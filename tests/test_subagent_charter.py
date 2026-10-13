@@ -713,3 +713,17 @@ def test_one_sentence_is_as_good_as_a_list_for_a_generated_judge() -> None:
     empty = "def judge(name, params, prior):\n    return '   '"
     with charter_scope(Charter(functions=(("judge", empty),))):
         assert judge("write_file", {}, []) == []
+
+
+def test_a_source_over_the_ceiling_is_dropped_rather_than_cut() -> None:
+    """Half of a function is not a shorter function: the cut lands mid-token,
+    the gate reports a syntax error, and the verb answers silence -- which for
+    ``judge`` turns every refusal it carried into permission."""
+    from raven.agent.subagent.charter import MAX_CODE_CHARS
+
+    oversized = "def judge(name, params, prior):\n    return [" + ", ".join([repr("x" * 60)] * 200) + "]"
+    assert len(oversized) > MAX_CODE_CHARS
+
+    charter = parse({"functions": {"judge": oversized}})
+
+    assert charter is None, "a brief this process will not run carries no judge at all"

@@ -147,8 +147,26 @@ def parse(payload: Any) -> Charter | None:
     if isinstance(raw_functions, dict):
         for name, source in raw_functions.items():
             module = function_modules.get(name)
-            if module and isinstance(source, str) and source.strip() and _function_enabled(module, "participant", name):
-                functions.append((name, source[:MAX_CODE_CHARS]))
+            if not (module and isinstance(source, str) and source.strip()):
+                continue
+            if not _function_enabled(module, "participant", name):
+                continue
+            # Dropped whole rather than cut to fit. Half of a function is not a
+            # shorter function: the cut lands mid-token, the gate reports a
+            # syntax error, and the verb answers silence -- which for ``judge``
+            # turns every refusal it carried into permission. A source over the
+            # ceiling is a brief this process will not run, and saying so is
+            # the only honest answer.
+            if len(source) > MAX_CODE_CHARS:
+                logger.warning(
+                    "charter: its {} function is {} characters, over the {} ceiling; "
+                    "dropping it rather than cutting executable source",
+                    name,
+                    len(source),
+                    MAX_CODE_CHARS,
+                )
+                continue
+            functions.append((name, source))
     raw_timeout = payload.get("timeoutSeconds") or payload.get("timeout_s")
     timeout_s: int | None = None
     if isinstance(raw_timeout, (int, float)) and raw_timeout > 0:

@@ -244,3 +244,69 @@ async def test_a_review_whose_inject_is_junk_still_carries_its_reason() -> None:
 
     assert provider.calls == 2
     assert any("say why" in str(m.get("content", "")) for m in provider.last_messages)
+
+
+@pytest.mark.asyncio
+async def test_review_is_asked_again_once_the_tool_results_exist() -> None:
+    """The second of the two moments one tool-calling step has. The first
+    decides whether the calls run; this one judges what they returned, and it
+    is the last moment before the next model call consumes them."""
+    ran: list[str] = []
+
+    async def _spy(self, **kwargs) -> str:
+        ran.append(str(kwargs.get("path", "")))
+        return "contents"
+
+    source = (
+        "def review(step):\n"
+        "    if step.get('phase') == 'after_iteration' and step.get('response', {}).get('tool_calls'):\n"
+        "        return {'verdict': 'end', 'reply': 'ended-after-results', 'note': None}\n"
+        "    return None"
+    )
+    original = filesystem.ReadFileTool.execute
+    filesystem.ReadFileTool.execute = _spy
+    try:
+        answer, provider = await _run_with({"review": source}, tool_call=("read_file", {"path": "input.txt"}))
+    finally:
+        filesystem.ReadFileTool.execute = original
+
+    assert answer == "ended-after-results"
+    assert ran == ["input.txt"], "this moment is after the calls, so they have run"
+    assert provider.calls == 1, "and before the call that would have consumed their results"
+
+
+@pytest.mark.asyncio
+async def test_one_tool_calling_step_offers_review_both_moments() -> None:
+    """Asserted as the pair rather than one at a time: the two were collapsed
+    into one once, and a test for either alone stayed green while the other
+    was missing."""
+    seen: list[tuple[str, bool]] = []
+
+    async def _spy(self, **kwargs) -> str:
+        return "contents"
+
+    source = (
+        "def review(step):\n"
+        "    return {'verdict': 'accept', 'note': step.get('phase', '') + ':' + str(step.get('tools_ran'))}"
+    )
+    original = filesystem.ReadFileTool.execute
+    filesystem.ReadFileTool.execute = _spy
+    try:
+        from raven.agent.subagent import charter as charter_mod
+
+        real = charter_mod.CharterParticipant.review
+
+        async def _record(self, step):
+            seen.append((step.phase, step.tools_ran))
+            return await real(self, step)
+
+        charter_mod.CharterParticipant.review = _record
+        try:
+            await _run_with({"review": source}, tool_call=("read_file", {"path": "input.txt"}))
+        finally:
+            charter_mod.CharterParticipant.review = real
+    finally:
+        filesystem.ReadFileTool.execute = original
+
+    assert ("execute_tools", False) in seen, "the moment that can keep the calls from running"
+    assert ("after_iteration", True) in seen, "the moment that judges what they returned"

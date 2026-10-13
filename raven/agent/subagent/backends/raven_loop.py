@@ -895,6 +895,20 @@ class RavenLoopBackend:
                     advice = await participant_answer("advise", participant_step("after_iteration", response=response))
                     if isinstance(advice, str) and advice:
                         _append_participant_note(messages, advice)
+                    # The second of the two moments the contract names for one
+                    # tool-calling step. The first decides whether the calls
+                    # run; this one judges what they returned, which is the only
+                    # moment their results exist and the last one before the
+                    # next model call consumes them. ``tools_ran`` tells the two
+                    # apart, and it is derived from this phase.
+                    verdict = await participant_answer("review", participant_step("after_iteration", response=response))
+                    decided = _review_verdict(verdict)
+                    if decided == "end":
+                        return str(verdict.get("reply") or "")
+                    if decided == "resample" and resamples < MAX_PARTICIPANT_RESAMPLES:
+                        resamples += 1
+                        _apply_resample(messages, verdict)
+                        continue
             else:
                 if participants:
                     verdict = await participant_answer("review", participant_step("after_iteration", response=response))

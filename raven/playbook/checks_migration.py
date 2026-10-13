@@ -33,51 +33,69 @@ def _when_clause(when: dict[str, Any]) -> str:
     )
 
 
-def _rule_block(rule: dict[str, Any]) -> list[str]:
-    """One rule as the lines of an ``if`` block, or [] when it says nothing."""
-    tool = str(rule.get("tool") or "")
-    if not tool:
-        return []
-    when = rule.get("when") if isinstance(rule.get("when"), dict) else {}
-    guard = f"    if name == {_literal(tool)}{_when_clause(when)}:"
-    body: list[str] = []
+def _grouped(rules: list[Any]) -> dict[tuple[str, str], dict[str, list[tuple[str, str]]]]:
+    """Rules by (tool, when), then by operator, as (value, message) pairs.
 
-    prefix = str(rule.get("pathPrefix") or rule.get("path_prefix") or "")
-    if prefix:
-        message = str(rule.get("message") or f"{tool}: path must start with {prefix}")
-        body += [
-            "        path = str(params.get('path', '') or params.get('file_path', ''))",
-            f"        if path and not path.startswith({_literal(prefix)}):",
-            f"            refusals = refusals + [{_literal(message)}]",
-        ]
+    Grouped before anything is written because a table is mostly the same few
+    shapes repeated: thirty-two forbidden fragments for one tool are one list
+    and one comprehension, not thirty-two blocks. The source has to stay under
+    the ceiling a charter carries, and a translation that cannot be dispatched
+    has preserved nothing.
+    """
+    out: dict[tuple[str, str], dict[str, list[tuple[str, str]]]] = {}
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        tool = str(rule.get("tool") or "")
+        if not tool:
+            continue
+        when = rule.get("when") if isinstance(rule.get("when"), dict) else {}
+        key = (tool, _when_clause(when))
+        by_operator = out.setdefault(key, {})
+        prefix = str(rule.get("pathPrefix") or rule.get("path_prefix") or "")
+        if prefix:
+            message = str(rule.get("message") or f"{tool}: path must start with {prefix}")
+            by_operator.setdefault("prefix", []).append((prefix, message))
+        forbid = str(rule.get("forbid") or "")
+        if forbid:
+            message = str(rule.get("message") or f"{tool}: this call may not contain {forbid!r}")
+            by_operator.setdefault("forbid", []).append((forbid, message))
+        earlier = str(rule.get("requiresPrior") or rule.get("requires_prior") or "")
+        if earlier:
+            message = str(rule.get("message") or f"{tool}: run {earlier} first")
+            match_param = str(rule.get("matchParam") or rule.get("match_param") or "")
+            by_operator.setdefault("prior", []).append((f"{earlier}\x00{match_param}", message))
+    return out
 
-    forbid = str(rule.get("forbid") or "")
-    if forbid:
-        message = str(rule.get("message") or f"{tool}: this call may not contain {forbid!r}")
-        body += [
-            f"        if {_literal(forbid)} in ' '.join([str(v) for v in params.values()]):",
-            f"            refusals = refusals + [{_literal(message)}]",
-        ]
 
-    earlier = str(rule.get("requiresPrior") or rule.get("requires_prior") or "")
-    if earlier:
-        message = str(rule.get("message") or f"{tool}: run {earlier} first")
-        match_param = str(rule.get("matchParam") or rule.get("match_param") or "")
-        same = f" and p.get({_literal(match_param)}) == params.get({_literal(match_param)})" if match_param else ""
-        body += [
-            f"        if not [p for n, p in prior if n == {_literal(earlier)}{same}]:",
-            f"            refusals = refusals + [{_literal(message)}]",
-        ]
-
-    return [guard, *body] if body else []
+def _pairs(values: list[tuple[str, str]]) -> str:
+    return "[" + ", ".join(f"({_literal(value)}, {_literal(message)})" for value, message in values) + "]"
 
 
 def judge_from_rules(rules: list[Any]) -> str:
     """The rule table as one ``judge``, or "" when it refuses nothing."""
     blocks: list[str] = []
-    for rule in rules:
-        if isinstance(rule, dict):
-            blocks += _rule_block(rule)
+    for (tool, when), by_operator in _grouped(rules).items():
+        body: list[str] = []
+        if prefixes := by_operator.get("prefix"):
+            body += [
+                "        path = str(params.get('path', '') or params.get('file_path', ''))",
+                f"        refusals = refusals + [m for p, m in {_pairs(prefixes)} if path and not path.startswith(p)]",
+            ]
+        if forbidden := by_operator.get("forbid"):
+            body += [
+                "        seen = ' '.join([str(v) for v in params.values()])",
+                f"        refusals = refusals + [m for f, m in {_pairs(forbidden)} if f in seen]",
+            ]
+        for encoded, message in by_operator.get("prior", []):
+            earlier, _, match_param = encoded.partition("\x00")
+            same = f" and p.get({_literal(match_param)}) == params.get({_literal(match_param)})" if match_param else ""
+            body += [
+                f"        if not [p for n, p in prior if n == {_literal(earlier)}{same}]:",
+                f"            refusals = refusals + [{_literal(message)}]",
+            ]
+        if body:
+            blocks += [f"    if name == {_literal(tool)}{when}:", *body]
     if not blocks:
         return ""
     return "\n".join(["def judge(name, params, prior):", "    refusals = []", *blocks, "    return refusals"])
