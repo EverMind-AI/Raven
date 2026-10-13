@@ -50,7 +50,7 @@ import tempfile
 import threading
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from functools import partial
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -327,9 +327,10 @@ async def _write(params: dict[str, Any]) -> dict[str, Any]:
     ``expect`` is the file as the host last read it -- its digest, or
     ``absent`` -- and a file that is not so any more is left alone, with
     :data:`raven.node.protocol.CHANGED`. The check and the write run in one
-    worker thread under the daemon's write lock (:func:`_apart`), so no other
-    write comes between them: what was checked is what is written over, and
-    the loop is not held while a whole file is hashed.
+    worker thread, alone among the whole-file calls (:func:`_apart`,
+    :class:`_FileGate`), so no other write comes between them and no read
+    lands inside them: what was checked is what is written over, and the
+    loop is not held while a whole file is hashed.
     """
     from raven.agent.tools.filesystem import WriteFileTool
 
@@ -355,7 +356,7 @@ async def _write(params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _edit(params: dict[str, Any]) -> dict[str, Any]:
-    """The host's ``edit_file`` on this machine: one read, the replacement, one write, with nothing between (under the write lock, :func:`_apart`)."""
+    """The host's ``edit_file`` on this machine: one read, the replacement, one write, with nothing between (alone among the whole-file calls, :func:`_apart`)."""
     from raven.agent.tools.filesystem import EditFileTool
 
     tool = _tool(EditFileTool, params)
@@ -1114,18 +1115,67 @@ class Node:
 #: agent's frames is not held for as long as a large file takes (measured
 #: 2026-10-12: 3.5 s for a 1 GiB file, with no ping answered meanwhile).
 _WHOLE_FILE = frozenset({protocol.READ, protocol.STAT, protocol.WRITE, protocol.EDIT, protocol.PULL})
-#: The ones that change a file, one at a time: what a write checked is what it writes over.
+#: The ones that change a file: alone, so what a write checked is what it writes over and what a read digests is one file.
 _WRITERS = frozenset({protocol.WRITE, protocol.EDIT})
-_WRITE_LOCK = threading.Lock()
+
+
+class _FileGate:
+    """The whole-file calls, readers together and a writer alone, so what a read digests is the file it read.
+
+    On the daemon's one loop nothing came between a read and a write; in a
+    worker thread a page read and the digest taken beside it could land
+    inside a write of the same file and leave with the old page and the new
+    digest (measured 2026-10-13: 2 to 4 of some 50 reads during one write of
+    a 400,000-line file), which a later ``fs/write`` carrying that digest as
+    ``expect`` would take as leave to replace content never read. A waiting
+    writer goes before new readers, so a stream of reads cannot keep it out.
+    """
+
+    def __init__(self) -> None:
+        self._changed = threading.Condition()
+        self._readers = 0
+        self._writing = False
+        self._writers_waiting = 0
+
+    @contextlib.contextmanager
+    def reading(self) -> Iterator[None]:
+        with self._changed:
+            while self._writing or self._writers_waiting:
+                self._changed.wait()
+            self._readers += 1
+        try:
+            yield
+        finally:
+            with self._changed:
+                self._readers -= 1
+                self._changed.notify_all()
+
+    @contextlib.contextmanager
+    def writing(self) -> Iterator[None]:
+        with self._changed:
+            self._writers_waiting += 1
+            try:
+                while self._writing or self._readers:
+                    self._changed.wait()
+            finally:
+                self._writers_waiting -= 1
+            self._writing = True
+        try:
+            yield
+        finally:
+            with self._changed:
+                self._writing = False
+                self._changed.notify_all()
+
+
+_FILES = _FileGate()
 
 
 def _apart(
-    handler: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]], params: dict[str, Any], *, serial: bool
+    handler: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]], params: dict[str, Any], *, writes: bool
 ) -> dict[str, Any]:
-    """``handler`` run to completion in this worker thread, on a loop of its own; a writer one at a time."""
-    if not serial:
-        return asyncio.run(handler(params))
-    with _WRITE_LOCK:
+    """``handler`` run to completion in this worker thread, on a loop of its own, through the file gate."""
+    with _FILES.writing() if writes else _FILES.reading():
         return asyncio.run(handler(params))
 
 
@@ -1186,7 +1236,7 @@ async def handle(frame: Any, node: Node | None = None) -> dict[str, Any] | None:
         if not isinstance(params, dict):
             raise _RefusedError(_INVALID_PARAMS, "params must be an object")
         if method in _WHOLE_FILE:
-            result = await asyncio.to_thread(_apart, handler, params, serial=method in _WRITERS)
+            result = await asyncio.to_thread(_apart, handler, params, writes=method in _WRITERS)
         else:
             result = await handler(params)
         return {"jsonrpc": "2.0", "id": request_id, "result": result}
