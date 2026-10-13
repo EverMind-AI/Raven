@@ -964,6 +964,20 @@ def test_the_product_disclaims_the_servers_ownership_even_with_nothing_to_inheri
         assert config["plugins"]["config"]["everos-memory"] == {"owned": False}
 
 
+def test_the_hosts_off_switch_travels_and_an_absent_key_does_not():
+    """``memory.backend: null`` is how an operator turns long-term memory off,
+    and a product that kept writing would be the one surface that ignored them.
+    An absent key is the other answer and must not read as the same thing."""
+    off = _product()
+    assert render.inherit_memory_backend(off, {"memory": {"backend": None}}) is None
+    assert off["memory"]["backend"] is None
+    assert "plugins" not in off
+
+    absent = _product()
+    assert render.inherit_memory_backend(absent, {"memory": {}}) == "everos"
+    assert absent["memory"]["backend"] == "everos"
+
+
 def test_a_host_that_names_no_backend_leaves_the_products_own_standing():
     config = _product(backend="everos-cloud", slice_={"api_key": "mine"}, distribution="everos-cloud-memory")
 

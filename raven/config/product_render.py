@@ -383,11 +383,17 @@ def inherit_memory_backend(config: dict, host: dict) -> str | None:
     this it answers a host that is merely not serving by starting a second
     server against a root of its own, stranding everything written so far.
 
-    Returns the backend in force, or ``None`` when neither side names one.
+    Returns the backend in force, or ``None`` when it is off or neither side
+    names one.
     """
     host_memory = host.get("memory") if isinstance(host.get("memory"), dict) else {}
-    backend = host_memory.get("backend")
-    if isinstance(backend, str) and backend:
+    if "backend" in host_memory:
+        # Present and null is the host's off switch, not an absent answer, and
+        # it travels like any other value: an operator who turned long-term
+        # memory off would otherwise find the products still writing, through
+        # a backend their own raven no longer builds.
+        named = host_memory["backend"]
+        backend = named if isinstance(named, str) and named else None
         config.setdefault("memory", {})["backend"] = backend
     else:
         own_memory = config.get("memory") if isinstance(config.get("memory"), dict) else {}
