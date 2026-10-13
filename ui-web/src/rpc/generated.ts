@@ -827,7 +827,7 @@ export interface SubagentRow {
   enabled: boolean;
   configured: boolean;
   /**
-   * The registered machine an acp row runs on, by its id in the machine registry; null for this computer, and on a server that predates the field.
+   * The registered machine a row runs on -- an openai row: reaches its endpoint from -- by its id in the machine registry; null for this computer, and on a server that predates the field.
    */
   machine?: string;
   /**

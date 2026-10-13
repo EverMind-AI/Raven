@@ -625,6 +625,45 @@ async def test_an_agent_starts_in_its_root_in_the_login_environment_plus_the_ent
 
 
 @pytest.mark.slow
+async def test_a_cli_agent_s_prompt_reaches_its_stdin_as_it_is_and_the_end_of_it_lets_it_leave(tmp_path, agent):
+    host = _Host()
+    await host.ask(protocol.AGENT_LAUNCH, {"channel": 1, "command": agent, "cwd": str(tmp_path)})
+
+    prompt = _frame("one") + "\n" + _frame("two", 2) + "\n"
+    await host.tell(protocol.AGENT_STDIN, {"channel": 1, "data": prompt, "eof": True})
+
+    await host.until(lambda: host.notified(protocol.AGENT_EXIT))
+    answered = [json.loads(frame["line"])["id"] for frame in host.notified(protocol.AGENT_FRAME)]
+    assert answered == [1, 2], "both lines, in order, before the end of its stdin"
+    assert host.notified(protocol.AGENT_EXIT) == [{"channel": 1, "rc": 0}], "stdin closed, the agent left on its own"
+    assert host.node.agents == {}
+
+
+@pytest.mark.slow
+async def test_the_end_of_stdin_alone_is_a_frame_too_and_one_for_no_channel_is_dropped(tmp_path, agent):
+    host = _Host()
+    await host.ask(protocol.AGENT_LAUNCH, {"channel": 1, "command": agent, "cwd": str(tmp_path)})
+
+    await host.tell(protocol.AGENT_STDIN, {"channel": 9, "data": "nobody", "eof": True})
+    await host.tell(protocol.AGENT_STDIN, {"channel": 1, "eof": True})
+
+    await host.until(lambda: host.notified(protocol.AGENT_EXIT))
+    assert host.notified(protocol.AGENT_FRAME) == [] and host.notified(protocol.AGENT_EXIT) == [{"channel": 1, "rc": 0}]
+
+
+@pytest.mark.slow
+async def test_input_after_the_end_of_stdin_is_dropped_and_the_agent_is_left_alone(tmp_path):
+    host = _Host()
+    await host.ask(protocol.AGENT_LAUNCH, {"channel": 1, "command": "sleep 2", "cwd": str(tmp_path)})
+
+    await host.tell(protocol.AGENT_STDIN, {"channel": 1, "eof": True})
+    await host.tell(protocol.AGENT_STDIN, {"channel": 1, "data": "late", "eof": True})
+
+    await host.until(lambda: host.notified(protocol.AGENT_EXIT))
+    assert host.notified(protocol.AGENT_EXIT) == [{"channel": 1, "rc": 0}], "ended on its own, not by the late input"
+
+
+@pytest.mark.slow
 async def test_cancel_ends_the_agent_s_whole_process_group(tmp_path, agent):
     host = _Host()
     started = await host.ask(protocol.AGENT_LAUNCH, {"channel": 2, "command": agent, "cwd": str(tmp_path)})

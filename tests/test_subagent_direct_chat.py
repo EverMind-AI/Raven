@@ -881,6 +881,50 @@ async def test_chat_tells_a_no_local_files_agent_its_attachments_stayed_behind(t
 
 
 @pytest.mark.asyncio
+async def test_chat_keeps_a_machine_row_s_attachments_for_its_backend_to_name_by_address(tmp_path, monkeypatch):
+    """A row on a registered machine carries [no-local-files] too, but its backend
+    names each attachment by its address on this computer and copies nothing
+    (``remote.files_note``), so the attachments stay for it and the page's
+    bullet is spelled the way the note will spell it."""
+    import dataclasses
+
+    from raven.agent.subagent.attachments import UNDELIVERABLE_NOTE
+    from raven.spine.message import Media
+
+    manager = _direct_chat_manager(tmp_path, monkeypatch)
+    real_get = manager.registry.get
+
+    def machine_row(name):
+        row = real_get(name)
+        if row is None:
+            return None
+        return dataclasses.replace(row, caps=dataclasses.replace(row.caps, reads_local_files=False, machine="box"))
+
+    monkeypatch.setattr(manager.registry, "get", machine_row)
+    seen: dict[str, Any] = {}
+    real_run = manager.registry.backend("raven").run
+
+    async def spying_run(task, **kw):
+        seen["media"] = kw.get("media")
+        seen["task"] = task
+        return await real_run(task, **kw)
+
+    monkeypatch.setattr(manager.registry.backend("raven"), "run", spying_run)
+    deck = manager.workspace / "uploads" / "house.pptx"
+    deck.parent.mkdir(parents=True)
+    deck.write_bytes(b"deck")
+    attached = (Media(path=str(deck), mime="application/octet-stream", kind="file"),)
+
+    await manager.chat(
+        session_key="s1", agent="raven", handle="deck", text="use it\n- uploads/house.pptx", media=attached
+    )
+
+    assert seen["media"] == attached, "kept, for the backend to name by address"
+    assert seen["task"] == f"use it\n- {deck.resolve()}", "the bullet names the file as the address note will"
+    assert UNDELIVERABLE_NOTE not in seen["task"]
+
+
+@pytest.mark.asyncio
 async def test_a_direct_chat_runs_in_the_session_workdir_not_agent_home(tmp_path, monkeypatch):
     """The same directory the turn's own tools get, and that ``spawn`` captures.
 
