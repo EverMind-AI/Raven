@@ -101,6 +101,7 @@ parked, not retired); making native and plugin memory mutually exclusive
 | EverOS plugin | system | the same turn slice it gets today | `_dispatch_backend_store`, unchanged |
 | A session that existed before the writer | system | not to have its history replayed into one call | the seed rule (C10) |
 | Sentinel, cron and heartbeat | system | their own turns kept out of the log they read | the origin check |
+| An ACP host driving this Raven | system | its prompts answered; whether they belong in this instance's log is a deployment question | `turn.send`, which stamps `Origin.USER` -- a parent agent's prompt is indistinguishable from a person's here |
 
 ## Paths
 
@@ -421,3 +422,10 @@ and F5's safety follows from how `append_history` writes, not from new code.
   cost shows.
 - The read-only wording. Any phrasing that an agent reads as permission to
   edit reopens #440; the one above is a draft for the G1 read.
+- Whether the ACP entrance deserves an origin of its own. Today it reaches
+  `turn.send` as `Origin.USER`, so an ACP Raven sharing `~/.raven` mixes its
+  parent's prompts into the reader's log, where two Sentinel producers read
+  them as the reader's own activity. Not new -- `_dispatch_backend_store` is
+  unconditional on origin the same way -- and the alternative, a deployment
+  rule giving each ACP instance its own `RAVEN_HOME`, is already the correct
+  setup for a separate agent.
