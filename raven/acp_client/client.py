@@ -250,6 +250,16 @@ class AcpClient:
         # An acp server's argv is its configuration -- its turns travel over
         # stdio -- so a batch file may stand in for the program here.
         argv = resolve_program(argv, child_env, batch_files=True)
+        from raven.acp_client import orphans
+
+        # Agents the last host never closed are still running in sessions of
+        # their own (issue #928): sweep them before adding another. Failure to
+        # sweep never blocks a launch -- the registry is a safety net, not a
+        # dependency of starting one.
+        try:
+            await asyncio.to_thread(orphans.sweep_orphans)
+        except Exception as exc:  # noqa: BLE001 - a broken sweep must not stop the launch
+            logger.debug("acp orphan sweep failed (launching anyway): {}", exc)
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv,
@@ -273,6 +283,11 @@ class AcpClient:
             journal=journal,
         )
         client._start_loops()
+        # The breadcrumb for the sweep above: if this host dies without
+        # reaching close(), the next launch on this machine finds the pgid,
+        # the owner's pid and the agent's start time here.
+        await asyncio.to_thread(orphans.record_agent, name, proc.pid)
+
         logger.info("acp agent {!r}: started {} (pid {})", name, argv[:1], proc.pid)
         return client
 
