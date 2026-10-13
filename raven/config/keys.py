@@ -6,7 +6,7 @@ from typing import Any
 from pydantic.alias_generators import to_camel, to_snake
 
 
-def key_as_written(node: Mapping[str, Any], name: str, *, top_level: bool) -> str:
+def key_as_written(node: Mapping[str, Any], name: str, *, top_level: bool = False, exact: bool = False) -> str:
     """The spelling of ``name`` already in ``node`` that the loader reads, else ``name``.
 
     The config models accept every key as camelCase or snake_case, so a write
@@ -22,7 +22,21 @@ def key_as_written(node: Mapping[str, Any], name: str, *, top_level: bool) -> st
       before pydantic sees it, so a non-null spelling is the one read there and
       a null one only when nothing else is present. False, zero and other
       non-null values still count, so they reach the caller's validation.
+    - ``exact`` is for a segment that is not a field at all: the caller names a
+      *map entry* (a provider, a channel, an MCP server), and the map is read by
+      the key itself. Folding there would reach a different entry that happens
+      to be a spelling of the same word -- ``foo_bar`` and ``fooBar`` are two
+      MCP servers, and a write aimed at one disabling the other.
+      ``providers`` is the exception the caller keeps tolerant: its runtime
+      reader folds spellings through ``names_same_provider``, so exactness
+      there would update a section nothing reads.
+
+    ``exact`` is only consulted for a name the node does not carry as written:
+    a caller spelling an entry the way the file already files it lands on that
+    key either way.
     """
+    if exact:
+        return name
     spellings = (name, to_camel(name), to_snake(name))
     if top_level:
         for spelling in spellings:
