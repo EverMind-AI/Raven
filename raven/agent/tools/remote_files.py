@@ -7,11 +7,14 @@ on its machine -- absolute, against the login home the node reported --
 fenced to the directory the permission check allowed, and sent to the
 machine's node (:mod:`raven.node.client`), which runs the very tool the call
 named there. Only the answer comes back, and every path in it is shown the
-way scp writes it, with the registry's user, address and port (C28).
+way scp writes it, with the registry's user, address and port.
 
-A read remembers the file's digest; a write that replaces the whole file
-then tells the node what it expects to replace, and a file changed in
-between is left alone, with a sentence that says to read it again.
+A read remembers the file's digest for the agent that read it -- the
+conversation, and the sub-agent run inside it; a write by that agent that
+replaces the whole file then tells the node what it expects to replace, and
+a file changed in between is left alone, with a sentence that says to read
+it again. Another agent's read does not vouch for it, and an agent that
+never read the file replaces it, as a write here does.
 
 Every failure is one sentence the tool returns: a path that names no
 registered machine, a machine without this Raven's node, one that does not
@@ -57,6 +60,7 @@ async def answer(tool: str, path: Any, params: dict[str, Any]) -> str | ToolResu
     pool = remote_path.nodes()
     if pool is None:
         return f"Error: {path} is on another machine, and this process does not read registered machines' files"
+    reader = _reader()
     try:
         home = await pool.home(where.machine)
         place = where.absolute(home)
@@ -65,25 +69,43 @@ async def answer(tool: str, path: Any, params: dict[str, Any]) -> str | ToolResu
         if (
             tool == "write_file"
             and params.get("mode") != "append"
-            and (read := remote_path.last_read(where.machine, place))
+            and (read := remote_path.last_read(where.machine, place, reader=reader))
         ):
-            # What this process last read there, so a file changed since is
+            # What this agent last read there, so a file changed since is
             # not written over unseen (``fs/write``'s ``expect``).
             sent["expect"] = read
         got = await pool.call(where.machine, _METHODS[tool], sent)
     except remote_path.NodeCallError as exc:
         if exc.reason == "changed":
-            remote_path.forget_read(where.machine, place)
+            remote_path.forget_read(where.machine, place, reader=reader)
             return (
                 f"Error: {where.display(place)} on machine {remote_path._label(where._row)} changed after it was "
                 "read; nothing was written. Read it again before writing."
             )
         return f"Error: {exc}"
     if tool == "read_file" and isinstance(got.get("sha256"), str):
-        remote_path.remember_read(where.machine, place, got["sha256"])
+        remote_path.remember_read(where.machine, place, got["sha256"], reader=reader)
     elif tool in ("write_file", "edit_file"):
-        remote_path.forget_read(where.machine, place)
+        remote_path.forget_read(where.machine, place, reader=reader)
     return _shown(got, where, [place, *roots], tool)
+
+
+def _reader() -> str:
+    """Who is reading: the conversation, and the sub-agent run inside it, whose later write expects what it read.
+
+    The permission turn names the conversation; a delegated run inside one is
+    told apart by its activity's uid, since the sub-agents of a turn read and
+    write on their own. Empty outside both, where every call is one reader.
+    """
+    # Imported here, both: a machine's node imports the file tools and runs
+    # them with only its own requirements importable, and neither the
+    # permission turn nor the sub-agent package is among them. This runs on
+    # the host alone, once a path has named a machine.
+    from raven.agent.subagent import activity
+    from raven.permissions.turn import current_turn
+
+    run = activity.current()
+    return "\x00".join(part for part in (current_turn().session_key, run.uid if run is not None else "") if part)
 
 
 #: The lines of a tool's answer that are the file's own bytes, which no path

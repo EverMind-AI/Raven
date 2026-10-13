@@ -546,7 +546,7 @@ async def test_what_was_not_delivered_says_why(tool, machines) -> None:
     assert "is written as a path on another machine" in nobody
     assert "not found or not a regular file on machine 'Lab box' (box)" in folder
     # The machine is named by its label in every sentence; its address appears
-    # only inside a path shown the way scp writes it (C28).
+    # only inside a path shown the way scp writes it.
     assert (
         outside.count("203.0.113.7") == 1 and "scp://worker@203.0.113.7:58717//root/.ssh/id_rsa is outside" in outside
     )

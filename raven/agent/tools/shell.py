@@ -303,31 +303,26 @@ class ExecTool(Tool):
             # Typed ssh to a registered machine is the registry bypassed: the
             # cap, the process-group sweep and the ledger all live on the
             # other two paths. Refused by name so the model learns the path,
-            # not just that this one closed.
+            # not just that this one closed. A copy there with scp, sftp or
+            # rsync starts nothing and passes this tool's own question like
+            # any other command, so it is left alone; and the file tools are
+            # named only while they read a remote path, with the machine
+            # lane on -- with it off they would write that spelling here.
+            from raven.home import machine_lane_enabled
+
             conn_id = str(row.get("id") or "").strip()
+            files = (
+                " Its files are read and written with read_file, write_file and edit_file on the path the way "
+                "scp writes it."
+                if machine_lane_enabled()
+                else ""
+            )
             return (
                 f"Error: this command reaches {row.get('display_name') or conn_id} over raw ssh from "
                 f"this computer, and that machine is registered as {conn_id!r}. Look at it with "
                 f"exec(machine={conn_id!r}) (capped at 60s, nothing left running), and hand anything "
                 "longer, or anything that must keep running, to the on-call agent's ops_submit "
-                "(budget, dedup, ledger). Its files are read and written with read_file, write_file "
-                "and edit_file on the path the way scp writes it. Nothing was run."
-            )
-        from raven.agent.tools.machine_exec import raw_copy_target
-
-        if (row := raw_copy_target(command)) is not None:
-            # A copy over scp, sftp or rsync starts nothing there, but it
-            # carries the address into the model's text and goes around the
-            # file tools' budgets and read check. The tools take the same
-            # spelling, so the model learns the path, not just that this
-            # one closed.
-            conn_id = str(row.get("id") or "").strip()
-            return (
-                f"Error: this command copies files to or from {row.get('display_name') or conn_id} with scp, "
-                f"sftp or rsync from this computer, and that machine is registered as {conn_id!r}. Its files "
-                "are reached through its Raven node instead: give read_file, list_dir, find, grep, write_file "
-                "and edit_file the path the way scp writes it (user@host:/path, or scp://user@host:port//path), "
-                "and deliver_files brings a file back. Nothing was run."
+                f"(budget, dedup, ledger).{files} scp and rsync to it are still fine here. Nothing was run."
             )
 
         cwd = self._cwd_for(working_dir)

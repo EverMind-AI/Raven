@@ -682,13 +682,16 @@ DEFAULT_ALLOW_ACTIONS: dict[str, frozenset[str]] = {"plugin": frozenset({"find",
 
 
 def default_tier(tool_name: str, params: dict[str, Any] | None = None) -> Tier:
-    if (reach := remote_path.reading(tool_name, params) or remote_path.writing(tool_name, params)) is not None:
+    if (reach := remote_path.reading(tool_name, params)) is not None:
         # A registered machine's disk is not this computer's: its login is
         # often root and its disks shared. The directories this Raven's agents
-        # work in there and the row's own paths read and write freely;
-        # anywhere else asks, once per machine and directory, a write apart
-        # from a read (C30; ``builtin.session_keys``).
+        # work in there and the row's own paths read freely; anywhere else
+        # asks, once per machine and directory (``builtin.session_keys``).
         return Tier.ALLOW if reach.inside else Tier.ASK
+    if remote_path.writing(tool_name, params) is not None:
+        # A write there asks wherever it falls, as a write here does: the
+        # roots free a look, not a change, and a grant is for the one file.
+        return Tier.ASK
     if tool_name in DEFAULT_ALLOW_TOOLS:
         return Tier.ALLOW
     if (params or {}).get("action") in DEFAULT_ALLOW_ACTIONS.get(tool_name, ()):

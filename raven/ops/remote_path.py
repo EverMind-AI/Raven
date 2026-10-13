@@ -51,8 +51,8 @@ DEFAULT_ROOT = "~/raven-work"
 #: check is about.
 READING_TOOLS = frozenset({"read_file", "list_dir", "find", "grep"})
 
-#: The writing tools a remote path reaches. Freed by the same roots as a read,
-#: asked about on their own account elsewhere.
+#: The writing tools a remote path reaches. Asked about wherever they fall, as
+#: a write here is; the roots place their fence, not their answer.
 WRITING_TOOLS = frozenset({"write_file", "edit_file"})
 
 # The tools whose path names a file, so the directory a call reaches is the file's.
@@ -184,26 +184,34 @@ def known_home(machine: str) -> str:
     return _HOMES.get(machine, "")
 
 
-# The digest of each remote file as it was last read in this process, by
-# machine and absolute path (``raven.agent.tools.remote_files``), so a write
-# that replaces the whole file can say what it expects to replace.
-_READ: dict[tuple[str, str], str] = {}
+# The digest of each remote file as its reader last read it in this process,
+# by reader, machine and absolute path (``raven.agent.tools.remote_files``), so
+# a write that replaces the whole file can say what it expects to replace. By
+# reader because the digest describes what one agent saw: another agent's
+# later read must not vouch for a write based on an older one. Bounded, since
+# readers come and go; past the bound the oldest entry goes, and the write it
+# would have checked is then one by an agent that never read the file.
+_READ: dict[tuple[str, str, str], str] = {}
+_READ_LIMIT = 4096
 
 
-def remember_read(machine: str, path: str, digest: str) -> None:
-    """Record ``digest`` as what ``path`` on ``machine`` held when it was read."""
+def remember_read(machine: str, path: str, digest: str, *, reader: str = "") -> None:
+    """Record ``digest`` as what ``path`` on ``machine`` held when ``reader`` read it."""
     if machine and path.startswith("/") and digest:
-        _READ[(machine, path)] = digest
+        _READ.pop((reader, machine, path), None)
+        _READ[(reader, machine, path)] = digest
+        while len(_READ) > _READ_LIMIT:
+            del _READ[next(iter(_READ))]
 
 
-def last_read(machine: str, path: str) -> str | None:
-    """The digest ``path`` on ``machine`` had when this process last read it, if it did."""
-    return _READ.get((machine, path))
+def last_read(machine: str, path: str, *, reader: str = "") -> str | None:
+    """The digest ``path`` on ``machine`` had when ``reader`` last read it in this process, if it did."""
+    return _READ.get((reader, machine, path))
 
 
-def forget_read(machine: str, path: str) -> None:
-    """Drop what was read of ``path`` on ``machine``: it was written, or it changed."""
-    _READ.pop((machine, path), None)
+def forget_read(machine: str, path: str, *, reader: str = "") -> None:
+    """Drop what ``reader`` read of ``path`` on ``machine``: it wrote the file, or found it changed."""
+    _READ.pop((reader, machine, path), None)
 
 
 def target(text: str) -> RemotePath | None:
@@ -216,7 +224,7 @@ def target(text: str) -> RemotePath | None:
 
 
 def reading_roots(where: RemotePath) -> list[str]:
-    """The directories on ``where``'s machine a read needs no question for (C30).
+    """The directories on ``where``'s machine a read needs no question for.
 
     The default remote root, the ``remoteCwd`` of every acp agent entry that
     names this machine, and the registry row's ``paths``: where this Raven's
@@ -263,10 +271,12 @@ class Reading:
     """What one call on a remote path reaches, for its permission check."""
 
     target: RemotePath
+    place: str
+    """The path the call names, placed on the machine (:func:`_placed`)."""
     directory: str
     """The directory the call reaches: the file's for a tool that names a file, else the path itself."""
     inside: bool
-    """Whether that is under a :func:`reading_roots` directory, so no question is asked."""
+    """Whether that is under a :func:`reading_roots` directory, so a read asks no question."""
 
 
 def reading(tool: str, params: dict[str, Any] | None) -> Reading | None:
@@ -283,10 +293,11 @@ def reading(tool: str, params: dict[str, Any] | None) -> Reading | None:
 def writing(tool: str, params: dict[str, Any] | None) -> Reading | None:
     """What ``tool``'s writing call reaches on a registered machine, or ``None``.
 
-    The roots that free a read free a write too: the directories this
-    Raven's agents work in there, and the row's own paths. Elsewhere a write
-    asks on its own account, apart from any read that was allowed
-    (``raven.permissions.builtin.session_keys``).
+    A write there asks wherever it falls, as a write here does
+    (``raven.permissions.rules.default_tier``), and a grant is for the one
+    file, apart from any read that was allowed
+    (``raven.permissions.builtin.session_keys``); the roots decide only the
+    fence the node is given (:func:`fence`).
     """
     return _reach(tool, params) if tool in WRITING_TOOLS else None
 
@@ -305,7 +316,7 @@ def _reach(tool: str, params: dict[str, Any] | None) -> Reading | None:
     place = _placed(where.path, home)
     directory = posixpath.dirname(place) or place if tool in _FILE_TOOLS else place
     inside = any(_under(place, _placed(root, home)) for root in reading_roots(where))
-    return Reading(where, directory, inside)
+    return Reading(where, place, directory, inside)
 
 
 def fence(tool: str, where: RemotePath, place: str, home: str) -> str:

@@ -104,7 +104,7 @@ def machines_registered() -> bool:
 # next command and not to this ssh.
 _COMMAND_SEPARATORS = frozenset({";", "&", "&&", "|", "||", "|&", "(", ")"})
 #: On a Windows host the shell that runs a command reads a backslash as a path's
-#: own, not as an escape: the words are read that way too, so ``C:\...\scp.exe``
+#: own, not as an escape: the words are read that way too, so ``C:\...\ssh.exe``
 #: keeps its name.
 _WINDOWS = os.name == "nt"
 
@@ -186,13 +186,12 @@ _EXE_SUFFIXES = (".exe", ".cmd", ".bat")
 
 
 def _program(word: str) -> str:
-    """The program a command word runs, as the refusals name one: ``ssh``, ``scp``, ``sftp``, ``rsync``.
+    """The program a command word runs, as the refusal names one: ``ssh``.
 
     Written ``ssh``, ``/usr/bin/ssh`` or ``\\ssh`` (a backslash suppresses alias
-    lookup and still runs the client), and on Windows ``scp.exe``, ``SCP.EXE``
-    or ``C:\\Windows\\System32\\OpenSSH\\scp.exe``, all of which reach the far
-    side: the directory, the case and the suffix are taken off (before
-    this, the three Windows spellings went past the copy refusal).
+    lookup and still runs the client), and on Windows ``ssh.exe``, ``SSH.EXE``
+    or ``C:\\Windows\\System32\\OpenSSH\\ssh.exe``, all of which reach the far
+    side: the directory, the case and the suffix are taken off.
     """
     name = PureWindowsPath(PurePosixPath(word.strip("\"'").lstrip("\\")).name).name.lower()
     for suffix in _EXE_SUFFIXES:
@@ -313,178 +312,6 @@ def _ssh_destinations(command: str) -> list[tuple[str, int]]:
     return found
 
 
-#: The programs that copy files to or from a machine over ssh, and so carry a
-#: destination written ``[user@]host:path``, ``host::module`` or as a URI.
-_COPIERS = frozenset({"scp", "sftp", "rsync"})
-# The short options of each that take a value, so the value is never read as
-# an operand: ``scp -P 58717 a.txt host:b`` names a port, not a file. rsync's
-# ``-P`` takes none (it is ``--partial --progress``).
-_COPY_VALUE_FLAGS = {
-    "scp": frozenset("iFclSJDoP"),
-    "sftp": frozenset("iFclSJDoPbsBRX"),
-    "rsync": frozenset("eBTMf"),
-}
-# rsync's long options that take a value the next word may carry.
-_RSYNC_VALUE_OPTIONS = frozenset(
-    {
-        "--rsh",
-        "--port",
-        "--files-from",
-        "--exclude",
-        "--include",
-        "--exclude-from",
-        "--include-from",
-        "--log-file",
-        "--timeout",
-        "--contimeout",
-        "--bwlimit",
-        "--chmod",
-        "--chown",
-        "--rsync-path",
-        "--password-file",
-        "--out-format",
-        "--temp-dir",
-        "--compare-dest",
-        "--copy-dest",
-        "--link-dest",
-        "--backup-dir",
-        "--suffix",
-        "--max-size",
-        "--min-size",
-        "--filter",
-        "--partial-dir",
-        "--iconv",
-        "--block-size",
-        "--max-delete",
-        "--modify-window",
-        "--address",
-        "--sockopts",
-        "--checksum-choice",
-    }
-)
-_URI_DESTINATION = re.compile(
-    r"^(?:scp|sftp|rsync)://(?:[^/@]+@)?(?P<host>\[[^\]]+\]|[^/:]+)(?::(?P<port>\d+))?(?:/|$)", re.IGNORECASE
-)
-# The port an rsync ``-e``/``--rsh`` value hands its ssh: ``ssh -p 58717``, ``ssh -o Port=58717``.
-_RSH_PORT = re.compile(r"(?:^|\s)-p\s*(\d+)|(?:^|\s)-o\s*[\"']?Port[=\s](\d+)", re.IGNORECASE)
-
-
-def _copy_host(word: str) -> tuple[str, int | None] | None:
-    """The host (and the port a URI carries) a scp, sftp or rsync operand names, or ``None`` for a local path.
-
-    scp's own rule: a colon before any slash makes a remote spelling, so
-    ``./a:b`` and ``/tmp/a:b`` are files here. ``host::module`` and
-    ``rsync://`` are rsync's daemon forms; the host still counts.
-    """
-    if match := _URI_DESTINATION.match(word):
-        port = match.group("port")
-        return match.group("host").strip("[]").lower(), (int(port) if port else None)
-    if "::" in word:
-        head = word.split("::", 1)[0]
-    elif ":" in word:
-        head = word.split(":", 1)[0]
-    else:
-        return None
-    if not head or "/" in head:
-        return None
-    host = head.rsplit("@", 1)[-1].strip("[]").lower()
-    return (host, None) if host else None
-
-
-def _copy_destinations(command: str) -> list[tuple[str, int]]:
-    """Every host and port a ``scp``, ``sftp`` or ``rsync`` word in a shell command would reach.
-
-    Read the way :func:`_ssh_destinations` reads ssh, program by program: the
-    port from scp's and sftp's ``-P`` or ``-o Port``, from rsync's ``--port``
-    or the ssh its ``-e``/``--rsh`` names, else 22; every operand written as a
-    remote path names the host, and all of one command's share its port.
-    """
-    tokens = _words(command)
-    if not tokens:
-        return []
-    found: list[tuple[str, int]] = []
-    index = 0
-    while index < len(tokens):
-        program = _program(tokens[index])
-        if program not in _COPIERS:
-            index += 1
-            continue
-        index += 1
-        port: int | None = None
-        operands: list[str] = []
-        options_ended = False
-        while index < len(tokens):
-            word = tokens[index]
-            if word in _COMMAND_SEPARATORS or _program(word) in _COPIERS | {"ssh"}:
-                break
-            following = tokens[index + 1] if index + 1 < len(tokens) else None
-            if word in _REDIRECTIONS:
-                index += 1
-                if following is not None and following not in _COMMAND_SEPARATORS and following not in _REDIRECTIONS:
-                    index += 1
-                continue
-            if word.isdigit() and following in _REDIRECTIONS:
-                index += 1
-                continue
-            index += 1
-            if word == "--" and not options_ended:
-                options_ended = True
-                continue
-            if options_ended or not word.startswith("-") or len(word) == 1:
-                operands.append(word)
-                continue
-            if word.startswith("--"):
-                name, _, value = word.partition("=")
-                if not _ and program == "rsync" and name in _RSYNC_VALUE_OPTIONS and index < len(tokens):
-                    value = tokens[index]
-                    index += 1
-                if name == "--port" and value.isdigit():
-                    port = int(value)
-                elif name == "--rsh" and (match := _RSH_PORT.search(value)):
-                    port = int(match.group(1) or match.group(2))
-                continue
-            for offset, letter in enumerate(word[1:]):
-                if letter not in _COPY_VALUE_FLAGS[program]:
-                    continue
-                value = word[offset + 2 :]
-                if not value and index < len(tokens):
-                    value = tokens[index]
-                    index += 1
-                if letter == "P" and value.isdigit():
-                    port = int(value)
-                elif letter == "o":
-                    pair = _OPTION_SPLIT.split(value.strip(), maxsplit=1)
-                    if len(pair) == 2 and pair[0].lower() == "port" and pair[1].strip().isdigit():
-                        port = int(pair[1].strip())
-                elif letter == "e" and (match := _RSH_PORT.search(value)):
-                    port = int(match.group(1) or match.group(2))
-                break
-        for word in operands:
-            named = _copy_host(word)
-            if named is None and program == "sftp":
-                # sftp's one operand is the machine, with or without a path:
-                # ``sftp root@h`` opens a session there.
-                head = word.split(":", 1)[0]
-                host = head.rsplit("@", 1)[-1].strip("[]").lower()
-                named = (host, None) if host and "/" not in head else None
-            if named is not None:
-                host, explicit = named
-                found.append((host, explicit or port or 22))
-    return found
-
-
-def raw_copy_target(command: str) -> dict[str, Any] | None:
-    """The registered machine a plain-shell ``scp``, ``sftp`` or ``rsync`` reaches, or ``None``.
-
-    The sibling of :func:`raw_ssh_target` for the copying clients. Refused by
-    ``exec`` not because a copy starts anything there -- it does not -- but
-    because the address it carries would then stand in the model's text where
-    a path shown by the file tools belongs, and the copy would go around the
-    budgets and the read check those tools keep.
-    """
-    return _registered(_copy_destinations(command))
-
-
 def raw_ssh_target(command: str) -> dict[str, Any] | None:
     """The registered machine a plain-shell command reaches over its own ssh.
 
@@ -501,14 +328,10 @@ def raw_ssh_target(command: str) -> dict[str, Any] | None:
     typed ``ssh -p <port> root@<ip> '... &'`` from the local shell 58 times to
     start GPU work: the look here is capped at 60 s and on-call's job runner
     was not theirs to call, so the address was the path of least resistance,
-    and the ledger never saw the runs. ``scp``, ``sftp`` and ``rsync`` are
-    :func:`raw_copy_target`'s, for a reason of their own.
+    and the ledger never saw the runs. Only ssh is matched -- ``scp`` and
+    ``rsync`` move files and start nothing on the far side.
     """
-    return _registered(_ssh_destinations(command))
-
-
-def _registered(destinations: list[tuple[str, int]]) -> dict[str, Any] | None:
-    """The registry row at the first of ``destinations`` that is registered, host and port both."""
+    destinations = _ssh_destinations(command)
     if not destinations:
         return None
     try:
