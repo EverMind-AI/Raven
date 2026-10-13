@@ -558,6 +558,9 @@ def _probe_cli(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
     exe = argv[0]
     if "{" in exe:
         return done("unknown", f"the command's first token is a placeholder ({exe})", exe)
+    if machine_id := (getattr(cfg, "machine", None) or "").strip():
+        # A `which` here would answer for this computer, and the command runs there.
+        return _probe_remote(cfg, machine_id, done)
     # CliAgentBackend._exec builds the child's env as {**login_shell_env(), **self.env}
     # (cli_agent.py:139-140), so a configured PATH overrides the login shell's for a
     # real spawn; resolving against the login PATH alone here would report an agent
@@ -602,7 +605,7 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
     if not argv:
         return done("unknown", "command is empty")
     if machine_id := (getattr(cfg, "machine", None) or "").strip():
-        return _probe_remote_acp(cfg, machine_id, done)
+        return _probe_remote(cfg, machine_id, done)
     exe = argv[0]
     cfg_path = (getattr(cfg, "env", None) or {}).get("PATH")
     resolved = shutil.which(exe, path=cfg_path or path)
@@ -679,6 +682,10 @@ async def _probe_openai(cfg: Any, *, source: Source) -> ProbeResult:
         # endpoint (a local vLLM) is legitimate, and short-circuiting would
         # report a working agent as broken.
         return done("attention", "api key not set")
+    if machine_id := (getattr(cfg, "machine", None) or "").strip():
+        # The endpoint answers on the machine's network, through a tunnel a
+        # test opens; a request from here would ask the wrong network.
+        return _probe_remote(cfg, machine_id, lambda status, detail, target="": done(status, detail))
     url = base_url.rstrip("/") + "/models"
     headers = {"Authorization": f"Bearer {cfg.api_key}"} if has_key else {}
     try:
@@ -793,6 +800,7 @@ async def run_test(cfg: Any, *, source: Source) -> TestResult:
         return int((time.monotonic() - started) * 1000)
 
     kind = getattr(cfg, "kind", None)
+    on_machine = bool((getattr(cfg, "machine", None) or "").strip())
     if kind == "builtin":
         # Nothing to verify. A built-in agent is this process: there is no command
         # to launch, no endpoint to authenticate against, and no transcript parser
@@ -825,9 +833,16 @@ async def run_test(cfg: Any, *, source: Source) -> TestResult:
         if probe.status == "missing":
             return TestResult(cfg.name, source, "openai", False, probe.detail, None, elapsed())
         answered = await ping_agent(cfg)
-        detail = probe.detail if answered.ok else f"{answered.detail}; {probe.detail}"
+        # On a machine the free probe said only where the endpoint is and to
+        # run this; the ping's own words are the whole verdict there.
+        if on_machine:
+            detail = answered.detail
+        else:
+            detail = probe.detail if answered.ok else f"{answered.detail}; {probe.detail}"
         return TestResult(cfg.name, source, "openai", answered.ok, detail, None, elapsed(), answered.remedy)
-    if probe.status != "ready":
+    # The free probe cannot say "ready" for a command on another machine, and
+    # this run through the machine's node is what can.
+    if probe.status != "ready" and not on_machine:
         return TestResult(cfg.name, source, "cli", False, probe.detail, None, elapsed())
 
     try:
@@ -936,13 +951,18 @@ class PingResult:
     remedy: Remedy | None = None
 
 
-def _probe_remote_acp(cfg: Any, machine_id: str, done: Any) -> ProbeResult:
-    """The free check for an acp agent on a registered machine: still registered, and verified?
+def _probe_remote(cfg: Any, machine_id: str, done: Any) -> ProbeResult:
+    """The free check for an agent on a registered machine: still registered, and verified?
 
     No ssh: this runs on every listing, and one machine slow to answer would hold
     the whole roster behind it. ``which`` here would answer for this computer,
-    which is not where the agent runs. What can be said for free is whether the
-    registry still names a usable machine, and what the last test recorded.
+    which is not where the agent runs, and a request from here would ask the
+    wrong network for an endpoint behind the machine. What can be said for free
+    is whether the registry still names a usable machine, the link's state, and
+    what the last test recorded: for an acp row, its handshake, kept as a
+    capability snapshot; a cli or openai row records nothing for free, so its
+    verdict is the test's alone, kept beside the row (``last_test_*``), and the
+    probe says to run one.
     """
     from raven.acp_client import remote
     from raven.ops import remote_path
@@ -956,6 +976,10 @@ def _probe_remote_acp(cfg: Any, machine_id: str, done: Any) -> ProbeResult:
     # how many agents it carries, idle, or the sentence of its last failure.
     if (link := remote_path.nodes()) is not None and (said := link.status(machine_id).said()):
         where += f" ({said})"
+    if getattr(cfg, "kind", None) != "acp":
+        return done(
+            "attention", f"{where}; nothing here can check it without reaching the machine -- run a test", machine_id
+        )
     snapshot = acp_snapshot_for(cfg)
     if snapshot is None:
         return done("attention", f"{where}; its ACP capabilities have not been recorded yet -- run a test", machine_id)
@@ -1267,7 +1291,7 @@ def capabilities_wanted(cfg: Any) -> bool:
 
 
 def _test_record(snapshot: Any, previous: Any) -> Any:
-    """What a manual test writes down: its verdict always, its capabilities only
+    """What a new measurement writes down: its verdict always, its capabilities only
     when it reached them.
 
     A verify that fails before ``session/new`` -- a cold shim start, a machine
@@ -1292,6 +1316,8 @@ def _test_record(snapshot: Any, previous: Any) -> Any:
         stale=False,
         status=snapshot.status,
         detail=snapshot.detail,
+        needs_auth=snapshot.needs_auth,
+        unfetched=snapshot.unfetched,
         measured_at_ms=snapshot.measured_at_ms,
         elapsed_ms=snapshot.elapsed_ms,
     )
@@ -1367,7 +1393,7 @@ def _unconfigured_acp_preset_rows(configured: set[str], *, path: str | None) -> 
 
 
 def schedule_snapshot_verification(manager: Any) -> asyncio.Task | None:
-    """Verify every enabled acp agent that has no fresh capability snapshot.
+    """Verify every enabled acp agent whose capability snapshot is missing, stale or a failure.
 
     Before this, the snapshot -- the record an acp row's ``stateful`` and
     ``can_resume`` are read from -- was written only by the UI Test button and a
@@ -1375,8 +1401,9 @@ def schedule_snapshot_verification(manager: Any) -> asyncio.Task | None:
     the ``/new-instance`` picker hid those agents until someone opened a page
     and clicked. Backgrounded so a slow adapter (a first ``npx`` fetch) cannot
     delay startup; fire-and-forget, because a failure leaves the row stateless
-    with the snapshot's own detail rather than breaking the boot. Verification
-    costs no model tokens (handshake plus a throwaway ``session/new``).
+    with the snapshot's own detail rather than breaking the boot, and is
+    measured again at the next start. Verification costs no model tokens
+    (handshake plus a throwaway ``session/new``).
     """
     global _SCHEDULED
     if _SCHEDULED:
@@ -1403,7 +1430,7 @@ def schedule_snapshot_verification(manager: Any) -> asyncio.Task | None:
 
 
 async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured: set[str] | None = None) -> None:
-    """One verification per missing or stale row, sequentially, never raising.
+    """One verification per row whose snapshot is missing, stale or a failure, sequentially, never raising.
 
     Sequential, not concurrent: every acp verify spawns a child process, and a
     machine with a slow adapter among several would otherwise launch them all at
@@ -1439,7 +1466,7 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured
             name = getattr(row, "name", "") or ""
             outdated_menu = snapshot is not None and has_model_menu is not None and not has_model_menu(name)
             # Three reasons to re-measure besides staleness: a record written
-            # from before the model menu (above), a credential refusal, and one
+            # from before the model menu (above), a failed verification, and one
             # of raven's own that came back with an empty menu. Staleness asks
             # whether the launch config moved, and neither signing in nor
             # configuring a provider moves it -- so a recorded refusal never goes
@@ -1447,16 +1474,24 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured
             # across every restart after the sign-in that cured it.
             refused = getattr(snapshot, "needs_auth", False)
             menuless_own = _own_row_missing_its_menu(snapshot, name)
-            if snapshot is not None and not snapshot.stale and not outdated_menu and not refused and not menuless_own:
+            failed_before = snapshot is not None and snapshot.status != "ready"
+            if (
+                snapshot is not None
+                and not snapshot.stale
+                and not outdated_menu
+                and not refused
+                and not menuless_own
+                and not failed_before
+            ):
                 continue
             result = await verify_agent(cfg, **_launch_kw(cfg))
             _note_menu_re_measured(result, name)
-            # A pass, or a refusal the agent explained. Every other failure stays
-            # unrecorded on purpose: a timeout or a crashed adapter is a fact
-            # about this minute, and a snapshot of one would label a working
-            # agent broken until somebody happened to press Test.
-            if result.status == "ready" or getattr(result, "needs_auth", False):
-                store.record(result)
+            # Replace an old failure with what this attempt actually measured.
+            # Failed rows are retried next boot, so a timeout is not a permanent
+            # verdict. A formerly working row still keeps its old capabilities.
+            if result.status == "ready" or getattr(result, "needs_auth", False) or failed_before:
+                record = _test_record(result, snapshot) if snapshot is not None and result.status != "ready" else result
+                store.record(record)
                 recorded = True
             logger.info("acp agent {!r}: auto-verify {}", name, result.status)
         except Exception as exc:  # noqa: BLE001 - a failed verify must not sink the rest

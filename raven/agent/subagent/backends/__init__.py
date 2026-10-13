@@ -98,9 +98,13 @@ class AgentMeta(NamedTuple):
     """The registered machine this agent runs on, by id, or ``""`` for this computer.
 
     Rendered as a tag so the model can send work to a named machine and knows
-    the files it gets back are there, not here. The id only: the registry keeps
-    the address out of anything a model reads. Appended last, for the reason
-    ``model_choices`` gives."""
+    the files it gets back are there, not here. The id only, which is all the
+    roster says of the machine: the way onto it -- the address, port, account
+    and key the registry holds -- stays out of anything a model reads, while a
+    path on it is written to a model the way scp writes it, address included,
+    because that is how a file there is named (``remote.shown``). Read off
+    every kind: whichever kind runs there, the tag is the same. Appended last,
+    for the reason ``model_choices`` gives."""
 
 
 def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
@@ -139,6 +143,12 @@ def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
       continues nothing. A false is therefore an endpoint-specific exception a
       preset states, or the operator of a custom endpoint writes by hand; the
       declaration is the only available carrier of a fact raven cannot discover.
+
+    ``machine`` is read off every kind the same way: an entry of any kind that
+    names one runs there -- a cli one through the machine's Raven node, an
+    openai one through a tunnel to it -- and a built-in row's is cleared by its
+    schema, so the roster's tag, the registry's lane gate and the dispatch
+    never disagree about where a row runs.
 
     ``snapshot`` is the already-loaded snapshot for this config, for callers
     handling a batch. Omitted, it is read from the store -- so a caller that
@@ -179,7 +189,7 @@ def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
         stateful = bool(getattr(cfg, "stateful", True))
     else:
         stateful = bool(getattr(cfg, "resume_command", None))
-    machine = str(getattr(cfg, "machine", None) or "") if kind == "acp" else ""
+    machine = str(getattr(cfg, "machine", None) or "")
     return AgentMeta(
         getattr(cfg, "name", "") or "",
         getattr(cfg, "description", "") or "",
@@ -370,7 +380,9 @@ def build_third_party_backend(
 ) -> SubagentBackend:
     """Build a third-party backend from a config object (duck-typed on ``kind``).
 
-    Accepts ThirdPartyCliSubagentConfig / ThirdPartyOpenAISubagentConfig.
+    Accepts ThirdPartyCliSubagentConfig / ThirdPartyOpenAISubagentConfig /
+    ThirdPartyAcpSubagentConfig; each kind takes the machine its entry names,
+    and runs there its own way.
 
     ``registry``, ``timeout`` and ``ready_timeout_ms`` override the config for one
     call and exist for the availability test in :mod:`raven.agent.subagent.probe`,
@@ -405,6 +417,8 @@ def build_third_party_backend(
             registry=registry,
             mcps=cfg.mcps,
             allow_mcp_secrets=cfg.allow_mcp_secrets,
+            machine=getattr(cfg, "machine", None),
+            remote_cwd=getattr(cfg, "remote_cwd", None),
         )
     if kind == "acp":
         from raven.acp_client.acp_agent import AcpAgentBackend
@@ -441,6 +455,7 @@ def build_third_party_backend(
             max_tokens=cfg.max_tokens,
             timeout=cfg.timeout if timeout is None else timeout,
             max_output_chars=cfg.max_output_chars,
+            machine=getattr(cfg, "machine", None),
         )
     raise ValueError(f"unknown third-party subagent kind: {kind!r}")
 

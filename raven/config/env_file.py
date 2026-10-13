@@ -1,9 +1,10 @@
 """The shell env file mirroring the web tool credentials out of ``config.json``.
 
 ``~/.raven/env`` exists for consumers that never read raven's config: the
-user's own shell, and every ``cli`` / ``acp`` sub-agent, whose environment is a
-capture of ``$SHELL -lic`` (see ``raven.agent.subagent.backends.env``) rather
-than anything raven hands down. A ``kind: openai`` sub-agent is an HTTP call
+user's own shell, and POSIX ``cli`` / ``acp`` sub-agents whose environment is a
+capture of ``$SHELL -lic`` (see ``raven.agent.subagent.backends.env``). Windows
+children instead inherit Raven's environment with a refreshed registry PATH;
+they do not source these shell exports. A ``kind: openai`` sub-agent is an HTTP call
 with no subprocess, so no environment variable reaches it at all.
 
 It is a *derived* artefact, never a second source of truth -- which only holds

@@ -433,7 +433,9 @@ async def test_a_pdf_tile_gets_its_first_page_without_libreoffice(
     assert as_pdf.status == 400
 
 
-def test_a_pdf_page_is_drawn_by_pymupdf_when_it_is_installed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_pdf_page_is_drawn_by_the_rasteriser_this_package_declares(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     pymupdf = pytest.importorskip("pymupdf")
     from raven.rpc import pdf_preview
 
@@ -443,13 +445,16 @@ def test_a_pdf_page_is_drawn_by_pymupdf_when_it_is_installed(tmp_path: Path, mon
     page.draw_rect(pymupdf.Rect(20, 20, 380, 205), color=(0, 0, 1), fill=(0.9, 0.9, 1))
     source = tmp_path / "one.pdf"
     doc.save(source)
-    target = tmp_path / "cache" / "one.png"
+    doc.close()
 
+    target = tmp_path / "cache" / "one.png"
     pdf_preview._rasterise_pdf_page(source, target, 640)
 
-    drawn = pymupdf.Pixmap(str(target))
-    assert (drawn.width, drawn.height) == (640, 360)
-    assert not list((tmp_path / "cache").glob("render-*")), "the scratch directory is gone"
+    from PIL import Image
+
+    with Image.open(target) as drawn:
+        assert drawn.width == 640, "drawn at the width asked for"
+        assert drawn.height == pytest.approx(640 * 225 / 400, abs=2), "and the page's own ratio"
 
 
 def test_a_tall_page_is_drawn_small_rather_than_expensively(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -465,80 +470,41 @@ def test_a_tall_page_is_drawn_small_rather_than_expensively(tmp_path: Path, monk
     doc.new_page(width=72, height=14400)
     source = tmp_path / "tall.pdf"
     doc.save(source)
+    doc.close()
     assert source.stat().st_size < 2000, "the cost is not in the file"
 
     target = tmp_path / "cache" / "tall.png"
     pdf_preview._rasterise_pdf_page(source, target, pdf_preview.THUMB_WIDTH_PX)
 
-    drawn = pymupdf.Pixmap(str(target))
-    # The ceiling is on the area the scale asks for; each drawn side is then
-    # rounded up to a whole pixel, which is the row and column of slack here.
-    assert drawn.width * drawn.height <= pdf_preview.THUMB_MAX_PIXELS + drawn.width + drawn.height
-    assert drawn.width * drawn.height < 5_000_000, "far under the 328 megapixels this page used to draw"
-    assert drawn.width < pdf_preview.THUMB_WIDTH_PX, "the width came down with the height"
+    from PIL import Image
+
+    with Image.open(target) as drawn:
+        # The ceiling is on the area the scale asks for; each drawn side is then
+        # rounded up to a whole pixel, which is the row and column of slack here.
+        assert drawn.width * drawn.height <= pdf_preview.THUMB_MAX_PIXELS + drawn.width + drawn.height
+        assert drawn.width * drawn.height < 5_000_000, "far under the 328 megapixels this page used to draw"
+        assert drawn.width < pdf_preview.THUMB_WIDTH_PX, "the width came down with the height"
     # An ordinary page is untouched by the ceiling.
     assert pdf_preview._thumb_zoom(612, 792, 1280) == pytest.approx(1280 / 612)
 
 
 def test_a_rasteriser_that_fails_its_own_way_is_still_named(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """PyMuPDF refuses a page past its own limits with an exception of its own,
-    and the fallback can raise from the subprocess module. Neither is foreseeable
-    here by type; both must reach the route as the render error it answers for."""
-    pymupdf = pytest.importorskip("pymupdf")
+    """A rasteriser refuses a page past its own limits with an exception of its
+    own, and the library under it raises its own type for every cause. Neither
+    is foreseeable here by type; both must reach the route as the render error
+    it answers for."""
+    from raven.knowledge.parser import _pdfdoc
     from raven.rpc import pdf_preview
 
     monkeypatch.setattr(pdf_preview, "cache_dir", lambda: tmp_path / "cache")
-    doc = pymupdf.open()
-    doc.new_page(width=200, height=100)
     source = tmp_path / "one.pdf"
-    doc.save(source)
+    source.write_bytes(FAKE_PDF)
 
-    class _MupdfLimit(Exception):
-        """Stands in for pymupdf.mupdf.FzErrorLimit, which is not an OSError."""
+    class _OwnLimit(Exception):
+        """Stands in for the rasteriser's own out-of-range error."""
 
-    real_open = pymupdf.open
-
-    def refusing(path):
-        doc = real_open(path)
-
-        class _Refuses:
-            page_count = 1
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *exc):
-                doc.close()
-                return None
-
-            def __getitem__(self, n):
-                raise _MupdfLimit("integer out of range")
-
-        return _Refuses()
-
-    monkeypatch.setattr(pymupdf, "open", refusing)
-    with pytest.raises(pdf_preview.PdfPreviewError, match="could not be drawn"):
-        pdf_preview._rasterise_pdf_page(source, tmp_path / "cache" / "x.png", 640)
-
-
-def test_a_pdf_page_says_what_went_wrong_rather_than_leaking_the_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Three ways drawing fails, each named: a PDF with no pages, a rasteriser
-    that dies mid-draw, and the fallback writing nothing."""
-    pymupdf = pytest.importorskip("pymupdf")
-    from raven.rpc import pdf_preview
-
-    monkeypatch.setattr(pdf_preview, "cache_dir", lambda: tmp_path / "cache")
-    doc = pymupdf.open()
-    doc.new_page(width=200, height=100)
-    source = tmp_path / "one.pdf"
-    doc.save(source)
-
-    # A PDF with no pages cannot be written by this library, so the reader is
-    # one that answers zero: a file that arrived from somewhere else.
-    class _Empty:
-        page_count = 0
+    class _Refuses:
+        page_count = 1
 
         def __enter__(self):
             return self
@@ -546,188 +512,74 @@ def test_a_pdf_page_says_what_went_wrong_rather_than_leaking_the_failure(
         def __exit__(self, *exc):
             return None
 
-    monkeypatch.setattr(pymupdf, "open", lambda path: _Empty())
+        def __getitem__(self, n):
+            raise _OwnLimit("integer out of range")
+
+    monkeypatch.setattr(_pdfdoc, "open_document", lambda path: _Refuses())
+    with pytest.raises(pdf_preview.PdfPreviewError, match="could not be drawn"):
+        pdf_preview._rasterise_pdf_page(source, tmp_path / "cache" / "x.png", 640)
+
+
+def test_a_pdf_page_says_what_went_wrong_rather_than_leaking_the_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Three ways drawing fails, each named: a PDF with no pages, one with
+    fewer pages than were asked for, and a reader that dies mid-open."""
+    from raven.knowledge.parser import _pdfdoc
+    from raven.rpc import pdf_preview
+
+    monkeypatch.setattr(pdf_preview, "cache_dir", lambda: tmp_path / "cache")
+    source = tmp_path / "one.pdf"
+    source.write_bytes(FAKE_PDF)
+
+    class _Pages:
+        def __init__(self, count: int) -> None:
+            self.page_count = count
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return None
+
+    # A PDF with no pages cannot be written by the library that builds these
+    # fixtures, so the reader is one that answers zero: a file that arrived
+    # from somewhere else.
+    monkeypatch.setattr(_pdfdoc, "open_document", lambda path: _Pages(0))
     with pytest.raises(pdf_preview.PdfPreviewError, match="has no pages"):
         pdf_preview._rasterise_pdf_page(source, tmp_path / "cache" / "a.png", 640)
+
+    monkeypatch.setattr(_pdfdoc, "open_document", lambda path: _Pages(2))
+    with pytest.raises(pdf_preview.PdfPreviewError, match="has no page 5"):
+        pdf_preview._rasterise_pdf_page(source, tmp_path / "cache" / "b.png", 640, page=5)
 
     def explode(path):
         raise OSError("the file went away")
 
-    monkeypatch.setattr(pymupdf, "open", explode)
+    monkeypatch.setattr(_pdfdoc, "open_document", explode)
     with pytest.raises(pdf_preview.PdfPreviewError, match="could not be drawn"):
-        pdf_preview._rasterise_pdf_page(source, tmp_path / "cache" / "b.png", 640)
+        pdf_preview._rasterise_pdf_page(source, tmp_path / "cache" / "c.png", 640)
     assert not list((tmp_path / "cache").glob("render-*")), "the scratch directory is gone either way"
 
 
-def _without_pymupdf(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The supported host shape the fallback exists for: poppler, no PyMuPDF."""
-    import builtins
-    import sys
-
-    real_import = builtins.__import__
-
-    def no_pymupdf(name, *args, **kwargs):
-        if name in ("pymupdf", "fitz"):
-            raise ImportError(name)
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", no_pymupdf)
-    monkeypatch.delitem(sys.modules, "pymupdf", raising=False)
-    monkeypatch.delitem(sys.modules, "fitz", raising=False)
-
-
-def test_the_fallback_is_bounded_by_the_same_ceiling(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """`-scale-to-x W -scale-to-y -1` is the flag pair a tall page abuses: the
-    height it leaves to the ratio is a number inside the file. Given the page's
-    size both sides are computed from the bounded scale; without it the page is
-    fitted into a square, which bounds the area either way."""
+def test_pages_are_counted_from_the_document(tmp_path: Path) -> None:
+    """The count and the pages the reader then sees come from one reading."""
+    pymupdf = pytest.importorskip("pymupdf")
     from raven.rpc import pdf_preview
 
-    monkeypatch.setattr(pdf_preview, "cache_dir", lambda: tmp_path / "cache")
-    tall = tmp_path / "tall.pdf"
-    tall.write_bytes(FAKE_PDF)
+    doc = pymupdf.open()
+    for _ in range(3):
+        doc.new_page(width=200, height=100)
+    source = tmp_path / "three.pdf"
+    doc.save(source)
+    doc.close()
 
-    monkeypatch.setattr(pdf_preview, "_pdf_page_size", lambda source: (72.0, 14400.0))
-    argv = pdf_preview._scale_argv(tall, pdf_preview.THUMB_WIDTH_PX)
-    assert argv[0::2] == ["-scale-to-x", "-scale-to-y"], "both sides are stated, none left to the page"
-    drawn = int(argv[1]) * int(argv[3])
-    assert drawn <= pdf_preview.THUMB_MAX_PIXELS + int(argv[1]) + int(argv[3])
-    assert "-1" not in argv, "nothing is left for the file to decide"
+    assert pdf_preview._count_pages(source) == 3
 
-    monkeypatch.setattr(pdf_preview, "_pdf_page_size", lambda source: (612.0, 792.0))
-    letter = pdf_preview._scale_argv(tall, pdf_preview.THUMB_WIDTH_PX)
-    assert letter[1] == str(pdf_preview.THUMB_WIDTH_PX), "an ordinary page still gets the tile width"
-
-    monkeypatch.setattr(pdf_preview, "_pdf_page_size", lambda source: None)
-    boxed = pdf_preview._scale_argv(tall, pdf_preview.THUMB_WIDTH_PX)
-    assert boxed == ["-scale-to", str(pdf_preview.THUMB_BOX_PX)]
-    assert pdf_preview.THUMB_BOX_PX**2 <= pdf_preview.THUMB_MAX_PIXELS
-
-
-def test_the_page_size_is_read_from_poppler_or_answered_as_unknown(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Every way the reading can fail answers None, which is the square: a host
-    without pdfinfo, a run that cannot start, and output that says nothing."""
-    import subprocess
-
-    from raven.rpc import pdf_preview
-
-    source = tmp_path / "one.pdf"
-    source.write_bytes(FAKE_PDF)
-
-    monkeypatch.setattr(pdf_preview.shutil, "which", lambda name: None)
-    assert pdf_preview._pdf_page_size(source) is None
-
-    monkeypatch.setattr(pdf_preview.shutil, "which", lambda name: "/usr/bin/pdfinfo")
-
-    class _Out:
-        def __init__(self, text: str) -> None:
-            self.stdout = text
-
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Out("Page    1 size:  72 x 14400 pts\n"))
-    assert pdf_preview._pdf_page_size(source) == (72.0, 14400.0)
-
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Out("Page size:       612 x 792 pts (letter)\n"))
-    assert pdf_preview._pdf_page_size(source) == (612.0, 792.0)
-
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Out("Encrypted: yes\n"))
-    assert pdf_preview._pdf_page_size(source) is None
-
-    def cannot_start(*a, **k):
-        raise OSError("pdfinfo is not executable")
-
-    monkeypatch.setattr(subprocess, "run", cannot_start)
-    assert pdf_preview._pdf_page_size(source) is None
-
-
-def test_the_fallback_runs_with_that_argv_on_a_host_without_pymupdf(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The whole path, on the host shape it is written for: what the child is
-    asked to draw is what the bound above computed, not what the page said."""
-    from raven.rpc import pdf_preview
-
-    monkeypatch.setattr(pdf_preview, "cache_dir", lambda: tmp_path / "cache")
-    _without_pymupdf(monkeypatch)
-    monkeypatch.setattr(pdf_preview, "_pdf_page_size", lambda source: (72.0, 14400.0))
-
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    seen = tmp_path / "argv"
-    script = fake_bin / "pdftoppm"
-    script.write_text(
-        '#!/bin/bash\nout="${@: -1}"\nprintf "PNGfake" > "$out-1.png"\nprintf "%s\\n" "$@" > "$RAVEN_ARGV_LOG"\n'
-    )
-    script.chmod(0o755)
-    monkeypatch.setenv("PATH", str(fake_bin))
-    monkeypatch.setenv("RAVEN_ARGV_LOG", str(seen))
-    source = tmp_path / "one.pdf"
-    source.write_bytes(FAKE_PDF)
-
-    target = tmp_path / "cache" / "one.png"
-    pdf_preview._rasterise_pdf_page(source, target, pdf_preview.THUMB_WIDTH_PX, 12.0)
-
-    assert target.read_bytes() == b"PNGfake"
-    assert not list((tmp_path / "cache").glob("render-*")), "the scratch directory is gone"
-    argv = seen.read_text().split()
-    assert "-1" not in argv, "the child is told both sides"
-    drawn = int(argv[argv.index("-scale-to-x") + 1]) * int(argv[argv.index("-scale-to-y") + 1])
-    assert drawn <= pdf_preview.THUMB_MAX_PIXELS * 1.01
-
-
-def test_a_pdf_page_fallback_that_writes_nothing_is_named(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from raven.rpc import pdf_preview
-
-    monkeypatch.setattr(pdf_preview, "cache_dir", lambda: tmp_path / "cache")
-    _without_pymupdf(monkeypatch)
-
-    fake_bin = tmp_path / "quiet"
-    fake_bin.mkdir()
-    script = fake_bin / "pdftoppm"
-    script.write_text("#!/bin/sh\nexit 0\n")
-    script.chmod(0o755)
-    monkeypatch.setenv("PATH", str(fake_bin))
-    source = tmp_path / "one.pdf"
-    source.write_bytes(FAKE_PDF)
-
-    with pytest.raises(pdf_preview.PdfPreviewError, match="drew nothing"):
-        pdf_preview._rasterise_pdf_page(source, tmp_path / "cache" / "c.png", 640)
-
-
-def test_a_pdf_page_falls_back_to_pdftoppm_and_then_says_what_is_missing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from raven.rpc import pdf_preview
-
-    monkeypatch.setattr(pdf_preview, "cache_dir", lambda: tmp_path / "cache")
-    _without_pymupdf(monkeypatch)
-    source = tmp_path / "one.pdf"
-    source.write_bytes(FAKE_PDF)
-
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    script = fake_bin / "pdftoppm"
-    script.write_text(
-        '#!/bin/bash\nprintf "%s " "$@" > "'
-        + str(fake_bin / "argv.txt")
-        + '"\nout="${@: -1}"\nprintf "PNGfake" > "$out-1.png"\n'
-    )
-    script.chmod(0o755)
-    monkeypatch.setenv("PATH", str(fake_bin))
-
-    target = tmp_path / "cache" / "one.png"
-    pdf_preview._rasterise_pdf_page(source, target, 640)
-    assert target.read_bytes() == b"PNGfake"
-    # One number for the long side, not a pinned width with the height left to
-    # follow: the child must not be able to draw what this process refuses to.
-    argv = (fake_bin / "argv.txt").read_text().split() if (fake_bin / "argv.txt").exists() else []
-    if argv:
-        assert "-scale-to" in argv and "-scale-to-y" not in argv
-
-    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
-    with pytest.raises(pdf_preview.PdfPreviewUnavailableError, match="no PDF rasteriser"):
-        pdf_preview._rasterise_pdf_page(source, tmp_path / "cache" / "two.png", 640)
+    broken = tmp_path / "broken.pdf"
+    broken.write_bytes(b"not a pdf at all")
+    with pytest.raises(pdf_preview.PdfPreviewError, match="could not be read"):
+        pdf_preview._count_pages(broken)
 
 
 async def test_a_second_click_reads_the_cache(client: TestClient, tmp_path: Path, soffice: FakeSoffice) -> None:
@@ -1168,13 +1020,12 @@ async def test_the_converter_is_handed_a_suffixed_name(kb) -> None:
     """LibreOffice picks its input filter partly from the extension, and a
     legacy .doc arriving as an extensionless blob is the case its sniffing is
     worst at. The alias is the same inode, so the cache key does not move."""
-    from raven.rpc import knowledge_preview
 
     base = await _base(kb)
     doc = kb.add_document(base.id, filename="report.doc", content=b"\xd0\xcf\x11\xe0stub")
     blob = kb.document_path(doc.id)
 
-    alias = knowledge_preview._alias_for(doc, blob)
+    alias = _alias(doc, blob)
 
     assert alias.suffix == ".doc"
     assert alias.read_bytes() == blob.read_bytes()
@@ -1187,12 +1038,11 @@ async def test_deleting_a_document_takes_its_retained_source_with_it(kb) -> None
     are and a blob is stored under a bare id. Deleting the document unlinks
     the blob and knows nothing about that copy, so without this the content
     stays on disk under a name nothing lists."""
-    from raven.rpc import knowledge_preview
     from raven.rpc.methods import knowledge as kb_methods
 
     base = await _base(kb)
     doc = kb.add_document(base.id, filename="notice.xls", content=b"\xd0\xcf\x11\xe0stub")
-    alias = knowledge_preview._alias_for(doc, kb.document_path(doc.id))
+    alias = _alias(doc, kb.document_path(doc.id))
     assert alias.is_file()
 
     kb_methods._set_manager_for_tests(kb)
@@ -1209,12 +1059,12 @@ async def test_deleting_a_document_takes_its_rendering_with_it(kb) -> None:
     converter produced is a readable copy of the whole document, and it is
     keyed by a digest of the source's path and stamp -- so the key has to be
     taken while that file is still there."""
-    from raven.rpc import knowledge_preview, pdf_preview
+    from raven.rpc import pdf_preview
     from raven.rpc.methods import knowledge as kb_methods
 
     base = await _base(kb)
     doc = kb.add_document(base.id, filename="notice.xls", content=b"\xd0\xcf\x11\xe0stub")
-    alias = knowledge_preview._alias_for(doc, kb.document_path(doc.id))
+    alias = _alias(doc, kb.document_path(doc.id))
     rendered = pdf_preview.cache_dir() / f"{pdf_preview.cache_key(alias)}.pdf"
     rendered.write_bytes(b"%PDF-1.4 the document, readable")
 
@@ -1230,14 +1080,14 @@ async def test_deleting_a_document_takes_its_rendering_with_it(kb) -> None:
 
 async def test_deleting_a_base_takes_every_retained_source_with_it(kb) -> None:
     """The same for the base around them: its delete visits blobs only."""
-    from raven.rpc import knowledge_preview, pdf_preview
+    from raven.rpc import pdf_preview
     from raven.rpc.methods import knowledge as kb_methods
 
     base = await _base(kb)
     aliases = []
     for name in ("one.xls", "two.doc"):
         doc = kb.add_document(base.id, filename=name, content=b"\xd0\xcf\x11\xe0stub")
-        aliases.append(knowledge_preview._alias_for(doc, kb.document_path(doc.id)))
+        aliases.append(_alias(doc, kb.document_path(doc.id)))
     assert all(a.is_file() for a in aliases)
 
     renderings = [pdf_preview.cache_dir() / f"{pdf_preview.cache_key(a)}.pdf" for a in aliases]
@@ -1260,11 +1110,11 @@ async def test_a_retained_source_nobody_deleted_is_swept_like_a_rendering(kb, mo
     for as long as the installation lived."""
     import os
 
-    from raven.rpc import knowledge_preview, pdf_preview
+    from raven.rpc import pdf_preview
 
     base = await _base(kb)
     doc = kb.add_document(base.id, filename="notice.xls", content=b"\xd0\xcf\x11\xe0stub")
-    alias = knowledge_preview._alias_for(doc, kb.document_path(doc.id))
+    alias = _alias(doc, kb.document_path(doc.id))
 
     stale = time.time() - (pdf_preview.CACHE_TTL_S + 3600)
     os.utime(alias, (stale, stale))
@@ -1274,11 +1124,11 @@ async def test_a_retained_source_nobody_deleted_is_swept_like_a_rendering(kb, mo
 
 
 async def test_the_sweep_leaves_a_retained_source_still_in_use(kb) -> None:
-    from raven.rpc import knowledge_preview, pdf_preview
+    from raven.rpc import pdf_preview
 
     base = await _base(kb)
     doc = kb.add_document(base.id, filename="notice.xls", content=b"\xd0\xcf\x11\xe0stub")
-    alias = knowledge_preview._alias_for(doc, kb.document_path(doc.id))
+    alias = _alias(doc, kb.document_path(doc.id))
 
     pdf_preview._sweep(pdf_preview.cache_dir())
 
@@ -1317,6 +1167,143 @@ async def test_only_the_kinds_that_can_need_it_may_be_asked_to_run(client: TestC
     r = await client.get("/file", params={"path": str(notes), "run": "1"}, headers=auth())
 
     assert r.headers["Content-Security-Policy"] == "sandbox"
+
+
+# ---------------------------------------------------------------------------
+# /knowledge/crop -- the picture of the region a chunk was cut from
+# ---------------------------------------------------------------------------
+
+
+def _alias(doc, blob):
+    """The suffixed name a renderer is handed for one stored file.
+
+    It lives in `pdf_preview` beside the sweep that empties that directory --
+    the module that owns a cache owns what fills it.
+    """
+    from raven.rpc import pdf_preview
+
+    return pdf_preview.source_alias(doc.id, blob, doc.source)
+
+
+def _crop(kb, document_id: str, chunk_id: str = "a" * 32) -> str:
+    """Put one crop on disk the way indexing would, and answer its id."""
+    directory = kb._crops_dir(document_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{chunk_id}.webp").write_bytes(b"RIFF0000WEBPVP8 ")
+    return chunk_id
+
+
+async def _cropped(kb) -> "tuple[str, str]":
+    base = await _base(kb)
+    doc = kb.add_document(base.id, filename="report.pdf", content=b"%PDF-1.4\n")
+    return doc.id, _crop(kb, doc.id)
+
+
+async def test_knowledge_crop_serves_the_picture_by_its_two_ids(client: TestClient, kb) -> None:
+    document, chunk = await _cropped(kb)
+
+    r = await client.get("/knowledge/crop", params={"document": document, "chunk": chunk}, headers=auth())
+
+    assert r.status == 200
+    assert r.headers["Content-Type"] == "image/webp"
+    assert r.headers["X-Content-Type-Options"] == "nosniff"
+
+
+async def test_knowledge_crop_is_never_a_document(client: TestClient, kb) -> None:
+    """The strictest sandbox there is. This route answers with an image and
+    nothing it serves may fetch, script or frame anything."""
+    document, chunk = await _cropped(kb)
+
+    r = await client.get("/knowledge/crop", params={"document": document, "chunk": chunk}, headers=auth())
+
+    policy = r.headers["Content-Security-Policy"]
+    assert policy.startswith("sandbox")
+    assert "default-src 'none'" in policy
+    assert "allow-scripts" not in policy and "allow-same-origin" not in policy
+
+
+async def test_knowledge_crop_is_cached(client: TestClient, kb) -> None:
+    """A crop is immutable for the life of its chunk id -- the id is derived
+    from the chunk's text -- and a panel of thumbnails refetching on every
+    scroll pays the whole cost of the feature again per glance."""
+    document, chunk = await _cropped(kb)
+
+    r = await client.get("/knowledge/crop", params={"document": document, "chunk": chunk}, headers=auth())
+
+    assert "immutable" in r.headers["Cache-Control"]
+
+
+async def test_knowledge_crop_refuses_without_a_token(client: TestClient, kb) -> None:
+    document, chunk = await _cropped(kb)
+
+    r = await client.get("/knowledge/crop", params={"document": document, "chunk": chunk})
+
+    assert r.status == 401
+
+
+@pytest.mark.parametrize(
+    "chunk",
+    ["", "nosuchchunk", "../../../records.json", "..", "a/b"],
+    ids=["nothing", "not written", "traversal", "parent", "separator"],
+)
+async def test_knowledge_crop_answers_404_for_anything_it_did_not_write(client: TestClient, kb, chunk: str) -> None:
+    """The chunk id arrives from the page and becomes a path segment, so it is
+    checked rather than trusted -- and anything that is not a crop this base
+    wrote is simply not there.
+
+    A readable file is planted where the traversal would land, so these can
+    fail. Without one the walk reaches nothing and the route answers 404 for
+    the ordinary reason, which is the same answer the check gives.
+    """
+    document, _ = await _cropped(kb)
+    (kb._crops / "secret.webp").write_bytes(b"RIFF0000WEBPVP8 ")
+    (kb._crops.parent / "records.json").write_bytes(b"{}")
+
+    r = await client.get("/knowledge/crop", params={"document": document, "chunk": chunk}, headers=auth())
+
+    assert r.status == 404
+
+
+@pytest.mark.parametrize(
+    "document",
+    ["", "nosuchdocument", "../private", "..", "a/b", "x" * 65],
+    ids=["nothing", "not written", "traversal", "parent", "separator", "too long"],
+)
+async def test_knowledge_crop_refuses_a_document_that_names_a_place(client: TestClient, kb, document: str) -> None:
+    """The other half of the path, and the one that was trusted.
+
+    The route's contract is two ids and no location. `..` walks out of the
+    crops directory carrying no separator for a shape test to catch, and the
+    planted file below is what the walk would have served.
+    """
+    await _cropped(kb)
+    outside = kb._crops.parent / "private"
+    outside.mkdir(parents=True, exist_ok=True)
+    (outside / "secret.webp").write_bytes(b"RIFF0000WEBPVP8 ")
+
+    r = await client.get("/knowledge/crop", params={"document": document, "chunk": "secret"}, headers=auth())
+
+    assert r.status == 404
+
+
+async def test_knowledge_crop_refuses_a_document_naming_an_absolute_path(
+    client: TestClient, kb, tmp_path: Path
+) -> None:
+    """The worst of the two, because it needs no walking.
+
+    Joining an absolute path replaces everything to its left, so a `document`
+    naming any readable directory served whatever `.webp` sat in it -- past
+    the state directory, and past the workspace fence the `/file` route
+    applies, for any file whose name fits a chunk id.
+    """
+    await _cropped(kb)
+    private = tmp_path / "Pictures"
+    private.mkdir(parents=True, exist_ok=True)
+    (private / "secret.webp").write_bytes(b"RIFF0000WEBPVP8 ")
+
+    r = await client.get("/knowledge/crop", params={"document": str(private), "chunk": "secret"}, headers=auth())
+
+    assert r.status == 404
 
 
 async def _page(client: TestClient, source: Path, p: int | str | None = None):
@@ -1477,3 +1464,95 @@ async def test_the_sweep_reaches_the_pictures_it_draws(tmp_path: Path, monkeypat
     assert not stale_png.exists(), "an expired picture goes, like an expired PDF"
     assert not stale_pdf.exists()
     assert fresh_png.exists(), "one still in service stays"
+
+
+# ---------------------------------------------------------------------------
+# /knowledge/page -- the file drawn as pages, for the panel that marks them
+# ---------------------------------------------------------------------------
+
+
+def _pdf_bytes(pages: int = 3) -> bytes:
+    """A real PDF, because this route renders one rather than serving it."""
+    import pymupdf
+
+    made = pymupdf.open()
+    for number in range(1, pages + 1):
+        page = made.new_page(width=595, height=842)
+        page.insert_text((60, 120), f"page {number}", fontsize=36)
+    out = made.tobytes()
+    made.close()
+    return out
+
+
+async def _paged(kb, monkeypatch, tmp_path) -> str:
+    monkeypatch.setattr("raven.config.paths.get_cache_dir", lambda: tmp_path / "cache")
+    base = await _base(kb)
+    return kb.add_document(base.id, filename="report.pdf", content=_pdf_bytes()).id
+
+
+async def test_knowledge_page_draws_one_page_of_a_document(client: TestClient, kb, monkeypatch, tmp_path) -> None:
+    document = await _paged(kb, monkeypatch, tmp_path)
+
+    r = await client.get("/knowledge/page", params={"document": document, "page": "2"}, headers=auth())
+
+    assert r.status == 200
+    assert r.headers["Content-Type"] == "image/webp"
+    assert len(await r.read()) > 0
+
+
+async def test_knowledge_page_is_cached_and_drawn_once(client: TestClient, kb, monkeypatch, tmp_path) -> None:
+    """A page is immutable for the life of its document id: the bytes behind an
+    id never change, because re-uploading a file makes a new document."""
+    from raven.rpc import knowledge_pages
+
+    document = await _paged(kb, monkeypatch, tmp_path)
+
+    r = await client.get("/knowledge/page", params={"document": document, "page": "1"}, headers=auth())
+    assert "immutable" in r.headers["Cache-Control"]
+
+    drawn = []
+    real = knowledge_pages._render
+    monkeypatch.setattr(knowledge_pages, "_render", lambda *a: (drawn.append(a), real(*a))[1])
+    await client.get("/knowledge/page", params={"document": document, "page": "1"}, headers=auth())
+
+    assert drawn == [], "the second ask is served from what the first drew"
+
+
+async def test_knowledge_page_is_never_a_document(client: TestClient, kb, monkeypatch, tmp_path) -> None:
+    document = await _paged(kb, monkeypatch, tmp_path)
+
+    r = await client.get("/knowledge/page", params={"document": document, "page": "1"}, headers=auth())
+
+    policy = r.headers["Content-Security-Policy"]
+    assert policy.startswith("sandbox")
+    assert "default-src 'none'" in policy
+    assert "allow-scripts" not in policy and "allow-same-origin" not in policy
+
+
+async def test_knowledge_page_refuses_without_a_token(client: TestClient, kb, monkeypatch, tmp_path) -> None:
+    document = await _paged(kb, monkeypatch, tmp_path)
+
+    r = await client.get("/knowledge/page", params={"document": document, "page": "1"})
+
+    assert r.status == 401
+
+
+@pytest.mark.parametrize(
+    ("page", "status"),
+    [("", 400), ("0", 400), ("-1", 400), ("nine", 400), ("99", 404)],
+    ids=["nothing", "zero", "negative", "words", "past the end"],
+)
+async def test_knowledge_page_refuses_a_page_that_is_not_one(
+    client: TestClient, kb, monkeypatch, tmp_path, page: str, status: int
+) -> None:
+    document = await _paged(kb, monkeypatch, tmp_path)
+
+    r = await client.get("/knowledge/page", params={"document": document, "page": page}, headers=auth())
+
+    assert r.status == status
+
+
+async def test_knowledge_page_answers_404_for_a_document_it_does_not_have(client: TestClient, kb) -> None:
+    r = await client.get("/knowledge/page", params={"document": "nosuchdoc", "page": "1"}, headers=auth())
+
+    assert r.status == 404

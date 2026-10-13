@@ -361,7 +361,9 @@ async def _rows(*, probe: bool = True) -> list[dict]:
                 # things. Always present, never omitted -- a client cannot tell
                 # a missing key from a false one, and one day it will mean
                 # "this server predates the field".
-                "needs_auth": bool(getattr(snapshot, "needs_auth", False)),
+                # Old capabilities remain useful after a config edit; an old
+                # authentication verdict must not disable the edited row.
+                "needs_auth": bool(getattr(snapshot, "needs_auth", False)) and not getattr(snapshot, "stale", False),
                 "mcps": list(getattr(cfg, "mcps", None) or []),
                 "allow_mcp_secrets": bool(getattr(cfg, "allow_mcp_secrets", False)),
                 "last_test_ok": None if last is None else last.ok,
@@ -460,10 +462,11 @@ async def subagents_add(params: dict, *, agent_loop_factory: "AgentLoopFactory |
     entry = third_party_subagent_preset(preset_name)
     machine = _clean_name(params.get("machine"), field="machine")
     if machine:
-        _refuse_unless_it_can_run_there(entry, machine)
+        remote_cwd = params["remote_cwd"].strip() if isinstance(params.get("remote_cwd"), str) else ""
+        _refuse_unless_it_can_run_there(entry, machine, remote_cwd=remote_cwd)
         entry["machine"] = machine
-        if isinstance(params.get("remote_cwd"), str) and params["remote_cwd"].strip():
-            entry["remoteCwd"] = params["remote_cwd"].strip()
+        if remote_cwd:
+            entry["remoteCwd"] = remote_cwd
     name = _clean_name(params.get("name"), field="name")
     if name:
         entry["name"] = name
@@ -523,21 +526,32 @@ async def subagents_add(params: dict, *, agent_loop_factory: "AgentLoopFactory |
     return {"added": True, "name": entry["name"]}
 
 
-def _refuse_unless_it_can_run_there(entry: dict, machine: str) -> None:
+def _refuse_unless_it_can_run_there(entry: dict, machine: str, *, remote_cwd: str = "") -> None:
     """Refuse an add on a registered machine before anything is spent on it.
 
-    Only an acp preset runs on a machine: its command is started there by the
-    machine's Raven node. The machine is judged the way a dispatch judges it
-    (:func:`raven.acp_client.remote.machine`): the lane on, the row registered
-    and usable -- each refusal one sentence, with no address in it.
+    An acp or cli preset's command is started there by the machine's Raven
+    node; an openai preset's endpoint is reached from the machine through an
+    ssh tunnel, so it has no directory there, and a ``remote_cwd`` is refused
+    with it rather than written and ignored. A built-in agent is Raven's own
+    loop in this process and runs on no other machine. The machine is judged
+    the way a dispatch judges it (:func:`raven.acp_client.remote.machine`):
+    the lane on, the row registered and usable -- each refusal one sentence,
+    with no address in it.
     """
     from raven.acp_client import remote
 
-    if entry.get("kind") != "acp":
+    shown = str(entry.get("preset") or entry.get("name"))
+    if entry.get("kind") == "builtin":
         raise ConfigValidationError(
-            f"preset {str(entry.get('preset') or entry.get('name'))!r} is not an acp agent; only an acp agent "
-            "runs on a registered machine",
+            f"preset {shown!r} is a built-in agent: Raven's own loop in this process, which runs on no other "
+            "machine; reach the machine from it with exec and the file tools instead",
             data={"field": "machine", "machine": machine},
+        )
+    if entry.get("kind") == "openai" and remote_cwd:
+        raise ConfigValidationError(
+            f"preset {shown!r} is an openai agent, reached from machine {machine!r} through a tunnel: it has no "
+            "working directory there, so leave remote_cwd out",
+            data={"field": "remote_cwd", "machine": machine},
         )
     try:
         remote.machine(machine)

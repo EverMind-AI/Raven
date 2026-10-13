@@ -11,12 +11,13 @@ opens no network port.
 One connection per machine carries everything the host asks of it. Agents the
 daemon starts for the host each get a *channel* of that connection, on which
 the agent's ACP frames travel in both directions as ``agent/frame``
-notifications -- and a *task* id of the host's choosing, which outlives the
-connection: an agent keeps running when the ssh goes, its frames are kept on
-the machine, and a new connection picks them up from where the host stopped
-reading (``agent/attach``). Requests are answered as they finish, not in the
-order they arrive: a search of a large tree does not hold a heartbeat behind
-it.
+notifications (a CLI agent's output lines travel the same way, and its prompt
+reaches its stdin as ``agent/stdin``) -- and a *task* id of the host's
+choosing, which outlives the connection: an agent keeps running when the ssh
+goes, its frames are kept on the machine, and a new connection picks them up
+from where the host stopped reading (``agent/attach``). Requests are answered
+as they finish, not in the order they arrive: a search of a large tree does
+not hold a heartbeat behind it.
 
 Every ``fs/*`` call carries ``roots``, the directories it may touch. The host
 decides them; the daemon checks them again, because only the machine can
@@ -27,7 +28,7 @@ from __future__ import annotations
 
 #: Bumped when a method or a field changes meaning. A daemon and a host that
 #: disagree refuse each other at ``node/hello`` instead of misreading a reply.
-PROTOCOL = 3
+PROTOCOL = 4
 
 HELLO = "node/hello"
 PING = "node/ping"
@@ -40,6 +41,7 @@ SESSION_DIR = "session/dir"
 AGENT_LAUNCH = "agent/launch"
 AGENT_ATTACH = "agent/attach"
 AGENT_FRAME = "agent/frame"
+AGENT_STDIN = "agent/stdin"
 AGENT_STDERR = "agent/stderr"
 AGENT_EXIT = "agent/exit"
 AGENT_CANCEL = "agent/cancel"
@@ -100,6 +102,7 @@ __all__ = [
     "AGENT_FRAME",
     "AGENT_LAUNCH",
     "AGENT_STDERR",
+    "AGENT_STDIN",
     "BUSY",
     "CHANGED",
     "CHUNK",

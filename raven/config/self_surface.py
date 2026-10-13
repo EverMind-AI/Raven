@@ -41,6 +41,7 @@ from typing import Any
 from pydantic import BaseModel
 from pydantic.alias_generators import to_camel, to_snake
 
+from raven.config.keys import key_as_written as _spelled
 from raven.config.loader import EXTENSION_KEYS, get_config_path, read_raw_or_raise
 from raven.providers.registry import PROVIDERS
 from raven.utils.atomic_io import atomic_update
@@ -1410,21 +1411,6 @@ def _short(value: Any) -> str:
 # ---------------------------------------------------------------------------
 # Reading and writing the file
 # ---------------------------------------------------------------------------
-
-
-def _spelled(node: dict[str, Any], name: str) -> str:
-    """The spelling ``node`` already uses for ``name``, else ``name`` itself.
-
-    Every block validates under both camelCase and snake_case, and the models
-    forbid extras, so writing the other spelling beside an existing key makes
-    the whole config stop loading.
-    """
-    if name in node:
-        return name
-    for alias in (to_camel(name), to_snake(name)):
-        if alias in node:
-            return alias
-    return name
 
 
 def read_raw(config_path: Path | None = None) -> dict[str, Any]:

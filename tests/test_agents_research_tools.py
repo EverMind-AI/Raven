@@ -51,6 +51,19 @@ from raven.security.network import validate_url_target  # noqa: E402
 _NO_LLM_GATES = {"verify": {"enabled": False}, "forceFinalize": {"enabled": False}}
 
 
+@pytest.fixture(autouse=True)
+def _public_dns(monkeypatch):
+    """Keep the real URL checks, with deterministic DNS beside the stubbed HTTP.
+
+    Cases about resolution failure override this function-scoped fixture.
+    """
+
+    def resolve(host, port, *args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("8.8.8.8", port or 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolve)
+
+
 def _ctx(tmp_path: Path, slice_: dict, *, provider: object | None = None) -> PluginContext:
     return PluginContext(
         config=slice_,
@@ -66,6 +79,21 @@ def _patch_client(monkeypatch, transport):
         return real(transport=transport, **kwargs)
 
     monkeypatch.setattr(httpx, "AsyncClient", factory)
+    _shorten_the_retry_ladder(monkeypatch)
+
+
+def _shorten_the_retry_ladder(monkeypatch):
+    """Collapse the fetch backoff to a millisecond a slot.
+
+    The suite shortens the ladders it knows about in `tests/conftest.py`, which
+    reaches `raven.*` and not this plugin -- so a case whose fallback walk
+    retries waited the real one, five seconds of a test session spent asleep.
+    The length stays, because that is how the walk counts its attempts; only
+    the seconds collapse.
+    """
+    from research_flow.tools import web
+
+    monkeypatch.setattr(web, "_RETRY_BACKOFF_S", tuple(0.001 for _ in web._RETRY_BACKOFF_S))
 
 
 class _PageTransport(httpx.AsyncBaseTransport):

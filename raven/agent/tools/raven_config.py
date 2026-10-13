@@ -251,16 +251,19 @@ def _what_it_needs(
 ) -> list[str]:
     """The next step for one agent that did not answer, read off its refusal's remedy.
 
-    On a registered machine there is no next step here: the agent, its install
-    and its sign-in are all on that machine, which exec does not reach.
+    On a registered machine the fix is made there: the agent, its install and
+    its sign-in are all on that machine. exec can look there -- it takes the
+    machine's id -- but a sign-in or an install is the user's, in a terminal of
+    their own on it.
     """
     from raven.agent.subagent.presets import DIAGNOSE_HINTS
 
     if machine:
         lines = [
-            f"- It runs on machine {machine!r}, so every fix is made there by the user, in a terminal on that "
-            "machine: install, sign-in or setup, as the refusal says. Nothing here reaches it (exec refuses "
-            "ssh to a registered machine). Tell the user what it said, then retry once they have."
+            f"- It runs on machine {machine!r}, so the fix is made there by the user, in a terminal on that "
+            f"machine: install, sign-in or setup, as the refusal says. exec(machine={machine!r}) can look there "
+            "first (command -v <agent>, its --version), capped at 60s; it is not where a sign-in or an install "
+            "happens. Tell the user what the refusal and the look said, then retry once they have."
         ]
         return lines + _menu_line(row, model)
     remedy = remedy or {}
@@ -307,7 +310,7 @@ def _menu_line(row: dict[str, Any], model: str) -> list[str]:
 
 
 def _machines_line() -> str | None:
-    """The registered machines an acp preset can be added on, while the machine lane is on; else nothing."""
+    """The registered machines a preset can be added on, while the machine lane is on; else nothing."""
     from raven.home import machine_lane_enabled
     from raven.ops import connections
 
@@ -325,9 +328,10 @@ def _machines_line() -> str | None:
     if not names:
         return None
     return (
-        f"  machines an acp preset can be added on: {', '.join(names)} -- add subagents "
-        '{"preset": "<preset>", "machine": "<id>", "remote_cwd"?: "~/raven-work"}: it runs there, signed in '
-        "there; the name defaults to <preset>@<id>"
+        f"  machines a preset can be added on: {', '.join(names)} -- add subagents "
+        '{"preset": "<preset>", "machine": "<id>", "remote_cwd"?: "~/raven-work"}: an acp or cli preset runs '
+        "there, signed in there; an openai preset's endpoint is reached from there through an ssh tunnel (no "
+        "remote_cwd); the name defaults to <preset>@<id>"
     )
 
 

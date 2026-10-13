@@ -721,6 +721,13 @@ async def test_the_announce_does_not_point_at_this_computer_s_workspace(box, tmp
     assert "Working directory: /tmp" not in text
     assert "Collected outputs:" not in text, "nothing came back from this run"
 
+    # A run refused by the registry, the ssh or the node never made it: the
+    # line names the directory without claiming it exists.
+    await mgr._announce_result("t1", "Look", "look", "Error: it could not be reached", origin, "error")
+    failed = submitted[-1].text
+    assert "Working directory: on machine 'box', ~/raven-work/t1 (made there only if the run got that far)" in failed
+    assert "made there when the run started" not in failed
+
     record = tmp_path / "nodes" / "t1.out.md"
     await mgr._announce_result("t1", "Look", "look", "done", origin, "ok", record_path=str(record))
     assert "Collected outputs:" not in submitted[1].text, "nothing is brought back from a machine unasked"

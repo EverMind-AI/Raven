@@ -2740,8 +2740,9 @@ async def test_a_reserved_name_entry_is_reported_once_and_as_ignored(config_path
     assert rows[0]["enabled"] is True
 
 
+@pytest.mark.parametrize("stale", [False, True])
 async def test_a_row_carries_the_credential_verdict_its_snapshot_measured(
-    config_path: Path, monkeypatch: pytest.MonkeyPatch
+    config_path: Path, monkeypatch: pytest.MonkeyPatch, stale: bool
 ) -> None:
     """The agents page draws `Unauthorized` off this and nothing else.
 
@@ -2758,14 +2759,20 @@ async def test_a_row_carries_the_credential_verdict_its_snapshot_measured(
         if getattr(cfg, "name", "") != "Codex":
             return None
         return CapabilitySnapshot(
-            agent="Codex", fingerprint="f", status="attention", detail="no session", measured_at_ms=0, needs_auth=True
+            agent="Codex",
+            fingerprint="f",
+            status="attention",
+            detail="no session",
+            measured_at_ms=0,
+            needs_auth=True,
+            stale=stale,
         )
 
     monkeypatch.setattr(mod, "acp_snapshot_for", snapshot_for, raising=False)
     monkeypatch.setattr("raven.agent.subagent.probe.acp_snapshot_for", snapshot_for)
 
     rows = {row["name"]: row for row in (await subagents_list({"probe": False}))["rows"]}
-    assert rows["Codex"]["needs_auth"] is True
+    assert rows["Codex"]["needs_auth"] is not stale
     # Every other row says so too, rather than leaving the key out: a missing key
     # and a false one read the same to a client, right up until one of them means
     # "this server is too old to know". A cli row and an openai row have no
@@ -3223,16 +3230,35 @@ async def test_add_on_a_machine_nobody_registered_is_refused_by_name_without_an_
     assert _stored(config_path) == before
 
 
-async def test_add_on_a_machine_takes_only_an_acp_preset(
+async def test_add_on_a_machine_takes_an_openai_preset_and_no_directory_for_it(
     config_path: Path, registry: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """An openai preset's endpoint is reached from the machine through a tunnel: it works in no directory there."""
     monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _pings_ok)
 
-    with pytest.raises(ConfigValidationError) as caught:
-        await subagents_add({"preset": "mirothinker", "machine": "ravenx2"})
+    out = await subagents_add({"preset": "mirothinker", "machine": "ravenx2"})
 
-    assert "not an acp agent" in str(caught.value) and caught.value.data["machine"] == "ravenx2"
-    assert all(e.get("machine") is None for e in _stored(config_path))
+    assert out == {"added": True, "name": "mirothinker@ravenx2"}
+    entry = next(e for e in _stored(config_path) if e["name"] == "mirothinker@ravenx2")
+    assert entry["machine"] == "ravenx2" and entry["kind"] == "openai" and "remoteCwd" not in entry
+    assert "203.0.113" not in json.dumps(_stored(config_path))
+
+    with pytest.raises(ConfigValidationError) as caught:
+        await subagents_add({"preset": "mirothinker", "machine": "ravenx2", "name": "lab-llm", "remote_cwd": "~/x"})
+
+    assert "leave remote_cwd out" in str(caught.value) and caught.value.data["field"] == "remote_cwd"
+    assert all(e["name"] != "lab-llm" for e in _stored(config_path))
+
+
+def test_a_built_in_agent_is_refused_a_machine_in_one_sentence() -> None:
+    """Raven's own loop runs in this process: there is no process of it to start elsewhere."""
+    from raven.rpc.methods.subagents import _refuse_unless_it_can_run_there
+
+    with pytest.raises(ConfigValidationError) as caught:
+        _refuse_unless_it_can_run_there({"kind": "builtin", "name": "research-raven"}, "ravenx2")
+
+    assert "built-in agent" in str(caught.value) and "runs on no other machine" in str(caught.value)
+    assert caught.value.data == {"field": "machine", "machine": "ravenx2"}
 
 
 async def test_add_on_a_machine_lends_no_key(

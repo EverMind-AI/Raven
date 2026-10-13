@@ -1624,6 +1624,39 @@ async def test_the_context_window_a_picker_shows_is_the_one_a_request_is_sized_w
     assert shown == resolve_context_window("openai/gpt-4o", allow_fetch=False)
 
 
+async def test_options_read_cached_windows_without_asking_the_ollama_daemon(fake_home, monkeypatch):
+    from litellm.llms.ollama.completion.transformation import OllamaConfig
+
+    from raven.providers.litellm_setup import import_litellm
+
+    uncached = "ollama/raven-uncached-model"
+    cached = "ollama/raven-cached-model"
+    _write_config(
+        fake_home,
+        {
+            "agents": {"defaults": {"model": uncached, "provider": "ollama_chat"}},
+            "providers": {"ollama_chat": {"apiBase": "http://127.0.0.1:11434", "models": [uncached, cached]}},
+        },
+    )
+    litellm = import_litellm()
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, cached: {"max_input_tokens": 16384}})
+    asked = []
+
+    def info(self, model, api_base=None):
+        asked.append(model)
+        return {}
+
+    monkeypatch.setattr(OllamaConfig, "get_model_info", info)
+
+    result = await model_options({})
+
+    entry = _entry(result, "ollama_chat")
+    assert uncached in entry["models"]
+    assert entry["model_labels"][cached]["context_window"] == 16384
+    assert "context_window" not in entry["model_labels"].get(uncached, {})
+    assert asked == []
+
+
 async def test_options_config_reads_do_not_scale_with_the_row_count(
     fake_home: Path,
     monkeypatch: pytest.MonkeyPatch,

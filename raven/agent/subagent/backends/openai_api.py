@@ -8,12 +8,20 @@ key lives in config; the raw JSON is read directly so provider extension
 fields survive. ``reasoning_steps`` is one of those: it is how a deep-research
 endpoint reports the work behind an answer, and it reaches the run's own record
 through :mod:`raven.agent.subagent.openai_steps`.
+
+An entry that names a ``machine`` is posted to through that registered
+machine: each turn opens an ssh tunnel to it (:func:`raven.acp_client.remote.tunnel`)
+and the request goes to ``base_url`` as the machine resolves it, for an
+endpoint that answers only on that machine's network, or only on the machine
+itself. The tunnel ends with the turn.
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json as jsonlib
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -47,6 +55,7 @@ class OpenAIApiBackend:
         max_tokens: int | None = None,
         timeout: int | None = None,
         max_output_chars: int = 128000,
+        machine: str | None = None,
     ) -> None:
         self.name = name
         self.base_url = base_url
@@ -57,6 +66,45 @@ class OpenAIApiBackend:
         self.max_tokens = max_tokens
         self.timeout = timeout
         self.max_output_chars = max_output_chars
+        # The registered machine the endpoint is reached from, or None for this computer.
+        self.machine = (machine or "").strip() or None
+
+    @contextlib.asynccontextmanager
+    async def _reached(self, url: str, headers: dict[str, str]) -> AsyncIterator[tuple[str, dict[str, str]]]:
+        """``url`` and ``headers`` as this turn posts them.
+
+        As they are from this computer; through a tunnel from the entry's
+        machine otherwise, opened for this turn and closed after it. The
+        request then arrives at a port on this computer's loopback: ``Host``
+        carries the name the server knows itself by, and the proxy variables
+        of this computer's environment are not read for it (``_post_chat``),
+        since a proxy would take a loopback address somewhere else.
+        """
+        if not self.machine:
+            yield url, headers
+            return
+        from raven.acp_client import remote
+
+        try:
+            target = await asyncio.to_thread(remote.machine, self.machine)
+            log = await asyncio.to_thread(remote.ssh_log_path, f"{self.name}-tunnel")
+        except remote.RemoteMachineError as exc:
+            raise RuntimeError(f"OpenAI-API agent {self.name!r}: {exc}") from None
+        try:
+            # Emptied per turn, so a failure is read from this turn's lines.
+            log.write_text("", encoding="utf-8")
+        except OSError:
+            pass
+        try:
+            async with remote.tunnel(target, url, ssh_log=log) as reached:
+                yield reached.url, {**headers, "Host": reached.host}
+        except remote.RemoteMachineError as exc:
+            raise RuntimeError(f"OpenAI-API agent {self.name!r}: {exc}") from None
+        except aiohttp.ClientConnectionError as exc:
+            raise RuntimeError(
+                f"OpenAI-API agent {self.name!r}: its endpoint did not answer through the tunnel from machine "
+                f"{target.label}: {exc}"
+            ) from None
 
     async def _post_chat(
         self,
@@ -74,8 +122,10 @@ class OpenAIApiBackend:
         # otherwise ignores -- unlike httpx (the rest of the codebase), which honors
         # them by default. On a host that can only reach the provider through a
         # proxy, a direct connection is not a connection error but whatever the
-        # provider says to an unexpected origin (mirothinker: HTTP 451).
-        async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
+        # provider says to an unexpected origin (mirothinker: HTTP 451). Not
+        # for a row on a machine: its request goes to a port on this computer's
+        # loopback (``_reached``), which a proxy would take somewhere else.
+        async with aiohttp.ClientSession(timeout=timeout, trust_env=not self.machine) as session:
             async with session.post(url, json=json, headers=headers) as resp:
                 await self._raise_for_status(resp)
                 return await resp.json()
@@ -120,7 +170,7 @@ class OpenAIApiBackend:
         content: list[str] = []
         reasoning: list[str] = []
         usage: Any = None
-        async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
+        async with aiohttp.ClientSession(timeout=timeout, trust_env=not self.machine) as session:
             async with session.post(url, json=payload, headers=headers) as resp:
                 await self._raise_for_status(resp)
                 async for raw in resp.content:
@@ -234,34 +284,35 @@ class OpenAIApiBackend:
         client_timeout = aiohttp.ClientTimeout(total=self.timeout, connect=30)
 
         reader = OpenAIStepReader()
-        if on_delta is not None:
-            content: Any = await self._stream_chat(
-                url,
-                payload=body,
-                headers=headers,
-                timeout=client_timeout,
-                on_delta=bounded_delta(on_delta, self.max_output_chars),
-                reader=reader,
-                task_id=task_id,
-                session_key=session_key,
-            )
-        else:
-            data = await self._post_chat(url, json=body, headers=headers, timeout=client_timeout)
-            try:
-                message = data["choices"][0]["message"]
-            except (KeyError, IndexError, TypeError) as exc:
-                raise RuntimeError(f"OpenAI-API agent {self.name!r}: unexpected response shape") from exc
-            content = message.get("content")
-            if not content:
-                # Some reasoning models put the answer only in a reasoning field.
-                content = message.get("reasoning_content") or message.get("reasoning") or ""
-            reader.feed_steps(message.get("reasoning_steps"))
-            await activity.note_provider_usage(
-                data.get("usage"),
-                model=self.model,
-                session_key=session_key,
-                task_id=task_id,
-            )
+        async with self._reached(url, headers) as (url, headers):
+            if on_delta is not None:
+                content: Any = await self._stream_chat(
+                    url,
+                    payload=body,
+                    headers=headers,
+                    timeout=client_timeout,
+                    on_delta=bounded_delta(on_delta, self.max_output_chars),
+                    reader=reader,
+                    task_id=task_id,
+                    session_key=session_key,
+                )
+            else:
+                data = await self._post_chat(url, json=body, headers=headers, timeout=client_timeout)
+                try:
+                    message = data["choices"][0]["message"]
+                except (KeyError, IndexError, TypeError) as exc:
+                    raise RuntimeError(f"OpenAI-API agent {self.name!r}: unexpected response shape") from exc
+                content = message.get("content")
+                if not content:
+                    # Some reasoning models put the answer only in a reasoning field.
+                    content = message.get("reasoning_content") or message.get("reasoning") or ""
+                reader.feed_steps(message.get("reasoning_steps"))
+                await activity.note_provider_usage(
+                    data.get("usage"),
+                    model=self.model,
+                    session_key=session_key,
+                    task_id=task_id,
+                )
         # The answer is deliberately not among these rows: the record keeps it and
         # its reader appends it as the closing message, the same contract the acp
         # lane follows.

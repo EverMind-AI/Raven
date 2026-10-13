@@ -86,6 +86,15 @@ def reject_unsupported_openai_fields(entries: list[dict]) -> None:
                 f"mcps/allowMcpSecrets/sessionMcp are not supported for kind 'openai' (sub-agent "
                 f"{name!r}): the backend has no tool loop; remove the field(s)"
             )
+        if "remoteCwd" in entry or "remote_cwd" in entry:
+            # The schema drops it with a warning on load; on a write the caller
+            # can be told. An endpoint reached from a machine works in no
+            # directory there, so the field would be written and do nothing.
+            name = entry.get("name") or "<unnamed>"
+            raise ValueError(
+                f"remoteCwd is not supported for kind 'openai' (sub-agent {name!r}): an endpoint reached "
+                "from a machine has no working directory there; remove the field"
+            )
 
 
 def reject_unsupported_acp_fields(entries: list[dict]) -> None:

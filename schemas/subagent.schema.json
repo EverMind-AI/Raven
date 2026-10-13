@@ -373,6 +373,18 @@
           "title": "Kind",
           "type": "string"
         },
+        "machine": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Machine"
+        },
         "maxOutputChars": {
           "default": 30000,
           "title": "Maxoutputchars",
@@ -453,6 +465,18 @@
           "default": true,
           "title": "Readslocalfiles",
           "type": "boolean"
+        },
+        "remoteCwd": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Remotecwd"
         },
         "resumeCommand": {
           "anyOf": [

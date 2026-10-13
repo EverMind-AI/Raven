@@ -1171,22 +1171,26 @@ class SubagentManager:
         ``media`` is the turn's attachments, handed to the backend by path (see
         ``raven.agent.subagent.attachments``). An agent the roster tags
         [no-local-files] cannot open a path, so it is told the attachments stayed
-        behind rather than handed a spelling that means nothing where it runs.
+        behind rather than handed a spelling that means nothing where it runs --
+        except a row on a registered machine, which carries the same tag: its
+        backend names each attachment to the agent by its address on this
+        computer and copies nothing (``remote.files_note``), so the attachments
+        are kept for it to name, and the page's bullets are spelled the same way.
         """
         self.remember_session(session_key)
         self._require_addressable(agent, doing=f"chat with instance {handle!r}")
         row = self.registry.get(agent)
-        # A row on a registered machine cannot read a path here either, but its
-        # attachments are sent there by the backend, which tells the agent
-        # where they landed in its own terms; so they are kept, and the
-        # bullets are left as the page wrote them rather than pointed at this
-        # computer's disk.
+        # A row on a registered machine cannot read a path here either; what
+        # its backend sends is the address of each file on this computer, with
+        # the word that nothing was copied, so the agent looks for the file
+        # where its machine can read it or says it could not. The bullets are
+        # pointed at this computer's disk for the same reason as a local
+        # row's: relative to the session directory there they name nothing.
         on_machine = bool(row is not None and row.caps.machine)
         if media and row is not None and not row.caps.reads_local_files and not on_machine:
             text = with_undeliverable_note(text, media)
             media = ()
-        if not on_machine:
-            text = retarget_note(text, media, self.workspace)
+        text = retarget_note(text, media, self.workspace)
         recorded = with_attachment_note(text, media)
 
         session_dir = self.session_dir_for(session_key)
@@ -2125,10 +2129,13 @@ class SubagentManager:
         machine, where = self._machine_workdir(origin.get("agent") or "", origin.get("handle") or task_id)
         if machine:
             # Not this computer's directory: the agent worked on its machine,
-            # in a directory made there when the run started. Named here on
+            # in a directory made there as the run started. Named here on
             # every path, since a failed or cancelled run's result does not
-            # close with it the way a finished one's does.
-            workdir_line = f"Working directory: on machine {machine!r}, {where} (made there when the run started)\n"
+            # close with it the way a finished one's does -- but only a run
+            # that returned is known to have got as far as making it: one
+            # refused by the registry, the ssh or the node never did.
+            made = "made there when the run started" if status == "ok" else "made there only if the run got that far"
+            workdir_line = f"Working directory: on machine {machine!r}, {where} ({made})\n"
         record_line = f"\n\nRecord: {record_path}" if record_path else ""
         # How the run's calls went, which nothing on this path carried. Measured
         # on a real dispatch: two of three calls timed out, the run produced no

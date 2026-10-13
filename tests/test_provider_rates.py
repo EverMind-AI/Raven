@@ -733,8 +733,9 @@ def test_resolve_context_window_allow_fetch_false_also_forwards_allow_import_fal
     LiteLLM tier as allow_import=False, not just the OpenRouter tier."""
     seen = {}
 
-    def _fake_litellm_tier(model, *, allow_import=True):
+    def _fake_litellm_tier(model, *, allow_import=True, allow_fetch=True):
         seen["allow_import"] = allow_import
+        seen["allow_fetch"] = allow_fetch
         return None
 
     monkeypatch.setattr(rates, "_try_litellm_context_window", _fake_litellm_tier)
@@ -743,6 +744,7 @@ def test_resolve_context_window_allow_fetch_false_also_forwards_allow_import_fal
     rates.resolve_context_window("openrouter/deepseek/deepseek-v4-pro", allow_fetch=False)
 
     assert seen["allow_import"] is False
+    assert seen["allow_fetch"] is False
 
 
 # --- Disk persistence of the OpenRouter catalog ---
@@ -988,6 +990,125 @@ def _seed_catalog(monkeypatch, table: dict) -> None:
     rates.reset_openrouter_cache()
     monkeypatch.setattr(rates, "_OPENROUTER_CACHE", table, raising=False)
     monkeypatch.setattr(rates, "_OPENROUTER_CACHE_TIME", 0.0, raising=False)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "ollama/raven-uncached-model",
+        "ollama_chat/raven-uncached-model",
+        "openrouter/ollama/raven-uncached-model",
+    ],
+)
+@pytest.mark.parametrize("lookup", [rates.resolve_context_window, rates.declared_max_output_tokens])
+def test_no_fetch_metadata_does_not_ask_the_ollama_driver_on_a_table_miss(monkeypatch, model, lookup):
+    asked = []
+
+    def info(candidate):
+        asked.append(candidate)
+        return {"max_input_tokens": 16384, "max_output_tokens": 4096}
+
+    _patch_table(monkeypatch, {}, info=info)
+
+    assert lookup(model, allow_fetch=False) is None
+    assert asked == []
+
+
+@pytest.mark.parametrize(
+    ("lookup", "expected"),
+    [(rates.resolve_context_window, 16384), (rates.declared_max_output_tokens, 4096)],
+)
+def test_no_fetch_metadata_still_asks_litellm_for_a_driver_that_reads_a_table(monkeypatch, lookup, expected):
+    model = "custom/raven-uncached-model"
+    asked = []
+
+    def info(candidate):
+        asked.append(candidate)
+        return {"max_input_tokens": 16384, "max_output_tokens": 4096}
+
+    _patch_table(monkeypatch, {}, info=info)
+
+    assert lookup(model, allow_fetch=False) == expected
+    assert asked == [model]
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["openai/gpt-4o-mini", "openai/gpt-4o", "vertex_ai/gemini-2.5-pro", "anthropic/claude-sonnet-4-5"],
+)
+def test_no_fetch_metadata_answers_a_direct_vendor_the_way_a_fetch_does(model):
+    """The table files these under the bare name, so only ``get_model_info`` finds them.
+
+    It finds them offline, by stripping the routing prefix. Skipping it on a
+    cache-only lookup sized the turn on the fallback window, or on the
+    ``openrouter/`` alias row, which carries OpenRouter's numbers rather than
+    the vendor's.
+    """
+    assert rates._table_entry(model) is None
+    assert rates._try_litellm_context_window(model, allow_fetch=False) == rates._try_litellm_context_window(model)
+    assert rates._try_litellm_max_output(model, allow_fetch=False) == rates._try_litellm_max_output(model)
+    assert rates._try_litellm_context_window(model, allow_fetch=False)
+    assert rates._try_litellm_max_output(model, allow_fetch=False)
+
+
+@pytest.mark.parametrize("model", ["ollama/raven-uncached-model", "ollama_chat/raven-uncached-model"])
+def test_no_fetch_metadata_does_not_reach_the_ollama_daemon(monkeypatch, model):
+    from litellm.llms.ollama.completion.transformation import OllamaConfig
+
+    asked = []
+
+    def info(self, model, api_base=None):
+        asked.append(model)
+        return {"max_input_tokens": 16384, "max_output_tokens": 4096}
+
+    monkeypatch.setattr(OllamaConfig, "get_model_info", info)
+
+    assert rates.resolve_context_window(model, allow_fetch=False) is None
+    assert rates.declared_max_output_tokens(model, allow_fetch=False) is None
+    assert asked == []
+
+    assert rates.resolve_context_window(model, allow_fetch=True) == 16384
+    assert asked
+
+
+@pytest.mark.parametrize(
+    ("lookup", "expected"),
+    [(rates.resolve_context_window, 16384), (rates.declared_max_output_tokens, 4096)],
+)
+def test_no_fetch_metadata_reads_a_loaded_alias_row(monkeypatch, lookup, expected):
+    model = "ollama/raven-cached-model"
+    asked = []
+
+    def info(candidate):
+        asked.append(candidate)
+        return {}
+
+    _patch_table(
+        monkeypatch,
+        {f"openrouter/{model}": {"max_input_tokens": 16384, "max_output_tokens": 4096}},
+        info=info,
+    )
+
+    assert lookup(model, allow_fetch=False) == expected
+    assert asked == []
+
+
+@pytest.mark.parametrize(
+    ("lookup", "expected"),
+    [(rates.resolve_context_window, 16384), (rates.declared_max_output_tokens, 4096)],
+)
+def test_metadata_lookup_can_ask_litellm_when_fetch_is_allowed(monkeypatch, lookup, expected):
+    model = "ollama/raven-uncached-model"
+    asked = []
+
+    def info(candidate):
+        asked.append(candidate)
+        return {"max_input_tokens": 16384, "max_output_tokens": 4096}
+
+    _patch_table(monkeypatch, {}, info=info)
+
+    assert lookup(model, allow_fetch=True) == expected
+    assert asked == [model]
 
 
 def test_a_model_the_catalogue_does_not_know_gets_the_one_fallback(monkeypatch):
@@ -1449,15 +1570,14 @@ def test_offline_fetch_entry_is_cache_only(monkeypatch):
     assert table == {"m": {"pricing": {}}}
 
 
-def test_a_huggingface_id_is_never_handed_to_litellm_for_its_window(monkeypatch):
+@pytest.mark.parametrize("allow_fetch", [False, True])
+def test_a_huggingface_id_is_never_handed_to_litellm_for_its_window(monkeypatch, allow_fetch):
     """The lookup that was supposed to read a table went to the network.
 
     LiteLLM resolves a huggingface id's window by fetching the repo's
-    `config.json`, on every call and cached nowhere, and `allow_fetch=False`
-    does not reach it. `model.options` resolves a window per configured vendor,
-    so the settings page paid six sequential round trips for answers that were
-    404 anyway -- the id still carries its routing prefix, so the address is
-    `huggingface.co/huggingface/<repo>`, which is not a repo.
+    `config.json`, on every call and cached nowhere. Even where fetching is
+    allowed, this driver is skipped: the id still carries its routing prefix,
+    so the address is `huggingface.co/huggingface/<repo>`, which is not a repo.
     """
     from raven.providers import rates
     from raven.providers.wire import metadata_candidates
@@ -1477,6 +1597,6 @@ def test_a_huggingface_id_is_never_handed_to_litellm_for_its_window(monkeypatch)
     monkeypatch.setattr("raven.providers.litellm_setup.import_litellm", lambda: _Fake)
     monkeypatch.setattr(rates, "_table_entry", lambda _c: None)
 
-    rates.resolve_context_window(model, allow_fetch=False)
+    rates.resolve_context_window(model, allow_fetch=allow_fetch)
 
     assert not [c for c in asked if "huggingface" in c], f"handed over: {asked}"

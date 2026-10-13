@@ -580,6 +580,10 @@ async def build_rpc_stack(
                 await agent_loop.stop_plugin_services()
             except Exception:
                 logger.exception("plugin services stop failed; continuing shutdown")
+            try:
+                agent_loop.context.skills.stop_file_watcher()
+            except Exception:
+                logger.exception("serve: skill watcher stop failed; continuing shutdown")
         if agent_loop is not None and agent_loop.backend is not None:
             try:
                 # Drain before stop, the same order the CLI hosts follow:
