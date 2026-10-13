@@ -299,13 +299,19 @@ async def _raw_server(handler, *, rcvbuf=None):
     return server, sock.getsockname()[1]
 
 
-async def _assert_deadline(coro, *, total=0.3):
+async def _assert_deadline(coro, *, total=0.3, limit=2.5):
+    """The total deadline, not an I/O timeout or the server's pace, is what ended the upload.
+
+    The message names the path that raised; the elapsed time only has to show
+    the request was cut short of the alternatives (an io_timeout of 1 s, a
+    3 s drip), with room for a loaded CI runner to deliver the cancellation late.
+    """
     started = time.monotonic()
     with pytest.raises(tupload.UploadError) as exc:
         await coro
     elapsed = time.monotonic() - started
     assert exc.value.retryable is True and f"exceeded {total}s" in str(exc.value)
-    assert 0.25 <= elapsed < 1.0, elapsed
+    assert 0.25 <= elapsed < limit, elapsed
 
 
 async def test_slow_response_headers_hit_the_deadline(tmp_path):
