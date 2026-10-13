@@ -36,7 +36,7 @@ import re
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from raven.contracts.memory import MEMORY_BACKEND_DISTRIBUTIONS, SHIPPED_DEFAULT_BACKEND
+from raven.config.raven import MEMORY_BACKEND_DISTRIBUTIONS, SHIPPED_DEFAULT_BACKEND
 from raven.contracts.path_policy import CONFIG_FILENAME, WORKSPACE_DEFAULT_SENTINEL
 from raven.home import raven_home
 from raven.utils.paths import safe_path_segment

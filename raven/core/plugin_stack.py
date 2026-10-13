@@ -38,7 +38,12 @@ from importlib.util import find_spec
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from raven.contracts.memory import MEMORY_BACKEND_DISTRIBUTIONS, SHIPPED_DEFAULT_BACKEND
+# Re-exported: both were defined here before a reader outside this package
+# needed the pairing they come from, and every importer still reads them from
+# here. They live beside the two config fields that pairing joins
+# (raven/config/raven.py), because raven.core may import that package and not
+# the other way round (tests/test_import_cycle_budget.py).
+from raven.config.raven import EVEROS_PLUGIN_DISTRIBUTION, SHIPPED_DEFAULT_BACKEND
 from raven.plugins import (
     PluginActivationFailure,
     PluginNotFoundError,
@@ -56,10 +61,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-#: Re-exported: both names were defined here before a second reader outside
-#: this package needed them, and every importer still reads them from here.
-EVEROS_PLUGIN_DISTRIBUTION = MEMORY_BACKEND_DISTRIBUTIONS[SHIPPED_DEFAULT_BACKEND]
-"""The distribution that contributes the ``everos`` memory backend."""
 
 _EVEROS_PLUGIN_PACKAGE = "raven_everos"
 

@@ -1099,6 +1099,35 @@ class SkillForgeConfig(_Base):
 # Plugin / Memory backend / SkillForgeRouter
 # ---------------------------------------------------------------------------
 
+SHIPPED_DEFAULT_BACKEND = "everos"
+"""The value ``memory.backend`` carries when nobody has chosen one.
+
+Named rather than compared inline, because the places that test for it are not
+treating this backend as special -- they are answering "the default names
+something that is not here", which is the commonest way an install reaches
+those lines and the only one where the reader did not pick the name
+themselves.
+"""
+
+MEMORY_BACKEND_DISTRIBUTIONS: dict[str, str] = {
+    SHIPPED_DEFAULT_BACKEND: "everos-memory",
+    "everos-cloud": "everos-cloud-memory",
+}
+"""Which distribution contributes each memory backend raven ships a name for.
+
+The join between the two fields below: ``MemoryConfig.backend`` names a
+contribution, ``PluginsConfig.config`` is keyed by the distribution that
+provides it. The registry answers the same question by activating a manifest;
+this answers it for the readers that have no registry -- the launcher that
+renders an agent product's config, and anything reporting on a backend whose
+distribution is not installed. Here rather than beside the registry because
+``raven.core`` may import this package and not the other way round
+(``tests/test_import_cycle_budget.py``).
+"""
+
+EVEROS_PLUGIN_DISTRIBUTION = MEMORY_BACKEND_DISTRIBUTIONS[SHIPPED_DEFAULT_BACKEND]
+"""The distribution that contributes the ``everos`` memory backend."""
+
 
 class PluginsConfig(_Base):
     """Plugin-system top-level config.
