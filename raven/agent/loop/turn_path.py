@@ -168,7 +168,7 @@ def _marker_failure(reason: str | None) -> str:
     return reason or "unknown error"
 
 
-def _first_turns_within(messages: list[dict[str, Any]], budget: int) -> list[dict[str, Any]]:
+def _first_turns_within(messages: list[dict[str, Any]], budget: int) -> tuple[list[dict[str, Any]], bool]:
     """The leading whole turns of ``messages`` that fit in ``budget`` tokens.
 
     The path this step replaces bounded its input by a token budget; without
@@ -179,25 +179,26 @@ def _first_turns_within(messages: list[dict[str, Any]], budget: int) -> list[dic
     that point.
 
     Cuts only where a turn ends -- the next ``role == "user"`` -- so the
-    annotator still sees whole exchanges. The first turn is always returned
-    even when it alone exceeds the budget: refusing to send anything would
-    stall the cursor forever, and one oversized turn is the caller's to
-    decline, once, rather than every turn after it.
+    annotator still sees whole exchanges. A first turn that alone exceeds the
+    budget is still returned whole, because sending nothing would stall the
+    cursor on it forever; the second return value says so, and the caller
+    needs it. Nothing else records that such a turn was sent, so a refusal
+    would otherwise rebuild the same tail and send the same oversized prompt
+    on every qualifying turn after it.
     """
     if budget <= 0 or not messages:
-        return messages
+        return messages, False
     spent = 0
     cut = 0
     for i, m in enumerate(messages):
         if i and m.get("role") == "user":
             if spent > budget:
-                # ``cut or i``: at the first boundary nothing has been banked
-                # yet, and returning nothing would stall the cursor on an
-                # oversized opening turn forever.
-                return messages[: cut or i]
+                return (messages[:cut], False) if cut else (messages[:i], True)
             cut = i
         spent += estimate_message_tokens(m)
-    return messages if spent <= budget or not cut else messages[:cut]
+    if spent <= budget:
+        return messages, False
+    return (messages[:cut], False) if cut else (messages, True)
 
 
 def _turns_a_person_opened(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2957,9 +2958,14 @@ class TurnPathMixin:
                     # down to. What is left over rides the next qualifying
                     # turn, so the cursor keeps moving and a tail refused for
                     # its size is not retried larger.
-                    capped = _first_turns_within(tail, self.memory_consolidator.context_window_tokens // 2)
+                    capped, oversized = _first_turns_within(tail, self.memory_consolidator.context_window_tokens // 2)
                     if len(capped) != len(tail):
-                        last = session.messages[start:end].index(capped[-1]) + 1
+                        # Located by identity, not equality: two messages in
+                        # one slice can be equal down to the timestamp, and a
+                        # search by value would answer with the earlier one,
+                        # leaving the cursor short of what was sent.
+                        sent = session.messages[start:end]
+                        last = next(i for i, m in enumerate(sent) if m is capped[-1]) + 1
                         end_for_this_pass = start + last
                         logger.info(
                             "episodic annotate for {}: tail trimmed to {} of {} messages for this pass",
@@ -2970,7 +2976,8 @@ class TurnPathMixin:
                     else:
                         end_for_this_pass = end
                     tail = capped
-                    if not await self.memory_consolidator.consolidate_messages(tail):
+                    wrote = await self.memory_consolidator.consolidate_messages(tail)
+                    if not wrote and not oversized:
                         logger.warning("episodic annotate for {} declined; cursor kept at {}", session.key, start)
                         return
                     # The reader may undo or clear while the annotator runs,
@@ -2987,6 +2994,18 @@ class TurnPathMixin:
                         )
                         return
                     self._set_annotated_through(session, min(end_for_this_pass, len(session.messages)))
+                    if not wrote:
+                        # The one refusal the cursor has to absorb: this turn
+                        # is larger than the whole budget, so every later pass
+                        # would build the same tail and send the same prompt
+                        # again. Keeping the cursor here repeats the call
+                        # rather than retrying it.
+                        logger.warning(
+                            "episodic annotate for {} declined a turn larger than the bound; cursor moved past it to {}",
+                            session.key,
+                            end_for_this_pass,
+                        )
+                        return
                     await self.memory_consolidator.maybe_refresh_hot_tags()
             except Exception:
                 logger.exception("episodic annotate for {} failed", session.key)

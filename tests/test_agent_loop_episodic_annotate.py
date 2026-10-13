@@ -680,6 +680,92 @@ class TestOneCallIsBounded:
         await _settle(loop)
         assert fake.tails[0][0] == {"role": "user", "content": f"q{len(sent) // 2}"}
 
+    async def test_a_refused_oversized_turn_moves_the_cursor_past_it(self, tmp_path: Path, log_lines) -> None:
+        """The one refusal the cursor absorbs, because retrying it is repeating it.
+
+        A turn larger than the whole budget is sent whole, and nothing records
+        that it was. Keeping the cursor on a refusal therefore does not retry
+        the call later under better conditions: every qualifying turn after it
+        rebuilds the same tail and sends the same oversized prompt again.
+        """
+        loop = _make_loop(tmp_path, every=1)
+        fake = _FakeConsolidator(result=False, window=100)
+        loop.memory_consolidator = fake
+        session = _session_with(loop, "cli:refused-huge", turns=0)
+        session.metadata["annotated_through"] = 0
+        session.messages.extend([{"role": "user", "content": "q0"}, {"role": "assistant", "content": "y" * 40000}])
+        loop.sessions.save(session)
+
+        loop._maybe_annotate_tail(session, prev_len=0)
+        await _settle(loop)
+
+        assert len(fake.tails) == 1
+        assert session.metadata["annotated_through"] == 2
+        assert fake.refreshes == 0, "nothing was written, so no section may refresh"
+        assert any("WARNING" in line and "larger than the bound" in line for line in log_lines)
+
+        # and the next pass starts after it rather than sending it again
+        session.messages.extend(_turn(1))
+        loop.sessions.save(session)
+        loop._maybe_annotate_tail(session, prev_len=2)
+        await _settle(loop)
+
+        assert len(fake.tails) == 2
+        assert fake.tails[1] == _turn(1)
+
+    async def test_an_ordinary_decline_still_keeps_the_cursor(self, tmp_path: Path) -> None:
+        """The twin of the case above, so the exemption cannot widen quietly.
+
+        A tail that fits the budget and is refused is retried, because the
+        refusal may have been the provider rather than the size.
+        """
+        loop = _make_loop(tmp_path, every=1)
+        fake = _FakeConsolidator(result=False, window=1_000_000)
+        loop.memory_consolidator = fake
+        session = _session_with(loop, "cli:refused-small", turns=0)
+        session.metadata["annotated_through"] = 0
+        session.messages.extend(_turn(0))
+        loop.sessions.save(session)
+
+        loop._maybe_annotate_tail(session, prev_len=0)
+        await _settle(loop)
+
+        assert session.metadata["annotated_through"] == 0
+
+    async def test_the_cut_is_located_by_position_not_by_equality(self, tmp_path: Path) -> None:
+        """Two messages in one slice can be equal, and the cursor must not care.
+
+        A search by value answers with the earlier twin, which leaves the
+        cursor short of what was actually sent and re-annotates the overlap on
+        the next pass. Repeated answers are ordinary -- a tool that prints the
+        same thing twice, an agent that replies "done" -- and messages written
+        under a frozen clock carry equal timestamps as well.
+        """
+        loop = _make_loop(tmp_path, every=2)
+        fake = _FakeConsolidator(window=400)  # budget 200
+        loop.memory_consolidator = fake
+        session = _session_with(loop, "cli:twins", turns=0)
+        session.metadata["annotated_through"] = 0
+        same = {"role": "assistant", "content": "x" * 200}
+        session.messages.extend(
+            [
+                {"role": "user", "content": "q0"},
+                dict(same),
+                {"role": "user", "content": "q1"},
+                dict(same),  # equal to index 1, and the last message sent
+                {"role": "user", "content": "q2"},
+                {"role": "assistant", "content": "y" * 4000},
+            ]
+        )
+        loop.sessions.save(session)
+
+        loop._maybe_annotate_tail(session, prev_len=4)
+        await _settle(loop)
+
+        sent = fake.tails[0]
+        assert sent == session.messages[:4], "the cut did not land where this case needs it"
+        assert session.metadata["annotated_through"] == 4, "the cursor answered with the earlier twin"
+
     async def test_one_turn_larger_than_the_budget_still_goes_out(self, tmp_path: Path) -> None:
         """Otherwise the cursor stalls on it forever and nothing after it is ever seen."""
         loop = _make_loop(tmp_path, every=1)

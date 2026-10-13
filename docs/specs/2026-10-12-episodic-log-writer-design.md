@@ -333,7 +333,7 @@ Test names marked "to be created" do not exist yet.
 | A6 | After a gateway restart the cursor is the value patched before | P6, C7 | the patch is not written, or `save` overwrote it | live only, part of the integration file above |
 | A7 | The turn's reply is delivered before the annotator's provider call resolves | P7, C3 | the step is awaited inline | `::test_the_reply_does_not_wait_for_the_annotator` (to be created), consolidator stub with a held future |
 | A8 | With a task holding the session lock, a second qualifying turn's task waits and then makes no provider call because the cursor moved | P8, state "locked", C4 | the tail is computed outside the lock, or no lock is taken | `::test_a_waiting_task_recomputes_and_does_nothing` (to be created) |
-| A9 | When `consolidate_messages` returns False, the cursor does not move and a warning is logged | P9, F1 | the cursor is advanced unconditionally | `::test_a_declined_annotation_keeps_the_cursor` (to be created) |
+| A9 | When `consolidate_messages` returns False, the cursor does not move and a warning is logged, except for a turn larger than the whole budget, which the cursor moves past | P9, F1 | the cursor is advanced unconditionally, or the exemption covers an ordinary decline | `::test_a_declined_annotation_keeps_the_cursor`, `::test_a_refused_oversized_turn_moves_the_cursor_past_it`, `::test_an_ordinary_decline_still_keeps_the_cursor` |
 | A10 | When `consolidate_messages` returns True having written zero lines, the cursor advances past the tail | P10 | the step inspects the file and refuses to move | `::test_zero_lines_still_advance_the_cursor` (to be created) |
 | A11 | When `append_metadata_patch` raises inside the task, a traceback is logged and the turn that follows is unaffected | P11, F8 | the exception escapes the task or the next turn fails | `::test_a_failing_patch_is_logged_not_raised` (to be created) |
 | A12 | The no-backend identity render still names `user.md` and the `Episodic log:` line exactly as on `main` | P12 | the no-backend branch was touched | `tests/test_segments.py::test_identity_without_a_backend_still_names_both_memory_files` (exists; it asserts both paths and the `Episodic log:` wording) |
@@ -394,6 +394,14 @@ and F5's safety follows from how `append_history` writes, not from new code.
   (F4) and is accepted.** Making it atomic means writing the cursor into the
   same file under the same lock; duplicates cost nothing to grep and over-count
   a tag by one batch at most. Rejected: a two-phase write.
+- **A refused turn larger than the whole bound advances the cursor anyway.**
+  That turn is sent whole, because sending nothing would stall the cursor on
+  it forever, and nothing records that it was sent. Keeping the cursor on the
+  refusal therefore does not retry the call later; it rebuilds the same tail
+  and sends the same oversized prompt on every qualifying turn after it, which
+  is the self-reinforcing retry the bound was added to stop. An ordinary
+  decline still keeps the cursor: that one may have been the provider rather
+  than the size. Rejected: one rule for both, in either direction.
 - **`True` with zero lines advances the cursor.** The annotator returning
   True with nothing kept means it read the tail and found nothing worth an
   episode (or dropped every candidate as process-only); that is a verdict, not
