@@ -3175,25 +3175,31 @@ async def test_a_request_after_the_child_died_still_names_the_exit_and_the_reaso
         await client.request("initialize", acp_protocol.initialize_params(), timeout=10)
 
 
-def _without_killpg(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+def _without_killpg(monkeypatch: pytest.MonkeyPatch) -> list[tuple[list[str], int]]:
     """Windows as ``close`` sees it: no ``os.killpg``, and a ``taskkill`` on PATH.
 
-    The ``taskkill`` runs are recorded rather than made.
+    Record real ``taskkill`` runs on Windows and simulate them on POSIX.
     """
     import shutil
     import subprocess
 
     real_which = shutil.which
-    ran: list[list[str]] = []
+    real_run = subprocess.run
+    native = not hasattr(os, "killpg")
+    taskkill = real_which("taskkill") if native else r"C:\Windows\System32\taskkill.exe"
+    if taskkill is None:
+        pytest.skip("taskkill is unavailable")
+    ran: list[tuple[list[str], int]] = []
 
-    def run(argv: list[str], **_kw: Any) -> subprocess.CompletedProcess:
-        ran.append(list(argv))
-        return subprocess.CompletedProcess(argv, 0)
+    def run(argv: list[str], **kw: Any) -> subprocess.CompletedProcess:
+        if argv[0] != taskkill:
+            return real_run(argv, **kw)
+        result = real_run(argv, **kw) if native else subprocess.CompletedProcess(argv, 0)
+        ran.append((list(argv[1:]), result.returncode))
+        return result
 
-    monkeypatch.delattr(os, "killpg")
-    monkeypatch.setattr(
-        shutil, "which", lambda name: r"C:\Windows\System32\taskkill.exe" if name == "taskkill" else real_which(name)
-    )
+    monkeypatch.delattr(os, "killpg", raising=False)
+    monkeypatch.setattr(shutil, "which", lambda name: taskkill if name == "taskkill" else real_which(name))
     monkeypatch.setattr(subprocess, "run", run)
     return ran
 
@@ -3205,18 +3211,23 @@ async def test_close_without_killpg_ends_the_tree_through_taskkill(monkeypatch: 
     its transport all still there. ``taskkill /T`` reaches what the launcher
     started, which a bare ``Process.kill`` does not.
     """
+    from raven.acp_client import protocol
     from raven.acp_client.client import AcpClient
 
     cfg = stub_config("windows-close")
     client = await AcpClient.launch(name="windows-close", command=cfg.command, env=dict(cfg.env))
-    proc = client._proc
-    ran = _without_killpg(monkeypatch)
+    try:
+        await client.request("initialize", protocol.initialize_params(), timeout=15)
+        proc = client._proc
+        ran = _without_killpg(monkeypatch)
 
-    await client.close()
+        await client.close()
 
-    assert ran == [[r"C:\Windows\System32\taskkill.exe", "/T", "/F", "/PID", str(proc.pid)]]
-    assert proc.returncode is not None, "the Process.kill after it must still stop the launcher"
-    assert client.closed and not client.alive
+        assert ran == [(["/T", "/F", "/PID", str(proc.pid)], 0)]
+        assert proc.returncode is not None, "close must stop the launcher"
+        assert client.closed and not client.alive
+    finally:
+        await client.close()
 
 
 async def test_close_without_killpg_kills_nothing_by_the_pid_of_an_exited_launcher(
@@ -3227,17 +3238,20 @@ async def test_close_without_killpg_kills_nothing_by_the_pid_of_an_exited_launch
 
     cfg = stub_config("abort", mode="abort")
     client = await AcpClient.launch(name="abort", command=cfg.command, env=dict(cfg.env))
-    for _ in range(200):
-        if client._proc.returncode is not None:
-            break
-        await asyncio.sleep(0.025)
-    assert client._proc.returncode is not None, "the stub must be gone before the close, or this tests nothing"
-    ran = _without_killpg(monkeypatch)
+    try:
+        for _ in range(200):
+            if client._proc.returncode is not None:
+                break
+            await asyncio.sleep(0.025)
+        assert client._proc.returncode is not None, "the stub must be gone before the close, or this tests nothing"
+        ran = _without_killpg(monkeypatch)
 
-    await client.close()
+        await client.close()
 
-    assert ran == []
-    assert client.closed
+        assert ran == []
+        assert client.closed
+    finally:
+        await client.close()
 
 
 @pytest.mark.skipif(not hasattr(os, "killpg"), reason="process groups are POSIX")
