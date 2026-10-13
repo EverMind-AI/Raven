@@ -2073,6 +2073,20 @@ acknowledged. `apply_review_decisions` guarantees the array matches the
 delivered bytes: replaced values are verified gone in every spelling variant
 and kept values verified untouched before the export freezes.
 
+**Redaction History** (`raven/trajectory/redaction_history.py`):
+The machine-local record of the user's Review Item decisions (`kept` or
+`redacted`), kept in `<raven home>/redaction_history.json` (mode 0600) and
+keyed by the sha256 of the token value: only the hash and a masked sample are
+stored, never the plaintext. `resolve` decides a suspected item -- or a whole
+linked group -- from it only when every member has a recorded, agreeing
+decision; confirmed-sensitive items are never decided from history. Each human
+decision gets a fresh revision, and a replay is counted only against the
+revision it read, so a stale replay never overrides a newer human answer or
+revives a forgotten record. An unreadable file reads as empty and is backed
+up, never overwritten in place, before the next save.
+_Avoid_: "memory" (the agent memory engine), "cache" (it is an authoritative
+record, never evicted automatically).
+
 **Bug Report Receiver** (`raven/trajectory/receiver.py`):
 The standalone HTTP service that takes Bug Report Packages in: it validates each
 upload with `package_check.inspect_package` (streaming, never extracting), lands
