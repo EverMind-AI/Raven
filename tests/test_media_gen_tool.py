@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import math
 import wave
 from pathlib import Path
 from types import SimpleNamespace
@@ -272,6 +273,55 @@ async def test_an_ark_plan_base_with_an_unknown_ratio_falls_back_to_the_2k_tier(
     )
     assert json.loads(await tool.execute("a poster", aspect_ratio="5:1"))["success"]
     assert sent["body"]["size"] == "2K"
+
+
+async def test_a_seedream_3_t2i_ark_base_is_sized_inside_its_own_window(monkeypatch, tmp_path) -> None:
+    """Seedream 3.0-t2i's card lists WxH only, in [512x512, 2048x2048] -- the
+    model-independent 2736x1539 is a 400 there, and an unspellable ratio has
+    no tier to fall back to, so the endpoint default stands in."""
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/plan/v3/images/generations":
+            sent.append(json.loads(request.content))
+            return httpx.Response(200, json={"data": [{"url": "https://1.2.3.4/tos/signed.jpeg"}]})
+        return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=_JPG)
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-3-0-t2i-250415",
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/plan/v3",
+    )
+    for ratio in ("16:9", "21:9", "5:1"):
+        assert json.loads(await tool.execute("a poster", aspect_ratio=ratio))["success"]
+    # 16:9 hits the 2048 per-side cap; 21:9 lands on the pair that always
+    # worked pre-PR; 5:1 is unspellable and 3.0-t2i has no tier to send.
+    assert [body.get("size") for body in sent] == ["2048x1152", "1536x658", None]
+
+
+def test_ark_explicit_sizes_stay_exact_and_inside_every_models_window() -> None:
+    """The reviewer's hand enumeration, locked into CI: for every supported
+    ratio and every Seedream window in the table (default included), the pair
+    sent keeps the ratio exact by construction -- the same coprime pair scaled
+    by one integer -- and fits the card's per-side and total-pixel bounds."""
+    windows = [(f"doubao-{needle}", *bounds) for needle, *bounds in media_gen._ARK_SIZE_WINDOWS]
+    windows.append(("doubao-seedream-future", None, None, 2560 * 1440, 4096 * 4096))
+    for ratio, dims in media_gen._SIZES.items():
+        width, height = (int(side) for side in dims.split("x"))
+        divisor = math.gcd(width, height)
+        for model_id, min_side, max_side, min_total, max_total in windows:
+            size = media_gen.ark_explicit_size(model_id, ratio)
+            assert size is not None, (model_id, ratio)
+            sw, sh = (int(side) for side in size.split("x"))
+            common = math.gcd(sw, sh)
+            assert (sw // common, sh // common) == (width // divisor, height // divisor)
+            assert min_total <= sw * sh <= max_total, (model_id, ratio, size)
+            if min_side:
+                assert min_side <= min(sw, sh), (model_id, ratio, size)
+            if max_side:
+                assert max(sw, sh) <= max_side, (model_id, ratio, size)
 
 
 async def test_an_ark_plan_base_still_takes_an_inline_b64_picture(monkeypatch, tmp_path) -> None:
