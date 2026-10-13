@@ -205,7 +205,7 @@ Raven 可以通过 ACP、CLI 或兼容 OpenAI 的 API 接入并编排 Agent，�
   <img src="https://github.com/user-attachments/assets/3370c883-00ac-4471-97ef-f4312df77202" width="80%" alt="Third-party agents: Claude Code, Codex, OpenCode, Hermes Agent, OpenClaw, MiroThinker, GitHub Copilot, Qwen Code, CodeBuddy, Qoder, Grok Build, Kimi Code, and Pi">
 </p>
 
-## ❯❯ News
+## ❯❯ 新闻
 
 - 📣 **2026-09-30** — Raven 技术报告获评 Hugging Face [**#1 Paper of the day**](https://huggingface.co/papers/2609.33439)。
 
