@@ -56,6 +56,17 @@ server {
         proxy_pass http://127.0.0.1:${RAVEN_PAGE_PORT};
     }
 
+    # The knowledge document reader: a page of the file as a picture
+    # (/knowledge/page), the region a chunk was cut from (/knowledge/crop),
+    # and the file itself (/knowledge/file). All three are engine-served and
+    # none of them is a file under the dist root, so without this block they
+    # fall through to `location /` and answer index.html -- a 200 of text/html
+    # where the page put an <img>, which a browser draws as a broken image
+    # rather than as an error anybody can read.
+    location /knowledge/ {
+        proxy_pass http://127.0.0.1:${RAVEN_PAGE_PORT};
+    }
+
     location = /oauth/callback {
         proxy_pass http://127.0.0.1:${RAVEN_PAGE_PORT};
     }
