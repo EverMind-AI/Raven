@@ -17,10 +17,12 @@ Providers and keys land in ``config.json`` through ``update_tools``, keyed by
 vendor (``tools.web.providers.<vendor>.apiKey``), and the keys are then mirrored
 into ``~/.raven/env`` as ``export`` lines. The mirror is what reaches consumers
 that never read raven's config: the user's own shell, and -- the reason it is
-here rather than in a docs page -- every ``cli`` and ``acp`` sub-agent, whose
+here rather than in a docs page -- POSIX ``cli`` and ``acp`` sub-agents, whose
 environment is a capture of ``$SHELL -lic`` (see
 ``raven.agent.subagent.backends.env``) rather than anything raven passes down.
-Which files that capture actually reads is the subtle part, and ``rc_targets_for``
+Windows children inherit Raven's environment with a refreshed registry PATH
+instead; these shell exports do not reach them.
+Which files the POSIX capture reads is the subtle part, and ``rc_targets_for``
 carries it.
 A ``kind: openai`` sub-agent is an HTTP call with no subprocess, so no
 environment variable can reach it; the step does not pretend otherwise.

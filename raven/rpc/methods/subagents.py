@@ -361,7 +361,9 @@ async def _rows(*, probe: bool = True) -> list[dict]:
                 # things. Always present, never omitted -- a client cannot tell
                 # a missing key from a false one, and one day it will mean
                 # "this server predates the field".
-                "needs_auth": bool(getattr(snapshot, "needs_auth", False)),
+                # Old capabilities remain useful after a config edit; an old
+                # authentication verdict must not disable the edited row.
+                "needs_auth": bool(getattr(snapshot, "needs_auth", False)) and not getattr(snapshot, "stale", False),
                 "mcps": list(getattr(cfg, "mcps", None) or []),
                 "allow_mcp_secrets": bool(getattr(cfg, "allow_mcp_secrets", False)),
                 "last_test_ok": None if last is None else last.ok,

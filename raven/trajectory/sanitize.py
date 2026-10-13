@@ -22,6 +22,10 @@ an export snapshot's identity:
   fields, keeping the basename for diagnostics.
 - :func:`scan_absolute_paths` — the assertion pass: re-run the same parser
   over a sanitized tree; any hit means the tree must not ship.
+- :func:`find_absolute_paths_in_json` — the same assertion over a parsed
+  JSON value, string by string, with the field path of every hit. JSON is
+  parsed before scanning: serialization doubles every backslash, so a
+  literal ``\\n`` in a value would read as a UNC prefix in the text form.
 - :func:`tree_digest` — order-stable content digest over a directory tree,
   refusing symlinks and special files (an injected link can never "pass").
 """
@@ -33,7 +37,7 @@ import json
 import os
 import re
 from pathlib import Path, PureWindowsPath
-from typing import Iterable
+from typing import Any, Iterable
 
 PATH_PLACEHOLDER = "[REDACTED:path]"
 
@@ -276,6 +280,10 @@ def sanitize_export_tree(root: Path, roots: Iterable[str] = ()) -> None:
             path.write_text(sanitized, encoding="utf-8")
 
 
+def _root_needles(roots: Iterable[str]) -> list[str]:
+    return sorted({r.rstrip("/\\") for r in roots if r and r.strip("/\\")})
+
+
 def scan_absolute_paths(root: Path, roots: Iterable[str] = ()) -> list[tuple[str, str]]:
     """Assertion pass: ``(relative file, sample)`` for every remaining hit.
 
@@ -285,7 +293,7 @@ def scan_absolute_paths(root: Path, roots: Iterable[str] = ()) -> list[tuple[str
     """
     root = root.resolve()
     hits: list[tuple[str, str]] = []
-    root_needles = sorted({r.rstrip("/\\") for r in roots if r and r.strip("/\\")})
+    root_needles = _root_needles(roots)
     for path in _walk_files(root):
         rel = str(path.relative_to(root))
         try:
@@ -298,6 +306,40 @@ def scan_absolute_paths(root: Path, roots: Iterable[str] = ()) -> list[tuple[str
         for needle in root_needles:
             if needle in text:
                 hits.append((rel, needle))
+    return hits
+
+
+def find_absolute_paths_in_json(value: Any, roots: Iterable[str] = ()) -> list[tuple[str, str]]:
+    """Assertion pass over a parsed JSON value: ``(field path, sample)`` per hit.
+
+    Parse first, then scan each string: ``json.dumps`` writes one backslash as
+    two, so a literal ``\\n`` inside a value reads as a UNC prefix in the
+    serialized text. Every string value and every object key runs through the
+    same parser sanitization used, plus the known-root substring check.
+    """
+    needles = _root_needles(roots)
+    hits: list[tuple[str, str]] = []
+
+    def scan(text: str, where: str) -> None:
+        for start, end in find_absolute_paths(text):
+            hits.append((where, text[start:end][:120]))
+        for needle in needles:
+            if needle in text:
+                hits.append((where, needle))
+
+    def walk(node: Any, where: str) -> None:
+        if isinstance(node, str):
+            scan(node, where)
+        elif isinstance(node, list):
+            for index, item in enumerate(node):
+                walk(item, f"{where}[{index}]")
+        elif isinstance(node, dict):
+            for key, item in node.items():
+                child = f"{where}.{key}" if where else str(key)
+                scan(str(key), f"{child} (key)")
+                walk(item, child)
+
+    walk(value, "")
     return hits
 
 

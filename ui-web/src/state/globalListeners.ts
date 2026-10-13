@@ -36,6 +36,7 @@ import { isMac } from '../lib/platform'
 import { onContextMenu } from './contextMenu'
 import * as escapeOrder from './escapeOrder'
 import { toggle as toggleFind } from './find'
+import { close as closeAtMenu } from './mentions'
 import { onPointerDown as menuAway } from './menu'
 import { close as closePermPopover } from './perm'
 import { close as closePlusMenu } from './plus'
@@ -48,7 +49,7 @@ import * as tip from './tooltip'
 import * as visibility from './visibility'
 import { close as closeWorkdir } from './workdir'
 
-/* The three composer popovers have no close button: a pointer landing outside
+/* The four composer popovers have no close button: a pointer landing outside
    one is one way back out, and Escape is the other (state/escapeOrder.ts).
    Capture, because the row under the pointer may stop the event.
 
@@ -58,7 +59,11 @@ function awayFromPopovers(event: PointerEvent): void {
   const target = event.target as Element
   if (!target.closest('#permPop') && !target.closest('#permChip')) closePermPopover()
   if (!target.closest('#plusPop') && !target.closest('#plusBtn')) closePlusMenu()
-  if (!target.closest('#wdPop') && !target.closest('#wdChip')) closeWorkdir()
+  if (!target.closest('#atPop') && !target.closest('#atBtn')) closeAtMenu()
+  /* The folder popover hangs off the "@" button, and pressing that button is a
+     pointer outside this one: it raises the menu the row was picked from, so
+     the menu the row opened goes. */
+  if (!target.closest('#wdPop')) closeWorkdir()
 }
 
 /* Code blocks come and go with every answer, so the click is caught once here

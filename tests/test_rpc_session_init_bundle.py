@@ -269,7 +269,7 @@ def test_resolve_context_window_helper_removed() -> None:
 
 
 async def test_default_session_info_key_set_matches_expected_v030(fake_agent_loop, config, monkeypatch) -> None:
-    """wire-shape lock — info dict has exactly the 13 expected keys.
+    """wire-shape lock — info dict has exactly the expected keys.
 
     Anti-drift gate: adding a new field to the init bundle MUST update this
     expected set, forcing an explicit spec amendment, until the dict is
@@ -297,6 +297,10 @@ async def test_default_session_info_key_set_matches_expected_v030(fake_agent_loo
         "skills",
         "tools",
         "cwd",
+        # What the session may search, beside the folder it runs in and for the
+        # same reason: a reader reopening a conversation has to see what it is
+        # pointed at, or the picker draws it as pointed at nothing.
+        "knowledge_bases",
         "version",
         "mcp_servers",
         # init bundle

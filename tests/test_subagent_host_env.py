@@ -285,6 +285,65 @@ def test_windows_capture_reports_failure_when_no_store_reads(windows_host: _Fake
     assert backend_env._capture_windows(consequence="subagents inherit raven's environment") is None
 
 
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (r"C:\50%;%userprofile%\bin", r"C:\50%;C:\Users\me\bin"),
+        (r"%UNKNOWN%;%USERPROFILE%\bin", r"%UNKNOWN%;C:\Users\me\bin"),
+        (r"%EMPTY%;%NESTED%", r";C:\Users\me\bin"),
+        (r"C:\plain%", r"C:\plain%"),
+    ],
+)
+def test_windows_expansion_keeps_literal_percent_and_later_references(value, expected):
+    context = {"USERPROFILE": r"C:\Users\me", "EMPTY": "", "NESTED": r"%USERPROFILE%\bin"}
+    assert backend_env._expand_windows(value, context) == expected
+
+
+@pytest.mark.parametrize("references", [{"A": "%A%"}, {"A": "%B%", "B": "%A%"}])
+def test_windows_expansion_refuses_cycles(references):
+    with pytest.raises(ValueError, match="cyclic"):
+        backend_env._expand_windows("%A%", references)
+
+
+def test_windows_expansion_bounds_output_before_joining(monkeypatch):
+    monkeypatch.setattr(backend_env, "_MAX_EXPANDED_ENV_CHARS", 16)
+    assert backend_env._expand_windows("%B%%B%", {"A": "abcd", "B": "%A%%A%"}) == "abcd" * 4
+    with pytest.raises(ValueError, match="limit"):
+        backend_env._expand_windows("%B%%B%x", {"A": "abcd", "B": "%A%%A%"})
+
+
+def test_windows_expansion_bounds_reference_depth(monkeypatch):
+    monkeypatch.setattr(backend_env, "_MAX_ENV_REFERENCE_DEPTH", 2)
+    assert backend_env._expand_windows("%A%", {"A": "%B%", "B": "done"}) == "done"
+    with pytest.raises(ValueError, match="nested"):
+        backend_env._expand_windows("%A%", {"A": "%B%", "B": "%C%", "C": "done"})
+
+
+def test_windows_invalid_expansion_keeps_the_last_capture(windows_host):
+    before = backend_env.login_shell_env()
+    windows_host.user.update({"Path": "%LOOP%", "LOOP": "%LOOP%"})
+    assert backend_env.refresh_login_shell_env() is False
+    assert backend_env.login_shell_env() == before
+
+
+def test_windows_registry_non_strings_do_not_become_path_components(windows_host):
+    windows_host.machine["Path"] = 123
+    windows_host.user["Path"] = r"C:\valid"
+    captured = backend_env._capture_windows(consequence="keeping the old capture")
+    assert captured["PATH"] == r"C:\valid;" + _LOGON["PATH"]
+
+
+@pytest.mark.parametrize("program", [r"C:\tools\agent.exe", r".\agent.exe", "bin/agent.exe"])
+def test_windows_explicit_program_is_not_looked_up_again(monkeypatch, program):
+    monkeypatch.setattr(backend_env, "_on_windows", lambda: True)
+
+    def unexpected_lookup(*args, **kwargs):
+        raise AssertionError("an explicit program must bypass PATH lookup")
+
+    monkeypatch.setattr(backend_env.shutil, "which", unexpected_lookup)
+    assert backend_env.resolve_program([program, "acp"], {"PATH": "elsewhere"}) == [program, "acp"]
+
+
 def test_a_refresh_on_windows_reads_the_stores_again(
     windows_host: _FakeWinreg, monkeypatch: pytest.MonkeyPatch
 ) -> None:

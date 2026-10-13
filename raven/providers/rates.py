@@ -218,10 +218,9 @@ def may_prompt(model: str) -> bool:
     return any((drivers / part / "authenticator.py").exists() for part in model.split("/") if part)
 
 
-# LiteLLM answers a huggingface id's context window by fetching the repo's
-# `config.json` over the network -- `utils.py::_get_max_position_embeddings`,
-# on every call, cached nowhere. `allow_fetch=False` does not reach it: that
-# flag governs this module's own OpenRouter fetch, not LiteLLM's.
+# LiteLLM fetches a huggingface id's config.json for its context window.
+# Skip this driver even when SDK lookups are allowed: the routing prefix
+# becomes part of the repository name, so the request returns 404.
 _NETWORK_METADATA_VENDORS = frozenset({"huggingface"})
 
 
@@ -252,6 +251,23 @@ def may_fetch(model: str) -> bool:
     branch.
     """
     return any(part in _NETWORK_METADATA_VENDORS for part in model.split("/") if part)
+
+
+# Ollama's driver answers a table miss by POSTing `{api_base}/api/show` to the
+# daemon serving the model. That is a request, not a read: worth making when the
+# caller allows a fetch, and what held `session/new` past its EOF grace when not.
+_ENDPOINT_METADATA_VENDORS = frozenset({"ollama", "ollama_chat"})
+
+
+def _may_query_endpoint(model: str) -> bool:
+    """Would ``get_model_info`` ask this model's own server rather than a table?
+
+    Every other driver answers offline: it strips the routing prefix and reads
+    the table, which files most direct vendors under the bare name
+    (``openai/gpt-4o-mini`` is keyed ``gpt-4o-mini``). That normalization is
+    what a cache-only lookup still needs. Any segment counts, as in ``may_fetch``.
+    """
+    return any(part in _ENDPOINT_METADATA_VENDORS for part in model.split("/") if part)
 
 
 def _numeric(entry: dict | None, *fields: str) -> float | None:
@@ -794,7 +810,7 @@ def _litellm_ready() -> bool:
     return not getattr(getattr(module, "__spec__", None), "_initializing", False)
 
 
-def _try_litellm_max_output(model: str, *, allow_import: bool = True) -> int | None:
+def _try_litellm_max_output(model: str, *, allow_import: bool = True, allow_fetch: bool = True) -> int | None:
     """The model's own output ceiling, from the same metadata as the window.
 
     ``max_tokens`` is a legitimate fallback here in a way it is not on the
@@ -804,6 +820,9 @@ def _try_litellm_max_output(model: str, *, allow_import: bool = True) -> int | N
     Both tiers are filtered through ``_trustworthy_ceiling``: the rows that get
     this wrong answer the table and ``get_model_info`` alike, so guarding one
     would hand back exactly what the other just rejected.
+
+    ``allow_fetch=False`` skips ``get_model_info`` only where it would ask the
+    model's own server (see ``_may_query_endpoint``).
     """
     if not allow_import and not _litellm_ready():
         return None
@@ -818,7 +837,7 @@ def _try_litellm_max_output(model: str, *, allow_import: bool = True) -> int | N
         ceiling = _trustworthy_ceiling(_table_entry(candidate))
         if ceiling:
             return ceiling
-        if may_prompt(candidate) or may_fetch(candidate):
+        if may_prompt(candidate) or may_fetch(candidate) or (not allow_fetch and _may_query_endpoint(candidate)):
             continue
         try:
             info = litellm.get_model_info(candidate)
@@ -880,9 +899,9 @@ def declared_max_output_tokens(model: str | None, *, allow_fetch: bool = True) -
     """
     if not model:
         return None
-    return _try_litellm_max_output(model, allow_import=allow_fetch) or _try_openrouter_max_output(
-        model, allow_fetch=allow_fetch
-    )
+    return _try_litellm_max_output(
+        model, allow_import=allow_fetch, allow_fetch=allow_fetch
+    ) or _try_openrouter_max_output(model, allow_fetch=allow_fetch)
 
 
 def resolve_max_output_tokens(model: str | None, *, window: int | None = None, allow_fetch: bool = True) -> int:
@@ -941,8 +960,8 @@ def resolve_max_output_tokens(model: str | None, *, window: int | None = None, a
     return max(1, min(ceiling, room, MAX_OUTPUT_TOKENS_PER_ITERATION))
 
 
-def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int | None:
-    """LiteLLM's static model metadata -- offline, covers most mapped providers.
+def _try_litellm_context_window(model: str, *, allow_import: bool = True, allow_fetch: bool = True) -> int | None:
+    """LiteLLM's model metadata, covering most mapped providers.
 
     Falls back to ``max_tokens`` (the output ceiling) for the handful of rows
     that carry no ``max_input_tokens``. Not because the two mean the same
@@ -958,6 +977,9 @@ def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int
     only, not to wait out the import it is trying to defer. Once LiteLLM is in
     hand the check is free and the lookup proceeds exactly as with
     ``allow_import=True``.
+
+    ``allow_fetch=False`` skips ``get_model_info`` only where it would ask the
+    model's own server (see ``_may_query_endpoint``).
     """
     if not allow_import and not _litellm_ready():
         return None
@@ -974,7 +996,7 @@ def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int
         window = _numeric(_table_entry(candidate), "max_input_tokens", "max_tokens")
         if window:
             return int(window)
-        if may_prompt(candidate) or may_fetch(candidate):
+        if may_prompt(candidate) or may_fetch(candidate) or (not allow_fetch and _may_query_endpoint(candidate)):
             continue
         try:
             info = litellm.get_model_info(candidate)
@@ -1003,11 +1025,11 @@ def resolve_context_window(model: str, *, allow_fetch: bool = True) -> int | Non
 
     ``allow_fetch=False`` means "answer from what is already on hand": it
     passes through to the OpenRouter tier (see ``_fetch_openrouter_models``)
-    and also tells the LiteLLM tier not to import LiteLLM on this caller's
-    behalf (see ``_try_litellm_context_window``) -- a caller cheap enough to
-    pass this is cheap enough not to pay a fresh import either.
+    and keeps the LiteLLM tier to lookups that read: no fresh import, and no
+    metadata request to the model's own server, runs on this caller's behalf
+    (see ``_try_litellm_context_window``).
     """
-    window = _try_litellm_context_window(model, allow_import=allow_fetch)
+    window = _try_litellm_context_window(model, allow_import=allow_fetch, allow_fetch=allow_fetch)
     if window:
         return window
 

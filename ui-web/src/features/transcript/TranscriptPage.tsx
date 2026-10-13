@@ -12,12 +12,14 @@ import { copy } from '../../lib/clipboard'
 import { useTick } from '../../lib/tick'
 import * as lightbox from '../../state/lightbox'
 import { open as openChip } from '../../state/proseChips'
+import * as reveal from '../../state/reveal'
 import { ds } from '../../state/sources'
 import * as dag from '../dag/graph'
 import { getVersion as deliveriesVersion, humanSize, subscribe as deliveriesSubscribe } from '../workspace/deliveries'
 import {
-  fileKind, fileURL, openDelivery as wsOpenDelivery, openPath as wsOpenPath, thumbURL,
+  fileKind, fileURL, openDelivery as wsOpenDelivery, openPath as wsOpenPath, thumbURL, versioned,
 } from '../workspace/store'
+import * as citations from './citations'
 import * as store from './store'
 import * as tail from './tail'
 
@@ -423,6 +425,37 @@ function Dtl({ c, open }: { c: CallData; open: boolean }): ReactElement | null {
     /* Below the pictures, not instead of them: a batch where one entry failed
        has both, and the reader needs both. */
     if (made.saysMore) body.push(dtlPre(c.res, 'out'))
+  } else if (c.name === 'knowledge_search') {
+    /* The query as the head, and the passages under it -- each one pressable,
+       because a citation a reader cannot follow is a claim they have to take
+       on trust. The prose the model got is still below: what the tool said is
+       what the answer was written from, and a card that showed only the
+       document names would hide the words that were actually read. */
+    const query = String(c.args.query || '')
+    head = <DtlHead name={query || t('gui.dtl.plain')} copyText={query || c.res} />
+    const found = citations.of(c.callId)
+    if (found.length && reveal.canOpenDocument()) {
+      body.push(
+        <div key="cites" className="transcript-cites">
+          {found.map((cite, at) => (
+            <button
+              key={`${cite.documentId}-${cite.chunkIndex}-${at}`}
+              className="transcript-cite"
+              onClick={() => reveal.document({
+                baseId: cite.baseId,
+                documentId: cite.documentId,
+                chunkIndex: cite.chunkIndex,
+              })}
+            >
+              <span className="transcript-citen">{at + 1}</span>
+              <span className="transcript-cited">{cite.source}</span>
+              {cite.page !== null && <span className="transcript-citep">{t('gui.dtl.cite_page', { n: cite.page })}</span>}
+            </button>
+          ))}
+        </div>,
+      )
+    }
+    body.push(dtlPre(c.res, 'out'))
   } else if (c.name === 'web_fetch') {
     const url = String(c.args.url || '')
     head = <DtlHead name={url || t('gui.dtl.plain')} copyText={url || c.res} />
@@ -1308,9 +1341,12 @@ const DeliveryShot = memo(function DeliveryShot({ row, broken, src }: {
   row: DeliveryRow; broken: () => void; src?: string
 }): ReactElement {
   const [ready, setReady] = useState(false)
+  /* Versioned by the delivery: a path delivered again keeps its token and a
+     thumb is named by its path, so without the stamp the new card's picture
+     is the URL the old card already drew. */
   return (
     <span className={'pic shot' + (ready ? '' : ' skel')}>
-      <img src={src || row.downloadPath} alt="" loading="lazy" decoding="async"
+      <img src={versioned(src || row.downloadPath, row.when)} alt="" loading="lazy" decoding="async"
         onLoad={() => setReady(true)} onError={broken} />
       {ready ? null : <span className="sk" />}
     </span>

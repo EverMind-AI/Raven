@@ -1960,6 +1960,43 @@ describe("the turn's delivered files", () => {
     expect(src).toContain('render=thumb')
   })
 
+  /* A tile is a picture, and a document that drew one URL draws it again from
+     memory without asking, whatever Cache-Control says. The registry hands a
+     path delivered again in one conversation the same token, and a thumb is
+     named by its path, so the second card's tile could come back as the first
+     card's picture while the file on disk held the new one. Each delivery's own
+     stamp keeps the two URLs apart. */
+  it.each([
+    ['shot.png', '/files/download?token=shot.png'],
+    ['report.pdf', '/file?path=%2Fw%2Freport.pdf'],
+  ])('draws %s, delivered twice, under a URL per delivery', async (name, route) => {
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true }))
+    const stamped = (at: number): Record<string, unknown> => ({
+      raven_delivery: { ...(manifest([name]).raven_delivery as Record<string, unknown>), delivered_at: at },
+    })
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'draw it', timestamp: iso(Date.now() - 9000) },
+        { role: 'tool', name: 'deliver_files', text: 'ok', metadata: stamped(1000) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now() - 8000) },
+        { role: 'user', text: 'make it blue', timestamp: iso(Date.now() - 5000) },
+        { role: 'tool', name: 'deliver_files', text: 'ok', metadata: stamped(2000) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    await act(async () => { await Promise.resolve() })
+    await act(async () => { await Promise.resolve() })
+    const srcs = $$('.atile .pic.shot img').map((img) => img.getAttribute('src') || '')
+    expect(srcs).toHaveLength(2)
+    expect(srcs.every((src) => src.includes(route))).toBe(true)
+    expect(srcs[0]).not.toBe(srcs[1])
+    /* By the delivery's stamp rather than its turn: a delegated stream numbers
+       its turns from one as well, so one turn number can name two deliveries
+       of the same path. */
+    expect(srcs[0]).toContain('&v=1000')
+    expect(srcs[1]).toContain('&v=2000')
+  })
+
   it('falls back to the type mark when the deck cannot be rendered', async () => {
     vi.stubGlobal('fetch', (_url: string, init?: RequestInit) => {
       if (init?.method === 'HEAD') return Promise.resolve({ ok: true })

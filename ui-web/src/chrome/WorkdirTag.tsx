@@ -18,7 +18,7 @@ import { useSyncExternalStore } from 'react'
 import { t } from '../i18n/t'
 import * as lang from '../state/lang'
 import * as wd from '../state/workdir'
-import { FOLDER } from './WorkdirChip'
+import { FOLDER } from './WorkdirPopover'
 
 import type { JSX } from 'react'
 

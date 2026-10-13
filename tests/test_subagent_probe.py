@@ -1675,3 +1675,89 @@ def test_a_machine_failure_says_where_the_fix_is_made_unless_the_fix_is_the_node
         "ravenx2",
     )
     assert "any fix is made there" not in here and here.endswith("install-node ravenx2`")
+
+
+@pytest.mark.parametrize(
+    "status,detail",
+    [
+        ("unknown", "unsupported session configuration"),
+        ("attention", "session/new timed out"),
+        ("missing", "transport disconnected"),
+    ],
+)
+async def test_boot_replaces_an_auth_verdict_and_retries_until_ready(tmp_path, monkeypatch, status, detail):
+    from dataclasses import replace
+    from unittest.mock import AsyncMock
+
+    import raven.acp_client.capabilities as caps
+
+    cfg = ThirdPartyAcpSubagentConfig(name="measured", command="measured --acp")
+    monkeypatch.setattr(caps, "default_snapshot_path", lambda: tmp_path / "caps.json")
+    monkeypatch.setattr(probe_mod, "_launch_kw", lambda cfg: {})
+    old = caps.CapabilitySnapshot(
+        agent=cfg.name,
+        fingerprint=caps.snapshot_fingerprint(cfg),
+        status="attention",
+        detail="sign in",
+        measured_at_ms=1,
+        needs_auth=True,
+        can_load=True,
+        model_choices=(caps.AcpModelChoice(value="a", name="A"),),
+    )
+    store = caps.SnapshotStore()
+    store.record(old)
+    failed = caps.CapabilitySnapshot(
+        agent=cfg.name,
+        fingerprint=old.fingerprint,
+        status=status,
+        detail=detail,
+        measured_at_ms=2,
+        needs_auth=False,
+    )
+    verified = AsyncMock(side_effect=[failed, replace(old, status="ready", needs_auth=False, measured_at_ms=3)])
+    monkeypatch.setattr(caps, "verify_agent", verified)
+    rows = [_FakeRow(cfg.name, config=cfg)]
+    manager = _FakeManager(rows, with_refresh=True)
+    await probe_mod._verify_missing_snapshots(manager, rows)
+    saved = store.load([cfg])[cfg.name]
+    assert not saved.needs_auth
+    assert not saved.usable
+    assert (saved.status, saved.detail) == (status, detail)
+    assert saved.can_load and saved.model_choices == old.model_choices
+    await probe_mod._verify_missing_snapshots(manager, rows)
+    assert store.load([cfg])[cfg.name].usable
+    await probe_mod._verify_missing_snapshots(manager, rows)
+    assert verified.await_count == 2
+    assert manager.refresh_calls == 2
+
+
+@pytest.mark.parametrize("needs_auth,unfetched", [(True, False), (False, True), (False, False)])
+@pytest.mark.parametrize("previous_status", ["ready", "attention"])
+def test_manual_test_merges_current_failure_flags_with_old_capabilities(needs_auth, unfetched, previous_status):
+    from dataclasses import replace
+
+    from raven.acp_client.capabilities import CapabilitySnapshot
+
+    old = CapabilitySnapshot(
+        agent="agent",
+        fingerprint="old",
+        status=previous_status,
+        detail="old refusal",
+        measured_at_ms=1,
+        needs_auth=previous_status == "attention",
+        can_load=True,
+    )
+    measured = replace(
+        old,
+        status="attention",
+        fingerprint="new",
+        measured_at_ms=2,
+        detail="current refusal",
+        can_load=False,
+        needs_auth=needs_auth,
+        unfetched=unfetched,
+    )
+    saved = probe_mod._test_record(measured, old)
+    assert saved.can_load
+    assert saved.fingerprint == "new"
+    assert (saved.needs_auth, saved.unfetched) == (needs_auth, unfetched)

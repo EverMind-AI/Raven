@@ -19,112 +19,48 @@ one payload gets built per turn and may be sent to any of them:
 
 from __future__ import annotations
 
-import base64
-import io
 from pathlib import Path
 from typing import Any
 
 from raven.contracts.tool import ContentPart
-from raven.utils.images import estimate_image_tokens, image_block, is_image_part, text_block
 
-# Formats every target accepts inline. A raster format Pillow can decode (BMP,
-# TIFF, ICO) is converted to JPEG rather than rejected. Formats Pillow cannot
-# decode are not images as far as this module is concerned -- SVG is XML and HEIC
-# needs pillow-heif -- and read_file falls back to reading them as text.
-INLINE_MIME_TYPES = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
+# The preparation half moved to `raven.utils.images`, beside the content-part
+# builders it was always calling: a knowledge base has to prepare an image too,
+# and reaching into `raven.agent` for it would have put the two packages in an
+# import cycle. Re-exported because the tool modules and the context engine
+# address them here.
+from raven.utils.images import (
+    INLINE_MIME_TYPES,
+    JPEG_QUALITY_LADDER,
+    MAX_BASE64_BYTES,
+    MAX_DIMENSION_PX,
+    MAX_IMAGE_TOKENS,
+    MIN_DIMENSION_PX,
+    ImageTooLargeError,
+    image_block,
+    is_image_part,
+    prepare_image,
+    text_block,
+    to_data_uri,
+)
 
-MAX_DIMENSION_PX = 2000
-MAX_BASE64_BYTES = int(4.5 * 1024 * 1024)
-MAX_IMAGE_TOKENS = 1568
-# Below this a further downscale destroys the content instead of shrinking it,
-# so we stop and let the caller report failure rather than send mush.
-MIN_DIMENSION_PX = 200
-# First value is the quality used for a plain format conversion; the rest are
-# the ladder walked when the encoded result is still too large.
-JPEG_QUALITY_LADDER = (85, 80, 70, 55, 40, 30)
-
-
-class ImageTooLargeError(RuntimeError):
-    """Raised when an image cannot be squeezed under the limits."""
-
-
-def _target_size(width: int, height: int) -> tuple[int, int]:
-    """Largest size within both the pixel cap and the patch-token cap.
-
-    Two constraints, so take whichever bites harder — checking only the long
-    edge leaves images that the server would still downscale.
-    """
-    scale = min(1.0, MAX_DIMENSION_PX / max(width, height))
-    while True:
-        w = max(1, int(width * scale))
-        h = max(1, int(height * scale))
-        if estimate_image_tokens(w, h, cap=10**9) <= MAX_IMAGE_TOKENS or min(w, h) <= MIN_DIMENSION_PX:
-            return w, h
-        scale *= 0.9
-
-
-def prepare_image(data: bytes, mime: str) -> tuple[bytes, str, dict[str, Any]]:
-    """Return ``(payload, mime, metadata)`` ready to inline as a data URI.
-
-    ``metadata`` always reports the original and final geometry plus whether the
-    image was altered, so the caller can tell the model what it is looking at —
-    a resized screenshot with unreadable small text is worse than a resized
-    screenshot the model *knows* was resized.
-    """
-    from PIL import Image
-
-    with Image.open(io.BytesIO(data)) as probe:
-        original_size = (probe.width, probe.height)
-
-    meta: dict[str, Any] = {
-        "original_width": original_size[0],
-        "original_height": original_size[1],
-        "width": original_size[0],
-        "height": original_size[1],
-        "resized": False,
-        "recompressed": False,
-        "source_mime": mime,
-    }
-
-    target = _target_size(*original_size)
-    passthrough_ok = (
-        mime in INLINE_MIME_TYPES and target == original_size and len(base64.b64encode(data)) <= MAX_BASE64_BYTES
-    )
-    if passthrough_ok:
-        meta["tokens"] = estimate_image_tokens(*original_size)
-        return data, mime, meta
-
-    # Animated GIFs lose their frames on re-encode; only the first frame can be
-    # shown, which is what the model would attend to anyway.
-    with Image.open(io.BytesIO(data)) as img:
-        img = img.convert("RGB")
-        size = target
-        for quality in JPEG_QUALITY_LADDER:
-            frame = img if size == original_size else img.resize(size, Image.LANCZOS)
-            buf = io.BytesIO()
-            frame.save(buf, format="JPEG", quality=quality, optimize=True)
-            payload = buf.getvalue()
-            if len(base64.b64encode(payload)) <= MAX_BASE64_BYTES:
-                meta.update(
-                    width=size[0],
-                    height=size[1],
-                    resized=size != original_size,
-                    recompressed=True,
-                    quality=quality,
-                    tokens=estimate_image_tokens(*size),
-                )
-                return payload, "image/jpeg", meta
-            if min(size) <= MIN_DIMENSION_PX:
-                break
-            size = (max(1, int(size[0] * 0.8)), max(1, int(size[1] * 0.8)))
-
-    raise ImageTooLargeError(
-        f"image cannot be reduced below {MAX_BASE64_BYTES} bytes without dropping under {MIN_DIMENSION_PX}px"
-    )
-
-
-def to_data_uri(payload: bytes, mime: str) -> str:
-    return f"data:{mime};base64,{base64.b64encode(payload).decode('ascii')}"
+__all__ = [
+    "INLINE_MIME_TYPES",
+    "JPEG_QUALITY_LADDER",
+    "MAX_BASE64_BYTES",
+    "MAX_DIMENSION_PX",
+    "MAX_IMAGE_TOKENS",
+    "MIN_DIMENSION_PX",
+    "ImageTooLargeError",
+    "blocks_from_mcp_content",
+    "describe_image",
+    "image_block",
+    "is_image_part",
+    "prepare_image",
+    "text_block",
+    "to_data_uri",
+    "to_data_uri_from_b64",
+]
 
 
 def blocks_from_mcp_content(content: list[Any]) -> tuple[str, list[ContentPart]]:
