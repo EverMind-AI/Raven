@@ -504,11 +504,13 @@ class TestWhatHappensDuringTheAwait:
 
 class TestMachineTurnsInsideTheTail:
     async def test_a_sentinel_turn_between_two_user_turns_is_not_annotated(self, tmp_path: Path) -> None:
-        """Sentinel reads this file; its own turns must not come back to it.
+        """Sentinel reads this file; none of its turn may come back to it.
 
-        The origin check gates the trigger, not the content: a Sentinel turn
-        lands in the reader's own session, between their turns, and would ride
-        into the tail the next user turn hands over.
+        The mark rides on the one entry that opens a turn and on nothing else
+        in it -- the reply, the tool calls and their results are all saved
+        unmarked (`initial_messages[-1]` at the stamp site). A filter that read
+        each message on its own would drop Sentinel's question and keep its
+        answer, which is the half that reaches `episodes.md`.
         """
         loop = _make_loop(tmp_path, every=2)
         fake = _FakeConsolidator()
@@ -516,10 +518,13 @@ class TestMachineTurnsInsideTheTail:
         session = _session_with(loop, "cli:mixed", turns=0)
         session.metadata["annotated_through"] = 0
         session.messages.extend(_turn(0))
+        # The shape _save_turn writes: the mark on the opening entry only.
         session.messages.extend(
             [
                 {"role": "user", "content": "SENTINEL NOTICE", "origin": "sentinel"},
-                {"role": "assistant", "content": "noted", "origin": "sentinel"},
+                {"role": "assistant", "content": "reminder handled, nudged the user"},
+                {"role": "assistant", "content": "", "tool_calls": [{"id": "t1"}]},
+                {"role": "tool", "tool_call_id": "t1", "content": "nudge sent"},
             ]
         )
         session.messages.extend(_turn(1))
@@ -529,9 +534,34 @@ class TestMachineTurnsInsideTheTail:
         await _settle(loop)
 
         assert len(fake.tails) == 1
-        contents = [m["content"] for m in fake.tails[0]]
+        contents = [m.get("content") for m in fake.tails[0]]
         assert "SENTINEL NOTICE" not in contents
+        assert "reminder handled, nudged the user" not in contents, "the reply is the half that reaches the file"
+        assert "nudge sent" not in contents
         assert contents == ["q0", "a0", "q1", "a1"]
+
+    async def test_a_persons_turn_keeps_its_unmarked_parts(self, tmp_path: Path) -> None:
+        """The same rule must not eat a person's tool calls, which are unmarked too."""
+        loop = _make_loop(tmp_path, every=2)
+        fake = _FakeConsolidator()
+        loop.memory_consolidator = fake
+        session = _session_with(loop, "cli:tools", turns=0)
+        session.metadata["annotated_through"] = 0
+        session.messages.extend(
+            [
+                {"role": "user", "content": "q0"},
+                {"role": "assistant", "content": "", "tool_calls": [{"id": "t1"}]},
+                {"role": "tool", "tool_call_id": "t1", "content": "ran it"},
+                {"role": "assistant", "content": "a0"},
+            ]
+        )
+        session.messages.extend(_turn(1))
+        loop.sessions.save(session)
+
+        loop._maybe_annotate_tail(session, prev_len=len(session.messages) - 2)
+        await _settle(loop)
+
+        assert [m.get("content") for m in fake.tails[0]] == ["q0", "", "ran it", "a0", "q1", "a1"]
 
 
 class TestTheNewCommandDoesNotRedoTheWork:
@@ -576,3 +606,41 @@ class TestTheNewCommandDoesNotRedoTheWork:
         session.messages.extend(_turn(3))
         await _Recording().consolidate_unconsolidated(session)
         assert [m["content"] for m in seen[-1]] == ["q3", "a3"]
+
+
+class TestATruncationWhileTheTaskIsQueued:
+    async def test_a_cut_before_the_lock_is_taken_is_still_seen(self, tmp_path: Path) -> None:
+        """The counter is read with the boundary, not after the wait.
+
+        A second task can sit queued behind the first. A truncation that lands
+        while it waits has already moved the counter by the time it takes the
+        lock, so a counter read there agrees with itself and the task goes on
+        to slice the changed list against the boundary it captured.
+        """
+        loop = _make_loop(tmp_path, every=2)
+        gate = asyncio.Event()
+        fake = _FakeConsolidator(hold=gate)
+        loop.memory_consolidator = fake
+        session = _session_with(loop, "cli:queued", turns=0)
+        session.metadata["annotated_through"] = 0
+        for i in range(2):
+            session.messages.extend(_turn(i))
+        loop.sessions.save(session)
+
+        loop._maybe_annotate_tail(session, prev_len=2)  # task 1 takes the lock and holds
+        await asyncio.sleep(0)
+        assert len(fake.tails) == 1
+
+        session.messages.extend(_turn(2))
+        loop._maybe_annotate_tail(session, prev_len=4)  # task 2 queues with end=6
+        await asyncio.sleep(0)
+
+        assert session.undo_last_turn(1) == 2  # the first half of a retry
+        loop.sessions.save(session)
+
+        gate.set()
+        await _settle(loop)
+
+        # task 2 saw the cut and stood down; nothing was annotated twice
+        assert len(fake.tails) == 1
+        assert session.metadata["annotated_through"] <= len(session.messages)

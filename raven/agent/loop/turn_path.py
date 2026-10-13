@@ -167,6 +167,31 @@ def _marker_failure(reason: str | None) -> str:
     return reason or "unknown error"
 
 
+def _turns_a_person_opened(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """``messages`` without the turns the runtime opened for itself.
+
+    The origin mark rides on the one message that opens a turn -- the user
+    entry (``initial_messages[-1]`` at the stamp site) -- and nothing else in
+    that turn carries it: the reply the model writes, its tool calls and their
+    results are all saved unmarked. Deciding message by message would drop a
+    Sentinel turn's question and keep its answer, which is the half that ends
+    up in ``episodes.md``, which two Sentinel producers read.
+
+    So the turn decides. A ``role == "user"`` entry opens one and its mark
+    rules until the next opens; anything before the first user entry is the
+    tail of a turn this slice does not contain, and is kept, because the slice
+    starts where the last annotation stopped.
+    """
+    out: list[dict[str, Any]] = []
+    keep = True
+    for m in messages:
+        if m.get("role") == "user":
+            keep = not m.get("origin")
+        if keep:
+            out.append(m)
+    return out
+
+
 def _stamp_turn_observers(messages: list[dict[str, Any]], metadata: dict[str, Any] | None, turn_base: int) -> None:
     """File the turn's observer record onto its last substantive assistant message.
 
@@ -2875,6 +2900,12 @@ class TurnPathMixin:
         # length the next turn has already grown, ending the tail on a user
         # message whose answer has not arrived.
         end = len(session.messages)
+        # Both read here, for the same reason: a task can sit queued behind
+        # another annotation on the same session, and a truncation that lands
+        # while it waits has already moved the counter by the time it takes
+        # the lock. Read together, they describe one moment -- the end of this
+        # turn -- and disagree with the session if anything cut it since.
+        before = session.truncations
 
         async def _run() -> None:
             try:
@@ -2884,17 +2915,11 @@ class TurnPathMixin:
                         stored = prev_len
                         self._set_annotated_through(session, min(prev_len, len(session.messages)))
                     start = min(int(stored), end, len(session.messages))
-                    if start >= end:
+                    if start >= end or session.truncations != before:
                         return
-                    # A machine-initiated turn carries an origin mark and a
-                    # person's does not (``_runtime_origin``). Two of this
-                    # file's readers are Sentinel producers, so writing
-                    # Sentinel's own turns into it would feed the layer its
-                    # output back.
-                    tail = [m for m in session.messages[start:end] if not m.get("origin")]
+                    tail = _turns_a_person_opened(session.messages[start:end])
                     if sum(1 for m in tail if m.get("role") == "user") < every:
                         return
-                    before = session.truncations
                     if not await self.memory_consolidator.consolidate_messages(tail):
                         logger.warning("episodic annotate for {} declined; cursor kept at {}", session.key, start)
                         return
