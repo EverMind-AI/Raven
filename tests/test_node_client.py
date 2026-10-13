@@ -1198,7 +1198,7 @@ async def test_a_watcher_that_fails_is_named_and_the_frames_go_on(tmp_path):
     sink = logger.add(lambda message: records.append(message.record["message"]), level="WARNING")
     try:
         endpoint.feed_frame('{"jsonrpc":"2.0","id":1,"result":{}}', 1)
-        assert await endpoint.readline() == b'{"jsonrpc":"2.0","id":1,"result":{}}'
+        assert await endpoint.readline() == b'{"jsonrpc":"2.0","id":1,"result":{}}\n'
         endpoint.consumed()
     finally:
         logger.remove(sink)
