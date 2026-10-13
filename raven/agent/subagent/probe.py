@@ -1176,12 +1176,13 @@ def _note_menu_re_measured(snapshot: Any, name: str) -> None:
 def capabilities_wanted(cfg: Any) -> bool:
     """Does this acp entry lack a fresh, complete capability record?
 
-    The same four cases the boot backfill re-measures: no snapshot, one whose
-    launch config has changed, one written before the model menu was recorded,
-    or one of raven's own whose menu came back empty -- that last one bounded as
-    ``_own_row_missing_its_menu`` bounds it. A row with a complete record keeps
-    it -- a connect must not spend a handshake re-measuring what is already
-    known.
+    Four cases: no snapshot, one whose launch config has changed, one written
+    before the model menu was recorded, or one of raven's own whose menu came
+    back empty -- that last one bounded as ``_own_row_missing_its_menu`` bounds
+    it. A recorded failure, a credential refusal included, is not one of them;
+    the boot backfill re-measures those as well as these four. A row with a
+    complete record keeps it -- a connect must not spend a handshake re-measuring
+    what is already known.
     """
     snapshot = acp_snapshot_for(cfg)
     if snapshot is None or snapshot.stale or not getattr(snapshot, "model_menu_measured", True):
