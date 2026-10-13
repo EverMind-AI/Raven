@@ -54,11 +54,12 @@ class _FakeChatProvider:
 class _FakeConsolidator:
     """Records what the step hands it; answers whatever the test scripted."""
 
-    def __init__(self, *, result: bool = True, hold: asyncio.Event | None = None) -> None:
+    def __init__(self, *, result: bool = True, hold: asyncio.Event | None = None, window: int = 1_000_000) -> None:
         self.result = result
         self.hold = hold
         self.tails: list[list[dict[str, Any]]] = []
         self.refreshes = 0
+        self.context_window_tokens = window
         self._locks: dict[str, asyncio.Lock] = {}
 
     def get_lock(self, session_key: str) -> asyncio.Lock:
@@ -644,3 +645,54 @@ class TestATruncationWhileTheTaskIsQueued:
         # task 2 saw the cut and stood down; nothing was annotated twice
         assert len(fake.tails) == 1
         assert session.metadata["annotated_through"] <= len(session.messages)
+
+
+class TestOneCallIsBounded:
+    async def test_an_oversized_tail_is_cut_at_a_turn_and_the_rest_rides_the_next_pass(self, tmp_path: Path) -> None:
+        """A declined tail must not be retried larger every turn.
+
+        Without a bound, a tail refused for its size comes back one turn
+        longer each time and the log stops being written for that session.
+        The cut lands on a turn boundary and the cursor moves to it, so the
+        next pass starts after what was sent.
+        """
+        loop = _make_loop(tmp_path, every=2)
+        fake = _FakeConsolidator(window=400)  # budget is half of this
+        loop.memory_consolidator = fake
+        session = _session_with(loop, "cli:big", turns=0)
+        session.metadata["annotated_through"] = 0
+        big = "x" * 4000
+        for i in range(4):
+            session.messages.extend([{"role": "user", "content": f"q{i}"}, {"role": "assistant", "content": big}])
+        loop.sessions.save(session)
+
+        loop._maybe_annotate_tail(session, prev_len=6)
+        await _settle(loop)
+
+        assert len(fake.tails) == 1
+        sent = fake.tails[0]
+        assert len(sent) < 8, "the whole tail went out unbounded"
+        assert sent[-1]["role"] == "assistant", "cut mid-turn"
+        assert session.metadata["annotated_through"] == len(sent)
+
+        fake.tails.clear()
+        loop._maybe_annotate_tail(session, prev_len=len(session.messages) - 2)
+        await _settle(loop)
+        assert fake.tails[0][0] == {"role": "user", "content": f"q{len(sent) // 2}"}
+
+    async def test_one_turn_larger_than_the_budget_still_goes_out(self, tmp_path: Path) -> None:
+        """Otherwise the cursor stalls on it forever and nothing after it is ever seen."""
+        loop = _make_loop(tmp_path, every=1)
+        fake = _FakeConsolidator(window=100)
+        loop.memory_consolidator = fake
+        session = _session_with(loop, "cli:huge", turns=0)
+        session.metadata["annotated_through"] = 0
+        session.messages.extend([{"role": "user", "content": "q0"}, {"role": "assistant", "content": "y" * 40000}])
+        loop.sessions.save(session)
+
+        loop._maybe_annotate_tail(session, prev_len=0)
+        await _settle(loop)
+
+        assert len(fake.tails) == 1
+        assert len(fake.tails[0]) == 2
+        assert session.metadata["annotated_through"] == 2

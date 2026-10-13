@@ -99,6 +99,7 @@ from raven.spine.events import bound_failure_text
 from raven.spine.turn import AnswerlessTurnError
 from raven.token_wise import usage_context
 from raven.token_wise.turn_spend import TurnSpend
+from raven.utils.tokens import estimate_message_tokens
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -165,6 +166,38 @@ def _marker_failure(reason: str | None) -> str:
         category, provider, _detail = parsed
         return llm_error_summary(category, provider)
     return reason or "unknown error"
+
+
+def _first_turns_within(messages: list[dict[str, Any]], budget: int) -> list[dict[str, Any]]:
+    """The leading whole turns of ``messages`` that fit in ``budget`` tokens.
+
+    The path this step replaces bounded its input by a token budget; without
+    one a declined annotation is retried next turn with the tail one turn
+    longer, so a tail that was refused for its size is refused larger every
+    time and the log stops being written for that session. A tool result is
+    kept at up to 16k characters, so a handful of tool-heavy turns reaches
+    that point.
+
+    Cuts only where a turn ends -- the next ``role == "user"`` -- so the
+    annotator still sees whole exchanges. The first turn is always returned
+    even when it alone exceeds the budget: refusing to send anything would
+    stall the cursor forever, and one oversized turn is the caller's to
+    decline, once, rather than every turn after it.
+    """
+    if budget <= 0 or not messages:
+        return messages
+    spent = 0
+    cut = 0
+    for i, m in enumerate(messages):
+        if i and m.get("role") == "user":
+            if spent > budget:
+                # ``cut or i``: at the first boundary nothing has been banked
+                # yet, and returning nothing would stall the cursor on an
+                # oversized opening turn forever.
+                return messages[: cut or i]
+            cut = i
+        spent += estimate_message_tokens(m)
+    return messages if spent <= budget or not cut else messages[:cut]
 
 
 def _turns_a_person_opened(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2920,6 +2953,23 @@ class TurnPathMixin:
                     tail = _turns_a_person_opened(session.messages[start:end])
                     if sum(1 for m in tail if m.get("role") == "user") < every:
                         return
+                    # Half the window, the share the token path consolidated
+                    # down to. What is left over rides the next qualifying
+                    # turn, so the cursor keeps moving and a tail refused for
+                    # its size is not retried larger.
+                    capped = _first_turns_within(tail, self.memory_consolidator.context_window_tokens // 2)
+                    if len(capped) != len(tail):
+                        last = session.messages[start:end].index(capped[-1]) + 1
+                        end_for_this_pass = start + last
+                        logger.info(
+                            "episodic annotate for {}: tail trimmed to {} of {} messages for this pass",
+                            session.key,
+                            len(capped),
+                            len(tail),
+                        )
+                    else:
+                        end_for_this_pass = end
+                    tail = capped
                     if not await self.memory_consolidator.consolidate_messages(tail):
                         logger.warning("episodic annotate for {} declined; cursor kept at {}", session.key, start)
                         return
@@ -2936,7 +2986,7 @@ class TurnPathMixin:
                             session.metadata.get("annotated_through"),
                         )
                         return
-                    self._set_annotated_through(session, min(end, len(session.messages)))
+                    self._set_annotated_through(session, min(end_for_this_pass, len(session.messages)))
                     await self.memory_consolidator.maybe_refresh_hot_tags()
             except Exception:
                 logger.exception("episodic annotate for {} failed", session.key)
