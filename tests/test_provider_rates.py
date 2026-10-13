@@ -36,6 +36,13 @@ import_litellm()
 # The real fetch, captured before conftest's autouse guard stubs it to {}.
 _REAL_FETCH = rates._fetch_openrouter_models
 
+# The real Ollama driver call, captured for the same reason: the suite's autouse
+# guard replaces it with an offline stub, and ``litellm.utils`` reads the class
+# at call time, so a test that wants the request path has to put it back.
+from litellm.llms.ollama.completion.transformation import OllamaConfig as _OllamaConfig
+
+_REAL_OLLAMA_INFO = _OllamaConfig.get_model_info
+
 
 @pytest.fixture(autouse=True)
 def _reset_catalog_state():
@@ -1642,3 +1649,135 @@ def test_a_huggingface_id_is_never_handed_to_litellm_for_its_window(monkeypatch,
     rates.resolve_context_window(model, allow_fetch=allow_fetch)
 
     assert not [c for c in asked if "huggingface" in c], f"handed over: {asked}"
+
+
+def rates_expected_ceiling(window: int) -> int:
+    """What ``resolve_max_output_tokens`` answers for a window nothing declares.
+
+    The documented fallback, bounded by the room the window leaves: written out
+    here rather than imported so a change to either constant shows up as this
+    test failing rather than as it silently agreeing with the code.
+    """
+    from raven.providers.rates import DEFAULT_MAX_OUTPUT_TOKENS, MAX_OUTPUT_TOKENS_PER_ITERATION, MIN_PROMPT_TOKENS
+
+    return min(DEFAULT_MAX_OUTPUT_TOKENS, max(window - MIN_PROMPT_TOKENS, window // 2), MAX_OUTPUT_TOKENS_PER_ITERATION)
+
+
+def _serve_ollama(monkeypatch, window: int | None = None, *, payload: dict | None = None):
+    """Point LiteLLM's Ollama driver at a real socket, and count the asks.
+
+    A stand-in for the daemon rather than for the driver: ``litellm.utils``
+    reaches the driver through ``OllamaConfig`` looked up on the module at call
+    time, so a patched class attribute is answered by whichever stub is
+    installed -- the suite's own offline guard among them -- and the request
+    path this exercises is never entered. A socket on a loopback port is the
+    only layer both sides agree on, and it is what the driver's own
+    ``OLLAMA_API_BASE`` lookup reads.
+    """
+    import http.server
+    import threading
+
+    hits: list[str] = []
+    body = payload if payload is not None else {"model_info": {"llama.context_length": window}}
+
+    class _Daemon(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802 -- the name http.server dispatches on
+            length = int(self.headers.get("content-length") or 0)
+            self.rfile.read(length)
+            hits.append(self.path)
+            answer = json.dumps(body).encode()
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(answer)))
+            self.end_headers()
+            self.wfile.write(answer)
+
+        def log_message(self, *args):  # keep the suite's output clean
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Daemon)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setenv("OLLAMA_API_BASE", f"http://127.0.0.1:{server.server_address[1]}")
+    # Every call starts with nothing learned, so a second call inside one test
+    # -- a daemon that failed, then one that answers -- is a fresh ask. LiteLLM
+    # memoizes its own answer too, and that one is keyed by id alone, so a stand-in
+    # server serving different bytes for the same id has to clear both.
+    import litellm
+
+    litellm.get_model_info.cache_clear()
+    rates.reset_openrouter_cache()
+    # The suite's offline guard stubs this class attribute, and ``litellm.utils``
+    # reads the class at call time, so a socket is not enough on its own: the
+    # stub has to be lifted for the driver to send anything at all. Restored by
+    # the same fixture that installed it.
+    from litellm.llms.ollama.completion.transformation import OllamaConfig
+
+    monkeypatch.setattr(OllamaConfig, "get_model_info", _REAL_OLLAMA_INFO)
+    return hits
+
+
+def test_a_window_the_endpoint_reported_answers_a_later_cache_only_read(monkeypatch):
+    """The reading turn asks the daemon and cannot reuse the answer; the writing turn can.
+
+    A window resolved on a caller that is allowed to fetch has to reach the
+    daemon. Throwing the answer away left the binding -- which resolves
+    cache-only, inside the turn, on the event loop -- on the 200000-token
+    fallback for a model the daemon had just reported as 8192, on every
+    iteration, for the life of the process.
+
+    Keyed by wire spelling: ``ollama/``, ``ollama_chat/`` and ``ollama-chat/``
+    all route to the daemon, and the driver strips the prefix before asking, so
+    one answer is the same answer for all three.
+    """
+    hits = _serve_ollama(monkeypatch, 8192)
+
+    assert rates.resolve_context_window("ollama_chat/qwen2.5", allow_fetch=True) == 8192
+    assert hits == ["/api/show"]
+
+    assert rates.resolve_context_window("ollama/qwen2.5", allow_fetch=False) == 8192
+    assert hits == ["/api/show"], "the later reads were answered without another request"
+
+    # The ceiling is deliberately not remembered as the window. A daemon reports
+    # one number for both fields, and a row whose ceiling equals its window is
+    # one ``_trustworthy_ceiling`` rejects -- it is a window filed twice, not an
+    # output ceiling. The memo therefore hands the window over and lets the
+    # caller bound its own fallback by it, which is where the real number is.
+    assert rates.declared_max_output_tokens("ollama/qwen2.5", allow_fetch=False) is None
+    assert rates.resolve_max_output_tokens("ollama/qwen2.5", allow_fetch=False) == rates_expected_ceiling(8192)
+
+
+def test_a_daemon_that_did_not_answer_teaches_nothing(monkeypatch):
+    """A failure is not a window, and must not be remembered as one.
+
+    LiteLLM reports an unreachable ``/api/show`` as a row whose every field is
+    null. Remembering that row would answer the fallback for the life of the
+    process -- the one state a daemon that comes up a minute later cannot
+    correct.
+    """
+    _serve_ollama(monkeypatch, payload={})
+
+    assert rates.resolve_context_window("ollama_chat/qwen2.5", allow_fetch=True) is None
+    assert rates.resolve_context_window("ollama/qwen2.5", allow_fetch=False) is None
+    assert rates._ENDPOINT_WINDOWS == {}, "nothing was learned, so nothing was kept"
+
+    hits = _serve_ollama(monkeypatch, 8192)
+    assert rates.resolve_context_window("ollama_chat/qwen2.5", allow_fetch=True) == 8192
+    assert rates.resolve_context_window("ollama_chat/qwen2.5", allow_fetch=False) == 8192
+    assert hits == ["/api/show"]
+
+
+def test_the_endpoint_memo_goes_with_the_catalogue_cache(monkeypatch):
+    """One reset for the process's model facts, so a test cannot inherit one.
+
+    The memo is process-wide, like the catalogue it sits beside, and the same
+    ``reset_openrouter_cache`` the suite already calls between tests is what
+    clears it -- a second reset for callers to remember would be the one that
+    gets forgotten.
+    """
+    _serve_ollama(monkeypatch, 8192)
+
+    assert rates.resolve_context_window("ollama_chat/qwen2.5", allow_fetch=True) == 8192
+    assert rates._ENDPOINT_WINDOWS
+
+    rates.reset_openrouter_cache()
+    assert rates._ENDPOINT_WINDOWS == {}

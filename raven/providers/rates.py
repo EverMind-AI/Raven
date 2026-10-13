@@ -127,6 +127,50 @@ _OPENROUTER_CACHE_TTL = 3600
 _OPENROUTER_CACHE: dict[str, dict] = {}
 _OPENROUTER_CACHE_TIME: float = 0.0
 
+# What a model's own server said its window is, keyed by the id the request
+# goes out under. The server is asked once and its answer is a fact about the
+# model, so the later readers that are not allowed to ask -- ``ModelBinding``
+# resolves inside a running turn, on the event loop -- read it instead of
+# falling back to a default that is wrong by an order of magnitude for a local
+# model. Only a real figure is kept: a server that is down answers a row of
+# nulls, and remembering that would answer the fallback for the life of the
+# process, which is the one state a server that comes up later cannot correct.
+_ENDPOINT_WINDOWS: dict[str, tuple[int, int | None]] = {}
+
+
+def _endpoint_key(name: str) -> str:
+    """The id ``name`` is sent under, so every stored spelling answers as one."""
+    from raven.providers.wire import wire_model
+
+    try:
+        return wire_model(name)
+    except Exception:
+        return name
+
+
+def _endpoint_memo(model: str) -> tuple[int, int | None] | None:
+    """What the model's own server reported, if it was ever asked."""
+    if not any(part in _ENDPOINT_METADATA_VENDORS for part in model.split("/") if part):
+        return None
+    for candidate in _candidates(model):
+        found = _ENDPOINT_WINDOWS.get(_endpoint_key(candidate))
+        if found is not None:
+            return found
+    return None
+
+
+def _remember_endpoint(name: str, *, window: int, ceiling: int | None) -> None:
+    """Keep what the server reported, under the id the request goes out under.
+
+    ``window`` is required rather than optional, and that is the guard: the one
+    caller has a window in hand before it calls, so a signature that accepts
+    ``None`` would only invite a later caller to store the zeroed row a down
+    server answers with -- which reads back as a real figure and pins the
+    fallback for the life of the process.
+    """
+    _ENDPOINT_WINDOWS[_endpoint_key(name)] = (int(window), int(ceiling) if ceiling else None)
+
+
 # An offline context (a trajectory replay feeding recorded responses, say) must
 # not gate on the network or leak that it ran: no rate lookup, no catalog warm,
 # no fetch. A ContextVar, not a process global — real turns running
@@ -861,6 +905,10 @@ def _try_litellm_max_output(model: str, *, allow_import: bool = True, allow_fetc
         ceiling = _trustworthy_ceiling(_table_entry(candidate))
         if ceiling:
             return ceiling
+        # After the table, like the window lookup: a shipped row outranks what a
+        # previous ask answered.
+        if not allow_fetch and (memo := _endpoint_memo(model)) is not None:
+            return memo[1]
         if may_prompt(candidate) or may_fetch(candidate) or (not allow_fetch and _may_query_endpoint(model)):
             continue
         try:
@@ -1020,6 +1068,12 @@ def _try_litellm_context_window(model: str, *, allow_import: bool = True, allow_
         window = _numeric(_table_entry(candidate), "max_input_tokens", "max_tokens")
         if window:
             return int(window)
+        # The table before the memo too, and for the same reason: a row LiteLLM
+        # ships is this module's first source for this id, and the memo holds
+        # what a previous ask answered -- which is authoritative for the daemon
+        # but ranks below a table the caller could have read offline.
+        if not allow_fetch and (memo := _endpoint_memo(model)) is not None:
+            return memo[0]
         if may_prompt(candidate) or may_fetch(candidate) or (not allow_fetch and _may_query_endpoint(model)):
             continue
         try:
@@ -1028,6 +1082,8 @@ def _try_litellm_context_window(model: str, *, allow_import: bool = True, allow_
             continue
         window = _numeric(info, "max_input_tokens", "max_tokens")
         if window:
+            if _may_query_endpoint(model):
+                _remember_endpoint(candidate, window=window, ceiling=_trustworthy_ceiling(info))
             return int(window)
     return None
 
@@ -1117,9 +1173,12 @@ def reset_openrouter_cache() -> None:
     The tests' reset: pair it with the ``model_catalog_cache._CACHE_PATH`` seam
     to exercise the disk tiers without touching the real ~/.raven/cache/.
     """
-    global _OPENROUTER_CACHE, _OPENROUTER_CACHE_TIME, _WARM_AT
+    global _OPENROUTER_CACHE, _OPENROUTER_CACHE_TIME, _WARM_AT, _ENDPOINT_WINDOWS
     _OPENROUTER_CACHE = {}
     _OPENROUTER_CACHE_TIME = 0.0
     # Reset too, or a warm attempt from an earlier test leaves this one on a
     # cooldown it never asked for.
     _WARM_AT = 0.0
+    # And the windows a stand-in server reported: those are this process's
+    # answer for a model the next test may point somewhere else entirely.
+    _ENDPOINT_WINDOWS = {}
