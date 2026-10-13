@@ -360,6 +360,53 @@ async def test_any_openai_compatible_base_may_answer_in_url_form(monkeypatch, tm
     assert out["success"] and Path(out["paths"][0]).read_bytes() == _PNG
 
 
+async def test_a_generated_picture_pointing_inward_is_refused_before_anything_is_fetched(monkeypatch, tmp_path) -> None:
+    """The download side of the URL form is a provider-supplied address too: the
+    guarded fetch refuses a link-local or private target, and -- the generation
+    already billed -- that refusal is its own error, not "no image returned"."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.path == "/api/plan/v3/images/generations":
+            return httpx.Response(200, json={"data": [{"url": "http://169.254.169.254/latest/meta-data/"}]})
+        return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=_JPG)
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-5-0-pro",
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/plan/v3",
+    )
+    out = json.loads(await tool.execute("a poster"))
+    assert out["error"] == "generated, but the picture URL was refused or could not be fetched"
+    assert out["url"] == "http://169.254.169.254/latest/meta-data/"
+    assert len(seen) == 1
+
+
+async def test_a_generated_picture_a_dead_network_cannot_deliver_is_not_read_as_missing(monkeypatch, tmp_path) -> None:
+    """A public URL the transport cannot reach is the same billed generation:
+    the answer names the fetch failure instead of reading as no image."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/plan/v3/images/generations":
+            return httpx.Response(200, json={"data": [{"url": "https://1.2.3.4/tos/signed.jpeg"}]})
+        raise httpx.ConnectError("[Errno 61] Connection refused to 1.2.3.4")
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-5-0-pro",
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/plan/v3",
+    )
+    out = json.loads(await tool.execute("a poster"))
+    assert out["error"] == "generated, but the picture URL was refused or could not be fetched"
+    assert out["url"] == "https://1.2.3.4/tos/signed.jpeg"
+    assert "1.2.3.4" in out["detail"]
+
+
 @pytest.mark.parametrize(
     ("model", "ratio", "size"),
     [
