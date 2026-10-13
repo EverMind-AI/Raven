@@ -17,6 +17,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -1286,6 +1287,89 @@ async def test_a_whole_file_s_digest_is_taken_off_the_loop_the_heartbeat_is_answ
 
     assert time.monotonic() - before < 0.3, "answered while the digest was still being taken"
     assert (await read)["sha256"] == hashlib.sha256(b"hay\n").hexdigest()
+
+
+async def test_a_read_never_lands_inside_a_write_of_the_same_file(tree, monkeypatch):
+    """The page and the digest a read answers with are one state of the file, whatever a write does meanwhile."""
+    digest = server._sha256
+
+    def slowly(path: Path) -> str:
+        time.sleep(0.3)
+        return digest(path)
+
+    monkeypatch.setattr(server, "_sha256", slowly)
+    path = str(tree / "b.md")
+    read = asyncio.create_task(_result(protocol.READ, {"path": path, "roots": [str(tree)]}))
+    await asyncio.sleep(0.05)
+    write = asyncio.create_task(_result(protocol.WRITE, {"path": path, "content": "straw\n", "roots": [str(tree)]}))
+
+    page, written = await asyncio.gather(read, write)
+
+    assert page["text"].startswith("1| hay") and page["sha256"] == hashlib.sha256(b"hay\n").hexdigest()
+    assert written["ok"] and (tree / "b.md").read_text(encoding="utf-8") == "straw\n", "the write landed after"
+
+
+def test_a_writer_that_waits_goes_before_new_readers():
+    gate = server._FileGate()
+    first_in = threading.Event()
+    writer_waiting = threading.Event()
+    writer_done = threading.Event()
+    order: list[str] = []
+
+    def first_reader() -> None:
+        with gate.reading():
+            first_in.set()
+            writer_waiting.wait(5)
+            time.sleep(0.1)
+            order.append("first reader out")
+
+    def writer() -> None:
+        writer_waiting.set()
+        with gate.writing():
+            order.append("writer")
+        writer_done.set()
+
+    def second_reader() -> None:
+        with gate.reading():
+            order.append("second reader")
+
+    threads = [
+        threading.Thread(target=first_reader),
+        threading.Thread(target=writer),
+        threading.Thread(target=second_reader),
+    ]
+    threads[0].start()
+    first_in.wait(5)
+    threads[1].start()
+    writer_waiting.wait(5)
+    time.sleep(0.02)
+    threads[2].start()
+    for thread in threads:
+        thread.join(5)
+
+    assert order == ["first reader out", "writer", "second reader"]
+
+
+@pytest.mark.slow
+async def test_a_page_read_of_a_large_file_keeps_the_heartbeat_answered(tmp_path):
+    """The page is read a chunk at a time, so no one step holds the interpreter for the whole file."""
+    big = tmp_path / "big.log"
+    with big.open("wb") as handle:
+        line = b"2026-10-13 12:00:00 one line of a log that goes on for a while, as log lines do\n"
+        for _ in range(120 * 1024 * 1024 // len(line)):
+            handle.write(line)
+    read = asyncio.create_task(_result(protocol.READ, {"path": str(big), "limit": 3, "roots": [str(tmp_path)]}))
+    gaps: list[float] = []
+    last = time.monotonic()
+    while not read.done():
+        assert await _result(protocol.PING, {"t": 1}) == {"t": 1}
+        now = time.monotonic()
+        gaps.append(now - last)
+        last = now
+        await asyncio.sleep(0.005)
+
+    assert max(gaps) < 0.25, f"a ping waited {max(gaps):.2f}s on the read"
+    assert (await read)["text"].startswith("1| 2026-10-13 12:00:00 one line")
 
 
 @pytest.mark.parametrize("argv", [["--serve"], ["--attach"]])

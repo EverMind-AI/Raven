@@ -21,6 +21,63 @@ _DIFF_MAX_LINES = 400
 # line cap anyway) and the prompt shows the path alone.
 _PREVIEW_MAX_BYTES = 256 * 1024
 
+#: How a page of a text file is read: this many bytes at a time, the line
+#: breaks counted as the bytes come and only the page's own lines decoded.
+#: ``read_text().splitlines()`` held the interpreter for the whole file --
+#: 7.5 s on a 1 GiB file (decode 2.7 s, split 4.8 s, measured 2026-10-13),
+#: during which nothing else ran: on a Raven node, no heartbeat answered;
+#: here, no turn served. Each step is now one chunk's, and the file is never
+#: whole in memory.
+_PAGE_CHUNK = 4 * 1024 * 1024
+
+# Where ``str.splitlines`` ends a line, as UTF-8 bytes: the two-byte ``\r\n``
+# first so it counts once, the one-byte breaks, then NEL, LS and PS.
+_LINE_BREAK = re.compile(rb"\r\n|[\n\r\x0b\x0c\x1c\x1d\x1e]|\xc2\x85|\xe2\x80[\xa8\xa9]")
+# The breaks other than ``\n``: a chunk with none splits on ``\n`` alone, the
+# common case, in one C call. Looked for one by one with ``in``, a search at
+# memchr speed; a regular expression over the same bytes took twenty times
+# as long (measured 2026-10-13 on a 1 GiB file: 80 ms a chunk against 4).
+_ODD_BREAKS = (b"\r", b"\x0b", b"\x0c", b"\x1c", b"\x1d", b"\x1e", b"\xc2\x85", b"\xe2\x80\xa8", b"\xe2\x80\xa9")
+
+
+def _page_of_lines(handle: Any, start: int, limit: int) -> tuple[list[bytes], int]:
+    """Lines ``start`` to ``start + limit`` (0-based) of the bytes ``handle`` reads, and how many lines there are.
+
+    Exactly the lines ``read_text(encoding="utf-8").splitlines()`` would give,
+    read a chunk at a time. A break may straddle two chunks, so the bytes
+    that could begin one are held back until the next chunk says; the tail
+    after the last break is a line only when it holds something, as
+    ``splitlines`` has it.
+    """
+    page: list[bytes] = []
+    total = 0
+    stop = start + limit
+
+    def take(lines: list[bytes]) -> None:
+        nonlocal total
+        if total < stop and total + len(lines) > start:
+            page.extend(lines[max(start - total, 0) : stop - total])
+        total += len(lines)
+
+    def cut(body: bytes) -> bytes:
+        """Count and keep the complete lines of ``body``; what follows the last break comes back."""
+        odd = any(sign in body for sign in _ODD_BREAKS)
+        pieces = _LINE_BREAK.split(body) if odd else body.split(b"\n")
+        take(pieces[:-1])
+        return pieces[-1]
+
+    buffer = b""
+    while chunk := handle.read(_PAGE_CHUNK):
+        buffer += chunk
+        hold = 2 if buffer.endswith(b"\xe2\x80") else (1 if buffer.endswith((b"\r", b"\xc2", b"\xe2")) else 0)
+        kept = buffer[len(buffer) - hold :] if hold else b""
+        buffer = cut(buffer[: len(buffer) - hold] if hold else buffer) + kept
+    if buffer:
+        tail = cut(buffer)
+        if tail:
+            take([tail])
+    return page, total
+
 
 def _write_text_bytes(content: str) -> bytes:
     """The bytes ``Path.write_text`` would leave on disk for ``content``.
@@ -274,19 +331,21 @@ class ReadFileTool(_FsTool):
                         return f"Error decoding image {path}: {e}"
                     # An extension-only guess that would not decode: fall through.
 
-            all_lines = fp.read_text(encoding="utf-8").splitlines()
-            total = len(all_lines)
-
             if offset < 1:
                 offset = 1
+            start = offset - 1
+            with fp.open("rb") as fh:
+                raw_page, total = _page_of_lines(fh, start, limit or self._DEFAULT_LIMIT)
             if total == 0:
                 return f"(Empty file: {path})"
             if offset > total:
                 return f"Error: offset {offset} is beyond end of file ({total} lines)"
 
-            start = offset - 1
-            end = min(start + (limit or self._DEFAULT_LIMIT), total)
-            numbered = [f"{start + i + 1}| {line}" for i, line in enumerate(all_lines[start:end])]
+            # Strict, as the whole-file decode was: a byte that is not UTF-8
+            # on the page refuses the read with the codec's own sentence.
+            lines = [raw.decode("utf-8") for raw in raw_page]
+            end = start + len(lines)
+            numbered = [f"{start + i + 1}| {line}" for i, line in enumerate(lines)]
             result = "\n".join(numbered)
 
             if len(result) > self._MAX_CHARS:

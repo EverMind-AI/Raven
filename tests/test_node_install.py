@@ -16,6 +16,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import shutil
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -232,7 +233,8 @@ def test_a_machine_without_uv_gets_one_first_and_the_room_for_it_is_counted():
     assert p.uv_from == "fetched" and p.how == "python" and p.needed_kb == 85 * 1024
     said = p.describe()
     assert (
-        "uv itself first, under ~/.raven-node/.uv (the machine has none), fetched with its own /usr/bin/curl;" in said
+        f"uv {install.UV_VERSION} itself first, under ~/.raven-node/.uv (the machine has none), fetched with its own "
+        "/usr/bin/curl;" in said
     )
     assert "a virtualenv of the machine's own /usr/bin/python3.12" in said and "all through uv" in said
     assert _plan(uv="", fetch="").how == "" and _plan(uv="", fetch="").uv_from == ""
@@ -279,6 +281,8 @@ def test_an_install_that_cannot_go_ahead_says_why(fields, said):
 
 
 _UV_ENV = 'UV_CACHE_DIR="$dir/.uv-cache" UV_PYTHON_INSTALL_DIR="$dir/.uv-python"'
+# node_dir made owner-only only when the step makes it; one that is there is left as it is.
+_MADE = '[ -d "$dir" ] || { mkdir -p "$dir" && chmod 700 "$dir"; }; '
 
 
 def test_the_steps_build_a_virtualenv_with_uv_then_fill_it_with_uv():
@@ -289,11 +293,11 @@ def test_the_steps_build_a_virtualenv_with_uv_then_fill_it_with_uv():
     assert all(command.startswith(head) for _, command in steps)
     commands = dict(steps)
     assert commands["virtualenv"] == (
-        head
-        + f'mkdir -p "$dir" && chmod 700 "$dir" && {_UV_ENV} "$uv" venv --quiet --python \'/opt/py 3.12/bin/python3\' "$node"'
+        head + _MADE + f'{_UV_ENV} "$uv" venv --quiet --python \'/opt/py 3.12/bin/python3\' "$node"'
     )
     pip = f'{_UV_ENV} "$uv" pip install --quiet --python "$node/bin/python"'
     assert commands["packages"] == head + f"{pip} " + " ".join(bundle.pinned(protocol.REQUIREMENTS))
+    assert "--default-index" not in " ".join(commands.values()), "no index configured for pip: uv's own default"
     assert "python -m pip" not in " ".join(commands.values()) and " -m venv " not in " ".join(commands.values())
     (rg,) = bundle.pinned((protocol.SEARCH_REQUIREMENT,))
     assert commands["search"].count(rg) == 2 and commands["search"].count(pip) == 2
@@ -309,25 +313,50 @@ def test_uv_makes_its_python_inside_the_node_dir():
     commands = dict(install.steps(_plan(python="", uv="/root/.local/bin/uv")))
 
     assert commands["virtualenv"].endswith(
-        f'uv=/root/.local/bin/uv; mkdir -p "$dir" && chmod 700 "$dir" && {_UV_ENV} "$uv" venv --quiet --python 3.12 "$node"'
+        f'uv=/root/.local/bin/uv; {_MADE}{_UV_ENV} "$uv" venv --quiet --python 3.12 "$node"'
     )
+
+
+def test_the_index_pip_is_configured_with_is_handed_to_uv_and_named_in_the_plan():
+    p = _plan(index="https://mirror.example/simple")
+
+    commands = dict(install.steps(p))
+
+    pip = (
+        f'{_UV_ENV} "$uv" pip install --quiet --python "$node/bin/python" --default-index https://mirror.example/simple'
+    )
+    assert commands["packages"] == commands["packages"].split(pip)[0] + pip + " " + " ".join(
+        bundle.pinned(protocol.REQUIREMENTS)
+    )
+    # The search package tries the machine's index first, then that index with the public one beside it.
+    assert commands["search"].count(pip) == 2 and f"--extra-index-url {protocol.PUBLIC_INDEX}" in commands["search"]
+    assert "from https://mirror.example/simple (the index pip is configured with there), and this Raven's code" in (
+        p.describe()
+    )
+    assert "from PyPI (pip is configured with no other index there), and this Raven's code" in _plan().describe()
 
 
 @pytest.mark.parametrize(
     ("fetch", "fetched_with"),
-    [("/usr/bin/curl", f"curl -LsSf {install.UV_INSTALLER}"), ("/usr/bin/wget", f"wget -qO- {install.UV_INSTALLER}")],
+    [
+        ("/usr/bin/curl", f"curl -LsSf {install.UV_PINNED_INSTALLER}"),
+        ("/usr/bin/wget", f"wget -qO- {install.UV_PINNED_INSTALLER}"),
+    ],
 )
-def test_a_machine_without_uv_fetches_it_under_the_node_dir_first(fetch, fetched_with):
+def test_a_machine_without_uv_fetches_one_version_of_it_under_the_node_dir_and_nowhere_else(fetch, fetched_with):
     steps = install.steps(_plan(uv="", fetch=fetch))
 
     assert [name for name, _ in steps] == ["uv", "virtualenv", "packages", "search", "code", "path", "check"]
     head = "dir=~/.raven-node; id=" + bundle.install_name() + '; node="$dir/$id"; uv="$dir/.uv/uv"; '
     assert all(command.startswith(head) for _, command in steps)
+    # One version, as the packages are pinned; an unmanaged install, which
+    # writes no receipt under the home directory and changes no PATH.
+    assert install.UV_VERSION in install.UV_PINNED_INSTALLER and install.UV_PINNED_INSTALLER != install.UV_INSTALLER
     assert dict(steps)["uv"] == (
-        head
-        + f'mkdir -p "$dir/.uv" && chmod 700 "$dir" && {fetched_with} | UV_INSTALL_DIR="$dir/.uv" UV_NO_MODIFY_PATH=1 '
-        'INSTALLER_NO_MODIFY_PATH=1 sh >/dev/null && test -x "$dir/.uv/uv"'
+        head + _MADE + f'mkdir -p "$dir/.uv" && {fetched_with} | UV_UNMANAGED_INSTALL="$dir/.uv" sh >/dev/null '
+        '&& test -x "$dir/.uv/uv"'
     )
+    assert "UV_INSTALL_DIR" not in dict(steps)["uv"] and "MODIFY_PATH" not in dict(steps)["uv"]
     assert dict(steps)["virtualenv"].endswith('"$uv" venv --quiet --python /usr/bin/python3.12 "$node"')
 
 
@@ -481,12 +510,12 @@ def test_a_prune_that_failed_says_where():
 # --- the scripts, under a real shell ----------------------------------------------
 
 
-def _sh(command: str, home: Path, path: str) -> str:
+def _sh(command: str, home: Path, path: str, **env: str) -> str:
     done = subprocess.run(
         ["/bin/sh", "-c", command],
         capture_output=True,
         text=True,
-        env={"HOME": str(home), "PATH": path},
+        env={"HOME": str(home), "PATH": path, **env},
         cwd=home,
         timeout=60,
     )
@@ -541,6 +570,46 @@ def test_the_probe_finds_the_node_a_new_enough_python_uv_and_the_room(shell):
     assert seen["UV"] == str(tools / "uv")
     assert seen["FETCH"] == str(tools / "curl")
     assert seen["FREE_KB"].isdigit()
+
+
+@pytest.mark.slow
+def test_the_probe_reads_the_index_pip_is_configured_with_as_pip_reads_it(shell):
+    home, tools = shell
+    _script(tools / "python3", f'exec {sys.executable} "$@"\n')
+    conf = home / ".config" / "pip" / "pip.conf"
+    conf.parent.mkdir(parents=True)
+    conf.write_text("[global]\nindex-url = https://mirror.example/simple\n", encoding="utf-8")
+    probe = install.probe_script("~/.raven-node", "0.1-x", "d")
+
+    assert _lines(_sh(probe, home, str(tools)))["INDEX"] == "https://mirror.example/simple"
+
+    # [install] over [global], as for pip's own install command; the environment over every file.
+    conf.write_text(
+        "[global]\nindex-url = https://a/simple\n[install]\nindex-url = https://b/simple\n", encoding="utf-8"
+    )
+    assert _lines(_sh(probe, home, str(tools)))["INDEX"] == "https://b/simple"
+    assert _lines(_sh(probe, home, str(tools), PIP_INDEX_URL="https://c/simple"))["INDEX"] == "https://c/simple"
+    conf.unlink()
+    assert "INDEX" not in _lines(_sh(probe, home, str(tools))), "nothing configured: uv's default"
+
+
+@pytest.mark.slow
+def test_a_node_dir_that_was_there_keeps_its_mode_and_one_the_install_makes_is_owner_only(shell, tmp_path):
+    home, tools = shell
+    for name in ("mkdir", "chmod"):
+        (tools / name).symlink_to(shutil.which(name) or name)
+    uv = _script(tools / "uv", "exit 0\n")
+    theirs = tmp_path / "theirs"
+    theirs.mkdir(mode=0o755)
+    (theirs / "notes.txt").write_text("the owner's own\n", encoding="utf-8")
+    ours = tmp_path / "ours"
+
+    for node_dir in (theirs, ours):
+        step = dict(install.steps(_plan(node_dir=str(node_dir), uv=str(uv), python=sys.executable)))["virtualenv"]
+        _sh(step, home, str(tools))
+
+    assert stat.S_IMODE(theirs.stat().st_mode) == 0o755 and (theirs / "notes.txt").is_file()
+    assert stat.S_IMODE(ours.stat().st_mode) == 0o700
 
 
 @pytest.mark.slow
