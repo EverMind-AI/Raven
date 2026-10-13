@@ -149,7 +149,9 @@ class ChannelEndpoint:
 
     The client reads and writes it as it would a child process's pipes; what
     it gets are the ``agent/frame`` and ``agent/stderr`` notifications of one
-    channel, and what it writes goes back the same way. ``end`` is
+    channel, and what it writes goes back the same way -- a frame per line
+    (``write``), or a CLI agent's whole prompt and the end of its stdin
+    (``send_input``, ``agent/stdin``). ``end`` is
     ``agent/cancel``: the node ends the agent's whole process tree, and the
     ``agent/exit`` that follows is what settles ``wait``. A link that goes
     before the agent does leaves the endpoint waiting (``detach``): the agent
@@ -176,7 +178,8 @@ class ChannelEndpoint:
         self._rc: int | None = None
         self._lost: str | None = None
         self._detached: str | None = None
-        self._pending: list[str] = []
+        self._pending: list[tuple[str, dict[str, Any]]] = []
+        """What was written while the link was down, by method, to go out on the next link in order."""
         self._cancel_wanted = False
         self._done = asyncio.Event()
 
@@ -199,22 +202,38 @@ class ChannelEndpoint:
         if self.returncode is not None:
             raise BrokenPipeError(f"the agent on {self.describe()} has ended")
         line = data.decode("utf-8", "replace").rstrip("\r\n")
+        await self._send(protocol.AGENT_FRAME, {"line": line})
+
+    async def send_input(self, text: str, *, eof: bool = False) -> None:
+        """``text`` to the agent's stdin as it is, and the end of its stdin when ``eof``.
+
+        For an agent that reads a prompt rather than frames: a CLI agent takes
+        its task this way when its command names no placeholder for it, and
+        every CLI agent is told where its stdin ends, since the node opens one
+        for each agent it starts and a command that reads to the end would
+        otherwise wait for it.
+        """
+        if self.returncode is not None:
+            raise BrokenPipeError(f"the agent on {self.describe()} has ended")
+        await self._send(protocol.AGENT_STDIN, {"data": text, "eof": eof})
+
+    async def _send(self, method: str, params: dict[str, Any]) -> None:
         if self._detached is not None or not self._link.alive:
-            # Down, or gone and not yet said so by the heartbeat: the frame waits for the next link.
-            self._hold(line)
+            # Down, or gone and not yet said so by the heartbeat: it waits for the next link.
+            self._hold(method, params)
             return
         try:
-            await self._link.notify(protocol.AGENT_FRAME, {"channel": self.channel, "line": line})
+            await self._link.notify(method, {"channel": self.channel, **params})
         except AcpConnectionError:
-            # The pool's heartbeat will say the link is lost; the frame waits for the next one.
-            self._hold(line)
+            # The pool's heartbeat will say the link is lost; it waits for the next one.
+            self._hold(method, params)
 
-    def _hold(self, line: str) -> None:
+    def _hold(self, method: str, params: dict[str, Any]) -> None:
         if len(self._pending) >= _PENDING_FRAMES:
             raise BrokenPipeError(
                 f"the link to machine {self.target.label} has been down too long: {len(self._pending)} frames wait"
             )
-        self._pending.append(line)
+        self._pending.append((method, params))
 
     async def readline(self) -> bytes:
         item = await self._frames.get()
@@ -277,8 +296,8 @@ class ChannelEndpoint:
         self._link, self.channel = link, channel
         self._detached = None
         held, self._pending = self._pending, []
-        for line in held:
-            await self._link.notify(protocol.AGENT_FRAME, {"channel": channel, "line": line})
+        for method, params in held:
+            await self._link.notify(method, {"channel": channel, **params})
         if self._cancel_wanted:
             self._cancel_wanted = False
             await self.end()
@@ -396,6 +415,17 @@ class NodePool:
     async def stat(self, machine_id: str, path: str, *, roots: Sequence[str], hash: bool = False) -> dict[str, Any]:
         """What is at ``path`` on the machine: exists, kind, size, mtime, and its digest when asked."""
         return await self.call(machine_id, protocol.STAT, {"path": path, "roots": list(roots), "hash": hash})
+
+    async def write_file(self, machine_id: str, path: str, content: str, *, roots: Sequence[str]) -> None:
+        """Write ``content`` to ``path`` on the machine, whole, inside ``roots``; the directories above it are made."""
+        params = {"path": path, "content": content, "roots": list(roots)}
+        answer = await self.call(machine_id, protocol.WRITE, params)
+        said = str(answer.get("text") or "")
+        # A refusal is the tool's own sentence ("Error: ...", "Error writing file: ..."), never an exception.
+        if answer.get("ok") is False or said.startswith("Error"):
+            label = (await self._acquire(machine_id)).target.label
+            reason = said.split(": ", 1)[1] if ": " in said else said
+            raise NodeError(f"{path} could not be written on machine {label}: {reason.strip() or 'refused'}")
 
     async def tasks(self, machine_id: str) -> list[dict[str, Any]]:
         """Every task the machine's daemon runs or remembers: id, state, exit code, times, frames."""

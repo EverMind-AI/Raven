@@ -108,8 +108,8 @@ class SubagentRow(_Strict):
     machine: str | None = Field(
         default=None,
         description=(
-            "The registered machine an acp row runs on, by its id in the machine registry; null for this "
-            "computer, and on a server that predates the field."
+            "The registered machine a row runs on -- an openai row: reaches its endpoint from -- by its id in "
+            "the machine registry; null for this computer, and on a server that predates the field."
         ),
     )
     vendored: bool = Field(
@@ -2659,14 +2659,18 @@ class SubagentsAddParams(_Strict):
     machine: str | None = Field(
         default=None,
         description=(
-            "A registered machine, by its id in the machine registry, for an acp preset: the preset's command is "
-            "started there by the machine's Raven node and signed in there, and the row's name defaults to "
-            "<preset>@<machine>. Refused unless the machine lane is on and the machine is registered and usable."
+            "A registered machine, by its id in the machine registry: an acp or cli preset's command is started "
+            "there by the machine's Raven node and signed in there; an openai preset's endpoint is reached from "
+            "that machine through an ssh tunnel. The row's name defaults to <preset>@<machine>. Refused for a "
+            "built-in agent, and unless the machine lane is on and the machine is registered and usable."
         ),
     )
     remote_cwd: str | None = Field(
         default=None,
-        description="Where on `machine` the agent works (`~/raven-work` when unset); ignored without `machine`.",
+        description=(
+            "Where on `machine` an acp or cli agent works (`~/raven-work` when unset); ignored without `machine`, "
+            "refused with an openai preset, which has no working directory there."
+        ),
     )
     api_key: str | None = None
     mcps: list[str] | None = None

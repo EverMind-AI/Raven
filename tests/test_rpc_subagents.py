@@ -3223,16 +3223,35 @@ async def test_add_on_a_machine_nobody_registered_is_refused_by_name_without_an_
     assert _stored(config_path) == before
 
 
-async def test_add_on_a_machine_takes_only_an_acp_preset(
+async def test_add_on_a_machine_takes_an_openai_preset_and_no_directory_for_it(
     config_path: Path, registry: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """An openai preset's endpoint is reached from the machine through a tunnel: it works in no directory there."""
     monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _pings_ok)
 
-    with pytest.raises(ConfigValidationError) as caught:
-        await subagents_add({"preset": "mirothinker", "machine": "ravenx2"})
+    out = await subagents_add({"preset": "mirothinker", "machine": "ravenx2"})
 
-    assert "not an acp agent" in str(caught.value) and caught.value.data["machine"] == "ravenx2"
-    assert all(e.get("machine") is None for e in _stored(config_path))
+    assert out == {"added": True, "name": "mirothinker@ravenx2"}
+    entry = next(e for e in _stored(config_path) if e["name"] == "mirothinker@ravenx2")
+    assert entry["machine"] == "ravenx2" and entry["kind"] == "openai" and "remoteCwd" not in entry
+    assert "203.0.113" not in json.dumps(_stored(config_path))
+
+    with pytest.raises(ConfigValidationError) as caught:
+        await subagents_add({"preset": "mirothinker", "machine": "ravenx2", "name": "lab-llm", "remote_cwd": "~/x"})
+
+    assert "leave remote_cwd out" in str(caught.value) and caught.value.data["field"] == "remote_cwd"
+    assert all(e["name"] != "lab-llm" for e in _stored(config_path))
+
+
+def test_a_built_in_agent_is_refused_a_machine_in_one_sentence() -> None:
+    """Raven's own loop runs in this process: there is no process of it to start elsewhere."""
+    from raven.rpc.methods.subagents import _refuse_unless_it_can_run_there
+
+    with pytest.raises(ConfigValidationError) as caught:
+        _refuse_unless_it_can_run_there({"kind": "builtin", "name": "research-raven"}, "ravenx2")
+
+    assert "built-in agent" in str(caught.value) and "runs on no other machine" in str(caught.value)
+    assert caught.value.data == {"field": "machine", "machine": "ravenx2"}
 
 
 async def test_add_on_a_machine_lends_no_key(

@@ -1750,8 +1750,9 @@ async def test_a_refused_add_on_a_machine_sends_the_user_to_that_machine_and_run
     reply = await _run(tool, action="add", path="subagents", value='{"preset": "claude_code", "machine": "ravenx2"}')
 
     assert reply.startswith("Not added:") and "on machine 'ravenx2': any fix is made there" in reply
-    assert "It runs on machine 'ravenx2', so every fix is made there by the user" in reply
-    assert "exec refuses ssh to a registered machine" in reply
+    assert "It runs on machine 'ravenx2', so the fix is made there by the user" in reply
+    # exec reaches the machine, so a look there is offered; a sign-in or an install is not.
+    assert "exec(machine='ravenx2') can look there first" in reply
     assert "Install it with exec" not in reply and "Run it on its own with exec" not in reply
 
 
@@ -1783,10 +1784,12 @@ async def test_describe_names_the_registered_machines_only_while_the_lane_is_on(
     tool.set_rpc_caller(Calls({"subagents.list": {"rows": []}}))
 
     monkeypatch.delenv("RAVEN_DEBUG_MACHINES", raising=False)
-    assert "machines an acp preset" not in await _run(tool, action="describe", path="subagents")
+    assert "machines a preset can be added on" not in await _run(tool, action="describe", path="subagents")
 
     monkeypatch.setenv("RAVEN_DEBUG_MACHINES", "1")
     said = await _run(tool, action="describe", path="subagents")
-    line = next(ln for ln in said.splitlines() if ln.strip().startswith("machines an acp preset"))
+    line = next(ln for ln in said.splitlines() if ln.strip().startswith("machines a preset can be added on"))
     assert line.split("on:", 1)[1].split("--", 1)[0].strip() == "ravenx2 (RavenX 2)", "the local row is no machine"
     assert '"machine": "<id>"' in line and "203.0.113" not in said
+    # Every kind, each its own way: a command runs there, an endpoint is reached from there.
+    assert "an acp or cli preset runs there" in line and "openai preset's endpoint is reached from there" in line

@@ -558,6 +558,9 @@ def _probe_cli(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
     exe = argv[0]
     if "{" in exe:
         return done("unknown", f"the command's first token is a placeholder ({exe})", exe)
+    if machine_id := (getattr(cfg, "machine", None) or "").strip():
+        # A `which` here would answer for this computer, and the command runs there.
+        return _probe_remote(cfg, machine_id, done)
     # CliAgentBackend._exec builds the child's env as {**login_shell_env(), **self.env}
     # (cli_agent.py:139-140), so a configured PATH overrides the login shell's for a
     # real spawn; resolving against the login PATH alone here would report an agent
@@ -602,7 +605,7 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
     if not argv:
         return done("unknown", "command is empty")
     if machine_id := (getattr(cfg, "machine", None) or "").strip():
-        return _probe_remote_acp(cfg, machine_id, done)
+        return _probe_remote(cfg, machine_id, done)
     exe = argv[0]
     cfg_path = (getattr(cfg, "env", None) or {}).get("PATH")
     resolved = shutil.which(exe, path=cfg_path or path)
@@ -679,6 +682,10 @@ async def _probe_openai(cfg: Any, *, source: Source) -> ProbeResult:
         # endpoint (a local vLLM) is legitimate, and short-circuiting would
         # report a working agent as broken.
         return done("attention", "api key not set")
+    if machine_id := (getattr(cfg, "machine", None) or "").strip():
+        # The endpoint answers on the machine's network, through a tunnel a
+        # test opens; a request from here would ask the wrong network.
+        return _probe_remote(cfg, machine_id, lambda status, detail, target="": done(status, detail))
     url = base_url.rstrip("/") + "/models"
     headers = {"Authorization": f"Bearer {cfg.api_key}"} if has_key else {}
     try:
@@ -793,6 +800,7 @@ async def run_test(cfg: Any, *, source: Source) -> TestResult:
         return int((time.monotonic() - started) * 1000)
 
     kind = getattr(cfg, "kind", None)
+    on_machine = bool((getattr(cfg, "machine", None) or "").strip())
     if kind == "builtin":
         # Nothing to verify. A built-in agent is this process: there is no command
         # to launch, no endpoint to authenticate against, and no transcript parser
@@ -825,9 +833,16 @@ async def run_test(cfg: Any, *, source: Source) -> TestResult:
         if probe.status == "missing":
             return TestResult(cfg.name, source, "openai", False, probe.detail, None, elapsed())
         answered = await ping_agent(cfg)
-        detail = probe.detail if answered.ok else f"{answered.detail}; {probe.detail}"
+        # On a machine the free probe said only where the endpoint is and to
+        # run this; the ping's own words are the whole verdict there.
+        if on_machine:
+            detail = answered.detail
+        else:
+            detail = probe.detail if answered.ok else f"{answered.detail}; {probe.detail}"
         return TestResult(cfg.name, source, "openai", answered.ok, detail, None, elapsed(), answered.remedy)
-    if probe.status != "ready":
+    # The free probe cannot say "ready" for a command on another machine, and
+    # this run through the machine's node is what can.
+    if probe.status != "ready" and not on_machine:
         return TestResult(cfg.name, source, "cli", False, probe.detail, None, elapsed())
 
     try:
@@ -936,13 +951,18 @@ class PingResult:
     remedy: Remedy | None = None
 
 
-def _probe_remote_acp(cfg: Any, machine_id: str, done: Any) -> ProbeResult:
-    """The free check for an acp agent on a registered machine: still registered, and verified?
+def _probe_remote(cfg: Any, machine_id: str, done: Any) -> ProbeResult:
+    """The free check for an agent on a registered machine: still registered, and verified?
 
     No ssh: this runs on every listing, and one machine slow to answer would hold
     the whole roster behind it. ``which`` here would answer for this computer,
-    which is not where the agent runs. What can be said for free is whether the
-    registry still names a usable machine, and what the last test recorded.
+    which is not where the agent runs, and a request from here would ask the
+    wrong network for an endpoint behind the machine. What can be said for free
+    is whether the registry still names a usable machine, the link's state, and
+    what the last test recorded: for an acp row, its handshake, kept as a
+    capability snapshot; a cli or openai row records nothing for free, so its
+    verdict is the test's alone, kept beside the row (``last_test_*``), and the
+    probe says to run one.
     """
     from raven.acp_client import remote
     from raven.ops import remote_path
@@ -956,6 +976,10 @@ def _probe_remote_acp(cfg: Any, machine_id: str, done: Any) -> ProbeResult:
     # how many agents it carries, idle, or the sentence of its last failure.
     if (link := remote_path.nodes()) is not None and (said := link.status(machine_id).said()):
         where += f" ({said})"
+    if getattr(cfg, "kind", None) != "acp":
+        return done(
+            "attention", f"{where}; nothing here can check it without reaching the machine -- run a test", machine_id
+        )
     snapshot = acp_snapshot_for(cfg)
     if snapshot is None:
         return done("attention", f"{where}; its ACP capabilities have not been recorded yet -- run a test", machine_id)

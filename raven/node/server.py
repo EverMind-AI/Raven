@@ -12,7 +12,9 @@ would: the same line numbers, the same limits, the same footer.
 An agent the host starts here (``agent/launch``) runs in its own process group,
 in the login environment this daemon captures once at its first need, under a
 *task* id of the host's. Its ACP frames travel as ``agent/frame``
-notifications on a channel of the connection that asked, and are kept in the
+notifications on a channel of the connection that asked (a CLI agent's output
+lines the same way, and its prompt the other way as ``agent/stdin``, which
+also closes its stdin), and are kept in the
 task's record on disk as they arrive -- so when that connection goes, the
 agent keeps running, and the next connection takes the task over from the
 frame the host last read (``agent/attach``). Ending a task ends its whole
@@ -797,6 +799,19 @@ class _Task:
         except (BrokenPipeError, ConnectionResetError):
             pass
 
+    async def feed(self, data: str, *, eof: bool) -> None:
+        """``data`` to the agent's stdin as it is, then the end of it when ``eof``: how a CLI agent's prompt arrives."""
+        if self.proc.stdin is None or self.proc.stdin.is_closing():
+            return
+        if data:
+            self.proc.stdin.write(data.encode("utf-8"))
+            try:
+                await self.proc.stdin.drain()
+            except (BrokenPipeError, ConnectionResetError):
+                return
+        if eof:
+            self.proc.stdin.close()
+
     def end(self) -> None:
         """End the agent and everything it started, in its group or out of it."""
         if self.proc.returncode is not None:
@@ -1084,6 +1099,14 @@ class Node:
         if task is not None and isinstance(line, str):
             await task.write(line)
 
+    async def stdin(self, params: dict[str, Any]) -> None:
+        """A CLI agent's input: ``data`` written as it is, and its stdin closed after it when ``eof``."""
+        channel = params.get("channel")
+        task = self.channels.get(channel) if isinstance(channel, int) else None
+        data = params.get("data", "")
+        if task is not None and isinstance(data, str):
+            await task.feed(data, eof=bool(params.get("eof")))
+
     async def cancel(self, params: dict[str, Any]) -> dict[str, Any]:
         self._task(params).end()
         return {}
@@ -1150,6 +1173,7 @@ def _node_handlers(node: Node) -> dict[str, Callable[[dict[str, Any]], Awaitable
         protocol.AGENT_LAUNCH: node.launch,
         protocol.AGENT_ATTACH: node.attach,
         protocol.AGENT_FRAME: node.frame,
+        protocol.AGENT_STDIN: node.stdin,
         protocol.AGENT_CANCEL: node.cancel,
         protocol.AGENT_CLOSE: node.close,
         protocol.TASK_LIST: node.tasks,

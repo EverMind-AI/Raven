@@ -1001,6 +1001,51 @@ async def test_a_file_is_fetched_from_the_machine_whole_and_checked(box, pool, t
     assert len(box.launches()) == 1, "all of it on the one link"
 
 
+@pytest.mark.slow
+async def test_a_cli_agent_s_input_travels_on_the_link_and_its_stdin_ends_when_told(box, pool):
+    box.node()
+
+    endpoint = await pool.open_channel("box", name="cat@box", command="cat", cwd="~", env={})
+    await endpoint.send_input("first line\nsecond line\n", eof=True)
+
+    lines = []
+    while raw := await endpoint.readline():
+        lines.append(raw.decode("utf-8"))
+    assert lines == ["first line", "second line"], "what went in came back, line by line"
+    assert await endpoint.wait() == 0, "its stdin closed, cat left on its own"
+    assert len(box.launches()) == 1, "on the node's ssh, like a frame"
+
+
+async def test_input_written_while_the_link_is_down_goes_out_in_order_once_it_is_back():
+    endpoint = ChannelEndpoint(_Client(), 1, target=_box(), agent="cli@box")  # type: ignore[arg-type]
+    endpoint.detach("the link went")
+    await endpoint.write(b'{"a": 1}\n')
+    await endpoint.send_input("the prompt", eof=True)
+    back = _Client()
+
+    await endpoint.reattach(back, 7)  # type: ignore[arg-type]
+
+    assert back.said == [
+        (protocol.AGENT_FRAME, {"channel": 7, "line": '{"a": 1}'}),
+        (protocol.AGENT_STDIN, {"channel": 7, "data": "the prompt", "eof": True}),
+    ], "on the new channel, in the order they were written"
+
+
+async def test_input_for_an_agent_that_has_ended_or_whose_link_just_broke_is_refused_or_held():
+    endpoint = ChannelEndpoint(_Client(), 1, target=_box(), agent="cli@box")  # type: ignore[arg-type]
+    endpoint.exited(0)
+    with pytest.raises(BrokenPipeError, match="has ended"):
+        await endpoint.send_input("late", eof=True)
+
+    class _Gone(_Client):
+        async def notify(self, method: str, params: dict[str, Any]) -> None:
+            raise AcpConnectionError("the ssh ended")
+
+    held = ChannelEndpoint(_Gone(), 1, target=_box(), agent="cli@box")  # type: ignore[arg-type]
+    await held.send_input("the prompt", eof=True)
+    assert held._pending == [(protocol.AGENT_STDIN, {"data": "the prompt", "eof": True})], "kept for the next link"
+
+
 async def test_frames_held_for_a_link_that_is_down_are_capped(tmp_path):
     endpoint = ChannelEndpoint(_Client(), 1, target=_box(), agent="echo@box")  # type: ignore[arg-type]
     endpoint.detach("the link went")
