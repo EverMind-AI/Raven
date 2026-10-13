@@ -2,7 +2,7 @@
 """Host-side launcher for the Raven-Oncall ACP server -- the B side.
 
 The retired vendored Raven-Oncall carried a whole fork checkout; this
-product carries none. It renders its config and execs the
+product carries none. It renders its config and serves the
 installed raven's own ``raven acp``, so every turn runs through the same
 assembly door (build_runtime) as the host's TUI and gateway. The machinery
 of rendering lives in the launcher library
