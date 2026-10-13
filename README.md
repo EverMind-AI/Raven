@@ -203,6 +203,10 @@ Raven can connect to and orchestrate agents via ACP, CLI, or OpenAI-compatible A
   <img src="https://github.com/user-attachments/assets/3370c883-00ac-4471-97ef-f4312df77202" width="80%" alt="Third-party agents: Claude Code, Codex, OpenCode, Hermes Agent, OpenClaw, MiroThinker, GitHub Copilot, Qwen Code, CodeBuddy, Qoder, Grok Build, Kimi Code, and Pi">
 </p>
 
+## ❯❯ News
+
+- 📣 **2026-09-30** — Raven's technical report is [**#1 Paper of the day**](https://huggingface.co/papers/2609.33439) on Hugging Face.
+
 ## ❯❯ Quick Start
 
 ### 🤖 Install with Your Agent
