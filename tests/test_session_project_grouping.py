@@ -234,7 +234,12 @@ def test_a_transcript_that_cannot_be_read_is_still_adopted(tmp_path: Path) -> No
     """
     (tmp_path / "sessions" / "cli").mkdir(parents=True)
     orphan = tmp_path / "sessions" / "cli" / "orphan.jsonl"
-    orphan.symlink_to(tmp_path / "sessions" / "cli" / "gone.jsonl")
+    try:
+        orphan.symlink_to(tmp_path / "sessions" / "cli" / "gone.jsonl")
+    except OSError as exc:
+        if getattr(exc, "winerror", None) != 1314:
+            raise
+        pytest.skip("Creating symlinks requires Windows Developer Mode or elevated privileges")
 
     grouped = SessionManager(tmp_path, project_slug="-srv-alpha")
 
