@@ -132,6 +132,10 @@ start_nginx() {
             log "the engine did not publish its browser session cookie"
             return 1
         fi
+        # The name has to be the one the engine reads, and it derives that from the
+        # request's Host port -- which nginx forwards without one, so the engine keeps
+        # its own PAGE_PORT. Spelled here as that same port; test_docker_runtime.py
+        # holds the two sides together.
         RAVEN_AUTO_LOGIN_COOKIE="raven_session_${PAGE_PORT}=${cookie}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Strict"
     fi
     export RAVEN_AUTO_LOGIN_COOKIE

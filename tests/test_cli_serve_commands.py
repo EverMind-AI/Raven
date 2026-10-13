@@ -449,6 +449,41 @@ class TestTheCommand:
         assert started == [] and supervised == [] and opened == []
 
 
+class TestTheSignInLink:
+    """The one URL that signs a browser in has to reach the person, whatever the
+    browser launch did with it."""
+
+    def test_it_is_printed_when_a_browser_says_it_opened(self, monkeypatch, capsys) -> None:
+        """``webbrowser.open`` answers True whenever it ran something: VS Code's
+        ``browser.sh`` exits 0 on any outcome, and a box with no display hands the
+        URL to w3m, which has no JavaScript and never redeems it. A link printed
+        only on False was therefore never printed at all."""
+        monkeypatch.setattr(serve_commands.webbrowser, "open", lambda url: True)
+
+        serve_commands._open("http://127.0.0.1:18792/auth#n0nce")
+
+        assert "http://127.0.0.1:18792/auth#n0nce" in capsys.readouterr().out
+
+    def test_it_is_on_screen_before_the_browser_is_asked(self, monkeypatch, capsys) -> None:
+        """A console browser holds the terminal until it is quit, and a launch can
+        raise; printed first, the link is there in both cases."""
+        on_screen: list[str] = []
+        monkeypatch.setattr(serve_commands.webbrowser, "open", lambda url: on_screen.append(capsys.readouterr().out))
+
+        serve_commands._open("http://127.0.0.1:18792/auth#n0nce")
+
+        assert "auth#n0nce" in on_screen[0]
+
+    def test_a_standalone_serve_opens_through_the_same_path(self) -> None:
+        """`raven serve --open` with no gateway to attach to opens from inside the
+        coroutine that binds the port, which no test runs; pinned by source."""
+        import inspect
+
+        src = inspect.getsource(serve_commands._serve_main)
+        assert "_open(auth_url)" in src
+        assert "webbrowser.open" not in src
+
+
 class _FakeProc:
     """A gateway run that ends with ``code``, without running one."""
 

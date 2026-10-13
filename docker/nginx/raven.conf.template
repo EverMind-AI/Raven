@@ -15,10 +15,12 @@ server {
 
     include /etc/nginx/proxy.conf;
 
-    # The engine answers only to an Origin naming its own loopback port
-    # (`_origin_ok` in raven/rpc/transports/ws.py), which no browser reaching
-    # this container through a published port or a hostname can send. Rewriting
-    # it here is what makes the proxy work at all.
+    # The engine accepts an Origin that names its own loopback port, or one that
+    # equals the request's Host on a loopback name (`_origin_ok` in
+    # raven/rpc/transports/ws.py). A browser reaching this container through a
+    # published port or a hostname sends neither -- behind nginx its Host is the
+    # hostname it published, and Origin names that host with the published port
+    # -- so rewriting Origin here is what makes the proxy work at all.
     #
     # What that gives up is a defence-in-depth layer, not the gate: the session
     # cookie is SameSite=Strict, so a page on another site gets no cookie

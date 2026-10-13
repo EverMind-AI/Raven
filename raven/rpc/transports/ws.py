@@ -6,7 +6,7 @@ the HTTP request line or server logs; the auth page POSTs it to
 ``/auth/exchange`` which burns the nonce and sets an HttpOnly SameSite=Strict
 session cookie. The ``/rpc`` WebSocket upgrade and any future ``/files/*``
 endpoints require that cookie (or an ``X-Raven-Token`` header for local
-tooling), plus an Origin check when a browser sends one.
+Tooling authenticates with the ``X-Raven-Token`` header; a browser relies on the Origin check.
 
 Multi-connection from day one (plan D3): every authenticated socket receives
 all notification frames; request/response frames stay on the socket that sent
@@ -16,12 +16,14 @@ the request; concurrent-turn conflicts are already guarded by -32003.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import secrets
 import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from aiohttp import WSCloseCode, WSMsgType, web
 from loguru import logger
@@ -33,23 +35,39 @@ _PORT_PROBE_SPAN = 20
 # the credential used after the one-time exchange.
 _NONCE_TTL_S = 30 * 60.0
 
+# The page shows whatever the exchange answered, so the gateway is what says
+# why a sign-in was refused; the two refusals below need different remedies.
 _AUTH_PAGE = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Raven</title></head>
 <body style="font-family:system-ui;display:grid;place-items:center;height:100vh;margin:0">
 <p id="s">Signing in to Raven...</p>
 <script>
 (async () => {
+  const s = document.getElementById('s');
   const nonce = location.hash.slice(1);
   history.replaceState(null, '', '/auth');
-  const r = await fetch('/auth/exchange', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({nonce}),
-  });
-  if (r.ok) { location.replace('/'); }
-  else { document.getElementById('s').textContent = 'Sign-in link expired. Re-run: raven serve --open'; }
+  let r;
+  try {
+    r = await fetch('/auth/exchange', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({nonce}),
+    });
+  } catch (e) {
+    s.textContent = 'Raven did not answer. If it has stopped, start it with: raven web';
+    return;
+  }
+  if (r.ok) { location.replace('/'); return; }
+  const why = (await r.text()).trim();
+  s.textContent = why || `Sign-in failed (HTTP ${r.status}). Run raven web for a new link.`;
 })();
 </script></body></html>"""
+
+_REFUSED_ADDRESS = (
+    "Raven signs in a page opened at 127.0.0.1 or localhost, and this page is somewhere else. "
+    "Open the sign-in link at one of those addresses; reaching this machine through a port forward is fine."
+)
+_SPENT_LINK = "This sign-in link was already used or has expired. Run raven web for a new one."
 
 _COOKIE_BASE = "raven_session"
 
@@ -71,6 +89,34 @@ def cookie_name(port: int) -> str:
     its own jar entry, and a browser can hold as many as the user is running.
     """
     return f"{_COOKIE_BASE}_{port}"
+
+
+def _loopback_origin(origin: str) -> bool:
+    """Whether a browser origin names this machine: ``localhost`` or a loopback IP."""
+    try:
+        hostname = urlsplit(origin).hostname
+    except ValueError:
+        return False
+    if hostname == "localhost":
+        return True
+    try:
+        return hostname is not None and ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def _loopback_origin(origin: str) -> bool:
+    """Whether a browser origin names this machine: ``localhost`` or a loopback IP."""
+    try:
+        hostname = urlsplit(origin).hostname
+    except ValueError:
+        return False
+    if hostname == "localhost":
+        return True
+    try:
+        return hostname is not None and ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
 
 
 _COOKIE_MAX_AGE_S = 30 * 24 * 60 * 60
@@ -176,20 +222,47 @@ class WsGateway:
         reachable here, but a credential check that short-circuits on the
         first wrong byte is not worth keeping when the fix is free.
         """
-        cookie = request.cookies.get(cookie_name(self.port))
+        cookie = request.cookies.get(self._cookie_name(request))
         if cookie is not None and secrets.compare_digest(cookie, self.session_cookie):
             return True
         header = request.headers.get("X-Raven-Token")
         return header is not None and secrets.compare_digest(header, self.session_token)
 
+    def _cookie_name(self, request: web.Request) -> str:
+        """The session cookie's name, for the port the browser reached.
+
+        That is the bound port unless a port forward picked another one, and two
+        machines whose gateways both bound 18792 must not share one jar entry when
+        one browser reaches them through different forwards. A Host with no port
+        -- the container's nginx forwards ``$host`` -- keeps the bound port, which
+        is the name that proxy's auto-login sets.
+        """
+        try:
+            port = urlsplit(f"//{request.headers.get('Host', '')}").port
+        except ValueError:
+            port = None
+        return cookie_name(port or self.port)
+
     def _origin_ok(self, request: web.Request) -> bool:
+        """Whether a browser request comes from this gateway's own page.
+
+        Beyond the bound port's own origin (also what the container's nginx
+        restates), a page may sit behind a port forward, which picks another
+        local port whenever the remote one is taken; its origin then names a
+        port this process never bound. It passes when it asks its own origin
+        (Origin equals Host) on a loopback name. The first half refuses a page
+        another local server shows: cookies and SameSite ignore the port, so
+        that page's requests arrive carrying this session's cookie. The second
+        refuses DNS rebinding, where a name resolving to 127.0.0.1 asks its own
+        origin and the two agree.
+        """
         origin = request.headers.get("Origin")
         if origin is None:
             return True
-        return origin in (
-            f"http://127.0.0.1:{self.port}",
-            f"http://localhost:{self.port}",
-        )
+        if origin in (f"http://127.0.0.1:{self.port}", f"http://localhost:{self.port}"):
+            return True
+        host = request.headers.get("Host", "")
+        return origin.lower() == f"http://{host.lower()}" and _loopback_origin(origin)
 
     # ---- handlers ------------------------------------------------------------
 
@@ -214,7 +287,7 @@ class WsGateway:
 
     async def handle_auth_exchange(self, request: web.Request) -> web.Response:
         if not self._origin_ok(request):
-            raise web.HTTPForbidden(reason="bad origin")
+            raise web.HTTPForbidden(reason="bad origin", text=_REFUSED_ADDRESS)
         try:
             body = await request.json()
         except Exception:
@@ -226,10 +299,10 @@ class WsGateway:
         token_ok = isinstance(token, str) and secrets.compare_digest(token, self.session_token)
         nonce_ok = isinstance(nonce, str) and self.burn_nonce(nonce)
         if not (nonce_ok or token_ok):
-            raise web.HTTPForbidden(reason="invalid or used nonce")
+            raise web.HTTPForbidden(reason="invalid or used nonce", text=_SPENT_LINK)
         resp = web.json_response({"ok": True})
         resp.set_cookie(
-            cookie_name(self.port),
+            self._cookie_name(request),
             self.session_cookie,
             httponly=True,
             samesite="Strict",

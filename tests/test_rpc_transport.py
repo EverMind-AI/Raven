@@ -76,6 +76,41 @@ async def test_two_gateways_do_not_share_one_cookie_entry(tmp_path: Path) -> Non
             await client.close()
 
 
+async def test_two_gateways_on_one_port_number_keep_their_own_cookies_behind_forwards() -> None:
+    """The same collision, reached through port forwards.
+
+    Two machines both serve the page on 18792, and the browser reaches one on
+    its own 18792 and the other on whatever port its forwarder picked. Named
+    for the port each gateway bound, both cookies are ``raven_session_18792``
+    on one host, so signing into either signs the other out. Named for the
+    port the browser reached, the jar keeps both.
+    """
+    first, second = WsGateway(), WsGateway()
+    servers = [TestServer(build_app(g, None)) for g in (first, second)]
+    clients = [TestClient(s) for s in servers]
+    for client in clients:
+        await client.start_server()
+    for gateway in (first, second):
+        gateway.port = 18792
+    try:
+        jar = {}
+        for client, gateway in zip(clients, (first, second), strict=True):
+            resp = await client.post("/auth/exchange", json={"nonce": gateway.mint_nonce()})
+            assert resp.status == 200, await resp.text()
+            jar.update({name: morsel.value for name, morsel in resp.cookies.items()})
+
+        assert len(jar) == 2, f"two sign-ins wrote one jar entry: {sorted(jar)}"
+        # The jar is read back, not just written: a name no request ever sends
+        # would set two entries and authorize nothing.
+        for client in clients:
+            client.session.cookie_jar.clear()
+            client.session.cookie_jar.update_cookies(jar)
+            assert (await client.get("/file?path=")).status != 401, "the cookie the browser kept was not accepted"
+    finally:
+        for client in clients:
+            await client.close()
+
+
 # ---------------------------------------------------------------------------
 # who may reach the authenticated surface
 # ---------------------------------------------------------------------------
@@ -210,6 +245,123 @@ async def test_the_gateways_own_origin_is_accepted(gateway_client) -> None:
         headers={"Origin": f"http://127.0.0.1:{gateway.port}"},
     )
     assert resp.status == 200
+
+
+@pytest.fixture
+def forwarded(gateway_client):
+    """The gateway as a browser sees it through a port forward.
+
+    VS Code and ``ssh -L`` relay bytes unchanged, and they pick another local
+    port whenever the remote one is already taken on the browser's machine, so
+    the page's Host and Origin name a port the gateway never bound. Moving
+    ``gateway.port`` off the port the client really reaches is that situation
+    without the forwarder.
+    """
+    gateway, client = gateway_client
+    browser_port = gateway.port
+    gateway.port = browser_port + 1 if browser_port < 65535 else browser_port - 1
+    return gateway, client, browser_port
+
+
+async def test_a_page_reached_through_a_port_forward_signs_in(forwarded) -> None:
+    """Refusing the forwarded origin answered every sign-in with 403 while the
+    page reported an expired link, and each new link was refused the same way."""
+    gateway, client, browser_port = forwarded
+    resp = await client.post(
+        "/auth/exchange",
+        json={"nonce": gateway.mint_nonce()},
+        headers={"Origin": f"http://127.0.0.1:{browser_port}"},
+    )
+    assert resp.status == 200, await resp.text()
+
+
+async def test_a_page_reached_through_a_port_forward_opens_its_socket(forwarded) -> None:
+    """The page upgrades /rpc from the origin it signed in on, and the handshake
+    passes the same check, so a sign-in alone would still leave it dead."""
+    gateway, client, browser_port = forwarded
+    origin = {"Origin": f"http://127.0.0.1:{browser_port}"}
+    signed_in = await client.post("/auth/exchange", json={"nonce": gateway.mint_nonce()}, headers=origin)
+    assert signed_in.status == 200, await signed_in.text()
+
+    async with client.ws_connect("/rpc", headers=origin) as ws:
+        assert not ws.closed
+
+
+async def test_a_page_on_another_local_port_is_refused(gateway_client) -> None:
+    """Cookies and SameSite both ignore the port, so a page another local server
+    shows (a dev server, a package's preview) gets this session cookie attached
+    to whatever it sends here. Its origin is the one thing that gives it away,
+    which is why a forwarded origin passes only when the page asks its own."""
+    gateway, client = gateway_client
+    elsewhere = gateway.port + 1 if gateway.port < 65535 else gateway.port - 1
+    resp = await client.post(
+        "/auth/exchange",
+        json={"nonce": gateway.mint_nonce()},
+        headers={"Origin": f"http://127.0.0.1:{elsewhere}"},
+    )
+    assert resp.status == 403
+
+
+async def test_a_name_that_only_resolves_to_this_machine_is_refused(gateway_client) -> None:
+    """DNS rebinding: a site whose name answers 127.0.0.1 asks its own origin, so
+    its Origin and Host agree. Requiring a loopback host is what refuses it."""
+    gateway, client = gateway_client
+    rebound = f"rebind.example:{gateway.port}"
+    resp = await client.post(
+        "/auth/exchange",
+        json={"nonce": gateway.mint_nonce()},
+        headers={"Origin": f"http://{rebound}", "Host": rebound},
+    )
+    assert resp.status == 403
+
+
+async def test_a_proxy_that_restates_the_gateways_origin_still_signs_in(gateway_client) -> None:
+    """The container's nginx rewrites Origin to the gateway's own loopback origin
+    and forwards ``Host: $host``, which carries no port. That pair has to keep
+    working, and its cookie has to stay the ``raven_session_<page port>`` the
+    proxy's auto-login hands out, or that login stops signing anyone in."""
+    from raven.rpc.transports.ws import cookie_name
+
+    gateway, client = gateway_client
+    proxied = {"Origin": f"http://127.0.0.1:{gateway.port}", "Host": "127.0.0.1"}
+    resp = await client.post("/auth/exchange", json={"nonce": gateway.mint_nonce()}, headers=proxied)
+    assert resp.status == 200, await resp.text()
+    assert cookie_name(gateway.port) in resp.cookies
+
+    assert (await client.get("/rpc", headers=proxied)).status not in (401, 403)
+
+
+async def test_a_refused_sign_in_says_which_refusal_it_was(gateway_client) -> None:
+    """The sign-in page shows the reader what the gateway answered, so the answer
+    has to tell the refusals apart. Reporting a refused address as an expired
+    link sent people to mint link after link, each refused the same way."""
+    gateway, client = gateway_client
+    foreign = await client.post(
+        "/auth/exchange",
+        json={"nonce": gateway.mint_nonce()},
+        headers={"Origin": "http://evil.example"},
+    )
+    spent = await client.post("/auth/exchange", json={"nonce": "never-minted"})
+
+    assert foreign.status == spent.status == 403
+    foreign_says, spent_says = await foreign.text(), await spent.text()
+    assert "raven web" in spent_says, "a used or expired link has to name the command that mints a new one"
+    assert "127.0.0.1" in foreign_says, "a refused address has to say which address works"
+    assert "raven web" not in foreign_says, "a new link cannot fix an address that is refused"
+
+
+@pytest.mark.parametrize("origin", ["http://[::1", "not a url", "http://127.0.0.1:99999"])
+async def test_an_origin_that_does_not_parse_is_refused_rather_than_raising(gateway_client, origin: str) -> None:
+    """A browser sends neither of these, so only a non-browser client reaches the
+    branch -- and a raise there answers a client that has no credential with a
+    500 instead of a refusal."""
+    gateway, client = gateway_client
+    resp = await client.post(
+        "/auth/exchange",
+        json={"nonce": gateway.mint_nonce()},
+        headers={"Origin": origin},
+    )
+    assert resp.status == 403
 
 
 # ---------------------------------------------------------------------------
