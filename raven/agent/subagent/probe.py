@@ -1291,7 +1291,7 @@ def capabilities_wanted(cfg: Any) -> bool:
 
 
 def _test_record(snapshot: Any, previous: Any) -> Any:
-    """What a manual test writes down: its verdict always, its capabilities only
+    """What a new measurement writes down: its verdict always, its capabilities only
     when it reached them.
 
     A verify that fails before ``session/new`` -- a cold shim start, a machine
@@ -1316,6 +1316,8 @@ def _test_record(snapshot: Any, previous: Any) -> Any:
         stale=False,
         status=snapshot.status,
         detail=snapshot.detail,
+        needs_auth=snapshot.needs_auth,
+        unfetched=snapshot.unfetched,
         measured_at_ms=snapshot.measured_at_ms,
         elapsed_ms=snapshot.elapsed_ms,
     )
@@ -1391,7 +1393,7 @@ def _unconfigured_acp_preset_rows(configured: set[str], *, path: str | None) -> 
 
 
 def schedule_snapshot_verification(manager: Any) -> asyncio.Task | None:
-    """Verify every enabled acp agent that has no fresh capability snapshot.
+    """Verify every enabled acp agent whose capability snapshot is missing, stale or a failure.
 
     Before this, the snapshot -- the record an acp row's ``stateful`` and
     ``can_resume`` are read from -- was written only by the UI Test button and a
@@ -1399,8 +1401,9 @@ def schedule_snapshot_verification(manager: Any) -> asyncio.Task | None:
     the ``/new-instance`` picker hid those agents until someone opened a page
     and clicked. Backgrounded so a slow adapter (a first ``npx`` fetch) cannot
     delay startup; fire-and-forget, because a failure leaves the row stateless
-    with the snapshot's own detail rather than breaking the boot. Verification
-    costs no model tokens (handshake plus a throwaway ``session/new``).
+    with the snapshot's own detail rather than breaking the boot, and is
+    measured again at the next start. Verification costs no model tokens
+    (handshake plus a throwaway ``session/new``).
     """
     global _SCHEDULED
     if _SCHEDULED:
@@ -1427,7 +1430,7 @@ def schedule_snapshot_verification(manager: Any) -> asyncio.Task | None:
 
 
 async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured: set[str] | None = None) -> None:
-    """One verification per missing or stale row, sequentially, never raising.
+    """One verification per row whose snapshot is missing, stale or a failure, sequentially, never raising.
 
     Sequential, not concurrent: every acp verify spawns a child process, and a
     machine with a slow adapter among several would otherwise launch them all at
@@ -1463,7 +1466,7 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured
             name = getattr(row, "name", "") or ""
             outdated_menu = snapshot is not None and has_model_menu is not None and not has_model_menu(name)
             # Three reasons to re-measure besides staleness: a record written
-            # from before the model menu (above), a credential refusal, and one
+            # from before the model menu (above), a failed verification, and one
             # of raven's own that came back with an empty menu. Staleness asks
             # whether the launch config moved, and neither signing in nor
             # configuring a provider moves it -- so a recorded refusal never goes
@@ -1471,16 +1474,24 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured
             # across every restart after the sign-in that cured it.
             refused = getattr(snapshot, "needs_auth", False)
             menuless_own = _own_row_missing_its_menu(snapshot, name)
-            if snapshot is not None and not snapshot.stale and not outdated_menu and not refused and not menuless_own:
+            failed_before = snapshot is not None and snapshot.status != "ready"
+            if (
+                snapshot is not None
+                and not snapshot.stale
+                and not outdated_menu
+                and not refused
+                and not menuless_own
+                and not failed_before
+            ):
                 continue
             result = await verify_agent(cfg, **_launch_kw(cfg))
             _note_menu_re_measured(result, name)
-            # A pass, or a refusal the agent explained. Every other failure stays
-            # unrecorded on purpose: a timeout or a crashed adapter is a fact
-            # about this minute, and a snapshot of one would label a working
-            # agent broken until somebody happened to press Test.
-            if result.status == "ready" or getattr(result, "needs_auth", False):
-                store.record(result)
+            # Replace an old failure with what this attempt actually measured.
+            # Failed rows are retried next boot, so a timeout is not a permanent
+            # verdict. A formerly working row still keeps its old capabilities.
+            if result.status == "ready" or getattr(result, "needs_auth", False) or failed_before:
+                record = _test_record(result, snapshot) if snapshot is not None and result.status != "ready" else result
+                store.record(record)
                 recorded = True
             logger.info("acp agent {!r}: auto-verify {}", name, result.status)
         except Exception as exc:  # noqa: BLE001 - a failed verify must not sink the rest

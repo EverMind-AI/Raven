@@ -95,6 +95,14 @@ DEFAULT_ALLOW_TOOLS: frozenset[str] = frozenset(
         "tool_call",
         "web_search",
         "web_fetch",
+        # Narrower than the two above it: those reach the whole internet, and
+        # this reaches only the bases the reader attached to this conversation
+        # by hand. Asking for each search is asking a reader to re-approve the
+        # choice they just made -- and on a turn with nobody to ask (a cron
+        # job, the heartbeat, a channel with no approver) the registry refuses
+        # the call and tells the model it needs approval, so the attached
+        # bases are never searched at all.
+        "knowledge_search",
         "deliver_files",
         "message",
         "ask_user",

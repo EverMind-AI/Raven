@@ -2740,8 +2740,9 @@ async def test_a_reserved_name_entry_is_reported_once_and_as_ignored(config_path
     assert rows[0]["enabled"] is True
 
 
+@pytest.mark.parametrize("stale", [False, True])
 async def test_a_row_carries_the_credential_verdict_its_snapshot_measured(
-    config_path: Path, monkeypatch: pytest.MonkeyPatch
+    config_path: Path, monkeypatch: pytest.MonkeyPatch, stale: bool
 ) -> None:
     """The agents page draws `Unauthorized` off this and nothing else.
 
@@ -2758,14 +2759,20 @@ async def test_a_row_carries_the_credential_verdict_its_snapshot_measured(
         if getattr(cfg, "name", "") != "Codex":
             return None
         return CapabilitySnapshot(
-            agent="Codex", fingerprint="f", status="attention", detail="no session", measured_at_ms=0, needs_auth=True
+            agent="Codex",
+            fingerprint="f",
+            status="attention",
+            detail="no session",
+            measured_at_ms=0,
+            needs_auth=True,
+            stale=stale,
         )
 
     monkeypatch.setattr(mod, "acp_snapshot_for", snapshot_for, raising=False)
     monkeypatch.setattr("raven.agent.subagent.probe.acp_snapshot_for", snapshot_for)
 
     rows = {row["name"]: row for row in (await subagents_list({"probe": False}))["rows"]}
-    assert rows["Codex"]["needs_auth"] is True
+    assert rows["Codex"]["needs_auth"] is not stale
     # Every other row says so too, rather than leaving the key out: a missing key
     # and a false one read the same to a client, right up until one of them means
     # "this server is too old to know". A cli row and an openai row have no

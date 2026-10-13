@@ -1377,6 +1377,43 @@ class TranslateConfig(_Base):
     stated on every pin: an id alone does not name a credential."""
 
 
+class VisionConfig(_Base):
+    """The model that reads a picture, as a pair.
+
+    Raven could draw an image long before it could look at one: ``tools.media``
+    holds the painting tool, and nothing named the other direction. A knowledge
+    base is the first caller -- an uploaded screenshot and a figure inside a
+    document are both worth indexing, and neither has text until a model
+    describes it.
+
+    Unset is off, and deliberately not "follow the conversation's model": there
+    is no conversation behind an indexing run, and posting an image to a model
+    that cannot see one fails at the endpoint with a message about content
+    parts. Configuring this pin is the opt-in.
+    """
+
+    model: str | None = None
+    """Model for the describe call. It has to accept an image as input; the
+    settings picker offers only models whose catalogue entry says so."""
+
+    provider: str | None = None
+    """Which configured provider serves ``model``. Both halves, for the reason
+    stated on every pin: an id alone does not name a credential."""
+
+    timeout_seconds: float = 90.0
+    """Wall clock for one image. Generous next to the other pins because this
+    is an indexing call rather than a call somebody is waiting on, and a large
+    figure on a busy endpoint is slow rather than broken."""
+
+    max_figures: int = 64
+    """How many figures in one document get described.
+
+    A two-hundred-page report is hundreds of calls, and a reader who uploads
+    one should not discover that from their bill. Past the cap a figure keeps
+    whatever text it already had and the gateway logs which document hit it --
+    stopping quietly would look like a model that had nothing to say."""
+
+
 class KnowledgeConfig(_Base):
     """Knowledge-base settings that are not the embedding endpoint.
 
@@ -1582,6 +1619,7 @@ class RavenConfig(_Base):
     session_title: SessionTitleConfig = Field(default_factory=SessionTitleConfig)
     sessions: SessionsConfig = Field(default_factory=SessionsConfig)
     translate: TranslateConfig = Field(default_factory=TranslateConfig)
+    vision: VisionConfig = Field(default_factory=VisionConfig)
     knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
     subagent_dag: SubagentDagConfig = Field(default_factory=SubagentDagConfig)
     subagent_questions: SubagentQuestionsConfig = Field(default_factory=SubagentQuestionsConfig)

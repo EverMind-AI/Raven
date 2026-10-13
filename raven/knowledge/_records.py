@@ -38,7 +38,17 @@ DocumentOrigin = Literal["file", "note", "url"]
 #: numbers -- and three copies of a default are three chances to disagree.
 DEFAULT_TOP_K = 6
 DEFAULT_CHUNK_SIZE = 2048
-DEFAULT_CHUNK_OVERLAP = 215
+#: Off. Overlap repeats text between neighbouring chunks, so a passage that
+#: straddles a boundary is whole in both -- and every repeated passage is
+#: retrieved twice and reads as two findings. Worth turning on deliberately,
+#: not by default.
+DEFAULT_CHUNK_OVERLAP = 0
+
+#: The overlap every base carried while nothing read the setting. A base still
+#: holding exactly it never had an overlap applied and never had one chosen, so
+#: it is read as the nothing it has always been rather than turned on by the
+#: change that made the setting work.
+LEGACY_UNUSED_OVERLAP = 215
 DEFAULT_SEPARATOR = "\n\n"
 
 
@@ -143,6 +153,13 @@ class KnowledgeBaseRecord:
     created_at: str
     updated_at: str
     description: str = ""
+    #: Who served the model this base was built with. Recorded because the
+    #: model id alone cannot be embedded against later: the query has to go
+    #: out on that provider's address and credential, and today's configured
+    #: pin may name a different one. Empty on every base written before this
+    #: existed, and on one built through the inherited EverOS endpoint, which
+    #: names no provider -- those fall back to whatever is configured now.
+    embedding_provider: str = ""
     #: The settings a reader can change after the base exists. Every one of
     #: them is defaulted, so a registry written before they existed loads with
     #: the behaviour it already had.
@@ -161,9 +178,54 @@ class KnowledgeBaseRecord:
     #: carries, both in tokens.
     chunk_size: int = DEFAULT_CHUNK_SIZE
     chunk_overlap: int = DEFAULT_CHUNK_OVERLAP
+    #: Tokens of the prose around a table or a figure to carry into the chunk
+    #: that holds it. A table on its own embeds as a grid of values with
+    #: nothing saying what they are about, and a figure with only its caption
+    #: is worse -- so this is on, at about a sentence either side. Zero is off.
+    #:
+    #: Read by the naive strategy, where a table and a figure are each their
+    #: own chunk. A base carrying no value for this takes what is here, so
+    #: turning it on reaches the bases that predate the setting the next time
+    #: they are indexed.
+    table_context_size: int = 64
+    image_context_size: int = 64
     #: Which pre-processing a file goes through on the way in. Empty is
     #: "don't use", which is the only setting there is so far.
     file_processing: str = ""
+    #: Kept at the head of the list.
+    #:
+    #: A property of the base rather than of the browser looking at it: a
+    #: reader who pins a base has said something about the base, and saying it
+    #: again on their other machine is not what they meant. Defaulted, so every
+    #: base written before this loads unpinned.
+    pinned: bool = False
+    #: Marked by the reader, and the whole of what the starred tab shows.
+    #:
+    #: Not the same fact as :attr:`pinned`, which is about order: a reader
+    #: pins the two bases they are working in this week and stars the ten they
+    #: come back to, so a tab filtered by the pin would be a tab of two.
+    starred: bool = False
+
+
+@dataclass(frozen=True)
+class KnowledgeFolderRecord:
+    """One folder inside a knowledge base.
+
+    One level deep, deliberately: a folder here is a label a reader sorts by,
+    and a tree of them is a filing system with its own rules -- where a move
+    into a descendant goes, what a delete takes with it, how deep a path may
+    be. None of that earns its keep for sorting a few dozen documents, and the
+    shape can grow later without moving what is stored.
+
+    Root is not one of these. A document with no folder is in Root, so every
+    document that existed before folders did is already somewhere sensible and
+    nothing had to be written to make it so.
+    """
+
+    id: str
+    base_id: str
+    name: str
+    created_at: str
 
 
 @dataclass(frozen=True)
@@ -180,6 +242,18 @@ class KnowledgeDocumentRecord:
     updated_at: str
     chunk_count: int = 0
     error: str = ""
+    #: What went wrong while parsing that did not stop it.
+    #:
+    #: Not a second error field: a document carrying one of these *is* indexed
+    #: and *is* searchable, and what the line says is that part of it did not
+    #: make it in -- pictures nothing could read, most often. Left on its own
+    #: the case is undiscoverable, because the row says ready and the only
+    #: symptom is that a search about the missing part answers worse.
+    warning: str = ""
+    #: Which folder of its base it is filed under. Empty is Root, which is
+    #: where everything starts and where a deleted folder's documents return
+    #: to.
+    folder_id: str = ""
     #: Which kind of data source this came in as. Defaulted rather than
     #: required so a registry written before the field existed still loads --
     #: every document in one is a file, which is what the default says.
@@ -190,13 +264,28 @@ class KnowledgeDocumentRecord:
     origin_ref: str = ""
 
 
+def _without_the_unused_overlap(base: KnowledgeBaseRecord) -> KnowledgeBaseRecord:
+    """Read a base still carrying the old overlap default as having none.
+
+    That number was written into every base while nothing read the setting, so
+    no document was ever chunked with it and nobody chose it. Honouring it the
+    moment the setting starts working would turn overlap on across every
+    existing base without anyone asking -- and overlap is text retrieved twice.
+    A reader who wants one sets it, and then it is theirs.
+    """
+    if base.chunk_overlap != LEGACY_UNUSED_OVERLAP:
+        return base
+    return replace(base, chunk_overlap=DEFAULT_CHUNK_OVERLAP)
+
+
 class RecordStore:
-    """Knowledge bases and documents, persisted as one JSON object."""
+    """Knowledge bases, their folders and their documents, as one JSON object."""
 
     def __init__(self, path: "str | Path") -> None:
         self._path = Path(path)
         self._bases: dict[str, KnowledgeBaseRecord] = {}
         self._documents: dict[str, KnowledgeDocumentRecord] = {}
+        self._folders: dict[str, KnowledgeFolderRecord] = {}
         self._load()
 
     # ── persistence ───────────────────────────────────────────────
@@ -218,13 +307,19 @@ class RecordStore:
             if record is None:
                 logger.warning("knowledge: dropping malformed base {}", base_id)
             else:
-                self._bases[base_id] = record
+                self._bases[base_id] = _without_the_unused_overlap(record)
         for doc_id, fields in (raw.get("documents") or {}).items():
             record = _build(KnowledgeDocumentRecord, doc_id, fields, doc_extra.get(doc_id))
             if record is None:
                 logger.warning("knowledge: dropping malformed document {}", doc_id)
             else:
                 self._documents[doc_id] = record
+        for folder_id, fields in (raw.get("folders") or {}).items():
+            record = _build(KnowledgeFolderRecord, folder_id, fields, None)
+            if record is None:
+                logger.warning("knowledge: dropping malformed folder {}", folder_id)
+            else:
+                self._folders[folder_id] = record
         self._requeue_interrupted()
 
     def _requeue_interrupted(self) -> None:
@@ -246,10 +341,19 @@ class RecordStore:
     def _save(self) -> None:
         bases = {b.id: _split(b, LEGACY_BASE_FIELDS) for b in self._bases.values()}
         documents = {d.id: _split(d, LEGACY_DOCUMENT_FIELDS) for d in self._documents.values()}
-        payload = {
+        payload: dict[str, Any] = {
             "bases": {i: known for i, (known, _) in bases.items()},
             "documents": {i: known for i, (known, _) in documents.items()},
         }
+        # Whole rather than split into known and extra halves: a folder has no
+        # older shape to be compatible with, and every field it has is
+        # required. Written only when there are any, so a registry that has
+        # never had a folder is byte-for-byte what the writer before them
+        # produced.
+        if self._folders:
+            payload["folders"] = {
+                i: {k: v for k, v in asdict(f).items() if k != "id"} for i, f in self._folders.items()
+            }
         # Only when there is something to put there, so a registry that uses
         # none of them is byte-for-byte what the older writer produced.
         base_extra = {i: extra for i, (_, extra) in bases.items() if extra}
@@ -272,6 +376,7 @@ class RecordStore:
         embedding_model: str,
         dimensions: int,
         description: str = "",
+        embedding_provider: str = "",
     ) -> KnowledgeBaseRecord:
         now = _now()
         record = KnowledgeBaseRecord(
@@ -280,6 +385,7 @@ class RecordStore:
             embedding_model=embedding_model,
             dimensions=dimensions,
             description=description,
+            embedding_provider=embedding_provider,
             created_at=now,
             updated_at=now,
         )
@@ -327,12 +433,23 @@ class RecordStore:
         if record is None:
             return None
         allowed = {
+            # Not the model and not the width -- those are what the collection
+            # was built to. The provider is only where that same model is
+            # reached, which is why it can move: an operator who repoints the
+            # configured pin at another vendor leaves every older base naming
+            # a model the new endpoint does not serve, and without this the
+            # only way back is a rebuild.
+            "embedding_provider",
             "top_k",
             "smart_chunking",
             "separator",
+            "table_context_size",
+            "image_context_size",
             "chunk_size",
             "chunk_overlap",
             "file_processing",
+            "pinned",
+            "starred",
         }
         unknown = set(settings) - allowed
         if unknown:
@@ -342,11 +459,51 @@ class RecordStore:
         self._save()
         return updated
 
+    def rebuild_base(
+        self,
+        base_id: str,
+        *,
+        embedding_model: str,
+        dimensions: int,
+        embedding_provider: str = "",
+    ) -> KnowledgeBaseRecord | None:
+        """Record a base on a different model, and requeue everything in it.
+
+        Not a setting, which is why it is not ``configure_base``: the vectors a
+        base holds were made by the model it names, and a base that names
+        another one holds vectors nothing will ever match. So the two halves
+        move together -- the caller rebuilds the collection, and every document
+        goes back to ``pending`` here, in the same write, because a row left
+        saying ``ready`` would be claiming chunks that no longer exist.
+
+        An empty ``embedding_model`` is the base being turned off: it keeps its
+        documents and is never searched by vector again.
+        """
+        record = self._bases.get(base_id)
+        if record is None:
+            return None
+        updated = replace(
+            record,
+            embedding_model=embedding_model,
+            dimensions=dimensions,
+            embedding_provider=embedding_provider,
+            updated_at=_now(),
+        )
+        self._bases[base_id] = updated
+        now = _now()
+        for document in [d for d in self._documents.values() if d.base_id == base_id]:
+            self._documents[document.id] = replace(
+                document, status="pending", chunk_count=0, error="", warning="", updated_at=now
+            )
+        self._save()
+        return updated
+
     def delete_base(self, base_id: str) -> bool:
         """Drop a base and every document record under it.
 
-        The documents go with it in the same write: leaving them would strand
-        rows that list by base id and can never be reached or deleted again.
+        The documents and the folders go with it in the same write: leaving
+        either would strand rows that list by base id and can never be reached
+        or deleted again.
         Dropping the base's *collection* is the caller's half -- this store
         does not reach into the index.
         """
@@ -355,10 +512,71 @@ class RecordStore:
         del self._bases[base_id]
         for doc_id in [d.id for d in self._documents.values() if d.base_id == base_id]:
             del self._documents[doc_id]
+        for folder_id in [f.id for f in self._folders.values() if f.base_id == base_id]:
+            del self._folders[folder_id]
         self._save()
         return True
 
     # ── documents ─────────────────────────────────────────────────
+
+    # -- folders -------------------------------------------------------
+
+    def list_folders(self, base_id: str) -> "list[KnowledgeFolderRecord]":
+        """One base's folders, oldest first. Root is not among them."""
+        return sorted(
+            (f for f in self._folders.values() if f.base_id == base_id),
+            key=lambda f: f.created_at,
+        )
+
+    def get_folder(self, folder_id: str) -> "KnowledgeFolderRecord | None":
+        return self._folders.get(folder_id)
+
+    def create_folder(self, base_id: str, name: str) -> KnowledgeFolderRecord:
+        record = KnowledgeFolderRecord(id=_new_id(), base_id=base_id, name=name, created_at=_now())
+        self._folders[record.id] = record
+        self._save()
+        return record
+
+    def rename_folder(self, folder_id: str, name: str) -> "KnowledgeFolderRecord | None":
+        record = self._folders.get(folder_id)
+        if record is None:
+            return None
+        updated = replace(record, name=name)
+        self._folders[folder_id] = updated
+        self._save()
+        return updated
+
+    def delete_folder(self, folder_id: str) -> int:
+        """Drop the folder and return its documents to Root; say how many moved.
+
+        The documents stay. A folder is a label a reader put on them, and
+        taking a label off is not a reason to destroy what it labelled --
+        deleting documents is its own action, and it asks first.
+        """
+        if folder_id not in self._folders:
+            return -1
+        moved = 0
+        for doc_id, doc in list(self._documents.items()):
+            if doc.folder_id == folder_id:
+                self._documents[doc_id] = replace(doc, folder_id="", updated_at=_now())
+                moved += 1
+        del self._folders[folder_id]
+        self._save()
+        return moved
+
+    def move_document(self, document_id: str, folder_id: str) -> "KnowledgeDocumentRecord | None":
+        """File one document under a folder, or under Root for an empty id."""
+        record = self._documents.get(document_id)
+        if record is None:
+            return None
+        if folder_id and folder_id not in self._folders:
+            return None
+        updated = replace(record, folder_id=folder_id, updated_at=_now())
+        self._documents[document_id] = updated
+        self._save()
+        return updated
+
+    # -- documents -----------------------------------------------------
 
     def add_document(
         self,
@@ -403,12 +621,14 @@ class RecordStore:
         *,
         chunk_count: int | None = None,
         error: str = "",
+        warning: str = "",
     ) -> KnowledgeDocumentRecord | None:
-        """Move a document's state, clearing the previous error.
+        """Move a document's state, clearing the previous error and warning.
 
-        The error is cleared rather than kept unless this call sets one: a
-        retry that succeeds must not leave the failure that prompted it on
-        screen next to a document the page now calls ready.
+        Both are cleared rather than kept unless this call sets them: a retry
+        that succeeds must not leave the failure that prompted it on screen
+        next to a document the page now calls ready, and a reindex that reached
+        the vision endpoint must not keep saying its pictures were skipped.
         """
         record = self._documents.get(document_id)
         if record is None:
@@ -418,6 +638,7 @@ class RecordStore:
             status=status,
             chunk_count=record.chunk_count if chunk_count is None else chunk_count,
             error=error,
+            warning=warning,
             updated_at=_now(),
         )
         self._documents[document_id] = updated
@@ -449,6 +670,7 @@ class RecordStore:
             status="pending",
             chunk_count=0,
             error="",
+            warning="",
             updated_at=_now(),
         )
         self._documents[document_id] = updated

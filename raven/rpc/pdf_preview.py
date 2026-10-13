@@ -157,6 +157,47 @@ def sources_dir() -> Path:
     return cache_dir() / "sources"
 
 
+async def pdf_for_stored(document_id: str, blob: Path, name: str) -> Path:
+    """A PDF for a file kept under a bare id rather than its own name.
+
+    Here rather than with its caller for the reason `forget_source` gives: this
+    module owns the directory, so the function that fills it belongs beside the
+    one that empties it.
+
+    The renderer is handed a suffixed alias rather than the stored file. It
+    decides the input filter partly from the extension, and a legacy `.doc`
+    arriving as an extensionless file is exactly the case its sniffing is worst
+    at -- the conversion fails, or worse, succeeds as the wrong format.
+
+    A hard link, so the alias is the same inode: `cache_key` reads size and
+    mtime, and a copy would change neither by accident but would double the
+    bytes on disk for every preview. The fallback is a copy, for the case the
+    cache and the stored files are on different filesystems.
+    """
+    return await pdf_for(source_alias(document_id, blob, name))
+
+
+def source_alias(document_id: str, blob: Path, name: str) -> Path:
+    """The suffixed alias for one stored file, made if it is not there.
+
+    Separate from the render above so that the name a renderer will be handed
+    can be asked for without rendering anything.
+    """
+    import os
+    import shutil
+
+    alias = sources_dir() / f"{document_id}{Path(name or 'document').suffix}"
+    if alias.is_file() and alias.stat().st_mtime == blob.stat().st_mtime:
+        return alias
+    alias.parent.mkdir(parents=True, exist_ok=True)
+    alias.unlink(missing_ok=True)
+    try:
+        os.link(blob, alias)
+    except OSError:
+        shutil.copy2(blob, alias)
+    return alias
+
+
 def forget_source(document_id: str) -> None:
     """Drop the retained copy for one document, if there is one.
 
@@ -271,44 +312,19 @@ async def pages_of(source: Path, *, workspace: Path | None = None, timeout_s: fl
 
 
 def _count_pages(pdf: Path) -> int:
-    """The page count, read by whichever rasteriser this host has.
+    """The page count, read from the document.
 
-    PyMuPDF answers from the document. ``pdfinfo`` is poppler's, and ships with
-    the ``pdftoppm`` the fallback already needs, so a host that can draw a page
-    can count them too. Neither present is the same unavailability drawing
-    reports, in the same words, since the reader's next step is the same one.
+    One reader, because this package now declares one: a rasteriser used to be
+    something a host either happened to have or did not, and counting pages had
+    to be written twice for the two it might be.
     """
-    try:
-        import pymupdf  # type: ignore[import-not-found]
-    except ImportError:
-        try:
-            import fitz as pymupdf  # type: ignore[import-not-found, no-redef]
-        except ImportError:
-            pymupdf = None
-    if pymupdf is not None:
-        try:
-            with pymupdf.open(pdf) as doc:
-                return int(doc.page_count)
-        except Exception as exc:  # noqa: BLE001 - a document that cannot be opened has no count
-            raise PdfPreviewError(f"{pdf.name} could not be read: {exc}") from exc
-    pdfinfo = shutil.which("pdfinfo")
-    if pdfinfo is None:
-        raise PdfPreviewUnavailableError(
-            f"no PDF rasteriser on the gateway host, so {pdf.name} has no pages to show: "
-            "install a deck engine (PyMuPDF) or poppler (pdfinfo, pdftoppm)"
-        )
-    import subprocess
+    from raven.knowledge.parser._pdfdoc import open_document
 
     try:
-        out = subprocess.run(  # noqa: S603 - resolved above, argv is literals plus this file's path
-            [pdfinfo, str(pdf)], check=True, capture_output=True, timeout=CONVERT_TIMEOUT_S, text=True
-        ).stdout
-    except Exception as exc:  # noqa: BLE001 - every way pdfinfo fails is this route's 500
+        with open_document(pdf) as doc:
+            return doc.page_count
+    except Exception as exc:  # noqa: BLE001 - a document that cannot be opened has no count
         raise PdfPreviewError(f"{pdf.name} could not be read: {exc}") from exc
-    for line in out.splitlines():
-        if line.startswith("Pages:"):
-            return int(line.split(":", 1)[1].strip())
-    raise PdfPreviewError(f"{pdf.name} reported no page count")
 
 
 async def page_png_for(
@@ -386,80 +402,47 @@ def _rasterise_pdf_page(
 ) -> None:
     """One page of a PDF as a PNG at most ``width`` wide, written atomically.
 
-    ``page`` is 1-based, as the reader counts and as ``pdftoppm`` takes it.
+    ``page`` is 1-based, as the reader counts.
 
-    A PDF is already a rendering, so LibreOffice has nothing to convert (and its
-    Draw import refuses most of them). PyMuPDF draws the page when it is
-    installed -- it rides with either deck engine, so an install that makes
-    decks has it -- and poppler's ``pdftoppm`` is the fallback for one that
-    does not. Neither is a dependency of this package; both are probed.
+    A PDF is already a rendering, so LibreOffice has nothing to convert (and
+    its Draw import refuses most of them); it is drawn by the rasteriser this
+    package declares. That used to be a probe with poppler behind it, because
+    the only rasteriser here rode in with a deck engine and an install without
+    one could draw nothing -- there is no such install now.
 
-    Both paths are bounded in the picture they may draw, and the fallback in
-    the time it may take as well: it is a child process, so a clock reaches it,
-    while the PyMuPDF path draws in this thread where a clock would not stop it.
+    Bounded in the picture it may draw but not in the time it may take: it
+    draws in this thread, where a clock would not stop it. ``timeout_s`` is
+    kept because the callers pass it and a child process may yet come back.
     """
     root = cache_dir()
     root.mkdir(parents=True, exist_ok=True)
     scratch = Path(tempfile.mkdtemp(prefix="render-", dir=root))
     try:
         staged = scratch / "page.png"
-        try:
-            import pymupdf  # type: ignore[import-not-found]
-        except ImportError:
-            try:
-                import fitz as pymupdf  # type: ignore[import-not-found, no-redef]
-            except ImportError:
-                pymupdf = None
-        if pymupdf is not None:
-            with pymupdf.open(source) as doc:
-                if doc.page_count == 0:
-                    raise PdfPreviewError(f"{source.name} has no pages")
-                if not 1 <= page <= doc.page_count:
-                    raise PdfPreviewError(f"{source.name} has no page {page}")
-                drawn = doc[page - 1]
-                zoom = _thumb_zoom(drawn.rect.width, drawn.rect.height, width)
-                drawn.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False).save(str(staged))
-        else:
-            pdftoppm = shutil.which("pdftoppm")
-            if pdftoppm is None:
-                raise PdfPreviewUnavailableError(
-                    f"no PDF rasteriser on the gateway host, so {source.name} has no picture: "
-                    "install a deck engine (PyMuPDF) or poppler (pdftoppm)"
-                )
-            import subprocess
+        from raven.knowledge.parser._pdfdoc import open_document
 
-            prefix = scratch / "p"
-            subprocess.run(  # noqa: S603 - resolved above, argv is literals plus this file's path
-                [
-                    pdftoppm,
-                    "-f",
-                    str(page),
-                    "-l",
-                    str(page),
-                    *_scale_argv(source, width),
-                    "-png",
-                    str(source),
-                    str(prefix),
-                ],
-                check=True,
-                capture_output=True,
-                timeout=timeout_s,
-            )
-            made = sorted(scratch.glob("p-*.png"))
-            if not made:
-                raise PdfPreviewError(f"pdftoppm drew nothing for {source.name}")
-            os.replace(made[0], staged)
+        with open_document(source) as doc:
+            if doc.page_count == 0:
+                raise PdfPreviewError(f"{source.name} has no pages")
+            if not 1 <= page <= doc.page_count:
+                raise PdfPreviewError(f"{source.name} has no page {page}")
+            drawn = doc[page - 1]
+            image = drawn.render(_thumb_zoom(drawn.width, drawn.height, width))
+            try:
+                image.save(str(staged))
+            finally:
+                image.close()
         _sweep(root)
         os.replace(staged, target)
     except PdfPreviewError:
         raise
     except Exception as exc:  # noqa: BLE001 - every way a rasteriser fails is this route's 500
-        # Not a tuple of the ones foreseen: PyMuPDF refuses a page past its own
-        # limits with an exception of its own (`FzErrorLimit`), and the fallback
-        # can raise `CalledProcessError` or `TimeoutExpired`. Left uncaught each
-        # of those reaches the transport as an unnamed failure; named here, the
-        # route answers with the same sentence as every other render that could
-        # not be made.
+        # Not a tuple of the ones foreseen: a rasteriser refuses a page past
+        # its own limits with an exception of its own, and the library under it
+        # raises its own type for every cause. Left uncaught each of those
+        # reaches the transport as an unnamed failure; named here, the route
+        # answers with the same sentence as every other render that could not
+        # be made.
         raise PdfPreviewError(f"{source.name} could not be drawn: {exc}") from exc
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
@@ -512,55 +495,6 @@ def _render(source: Path, target: Path, timeout_s: float, fmt: str = "pdf") -> N
 #: page's size: an area bound that needs nothing but the flag, since poppler's
 #: ``-scale-to`` keeps the ratio inside a square.
 THUMB_BOX_PX = int(math.sqrt(THUMB_MAX_PIXELS))
-
-
-def _pdf_page_size(source: Path) -> tuple[float, float] | None:
-    """The first page's size in points, read with poppler's ``pdfinfo``, or None.
-
-    It ships beside ``pdftoppm``, so the host that has the fallback usually has
-    this too; None is for the one that does not, and for anything unparseable.
-    """
-    import re
-    import subprocess
-
-    pdfinfo = shutil.which("pdfinfo")
-    if pdfinfo is None:
-        return None
-    try:
-        done = subprocess.run(  # noqa: S603 - resolved above, argv is literals plus this file's path
-            [pdfinfo, "-f", "1", "-l", "1", str(source)], capture_output=True, text=True, timeout=30, check=False
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    found = re.search(r"size:\s*([0-9.]+)\s*x\s*([0-9.]+)\s*pts", done.stdout or "")
-    if not found:
-        return None
-    try:
-        return float(found.group(1)), float(found.group(2))
-    except ValueError:
-        return None
-
-
-def _scale_argv(source: Path, width: int) -> list[str]:
-    """How the fallback is told to size the page, bounded the same way the
-    rasteriser above is.
-
-    ``-scale-to-x W -scale-to-y -1`` is what a thumbnail wants and what the page
-    can abuse: the height it leaves to the ratio is a number inside the file.
-    Given the page's size the two sides are computed here instead, from the same
-    scale, so the ratio is kept and the area is bounded; without it the page is
-    fitted into a square, which bounds the area with the ratio left to poppler.
-    """
-    size = _pdf_page_size(source)
-    if size is None:
-        return ["-scale-to", str(THUMB_BOX_PX)]
-    zoom = _thumb_zoom(size[0], size[1], width)
-    return [
-        "-scale-to-x",
-        str(max(1, round(size[0] * zoom))),
-        "-scale-to-y",
-        str(max(1, round(size[1] * zoom))),
-    ]
 
 
 def _thumb_zoom(page_width: float, page_height: float, width: int) -> float:

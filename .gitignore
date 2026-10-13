@@ -143,6 +143,13 @@ demos/oncall_heat2d/.raven-demo-home/
 agents/raven-ppt/deck/
 agents/raven-ppt/materials/
 
+# Model weights and dictionaries fetched by scripts/fetch_resources.py: the
+# word dictionary the tokenizer segments with, the corpora nltk reads beside
+# it, and the deepdoc vision models the PDF parser runs. Out of git because the
+# smallest of them is eight times the 1 MiB ceiling AGENTS.md section 7 sets --
+# `make install` and the image build download them instead.
+raven/core/res/
+raven/knowledge/res/
 # The deck template picker's covers, rendered from the templates beside them by
 # scripts/bake_deck_template_covers.py and carried by the ppt-engine wheel as a
 # hatch artifact. Generated from tracked inputs, and images besides

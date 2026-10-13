@@ -203,6 +203,11 @@ REGISTERED_COMMAND_NAMES = {
     "plugin",
     "plugins",
     "provider",
+    # The weights and dictionaries that cannot live in git. On the CLI rather
+    # than only under `scripts/`, because the wheel carries no scripts: this is
+    # the command the two "not installed" errors name, and the one a one-line
+    # install runs for itself.
+    "resources",
     "sandbox",
     "sentinel",
     "serve",

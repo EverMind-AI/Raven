@@ -14,6 +14,9 @@ import asyncio
 import inspect
 import json
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from raven.rpc import bootstrap
 from raven.rpc.subscriptions import COALESCE_WINDOW_S
@@ -533,6 +536,47 @@ async def test_a_mounted_stack_does_not_close_its_host_s_mcp(monkeypatch) -> Non
     stack = await bootstrap.build_rpc_stack(_sink, agent_loop=loop)
     await stack.teardown()
     assert loop.mcp_closed == 0
+
+
+@pytest.mark.parametrize("owns_loop", [True, False])
+async def test_teardown_stops_only_the_owned_skill_watcher(tmp_path, monkeypatch, owns_loop) -> None:
+    from raven.memory_engine.skill_local.watcher import SkillFileWatcher
+
+    watcher = SkillFileWatcher([tmp_path], lambda _: None, lambda _: None)
+    loop = _FakeLoop()
+    loop.context = SimpleNamespace(skills=SimpleNamespace(stop_file_watcher=watcher.stop))
+    monkeypatch.setattr(bootstrap, "build_agent_loop", lambda **_: loop)
+    assert watcher.start()
+    thread = watcher._thread
+    assert thread is not None and thread.is_alive()
+    try:
+        stack = await bootstrap.build_rpc_stack(_sink, agent_loop=None if owns_loop else loop)
+        await stack.teardown()
+        assert thread.is_alive() is not owns_loop
+        await stack.teardown()
+        assert thread.is_alive() is not owns_loop
+    finally:
+        watcher.stop()
+
+
+async def test_a_failed_watcher_stop_does_not_strand_the_owned_stores(monkeypatch) -> None:
+    loop = _FakeLoop()
+
+    def fail():
+        loop.order.append("watcher")
+        raise RuntimeError("watcher stop failed")
+
+    async def drain():
+        loop.order.append("drain")
+
+    loop.context = SimpleNamespace(skills=SimpleNamespace(stop_file_watcher=fail))
+    loop.backend = _RecordingBackend(loop.order)
+    loop.drain_backend_stores = drain
+    monkeypatch.setattr(bootstrap, "build_agent_loop", lambda **_: loop)
+    stack = await bootstrap.build_rpc_stack(_sink)
+    await stack.teardown()
+
+    assert loop.order == ["cancel_all", "watcher", "drain", "stop", "close_mcp"]
 
 
 async def test_the_owning_path_builds_the_engine_for_the_channel_it_serves(monkeypatch) -> None:
