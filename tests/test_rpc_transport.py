@@ -504,7 +504,12 @@ def test_restricted_mode_refuses_a_symlink_that_points_out(tmp_path: Path, monke
 
     outside = tmp_path.parent / "outside.txt"
     outside.write_text("secret")
-    (tmp_path / "escape.txt").symlink_to(outside)
+    try:
+        (tmp_path / "escape.txt").symlink_to(outside)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows symlink creation requires an unavailable privilege")
+        raise
 
     monkeypatch.setattr(files_module, "load_config", lambda: _workspace_config(tmp_path, restrict=True))
     with pytest.raises(PermissionError):
