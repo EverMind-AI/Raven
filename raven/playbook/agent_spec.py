@@ -31,7 +31,7 @@ in Raven, and the enforcement point is ``ToolRegistry.execute``.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field, model_validator
 
@@ -79,6 +79,25 @@ class SubAction(CamelBase):
 
 class _SeatPlaybook(CamelBase):
     """The four Harness roles shared by coordinator and delegate seats."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _read_pre_merge_checks(cls, data: Any) -> Any:
+        """A seat saved with ``action.checks`` loads as the judge it meant.
+
+        An artifact is durable: one saved before the judgement seat became a
+        single surface must still open, and refusing it would take a Persona
+        out of service over a field its writer never chose. Translated rather
+        than tolerated -- see :mod:`raven.playbook.checks_migration`.
+        """
+        if not isinstance(data, dict):
+            return data
+        action = data.get("action")
+        if not isinstance(action, dict) or "checks" not in action:
+            return data
+        from raven.playbook.checks_migration import migrated_action
+
+        return {**data, "action": migrated_action(action)}
 
     memory: SubMemory = Field(default_factory=SubMemory)
     planning: SubPlanning = Field(default_factory=SubPlanning)

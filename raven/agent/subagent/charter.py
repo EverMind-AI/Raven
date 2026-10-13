@@ -363,6 +363,11 @@ def judge(
     an unbounded sequence.
     """
     answer = _generated_answer("judge", name, _pure_data(params), _pure_data(prior))
+    # One sentence is as good as a list: a judge with a single thing to say
+    # writes the string, and reading that as silence would turn its refusal
+    # into permission. Carried over from the judge this verb replaced.
+    if isinstance(answer, str):
+        return [answer] if answer.strip() else []
     if not isinstance(answer, (list, tuple)):
         return []
     return [str(line) for line in answer if str(line).strip()]
