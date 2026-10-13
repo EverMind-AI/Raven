@@ -672,6 +672,10 @@ async function added(make: () => Promise<KbDoc>): Promise<void> {
   const base = get().opened
   if (!base || get().indexing) return
   patch({ indexing: true })
+  let settle = (): void => {}
+  runningIndex = new Promise<void>((resolve) => {
+    settle = resolve
+  })
   try {
     let doc = await make()
     if (get().folder) doc = await source().move(doc.id, get().folder)
@@ -689,6 +693,7 @@ async function added(make: () => Promise<KbDoc>): Promise<void> {
     if (get().opened?.id === base.id) await loadDocuments(base.id)
   } finally {
     patch({ indexing: false })
+    settle()
   }
 }
 
@@ -797,6 +802,10 @@ export function setView(view: View): void {
 export async function reindex(doc: KbDoc): Promise<void> {
   if (get().indexing) return
   patch({ indexing: true })
+  let settle = (): void => {}
+  runningIndex = new Promise<void>((resolve) => {
+    settle = resolve
+  })
   /* Marked as indexing the moment it is asked for, not when it answers: a row
      that does not move until it is over reads as a press that did nothing. */
   marking(doc)
@@ -822,6 +831,7 @@ export async function reindex(doc: KbDoc): Promise<void> {
     if (base) await loadDocuments(base.id)
   } finally {
     patch({ indexing: false })
+    settle()
   }
 }
 
@@ -993,11 +1003,35 @@ export async function write(base: KbBase, settings: KbSettings): Promise<void> {
    the same endpoint asked to do everything simultaneously. Each row is put
    back as it lands, so the panel empties its queue in front of the reader
    rather than after. */
+/* The index running now, for a caller that has to wait for it rather than
+   give up. Already resolved when nothing is running. */
+let runningIndex: Promise<void> = Promise.resolve()
+
+/* Take the indexing flag, waiting for whatever holds it.
+
+   The difference between this and the plain `if (get().indexing) return` the
+   two user-initiated paths use is the difference between a press and a
+   consequence. A reader pressing Rebuild while another document indexes meant
+   that press for now, and refusing it is the honest answer.
+
+   A drain is not a press. The save already happened, the server has already
+   sent every document in the base back to the queue, and there is no second
+   chance: nothing else drains that queue in this process. Skipped, the whole
+   base reads Queued with nothing that will ever pick it up -- which is the
+   headline flow of the settings panel, moving a base onto a model that works.
+
+   No race in the gap: there is no await between the test and the patch, and
+   this runs on one thread. */
 async function drainPending(baseId: string): Promise<void> {
-  if (get().indexing) return
+  while (get().indexing) await runningIndex
   patch({ indexing: true })
+  const work = drainQueue(baseId)
+  runningIndex = work.then(
+    () => undefined,
+    () => undefined,
+  )
   try {
-    await drainQueue(baseId)
+    await work
   } finally {
     patch({ indexing: false })
   }

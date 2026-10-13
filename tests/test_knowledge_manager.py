@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import threading
 from dataclasses import replace
 
 import pytest
@@ -360,6 +361,41 @@ async def test_the_write_locks_are_dropped_when_nobody_holds_them(manager) -> No
 
     await manager.delete_document(doc.id)
     assert manager._writes == {}
+
+
+async def test_a_delete_mid_render_leaves_no_crops_behind(manager, tmp_path) -> None:
+    """The crops are cut in a worker thread before the write lock is taken --
+    holding it across a render would block a delete for the seconds that takes
+    -- so a delete landing in that window clears the directory and the thread
+    then writes into it. The files are for a document nothing can reach.
+    """
+    base = await manager.create_base(name="handbook")
+    doc = manager.add_document(base.id, filename="handbook.md", content=MARKDOWN)
+    crops = manager._crops_dir(doc.id)
+
+    # Threading events, not asyncio ones: this half runs in a worker thread,
+    # where `asyncio.Event.wait()` returns a coroutine nobody awaits and the
+    # render would sail straight past the delete it is meant to overlap.
+    rendering = threading.Event()
+    carry_on = threading.Event()
+
+    def render_then_wait(record, chunks, ids):
+        # The order that makes this the race: the render is still going when
+        # the delete clears the directory, and writes after it.
+        rendering.set()
+        carry_on.wait(timeout=5)
+        crops.mkdir(parents=True, exist_ok=True)
+        (crops / "1.webp").write_bytes(b"RIFFfake")
+
+    manager._write_crops = render_then_wait
+
+    indexing = asyncio.create_task(manager.index_document(doc.id))
+    assert await asyncio.to_thread(rendering.wait, 5), "the render started"
+    assert await manager.delete_document(doc.id) is True
+    carry_on.set()
+    await indexing
+
+    assert not list(crops.glob("*.webp")), "the pictures went with the document"
 
 
 # ── the whole path ────────────────────────────────────────────────

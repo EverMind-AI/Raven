@@ -957,6 +957,14 @@ class KnowledgeManager:
                     # inserting what was computed would put pieces of the file
                     # back with no row to own them, unreachable from the page
                     # and answering searches out of a file the reader deleted.
+                    # The crops as well. They are cut in a worker thread
+                    # before this lock is taken -- holding it across a render
+                    # would block the delete for the seconds that takes -- so
+                    # a delete landing mid-render clears the directory and the
+                    # thread then writes into it. Cleared again here, where
+                    # the record is already known to be gone, rather than left
+                    # on disk for a document nothing can reach.
+                    _clear(self._crops_dir(document_id))
                     logger.info("knowledge: {} was deleted while it indexed; its pieces are dropped", record.source)
                     return None
                 await self._store.delete(base.id, document_id)

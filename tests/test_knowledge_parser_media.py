@@ -68,15 +68,32 @@ class TestRegistering:
         assert guessed in DocxParser.supported_media_types
 
     def test_the_file_picker_offers_them_too(self, bare_host) -> None:
-        """`supported_extensions` reverses the same table, so the formats
-        missing from it were missing from the upload dialog's accept list."""
+        """`ParserBase.supported_extensions` reverses the same table, so the
+        formats missing from it were missing from the upload dialog's accept
+        list.
+
+        Asked of the base implementation rather than of a parser: every parser
+        that reads an OOXML format overrides the method with a literal, so
+        asserting against one of those is a tautology that a no-op `register`
+        survives. This asks the reverse lookup itself, which is the thing the
+        registration feeds.
+        """
+        from raven.knowledge.parser import ParserBase
+
+        class _Reader(ParserBase):
+            supported_media_types = [
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            ]
+
+            async def parse(self, file, filename):  # pragma: no cover - never called
+                return []
+
+        assert _Reader.supported_extensions() == [], "nothing to reverse before registering"
+
         register()
 
-        from raven.knowledge.parser.docx_parser import DocxParser
-        from raven.knowledge.parser.ppt_parser import PptParser
-
-        assert ".docx" in DocxParser.supported_extensions()
-        assert ".pptx" in PptParser.supported_extensions()
+        assert _Reader.supported_extensions() == [".docx", ".pptx"]
 
     def test_it_can_be_called_twice(self, bare_host) -> None:
         """It runs at import, and an import can happen more than once in a

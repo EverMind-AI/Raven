@@ -462,6 +462,38 @@ describe('the knowledge store', () => {
     expect(sorted.skipped).toEqual([])
   })
 
+  it('drains a model switch even when something is already indexing', async () => {
+    /* The save requeues every document in the base and nothing else drains
+       that queue. Skipped because a rebuild or an upload happened to be
+       running, the whole base reads Queued with nothing that will ever pick
+       it up -- which is the flow the settings panel exists for: move a base
+       onto a model that works. */
+    install([base({ id: 'kb-a' })])
+    docs = [doc({ id: 'd1', status: 'pending' }), doc({ id: 'd2', status: 'pending' })]
+    await store.openBase(base({ id: 'kb-a' }))
+
+    let release: () => void = () => {}
+    reindexBlocks = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const rebuilding = store.reindex(doc({ id: 'd1' }))
+    indexed.length = 0
+
+    const saving = store.write(base({ id: 'kb-a' }), { embedding_model: 'other-model' })
+    await vi.waitFor(() => expect(indexed.length).toBe(0))
+
+    release()
+    reindexBlocks = null
+    await rebuilding
+    await saving
+
+    /* The drain ran, after waiting out the rebuild rather than giving up on
+       finding it already running. `d1` is not in the list because the rebuild
+       took it to ready; `d2` is what was still queued, and skipping the drain
+       would leave this empty. */
+    expect(indexed).toEqual(['d2'])
+  })
+
   it('turns a mark off again', async () => {
     const fake = install([base({ id: 'a', pinned: true })])
     await store.load()

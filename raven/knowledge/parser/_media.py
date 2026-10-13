@@ -4,8 +4,10 @@
 whatever `/etc/mime.types` and its siblings happen to carry. On a developer's
 machine that is a full Apache table and every format here resolves. On a slim
 container image there is no such file at all, and the built-in table -- which
-predates OOXML -- answers `None` for `.docx`, `.pptx`, `.xlsx` and `.rtf`
-while still answering for `.doc` and `.ppt`.
+predates OOXML -- has no answer for `.docx`, `.pptx` or `.xlsx` while still
+answering for `.doc` and `.ppt`. `.rtf` moves with the interpreter: nothing on
+3.12, `text/rtf` on 3.13, and neither of those is the `application/rtf` the
+text parser claims.
 
 Both things that reach for a media type then go wrong, in opposite directions:
 
