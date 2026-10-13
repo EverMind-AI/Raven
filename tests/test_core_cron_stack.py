@@ -552,19 +552,43 @@ def test_a_new_cron_keeps_local_time_when_no_setting_was_written(monkeypatch, tm
     assert job.schedule.tz is None
 
 
+def test_the_zone_an_old_bootstrap_planted_leaves_new_crons_on_local_time(monkeypatch, tmp_path):
+    """Up to 0.1.12 onboarding wrote ``cron.defaultTimezone: "Asia/Shanghai"`` into
+    every config without the owner choosing it. Once loaded, as every entry point
+    does before it creates a job, an upgraded config must not move a new "every
+    day at 9" onto Shanghai's clock.
+    """
+    from raven.config.loader import _stamp_path, load_config
+    from raven.core.cron_stack import build_cron_service
+
+    config = tmp_path / "config.json"
+    monkeypatch.setattr("raven.home._current_config_path", config)
+    config.write_text(
+        json.dumps({"cron": {"defaultTimezone": "Asia/Shanghai", "notifyMissed": True}}), encoding="utf-8"
+    )
+    _stamp_path(config).write_text(json.dumps({"version": 12}), encoding="utf-8")
+    load_config(config)
+
+    service = build_cron_service(allowed_channels=None)
+    job = service.add_job("daily", CronSchedule(kind="cron", expr="0 9 * * *"), "daily")
+    assert job.schedule.tz is None
+
+
 def test_a_chosen_timezone_survives_a_config_save(monkeypatch, tmp_path):
     """``save_config`` drops every value equal to its schema default.
 
     That is lossless only while the default means what the value means. A
     chosen ``Asia/Shanghai`` must not read as "unset" after a save and move
-    new reminders onto the host's local time.
+    new reminders onto the host's local time. Chosen means written after the
+    planted copy was cleared, so the config is stamped past that migration.
     """
-    from raven.config.loader import load_config, save_config
+    from raven.config.loader import _stamp_path, load_config, save_config
     from raven.core.cron_stack import build_cron_service
 
     config = tmp_path / "config.json"
     monkeypatch.setattr("raven.home._current_config_path", config)
     config.write_text(json.dumps({"cron": {"defaultTimezone": "Asia/Shanghai"}}), encoding="utf-8")
+    _stamp_path(config).write_text(json.dumps({"version": 13}), encoding="utf-8")
     save_config(load_config(config), config)
 
     assert json.loads(config.read_text(encoding="utf-8"))["cron"] == {"defaultTimezone": "Asia/Shanghai"}

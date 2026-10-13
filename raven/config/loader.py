@@ -19,7 +19,7 @@ from raven.utils.atomic_io import atomic_replace, atomic_update
 # than on every load -- the watermark is what lets a user re-set by hand
 # whatever a migration cleared. Kept out of the schema on purpose: see
 # ``_stamp_path``.
-CURRENT_CONFIG_VERSION = 12
+CURRENT_CONFIG_VERSION = 13
 
 # The generation that introduced each run-once migration. Each is gated on its
 # own floor rather than on "is this config current", because those are not the
@@ -45,6 +45,7 @@ _EMBEDDING_SHAPE_MIGRATION = 9
 _RETIRED_DEEP_RESEARCH_MIGRATION = 10
 _SHIM_PIN_MIGRATION = 11
 _DISPLAY_ONLY_ADDRESS_MIGRATION = 12
+_PLANTED_CRON_TIMEZONE_MIGRATION = 13
 
 # The context window every pre-0.1.11 bootstrap wrote to disk verbatim: back
 # then ``AgentDefaults.context_window_tokens`` defaulted to this number and
@@ -52,6 +53,12 @@ _DISPLAY_ONLY_ADDRESS_MIGRATION = 12
 # window by design, so on an upgraded install this exact value silently caps
 # every model at 64k -- see ``_migrate_legacy_context_window``.
 LEGACY_CONTEXT_WINDOW_TOKENS = 65_536
+
+# The cron zone the same pre-0.1.13 bootstrap dump planted: ``CronConfig``
+# defaulted to it while nothing read the field. New cron jobs now capture the
+# field, so a planted copy would move every upgraded install's reminders onto
+# this zone -- see ``_migrate_planted_cron_timezone``.
+PLANTED_CRON_TIMEZONE = "Asia/Shanghai"
 
 # Single source of truth for Raven extension block keys.
 # Both _migrate_config (pop before base Config validates) and
@@ -394,6 +401,8 @@ def _persist_migrations(path: Path, from_version: int = 0) -> None:
                 changed = _migrate_retired_shim_pins(raw) or changed
             if from_version < _DISPLAY_ONLY_ADDRESS_MIGRATION:
                 changed = _migrate_display_only_addresses(raw) or changed
+            if from_version < _PLANTED_CRON_TIMEZONE_MIGRATION:
+                changed = _migrate_planted_cron_timezone(raw) or changed
         if not changed:
             return None, True
         return json.dumps(raw, indent=2, ensure_ascii=False), True
@@ -1176,6 +1185,36 @@ def _migrate_display_only_addresses(data: dict[str, Any], *, notify: bool = Fals
     return changed
 
 
+def _migrate_planted_cron_timezone(data: dict[str, Any], *, notify: bool = False) -> bool:
+    """Clear the cron zone an old bootstrap wrote. True when ``data`` changed.
+
+    Gated on its own floor for the reason ``_migrate_legacy_context_window``
+    gives: a planted ``Asia/Shanghai`` and a chosen one are the same string, so
+    running once clears what we planted and leaves any later choice standing.
+    Removing it costs no one a behaviour: until new cron jobs read the field,
+    no release scheduled anything by it. Silent, and False, when it changes
+    nothing, for the reason ``_migrate_retired_deep_research`` gives.
+    """
+    cron = data.get("cron")
+    if not isinstance(cron, dict):
+        return False
+    changed = False
+    for key in ("defaultTimezone", "default_timezone"):
+        if cron.get(key) != PLANTED_CRON_TIMEZONE:
+            continue
+        del cron[key]
+        changed = True
+        notice = (
+            f"Removed the leftover `cron.{key}: {PLANTED_CRON_TIMEZONE}` from your config (an old default, "
+            "written there by earlier versions, which never affected scheduling). New cron jobs without a "
+            "timezone keep following this machine's local time. Put the line back if you do want them on "
+            f"{PLANTED_CRON_TIMEZONE} time."
+        )
+        if notify and notice not in _migration_notices:
+            _migration_notices.append(notice)
+    return changed
+
+
 def _migrate_config(  # noqa: C901 (cc 45: pre-existing, above the ceiling)
     data: dict,
     *,
@@ -1276,6 +1315,8 @@ def _migrate_config(  # noqa: C901 (cc 45: pre-existing, above the ceiling)
         _migrate_retired_shim_pins(data, notify=True)
     if from_version < _DISPLAY_ONLY_ADDRESS_MIGRATION:
         _migrate_display_only_addresses(data, notify=True)
+    if from_version < _PLANTED_CRON_TIMEZONE_MIGRATION:
+        _migrate_planted_cron_timezone(data, notify=True)
 
     # Same for the session-title gate, which changed both name and unit:
     # ``min_input_chars`` counted code points, ``min_input_width`` counts
