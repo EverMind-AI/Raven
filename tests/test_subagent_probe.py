@@ -1593,6 +1593,34 @@ def test_only_resolvable_unconfigured_acp_presets_are_offered_for_verification(
     assert set(seen_paths) == {"/login/shell/bin"}
 
 
+def test_a_shim_preset_whose_agent_is_absent_is_not_offered_for_verification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A shim's command resolves on any machine; the agent it drives may not.
+
+    ``_probe_acp`` reads such a row as missing, so handshaking it at boot would
+    pay to learn what the free probe already said. Sharpest for a mirasim row,
+    whose command is Raven's own interpreter.
+    """
+    presets = [
+        {
+            "name": "Claude Code-Mirasim",
+            "preset": "mirasim_claude",
+            "kind": "acp",
+            "command": "/venv/bin/python -P -m raven.acp.mirasim --agent claude",
+        },
+        {"name": "Pi", "preset": "pi", "kind": "acp", "command": "npx -y pi-acp@0.0.33"},
+    ]
+    present = {"/venv/bin/python", "npx", "pi"}
+    monkeypatch.setattr(probe_mod, "third_party_subagent_presets", lambda: presets)
+    monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: f"/bin/{exe}" if exe in present else None)
+
+    assert [row.name for row in probe_mod._unconfigured_acp_preset_rows(set(), path=None)] == ["Pi"]
+    present.add("mirasim")
+    rows = probe_mod._unconfigured_acp_preset_rows(set(), path=None)
+    assert [row.name for row in rows] == ["Claude Code-Mirasim", "Pi"]
+
+
 async def test_a_hand_written_npx_row_is_not_held_to_a_shims_requirement(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

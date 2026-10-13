@@ -47,8 +47,8 @@ history.
   the artwork is unaltered in design or colour; only the embedded PNG is
   resampled to 96x96, which `cmp` will therefore not match for this file alone.
   Regenerate it with scripts/refresh_dmxapi_mark.py.
-- `MIT-lobe-icons.txt` - twelve of the fourteen sub-agent brand marks under
-  `ui-web/src/assets/agents/`, and `providers/vllm.svg`. Those twelve keep
+- `MIT-lobe-icons.txt` - fifteen of the seventeen sub-agent brand marks under
+  `ui-web/src/assets/agents/`, and `providers/vllm.svg`. Those fifteen keep
   upstream's filenames, so each is byte-identical to the one
   `@lobehub/icons-static-svg@1.95.0` ships under that name and the attribution is checkable
   with `cmp` rather than by trust. `raven.svg` is this project's own mark, drawn here and

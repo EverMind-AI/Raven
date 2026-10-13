@@ -34,6 +34,11 @@ The layers, outermost first:
 The opposite direction -- raven spawning somebody else's ACP agent -- already
 exists under :mod:`raven.acp_client` and is not this. The two share only the wire
 layer in :mod:`raven.acp_client.protocol`, which is imported rather than copied.
+
+:mod:`raven.acp.mirasim` is a second agent served over the same channel: not
+raven, but an agent mirasim runs, answered one ``mirasim ui-cli`` command at a
+time. It reuses :mod:`raven.acp.stdio` and :mod:`raven.acp.protocol` and none of
+the layers above them.
 """
 
 from raven.acp.stdio import MAX_FRAME_BYTES, claim_stdout, read_frames, write_frame

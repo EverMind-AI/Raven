@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from raven.agent.subagent.acp_registry_presets import ACP_REGISTRY_PRESETS
+from raven.agent.subagent.mirasim_presets import MIRASIM_PRESETS
 from raven.config.schema import ThirdPartyCliSubagentConfig
 from raven.rpc.dispatcher import Dispatcher
 from raven.rpc.errors import ConfigFieldReadonlyError, ConfigValidationError, SubagentNotReadyError
@@ -340,7 +341,7 @@ async def test_list_with_probe_false_skips_the_network_probe(config_path: Path, 
         "OpenClaw",
         "OpenCode",
         "Hermes Agent",
-    } | {p["name"] for p in ACP_REGISTRY_PRESETS.values()}
+    } | {p["name"] for p in ACP_REGISTRY_PRESETS.values()} | {p["name"] for p in MIRASIM_PRESETS.values()}
     # Their own group, not installed/uninstalled: there is nothing to install, and
     # a row that could only ever read "uninstalled" would say the opposite.
     assert by_name["Raven"]["group"] == "builtin"

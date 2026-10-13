@@ -64,6 +64,14 @@ describe('the agent catalogue', () => {
     expect(byOf(row({ preset: 'grok' }))).toBe('xAI')
   })
 
+  it("credits a mirasim row to its agent's maker and sends an absent one to mirasim", () => {
+    const r = row({ name: 'Claude Code-Mirasim', preset: 'mirasim_claude' })
+    expect(shortOf(r)).toBe('gui.agent.short_mirasim')
+    expect(byOf(r)).toBe('Anthropic')
+    expect(installOf(r)).toEqual({ site: 'mirasim.ai/download', cmd: undefined })
+    expect(byOf(row({ name: 'DSH-Mirasim', preset: 'mirasim_dsh' }))).toBe('')
+  })
+
   it('says nothing about a row nobody catalogued', () => {
     const r = row({ name: 'my-agent', preset: undefined })
     expect(shortOf(r)).toBe('')

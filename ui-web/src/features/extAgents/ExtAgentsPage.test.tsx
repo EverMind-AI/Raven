@@ -473,7 +473,7 @@ describe('connecting', () => {
       },
     })
     await mount()
-    expect(document.querySelectorAll('.extAgents-wcard').length).toBe(18)
+    expect(document.querySelectorAll('.extAgents-wcard').length).toBe(27)
     expect(document.querySelector('.extAgents-grid')!.getAttribute('aria-busy')).toBe('true')
     expect(document.querySelector('.extAgents-empty')).toBeNull()
     expect(document.querySelector('.extAgents-tn')).toBeNull()

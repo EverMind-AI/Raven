@@ -29,7 +29,12 @@ import type { JSX } from 'react'
    themes (page.css, `.agent-mark`), because recolouring a mark for a dark
    ground is a per-file guess: inverting a mono illustration gives its negative
    and rotating qoder's hue back lands on a different green. The attribute
-   stays as the file's fact, for the test that ties each tone to its file. */
+   stays as the file's fact, for the test that ties each tone to its file.
+
+   A `mirasim_` row is the agent of the same name run through mirasim, so it
+   wears that agent's mark; the row's name already says the route. DSH (the
+   DeepSeek Harness) publishes no mark of its own and wears DeepSeek's, whose
+   models it is built around. */
 const MARKS: Record<string, { file: string; tone?: 'mono' | 'hybrid' }> = {
   claude_code: { file: 'claudecode-color' },
   codebuddy: { file: 'codebuddy-color' },
@@ -38,6 +43,15 @@ const MARKS: Record<string, { file: string; tone?: 'mono' | 'hybrid' }> = {
   grok: { file: 'grok', tone: 'mono' },
   hermes: { file: 'hermesagent', tone: 'mono' },
   kimi_code: { file: 'kimi', tone: 'mono' },
+  mirasim_antigravity: { file: 'antigravity-color' },
+  mirasim_claude: { file: 'claudecode-color' },
+  mirasim_codex: { file: 'codex-color' },
+  mirasim_dsh: { file: 'deepseek-color' },
+  mirasim_grok: { file: 'grok', tone: 'mono' },
+  mirasim_kimi: { file: 'kimi', tone: 'mono' },
+  mirasim_pi: { file: 'pi', tone: 'mono' },
+  mirasim_qwen: { file: 'qwen-color' },
+  mirasim_zcode: { file: 'zai', tone: 'mono' },
   mirothinker: { file: 'miromind' },
   openclaw: { file: 'openclaw-color' },
   opencode: { file: 'opencode', tone: 'mono' },
@@ -54,7 +68,7 @@ const MARKS: Record<string, { file: string; tone?: 'mono' | 'hybrid' }> = {
    none, for the reason the table above is not keyed by name either.
 
    raven.svg is this project's own mark rather than upstream's, so the `cmp`
-   against @lobehub/icons-static-svg that settles provenance for the thirteen
+   against @lobehub/icons-static-svg that settles provenance for the files above
    does not apply to it and LICENSES/README.md counts it separately. It answers
    the theme from a prefers-color-scheme rule inside the file, the way
    miromind.svg does; the tile pins that scheme light, so on its light plate the

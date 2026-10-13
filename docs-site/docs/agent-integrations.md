@@ -180,11 +180,28 @@ your local installation has passed a live task.
 | `hermes` | `hermes acp --accept-hooks` | Native authentication; the flag accepts previously unseen shell hooks |
 | `openclaw` | `openclaw acp` | Its gateway and authentication; startup has a longer handshake allowance |
 | `mirothinker` | OpenAI-compatible HTTP | Endpoint/model/key; preset opts out of stateful replay |
+| `mirasim_<agent>` | Raven's own ACP adapter over `mirasim ui-cli` | mirasim installed, and the agent installed inside it; session MCP withheld via `sessionMcp: false` |
 
 GitHub Copilot, Qwen Code, CodeBuddy, Qoder, Grok Build, Kimi Code, and Pi also
 have preset entries. Adapter versions and exact commands are maintained in
 `raven/agent/subagent/presets.py` and `raven/agent/subagent/acp_registry_presets.py`.
 Prefer the installed version's preset instead of reconstructing its flags.
+
+The `mirasim_*` presets reach the agents mirasim runs, one
+row each: Claude Code, Codex, Kimi Code, Antigravity, Qwen Code, Grok Build, DSH,
+Pi and ZCode CLI, named `Claude Code-Mirasim` and so on. Such a row is the agent on
+the accounts and model routes set in mirasim, which is why it can sit beside the
+same agent's own preset. The adapter ships with Raven (`raven/acp/mirasim/`), so
+nothing is downloaded; the `{PYTHON}` in its command becomes Raven's interpreter
+when the row is written to config. Its model list is mirasim's for that agent,
+grouped into the agent's own models, the mirasim platform's, and your own keys; a
+session with no model chosen runs on mirasim's default for the agent. Each turn's
+reply arrives whole when the turn settles. What a turn stops to ask is put to
+Raven while the turn waits: a tool approval as a permission request, and a
+question -- Claude Code's `AskUserQuestion` when mirasim's `askTool` setting is
+on, or an MCP server's form -- as an elicitation, answered by you or by Raven's
+question autofill. A client without forms has the question skipped and named in
+the reply.
 
 Distinguish three claims when assessing compatibility:
 

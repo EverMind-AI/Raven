@@ -21,6 +21,7 @@ from types import SimpleNamespace
 import pytest
 import typer
 
+from raven.acp import stdio
 from raven.cli import acp_commands
 
 
@@ -143,7 +144,7 @@ class TestOpenStdin:
     @pytest.mark.parametrize("error", [38, 109])
     def test_windows_pipe_reader_reports_a_closed_pipe_as_eof(self, monkeypatch, error):
         monkeypatch.setattr(
-            acp_commands,
+            stdio,
             "_windows_stdin_api",
             lambda fd: (
                 lambda *args: pytest.fail("an empty closed pipe must not be read"),
@@ -152,7 +153,7 @@ class TestOpenStdin:
                 lambda: error,
             ),
         )
-        read = acp_commands._windows_stdin_read(SimpleNamespace(fileno=lambda: 0))
+        read = stdio._windows_stdin_read(SimpleNamespace(fileno=lambda: 0))
         assert read(64) == b""
 
     def test_windows_pipe_reader_reads_only_available_bytes(self, monkeypatch):
@@ -170,9 +171,9 @@ class TestOpenStdin:
             count._obj.value = size
             return True
 
-        monkeypatch.setattr(acp_commands, "_windows_stdin_api", lambda fd: (read_file, peek, 42, lambda: 0))
-        monkeypatch.setattr(acp_commands.time, "sleep", waits.append)
-        read = acp_commands._windows_stdin_read(SimpleNamespace(fileno=lambda: 0))
+        monkeypatch.setattr(stdio, "_windows_stdin_api", lambda fd: (read_file, peek, 42, lambda: 0))
+        monkeypatch.setattr(stdio.time, "sleep", waits.append)
+        read = stdio._windows_stdin_read(SimpleNamespace(fileno=lambda: 0))
 
         assert read(64) == b"hello"
         assert sizes == [5], "reading more than the pipe holds can block native imports"
@@ -184,16 +185,16 @@ class TestOpenStdin:
             available._obj.value = 5
             return phase != "peek"
 
-        monkeypatch.setattr(acp_commands, "_windows_stdin_api", lambda fd: (lambda *args: False, peek, 42, lambda: 5))
-        read = acp_commands._windows_stdin_read(SimpleNamespace(fileno=lambda: 0))
+        monkeypatch.setattr(stdio, "_windows_stdin_api", lambda fd: (lambda *args: False, peek, 42, lambda: 5))
+        read = stdio._windows_stdin_read(SimpleNamespace(fileno=lambda: 0))
 
         with pytest.raises(OSError) as caught:
             read(64)
         assert caught.value.errno == 5
 
     def test_windows_file_input_uses_the_stream_reader(self, monkeypatch):
-        monkeypatch.setattr(acp_commands, "_windows_stdin_api", lambda fd: None)
-        assert acp_commands._windows_stdin_read(SimpleNamespace(fileno=lambda: 0)) is None
+        monkeypatch.setattr(stdio, "_windows_stdin_api", lambda fd: None)
+        assert stdio._windows_stdin_read(SimpleNamespace(fileno=lambda: 0)) is None
 
     async def test_windows_pipes_deliver_frames_without_an_overlapped_transport(self, monkeypatch):
         read_fd, write_fd = os.pipe()

@@ -5672,6 +5672,10 @@
       "en": "Pi's coding agent",
       "zh": "Pi 的编码智能体"
     },
+    "gui.agent.short_mirasim": {
+      "en": "A coding agent run through mirasim",
+      "zh": "经 mirasim 运行的编码智能体"
+    },
     "gui.agent.by_raven": {
       "en": "Built into Raven",
       "zh": "Raven 自带"

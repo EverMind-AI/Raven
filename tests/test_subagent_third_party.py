@@ -38,6 +38,7 @@ from raven.agent.subagent.backends.env import login_shell_env, refresh_login_she
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent.manager import SPAWN_REFUSED_PREFIX, SubagentManager
 from raven.agent.subagent.mcp_grant import McpGrant
+from raven.agent.subagent.mirasim_presets import MIRASIM_PRESETS
 from raven.agent.subagent.presets import (
     THIRD_PARTY_SUBAGENT_PRESETS,
     third_party_subagent_preset,
@@ -2618,7 +2619,10 @@ def test_only_the_measured_non_isolating_preset_withholds_session_mcp() -> None:
     assert declared["OpenCode"] is False
     # And nothing else withholds. Asserted as "the only false" rather than by
     # listing every other preset, so adding one cannot quietly arrive as a false.
-    assert {name for name, isolates in declared.items() if not isolates} == {"OpenCode"}
+    # The mirasim rows are a measured exception of another kind: ui-cli takes no
+    # MCP servers at all, so withholding them is the honest declaration there.
+    mirasim = {row["name"] for row in MIRASIM_PRESETS.values()}
+    assert {name for name, isolates in declared.items() if not isolates} == {"OpenCode"} | mirasim
 
 
 def test_a_row_written_before_the_field_existed_still_gets_the_measured_answer() -> None:
@@ -2729,7 +2733,7 @@ def test_presets_are_valid_and_complete() -> None:
         "OpenClaw",
         "Hermes Agent",
         "OpenCode",
-    } | {p["name"] for p in ACP_REGISTRY_PRESETS.values()}
+    } | {p["name"] for p in ACP_REGISTRY_PRESETS.values()} | {p["name"] for p in MIRASIM_PRESETS.values()}
     # One row per key: a name collision would silently drop a preset here.
     assert len(presets) == len(THIRD_PARTY_SUBAGENT_PRESETS)
     # Every preset validates against the schema (discriminated union), so "Add
@@ -2743,14 +2747,16 @@ def test_presets_are_valid_and_complete() -> None:
     # One preset per agent, each already carrying that agent's transport: there is
     # no second preset for the same tool over a different one, because connecting
     # must not have to try two transports (and the cli test dispatch spends the
-    # user's own quota to answer a question the repo already knows).
+    # user's own quota to answer a question the repo already knows). A mirasim row
+    # is not that: it is the agent on mirasim's accounts and routes, a different
+    # thing to delegate to, and it speaks acp like the rest.
     assert {name for name, p in presets.items() if p["kind"] == "acp"} == {
         "Claude Code",
         "Codex",
         "OpenCode",
         "Hermes Agent",
         "OpenClaw",
-    } | {p["name"] for p in ACP_REGISTRY_PRESETS.values()}
+    } | {p["name"] for p in ACP_REGISTRY_PRESETS.values()} | {p["name"] for p in MIRASIM_PRESETS.values()}
     assert presets["MiroThinker"]["kind"] == "openai"
 
     for name, acp in ((n, p) for n, p in presets.items() if p["kind"] == "acp"):
@@ -2790,8 +2796,11 @@ def test_no_preset_downloads_the_agent_itself() -> None:
     It would also report the agent as installed when it is absent, because
     ``_probe_acp`` resolves ``argv[0]`` and ``npx`` always resolves; naming the
     local executable is what makes that probe tell the truth.
+
+    A shim raven ships is fetched by nobody: it is a raven module run on raven's
+    own interpreter, so its build is raven's and there is nothing to pin.
     """
-    from raven.agent.subagent.presets import SHIM_LAUNCHED_PRESETS
+    from raven.agent.subagent.presets import BUNDLED_SHIM_PRESETS, SHIM_LAUNCHED_PRESETS
 
     for preset in third_party_subagent_presets():
         if preset["kind"] != "acp":
@@ -2800,7 +2809,11 @@ def test_no_preset_downloads_the_agent_itself() -> None:
         argv = shlex.split(preset["command"])
         # Membership is keyed by provenance, not by the row's display name: the
         # set says what the package is, and a name is the user's to change.
-        if preset["preset"] in SHIM_LAUNCHED_PRESETS:
+        if preset["preset"] in BUNDLED_SHIM_PRESETS:
+            assert Path(argv[0]).is_absolute(), f"{name} runs {argv[0]!r}, not an interpreter"
+            assert argv[1:3] == ["-P", "-m"] and argv[3].startswith("raven."), f"{name} runs {argv[1:4]}"
+            assert not _VERSION_PIN.search(preset["command"]), name
+        elif preset["preset"] in SHIM_LAUNCHED_PRESETS:
             assert argv[0] in ("npx", "uvx"), f"{name} is shim-launched but runs {argv[0]!r}"
             package = _fetched_package(argv)
             assert _VERSION_PIN.search(package), f"{name} fetches {package!r} unpinned"

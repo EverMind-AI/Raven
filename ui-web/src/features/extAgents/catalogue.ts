@@ -32,6 +32,13 @@ interface CatalogueEntry {
 
 const OWN_BY = 'gui.agent.by_raven'
 
+/* A mirasim row is the agent of the same name run through mirasim: its maker is
+   that agent's, and what an absent one lacks is mirasim itself, which installs
+   from mirasim's own site rather than by one command. DSH names no maker it can
+   be held to, so it gets none. */
+const MIRASIM_SHORT = 'gui.agent.short_mirasim'
+const MIRASIM_SITE = 'mirasim.ai/download'
+
 const CATALOGUE: Record<string, CatalogueEntry> = {
   Raven: { short: 'gui.agent.short_raven', by: OWN_BY },
   'Raven-Code': { short: 'gui.agent.short_raven_code', by: OWN_BY },
@@ -91,6 +98,15 @@ const CATALOGUE: Record<string, CatalogueEntry> = {
     cmd: 'curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash',
   },
   pi: { short: 'gui.agent.short_pi', brand: 'Pi', site: 'pi.dev', cmd: 'npm install -g @earendil-works/pi-coding-agent' },
+  mirasim_claude: { short: MIRASIM_SHORT, brand: 'Anthropic', site: MIRASIM_SITE },
+  mirasim_codex: { short: MIRASIM_SHORT, brand: 'OpenAI', site: MIRASIM_SITE },
+  mirasim_kimi: { short: MIRASIM_SHORT, by: 'gui.agent.by_kimi_code', site: MIRASIM_SITE },
+  mirasim_antigravity: { short: MIRASIM_SHORT, brand: 'Google', site: MIRASIM_SITE },
+  mirasim_qwen: { short: MIRASIM_SHORT, by: 'gui.agent.by_qwen_code', site: MIRASIM_SITE },
+  mirasim_grok: { short: MIRASIM_SHORT, brand: 'xAI', site: MIRASIM_SITE },
+  mirasim_dsh: { short: MIRASIM_SHORT, site: MIRASIM_SITE },
+  mirasim_pi: { short: MIRASIM_SHORT, brand: 'Pi', site: MIRASIM_SITE },
+  mirasim_zcode: { short: MIRASIM_SHORT, brand: 'Z.ai', site: MIRASIM_SITE },
 }
 
 function entryOf(row: ExtAgentRow): CatalogueEntry | undefined {

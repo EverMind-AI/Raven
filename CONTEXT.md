@@ -2721,7 +2721,10 @@ unpinned `npx -y` would silently change which shim build a user runs. The **agen
 never fetched; its preset names the bare executable (`opencode acp`, `hermes acp`), so the
 build that answers is the one the user installed, at the version they chose, holding the login
 they already granted. `SHIM_LAUNCHED_PRESETS` declares that split per preset and a test holds
-every acp command to it.
+every acp command to it. A **bundled shim** (`BUNDLED_SHIM_PRESETS`) is one Raven ships rather
+than fetches: `raven.acp.mirasim` serves an agent mirasim runs, over `mirasim ui-cli`, launched
+on Raven's own interpreter (`{PYTHON}`, expanded when the preset is read), so there is no pin;
+the executable its probe asks after is `mirasim` (`SHIM_REQUIRED_EXECUTABLES`).
 _Avoid_: inferring it from the command shape. An agent whose own CLI happens to ship on npm
 (`opencode-ai`) is not a shim, and fetching it would run a second copy beside the user's
 install and report the agent as present on a machine that does not have it - `_probe_acp`

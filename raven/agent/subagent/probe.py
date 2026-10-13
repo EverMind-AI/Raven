@@ -32,6 +32,7 @@ from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.instances import InstanceRegistry
 from raven.agent.subagent.node_runtime import NodeTooOld, node_too_old
 from raven.agent.subagent.presets import (
+    SHIM_REQUIRED_EXECUTABLES,
     THIRD_PARTY_SUBAGENT_PRESETS,
     diagnose_hint_for,
     install_hint_for,
@@ -1367,9 +1368,12 @@ def _unconfigured_acp_preset_rows(configured: set[str], *, path: str | None) -> 
     Three filters, each for its own reason. A configured name is the registry
     half's already. A non-acp preset has no handshake to record -- an openai
     row's credential is settled by the free ``/models`` probe and a cli row is
-    never handshaken at all. And a command that does not resolve is one whose
-    verdict the free probe already reached for nothing: launching it to learn
-    the same thing is the cost this filter exists to refuse.
+    never handshaken at all. And a command that does not resolve -- or a shim
+    whose agent does not (``SHIM_REQUIRED_EXECUTABLES``), which ``_probe_acp``
+    reads as missing just the same -- is one whose verdict the free probe
+    already reached for nothing: launching it to learn the same thing is the
+    cost this filter exists to refuse. The shim half matters most where the
+    command is Raven's own interpreter, which resolves on every machine.
 
     ``path`` is the login shell's, captured once by the caller -- the same PATH
     ``_probe_acp`` resolves against. Reading this process's instead would answer
@@ -1389,8 +1393,12 @@ def _unconfigured_acp_preset_rows(configured: set[str], *, path: str | None) -> 
             argv = command_argv((preset.get("command") or "").strip())
         except ValueError:
             continue
-        if argv and shutil.which(argv[0], path=path or None) is not None:
-            here.append(preset)
+        if not argv or shutil.which(argv[0], path=path or None) is None:
+            continue
+        requirement = SHIM_REQUIRED_EXECUTABLES.get(str(preset.get("preset") or ""))
+        if requirement is not None and shutil.which(requirement[0], path=path or None) is None:
+            continue
+        here.append(preset)
     if not here:
         return []
     try:

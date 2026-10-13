@@ -1,11 +1,11 @@
 """Built-in third-party subagent presets.
 
-One preset per agent, and each one already carries the transport that agent is
-reached over. That choice is made *here*, in the repo, from a measurement -- not
-rediscovered on every user's machine at connect time. Whether hermes speaks ACP
-is a fact about hermes, and probing for it per install would mean trying a second
-transport whose own verification costs the user real tokens (the cli test
-dispatches a task) while telling them nothing new.
+One preset per agent and route, and each one already carries the transport that
+agent is reached over. That choice is made *here*, in the repo, from a
+measurement -- not rediscovered on every user's machine at connect time. Whether
+hermes speaks ACP is a fact about hermes, and probing for it per install would
+mean trying a second transport whose own verification costs the user real tokens
+(the cli test dispatches a task) while telling them nothing new.
 
 So connecting is: verify the one path this table names. If it fails, say why
 (adapter not installed, gateway not running, not logged in). There is no
@@ -51,6 +51,15 @@ well (:data:`SHIM_REQUIRED_EXECUTABLES`), so a machine without ``pi`` reads Pi a
 absent rather than as connectable. :data:`SHIM_LAUNCHED_PRESETS` is that split,
 declared; a test holds every command to it.
 
+One shim is not fetched at all, because Raven ships it: the agents mirasim runs
+(:mod:`raven.agent.subagent.mirasim_presets`) are reached through
+:mod:`raven.acp.mirasim`, launched on Raven's own interpreter, so its version is
+Raven's and there is nothing to pin (:data:`BUNDLED_SHIM_PRESETS`). Those rows
+are the one place an agent has a second preset. That is not a second transport
+for one install: a mirasim row is the agent as mirasim runs it, on mirasim's
+accounts and model routes, which is a different thing to delegate to and to pay
+for than the same agent on its own login.
+
 Every preset runs unattended, so none of them may stop to ask permission: raven
 answers whatever an ACP agent asks (``raven/acp_client/permissions.py``), and the
 two adapters that also take a launch-time "never ask" setting are configured with
@@ -77,6 +86,14 @@ from raven.agent.subagent.acp_registry_presets import (
     ACP_REGISTRY_PRESETS,
     ACP_REGISTRY_SHIM_PRESETS,
 )
+from raven.agent.subagent.mirasim_presets import (
+    MIRASIM_EXECUTABLE,
+    MIRASIM_INSTALL_HINT,
+    MIRASIM_PRESETS,
+    MIRASIM_SHIM_PRESETS,
+)
+from raven.agent.subagent.vendored_agents import _resolved_python
+from raven.utils.commands import resolve_subagent_command
 
 # Command templates for the cli transport, kept as reference rather than as
 # presets. Nothing reads them: they exist because the cli backend still runs
@@ -126,8 +143,8 @@ from raven.agent.subagent.acp_registry_presets import (
 _CLAUDE_ACP = "npx -y @agentclientprotocol/claude-agent-acp@0.81.1"
 _CODEX_ACP = "npx -y @agentclientprotocol/codex-acp@1.13.1"
 
-SHIM_LAUNCHED_PRESETS = frozenset({"claude_code", "codex"}) | ACP_REGISTRY_SHIM_PRESETS
-"""Presets whose command fetches an ACP shim rather than naming a local agent.
+SHIM_LAUNCHED_PRESETS = frozenset({"claude_code", "codex"}) | ACP_REGISTRY_SHIM_PRESETS | MIRASIM_SHIM_PRESETS
+"""Presets whose command starts an ACP shim rather than naming a local agent.
 
 Membership is a fact about the package, not a preference -- see the module
 docstring. Every other acp preset must name an executable the user installed.
@@ -137,19 +154,29 @@ depend on what the row is called, and a configured row's name is the user's to
 change (``test_provenance_survives_a_rename``).
 """
 
+BUNDLED_SHIM_PRESETS = MIRASIM_SHIM_PRESETS
+"""The shims Raven ships in its own package, which every other shim is fetched for.
+
+Their command runs a module of this package on the interpreter Raven runs on
+(``{PYTHON} -P -m raven.acp.mirasim``), so there is no package to fetch and no
+version to pin: the shim that answers is the Raven that launched it.
+"""
+
 SHIM_REQUIRED_EXECUTABLES: dict[str, tuple[str, str]] = {
     "pi": ("pi", "npm install -g @earendil-works/pi-coding-agent"),
+    **{key: (MIRASIM_EXECUTABLE, MIRASIM_INSTALL_HINT) for key in MIRASIM_SHIM_PRESETS},
 }
 """The local agent a shim drives, as ``(executable, install command)``, by preset key.
 
 A shim is plumbing in front of an agent the user installs themselves, and its
-``npx`` command resolves whether that agent is there or not. ``_probe_acp`` asks
-after this executable as well, so a machine without it reports the row absent
-with the install beside it, instead of offering a connect that fails a minute
-later inside the adapter with the same sentence. Listed only where the shim
-really does reach for a local install: ``pi-acp`` launches ``pi`` and fails
-with "executable not found" without it. The other two shims bring their agent
-along -- ``codex-acp`` ships it as its own binary, and ``claude-agent-acp``
+command resolves whether that agent is there or not -- ``npx`` always does, and
+a bundled shim's interpreter is Raven's own. ``_probe_acp`` asks after this
+executable as well, so a machine without it reports the row absent with the
+install beside it, instead of offering a connect that fails a minute later
+inside the adapter with the same sentence. Listed only where the shim really
+does reach for a local install: ``pi-acp`` launches ``pi`` and fails with
+"executable not found" without it, and every mirasim row runs ``mirasim``. The
+other two shims bring their agent along -- ``codex-acp`` ships it as its own binary, and ``claude-agent-acp``
 runs the CLI its ``@anthropic-ai/claude-agent-sdk`` pin carries as a
 per-platform optional dependency (read from the 0.66.0, 0.79.0 and 0.81.1
 packages on 2026-09-20/21/23), so a ``claude`` on PATH is neither needed nor the
@@ -256,7 +283,23 @@ THIRD_PARTY_SUBAGENT_PRESETS: dict[str, dict[str, Any]] = {
         "stateful": False,
     },
     **ACP_REGISTRY_PRESETS,
+    **MIRASIM_PRESETS,
 }
+
+
+def _launchable(entry: dict[str, Any]) -> dict[str, Any]:
+    """``entry`` with this install's interpreter written into a ``{PYTHON}`` command.
+
+    A bundled shim runs on the interpreter Raven itself runs on, which differs
+    per install and so cannot be spelled in the table. Expanded when a preset is
+    read -- the add path, the Test button and the agents page all read it here --
+    so the row written into config carries the absolute path, the same rule
+    ``raven agents new --register`` follows for a folder's manifest.
+    """
+    command = entry.get("command")
+    if not isinstance(command, str) or "{PYTHON}" not in command:
+        return entry
+    return {**entry, "command": resolve_subagent_command(command, python=_resolved_python(), subagent_dir="")}
 
 
 def _normalized(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -272,7 +315,7 @@ def _normalized(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     from raven.config.schema import SubagentsConfig
 
-    validated = SubagentsConfig(agents=entries)
+    validated = SubagentsConfig(agents=[_launchable(entry) for entry in entries])
     return [cfg.model_dump(by_alias=True) for cfg in validated.agents]
 
 
@@ -624,6 +667,7 @@ def shim_requirement_for(cfg: Any) -> tuple[str, str] | None:
 
 
 __all__ = [
+    "BUNDLED_SHIM_PRESETS",
     "SHIM_LAUNCHED_PRESETS",
     "SHIM_REQUIRED_EXECUTABLES",
     "LENDABLE_KEYS",
