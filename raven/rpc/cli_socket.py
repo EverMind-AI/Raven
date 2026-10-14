@@ -32,7 +32,7 @@ def register_cli(
 
     ``console_hosts`` may be a function that finds them, called on the first
     :func:`console_hosts` rather than here, so a host that never runs a console
-    command never imports the modules it would name.
+    command never makes the imports the finding does.
     """
     global _commands_module, _console_hosts, _find_console_hosts
     _commands_module = commands_module

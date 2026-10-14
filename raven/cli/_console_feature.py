@@ -1,10 +1,11 @@
 """Register the CLI's furniture into the rpc console socket.
 
 The discovery lived in ``rpc/_console_injection`` when rpc could import the
-cli; under the surfaces law the cli enumerates ITSELF and hands the results
-over. Discovered rather than listed, for the reason the original recorded:
-the hand-kept list drifted to 12 of 22 modules, and a command module outside
-it printed past the TUI.
+cli; under the surfaces law the cli enumerates ITSELF and hands over the
+results, or, where they can wait for the first console command, the
+enumerator. Discovered rather than listed, for the reason the original
+recorded: the hand-kept list drifted to 12 of 22 modules, and a command module
+outside it printed past the TUI.
 """
 
 from __future__ import annotations
@@ -36,8 +37,8 @@ def register_console_feature() -> None:
     from raven.rpc import cli_socket
 
     # Finding the hosts imports every CLI module, and one of them asks the terminal
-    # for its colours as it is imported. A host with no terminal to ask, such as the
-    # gateway `raven web` detaches, finds them on its first console command; one
-    # that shares a terminal, as the TUI's host does with the Ink screen, still
-    # asks now, before the session starts.
+    # for its colours as it is imported. Where the terminal cannot be asked -- none,
+    # as for the gateway `raven web` detaches, or Windows, SSH, screen or tmux, CI --
+    # they are found on the first console command; where it can, as from the TUI's
+    # host, the question is asked now, before the Ink screen starts.
     cli_socket.register_cli(commands, _console_host_modules() if _can_probe() else _console_host_modules)

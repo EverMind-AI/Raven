@@ -762,18 +762,19 @@ def test_a_reset_drops_a_finder_that_never_ran(unregistered_socket) -> None:
 
 
 @pytest.mark.parametrize(
-    ("terminal", "at_registration"),
+    ("askable", "at_registration"),
     [(False, []), (True, ["find"])],
-    ids=["no terminal", "a terminal"],
+    ids=["the terminal cannot be asked", "the terminal can be asked"],
 )
 def test_the_hosts_are_found_at_registration_only_where_the_terminal_can_be_asked(
-    unregistered_socket, monkeypatch, terminal: bool, at_registration: list[str]
+    unregistered_socket, monkeypatch, askable: bool, at_registration: list[str]
 ) -> None:
     """Finding the hosts imports every CLI module, and one of them asks the terminal
-    for its colours as it is imported. A host with no terminal to ask, such as the
-    gateway `raven web` detaches, finds them on its first console command; one that
-    shares a terminal, as the TUI's host does with the Ink screen, asks before the
-    session starts."""
+    for its colours as it is imported. Where the terminal cannot be asked -- none, as
+    for the gateway `raven web` detaches, or Windows, SSH, screen or tmux, CI -- they
+    are found on the first console command; where it can, as from the TUI's host
+    before the Ink screen starts, at registration. The query itself is stubbed: a
+    case may be the first to import the module that makes it."""
     from raven.cli import _console_feature, _theme
     from raven.cli import commands as commands_module
 
@@ -785,7 +786,8 @@ def test_the_hosts_are_found_at_registration_only_where_the_terminal_can_be_aske
         return find()
 
     monkeypatch.setattr(_console_feature, "_console_host_modules", counted)
-    monkeypatch.setattr(_theme, "_can_probe", lambda: terminal)
+    monkeypatch.setattr(_theme, "_can_probe", lambda: askable)
+    monkeypatch.setattr(_theme, "_probe_osc11", lambda: None)
 
     _console_feature.register_console_feature()
     assert finds == at_registration
@@ -795,20 +797,25 @@ def test_the_hosts_are_found_at_registration_only_where_the_terminal_can_be_aske
 
 
 @pytest.mark.slow
-def test_a_host_without_a_terminal_imports_no_host_module_until_a_console_asks(tmp_path) -> None:
-    """Checked in a fresh interpreter whose stdin and stdout are not a terminal."""
+def test_where_the_terminal_cannot_be_asked_the_finder_imports_on_the_first_lookup(tmp_path) -> None:
+    """Checked in a fresh interpreter whose stdin and stdout are not a terminal. The
+    modules counted are the ones only the finder imports: the rest of the CLI came in
+    with the command table, which every host has imported by then."""
     import subprocess
     import sys
 
     probe = (
-        "import sys\n"
-        "import raven.cli.commands\n"
-        "from raven.cli._console_feature import register_console_feature\n"
+        "import pkgutil, sys\n"
+        "import raven.cli, raven.cli.commands\n"
+        "from raven.cli import _console_feature, _theme\n"
         "from raven.rpc import cli_socket\n"
-        "register_console_feature()\n"
-        "print('after registration:', 'raven.cli._styles' in sys.modules)\n"
+        "every = {f'raven.cli.{m.name}' for m in pkgutil.iter_modules(raven.cli.__path__) if not m.name.startswith('__')}\n"
+        "finders = every - set(sys.modules)\n"
+        "print('only the finder imports the colour query:', 'raven.cli._styles' in finders)\n"
+        "_console_feature.register_console_feature()\n"
+        "print('imported at registration:', sorted(finders & set(sys.modules)))\n"
         "hosts = cli_socket.console_hosts()\n"
-        "print('after the first lookup:', 'raven.cli._styles' in sys.modules, len(hosts) > 0)\n"
+        "print('left after the first lookup:', sorted(finders - set(sys.modules)), len(hosts) > 0)\n"
     )
     done = subprocess.run(
         [sys.executable, "-P", "-c", probe],
@@ -819,5 +826,6 @@ def test_a_host_without_a_terminal_imports_no_host_module_until_a_console_asks(t
         timeout=120,
     )
 
-    assert "after registration: False" in done.stdout, done.stdout + done.stderr
-    assert "after the first lookup: True True" in done.stdout, done.stdout + done.stderr
+    assert "only the finder imports the colour query: True" in done.stdout, done.stdout + done.stderr
+    assert "imported at registration: []" in done.stdout, done.stdout + done.stderr
+    assert "left after the first lookup: [] True" in done.stdout, done.stdout + done.stderr
