@@ -89,20 +89,34 @@ def test_forget_removes_the_record_and_is_quiet_about_one_already_gone() -> None
     assert remote_runs.pending() == []
 
 
-def test_the_tracker_keeps_the_prompt_s_id_and_the_frames_read_current_and_removes_the_record_when_the_turn_ends() -> (
+def test_the_tracker_keeps_the_prompt_s_id_and_the_frames_read_before_it_and_removes_the_record_when_the_turn_ends() -> (
     None
 ):
     tracker = remote_runs.Tracker(_run(prompt_id=0, next_id=1))
     assert remote_runs.pending()[0].prompt_id == 0
 
-    tracker.prompt_sent(5)
     tracker.received(3)
     tracker.received(2)  # a frame counted twice is not a step back
+    tracker.prompt_sent(5)
+    tracker.received(9)  # the turn's own frames are the pick-up's to read again: the record stays at the prompt
 
     (kept,) = remote_runs.pending()
     assert (kept.prompt_id, kept.next_id, kept.received) == (5, 6, 3)
     tracker.close(keep=False)
     assert remote_runs.pending() == [] and tracker.kept is False
+
+
+def test_a_dispatch_s_record_is_forgotten_by_the_manager_s_id_with_its_claim() -> None:
+    """The manager's end of a run that returned: the record the backend left with the reply goes once the announce was taken."""
+    remote_runs.record(_run(task_id="d1"))
+    remote_runs.record(_run("other", task_id="d2"))
+    assert remote_runs.claim("echo@box-1a2b3c4d")
+
+    assert remote_runs.forget_dispatch("d1") is True
+    assert remote_runs.forget_dispatch("d1") is False, "nothing is left of it"
+
+    assert [run.task for run in remote_runs.pending()] == ["other"]
+    assert not remote_runs.claim_path("echo@box-1a2b3c4d").exists()
 
 
 def test_a_tracker_closed_to_keep_leaves_the_record_for_the_next_start() -> None:
@@ -114,7 +128,7 @@ def test_a_tracker_closed_to_keep_leaves_the_record_for_the_next_start() -> None
 
 
 def test_a_record_that_cannot_be_updated_is_named_not_raised(logs, monkeypatch) -> None:
-    tracker = remote_runs.Tracker(_run())
+    tracker = remote_runs.Tracker(_run(prompt_id=0))
 
     def refuse(run):
         raise OSError("disk full")

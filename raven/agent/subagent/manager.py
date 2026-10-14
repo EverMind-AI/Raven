@@ -1801,6 +1801,10 @@ class SubagentManager:
         # the same question.
         cancelled = False
         left = False
+        # Whether the reply reached the conversation: only a refused announce
+        # of a run that returned says no, and the run's record on its machine
+        # then stays for the next start to report.
+        announced = True
         # The record's own id, not its directory's name: the artifacts are a
         # filename prefix in the shared node root now, so the directory names
         # the namespace rather than the call.
@@ -1865,6 +1869,10 @@ class SubagentManager:
                             ),
                             **optional_keyword(backend, "authored_task", origin.get("authored_task")),
                             **({"mcp_grant": mcp_grant} if mcp_grant is not None else {}),
+                            # The reply is announced here, below: a backend that
+                            # ran it on a machine leaves the run's record until
+                            # then, rather than removing it as it returns.
+                            **optional_keyword(backend, "reported_by_caller", True),
                             **state_kwargs,
                         )
                 if (failure := llm_error_reply(final_result)) is not None:
@@ -1878,7 +1886,7 @@ class SubagentManager:
                     origin, task_id, task_summary, "completed", call_id=call_id, ended_at=int(time.time() * 1000)
                 )
                 record.finish(status="completed", output=final_result, activity=did)
-                await self._announce_result(
+                taken = await self._announce_result(
                     task_id,
                     task_summary,
                     task,
@@ -1888,6 +1896,7 @@ class SubagentManager:
                     record_path=str(record.file("out.md")),
                     activity=did,
                 )
+                announced = taken is not False
             except asyncio.CancelledError:
                 cancelled = True
                 reason = self._cancel_reasons.pop(task_id, UNEXPLAINED_CANCEL)
@@ -1957,6 +1966,15 @@ class SubagentManager:
                 # machine: its claim stays open for the process that picks it up.
                 if not left:
                     await self._finalize_node_claim(session_key, record)
+                    # The run's record on its machine, when the backend left
+                    # one with the reply: gone once the announce was taken. An
+                    # announce the draining scheduler refused leaves it, with
+                    # what the announce after a restart needs, for the next
+                    # start to report (raven.agent.subagent.resume_remote).
+                    if announced:
+                        remote_runs.forget_dispatch(task_id)
+                    else:
+                        remote_runs.annotate(task_id, origin=origin, task_summary=task_summary)
                 # Not for a cancelled call: this poller would be created after
                 # the cancellation sweep took its snapshot, so nothing could
                 # reap it (see cancel_all / cancel_by_session).

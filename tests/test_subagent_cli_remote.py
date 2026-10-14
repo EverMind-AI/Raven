@@ -815,6 +815,59 @@ async def test_a_command_that_ends_here_leaves_no_record(box, tmp_path, monkeypa
     assert head == "hi" and remote_runs.pending() == []
 
 
+async def test_a_reply_the_caller_reports_keeps_the_command_s_record_and_a_host_that_stops_before_the_announce_reads_it_again(
+    box, tmp_path, monkeypatch
+):
+    """The manager announces the output after the backend returns it: the record stays until then, and the next start reads the whole output again."""
+    from raven.acp_client import remote_runs
+    from raven.agent.subagent import resume_remote
+    from raven.agent.subagent.history import SpawnRecord
+    from tests.test_subagent_acp_remote import _Manager, _Registry
+
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    backend = build_third_party_backend(cli_config("sh -c 'echo done; cat'"))
+
+    head, _ = _split(
+        await backend.run(
+            "hi",
+            task_id="t1",
+            workspace=tmp_path,
+            executor=None,
+            session_key="tui:s1",
+            instance="kept",
+            reported_by_caller=True,
+        )
+    )
+
+    assert head == "done\nhi"
+    (run,) = remote_runs.pending()
+    assert (run.kind, run.task_id, run.received) == ("cli", "t1", 0), (
+        "the record outlives the output, for the manager to forget"
+    )
+
+    # This computer stops between the output and its announce.
+    await box.nodes.close_all()
+    session_dir = tmp_path / "sessions" / "s1"
+    meta = {
+        "call_id": "n1",
+        "session_key": "tui:s1",
+        "agent": backend.name,
+        "handle": "kept",
+        "task_summary": "say done",
+    }
+    SpawnRecord.open(session_dir, task_id="t1", task="hi", meta=meta, node_id="n1")
+    manager = _Manager(backend, session_dir)
+    monkeypatch.setattr(resume_remote, "get_registry", lambda: _Registry())
+
+    assert await asyncio.wait_for(resume_remote.resume_remote_runs(manager), timeout=30) == 1
+
+    (said,) = manager.announced
+    assert said["status"] == "ok" and said["result"].split("\n\n[raven]")[0] == "done\nhi", (
+        "the whole output, read again"
+    )
+    assert remote_runs.pending() == []
+
+
 class _PickUpLink:
     """A node pool with one task, whose attach hands over ``endpoint``: what a pick-up reads a left run off."""
 
