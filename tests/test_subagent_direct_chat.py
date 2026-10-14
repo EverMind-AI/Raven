@@ -40,6 +40,7 @@ def _direct_chat_manager(tmp_path, monkeypatch, *, fail: bool = False):
         model=None,
         mode=None,
         authored_task=None,
+        reported_by_caller=False,
         history=None,
         on_messages=None,
         on_delta=None,
