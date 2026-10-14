@@ -1,0 +1,88 @@
+/* The export wizard's own stylesheet, under the domain's `export-` prefix: the
+   header with the step strip, the scrolling page, the foot, and the two pages.
+   The dialog's frame (#exportModal) is the page's and is styled in
+   styles/page.css. Imported by ExportApp.tsx and inlined after styles/page.css
+   by ui-web/build.py. The step strip reads like the first-run wizard's
+   (features/onboard/styles.css) without borrowing its classes. */
+
+.export-app { flex: 1; min-height: 0; display: flex; flex-direction: column; color: var(--text);
+  font-family: var(--sans); font-size: 14px; line-height: 1.55; }
+
+.export-top { flex: none; display: flex; align-items: center; gap: 14px; padding: 14px 16px 12px 22px;
+  border-bottom: 1px solid var(--line-soft); }
+.export-title { flex: none; margin: 0; font-size: 15px; font-weight: 600; }
+.export-steps { flex: 1; min-width: 0; display: flex; align-items: center; margin: 0; padding: 0; list-style: none; }
+.export-step { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--faint); white-space: nowrap; }
+.export-step + .export-step { flex: 1; min-width: 0; }
+.export-step + .export-step::before { content: ""; flex: 1; min-width: 24px; height: 2px; border-radius: 2px;
+  margin: 0 10px 0 8px; background: var(--line); }
+.export-step[data-state="done"] + .export-step::before { background: var(--moss); }
+.export-dot { width: 18px; height: 18px; border-radius: 99px; border: 1.5px solid var(--line); display: grid;
+  place-items: center; font-size: 10px; font-weight: 700; color: var(--faint); background: var(--paper); }
+.export-step[data-state="current"] { color: var(--text); font-weight: 600; }
+.export-step[data-state="current"] .export-dot { border-color: var(--amber); background: var(--amber-dp); color: var(--gold); }
+.export-step[data-state="done"] { color: var(--text); }
+.export-step[data-state="done"] .export-dot { border-color: var(--moss); color: var(--moss); }
+.export-x { flex: none; width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: 7px;
+  background: none; color: var(--muted); cursor: pointer; }
+.export-x:hover { color: var(--text); background: var(--hover); }
+.export-x:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+
+.export-main { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 22px 20px; }
+.export-empty { margin: 28px 0; text-align: center; color: var(--faint); }
+.export-hint { margin: 0 0 10px; color: var(--muted); font-size: 13px; }
+
+.export-foot { flex: none; display: flex; align-items: center; gap: 10px; padding: 12px 22px;
+  border-top: 1px solid var(--line); background: var(--surface); }
+.export-grow { flex: 1; min-width: 0; }
+.export-err { color: var(--clay); font-size: 13px; }
+
+.export-btn { font: inherit; font-size: 13.5px; padding: 7px 18px; border-radius: 8px; cursor: pointer; }
+.export-btn:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+.export-btn:disabled { opacity: .4; cursor: not-allowed; }
+.export-primary { border: 1px solid var(--amber); background: var(--amber); color: var(--ink-on-accent); font-weight: 600; }
+.export-primary:not(:disabled):hover { filter: brightness(1.05); }
+.export-ghost { border: 1px solid var(--line); background: none; color: var(--muted); }
+.export-ghost:not(:disabled):hover { color: var(--text); border-color: var(--amber); }
+
+/* the turn picker */
+.export-turns { display: flex; flex-direction: column; }
+.export-all, .export-turn input { flex: none; margin: 0; accent-color: var(--amber); }
+.export-head { display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-bottom: 1px solid var(--line-soft);
+  font-weight: 600; cursor: pointer; }
+.export-count { color: var(--muted); font-size: 12.5px; font-weight: 400; }
+.export-list { margin: 0; padding: 0; list-style: none; }
+.export-turn { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
+.export-turn:hover { background: var(--hover); }
+.export-turn[data-off] { cursor: default; color: var(--faint); }
+.export-turn[data-off]:hover { background: none; }
+.export-turn[data-bad] { background: color-mix(in oklab, var(--clay) 7%, transparent); }
+.export-num { flex: none; min-width: 52px; font-weight: 600; }
+.export-when { flex: none; color: var(--muted); font-family: var(--mono); font-size: 12px; }
+.export-preview { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.export-tag { flex: none; font-size: 11.5px; padding: 1px 7px; border-radius: 99px; background: var(--raised); color: var(--muted); }
+.export-why { flex: none; font-size: 12px; color: var(--clay); }
+
+/* the export page */
+.export-page { display: flex; flex-direction: column; gap: 14px; }
+.export-field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }
+.export-name { font: inherit; font-size: 14px; color: var(--text); padding: 8px 10px; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--paper); }
+.export-name:focus { outline: none; border-color: var(--amber); }
+.export-name:disabled { color: var(--muted); background: var(--surface); }
+.export-warn { padding: 10px 12px; border: 1px solid color-mix(in oklab, var(--clay) 45%, transparent);
+  border-radius: 8px; background: color-mix(in oklab, var(--clay) 8%, transparent); color: var(--clay);
+  font-size: 13px; font-weight: 600; }
+.export-page > .export-count { margin: 0; }
+.export-state { display: flex; align-items: center; margin: 0; color: var(--muted); }
+.export-state[data-bad] { color: var(--clay); }
+.export-progress { display: flex; flex-direction: column; gap: 8px; }
+.export-lost { display: flex; align-items: center; gap: 10px; margin: 0; color: var(--clay); font-size: 13px; }
+.export-spin { display: inline-block; width: 11px; height: 11px; margin-right: 8px; flex: none;
+  border: 1.5px solid var(--line); border-top-color: var(--amber); border-radius: 50%;
+  animation: export-turn .8s linear infinite; }
+@keyframes export-turn { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .export-spin { animation: none; } }
+.export-done { display: flex; flex-direction: column; gap: 6px; }
+.export-done p { margin: 0; color: var(--moss); }
+.export-download { align-self: flex-start; color: var(--amber); font-size: 13px; }

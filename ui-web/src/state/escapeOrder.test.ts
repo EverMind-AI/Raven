@@ -11,9 +11,10 @@
  *
  * The array below is that expectation, plus the desk's own layer added after
  * C11 (features/desk/store.ts's registered `desk.escapeOpen()`, for its own
- * fullscreen -> node -> pane -> collapse retreat). What is asserted against
+ * fullscreen -> node -> pane -> collapse retreat) and the export wizard's
+ * dialog (#exportVeil). What is asserted against
  * it is now the table, every entry's own predicate and action against a
- * fixture page, and all ninety ordered pairs of layers. The capture-phase
+ * fixture page, and all hundred and four ordered pairs of layers. The capture-phase
  * handlers the open sheets register run before the table. An approval
  * consumes Escape after denying, leaving the running turn alone until a later
  * Escape: that is pinned here with the real sheets.
@@ -53,6 +54,7 @@ import type { ComposerSource } from '../features/composer/types'
 const LAYER_IDS = [
   '.lightbox',
   '#veil',
+  '#exportVeil',
   '#detail',
   '#extAgentsPage',
   '#connectionsPage',
@@ -70,8 +72,8 @@ const LAYER_IDS = [
 const source = (path: string): string => readFileSync(path, 'utf8') as string
 
 /* Every element the table reads or clicks, in a page shaped like the real one:
-   the carriers of data-open, the two cancel buttons the two sheets are answered
-   through, the new-task button Cmd+N clicks, and the rail's three pieces the
+   the carriers of data-open, the three cancel buttons the three sheets are
+   answered through, the new-task button Cmd+N clicks, and the rail's three pieces the
    two rail shortcuts write. */
 const PAGE = [
   '<div class="app" data-rail="on">',
@@ -89,6 +91,7 @@ const PAGE = [
   '<section class="page" id="knowledgePage" data-open="false"></section>',
   '<aside class="detail" id="detail" data-open="false"><div class="body" id="dBody"></div></aside>',
   '<div class="veil setveil" id="setVeil" data-open="false"><div id="setModal"></div></div>',
+  '<div class="veil" id="exportVeil" data-open="false"><button id="exportClose"></button></div>',
   '<div class="veil" id="veil" data-open="false"><button id="cfNo"></button></div>',
   '</div>',
   '<button id="railShow"></button>',
@@ -108,7 +111,7 @@ const spies = {
   stop: vi.fn(),
 }
 
-/* Which button was pressed on the two sheets that are answered by a click. */
+/* Which button was pressed on the sheets that are answered by a click. */
 let cancelled: string[] = []
 
 const flag = (id: string) => (): void => { document.getElementById(id)!.dataset.open = 'true' }
@@ -129,6 +132,7 @@ const LAYERS: Record<string, { up: () => void; taken: () => boolean }> = {
     taken: () => !document.querySelector('.lightbox'),
   },
   '#veil': { up: flag('veil'), taken: () => cancelled.includes('cfNo') },
+  '#exportVeil': { up: flag('exportVeil'), taken: () => cancelled.includes('exportClose') },
   '#detail': { up: flag('detail'), taken: lowered('detail') },
   '#extAgentsPage': { up: flag('extAgentsPage'), taken: called(spies.extAgentsClose) },
   '#connectionsPage': { up: flag('connectionsPage'), taken: called(spies.pageShow) },
@@ -177,6 +181,7 @@ beforeEach(() => {
   document.body.innerHTML = PAGE
   cancelled = []
   document.getElementById('cfNo')!.onclick = () => { cancelled.push('cfNo') }
+  document.getElementById('exportClose')!.onclick = () => { cancelled.push('exportClose') }
   for (const spy of Object.values(spies)) spy.mockClear()
   /* Each layer's own close, stood in for one export at a time: what is under
      test is which one the key reaches, not what any of them does. */
@@ -219,11 +224,11 @@ const key = (k: string, over: Partial<KeyboardEventInit> = {}): KeyboardEvent =>
 }
 
 describe('the Escape priority order', () => {
-  it('is the order the table reaches the fourteen layers in', () => {
+  it('is the order the table reaches the fifteen layers in', () => {
     expect(escapeOrder.ESCAPE_ORDER.map((layer) => layer.id)).toEqual([...LAYER_IDS])
   })
 
-  it('has no fourteenth entry, and every entry is in the fixture', () => {
+  it('has no sixteenth entry, and every entry is in the fixture', () => {
     expect(escapeOrder.ESCAPE_ORDER).toHaveLength(LAYER_IDS.length)
     expect(Object.keys(LAYERS)).toEqual([...LAYER_IDS])
   })
@@ -255,8 +260,8 @@ describe('the Escape priority order', () => {
   const pairs = LAYER_IDS.flatMap((first, i) =>
     LAYER_IDS.slice(i + 1).filter((second) => !shared(first, second)).map((second) => ({ first, second })))
 
-  it('has ninety pairs to answer for, every pair but the one that shares a close', () => {
-    expect(pairs).toHaveLength(90)
+  it('has a hundred and four pairs to answer for, every pair but the one that shares a close', () => {
+    expect(pairs).toHaveLength(104)
   })
 
   it('reaches the two pages that share a close in table order', () => {

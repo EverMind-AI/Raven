@@ -215,6 +215,30 @@ function SettingsModal(): JSX.Element {
   )
 }
 
+/* The export wizard's dialog (features/export/): the frame only -- the veil and
+   the box -- with #exportBody for the island to draw the wizard into. The
+   island raises the veil and owns the close button, which is what Escape
+   clicks (state/escapeOrder.ts). A click on the scrim does nothing: the
+   wizard holds the reader's choices and may hold a running job, and losing
+   both to a stray click costs more than one way fewer to close it. */
+function ExportVeil(): JSX.Element {
+  useSyncExternalStore(lang.subscribe, lang.get)
+  return (
+    <div className="veil" id="exportVeil" data-open="false">
+      <div
+        className="chrome-export-modal"
+        id="exportModal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={lang.attr('gui.export.dialog')}
+        tabIndex={-1}
+      >
+        <div className="chrome-export-body" id="exportBody" />
+      </div>
+    </div>
+  )
+}
+
 /* The context menu's rows, in the host they were raised in (state/menu.ts). The
    flag and the position are the store's, because they belong to div#menu, which
    this file renders as an empty region; what is here is the row list the writer
@@ -348,6 +372,7 @@ export function App(): JSX.Element {
       {PAGES.map((page) => <ModulePage key={page.id} page={page} />)}
       <DetailPanel />
       <SettingsModal />
+      <ExportVeil />
       <ConfirmSheet />
       <div className="menu" id="menu" data-open="false" role="menu" />
       <div className="toasts" id="toasts" aria-live="polite" />

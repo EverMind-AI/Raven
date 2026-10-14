@@ -398,7 +398,7 @@ vocabulary a card is the drawer's content.
 
 **Escape order**:
 The ordered table in `src/state/escapeOrder.ts` (`ESCAPE_ORDER`, of
-`EscapeLayer`): eleven layers that can be on screen at once, and which one an
+`EscapeLayer`): fifteen layers that can be on screen at once, and which one an
 Escape takes back. A table rather than a
 stack, because each entry answers "am I open" when the key arrives -- the
 channel dialog opens over the entries page and closes first, while the shared
@@ -407,6 +407,19 @@ docked sheets register run ahead of it. Approval and credential cards consume
 Escape after denying or skipping, leaving the turn running. A later Escape
 reaches the normal close order and stops a running turn only when no higher
 layer is open.
+
+**Export Wizard**:
+The dialog `#exportVeil` holds (`src/App.tsx` renders the veil, the box and the
+empty `#exportBody`), drawn by `features/export/`. A flow is a sequence of
+pages -- the export is the turn picker, then the export page -- and the picker drops out when the conversation has a single
+finished turn. The export runs as a gateway job (`trajectory.export`) the page
+follows through `trajectory.export_status` and downloads with the job's link.
+The close button and Escape both cancel, asking first while a job is starting
+or running; every answer is checked against the wizard's `epoch`, so a job
+whose start lands after its wizard closed is cancelled on arrival, and a status
+query that fails keeps the same job and asks again rather than starting
+another. `exportable` is the one place that says whether the conversation on
+screen may be exported.
 
 **Menu**:
 `src/state/menu.ts` plus `<ContextMenu/>` (`src/App.tsx`) -- the one context
