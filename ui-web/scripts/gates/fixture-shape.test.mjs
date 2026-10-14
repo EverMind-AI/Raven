@@ -180,6 +180,11 @@ const UNSENT = new Set([
   // done the moment it is asked for, and an error is a failed export's alone.
   'trajectory.list.next_cursor', 'trajectory.list.index_state.failure', 'trajectory.changes.index_state.failure',
   'trajectory.block.next_cursor', 'trajectory.block.reason', 'trajectory.export_status.error',
+  // bugreport.status: 5 -- probed while the demo report waits for decisions:
+  // nothing has failed, been frozen, landed or uploaded yet, and the history
+  // read cleanly, so it has no warning to give.
+  'bugreport.status.error', 'bugreport.status.history.warning', 'bugreport.status.receipt',
+  'bugreport.status.record_dir', 'bugreport.status.summary',
   // cron.list: 4
   'cron.list.jobs[].at_ms', 'cron.list.jobs[].every_ms', 'cron.list.jobs[].last_error', 'cron.list.jobs[].tz',
   // cron.save: 4

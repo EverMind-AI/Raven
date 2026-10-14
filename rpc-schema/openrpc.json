@@ -11114,6 +11114,448 @@
           }
         }
       }
+    },
+    {
+      "name": "bugreport.start",
+      "summary": "Validate the problem fields and the turn selection, then start collecting a bug report; an invalid selection is refused with invalid_params naming each turn.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "The session the turns belong to."
+        },
+        {
+          "name": "trace_ids",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "description": "The trace ids of the main-line turns to report."
+        },
+        {
+          "name": "problem",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/BugReportProblem"
+          }
+        }
+      ],
+      "result": {
+        "name": "BugReportStartResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "report_id"
+          ],
+          "properties": {
+            "report_id": {
+              "type": "string",
+              "description": "The Report Session's handle; the bug report id appears in bugreport.status once collected."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "bugreport.status",
+      "summary": "Where a bug report stands: its phase, the masked items to decide, the summary and the receipt.",
+      "params": [
+        {
+          "name": "report_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "The handle bugreport.start returned."
+        }
+      ],
+      "result": {
+        "name": "BugReportStatusResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "report_id",
+            "phase",
+            "history"
+          ],
+          "properties": {
+            "report_id": {
+              "type": "string"
+            },
+            "bug_report_id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The br-* id, once the snapshot is collected."
+            },
+            "phase": {
+              "type": "string",
+              "enum": [
+                "collecting",
+                "deciding",
+                "finishing",
+                "ready",
+                "uploading",
+                "uploaded",
+                "upload_failed",
+                "failed",
+                "cancelled"
+              ]
+            },
+            "error": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": false,
+              "required": [
+                "message",
+                "retryable"
+              ],
+              "properties": {
+                "message": {
+                  "type": "string"
+                },
+                "retryable": {
+                  "type": "boolean"
+                },
+                "status": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "description": "Why the last step failed; retryable says whether retry_upload may help."
+            },
+            "history": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "state",
+                "auto_kept",
+                "auto_redacted"
+              ],
+              "properties": {
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "on",
+                    "off",
+                    "corrupt",
+                    "unavailable"
+                  ]
+                },
+                "auto_kept": {
+                  "type": "integer"
+                },
+                "auto_redacted": {
+                  "type": "integer"
+                },
+                "warning": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            },
+            "items": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/components/schemas/BugReportItem"
+              },
+              "description": "The items still to decide, set only while deciding; confirmed items first."
+            },
+            "summary": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": false,
+              "required": [
+                "classification",
+                "warnings",
+                "auto_replaced",
+                "kept",
+                "redacted",
+                "acknowledged",
+                "completeness"
+              ],
+              "properties": {
+                "classification": {
+                  "type": "string",
+                  "enum": [
+                    "clean",
+                    "needs_review"
+                  ]
+                },
+                "warnings": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "size_bytes": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "auto_replaced": {
+                  "type": "integer"
+                },
+                "kept": {
+                  "type": "integer"
+                },
+                "redacted": {
+                  "type": "integer"
+                },
+                "acknowledged": {
+                  "type": "integer"
+                },
+                "completeness": {
+                  "type": "string"
+                }
+              },
+              "description": "What will ship, set once the report is frozen."
+            },
+            "receipt": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": false,
+              "required": [
+                "receipt_id",
+                "duplicate"
+              ],
+              "properties": {
+                "receipt_id": {
+                  "type": "string"
+                },
+                "duplicate": {
+                  "type": "boolean"
+                }
+              }
+            },
+            "record_dir": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Where the landed record and package stay on this machine."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "bugreport.item",
+      "summary": "One item's contexts, grouped by identical text and capped, with the hit positions to highlight.",
+      "params": [
+        {
+          "name": "report_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "The handle bugreport.start returned."
+        },
+        {
+          "name": "item_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      ],
+      "result": {
+        "name": "BugReportItemResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "groups",
+            "total_groups"
+          ],
+          "properties": {
+            "groups": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/BugReportContextGroup"
+              }
+            },
+            "total_groups": {
+              "type": "integer"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "bugreport.decide",
+      "summary": "Decide every remaining item; linked items that disagree are refused with review_conflict.",
+      "params": [
+        {
+          "name": "report_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "The handle bugreport.start returned."
+        },
+        {
+          "name": "decisions",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BugReportDecision"
+            }
+          },
+          "description": "One decision per remaining suspected item."
+        },
+        {
+          "name": "acknowledged",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "description": "Every remaining confirmed item, acknowledged."
+        }
+      ],
+      "result": {
+        "name": "BugReportOkResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok"
+          ],
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "bugreport.upload",
+      "summary": "Package and upload a frozen report; one that needs review needs the risk accepted.",
+      "params": [
+        {
+          "name": "report_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "The handle bugreport.start returned."
+        },
+        {
+          "name": "risk_accepted",
+          "required": true,
+          "schema": {
+            "type": "boolean"
+          }
+        }
+      ],
+      "result": {
+        "name": "BugReportOkResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok"
+          ],
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "bugreport.retry_upload",
+      "summary": "Retry a failed upload when the failure said it may help.",
+      "params": [
+        {
+          "name": "report_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "The handle bugreport.start returned."
+        }
+      ],
+      "result": {
+        "name": "BugReportOkResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok"
+          ],
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "bugreport.cancel",
+      "summary": "Stop a bug report; one that has not landed is removed, a landed record stays.",
+      "params": [
+        {
+          "name": "report_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "The handle bugreport.start returned."
+        }
+      ],
+      "result": {
+        "name": "BugReportOkResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok"
+          ],
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
     }
   ],
   "components": {
@@ -17105,6 +17547,161 @@
             "description": "The latest turn, still running; it cannot be selected."
           }
         }
+      },
+      "BugReportProblem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "description"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "expected": {
+            "type": "string"
+          },
+          "actual": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "",
+              "low",
+              "medium",
+              "high",
+              "critical"
+            ]
+          },
+          "steps": {
+            "type": "string"
+          },
+          "reporter": {
+            "type": "string"
+          }
+        }
+      },
+      "BugReportItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "kind",
+          "category",
+          "masked_sample",
+          "count",
+          "sources",
+          "linked"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "suspected",
+              "confirmed"
+            ]
+          },
+          "category": {
+            "type": "string"
+          },
+          "masked_sample": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "label",
+                "count"
+              ],
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "linked": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "hint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "kept",
+              "redacted",
+              null
+            ],
+            "description": "A remembered decision the history could not apply on its own."
+          }
+        }
+      },
+      "BugReportContextGroup": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "label",
+          "text",
+          "spans",
+          "count"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "spans": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              }
+            }
+          },
+          "count": {
+            "type": "integer"
+          }
+        }
+      },
+      "BugReportDecision": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "item_id",
+          "action"
+        ],
+        "properties": {
+          "item_id": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "kept",
+              "redacted"
+            ]
+          }
+        }
       }
     },
     "errors": {
@@ -17199,6 +17796,18 @@
       "TrajectoryTaskLimit": {
         "code": -32025,
         "message": "trajectory_task_limit"
+      },
+      "BugReportUnavailable": {
+        "code": -32026,
+        "message": "bugreport_unavailable"
+      },
+      "ReviewConflict": {
+        "code": -32027,
+        "message": "review_conflict"
+      },
+      "BugReportState": {
+        "code": -32028,
+        "message": "bugreport_state"
       }
     }
   }

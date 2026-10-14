@@ -772,6 +772,27 @@ def _mount_trajectory_exports(app: web.Application, guard: Callable[[web.Request
     app.on_shutdown.append(release)
 
 
+def _mount_bug_report_sessions(app: web.Application) -> None:
+    """Sweep bug report staging an earlier process left, and cancel the reports in progress with the app.
+
+    Both touch the disk, so both run in a worker thread; a sweep that fails is
+    only logged.
+    """
+    from raven.trajectory import bugreport, report_session
+
+    async def sweep(_app: web.Application) -> None:
+        try:
+            await asyncio.to_thread(bugreport.cleanup_stale_staging)
+        except Exception:  # noqa: BLE001 - see docstring
+            logger.opt(exception=True).warning("bug reports: the stale staging sweep failed")
+
+    async def release(_app: web.Application) -> None:
+        await asyncio.to_thread(report_session.REPORTS.shutdown)
+
+    app.on_startup.append(sweep)
+    app.on_shutdown.append(release)
+
+
 def build_app(
     gateway: WsGateway,
     static_dir: Path | None,
@@ -812,6 +833,7 @@ def build_app(
 
     add_files_routes(app, deliverables, guard=guard_delivery)
     _mount_trajectory_exports(app, guard_delivery)
+    _mount_bug_report_sessions(app)
 
     if static_dir is not None and (static_dir / "index.html").exists():
 

@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from raven.rpc.methods._stubs import register_stub_methods
 from raven.rpc.methods.approval import register_approval_methods
 from raven.rpc.methods.browser import register_browser_methods
+from raven.rpc.methods.bugreport import register_bugreport_methods
 from raven.rpc.methods.cli_dispatch import register_cli_methods
 from raven.rpc.methods.clipboard import register_clipboard_methods
 from raven.rpc.methods.command_dispatch import register_command_dispatch_methods
@@ -241,6 +242,7 @@ def register_aligned_methods_except_system(
     register_memory_methods(dispatcher)
     register_trajectory_methods(dispatcher)
     register_trajectory_export_methods(dispatcher, agent_loop_factory=agent_loop_factory)
+    register_bugreport_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_knowledge_methods(dispatcher)
     # playbooks.* -- read-only view of the two-layer playbook library, so the
     # page can list what is stored and read one whole spec. Registered

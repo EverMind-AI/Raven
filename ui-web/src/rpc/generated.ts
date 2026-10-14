@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 232 methods, 132 component schemas.
+// 239 methods, 136 component schemas.
 
 /* eslint-disable */
 /**
@@ -2502,6 +2502,40 @@ export interface TrajectoryTurn {
    * The latest turn, still running; it cannot be selected.
    */
   in_progress: boolean;
+}
+export interface BugReportProblem {
+  description: string;
+  expected?: string;
+  actual?: string;
+  severity?: '' | 'low' | 'medium' | 'high' | 'critical';
+  steps?: string;
+  reporter?: string;
+}
+export interface BugReportItem {
+  id: string;
+  kind: 'suspected' | 'confirmed';
+  category: string;
+  masked_sample: string;
+  count: number;
+  sources: {
+    label: string;
+    count: number;
+  }[];
+  linked: string[];
+  /**
+   * A remembered decision the history could not apply on its own.
+   */
+  hint?: 'kept' | 'redacted' | null;
+}
+export interface BugReportContextGroup {
+  label: string;
+  text: string;
+  spans: number[][];
+  count: number;
+}
+export interface BugReportDecision {
+  item_id: string;
+  action: 'kept' | 'redacted';
 }
 export interface SessionListParams {
   /**
@@ -5877,6 +5911,111 @@ export interface TrajectoryExportCancelParams {
 export interface TrajectoryExportCancelResult {
   ok: boolean;
 }
+export interface BugreportStartParams {
+  session_key: string;
+  trace_ids: string[];
+  problem: BugReportProblem;
+}
+export interface BugreportStartResult {
+  /**
+   * The Report Session's handle; the bug report id appears in bugreport.status once collected.
+   */
+  report_id: string;
+}
+export interface BugreportStatusParams {
+  report_id: string;
+}
+export interface BugreportStatusResult {
+  report_id: string;
+  /**
+   * The br-* id, once the snapshot is collected.
+   */
+  bug_report_id?: string | null;
+  phase:
+    | 'collecting'
+    | 'deciding'
+    | 'finishing'
+    | 'ready'
+    | 'uploading'
+    | 'uploaded'
+    | 'upload_failed'
+    | 'failed'
+    | 'cancelled';
+  /**
+   * Why the last step failed; retryable says whether retry_upload may help.
+   */
+  error?: {
+    message: string;
+    retryable: boolean;
+    status?: number | null;
+  } | null;
+  history: {
+    state: 'on' | 'off' | 'corrupt' | 'unavailable';
+    auto_kept: number;
+    auto_redacted: number;
+    warning?: string | null;
+  };
+  /**
+   * The items still to decide, set only while deciding; confirmed items first.
+   */
+  items?: BugReportItem[] | null;
+  /**
+   * What will ship, set once the report is frozen.
+   */
+  summary?: {
+    classification: 'clean' | 'needs_review';
+    warnings: string[];
+    size_bytes?: number | null;
+    auto_replaced: number;
+    kept: number;
+    redacted: number;
+    acknowledged: number;
+    completeness: string;
+  } | null;
+  receipt?: {
+    receipt_id: string;
+    duplicate: boolean;
+  } | null;
+  /**
+   * Where the landed record and package stay on this machine.
+   */
+  record_dir?: string | null;
+}
+export interface BugreportItemParams {
+  report_id: string;
+  item_id: string;
+}
+export interface BugreportItemResult {
+  groups: BugReportContextGroup[];
+  total_groups: number;
+}
+export interface BugreportDecideParams {
+  report_id: string;
+  decisions: BugReportDecision[];
+  acknowledged: string[];
+}
+export interface BugreportDecideResult {
+  ok: boolean;
+}
+export interface BugreportUploadParams {
+  report_id: string;
+  risk_accepted: boolean;
+}
+export interface BugreportUploadResult {
+  ok: boolean;
+}
+export interface BugreportRetryUploadParams {
+  report_id: string;
+}
+export interface BugreportRetryUploadResult {
+  ok: boolean;
+}
+export interface BugreportCancelParams {
+  report_id: string;
+}
+export interface BugreportCancelResult {
+  ok: boolean;
+}
 
 // ---------------------------------------------------------------------------
 // Method map -- generated from the contract's method list.
@@ -6116,6 +6255,13 @@ export interface RpcMethods {
   'trajectory.export': { params: TrajectoryExportParams; result: TrajectoryExportResult };
   'trajectory.export_status': { params: TrajectoryExportStatusParams; result: TrajectoryExportStatusResult };
   'trajectory.export_cancel': { params: TrajectoryExportCancelParams; result: TrajectoryExportCancelResult };
+  'bugreport.start': { params: BugreportStartParams; result: BugreportStartResult };
+  'bugreport.status': { params: BugreportStatusParams; result: BugreportStatusResult };
+  'bugreport.item': { params: BugreportItemParams; result: BugreportItemResult };
+  'bugreport.decide': { params: BugreportDecideParams; result: BugreportDecideResult };
+  'bugreport.upload': { params: BugreportUploadParams; result: BugreportUploadResult };
+  'bugreport.retry_upload': { params: BugreportRetryUploadParams; result: BugreportRetryUploadResult };
+  'bugreport.cancel': { params: BugreportCancelParams; result: BugreportCancelResult };
 }
 
 /** The literal union of callable method names. */
@@ -6139,6 +6285,13 @@ export const RPC_METHODS = [
   "browser.state",
   "browser.tabs",
   "browser.watch",
+  "bugreport.cancel",
+  "bugreport.decide",
+  "bugreport.item",
+  "bugreport.retry_upload",
+  "bugreport.start",
+  "bugreport.status",
+  "bugreport.upload",
   "channels.configure",
   "channels.qr",
   "channels.status",

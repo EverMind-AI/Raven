@@ -3048,6 +3048,56 @@ export interface TrajectoryTurn {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugReportProblem".
+ */
+export interface BugReportProblem {
+  description: string;
+  expected?: string;
+  actual?: string;
+  severity?: '' | 'low' | 'medium' | 'high' | 'critical';
+  steps?: string;
+  reporter?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugReportItem".
+ */
+export interface BugReportItem {
+  id: string;
+  kind: 'suspected' | 'confirmed';
+  category: string;
+  masked_sample: string;
+  count: number;
+  sources: {
+    label: string;
+    count: number;
+  }[];
+  linked: string[];
+  /**
+   * A remembered decision the history could not apply on its own.
+   */
+  hint?: 'kept' | 'redacted' | null;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugReportContextGroup".
+ */
+export interface BugReportContextGroup {
+  label: string;
+  text: string;
+  spans: number[][];
+  count: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugReportDecision".
+ */
+export interface BugReportDecision {
+  item_id: string;
+  action: 'kept' | 'redacted';
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "SessionListParams".
  */
 export interface SessionListParams {
@@ -7825,6 +7875,167 @@ export interface TrajectoryExportCancelParams {
  * via the `definition` "TrajectoryExportCancelResult".
  */
 export interface TrajectoryExportCancelResult {
+  ok: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugreportStartParams".
+ */
+export interface BugreportStartParams {
+  session_key: string;
+  trace_ids: string[];
+  problem: BugReportProblem;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugreportStartResult".
+ */
+export interface BugreportStartResult {
+  /**
+   * The Report Session's handle; the bug report id appears in bugreport.status once collected.
+   */
+  report_id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugreportStatusParams".
+ */
+export interface BugreportStatusParams {
+  report_id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugreportStatusResult".
+ */
+export interface BugreportStatusResult {
+  report_id: string;
+  /**
+   * The br-* id, once the snapshot is collected.
+   */
+  bug_report_id?: string | null;
+  phase:
+    | 'collecting'
+    | 'deciding'
+    | 'finishing'
+    | 'ready'
+    | 'uploading'
+    | 'uploaded'
+    | 'upload_failed'
+    | 'failed'
+    | 'cancelled';
+  /**
+   * Why the last step failed; retryable says whether retry_upload may help.
+   */
+  error?: {
+    message: string;
+    retryable: boolean;
+    status?: number | null;
+  } | null;
+  history: {
+    state: 'on' | 'off' | 'corrupt' | 'unavailable';
+    auto_kept: number;
+    auto_redacted: number;
+    warning?: string | null;
+  };
+  /**
+   * The items still to decide, set only while deciding; confirmed items first.
+   */
+  items?: BugReportItem[] | null;
+  /**
+   * What will ship, set once the report is frozen.
+   */
+  summary?: {
+    classification: 'clean' | 'needs_review';
+    warnings: string[];
+    size_bytes?: number | null;
+    auto_replaced: number;
+    kept: number;
+    redacted: number;
+    acknowledged: number;
+    completeness: string;
+  } | null;
+  receipt?: {
+    receipt_id: string;
+    duplicate: boolean;
+  } | null;
+  /**
+   * Where the landed record and package stay on this machine.
+   */
+  record_dir?: string | null;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugreportItemParams".
+ */
+export interface BugreportItemParams {
+  report_id: string;
+  item_id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugreportItemResult".
+ */
+export interface BugreportItemResult {
+  groups: BugReportContextGroup[];
+  total_groups: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugreportDecideParams".
+ */
+export interface BugreportDecideParams {
+  report_id: string;
+  decisions: BugReportDecision[];
+  acknowledged: string[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugreportDecideResult".
+ */
+export interface BugreportDecideResult {
+  ok: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugreportUploadParams".
+ */
+export interface BugreportUploadParams {
+  report_id: string;
+  risk_accepted: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugreportUploadResult".
+ */
+export interface BugreportUploadResult {
+  ok: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugreportRetryUploadParams".
+ */
+export interface BugreportRetryUploadParams {
+  report_id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugreportRetryUploadResult".
+ */
+export interface BugreportRetryUploadResult {
+  ok: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugreportCancelParams".
+ */
+export interface BugreportCancelParams {
+  report_id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugreportCancelResult".
+ */
+export interface BugreportCancelResult {
   ok: boolean;
 }
 

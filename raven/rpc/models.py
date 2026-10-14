@@ -6111,7 +6111,6 @@ class TrajectoryBlockResult(_Strict):
     truncated: bool
 
 
-
 class TrajectoryTurnsParams(_StrictParams):
     session_key: str
 
@@ -6168,6 +6167,136 @@ class TrajectoryExportCancelParams(_StrictParams):
 
 class TrajectoryExportCancelResult(_Strict):
     ok: bool
+
+
+class BugReportProblem(_Strict):
+    description: str
+    expected: str = ""
+    actual: str = ""
+    severity: Literal["", "low", "medium", "high", "critical"] = ""
+    steps: str = ""
+    reporter: str = ""
+
+
+class BugReportStartParams(_StrictParams):
+    session_key: str
+    trace_ids: list[str]
+    problem: BugReportProblem
+
+
+class BugReportStartResult(_Strict):
+    report_id: str
+
+
+class BugReportStatusParams(_StrictParams):
+    report_id: str
+
+
+class BugReportFailure(_Strict):
+    message: str
+    retryable: bool
+    status: int | None = None
+
+
+class BugReportHistory(_Strict):
+    state: Literal["on", "off", "corrupt", "unavailable"]
+    auto_kept: int
+    auto_redacted: int
+    warning: str | None = None
+
+
+class BugReportSource(_Strict):
+    label: str
+    count: int
+
+
+class BugReportItem(_Strict):
+    """One Review Item still to decide, masked; the plain value never leaves the gateway."""
+
+    id: str
+    kind: Literal["suspected", "confirmed"]
+    category: str
+    masked_sample: str
+    count: int
+    sources: list[BugReportSource]
+    linked: list[str]
+    hint: Literal["kept", "redacted"] | None = None
+
+
+class BugReportSummary(_Strict):
+    classification: Literal["clean", "needs_review"]
+    warnings: list[str]
+    size_bytes: int | None = None
+    auto_replaced: int
+    kept: int
+    redacted: int
+    acknowledged: int
+    completeness: str
+
+
+class BugReportReceipt(_Strict):
+    receipt_id: str
+    duplicate: bool
+
+
+class BugReportStatusResult(_Strict):
+    report_id: str
+    bug_report_id: str | None = None
+    phase: Literal[
+        "collecting", "deciding", "finishing", "ready", "uploading", "uploaded", "upload_failed", "failed", "cancelled"
+    ]
+    error: BugReportFailure | None = None
+    history: BugReportHistory
+    items: list[BugReportItem] | None = None
+    summary: BugReportSummary | None = None
+    receipt: BugReportReceipt | None = None
+    record_dir: str | None = None
+
+
+class BugReportItemParams(_StrictParams):
+    report_id: str
+    item_id: str
+
+
+class BugReportContextGroup(_Strict):
+    label: str
+    text: str
+    spans: list[list[int]]
+    count: int
+
+
+class BugReportItemResult(_Strict):
+    groups: list[BugReportContextGroup]
+    total_groups: int
+
+
+class BugReportDecision(_Strict):
+    item_id: str
+    action: Literal["kept", "redacted"]
+
+
+class BugReportDecideParams(_StrictParams):
+    report_id: str
+    decisions: list[BugReportDecision]
+    acknowledged: list[str]
+
+
+class BugReportUploadParams(_StrictParams):
+    report_id: str
+    risk_accepted: bool
+
+
+class BugReportRetryParams(_StrictParams):
+    report_id: str
+
+
+class BugReportCancelParams(_StrictParams):
+    report_id: str
+
+
+class BugReportOkResult(_Strict):
+    ok: bool
+
 
 METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     # knowledge.* -- bases and their documents, served by the in-process engine
@@ -6313,6 +6442,14 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "trajectory.export": (TrajectoryExportParams, TrajectoryExportResult),
     "trajectory.export_status": (TrajectoryExportStatusParams, TrajectoryExportStatusResult),
     "trajectory.export_cancel": (TrajectoryExportCancelParams, TrajectoryExportCancelResult),
+    # bugreport.* -- the web page's bug report, held as a Report Session
+    "bugreport.start": (BugReportStartParams, BugReportStartResult),
+    "bugreport.status": (BugReportStatusParams, BugReportStatusResult),
+    "bugreport.item": (BugReportItemParams, BugReportItemResult),
+    "bugreport.decide": (BugReportDecideParams, BugReportOkResult),
+    "bugreport.upload": (BugReportUploadParams, BugReportOkResult),
+    "bugreport.retry_upload": (BugReportRetryParams, BugReportOkResult),
+    "bugreport.cancel": (BugReportCancelParams, BugReportOkResult),
     # the round-trip answer sinks
     "approval.respond": (ApprovalRespondParams, ApprovalRespondResult),
     "approval.revoke": (ApprovalRevokeParams, ApprovalRevokeResult),
