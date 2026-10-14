@@ -524,3 +524,68 @@ def test_bundle_pin_falls_back_to_member_traces_when_attempt_vanishes(state, mon
     registry = tstore.pins(state)
     assert registry["trace-1"]["reason"] == "bundled"
     assert registry["trace-2"]["reason"] == "bundled"
+
+
+def test_write_bundle_tree_takes_the_session_key_it_is_given(state, tmp_path):
+    from raven.trajectory.bundle import write_bundle_tree
+
+    dest = tmp_path / "tree"
+    dest.mkdir()
+    seen: list[str | None] = []
+
+    def no_session(target, key):
+        seen.append(key)
+        return False
+
+    spans = [_span("trace-sub", session_key="subagent:x"), _span("trace-a", session_key="cli:main")]
+    manifest = write_bundle_tree(
+        dest,
+        spans,
+        attempt_id="sel-000000000000",
+        state_dir=state,
+        write_session=no_session,
+        verdicts=[],
+        session_key="cli:main",
+    )
+    assert manifest["session_key"] == "cli:main" and seen == ["cli:main"]
+    assert manifest["session_included"] is False and not (dest / "session.jsonl").exists()
+    derived = tmp_path / "derived"
+    derived.mkdir()
+    assert (
+        write_bundle_tree(
+            derived, spans, attempt_id="sel-000000000000", state_dir=state, write_session=no_session, verdicts=[]
+        )["session_key"]
+        == "subagent:x"
+    )
+
+
+def test_write_bundle_tree_confined_to_the_store_leaves_outside_files_missing(state, tmp_path):
+    from raven.trajectory.bundle import write_bundle_tree
+
+    outside = tmp_path / "outside.txt"
+    outside.write_text("not from the store", encoding="utf-8")
+    inside = _make_artifact(state, "inside.json", '{"content": "from the store"}')
+    spans = [
+        _span(
+            "trace-a", session_key="cli:main", attrs={"a.artifact_path": str(outside), "b.artifact_path": str(inside)}
+        )
+    ]
+    store = (state / "logs" / "audit-artifacts").resolve()
+
+    def none(_target, _key):
+        return False
+
+    confined = tmp_path / "confined"
+    confined.mkdir()
+    manifest = write_bundle_tree(
+        confined, spans, attempt_id="sel-000000000000", state_dir=state, write_session=none, verdicts=[], confine=store
+    )
+    assert manifest["missing_artifacts"] == [str(outside)]
+    assert sorted(p.name for p in (confined / "artifacts").iterdir()) == ["inside.json"]
+
+    open_tree = tmp_path / "open"
+    open_tree.mkdir()
+    manifest = write_bundle_tree(
+        open_tree, spans, attempt_id="sel-000000000000", state_dir=state, write_session=none, verdicts=[]
+    )
+    assert manifest["missing_artifacts"] == [], "without confine the attempt bundle keeps its old behavior"

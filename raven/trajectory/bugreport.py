@@ -49,7 +49,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
 
 from raven import __version__
 from raven.tracing import config as tracing_config
@@ -636,7 +636,18 @@ def _bundle_traces(bundle_dir: Path) -> tuple[str, ...]:
     return tuple(sorted(traces))
 
 
-def freeze_export(
+@dataclass
+class ReviewStage:
+    """What :func:`stage_review` leaves for :func:`finish_export`: the items to decide and their context."""
+
+    items: list["ReviewItem"]
+    reasons: list[str]
+    raw_fields: dict[str, str]
+    environment: dict[str, str]
+    require_review: bool
+
+
+def stage_review(
     prep: ExportPreparation,
     *,
     description: str,
@@ -645,22 +656,17 @@ def freeze_export(
     severity: str = "",
     steps: str = "",
     reporter: str = "",
-    decide: Callable[[list["ReviewItem"], list[str]], list["ReviewDecision"]] | None = None,
-) -> ExportPreparation:
-    """Freeze the complete deliverable under ``snapshot/export/``.
+) -> ReviewStage:
+    """Redact the problem fields beside the trajectory and build the Review Items.
 
     The user fields go through the same redaction as the trajectory (written
     as ``problem.<field>`` files and redacted with the same known secrets, so
-    residual findings carry that name). When the merged findings yield review
-    items, ``decide`` is called with them (plus the current reasons, for the
-    warning lines) and its decisions are applied to the redacted trees before
-    anything downstream reads them — a caller without a ``decide`` cannot
-    freeze such a report (silent shipping is not a fallback). Then path
-    sanitization, the completeness probe (over the post-decision tree), the
-    embedded tarball, and the canonical ``bugreport.json`` are produced,
-    asserted clean, and digested — the confirmation screen and every later
-    packaging run use exactly these bytes.
+    residual findings carry that name). The returned items are what the user
+    decides before :func:`finish_export` may freeze the report; a preparation
+    is staged once.
     """
+    if prep.problem_report is not None:
+        raise BugReportError("this report has already been staged")
     description = description.strip()
     if not description:
         raise ValueError("a problem description is required")
@@ -690,8 +696,9 @@ def freeze_export(
         prep.problem_report = problem_report
 
         # Pre-classification carries the reasons the review screen shows as
-        # warning lines; the authoritative classification is recomputed below
-        # once the completeness reasons have been through the same pipeline.
+        # warning lines; the authoritative classification is recomputed by
+        # finish_export once the completeness reasons have been through the
+        # same pipeline.
         require_review = _policy_review_enabled()
         classification, reasons = classify_redaction(
             prep.trajectory_report, problem_report, require_review=require_review
@@ -702,12 +709,40 @@ def freeze_export(
         from raven.trajectory import review as _review
 
         items = _review.build_review_items([prep.trajectory_report, problem_report])
+    except (OSError, tarfile.TarError) as exc:
+        raise PreparationError(str(exc) or exc.__class__.__name__) from exc
+    return ReviewStage(
+        items=list(items),
+        reasons=list(reasons),
+        raw_fields=raw_fields,
+        environment=environment,
+        require_review=require_review,
+    )
+
+
+def finish_export(
+    prep: ExportPreparation, stage: ReviewStage, decisions: "Sequence[ReviewDecision]"
+) -> ExportPreparation:
+    """Apply the decisions and freeze the complete deliverable under ``snapshot/export/``.
+
+    The decisions are validated and applied to the redacted trees before
+    anything downstream reads them. Then path sanitization, the completeness
+    probe (over the post-decision tree), the embedded tarball, and the
+    canonical ``bugreport.json`` are produced, asserted clean, and digested --
+    the confirmation screen and every later packaging run use exactly these
+    bytes.
+    """
+    from raven.trajectory import review as _review
+
+    items = stage.items
+    if not items and decisions:
+        raise BugReportError("decisions were given for a report without review items")
+    problem_report = prep.problem_report
+    if problem_report is None:
+        raise BugReportError("this report has not been staged")
+
+    try:
         if items:
-            if decide is None:
-                raise BugReportError("this report carries review items but no decide callback was provided")
-            decisions = decide(list(items), list(reasons))
-            # The interactive callers validate before returning (re-asking on
-            # conflicts); a defect that slips through here is a caller bug.
             _review.validate_review_decisions(items, decisions)
             outcome = _review.apply_review_decisions(items, decisions, reports=[prep.trajectory_report, problem_report])
             prep.secrets = list(prep.secrets) + outcome.user_secrets
@@ -721,8 +756,10 @@ def freeze_export(
             text = source.read_text(encoding="utf-8") if written and source.is_file() else ""
             return sanitize_text(text, prep.roots)
 
-        redacted_fields = {name: _redacted_value(f"problem.{name}", bool(value)) for name, value in raw_fields.items()}
-        prep.environment = {key: _redacted_value(f"environment.{key}", True) for key in environment}
+        redacted_fields = {
+            name: _redacted_value(f"problem.{name}", bool(value)) for name, value in stage.raw_fields.items()
+        }
+        prep.environment = {key: _redacted_value(f"environment.{key}", True) for key in stage.environment}
         prep.reporter = redacted_fields.pop("reporter")
         prep.problem = redacted_fields
 
@@ -736,7 +773,7 @@ def freeze_export(
         meta_report = _redact_completeness_reasons(prep)
 
         reports = [prep.trajectory_report, problem_report] + ([meta_report] if meta_report else [])
-        classification, reasons = classify_redaction(*reports, require_review=require_review)
+        classification, reasons = classify_redaction(*reports, require_review=stage.require_review)
         if items:
             replaced = sum(1 for entry in prep.user_decisions if entry["action"] == "redacted")
             if replaced:
@@ -763,6 +800,44 @@ def freeze_export(
         return prep
     except (OSError, tarfile.TarError) as exc:
         raise PreparationError(str(exc) or exc.__class__.__name__) from exc
+
+
+def freeze_export(
+    prep: ExportPreparation,
+    *,
+    description: str,
+    expected: str = "",
+    actual: str = "",
+    severity: str = "",
+    steps: str = "",
+    reporter: str = "",
+    decide: Callable[[list["ReviewItem"], list[str]], list["ReviewDecision"]] | None = None,
+) -> ExportPreparation:
+    """Freeze the complete deliverable under ``snapshot/export/``.
+
+    :func:`stage_review` and :func:`finish_export` in one call: when the
+    merged findings yield review items, ``decide`` is called with them (plus
+    the current reasons, for the warning lines) and its decisions are applied
+    before anything downstream reads the trees -- a caller without a
+    ``decide`` cannot freeze such a report (silent shipping is not a
+    fallback). The interactive callers validate before returning (re-asking
+    on conflicts); a defect that slips through is a caller bug.
+    """
+    stage = stage_review(
+        prep,
+        description=description,
+        expected=expected,
+        actual=actual,
+        severity=severity,
+        steps=steps,
+        reporter=reporter,
+    )
+    decisions: list[ReviewDecision] = []
+    if stage.items:
+        if decide is None:
+            raise BugReportError("this report carries review items but no decide callback was provided")
+        decisions = decide(list(stage.items), list(stage.reasons))
+    return finish_export(prep, stage, decisions)
 
 
 def _evaluate_completeness_safely(prep: ExportPreparation, redacted_dir: Path) -> tuple[str, list[str]]:
@@ -1138,6 +1213,7 @@ __all__ = [
     "PackagingError",
     "PreparationError",
     "RECORD_FILE",
+    "ReviewStage",
     "RECORD_SCHEMA",
     "SCHEMA_VERSION",
     "SEVERITIES",
@@ -1149,6 +1225,7 @@ __all__ = [
     "classify_redaction",
     "cleanup_stale_staging",
     "confirm_and_package",
+    "finish_export",
     "freeze_export",
     "list_reports",
     "load_record",
@@ -1158,4 +1235,5 @@ __all__ = [
     "reports_for_attempt",
     "retry_packaging",
     "save_record",
+    "stage_review",
 ]

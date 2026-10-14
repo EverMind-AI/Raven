@@ -113,6 +113,7 @@ def resolve_payload(
     artifacts_dir: Path | str,
     *,
     on_missing: Callable[[str], Any] | None = None,
+    read: Callable[[Path], str | None] | None = None,
 ) -> Any:
     """A v2 shell as its v1 equivalent; any other payload returned unchanged.
 
@@ -120,7 +121,8 @@ def resolve_payload(
     is called once per distinct missing address, so a caller can record them.
     A message is never dropped: consumers compare message-list length and
     position, so omitting one shifts every later message and turns a locatable
-    gap into a spurious full divergence.
+    gap into a spurious full divergence. ``read`` replaces how a blob's text is
+    read (None means it cannot be), for a caller that must bound what it reads.
     """
     if not is_v2(payload):
         return payload
@@ -130,7 +132,11 @@ def resolve_payload(
     def load(sha1: str) -> Any:
         if sha1 not in cache:
             try:
-                cache[sha1] = json.loads(message_path(artifacts_dir, sha1).read_text(encoding="utf-8"))
+                path = message_path(artifacts_dir, sha1)
+                text = path.read_text(encoding="utf-8") if read is None else read(path)
+                if text is None:
+                    raise OSError(f"blob {sha1} could not be read")
+                cache[sha1] = json.loads(text)
             except (OSError, ValueError):
                 cache[sha1] = missing(sha1)
         return cache[sha1]

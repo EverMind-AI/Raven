@@ -34,28 +34,38 @@ import shutil
 import tempfile
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Sequence
 
 from raven import __version__
 from raven.config.paths import get_workspace_path
 from raven.tracing import artifact_v2
 from raven.tracing import config as tracing_config
+from raven.trajectory.selection import read_store_file
 from raven.trajectory.store import attempt_alias_ids, iter_spans, pin, pin_attempt, resolve_attempt_id
-from raven.trajectory.verdict import read_verdicts
+from raven.trajectory.verdict import Verdict, read_verdicts
 
 BUNDLE_FORMAT_VERSION = 1
 
 _ARTIFACTS_DIR = "artifacts"
 
 
-def _copy_resolved(src: Path, target: Path, store_artifacts: Path, missing_messages: list[str]) -> bool:
-    """Write ``src`` to ``target`` resolved; False when it is not a v2 shell.
+def _copy_resolved(
+    src: Path,
+    target: Path,
+    store_artifacts: Path,
+    missing_messages: list[str],
+    *,
+    text: str | None = None,
+    read: Callable[[Path], str | None] | None = None,
+) -> bool:
+    """Write ``src`` (or its already-read ``text``) to ``target`` resolved; False when it is not a v2 shell.
 
     Unreadable or unparseable input answers False so the caller falls back to
     a byte copy: a file this cannot understand is still worth packing.
+    ``read`` bounds how the shell's blobs are read.
     """
     try:
-        payload = json.loads(src.read_text(encoding="utf-8"))
+        payload = json.loads(src.read_text(encoding="utf-8") if text is None else text)
     except (OSError, ValueError):
         return False
     if not artifact_v2.is_v2(payload):
@@ -66,9 +76,22 @@ def _copy_resolved(src: Path, target: Path, store_artifacts: Path, missing_messa
             missing_messages.append(sha1)
         return artifact_v2.placeholder(sha1)
 
-    resolved = artifact_v2.resolve_payload(payload, store_artifacts, on_missing=record)
+    resolved = artifact_v2.resolve_payload(payload, store_artifacts, on_missing=record, read=read)
     target.write_text(json.dumps(resolved, ensure_ascii=False, indent=2), encoding="utf-8")
     return True
+
+
+def _confined_text(root: Path) -> Callable[[Path], str | None]:
+    def read(path: Path) -> str | None:
+        found = read_store_file(path, root)
+        if found is None:
+            return None
+        try:
+            return found[0].decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+
+    return read
 
 
 def _import_artifact(
@@ -79,6 +102,7 @@ def _import_artifact(
     names: dict[str, str],
     store_artifacts: Path,
     missing_messages: list[str],
+    confine: Path | None = None,
 ) -> str | None:
     """Copy one referenced file into the bundle; return its relative path.
 
@@ -89,13 +113,24 @@ def _import_artifact(
     A v2 shell is resolved on the way in, so the bundle holds v1-shaped
     artifacts and stays readable on a machine that has no message store. That
     is the bundle's whole promise; keeping references here would break it.
+
+    With ``confine``, the file and every blob its shell references are read
+    only when they resolve inside that root and are regular files, opened so
+    that a FIFO cannot block; anything else is recorded as missing.
     """
     if source in copied:
         return copied[source]
     if source in missing:
         return None
     src = Path(source)
-    if not src.is_file():
+    data: bytes | None = None
+    if confine is not None:
+        found = read_store_file(src, confine)
+        if found is None:
+            missing.append(source)
+            return None
+        data = found[0]
+    elif not src.is_file():
         missing.append(source)
         return None
     name = src.name
@@ -105,7 +140,15 @@ def _import_artifact(
         counter += 1
     names[name] = source
     target = artifacts_dir / name
-    if not _copy_resolved(src, target, store_artifacts, missing_messages):
+    if data is not None:
+        try:
+            text: str | None = data.decode("utf-8")
+        except UnicodeDecodeError:
+            text = None
+        read = _confined_text(confine) if confine is not None else None
+        if text is None or not _copy_resolved(src, target, store_artifacts, missing_messages, text=text, read=read):
+            target.write_bytes(data)
+    elif not _copy_resolved(src, target, store_artifacts, missing_messages):
         shutil.copy2(src, target)
     rel = f"{_ARTIFACTS_DIR}/{name}"
     copied[source] = rel
@@ -126,6 +169,95 @@ def _session_source(session_key: str, workspace: Path | None) -> Path:
     from raven.session.manager import SessionManager
 
     return SessionManager(workspace or _default_workspace()).session_path(session_key)
+
+
+def write_bundle_tree(
+    dest: Path,
+    spans: Sequence[dict[str, Any]],
+    *,
+    attempt_id: str,
+    state_dir: Path,
+    write_session: Callable[[Path, str | None], bool],
+    verdicts: Sequence[Verdict],
+    session_key: str | None = None,
+    confine: Path | None = None,
+) -> dict[str, Any]:
+    """Write a bundle's files for ``spans`` into the existing directory ``dest``; return the manifest.
+
+    The artifacts the spans reference are imported (v2 shells resolved) and
+    their pointers rewritten. ``session_key`` defaults to the first one the
+    spans carry, which is the attempt's own when the spans are one attempt's;
+    ``write_session(target, session_key)`` writes ``session.jsonl`` and says
+    whether it did. ``confine`` (the resolved artifact store) restricts every
+    read to regular files inside it; see :func:`_import_artifact`.
+    """
+    artifacts_dir = dest / _ARTIFACTS_DIR
+    artifacts_dir.mkdir()
+
+    copied: dict[str, str] = {}
+    missing: list[str] = []
+    missing_messages: list[str] = []
+    names: dict[str, str] = {}
+    rewritten = 0
+    out_spans: list[dict[str, Any]] = []
+    derived_key: str | None = None
+    start: str | None = None
+    end: str | None = None
+    for span in spans:
+        # Historical records are unvalidated JSON: a truthy non-object
+        # attributes value or non-string key/timestamp degrades per-field.
+        raw_attrs = span.get("attributes")
+        attrs = dict(raw_attrs) if isinstance(raw_attrs, dict) else {}
+        if derived_key is None and isinstance(attrs.get("session.key"), str) and attrs["session.key"]:
+            derived_key = attrs["session.key"]
+        span_start, span_end = span.get("startTime"), span.get("endTime")
+        if isinstance(span_start, str) and span_start and (start is None or span_start < start):
+            start = span_start
+        if isinstance(span_end, str) and span_end and (end is None or span_end > end):
+            end = span_end
+        for key, value in attrs.items():
+            if not key.endswith(".artifact_path") or not isinstance(value, str) or not value:
+                continue
+            rel = _import_artifact(
+                value,
+                artifacts_dir,
+                copied,
+                missing,
+                names,
+                state_dir / "logs" / "audit-artifacts",
+                missing_messages,
+                confine,
+            )
+            if rel is not None:
+                attrs[key] = rel
+                rewritten += 1
+        out_spans.append({**span, "attributes": attrs})
+
+    (dest / "spans.jsonl").write_text(
+        "".join(json.dumps(s, ensure_ascii=False) + "\n" for s in out_spans), encoding="utf-8"
+    )
+    (dest / "verdicts.jsonl").write_text(
+        "".join(json.dumps(asdict(v), ensure_ascii=False) + "\n" for v in verdicts), encoding="utf-8"
+    )
+    key = session_key if session_key is not None else derived_key
+    session_included = write_session(dest / "session.jsonl", key)
+
+    manifest = {
+        "format_version": BUNDLE_FORMAT_VERSION,
+        "attempt_id": attempt_id,
+        "session_key": key,
+        "time_range": {"start": start, "end": end},
+        "span_count": len(out_spans),
+        "artifact_count": len(copied),
+        "rewritten_artifact_paths": rewritten,
+        "missing_artifacts": missing,
+        "missing_messages": missing_messages,
+        "session_included": session_included,
+        "verdict_count": len(verdicts),
+        "raven_version": __version__,
+    }
+    (dest / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return manifest
 
 
 def collect_bundle(
@@ -164,83 +296,27 @@ def collect_bundle(
     if bundle_dir.parent != out_root:
         raise ValueError(f"id {attempt_id!r} cannot be used as a bundle directory name")
 
+    def copy_session(target: Path, session_key: str | None) -> bool:
+        if not session_key:
+            return False
+        source = _session_source(session_key, workspace)
+        if not source.is_file():
+            return False
+        shutil.copyfile(source, target)
+        return True
+
     # Build in a staging dir and swap in whole, so a re-pack never inherits
     # stale files (e.g. an artifact whose source was purged since last pack).
     staging = Path(tempfile.mkdtemp(prefix=f".{bundle_dir.name}-", dir=out_root))
     try:
-        artifacts_dir = staging / _ARTIFACTS_DIR
-        artifacts_dir.mkdir()
-
-        copied: dict[str, str] = {}
-        missing: list[str] = []
-        missing_messages: list[str] = []
-        names: dict[str, str] = {}
-        rewritten = 0
-        out_spans: list[dict[str, Any]] = []
-        session_key: str | None = None
-        start: str | None = None
-        end: str | None = None
-        for span in spans:
-            # Historical records are unvalidated JSON: a truthy non-object
-            # attributes value or non-string key/timestamp degrades per-field.
-            raw_attrs = span.get("attributes")
-            attrs = dict(raw_attrs) if isinstance(raw_attrs, dict) else {}
-            if session_key is None and isinstance(attrs.get("session.key"), str) and attrs["session.key"]:
-                session_key = attrs["session.key"]
-            span_start, span_end = span.get("startTime"), span.get("endTime")
-            if isinstance(span_start, str) and span_start and (start is None or span_start < start):
-                start = span_start
-            if isinstance(span_end, str) and span_end and (end is None or span_end > end):
-                end = span_end
-            for key, value in attrs.items():
-                if not key.endswith(".artifact_path") or not isinstance(value, str) or not value:
-                    continue
-                rel = _import_artifact(
-                    value,
-                    artifacts_dir,
-                    copied,
-                    missing,
-                    names,
-                    resolved_state / "logs" / "audit-artifacts",
-                    missing_messages,
-                )
-                if rel is not None:
-                    attrs[key] = rel
-                    rewritten += 1
-            out_spans.append({**span, "attributes": attrs})
-
-        (staging / "spans.jsonl").write_text(
-            "".join(json.dumps(s, ensure_ascii=False) + "\n" for s in out_spans), encoding="utf-8"
-        )
-
         verdicts = read_verdicts(resolved_state, attempt_ids=attempt_alias_ids(attempt_id, resolved_state))
-        (staging / "verdicts.jsonl").write_text(
-            "".join(json.dumps(asdict(v), ensure_ascii=False) + "\n" for v in verdicts), encoding="utf-8"
-        )
-
-        session_included = False
-        if session_key:
-            source = _session_source(session_key, workspace)
-            if source.is_file():
-                shutil.copyfile(source, staging / "session.jsonl")
-                session_included = True
-
-        manifest = {
-            "format_version": BUNDLE_FORMAT_VERSION,
-            "attempt_id": attempt_id,
-            "session_key": session_key,
-            "time_range": {"start": start, "end": end},
-            "span_count": len(out_spans),
-            "artifact_count": len(copied),
-            "rewritten_artifact_paths": rewritten,
-            "missing_artifacts": missing,
-            "missing_messages": missing_messages,
-            "session_included": session_included,
-            "verdict_count": len(verdicts),
-            "raven_version": __version__,
-        }
-        (staging / "manifest.json").write_text(
-            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        write_bundle_tree(
+            staging,
+            spans,
+            attempt_id=attempt_id,
+            state_dir=resolved_state,
+            write_session=copy_session,
+            verdicts=verdicts,
         )
 
         if bundle_dir.exists():
@@ -256,6 +332,6 @@ def collect_bundle(
         # The attempt address vanished mid-pack (a concurrent split/merge);
         # protect exactly the traces that were bundled instead of leaving
         # them purgeable behind a dangling id.
-        for member in dict.fromkeys(s.get("traceId") for s in out_spans if s.get("traceId")):
+        for member in dict.fromkeys(s.get("traceId") for s in spans if s.get("traceId")):
             pin(member, reason="bundled", state_dir=resolved_state)
     return bundle_dir

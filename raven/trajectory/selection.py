@@ -28,7 +28,9 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import re
+import stat
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -335,6 +337,36 @@ def store_artifact(value: Any, state_dir: Path) -> Path | None:
     return target
 
 
+def read_store_file(path: Path, root: Path) -> tuple[bytes, float] | None:
+    """(bytes, mtime) of a regular file inside ``root``, else None.
+
+    The path is resolved first, so a file or directory link leading out of the
+    store is refused, and the file is opened without blocking and checked by
+    descriptor before anything is read: a FIFO or a device swapped in after an
+    earlier check must not hang a worker that cannot be cancelled mid-read.
+    ``root`` must already be resolved.
+    """
+    try:
+        target = Path(path).resolve()
+        if not target.is_relative_to(root):
+            return None
+        fd = os.open(target, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0))
+    except (OSError, ValueError):
+        return None
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            return None
+        with os.fdopen(fd, "rb") as handle:
+            fd = -1
+            return handle.read(), info.st_mtime
+    except OSError:
+        return None
+    finally:
+        if fd != -1:
+            os.close(fd)
+
+
 def _read_session(path: Path) -> tuple[dict[str, Any] | None, list[dict[str, Any]]] | None:
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
@@ -578,6 +610,7 @@ __all__ = [
     "collect_selection",
     "cut_session_record",
     "plan_selection",
+    "read_store_file",
     "session_turns",
     "store_artifact",
     "traces_present",

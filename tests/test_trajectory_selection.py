@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -632,3 +633,22 @@ def test_the_mark_shape_is_not_a_redaction_finding(tmp_path):
     control.mkdir()
     (control / "session.jsonl").write_text(json.dumps({**row, "trace_id": "9f2c4e71b8a3d605e1f7c2b94a6d0e83"}) + "\n")
     assert redact_bundle(control, tmp_path / "control-out", secrets=[]).findings, "the scan must see a bare hex id"
+
+
+def test_read_store_file_reads_only_regular_files_inside_the_root(state, tmp_path):
+    root = (state / "logs" / "audit-artifacts").resolve()
+    inside = Path(_input_artifact(state, "ok", "hello"))
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside", encoding="utf-8")
+    link = inside.parent / "link.json"
+    link.symlink_to(outside)
+    data, mtime = sel.read_store_file(inside, root)
+    assert json.loads(data)["content"] == "hello" and mtime > 0
+    assert sel.read_store_file(link, root) is None
+    assert sel.read_store_file(outside, root) is None
+    assert sel.read_store_file(inside.parent, root) is None
+    assert sel.read_store_file(inside.parent / "missing.json", root) is None
+    if hasattr(os, "mkfifo"):
+        fifo = inside.parent / "fifo.json"
+        os.mkfifo(fifo)
+        assert sel.read_store_file(fifo, root) is None

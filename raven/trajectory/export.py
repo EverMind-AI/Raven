@@ -31,7 +31,6 @@ import json
 import os
 import re
 import secrets
-import stat
 import tarfile
 import time
 from dataclasses import dataclass
@@ -42,7 +41,7 @@ from typing import Any, Callable
 from raven import __version__
 from raven.tracing import artifact_v2
 from raven.tracing import config as tracing_config
-from raven.trajectory.selection import Selection, SessionCut, store_artifact
+from raven.trajectory.selection import Selection, SessionCut, read_store_file, store_artifact
 
 EXPORT_SCHEMA = "raven_trajectory_export"
 EXPORT_FORMAT_VERSION = 1
@@ -131,32 +130,7 @@ def _member(name: str, size: int, mtime: float) -> tarfile.TarInfo:
 
 
 def _read(path: Path, root: Path) -> tuple[bytes, float] | None:
-    """(bytes, mtime) of a regular file inside ``root``, else None.
-
-    The path is resolved first, so a file or directory link leading out of the
-    store is refused, and the file is opened without blocking and checked by
-    descriptor before anything is read: a FIFO or a device swapped in after a
-    check must not hang the export, which cannot be cancelled mid-read.
-    """
-    try:
-        target = path.resolve()
-        if not target.is_relative_to(root):
-            return None
-        fd = os.open(target, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0))
-    except (OSError, ValueError):
-        return None
-    try:
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode):
-            return None
-        with os.fdopen(fd, "rb") as handle:
-            fd = -1
-            return handle.read(), info.st_mtime
-    except OSError:
-        return None
-    finally:
-        if fd != -1:
-            os.close(fd)
+    return read_store_file(path, root)
 
 
 def write_export(

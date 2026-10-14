@@ -487,8 +487,80 @@ def apply_review_decisions(
     )
 
 
+# Reasons whose content the review screen already presents as items; the
+# remaining reasons are the warning lines a screen must still show.
+REVIEW_ITEM_REASON_PREFIXES = ("residual scan flagged", "the original trajectory contained")
+CONTEXT_WINDOW = 200
+WHOLE_LINE_LIMIT = 300
+
+
+def review_warnings(reasons: Iterable[str]) -> list[str]:
+    return [reason for reason in reasons if not reason.startswith(REVIEW_ITEM_REASON_PREFIXES)]
+
+
+def occurrence_display(occurrence: dict[str, Any]) -> tuple[str, list[tuple[int, int]]]:
+    """(rendered context, highlight spans) for one occurrence.
+
+    Short lines render whole with every hit of the value highlighted (two
+    hits on one line must not lose their positions to display-text dedup);
+    long lines get a window centered on this occurrence, so hits at other
+    positions naturally render as distinct texts.
+    """
+    line, start, end = occurrence["line"], occurrence["start"], occurrence["end"]
+    token = line[start:end]
+    stripped = line.strip()
+    if len(stripped) <= WHOLE_LINE_LIMIT:
+        offset = line.find(stripped) if stripped else 0
+        spans = [(m.start(), m.end()) for m in re.finditer(re.escape(token), stripped)] if token else []
+        return stripped, spans or [(max(0, start - offset), max(0, end - offset))]
+    lo = max(0, start - CONTEXT_WINDOW)
+    hi = min(len(line), end + CONTEXT_WINDOW)
+    prefix = "..." if lo else ""
+    suffix = "..." if hi < len(line) else ""
+    text = prefix + line[lo:hi] + suffix
+    return text, [(len(prefix) + start - lo, len(prefix) + end - lo)]
+
+
+def grouped_occurrences(item: ReviewItem, *, limit: int | None = None) -> tuple[list[dict[str, Any]], int]:
+    """An item's occurrences merged by rendered context: (the first ``limit`` groups, the group count).
+
+    Each group carries its ``text``, the highlight ``spans`` of every
+    occurrence that rendered to it, those ``occurrences``, and the source
+    ``label`` of the first of them.
+    """
+    groups: list[dict[str, Any]] = []
+    by_text: dict[str, dict[str, Any]] = {}
+    for occurrence in item.occurrences:
+        text, spans = occurrence_display(occurrence)
+        group = by_text.get(text)
+        if group is None:
+            group = {"text": text, "spans": [], "occurrences": [], "label": occurrence.get("label", "")}
+            by_text[text] = group
+            groups.append(group)
+        # Two windows on a long line can render the same text from different
+        # hit positions; every occurrence's spans must survive the merge.
+        for span in spans:
+            if span not in group["spans"]:
+                group["spans"].append(span)
+        group["occurrences"].append(occurrence)
+    return (groups if limit is None else groups[:limit]), len(groups)
+
+
+def decision_counts(decisions: Iterable[dict[str, Any]]) -> dict[str, int]:
+    """How many recorded decisions kept, redacted and acknowledged a value."""
+    counts = {ACTION_KEPT: 0, ACTION_REDACTED: 0, ACTION_ACKNOWLEDGED: 0}
+    for entry in decisions:
+        action = entry.get("action")
+        if action in counts:
+            counts[action] += 1
+    return counts
+
+
 __all__ = [
     "ACTION_ACKNOWLEDGED",
+    "CONTEXT_WINDOW",
+    "REVIEW_ITEM_REASON_PREFIXES",
+    "WHOLE_LINE_LIMIT",
     "ACTION_KEPT",
     "ACTION_REDACTED",
     "KIND_CONFIRMED",
@@ -501,5 +573,9 @@ __all__ = [
     "ReviewOutcome",
     "apply_review_decisions",
     "build_review_items",
+    "decision_counts",
+    "grouped_occurrences",
+    "occurrence_display",
+    "review_warnings",
     "validate_review_decisions",
 ]

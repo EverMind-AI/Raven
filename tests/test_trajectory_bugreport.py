@@ -1595,3 +1595,68 @@ def test_reports_order_by_creation_time_not_directory_name(tmp_path):
     listed = breport.list_reports(tmp_path / "traces")
 
     assert [record["report_id"] for _dir, record in listed] == ["br-20260905-000000", "br-20260905-ffffff"]
+
+
+# ── staging and finishing apart ────────────────────────────────────────
+
+_INNER = "Hj5tR8uE3iO7pA1sD4fGk9lZ"
+_OUTER = _INNER + "W6xC2v"
+
+
+def test_stage_review_offers_the_items_freeze_export_would_ask_about(state, workspace, tmp_path):
+    asked: list[list[str]] = []
+
+    def record(items, reasons):
+        asked.append([item.id for item in items])
+        return _decide_all()(items, reasons)
+
+    prep = _prepared(state, workspace)
+    breport.freeze_export(prep, description=f"token {_ENTROPY_TOKEN}", decide=record)
+    prep.cleanup()
+
+    staged = _prepared(state, workspace)
+    stage = breport.stage_review(staged, description=f"token {_ENTROPY_TOKEN}")
+    assert [item.id for item in stage.items] == asked[0] and stage.items
+    assert stage.reasons == staged.reasons and stage.raw_fields["description"] == f"token {_ENTROPY_TOKEN}"
+    decisions = _decide_all(treview.ACTION_REDACTED)(stage.items, stage.reasons)
+    finished = breport.finish_export(staged, stage, decisions)
+    recorded = {entry["id"]: entry["action"] for entry in finished.package_metadata["redaction"]["user_decisions"]}
+    assert recorded == {decision.item_id: decision.action for decision in decisions}
+    assert _ENTROPY_TOKEN not in json.dumps(finished.package_metadata)
+    staged.cleanup()
+
+
+def test_a_preparation_is_staged_once(state, workspace):
+    prep = _prepared(state, workspace)
+    breport.stage_review(prep, description="first")
+    with pytest.raises(breport.BugReportError, match="already been staged"):
+        breport.stage_review(prep, description="again")
+    prep.cleanup()
+
+
+def test_finishing_refuses_decisions_for_a_report_without_items(state, workspace):
+    prep = _prepared(state, workspace)
+    stage = breport.stage_review(prep, description="plain words only")
+    assert stage.items == []
+    with pytest.raises(breport.BugReportError, match="without review items"):
+        breport.finish_export(prep, stage, [treview.ReviewDecision("x", treview.ACTION_KEPT)])
+    assert breport.finish_export(prep, stage, []).package_metadata is not None
+    prep.cleanup()
+
+
+def test_conflicting_linked_decisions_freeze_nothing(state, workspace):
+    prep = _prepared(state, workspace)
+    stage = breport.stage_review(prep, description=f"{_INNER} then {_OUTER}")
+    by_token = {item.token: item for item in stage.items}
+    decisions = [
+        treview.ReviewDecision(by_token[_INNER].id, treview.ACTION_KEPT),
+        treview.ReviewDecision(by_token[_OUTER].id, treview.ACTION_REDACTED),
+    ] + [
+        treview.ReviewDecision(item.id, treview.ACTION_KEPT)
+        for item in stage.items
+        if item.token not in (_INNER, _OUTER)
+    ]
+    with pytest.raises(treview.ReviewConflictError):
+        breport.finish_export(prep, stage, decisions)
+    assert not prep.export_dir.exists()
+    prep.cleanup()
