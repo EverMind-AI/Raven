@@ -2856,15 +2856,22 @@ teardown can leave its agents' groups running with nobody on the other end of th
 Linux the agent starts through an exec wrapper (`_WRAPPER`) that arms `PR_SET_PDEATHSIG`, so
 where the signal is armed and survives the exec (a set-id or file-capability binary clears it)
 its direct process ends when the thread that launched it does, which for an agent launched
-from the host's event loop is when the host dies. Every host records the ACP agent groups it
+from the host's event loop is when the host dies. Every Linux host records the ACP agent groups it
 launched in a file of its own under `acp-launches/` in the config file's directory
 (`<raven home>` unless `--config` moves it), and the first launch in any process ends the
 groups recorded by hosts that have since died, in the same boot and PID namespace, and only
 where a surviving member still carries the dead host's mark and, while the leader still runs,
 its start time matches the record - the group number alone can have been handed out again. Not
-covered: anything but Linux, a group whose record was never written (its host died first, the
+covered by the Linux sweep: other platforms, a group whose record was never written (its host died first, the
 write failed, or its leader had already exited when the record was taken), and agents started
 by a Raven older than the records.
+
+On Windows, each locally launched ACP connection owns an unnamed, non-inheritable Job Object with
+`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. A launcher waits for one byte on stdin before starting
+the agent; the host sends it only after assigning the launcher to the job. Host death before
+assignment closes stdin, so no agent starts. After assignment, host death or closing the
+connection closes the job's only handle, ending its processes and descendants even if the
+original launcher has already exited. macOS still relies on explicit connection teardown.
 _Avoid_: "orphaned" - in POSIX terms every agent group is an orphaned process group from the
 moment it starts, since its session does not hold the host; and the DAG vocabulary rules the
 word out for a released run.
