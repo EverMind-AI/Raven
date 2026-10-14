@@ -1162,7 +1162,7 @@ requires-dist = [
 
 [[package]]
 name = "everos-memory"
-version = "1.4.1"
+version = "1.4.2"
 source = { editable = "plugins-dist/everos-memory" }
 dependencies = [
     { name = "everos", extra = ["multimodal"] },

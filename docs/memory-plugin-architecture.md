@@ -370,9 +370,13 @@ Single pin: EverOS is pinned in **one** place, the plugin's own
    notes for any bump whose migration behaves this way. An upgrade whose
    only record is a pull-request description is known to whoever read
    that description.
-5. **Finalize**: bump the manifest `version`. Two tests assert it as a
-   literal and must be updated with it —
-   `test_everos_plugin_discovery.py::test_bundled_shadows_lower_priority_source`
+5. **Finalize**: set the plugin's own `version` to the EverOS version it
+   pins — the two are read together, and a plugin `1.4.0` that ships EverOS
+   `1.4.1` only invites the question which of them a given install has.
+   Three files carry it: `pyproject.toml`, `raven_everos/raven-plugin.toml`,
+   `raven_everos/__init__.py`. Two tests assert it as a literal and must be
+   updated with it —
+   `test_everos_plugin_discovery.py::TestPackageSurface::test_imports_clean`
    and `test_cli_plugin_commands.py::TestActiveBackend::test_lists_everos_memory`.
    Then commit
    `pyproject.toml` + `uv.lock` + adapter changes. Rollback =
@@ -553,7 +557,10 @@ any width. The wizard's own check reads the same constant and probe.
 ### 7.5 Record: `1.4.1` -> `1.4.2`
 
 One package moved: `everos` `1.4.1` -> `1.4.2`. EverOS declares the same 36
-requirements in both releases, so nothing else in the lock follows it.
+requirements in both releases, so nothing else in the lock follows it. The
+plugin's own version goes `1.4.0` -> `1.4.2` rather than `1.4.1`: step 5 now
+holds it equal to the EverOS it pins, and the number this upgrade skips is the
+gap that rule closes.
 
 **No adapter change.** Every internal symbol the adapter reaches is present
 in `1.4.2` with the same signature, the package layout churn underneath
