@@ -2,8 +2,7 @@
 
 The trajectory RPC surface is announced at the handshake (``trajectory-v1``)
 only while this policy is enabled, and every handler consults it again before
-it answers. Today the only source of truth is a launch flag, armed once before
-the first client connects; a settings entry or a developer mode can later
+it answers. It is on by default. A settings entry or a developer mode can
 replace the getter without touching the readers, and every replacement bumps
 ``revision``. A source that can change while clients are connected must also
 make them handshake again, since the announcement is read only then.
@@ -17,7 +16,7 @@ from typing import Callable
 
 @dataclass
 class TrajectoryPolicy:
-    enabled_getter: Callable[[], bool] = field(default=lambda: False)
+    enabled_getter: Callable[[], bool] = field(default=lambda: True)
     revision: int = 0
 
     def enabled(self) -> bool:
@@ -33,12 +32,8 @@ class TrajectoryPolicy:
 
 
 POLICY = TrajectoryPolicy()
-"""The process-wide policy, armed once by the hosting entrance at launch.
-
-Same shape as :data:`raven.rpc.serve_control.SERVE`: the command that starts
-the process says whether the view is enabled, and every reader -- the RPC
-handlers, the health endpoint -- consults this one object.
-"""
+"""The process-wide policy; every reader -- the RPC handlers, the health
+endpoint, the handshake -- consults this one object."""
 
 
 def arm(enabled: bool) -> None:
@@ -50,7 +45,7 @@ def current() -> TrajectoryPolicy:
 
 
 def _reset_for_tests() -> None:
-    POLICY.enabled_getter = lambda: False
+    POLICY.enabled_getter = lambda: True
     POLICY.revision = 0
 
 

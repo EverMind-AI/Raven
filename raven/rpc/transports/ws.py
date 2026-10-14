@@ -269,8 +269,8 @@ class WsGateway:
                 "service": "raven-serve",
                 "server_version": SERVER_VERSION,
                 "schema_version": SCHEMA_VERSION,
-                # What a relauncher needs to know before attaching: whether this
-                # process serves the trajectory view (``raven --dev``).
+                # Whether this process serves the trajectory view; on unless
+                # the trajectory policy's source was replaced with one that is off.
                 "trajectory_view": trajectory_policy.current().enabled(),
             }
         )

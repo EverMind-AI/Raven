@@ -13,7 +13,7 @@
  *
  * `system.hello` is the third source and the coarsest: `server_capabilities`
  * announces "jsonrpc-2.0", "subscriptions" and "cli-dispatch", plus
- * "trajectory-v1" from a process launched with `--dev`, and nothing finer
+ * "trajectory-v1" whenever the trajectory policy is on (the default), and nothing finer
  * (raven/rpc/methods/system.py), so `absorb()` records it and `serves()`
  * reads it -- and none of the field questions below can be answered from it.
  */
@@ -72,9 +72,9 @@ const field = (holder: unknown, name: string): unknown =>
   holder !== null && typeof holder === 'object' ? (holder as Record<string, unknown>)[name] : undefined
 
 /**
- * The gateway serves the `trajectory.*` methods: it announces them only when
- * it was launched with the view enabled. `trajectory.state` still says whether
- * the view is on, and a refusal still stops the asking.
+ * The gateway serves the `trajectory.*` methods: it announces them while its
+ * trajectory policy is on, which is the default. `trajectory.state` still says
+ * whether the view is on, and a refusal still stops the asking.
  */
 export const servesTrajectory = (): boolean => serves('trajectory-v1')
 

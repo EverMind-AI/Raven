@@ -1755,9 +1755,15 @@ def test_the_gateway_takes_its_control_port_from_the_fallback() -> None:
     assert "pick_port(8765)" not in src, "an inline probe has no fallback to fall back to"
 
 
-def test_gateway_dev_flag_arms_the_trajectory_policy(monkeypatch, tmp_config) -> None:
-    """`--dev` is read before anything heavy starts: the install guard is the
-    first real step, so stopping it there proves the policy was armed first."""
+def test_gateway_rejects_dev() -> None:
+    r = CliRunner(mix_stderr=False).invoke(app, ["gateway", "--dev"])
+    assert r.exit_code == 2
+    assert "No such option" in r.stderr
+
+
+def test_gateway_serves_the_trajectory_view_by_default(monkeypatch, tmp_config) -> None:
+    """Stopped at the install guard, the gateway's first real step: by then the
+    policy must still be the default one, enabled and never re-armed."""
     from raven.cli import serve_commands
     from raven.trajectory import policy
 
@@ -1768,9 +1774,8 @@ def test_gateway_dev_flag_arms_the_trajectory_policy(monkeypatch, tmp_config) ->
 
     monkeypatch.setattr(serve_commands, "_refuse_incomplete_install", halt)
     try:
-        r = runner.invoke(app, ["gateway", "--dev"])
-        assert r.exit_code != 0 and policy.current().enabled() is True
         r = runner.invoke(app, ["gateway"])
-        assert r.exit_code != 0 and policy.current().enabled() is False
+        assert r.exit_code != 0
+        assert policy.current().enabled() is True and policy.current().revision == 0
     finally:
         policy._reset_for_tests()

@@ -35,9 +35,9 @@ if TYPE_CHECKING:
 SERVER_VERSION = "0.1.0"
 SCHEMA_VERSION = "0.1.0"
 SERVER_CAPABILITIES = ["jsonrpc-2.0", "subscriptions", "cli-dispatch"]
-# Announced only by a process launched with --dev. The policy is armed once at
-# launch, so a page that does not see it at the handshake has nothing to ask
-# the trajectory surface, and a normal launch never polls it.
+# Announced while the trajectory policy is on, which it is by default. A page
+# reads the announcement at the handshake only, so one that does not see it
+# there has nothing to ask the trajectory surface and never polls it.
 TRAJECTORY_CAPABILITY = "trajectory-v1"
 
 # Lenient semver: <major>.<minor>.<patch> with optional `-prerelease` / `+build`.
@@ -291,9 +291,6 @@ async def system_upgrade(params: dict) -> dict:
             parent_pid = SERVE.supervisor_pid or parent_pid
         else:
             relaunch = [str(raven_bin), "serve", "--port", str(SERVE.port)]
-        if trajectory_policy.current().enabled():
-            # The flag lives in this process only; the relaunched one must be told again.
-            relaunch.append("--dev")
         # Same port, same credentials: the browser reconnects to the origin it
         # already has and presents the cookie it already holds, so it stays
         # signed in across the restart instead of hitting an auth wall. Both

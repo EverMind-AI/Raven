@@ -167,12 +167,12 @@ async def _list_all(dispatcher: Dispatcher) -> tuple[list[dict], dict]:
 
 async def test_state_is_always_answerable_and_reports_policy(monkeypatch):
     dispatcher = _dispatcher()
-    off = await _call(dispatcher, "trajectory.state", {})
-    TrajectoryStateResult.model_validate(off["result"])
-    assert off["result"] == {"enabled": False, "policy_revision": 0, "recording_enabled": True}
-    tpol.arm(True)
     on = await _call(dispatcher, "trajectory.state", {})
-    assert on["result"]["enabled"] is True and on["result"]["policy_revision"] == 1
+    TrajectoryStateResult.model_validate(on["result"])
+    assert on["result"] == {"enabled": True, "policy_revision": 0, "recording_enabled": True}
+    tpol.arm(False)
+    off = await _call(dispatcher, "trajectory.state", {})
+    assert off["result"]["enabled"] is False and off["result"]["policy_revision"] == 1
     monkeypatch.setenv("RAVEN_TRACING", "0")
     assert (await _call(dispatcher, "trajectory.state", {}))["result"]["recording_enabled"] is False
 
@@ -188,6 +188,7 @@ async def test_the_state_poll_lets_go_of_indexes_nobody_reads(monkeypatch):
 
 
 async def test_data_methods_refuse_when_disabled():
+    tpol.arm(False)
     dispatcher = _dispatcher()
     calls = {
         "trajectory.list": {"session_key": SESSION},
@@ -543,8 +544,8 @@ async def test_health_reports_the_trajectory_view_flag():
 
     gateway = WsGateway()
     request = make_mocked_request("GET", "/health")
-    off = json.loads((await gateway.handle_health(request)).text)
-    assert off["service"] == "raven-serve" and off["trajectory_view"] is False
-    tpol.arm(True)
     on = json.loads((await gateway.handle_health(request)).text)
-    assert on["trajectory_view"] is True and on["ok"] is True
+    assert on["service"] == "raven-serve" and on["trajectory_view"] is True and on["ok"] is True
+    tpol.arm(False)
+    off = json.loads((await gateway.handle_health(request)).text)
+    assert off["trajectory_view"] is False
