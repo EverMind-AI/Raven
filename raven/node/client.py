@@ -548,6 +548,12 @@ class NodePool:
                 node = await self._launch(machine_id)
             except NodeError as exc:
                 self._errors[machine_id] = str(exc)
+                if self._parked.get(machine_id):
+                    # Agents wait for this machine: the link is tried again
+                    # on the backoff, as after a heartbeat loss, and not only
+                    # by whatever call comes next.
+                    self._errors[machine_id] = f"{exc}; reconnecting"
+                    self._retry_later(machine_id)
                 raise
             self._nodes[machine_id] = node
             self._errors.pop(machine_id, None)
@@ -675,6 +681,10 @@ class NodePool:
         logger.warning("raven node on machine {}: link lost: {}", node.target.id, said)
         self._errors[machine_id] = f"{said}; reconnecting"
         await self._drop(machine_id, said)
+        self._retry_later(machine_id)
+
+    def _retry_later(self, machine_id: str) -> None:
+        """Try the link again on the backoff, unless a try is under way already or the pool is closing."""
         if not self._closing and machine_id not in self._reconnects:
             self._reconnects[machine_id] = asyncio.create_task(
                 self._reconnect(machine_id), name=f"node-reconnect-{machine_id}"

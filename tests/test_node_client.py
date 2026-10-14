@@ -1074,6 +1074,37 @@ async def test_a_call_that_replaces_a_dead_link_attaches_the_parked_agents_again
     await pool.close_all()
 
 
+async def test_a_relaunch_that_fails_under_a_call_still_reconnects_for_the_parked_agents(tmp_path, monkeypatch):
+    """The link died unnoticed and the call's own relaunch failed: the agents wait on the backoff, as after a heartbeat loss."""
+    pool = NodePool(heartbeat_s=60.0, backoff_s=(0.01, 0.01))
+    client = _live(pool, tmp_path)
+    endpoint = ChannelEndpoint(client, 1, target=_box(), agent="echo@box")  # type: ignore[arg-type]
+    pool._nodes["box"].channels[1] = endpoint
+    tried: list[str] = []
+    again = _Client()
+
+    async def launch(machine_id: str) -> _Node:
+        tried.append(machine_id)
+        if len(tried) == 1:
+            raise NodeError("machine 'Lab box' (box) could not be reached")
+        return _Node(again, _box(), tmp_path / "box.log", {"home": "/h"}, {})  # type: ignore[arg-type]
+
+    monkeypatch.setattr(pool, "_launch", launch)
+    client.alive = False
+
+    with pytest.raises(NodeError, match="could not be reached"):
+        await pool.call("box", protocol.PING, {})
+    assert pool.waiting("box") == 1 and pool.status("box").state == "lost"
+    assert "box" in pool._reconnects, (
+        "an agent waits: the link is tried again on the backoff, not only by the next call"
+    )
+
+    await _until(lambda: endpoint.detached is None and len(tried) == 2)
+    assert (protocol.AGENT_ATTACH, {"channel": 1, "task": endpoint.task, "after": 0}) in [a[:2] for a in again.asked]
+    assert pool.status("box").state == "connected"
+    await pool.close_all()
+
+
 class _Gone(_Client):
     """A connection that answers requests but can carry no notification: it died right after the attach."""
 
