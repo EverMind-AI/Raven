@@ -2957,6 +2957,51 @@ class TestTheSupervisorStartsWithoutTheCommandTable:
             serve_commands.supervise_from_argv(self.ARGV)
         assert ended.value.code == 1
 
+    @staticmethod
+    def _launch_on(platform: str, argv: list[str], monkeypatch) -> list[tuple]:
+        """Run the entry point with stdout and stderr in an ANSI code page, recording how
+        both streams and ``PYTHONIOENCODING`` stood when the process was handed over."""
+        import os
+
+        from raven.cli import commands, entry
+        from raven.security import tls
+
+        class Stream:
+            encoding = "cp1252"
+            reconfigured: dict | None = None
+
+            def reconfigure(self, **kwargs) -> None:
+                self.reconfigured = kwargs
+
+        out, err = Stream(), Stream()
+        seen: list[tuple] = []
+
+        def handed_over(*_a, **_kw) -> None:
+            seen.append((out.reconfigured, err.reconfigured, os.environ.get("PYTHONIOENCODING")))
+
+        monkeypatch.setattr(tls, "use_system_ca", lambda: None)
+        monkeypatch.setattr(serve_commands, "_web", handed_over)
+        monkeypatch.setattr(commands, "run", handed_over)
+        monkeypatch.delenv("PYTHONIOENCODING", raising=False)
+        monkeypatch.setattr(sys, "argv", ["raven", *argv])
+        monkeypatch.setattr(sys, "stdout", out)
+        monkeypatch.setattr(sys, "stderr", err)
+        monkeypatch.setattr(sys, "platform", platform)
+        entry.run()
+        return seen
+
+    @pytest.mark.parametrize("argv", [ARGV, ["status"]], ids=["the supervisor", "a command"])
+    def test_on_windows_every_launch_writes_its_streams_in_utf8(self, monkeypatch, argv: list[str]) -> None:
+        """The supervisor's stdout and stderr are ``web.log``, which its gateway writes in
+        UTF-8, and the gateway it starts inherits ``PYTHONIOENCODING``. The command table
+        set both as it was imported, and the supervisor no longer imports it."""
+        utf8 = {"encoding": "utf-8", "errors": "replace"}
+
+        assert self._launch_on("win32", argv, monkeypatch) == [(utf8, utf8, "utf-8")]
+
+    def test_elsewhere_the_streams_are_left_as_they_are(self, monkeypatch) -> None:
+        assert self._launch_on("linux", self.ARGV, monkeypatch) == [(None, None, None)]
+
     def test_raven_web_starts_it_with_that_argv(self, home: Path, web_calls, monkeypatch) -> None:
         import subprocess
 
