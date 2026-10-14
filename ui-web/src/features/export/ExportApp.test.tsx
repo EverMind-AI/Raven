@@ -52,6 +52,13 @@ const src: ExportSource = {
     return next
   },
   cancel: async (jobId) => { cancels.push(jobId); return { ok: true } },
+  reportStart: () => Promise.reject(new Error('not scripted')),
+  reportStatus: () => Promise.reject(new Error('not scripted')),
+  reportItem: () => Promise.reject(new Error('not scripted')),
+  reportDecide: () => Promise.reject(new Error('not scripted')),
+  reportUpload: () => Promise.reject(new Error('not scripted')),
+  reportRetry: () => Promise.reject(new Error('not scripted')),
+  reportCancel: async () => ({ ok: true }),
 }
 
 const FRAME = '<div id="exportVeil" data-open="false"><div id="exportModal" tabindex="-1"><div id="exportBody"></div></div></div>'

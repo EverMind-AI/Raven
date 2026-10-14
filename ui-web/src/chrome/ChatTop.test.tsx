@@ -194,6 +194,13 @@ describe('the chat column chrome and the trajectory view', () => {
     start: () => Promise.reject(new Error('not scripted')),
     status: () => Promise.reject(new Error('not scripted')),
     cancel: async () => ({ ok: true }),
+    reportStart: () => Promise.reject(new Error('not scripted')),
+    reportStatus: () => Promise.reject(new Error('not scripted')),
+    reportItem: () => Promise.reject(new Error('not scripted')),
+    reportDecide: () => Promise.reject(new Error('not scripted')),
+    reportUpload: () => Promise.reject(new Error('not scripted')),
+    reportRetry: () => Promise.reject(new Error('not scripted')),
+    reportCancel: async () => ({ ok: true }),
   }
 
   beforeEach(() => {
@@ -318,6 +325,18 @@ describe('the chat column chrome and the trajectory view', () => {
     act(() => { menu.pick(row!) })
     expect(el('menu').dataset.open).toBe('false')
     expect(exportWizard.get().open).toBe(true)
+    expect(exportWizard.get().sessionKey).toBe('gui:a')
+  })
+
+  it('adds Report a problem while the gateway announces a bug report receiver, and it opens the report', async () => {
+    render()
+    await offer()
+    absorb(['trajectory-v1', 'bugreport-v1'])
+    act(() => { el('moreBtn').click() })
+    const rows = menu.get().items as menu.MenuItem[]
+    expect(rows.map((row) => row.label)).toEqual(['Export', 'Report a problem'])
+    act(() => { menu.pick(rows[1]!) })
+    expect(exportWizard.get().flow).toBe('report')
     expect(exportWizard.get().sessionKey).toBe('gui:a')
   })
 

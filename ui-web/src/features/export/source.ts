@@ -7,6 +7,9 @@ import type { ExportSource, InvalidTurn } from './types'
 export const DISABLED_CODE = -32020
 export const NOT_FOUND_CODE = -32024
 export const LIMIT_CODE = -32025
+export const UNAVAILABLE_CODE = -32026
+export const CONFLICT_CODE = -32027
+export const STATE_CODE = -32028
 const INVALID_PARAMS_CODE = -32602
 
 export const exportSource: ExportSource = {
@@ -15,6 +18,16 @@ export const exportSource: ExportSource = {
     gateway().call('trajectory.export', { session_key: sessionKey, trace_ids: traceIds, file_name: fileName }),
   status: (jobId) => gateway().call('trajectory.export_status', { job_id: jobId }),
   cancel: (jobId) => gateway().call('trajectory.export_cancel', { job_id: jobId }),
+  reportStart: (sessionKey, traceIds, problem) =>
+    gateway().call('bugreport.start', { session_key: sessionKey, trace_ids: traceIds, problem }),
+  reportStatus: (reportId) => gateway().call('bugreport.status', { report_id: reportId }),
+  reportItem: (reportId, itemId) => gateway().call('bugreport.item', { report_id: reportId, item_id: itemId }),
+  reportDecide: (reportId, decisions, acknowledged) =>
+    gateway().call('bugreport.decide', { report_id: reportId, decisions, acknowledged }),
+  reportUpload: (reportId, riskAccepted) =>
+    gateway().call('bugreport.upload', { report_id: reportId, risk_accepted: riskAccepted }),
+  reportRetry: (reportId) => gateway().call('bugreport.retry_upload', { report_id: reportId }),
+  reportCancel: (reportId) => gateway().call('bugreport.cancel', { report_id: reportId }),
 }
 
 const codeOf = (err: unknown): number | null =>
@@ -33,8 +46,37 @@ export const isDisabled = (err: unknown): boolean => codeOf(err) === DISABLED_CO
 /** The job is no longer the gateway's: it restarted, or the job's record expired. */
 export const isGone = (err: unknown): boolean => codeOf(err) === NOT_FOUND_CODE
 
-/** As many exports are running as the gateway allows. */
+/** As many exports, or bug reports, are running as the gateway allows. */
 export const isLimit = (err: unknown): boolean => codeOf(err) === LIMIT_CODE
+
+/* The gateway answered with a refusal of its own. A transport failure (the
+   socket closed, or never opened) carries -1, and an error without a code is
+   no answer at all: either way the call may or may not have been taken. */
+export const answered = (err: unknown): boolean => {
+  const code = codeOf(err)
+  return code !== null && code !== -1
+}
+
+/** The gateway has no bug report receiver configured. */
+export const isUnavailable = (err: unknown): boolean => codeOf(err) === UNAVAILABLE_CODE
+
+const ids = (value: unknown): string[] =>
+  Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : []
+
+/** The linked items that were given different decisions, or null for any other error. */
+export const conflictOf = (err: unknown): string[] | null =>
+  codeOf(err) === CONFLICT_CODE ? ids(dataOf(err).item_ids) : null
+
+/** Why the report refused a step in its phase, or null for any other error. */
+export function stateOf(err: unknown): { phase: string; reason: string; itemIds: string[] } | null {
+  if (codeOf(err) !== STATE_CODE) return null
+  const data = dataOf(err)
+  return {
+    phase: typeof data.phase === 'string' ? data.phase : '',
+    reason: typeof data.reason === 'string' ? data.reason : '',
+    itemIds: ids(data.item_ids),
+  }
+}
 
 /* The selection was refused turn by turn: each one the gateway would not take
    and why. Any other invalid-params answer is an ordinary error. */

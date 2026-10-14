@@ -17,9 +17,18 @@
 .export-step + .export-step::before { content: ""; flex: 1; min-width: 24px; height: 2px; border-radius: 2px;
   margin: 0 10px 0 8px; background: var(--line); }
 .export-step[data-state="done"] + .export-step::before { background: var(--moss); }
-.export-dot { width: 18px; height: 18px; border-radius: 99px; border: 1.5px solid var(--line); display: grid;
+.export-dot { flex: none; width: 18px; height: 18px; border-radius: 99px; border: 1.5px solid var(--line); display: grid;
   place-items: center; font-size: 10px; font-weight: 700; color: var(--faint); background: var(--paper); }
+.export-step[data-state="skipped"] .export-dot { border-style: dashed; }
+/* Four steps do not fit beside the title in the dialog's width, so the bug
+   report's strip always takes a row of its own under it. */
+.export-app[data-flow="report"] .export-top { flex-wrap: wrap; row-gap: 10px; }
+.export-app[data-flow="report"] .export-x { margin-left: auto; }
+.export-app[data-flow="report"] .export-steps { order: 3; flex-basis: 100%; }
 .export-step[data-state="current"] { color: var(--text); font-weight: 600; }
+/* The current step is as wide as its name and its connector; the others share
+   what is left, so a long name never pushes the strip past the dialog. */
+.export-step + .export-step[data-state="current"] { flex: 1 0 auto; }
 .export-step[data-state="current"] .export-dot { border-color: var(--amber); background: var(--amber-dp); color: var(--gold); }
 .export-step[data-state="done"] { color: var(--text); }
 .export-step[data-state="done"] .export-dot { border-color: var(--moss); color: var(--moss); }
@@ -87,6 +96,46 @@
 .export-done p { margin: 0; color: var(--moss); }
 .export-download { align-self: flex-start; color: var(--amber); font-size: 13px; }
 
+/* the problem */
+.export-text, .export-select { font: inherit; font-size: 14px; color: var(--text); padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--paper); }
+.export-text { resize: vertical; min-height: 60px; line-height: 1.5; }
+.export-text:focus, .export-select:focus { outline: none; border-color: var(--amber); }
+.export-text:disabled, .export-select:disabled { color: var(--muted); background: var(--surface); }
+.export-page > .export-hint { margin: -8px 0 0; }
+
+/* the decisions */
+.export-decide { display: flex; flex-direction: column; gap: 10px; }
+.export-decide .two-pane { height: 360px; }
+.export-history { display: flex; flex-direction: column; gap: 2px; font-size: 13px; color: var(--muted); }
+.export-history p { margin: 0; }
+.export-history p[data-bad] { color: var(--clay); }
+.export-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.export-tools .export-btn { padding: 5px 12px; font-size: 13px; }
+.export-item[data-bad] { border-radius: 8px; box-shadow: inset 0 0 0 1px var(--clay); }
+.export-ack { flex: none; display: flex; align-items: center; gap: 5px; margin-right: 8px; font-size: 12px;
+  color: var(--muted); cursor: pointer; }
+.export-ack input { margin: 0; accent-color: var(--amber); }
+.export-pager { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px;
+  color: var(--muted); }
+.export-pager .export-btn { padding: 3px 10px; font-size: 12px; }
+.export-ctxs { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
+.export-ctxgroup { display: flex; flex-direction: column; gap: 4px; }
+.export-ctxlab { font-size: 12px; color: var(--muted); }
+.export-ctx { margin: 0; padding: 8px 10px; border-radius: 8px; background: var(--surface); font-family: var(--mono);
+  font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.export-ctx mark { background: var(--amber-dp); color: var(--text); border-radius: 3px; padding: 0 1px; }
+
+/* the upload */
+.export-summary { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; font-size: 13px; }
+.export-summary dt { color: var(--muted); }
+.export-summary dd { margin: 0; overflow-wrap: anywhere; }
+.export-mono { font-family: var(--mono); }
+.export-warnings { margin: 0; padding-left: 18px; color: var(--clay); font-size: 13px; }
+.export-risk { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border-radius: 8px;
+  border: 1px solid color-mix(in oklab, var(--clay) 45%, transparent); font-size: 13px; cursor: pointer; }
+.export-risk input { margin: 2px 0 0; accent-color: var(--amber); }
+
 /* Narrow: the steps take a row of their own under the title and the close
    button, and only the current step keeps its name -- the rest are numbered
    dots -- so neither the strip nor the close button is cut off. The dialog is
@@ -102,4 +151,8 @@
      them a few characters wide. 23px is the checkbox and the row's gap. */
   .export-turn { flex-wrap: wrap; row-gap: 2px; }
   .export-preview { order: 9; flex: 1 0 100%; padding-left: 23px; }
+  /* The decisions' two columns stack: the list over the contexts. */
+  .export-decide .two-pane { grid-template-columns: 1fr; grid-template-rows: minmax(0, 45%) minmax(0, 1fr);
+    height: 520px; }
+  .export-decide .two-pane-side { border-right: 0; border-bottom: 1px solid var(--line-soft); }
 }

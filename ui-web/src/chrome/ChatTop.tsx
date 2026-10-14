@@ -44,6 +44,7 @@ import * as exportWizard from '../features/export/store'
 import { rename as renameSession } from '../features/rail/store'
 import * as trajectory from '../features/trajectory/store'
 import { t } from '../i18n/t'
+import { servesBugReport } from '../rpc/capabilities'
 import * as lang from '../state/lang'
 import { show as showMenu } from '../state/menu'
 import { Banner } from './Banner'
@@ -96,7 +97,8 @@ function Header(): JSX.Element {
    moves with the conversation, and disabled while there is nothing the menu
    could act on. Whether there is reads the trajectory store, as the toggle
    beside it does, through the export domain's own predicate. The rows are the
-   shared context menu's, placed under the button. */
+   shared context menu's, placed under the button: Export always, and Report a
+   problem while the gateway announces a bug report receiver. */
 function MoreButton(): JSX.Element {
   const state = useSyncExternalStore(trajectory.subscribe, trajectory.get)
   const key = state.sessionKey
@@ -115,6 +117,9 @@ function MoreButton(): JSX.Element {
         const r = e.currentTarget.getBoundingClientRect()
         showMenu(r.left, r.bottom + 4, [
           { label: t('gui.export.menu_export'), fn: () => exportWizard.open('export', key) },
+          ...(servesBugReport()
+            ? [{ label: t('gui.export.menu_report'), fn: () => exportWizard.open('report', key) }]
+            : []),
         ])
       }}
     >

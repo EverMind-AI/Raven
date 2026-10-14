@@ -7,7 +7,7 @@ import * as confirm from '../../state/confirm'
 import { resetSources, setSources } from '../../state/sources'
 import * as store from './store'
 
-import type { ExportSource, ExportStatus, ExportTurn, ExportTurns } from './types'
+import type { ExportSource, ExportStatus, ExportTurn, ExportTurns, ReportContexts, ReportItem, ReportStatus } from './types'
 
 interface Deferred<T> {
   promise: Promise<T>
@@ -37,16 +37,59 @@ const status = (state: ExportStatus['state'], jobId = 'exj-1'): ExportStatus => 
   error: null,
 })
 
+const item = (id: string, kind: ReportItem['kind'], linked: string[] = [], hint: ReportItem['hint'] = null): ReportItem => ({
+  id, kind, category: 'high-entropy', masked_sample: `${id}...`, count: 1, sources: [], linked, hint,
+})
+
+/* a and b are linked, b and c are linked: one group of three. d stands alone,
+   k is a confirmed secret with a hint the page must not apply. */
+const ITEMS: ReportItem[] = [
+  item('k', 'confirmed'),
+  item('a', 'suspected', ['b']),
+  item('b', 'suspected', ['a', 'c']),
+  item('c', 'suspected', ['b'], 'redacted'),
+  item('d', 'suspected'),
+]
+
+const rstatus = (phase: ReportStatus['phase'], patch: Partial<ReportStatus> = {}): ReportStatus => ({
+  report_id: 'rs-1',
+  bug_report_id: 'br-1',
+  phase,
+  error: null,
+  history: { state: 'on', auto_kept: 1, auto_redacted: 0, warning: null },
+  items: phase === 'deciding' ? ITEMS : null,
+  summary: ['ready', 'uploading', 'uploaded', 'upload_failed'].includes(phase)
+    ? { classification: 'needs_review', warnings: [], size_bytes: null, auto_replaced: 2, kept: 3, redacted: 1, acknowledged: 1, completeness: 'complete' }
+    : null,
+  receipt: phase === 'uploaded' ? { receipt_id: 'rcpt-1', duplicate: false } : null,
+  record_dir: null,
+  ...patch,
+})
+
 let calls: Array<[string, ...unknown[]]>
 let onTurns: () => Promise<ExportTurns>
 let onStart: () => Promise<{ job_id: string }>
 let onStatus: (jobId: string) => Promise<ExportStatus>
+let onReportStart: () => Promise<{ report_id: string }>
+let onReportStatus: (reportId: string) => Promise<ReportStatus>
+let onReportItem: (reportId: string, itemId: string) => Promise<ReportContexts>
+let onReportAct: (step: 'decide' | 'upload' | 'retry') => Promise<{ ok: boolean }>
 
 const fake: ExportSource = {
   turns: (key) => { calls.push(['turns', key]); return onTurns() },
   start: (key, ids, name) => { calls.push(['start', key, ids, name]); return onStart() },
   status: (jobId) => { calls.push(['status', jobId]); return onStatus(jobId) },
   cancel: (jobId) => { calls.push(['cancel', jobId]); return Promise.resolve({ ok: true }) },
+  reportStart: (key, ids, problem) => { calls.push(['reportStart', key, ids, problem]); return onReportStart() },
+  reportStatus: (reportId) => { calls.push(['reportStatus', reportId]); return onReportStatus(reportId) },
+  reportItem: (reportId, itemId) => { calls.push(['reportItem', reportId, itemId]); return onReportItem(reportId, itemId) },
+  reportDecide: (reportId, decisions, acknowledged) => {
+    calls.push(['reportDecide', reportId, decisions, acknowledged])
+    return onReportAct('decide')
+  },
+  reportUpload: (reportId, risk) => { calls.push(['reportUpload', reportId, risk]); return onReportAct('upload') },
+  reportRetry: (reportId) => { calls.push(['reportRetry', reportId]); return onReportAct('retry') },
+  reportCancel: (reportId) => { calls.push(['reportCancel', reportId]); return Promise.resolve({ ok: true }) },
 }
 
 const of = (method: string): Array<[string, ...unknown[]]> => calls.filter((call) => call[0] === method)
@@ -69,11 +112,16 @@ beforeEach(() => {
   calls = []
   onStart = () => Promise.resolve({ job_id: 'exj-1' })
   onStatus = (jobId) => Promise.resolve(status('running', jobId))
+  onReportStart = () => Promise.resolve({ report_id: 'rs-1' })
+  onReportStatus = () => Promise.resolve(rstatus('collecting'))
+  onReportItem = (_id, itemId) => Promise.resolve({ groups: [{ label: 'a tool result', text: itemId, spans: [[0, 1]], count: 1 }], total_groups: 1 })
+  onReportAct = () => Promise.resolve({ ok: true })
   setSources({ export: fake })
   setTranslator((key) => key)
 })
 
 afterEach(() => {
+  localStorage.clear()
   store._resetForTests()
   confirm._resetForTests()
   resetSources()
@@ -354,5 +402,349 @@ describe('closing', () => {
     await openOn([turn(1), turn(2)])
     confirm.answer(true)
     expect(store.get().open).toBe(true)
+  })
+})
+
+/* Open the bug report on three finished turns, step to the problem page and
+   describe it. */
+async function atProblemPage(): Promise<void> {
+  onTurns = () => Promise.resolve({ title: 'Plan', turns: [turn(1), turn(2), turn(3)] })
+  store.open('report', 'gui:a')
+  await settle()
+  store.next()
+  store.editProblem('description', 'it broke')
+}
+
+/* Filed and waiting for decisions, with the first item's contexts in. */
+async function atDecisions(): Promise<void> {
+  await atProblemPage()
+  onReportStatus = () => Promise.resolve(rstatus('deciding'))
+  await store.startReport()
+  await settle()
+}
+
+async function atUpload(phase: ReportStatus['phase'] = 'ready', patch: Partial<ReportStatus> = {}): Promise<void> {
+  await atProblemPage()
+  onReportStatus = () => Promise.resolve(rstatus(phase, patch))
+  await store.startReport()
+  await settle()
+}
+
+describe('the bug report flow', () => {
+  it('pages through the picker, the problem, the decisions and the upload', async () => {
+    await atProblemPage()
+    expect(store.get().pages).toEqual(['turns', 'problem', 'decide', 'upload'])
+    expect(store.get().page).toBe('problem')
+    store.back()
+    expect(store.get().page).toBe('turns')
+  })
+
+  it('leaves the picker out for one finished turn', async () => {
+    onTurns = () => Promise.resolve({ title: 'Plan', turns: [turn(1)] })
+    store.open('report', 'gui:a')
+    await settle()
+    expect(store.get().pages).toEqual(['problem', 'decide', 'upload'])
+  })
+
+  it('needs a description, keeps the draft through a step back and sends it', async () => {
+    onTurns = () => Promise.resolve({ title: 'Plan', turns: [turn(1), turn(2)] })
+    store.open('report', 'gui:a')
+    await settle()
+    store.next()
+    await store.startReport()
+    expect(of('reportStart')).toEqual([])
+    store.editProblem('description', 'it broke')
+    store.editProblem('severity', 'high')
+    store.editProblem('reporter', 'sam')
+    expect(store.get().problemReady).toBe(true)
+    store.back()
+    store.next()
+    expect(store.problemDraft()).toMatchObject({ description: 'it broke', severity: 'high', reporter: 'sam' })
+    await store.startReport()
+    expect(of('reportStart')).toEqual([['reportStart', 'gui:a', ['t1', 't2'], {
+      description: 'it broke', severity: 'high', expected: '', actual: '', steps: '', reporter: 'sam',
+    }]])
+    expect(localStorage.getItem(store.REPORTER_KEY)).toBe('sam')
+  })
+
+  it('remembers the reporter, and files the report even where storage throws', async () => {
+    localStorage.setItem(store.REPORTER_KEY, 'kim')
+    await atProblemPage()
+    expect(store.problemDraft().reporter).toBe('kim')
+    /* A private window: reaching for the storage at all throws. */
+    const denied = vi.spyOn(window, 'localStorage', 'get').mockImplementation(() => { throw new Error('denied') })
+    store.close()
+    await atProblemPage()
+    expect(store.problemDraft().reporter).toBe('')
+    await store.startReport()
+    expect(of('reportStart')).toHaveLength(1)
+    denied.mockRestore()
+  })
+
+  it('files one report however often it is pressed', async () => {
+    await atProblemPage()
+    const pending = deferred<{ report_id: string }>()
+    onReportStart = () => pending.promise
+    void store.startReport()
+    void store.startReport()
+    expect(of('reportStart')).toHaveLength(1)
+  })
+
+  it('cancels a report whose start lands after its wizard was closed', async () => {
+    await atProblemPage()
+    const pending = deferred<{ report_id: string }>()
+    onReportStart = () => pending.promise
+    void store.startReport()
+    store.dismiss()
+    confirm.answer(true)
+    await atProblemPage()
+    const fresh = store.get()
+    pending.resolve({ report_id: 'rs-old' })
+    await settle(10_000)
+    expect(of('reportCancel')).toEqual([['reportCancel', 'rs-old']])
+    expect(store.get()).toEqual(fresh)
+    expect(of('reportStatus')).toEqual([])
+  })
+
+  it('polls while collecting and sets the decisions up from the hints', async () => {
+    await atProblemPage()
+    await store.startReport()
+    await settle()
+    expect(store.get().page).toBe('problem')
+    onReportStatus = () => Promise.resolve(rstatus('deciding'))
+    await settle(store.POLL_MS)
+    const s = store.get()
+    expect(s.page).toBe('decide')
+    expect(s.choices).toEqual({ a: 'kept', b: 'kept', c: 'redacted', d: 'kept' })
+    expect(s.acknowledged).toEqual([])
+    expect(s.focus).toBe('k')
+    expect(of('reportItem')).toEqual([['reportItem', 'rs-1', 'k']])
+    await settle(10_000)
+    expect(of('reportStatus')).toHaveLength(2)
+  })
+
+  it('marks the decisions skipped when nothing was left to decide', async () => {
+    await atUpload('ready')
+    expect(store.get().page).toBe('upload')
+    expect(store.get().skipped).toEqual(['decide'])
+  })
+
+  it('decides every suspected item, or the focused one with its whole linked group', async () => {
+    await atDecisions()
+    store.choose('redacted', 'all')
+    expect(store.get().choices).toEqual({ a: 'redacted', b: 'redacted', c: 'redacted', d: 'redacted' })
+    store.focusItem('a')
+    store.choose('kept', 'focus')
+    expect(store.get().choices).toEqual({ a: 'kept', b: 'kept', c: 'kept', d: 'redacted' })
+    store.focusItem('k')
+    store.choose('redacted', 'focus')
+    expect(store.get().choices).toEqual({ a: 'kept', b: 'kept', c: 'kept', d: 'redacted' })
+  })
+
+  it('asks for an item\'s contexts once, and drops one that lands after a close', async () => {
+    await atDecisions()
+    store.focusItem('a')
+    store.focusItem('a')
+    await settle()
+    expect(of('reportItem').filter((call) => call[2] === 'a')).toHaveLength(1)
+    expect(store.get().contexts.a).toMatchObject({ state: 'ready' })
+    const late = deferred<ReportContexts>()
+    onReportItem = () => late.promise
+    store.focusItem('d')
+    store.close()
+    late.resolve({ groups: [], total_groups: 0 })
+    await settle()
+    expect(store.get().contexts).toEqual({})
+  })
+
+  it('sends every decision with the acknowledgements, and only once every secret is acknowledged', async () => {
+    await atDecisions()
+    await store.decide()
+    expect(of('reportDecide')).toEqual([])
+    store.acknowledge('k', true)
+    onReportStatus = () => Promise.resolve(rstatus('ready'))
+    await store.decide()
+    await settle()
+    expect(of('reportDecide')).toEqual([['reportDecide', 'rs-1', [
+      { item_id: 'a', action: 'kept' },
+      { item_id: 'b', action: 'kept' },
+      { item_id: 'c', action: 'redacted' },
+      { item_id: 'd', action: 'kept' },
+    ], ['k']]])
+    expect(store.get().page).toBe('upload')
+    expect(store.get().skipped).toEqual([])
+  })
+
+  it('marks a conflict, clears it on the next choice, and names the unacknowledged', async () => {
+    await atDecisions()
+    store.acknowledge('k', true)
+    onReportAct = () => Promise.reject(new RpcError(-32027, 'clash', { item_ids: ['a', 'b'] }))
+    await store.decide()
+    expect(store.get().marked).toEqual(['a', 'b'])
+    expect(store.get().error).toEqual({ kind: 'conflict' })
+    expect(store.get().acting).toBe(false)
+    store.choose('kept', 'all')
+    expect(store.get().marked).toEqual([])
+    onReportAct = () => Promise.reject(new RpcError(-32028, 'ack', { phase: 'deciding', reason: 'not_acknowledged', item_ids: ['k'] }))
+    await store.decide()
+    expect(store.get().marked).toEqual(['k'])
+    expect(store.get().error).toEqual({ kind: 'not_acknowledged' })
+  })
+
+  it('asks the status again when a step finds the report in another phase', async () => {
+    await atDecisions()
+    store.acknowledge('k', true)
+    const before = of('reportStatus').length
+    onReportAct = () => Promise.reject(new RpcError(-32028, 'phase', { phase: 'finishing', reason: 'wrong_phase' }))
+    onReportStatus = () => Promise.resolve(rstatus('ready'))
+    await store.decide()
+    await settle()
+    expect(of('reportStatus')).toHaveLength(before + 1)
+    expect(store.get().page).toBe('upload')
+  })
+
+  it('uploads only with the risk accepted when the report needs review', async () => {
+    await atUpload('ready')
+    await store.upload()
+    expect(of('reportUpload')).toEqual([])
+    store.acceptRisk(true)
+    onReportStatus = () => Promise.resolve(rstatus('uploaded'))
+    await store.upload()
+    await settle()
+    expect(of('reportUpload')).toEqual([['reportUpload', 'rs-1', true]])
+    expect(store.get().report?.status?.receipt?.receipt_id).toBe('rcpt-1')
+  })
+
+  it('retries an upload only when the failure said it may help', async () => {
+    await atUpload('upload_failed', { error: { message: 'refused', retryable: false, status: 400 } })
+    await store.retryUpload()
+    expect(of('reportRetry')).toEqual([])
+    store.close()
+    await atUpload('upload_failed', { error: { message: 'unreachable', retryable: true, status: null } })
+    await store.retryUpload()
+    expect(of('reportRetry')).toHaveLength(1)
+  })
+
+  it('settles an upload whose answer was lost by asking the status, and sends it once', async () => {
+    await atUpload('ready', { summary: { classification: 'clean', warnings: [], size_bytes: null, auto_replaced: 0, kept: 0, redacted: 0, acknowledged: 0, completeness: 'complete' } })
+    onReportAct = () => Promise.reject(new RpcError(-1, 'connection closed'))
+    onReportStatus = () => Promise.resolve(rstatus('uploaded'))
+    await store.upload()
+    await settle()
+    expect(store.get().report?.status?.phase).toBe('uploaded')
+    expect(of('reportUpload')).toHaveLength(1)
+  })
+
+  it('sends no second step while the first is still settling, even through a lost status', async () => {
+    await atUpload('ready')
+    store.acceptRisk(true)
+    const pending = deferred<ReportStatus>()
+    onReportStatus = () => pending.promise
+    await store.upload()
+    await store.upload()
+    expect(of('reportUpload')).toHaveLength(1)
+    pending.reject(new Error('socket closed'))
+    await settle()
+    expect(store.get().report?.lost).toBe('socket closed')
+    await store.upload()
+    expect(of('reportUpload')).toHaveLength(1)
+    onReportStatus = () => Promise.resolve(rstatus('uploaded'))
+    await settle(store.RETRY_MS)
+    expect(store.get().acting).toBe(false)
+    expect(store.get().report?.status?.phase).toBe('uploaded')
+  })
+
+  it.each([
+    ['decide', async () => { await atDecisions(); store.acknowledge('k', true); await store.decide() }],
+    ['upload', async () => { await atUpload('ready'); store.acceptRisk(true); await store.upload() }],
+    ['retry', async () => {
+      await atUpload('upload_failed', { error: { message: 'x', retryable: true, status: null } })
+      await store.retryUpload()
+    }],
+  ])('lets a report the gateway no longer has be filed again after a %s', async (_name, step) => {
+    onReportAct = () => Promise.reject(new RpcError(-32024, 'gone', { id: 'rs-1' }))
+    await step()
+    const s = store.get()
+    expect(s.report).toBeNull()
+    expect(s.page).toBe('problem')
+    expect(s.error).toEqual({ kind: 'report_gone' })
+    expect(store.problemDraft().description).toBe('it broke')
+    onReportAct = () => Promise.resolve({ ok: true })
+    await store.startReport()
+    expect(of('reportStart')).toHaveLength(2)
+  })
+
+  it.each([
+    ['decide', 'resolve'], ['decide', 'reject'], ['upload', 'resolve'], ['upload', 'reject'], ['retry', 'resolve'], ['retry', 'reject'],
+  ] as const)('writes nothing from a %s that lands (%s) after its wizard closed', async (step, how) => {
+    const pending = deferred<{ ok: boolean }>()
+    onReportAct = () => pending.promise
+    if (step === 'decide') {
+      await atDecisions()
+      store.acknowledge('k', true)
+      void store.decide()
+    } else if (step === 'upload') {
+      await atUpload('ready')
+      store.acceptRisk(true)
+      void store.upload()
+    } else {
+      await atUpload('upload_failed', { error: { message: 'x', retryable: true, status: null } })
+      void store.retryUpload()
+    }
+    store.close()
+    await atProblemPage()
+    const fresh = store.get()
+    const asked = of('reportStatus').length
+    if (how === 'resolve') pending.resolve({ ok: true })
+    else pending.reject(new RpcError(-32027, 'clash', { item_ids: ['a'] }))
+    await settle(10_000)
+    expect(store.get()).toEqual(fresh)
+    expect(of('reportStatus')).toHaveLength(asked)
+  })
+
+  it('starts again after a failure, letting the failed report go', async () => {
+    await atProblemPage()
+    onReportStatus = () => Promise.resolve(rstatus('failed', { error: { message: 'snapshot gone', retryable: false, status: null } }))
+    await store.startReport()
+    await settle()
+    expect(store.get().page).toBe('problem')
+    expect(store.working()).toBe(false)
+    onReportStart = () => Promise.resolve({ report_id: 'rs-2' })
+    onReportStatus = () => Promise.resolve(rstatus('collecting'))
+    await store.startReport()
+    expect(of('reportCancel')).toEqual([['reportCancel', 'rs-1']])
+    expect(store.get().report?.id).toBe('rs-2')
+  })
+
+  it('keeps the same report through a failed status query and names one that is gone', async () => {
+    await atProblemPage()
+    onReportStatus = () => Promise.reject(new Error('socket closed'))
+    await store.startReport()
+    await settle()
+    expect(store.get().report).toMatchObject({ id: 'rs-1', lost: 'socket closed' })
+    onReportStatus = () => Promise.reject(new RpcError(-32024, 'gone', { id: 'rs-1' }))
+    await settle(store.RETRY_MS)
+    expect(store.get().report).toBeNull()
+    expect(store.get().error).toEqual({ kind: 'report_gone' })
+  })
+
+  it('cancels any report on close, a delivered one included, and none when there is none', async () => {
+    await atProblemPage()
+    store.close()
+    expect(of('reportCancel')).toEqual([])
+    await atUpload('uploaded')
+    expect(store.working()).toBe(false)
+    store.dismiss()
+    expect(confirm.get().open).toBe(false)
+    expect(of('reportCancel')).toEqual([['reportCancel', 'rs-1']])
+  })
+
+  it('asks before discarding a report waiting on the reader', async () => {
+    await atDecisions()
+    store.dismiss()
+    expect(confirm.get().open).toBe(true)
+    expect(of('reportCancel')).toEqual([])
+    confirm.answer(true)
+    expect(of('reportCancel')).toEqual([['reportCancel', 'rs-1']])
   })
 })
