@@ -148,9 +148,14 @@ class Machine:
         return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
     def daemons(self) -> list[int]:
-        """The daemons serving this machine's node directory, as the process table shows them."""
+        """The daemons serving this machine's node directory, as the process table shows them.
+
+        ``-ww``: ps cuts a command line at the terminal's width otherwise, and
+        the daemon's runs past 80 columns before the ``--dir`` that names
+        this machine, so a narrow run listed none of them.
+        """
         mark = f"--serve --dir {self.home / '.raven-node'}"
-        listed = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True).stdout
+        listed = subprocess.run(["ps", "-axww", "-o", "pid=,command="], capture_output=True, text=True).stdout
         return [int(line.split(None, 1)[0]) for line in listed.splitlines() if mark in line]
 
     def agents_left(self) -> list[int]:
@@ -171,8 +176,7 @@ async def box(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # The pool before the links, as the host's own stop orders them: an agent
     # is ended through its link, and a link closed first leaves its agent with
     # the daemon -- right for a host, a leak for a test, whose daemon then
-    # never goes idle (this module left ten daemons and their stubs behind per
-    # run, before this). The links the test itself closed are covered by the
+    # never goes idle. The links the test itself closed are covered by the
     # check after: an agent still under a daemon fails the test and is ended.
     await close_pool()
     await machine.nodes.close_all()
@@ -183,6 +187,22 @@ async def box(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         with contextlib.suppress(ProcessLookupError):
             os.kill(daemon, signal.SIGTERM)
     assert not left, f"agents left running under the stand-in machine's daemon: {left}"
+
+
+async def test_the_daemon_lookup_reads_whole_command_lines_whatever_the_terminal_width(box, monkeypatch):
+    """A stand-in daemon whose command line runs past 80 columns is still found, and so can still be ended."""
+    monkeypatch.setenv("COLUMNS", "80")
+    mark = f"--serve --dir {box.home / '.raven-node'}"
+    padding = "x" * 120
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, "-c", "import time; time.sleep(30)", padding, *mark.split(), stdout=asyncio.subprocess.DEVNULL
+    )
+    try:
+        assert proc.pid in box.daemons(), "the mark sits past the 80th column of the command line"
+    finally:
+        proc.kill()
+        await proc.wait()
+    assert proc.pid not in box.daemons()
 
 
 def _agent_pid(name: str = "stub@box") -> int | None:
