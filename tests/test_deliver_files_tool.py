@@ -551,3 +551,24 @@ async def test_what_was_not_delivered_says_why(tool, machines) -> None:
         outside.count("203.0.113.7") == 1 and "scp://worker@203.0.113.7:58717//root/.ssh/id_rsa is outside" in outside
     )
     assert "203.0.113.7" not in big + nobody + folder
+
+
+async def test_a_file_one_byte_over_the_budget_is_refused_in_bytes_not_in_a_size_that_reads_as_the_limit(
+    tool, machines
+) -> None:
+    """20 MiB goes; 20 MiB + 1 is refused, and the sentence does not read "20.0 MB is over the 20.0 MB limit"."""
+    from raven.agent.tools.deliver import PULL_FILE_BUDGET
+
+    machines.size = PULL_FILE_BUDGET
+    exact = await tool.execute(files=[{"path": "box:raven-work/t1/exact.bin"}])
+    tool.take_metadata()
+    machines.size = PULL_FILE_BUDGET + 1
+    over = await tool.execute(files=[{"path": "box:raven-work/t1/over.bin"}])
+
+    assert exact.startswith("Delivered 1 file(s): exact.bin (20.0 MB)")
+    assert (
+        "20,971,521 bytes is over the 20,971,520-byte (20.0 MB) limit for a file brought back from machine "
+        "'Lab box' (box); read it there instead" in over
+    )
+    assert "20.0 MB is over the 20.0 MB" not in over
+    assert [where for where, _, _ in machines.pulled] == ["/root/raven-work/t1/exact.bin"]
