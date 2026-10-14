@@ -35,7 +35,9 @@ import asyncio
 import contextlib
 import os
 import re
+import shutil
 import signal
+import subprocess
 import tempfile
 from typing import Any
 
@@ -52,6 +54,9 @@ retries those at the pace the provider asks for. The ones it retries with
 backoff take about 150s and are not waited for: an ask that runs out says
 nothing, and the connect's own verdict stands.
 """
+
+_TASKKILL_TIMEOUT_S = 5.0
+"""How long ending an ask on Windows waits for ``taskkill`` before killing the `kimi` alone."""
 
 _FAILED = re.compile(r"^error: failed to run prompt: (.+)$", re.MULTILINE)
 # With FORCE_COLOR in its environment Kimi Code prints that whole line in bright
@@ -336,9 +341,9 @@ async def doctor(cfg: Any) -> str | None:
 async def _run(cfg: Any, *args: str) -> tuple[int | None, str]:
     """Run the row's `kimi` with ``args`` in the environment its ACP launch gets, in a fresh directory.
 
-    The process group goes on any way out -- a timeout, or the connect itself
-    being cancelled when the page that asked goes away -- so an ask never
-    outlives the question.
+    The process group (on Windows, the process tree) goes on any way out -- a
+    timeout, or the connect itself being cancelled when the page that asked goes
+    away -- so an ask never outlives the question.
     """
     from raven.agent.subagent.backends.env import host_identity_env, login_shell_env, resolve_program
     from raven.agent.subagent.role import subagent_role_env
@@ -366,11 +371,38 @@ async def _run(cfg: Any, *args: str) -> tuple[int | None, str]:
             return None, ""
         finally:
             if proc.returncode is None:
-                with contextlib.suppress(ProcessLookupError, PermissionError):
-                    os.killpg(proc.pid, signal.SIGKILL)
+                await _end_tree(proc)
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(proc.wait(), 1.0)
     return proc.returncode, (out + err).decode("utf-8", "replace")
+
+
+async def _end_tree(proc: asyncio.subprocess.Process) -> None:
+    """End the asked `kimi` and what it started: its process group, or on Windows its tree.
+
+    Windows has no ``os.killpg``, and calling it there raised ``AttributeError``
+    in place of the timeout's answer or the cancel, with the `kimi` left running.
+    ``taskkill /T`` ends the tree from its pid instead; the caller only asks while
+    the `kimi` is alive, so that pid is still its own.
+    """
+    if hasattr(os, "killpg"):
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        return
+    taskkill = shutil.which("taskkill")
+    if taskkill:
+        with contextlib.suppress(OSError, RuntimeError, subprocess.SubprocessError):
+            await asyncio.to_thread(
+                subprocess.run,
+                [taskkill, "/T", "/F", "/PID", str(proc.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=_TASKKILL_TIMEOUT_S,
+                check=False,
+            )
+    if proc.returncode is None:
+        with contextlib.suppress(OSError):
+            proc.kill()
 
 
 def _in_chain(exc: BaseException | None, kind: type[BaseException]) -> Any:

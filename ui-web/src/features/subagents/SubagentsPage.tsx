@@ -457,7 +457,8 @@ function InstanceComposer(
   }
   const up = uploader()
   /* The page composer's `addFiles`, for one instance: bytes go up through the
-     same seam into <workspace>/uploads, and the message carries paths. */
+     same seam into <workspace>/uploads, and the message carries paths -- an
+     upload's being the file it wrote, as the main composer stages it. */
   const addFiles = (files: ArrayLike<File>): void => {
     if (!up) return
     Array.from(files).forEach((file) => {
@@ -469,7 +470,7 @@ function InstanceComposer(
         const b64 = String(reader.result).split(',')[1] || ''
         up({ name: file.name, content_b64: b64 })
           .then((r) => {
-            entry.path = r.path
+            entry.path = r.abs_path || r.path
             entry.size = r.size
             entry.uploading = false
             paintAtts(held.current.slice())

@@ -3891,6 +3891,32 @@ class SettingsEverosResult(_Strict):
             "names. Null when the store was actually consulted."
         ),
     )
+    reason: str | None = Field(
+        default=None,
+        description=(
+            "Why available is false, when the page should draw none of the role slots: "
+            "'other_backend' means memory.backend names a backend that does not read "
+            "EverOS's roles. Absent when the plugin is merely not installed, which keeps "
+            "the slots drawn with their not-installed note."
+        ),
+    )
+
+
+class SettingsEverosCloudParams(_Strict):
+    pass
+
+
+class SettingsEverosCloudResult(_Strict):
+    available: bool = Field(description="Whether the everos-cloud-memory distribution is installed.")
+    selected: bool = Field(description="Whether memory.backend names everos-cloud; the card is drawn only then.")
+    api_key_set: bool = Field(description="Whether a key resolves, from the file or the environment.")
+    key_source: str | None = Field(default=None, description="'file' or 'env' when a key resolves; null otherwise.")
+    base_url: str = Field(default="", description="The cloud address in force: the slice's base_url or the default.")
+    status: str | None = Field(
+        default=None,
+        description="The health probe's verdict when selected: 'ok', 'degraded' or 'missing'; null when not probed.",
+    )
+    hint: str | None = Field(default=None, description="What a person should look at, in the backend's own words.")
 
 
 class SettingsEverosSetParams(_Strict):
@@ -4080,12 +4106,30 @@ class FsReadResult(_Strict):
 class FsUploadParams(_Strict):
     name: str
     content_b64: str
-    session: str | None = None
+    session: str | None = Field(
+        None, description="An existing session key, or a channel prefix such as tui: for a draft."
+    )
+    workdir: str | None = Field(
+        None, description="A draft's selected working directory, used only to avoid attachment name collisions."
+    )
 
 
 class FsUploadResult(_Strict):
-    path: str = Field(..., description="Workspace-relative path to hand the agent; uploads never return bytes.")
-    abs_path: str
+    path: str = Field(
+        ...,
+        description=(
+            "The file relative to agent home (uploads/<name>). turn.send looks for a relative path under the "
+            "conversation's own working directory first, so a same-named file there answers for it; uploads "
+            "never return bytes."
+        ),
+    )
+    abs_path: str = Field(
+        ...,
+        description=(
+            "The file the upload wrote, and the path to hand turn.send: it names the upload whatever the "
+            "conversation's own directory holds."
+        ),
+    )
     size: int
 
 
@@ -4124,6 +4168,12 @@ class DeckTemplatesPagesResult(_Strict):
 
 class DeckTemplatesPickParams(_Strict):
     name: str = Field(..., description="A row's name from deck.templates.list.")
+    session: str | None = Field(
+        None, description="An existing session key, or a channel prefix such as tui: for a draft."
+    )
+    workdir: str | None = Field(
+        None, description="A draft's selected working directory, used only to avoid attachment name collisions."
+    )
 
 
 class FsRevealParams(_Strict):
@@ -6188,6 +6238,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "settings.everos": (SettingsEverosParams, SettingsEverosResult),
     "settings.everosSet": (SettingsEverosSetParams, SettingsEverosSetResult),
     "settings.everos_set": (SettingsEverosSetParams, SettingsEverosSetResult),
+    "settings.everosCloud": (SettingsEverosCloudParams, SettingsEverosCloudResult),
     "clipboard.paste": (ClipboardPasteParams, ClipboardPasteResult),
     "command.dispatch": (CommandDispatchParams, CommandDispatchResult),
     "delegation.status": (DelegationStatusParams, DelegationStatusResult),

@@ -123,7 +123,7 @@ class TestConstructorWiring:
         assert "user_memory" in plain
 
         wired = _make_loop(tmp_path, backend=_FakeBackend()).context._get_identity()
-        assert "user_memory" not in wired
+        assert "profile/user.md" not in wired
 
 
 # ---------------------------------------------------------------------------

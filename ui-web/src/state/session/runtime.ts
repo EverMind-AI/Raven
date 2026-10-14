@@ -224,7 +224,10 @@ export function finishTurn(payload: unknown, rt: SessionRuntime = viewRuntime())
    `media` field as well, recovered from that same note rather than threaded
    separately: a queued message is a plain string by the time it is drained,
    and the draft path sends from a second place, so deriving here covers all
-   three with one rule. */
+   three with one rule. The paths go over exactly as the note names them: the
+   composer names an upload by the file it wrote and a file attached where it
+   already was by its own path, so nothing here has to work out which file a
+   spelling meant. */
 export const mediaOf = (text: unknown): { media?: string[] } => {
   const paths = splitAtts(String(text)).atts
   return paths.length ? { media: paths } : {}

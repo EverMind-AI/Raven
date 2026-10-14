@@ -6,10 +6,10 @@ checkout; this product carries its assets only, and as of the exec-target
 swap the process it starts is installed raven itself. Two hostings, the
 fork launcher's own pair:
 
-- ``--acp`` (what the roster row spawns): render the config, then exec
-  ``python -m raven acp`` on this interpreter, so the server inherits this
-  pid, process group and stdio, and every turn runs through the same
-  assembly door (build_runtime) as the host's TUI and gateway.
+- ``--acp`` (what the roster row spawns): render the config, then serve
+  ``python -m raven acp`` on this interpreter with inherited stdio. POSIX
+  replaces the launcher; Windows keeps it alive until the server exits.
+  Every turn uses build_runtime, like the host's TUI and gateway.
 - ``--task`` / ``--prompt-file``: the one-turn CLI adjudication hosting.
   One call is one turn; the same ``--session <id>`` across calls is a
   multi-turn conversation. The launcher renders, runs ``raven agent -m``
@@ -537,17 +537,20 @@ def render_acp_config(source: Path, mode: str | None = None) -> Path:
 def serve(args: argparse.Namespace) -> int:
     """Serve installed raven's ``raven acp`` on this process's stdio.
 
-    After rendering, this process execs ``python -m raven acp`` on its own
-    interpreter (the roster row's ``{PYTHON}`` resolves at install time to
-    one that imports raven), so the server inherits this pid, process group
-    and stdio untouched. No finally-unlink around it: the fork's own sweep
+    After rendering, the launcher serves ``python -m raven acp``
+    on this interpreter with inherited stdio. POSIX exec preserves the pid;
+    Windows waits for the child so the rendered config's owner stays alive.
+    No finally-unlink around it: the fork's own sweep
     docstring concedes that promise is one a SIGKILLed process group never
     keeps, and the pid-liveness sweep in render_config is the cleaner that
     actually runs.
     """
     rendered = render_acp_config(Path(args.config).resolve(), mode=getattr(args, "mode", None))
-    log(f"[run] exec {sys.executable} -m raven acp (config {rendered})")
-    os.execv(sys.executable, [sys.executable, "-m", "raven", "acp", "--config", str(rendered)])
+    log(f"[run] serve {sys.executable} -m raven acp (config {rendered})")
+    argv = [sys.executable, "-m", "raven", "acp", "--config", str(rendered)]
+    if sys.platform == "win32":
+        raise SystemExit(subprocess.call(argv))
+    os.execv(sys.executable, argv)
     raise AssertionError("unreachable: execv does not return")
 
 

@@ -7,14 +7,16 @@ the block an editor sends for an @-mentioned file, which the agent renders as a
 line naming the path; a text-only transport (an in-process loop, an OpenAI-style
 endpoint, a CLI) gets the same facts appended to the task as a note.
 
-Absolute paths on purpose. A direct chat's text carries the page's own note with
-a path relative to the *host's* agent home (``uploads/x.pptx``), which resolves to
-nothing from the sub-agent's working directory: a deck agent handed that spelling
-reported the file as not there and fell back to a bundled template. Handed the
-absolute path beside it, the same agent still tried the note's spelling first, so
-the note is rewritten too: each of its bullets that names an attachment relative
-to the host's home is replaced by the absolute path (``retarget_note``), and a
-link is named by that same relative spelling so the two are visibly one file.
+Absolute paths on purpose. A direct chat's text can carry a note naming a file
+relative to the *host's* agent home (``uploads/x.pptx``) -- a message written
+before the composer named an upload by its absolute file, or by a client that keeps
+the short path -- and that spelling resolves to nothing from the sub-agent's
+working directory: a deck agent handed it reported the file as not there and fell
+back to a bundled template. Handed the absolute path beside it, the same agent
+still tried the note's spelling first, so the note is rewritten too: each of its
+bullets that names an attachment relative to the host's home is replaced by the
+absolute path (``retarget_note``), and a link is named by that same relative
+spelling so the two are visibly one file.
 """
 
 from __future__ import annotations

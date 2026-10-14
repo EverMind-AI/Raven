@@ -8,7 +8,7 @@ Key directories:
 ```text
 raven/                 # Shared runtime, feature engines, and CLI/RPC/ACP surfaces
 agents/                # Specialized agents assembled from installed Raven and plugins
-plugins-dist/          # everos-memory, design-engine, and ppt-engine distributions
+plugins-dist/          # everos-memory, everos-cloud-memory, design-engine, and ppt-engine distributions
 ui-web/                # Browser UI, also used by the desktop window
 ui-tui/                # React/Ink terminal UI
 rpc-schema/            # Shared OpenRPC contract for interactive clients

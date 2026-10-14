@@ -124,6 +124,13 @@ function heldByTheMenu(bases: { id: string; name: string; documents: number }[])
   mentions.set((prev) => ({ ...prev, bases }))
 }
 
+/* Set by a test that needs a reindex to still be running while it does
+   something else. Null for every other test, where reindex answers at once. */
+let reindexBlocks: Promise<void> | null = null
+
+/* What the install says it can read. The real one is read off the parsers. */
+let offeredExtensions: string[] = ['.pdf', '.md', '.txt', '.docx']
+
 function install(rows: KbBase[]): Fake {
   const fake: Fake = { rows, wrote: [], removed: [] }
   sources.knowledge = {
@@ -134,6 +141,7 @@ function install(rows: KbBase[]): Fake {
     documents: async () => docs,
     reindex: async (id) => {
       indexed.push(id)
+      if (reindexBlocks) await reindexBlocks
       if (indexFails) throw new Error(indexFails)
       docs = docs.map((row) => (row.id === id ? { ...row, status: 'ready' } : row))
       return docs.find((row) => row.id === id)!
@@ -203,6 +211,7 @@ function install(rows: KbBase[]): Fake {
     remove: async (id) => {
       fake.removed.push(id)
     },
+    extensions: async () => offeredExtensions,
   }
   return fake
 }
@@ -220,6 +229,8 @@ beforeEach(() => {
   added.length = 0
   indexed.length = 0
   indexFails = ''
+  reindexBlocks = null
+  offeredExtensions = ['.pdf', '.md', '.txt', '.docx']
   removedDocs.length = 0
 })
 
@@ -327,6 +338,160 @@ describe('the knowledge store', () => {
     await store.write(store.get().bases![0]!, { starred: true })
 
     expect(mentions.get().bases?.map((row) => row.name)).toEqual(['Handbook'])
+  })
+
+  it('deletes a document while another one is indexing', async () => {
+    /* The reported bug, and the reason `busy` is not one flag any more. A
+       reindex runs for tens of seconds on a long PDF, and it used to hold the
+       same lock every other control checks -- so a confirmed delete returned
+       at the guard and did nothing: no row removed, no toast, nothing in the
+       console. The reader confirmed a destructive action and watched the page
+       sit still. */
+    const fake = install([base({ id: 'a' })])
+    docs = [doc({ id: 'd1' }), doc({ id: 'd2' })]
+    await store.openBase(base({ id: 'a' }))
+
+    let release: () => void = () => {}
+    reindexBlocks = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const slow = store.reindex(doc({ id: 'd1' }))
+
+    await store.removeDoc(doc({ id: 'd2' }))
+
+    expect(removedDocs).toEqual(['d2'])
+    expect((store.get().documents ?? []).map((row) => row.id)).toEqual(['d1'])
+
+    release()
+    await slow
+    expect(fake.rows.length).toBe(1)
+  })
+
+  it('still refuses to start a second index while one is running', async () => {
+    /* The part of the old guard that was load-bearing: each document is an
+       embedding round trip, and two at once is the same endpoint asked to do
+       everything simultaneously. */
+    install([base({ id: 'a' })])
+    docs = [doc({ id: 'd1' }), doc({ id: 'd2' })]
+    await store.openBase(base({ id: 'a' }))
+    indexed.length = 0
+
+    let release: () => void = () => {}
+    reindexBlocks = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const first = store.reindex(doc({ id: 'd1' }))
+    await store.reindex(doc({ id: 'd2' }))
+
+    /* Refused, not queued behind it. */
+    expect(indexed).toEqual(['d1'])
+    release()
+    await first
+  })
+
+  it('shows a freshly uploaded file as indexing, not queued', async () => {
+    /* The add answers with the row as the server first wrote it -- pending,
+       which the page draws as Queued -- and the call that indexes it runs for
+       tens of seconds on a long PDF. Left at what the add said, the row read
+       Queued for all of it while the server had already moved on, so a reader
+       who reloaded saw the truth and a reader who waited saw a file that
+       never started. */
+    install([base({ id: 'a' })])
+    docs = []
+    await store.openBase(base({ id: 'a' }))
+
+    let release: () => void = () => {}
+    reindexBlocks = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const uploading = store.upload('report.pdf', 'Zm9v')
+    await vi.waitFor(() => expect(store.get().documents?.length).toBe(1))
+
+    expect(store.get().documents?.[0]?.status).toBe('indexing')
+
+    release()
+    await uploading
+    expect(store.get().documents?.[0]?.status).toBe('ready')
+  })
+
+  it('keeps what this install can read and leaves the rest', async () => {
+    /* A chosen folder arrives as every file under it, because no browser
+       applies `accept` to a directory. Uploaded unfiltered, each of those is
+       a round trip, a parse, and a row reading Failed for a file nobody meant
+       to add. */
+    install([base({ id: 'a' })])
+    await store.openBase(base({ id: 'a' }))
+    await vi.waitFor(() => expect(store.get().extensions).not.toBeNull())
+
+    const sorted = store.sortBySupported([
+      'report.pdf',
+      '.DS_Store',
+      'notes.md',
+      'package-lock.json',
+      'photo.HEIC',
+      'README',
+      'deck.PDF',
+    ])
+
+    expect(sorted.kept).toEqual(['report.pdf', 'notes.md', 'deck.PDF'])
+    expect(sorted.skipped).toEqual(['.DS_Store', 'package-lock.json', 'photo.HEIC', 'README'])
+  })
+
+  it('treats a dotfile as having no extension rather than as its own', async () => {
+    /* `.DS_Store` is not a Store file and `.gitignore` is not a gitignore
+       file: the leading dot starts the name, it does not separate one. */
+    install([base({ id: 'a' })])
+    await store.openBase(base({ id: 'a' }))
+    await vi.waitFor(() => expect(store.get().extensions).not.toBeNull())
+
+    expect(store.sortBySupported(['.md']).kept).toEqual([])
+  })
+
+  it('uploads everything when it could not read what is supported', async () => {
+    /* The empty list means "do not filter". A reader whose gateway blipped
+       should get the upload they asked for and the server's own answer on
+       each row, not a picker that silently drops every file they chose. */
+    install([base({ id: 'a' })])
+    offeredExtensions = []
+    await store.openBase(base({ id: 'a' }))
+    await vi.waitFor(() => expect(store.get().extensions).not.toBeNull())
+
+    const sorted = store.sortBySupported(['anything.xyz', 'report.pdf'])
+
+    expect(sorted.kept).toEqual(['anything.xyz', 'report.pdf'])
+    expect(sorted.skipped).toEqual([])
+  })
+
+  it('drains a model switch even when something is already indexing', async () => {
+    /* The save requeues every document in the base and nothing else drains
+       that queue. Skipped because a rebuild or an upload happened to be
+       running, the whole base reads Queued with nothing that will ever pick
+       it up -- which is the flow the settings panel exists for: move a base
+       onto a model that works. */
+    install([base({ id: 'kb-a' })])
+    docs = [doc({ id: 'd1', status: 'pending' }), doc({ id: 'd2', status: 'pending' })]
+    await store.openBase(base({ id: 'kb-a' }))
+
+    let release: () => void = () => {}
+    reindexBlocks = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const rebuilding = store.reindex(doc({ id: 'd1' }))
+    indexed.length = 0
+
+    const saving = store.write(base({ id: 'kb-a' }), { embedding_model: 'other-model' })
+    await vi.waitFor(() => expect(indexed.length).toBe(0))
+
+    release()
+    reindexBlocks = null
+    await rebuilding
+    await saving
+
+    /* The drain ran, after waiting out the rebuild rather than giving up on
+       finding it already running. `d1` is not in the list because the rebuild
+       took it to ready; `d2` is what was still queued, and skipping the drain
+       would leave this empty. */
+    expect(indexed).toEqual(['d2'])
   })
 
   it('turns a mark off again', async () => {

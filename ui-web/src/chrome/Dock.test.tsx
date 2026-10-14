@@ -26,6 +26,7 @@ import * as mentions from '../state/mentions'
 import * as pageStore from '../state/page'
 import * as perm from '../state/perm'
 import * as plus from '../state/plus'
+import { mediaOf } from '../state/session/runtime'
 import { setSources } from '../state/sources'
 import * as tier from '../state/tier'
 import * as wd from '../state/workdir'
@@ -603,5 +604,146 @@ describe('the anchored popovers', () => {
       expect(el(pop).dataset.open, name).toBe('true')
       expect(document.querySelectorAll(`#${pop}`), name).toHaveLength(1)
     }
+  })
+})
+
+/* A picture dragged out of the transcript names its file in `text/uri-list`,
+   by this origin's own /file route, and the field attaches that file where it
+   is rather than reading the picture and sending it up as a second copy. A drag
+   is taken at its word only when it began in this document: any site the
+   reader drags from can put one of these addresses in the list just as well. */
+describe('a drop onto the field', () => {
+  /* state/globalListeners registers the two drag listeners with the
+     document's other listeners, which this harness does not install; a case
+     here registers just those two. */
+  beforeEach(() => {
+    document.addEventListener('dragstart', composer.onPageDragStart)
+    document.addEventListener('dragend', composer.onPageDragEnd)
+  })
+  afterEach(() => {
+    document.removeEventListener('dragstart', composer.onPageDragStart)
+    document.removeEventListener('dragend', composer.onPageDragEnd)
+  })
+  const fileAt = (path: string): string => `${location.origin}/file?path=${encodeURIComponent(path)}&session=s1`
+  const carrying = (uris: string[], files: File[] = []): DataTransfer => {
+    const dt = new DataTransfer()
+    dt.setData('text/uri-list', uris.join('\r\n'))
+    for (const file of files) dt.items.add(file)
+    return dt
+  }
+  /* happy-dom builds a drag event as a plain Event, so the transfer goes on by hand. */
+  const fire = (type: string, target: Element, dt: DataTransfer): void => {
+    const ev = new Event(type, { bubbles: true, cancelable: true })
+    Object.defineProperty(ev, 'dataTransfer', { value: dt })
+    act(() => { target.dispatchEvent(ev) })
+  }
+  const field = (): Element => ta().closest('.field') as Element
+  /* What a drag starts from: anything in the document, since the document is what listens. */
+  const picture = (): Element => document.body.appendChild(document.createElement('img'))
+  /* FileReader lands on a macrotask, so an upload starts two turns of the loop after the drop. */
+  const settle = async (): Promise<void> => {
+    await act(async () => {
+      for (let i = 0; i < 4; i += 1) await new Promise((r) => setTimeout(r, 0))
+    })
+  }
+  const staged = (): Array<string | null> => store.get().atts.map((a) => a.path)
+  const ready = (): { upload: ReturnType<typeof vi.fn> } => {
+    const upload = vi.fn(async (req: { name: string }) => ({ path: `uploads/${req.name}`, size: 4 }))
+    render({ upload })
+    composer.install()
+    return { upload }
+  }
+
+  /* Chrome on macOS hands the same picture over as a File named `download` as
+     well; the address wins, so nothing goes up twice. */
+  it('attaches the file a picture dragged out of this document names, and sends nothing up', async () => {
+    const { upload } = ready()
+    const dt = carrying([fileAt('uploads/shot.png'), fileAt('/work/out/chart.png')],
+      [new File(['x'], 'download', { type: 'image/png' })])
+    fire('dragstart', picture(), dt)
+    fire('drop', field(), dt)
+    await settle()
+    expect(upload).not.toHaveBeenCalled()
+    expect(staged()).toEqual(['uploads/shot.png', '/work/out/chart.png'])
+  })
+
+  it('leaves an address alone when its drag began elsewhere, and uploads what the drop carries', async () => {
+    const { upload } = ready()
+    fire('drop', field(), carrying([fileAt('/etc/passwd')], [new File(['x'], 'shot.png', { type: 'image/png' })]))
+    await settle()
+    expect(upload).toHaveBeenCalledTimes(1)
+    expect(staged()).toEqual(['uploads/shot.png'])
+  })
+
+  it('takes only a file its own drag carried, and only while that drag lasts', async () => {
+    const { upload } = ready()
+    const shot = carrying([fileAt('uploads/shot.png')])
+    fire('dragstart', picture(), carrying([fileAt('uploads/shot.png')]))
+    /* Not what the drag carried, and then the drag is spent: a drop ends it. */
+    fire('drop', field(), carrying([fileAt('/etc/passwd')]))
+    fire('drop', field(), shot)
+    fire('dragstart', picture(), shot)
+    fire('dragend', picture(), shot)
+    fire('drop', field(), shot)
+    await settle()
+    expect(upload).not.toHaveBeenCalled()
+    expect(staged()).toEqual([])
+    /* The same drop, from a drag that is still under way, is taken. */
+    fire('dragstart', picture(), shot)
+    fire('drop', field(), shot)
+    expect(staged()).toEqual(['uploads/shot.png'])
+  })
+
+  it('takes an address only on this origin and only on the /file route', async () => {
+    ready()
+    const dt = carrying([
+      'http://elsewhere.example/file?path=%2Fetc%2Fpasswd',
+      `${location.origin}/files/download?token=t&path=%2Fetc%2Fpasswd`,
+      `${location.origin}/file`,
+      fileAt('uploads/shot.png'),
+    ])
+    fire('dragstart', picture(), dt)
+    fire('drop', field(), dt)
+    await settle()
+    expect(staged()).toEqual(['uploads/shot.png'])
+  })
+
+  /* The platform's drag plumbing may respell the address on the way through;
+     the file it names is what has to match. */
+  it('matches the dropped file to the dragged one by its path, not by how the address is spelled', () => {
+    ready()
+    fire('dragstart', picture(), carrying([`${location.origin}/file?path=uploads%2fshot.png&session=s1`]))
+    fire('drop', field(), carrying([`${location.origin}/file?session=s1&path=uploads/shot.png`]))
+    expect(staged()).toEqual(['uploads/shot.png'])
+  })
+
+  /* `uploads/shot.png` can name two files: what an upload wrote under agent
+     home, and a session root's own file, which the workspace pane lists and a
+     drag stages by that spelling. An upload staged earlier must not answer for
+     the dragged one, so the two are told apart where they are staged. */
+  it('hands the turn a dragged file, not an earlier upload of the same name', async () => {
+    const upload = vi.fn(async (req: { name: string }) => ({
+      path: `uploads/${req.name}`,
+      abs_path: `/home/me/.raven/workspace/uploads/${req.name}`,
+      size: 4,
+    }))
+    render({ upload })
+    /* The i18n catalogue's own words: the send reads the note back by its heading. */
+    resetTranslator()
+    composer.install()
+    fire('drop', field(), carrying([], [new File(['x'], 'shot.png', { type: 'image/png' })]))
+    await settle()
+    act(() => { store.fireSend() })
+    const dt = carrying([fileAt('uploads/shot.png')])
+    fire('dragstart', picture(), dt)
+    fire('drop', field(), dt)
+    await settle()
+    act(() => { store.fireSend() })
+
+    expect(upload).toHaveBeenCalledTimes(1)
+    expect(sent.map((text) => mediaOf(text).media)).toEqual([
+      ['/home/me/.raven/workspace/uploads/shot.png'],
+      ['uploads/shot.png'],
+    ])
   })
 })

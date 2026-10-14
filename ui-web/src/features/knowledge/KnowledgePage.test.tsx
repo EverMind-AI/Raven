@@ -148,6 +148,7 @@ function install(rows: KbBase[]): void {
     remove: async (id) => {
       removed.push(id)
     },
+    extensions: async () => ['.pdf', '.md', '.txt', '.docx'],
   }
 }
 

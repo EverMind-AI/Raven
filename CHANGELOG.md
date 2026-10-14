@@ -6,6 +6,25 @@ All notable changes to Raven are documented here.
 
 ### Added
 
+- The bug report review remembers your redaction decisions. Every keep or
+  replace answer is stored in `redaction_history.json` under the Raven home
+  (hashes and masked samples only), and the next `report-bug` or browser
+  *Report a bug* replays it: values you already decided are listed instead of
+  asked, and a run without a TTY no longer needs `--keep-findings` /
+  `--redact-findings` for them. `--review-all` asks again, `raven trajectory
+  redaction-history list|forget|clear` inspects and edits what is remembered,
+  and `RAVEN_BUGREPORT_REDACTION_HISTORY=off` turns it off.
+
+- Bug Report Packages can be sent to a Bug Report Receiver. `raven trajectory
+  receiver --save-dir DIR` runs the receiver: it checks each package in a
+  stream without extracting it, stores the original bytes by UTC day next to
+  a receipt sidecar, answers the same package with the same receipt, and
+  bounds abuse with per-address rate limits, daily budgets, a free-disk
+  reserve and timeouts rather than with authentication. `report-bug` and the
+  browser's *Report a bug* upload the package as soon as it lands when
+  `RAVEN_BUGREPORT_URL` names a receiver, and `raven trajectory
+  upload-bug-report` sends a filed report again.
+
 - Memory runs on native Windows. EverOS 1.4.0 runs there without WSL, so
   the memory plugin's pin moves to `everos[multimodal]==1.4.1` and the
   platform gate that made memory unavailable on Windows is gone, together

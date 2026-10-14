@@ -39,6 +39,9 @@ class TestDefaults:
         assert c.user_id == "default"
         assert c.agent_id == "default"
         assert c.memory_top_k == 5
+        # Off out of the box: the step bills a provider call per cadence, and
+        # an install that never reads the episodic log should not pay for it.
+        assert c.annotate_every_turns == 0
 
     def test_memory_backend_none_disables(self) -> None:
         c = MemoryConfig(backend=None)

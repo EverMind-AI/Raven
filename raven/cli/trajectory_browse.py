@@ -80,8 +80,10 @@ from raven.session.manager import SessionManager
 from raven.tracing import config as tracing_config
 from raven.trajectory import bugreport as breport
 from raven.trajectory import conversation as tconversation
+from raven.trajectory import redaction_history as thistory
 from raven.trajectory import review as treview
 from raven.trajectory import store as tstore
+from raven.trajectory import upload as tupload
 from raven.trajectory.bundle import _default_workspace, collect_bundle
 from raven.trajectory.cassette import minimize_bundle
 from raven.trajectory.verdict import VERDICT_STATUSES, read_verdicts, record_verdict
@@ -1131,11 +1133,52 @@ def _print_stale_refresh() -> None:
     console.print("The list was refreshed; pick the attempt again.")
 
 
-def _print_report_ready(record: dict[str, Any]) -> None:
+def _print_upload_state(record: dict[str, Any]) -> None:
+    upload = record.get("upload") or {}
+    state = upload.get("state", "")
+    if state == breport.UPLOAD_STATE_UPLOADED:
+        console.print(f"  Uploaded — receipt {escape(str(upload.get('receipt') or ''))}", highlight=False)
+    elif state == breport.UPLOAD_STATE_FAILED:
+        console.print(f"  [red]Upload failed: {escape(str(upload.get('error') or ''))}[/red]", highlight=False)
+        console.print('  Retry from this attempt\'s "Bug reports" entry (Upload).')
+    else:
+        console.print("  Not uploaded — hand the package file to a developer yourself.")
+
+
+def _print_report_ready(record: dict[str, Any], *, upload_state: bool = True) -> None:
     console.print(f"[green]✓[/green] Bug report {escape(record['report_id'])} ready (local_ready)", highlight=False)
     console.print(f"  Package: [cyan]{escape(record['package']['path'])}[/cyan]", highlight=False)
-    console.print("  Not uploaded — hand the package file to a developer yourself.")
+    if upload_state:
+        _print_upload_state(record)
     console.print('  Reopen this attempt\'s actions to view it under "Bug reports".')
+
+
+def _resolved_upload_url() -> str | None:
+    """The receiver to upload to, "" when uploading is off, None (after a message) when misconfigured."""
+    try:
+        return tupload.resolve_upload_url()
+    except tupload.UploadConfigError as exc:
+        console.print(f"[red]✗ Bug report upload is misconfigured: {escape(str(exc))}[/red]", highlight=False)
+        return None
+
+
+def _upload_and_report(record_dir: Path, base_url: str) -> dict[str, Any]:
+    """Upload a landed report's package, say how it went, and return the record as it now is.
+
+    The outcome of this attempt is always printed from the exception or the
+    receipt, not from the record: a package that vanished or changed is
+    refused without touching the record, and the user still has to see why.
+    """
+    try:
+        with console.status("Uploading the package...", spinner="dots"):
+            record, receipt = tupload.upload_record(record_dir, base_url=base_url)
+    except tupload.UploadError as exc:
+        console.print(f"  [red]✗ Upload failed: {escape(str(exc))}[/red]", highlight=False, soft_wrap=True)
+        console.print('  Retry from this attempt\'s "Bug reports" entry (Upload).')
+        return breport.load_record(record_dir)
+    verb = "Already uploaded" if receipt.duplicate else "Uploaded"
+    console.print(f"  {verb} — receipt {escape(receipt.receipt_id)}", highlight=False)
+    return record
 
 
 def _print_packaging_failure(report_id: str, reason: str, *, retryable: bool) -> None:
@@ -1261,9 +1304,23 @@ def _print_review_item(item: Any, index: int, total: int, index_by_id: dict[str,
 
 
 def _ask_review_item(
-    item: Any, index: int, total: int, index_by_id: dict[str, int], questionary: Any, style: Any
+    item: Any,
+    index: int,
+    total: int,
+    index_by_id: dict[str, int],
+    questionary: Any,
+    style: Any,
+    *,
+    hint: thistory.RememberedDecision | None = None,
 ) -> str:
     _print_review_item(item, index, total, index_by_id)
+    if hint is not None:
+        verb = "kept" if hint.action == treview.ACTION_KEPT else "replaced"
+        console.print(
+            f"  History: you {verb} this value on {escape(hint.decided_at[:10])}; its linked items have"
+            " no matching remembered answer, so the group is asked again.",
+            highlight=False,
+        )
     if item.kind == treview.KIND_CONFIRMED:
         while True:
             answer = (
@@ -1315,36 +1372,142 @@ def _conflicted_review_items(items: list[Any], actions: dict[str, str]) -> list[
     return conflicted
 
 
-def make_review_decider(questionary: Any, style: Any) -> Any:
+def _report_history() -> thistory.RedactionHistory | None:
+    return thistory.RedactionHistory() if thistory.enabled() else None
+
+
+def _resolve_history(
+    history: thistory.RedactionHistory, items: list[Any]
+) -> tuple[thistory.HistoryResolution | None, list[str]]:
+    """Replayed decisions plus the warnings to show; storage trouble never stops a report.
+
+    The warnings are returned rather than printed so each caller can place
+    them under its own heading.
+    """
+    try:
+        resolution = history.resolve(items)
+    except thistory.HistoryStorageError as exc:
+        return None, [f"Redaction history is unavailable ({exc}); every item needs your decision."]
+    if resolution.corrupt:
+        return resolution, [
+            f"Redaction history could not be read ({resolution.corrupt}); every item needs your decision."
+            " The file is backed up on the next save."
+        ]
+    return resolution, []
+
+
+def _print_history_warnings(warnings: list[str]) -> None:
+    for warning in warnings:
+        console.print(f"  [yellow]! {escape(warning)}[/yellow]", highlight=False)
+
+
+def _print_history_decisions(resolution: thistory.HistoryResolution | None, items: list[Any]) -> None:
+    if resolution is None or not resolution.auto:
+        return
+    by_id = {item.id: item for item in items}
+    index_by_id = {item.id: index for index, item in enumerate(items, 1)}
+    console.print(f"  {len(resolution.auto)} item(s) decided from your redaction history:", highlight=False)
+    for decision in resolution.auto:
+        record = resolution.replayed[decision.item_id]
+        verb = "kept" if record.action == treview.ACTION_KEPT else "replaced"
+        line = (
+            f"[{index_by_id[decision.item_id]}/{len(items)}] {by_id[decision.item_id].category} {record.masked}"
+            f" -- {verb} (decided {record.decided_at[:10]}, reused {record.applied} time(s))"
+        )
+        console.print(f"    {escape(line)}", highlight=False)
+
+
+def _remember_decisions(
+    history: thistory.RedactionHistory,
+    items: list[Any],
+    decisions: list[Any],
+    *,
+    source: str,
+    replayed: dict[str, thistory.RememberedDecision],
+) -> None:
+    """Record a valid decision set; a storage failure only warns, the report proceeds."""
+    try:
+        result = history.remember(items, decisions, source=source, replayed=replayed)
+    except thistory.HistoryStorageError as exc:
+        console.print(f"[yellow]! Your decisions were not remembered: {escape(str(exc))}[/yellow]", highlight=False)
+        return
+    if result.stale:
+        console.print(
+            f"[yellow]! {result.stale} remembered decision(s) changed elsewhere during this review;"
+            " this report used the earlier answer.[/yellow]",
+            highlight=False,
+        )
+    if result.backup is not None:
+        console.print(f"Backed up the unreadable redaction history to {escape(str(result.backup))}.", highlight=False)
+
+
+def make_review_decider(
+    questionary: Any,
+    style: Any,
+    *,
+    history: thistory.RedactionHistory | None = None,
+    replay: bool = True,
+    source: str = "cli",
+) -> Any:
     """The interactive ``decide`` callback for :func:`breport.freeze_export`.
 
     Validates before returning and re-asks only the conflicting linked group,
     so the pipeline never sees an inconsistent decision set (and nothing is
     applied until the set is legal). Shared by the browser and the CLI's TTY
-    path.
+    path. With a ``history``, remembered decisions are replayed first (whole
+    linked groups only) and listed, only the other items are asked, and once
+    the set is valid every suspected item's decision is recorded -- replayed
+    ones only count a reuse. ``replay=False`` asks every item but still
+    records the answers.
     """
 
     def _decide(items: list[Any], reasons: list[str]) -> list[Any]:
+        resolution, history_warnings = (
+            _resolve_history(history, items) if history is not None and replay else (None, [])
+        )
+        auto_ids = set(resolution.replayed) if resolution else set()
+        remaining = [item for item in items if item.id not in auto_ids]
         console.print()
-        console.print(f"Redaction review — {len(items)} item(s) need your decision", highlight=False)
+        if remaining:
+            console.print(f"Redaction review — {len(remaining)} item(s) need your decision", highlight=False)
+        else:
+            console.print("Redaction review — every item was decided from your redaction history", highlight=False)
         console.print(f"  {_REVIEW_PATHS_NOTE}", highlight=False)
         for warning in _review_warnings(reasons):
             console.print(f"  [yellow]! {escape(warning)}[/yellow]", highlight=False)
+        _print_history_warnings(history_warnings)
+        _print_history_decisions(resolution, items)
+        hints = resolution.hints if resolution else {}
         index_by_id = {item.id: index for index, item in enumerate(items, 1)}
-        actions: dict[str, str] = {}
-        for index, item in enumerate(items, 1):
-            actions[item.id] = _ask_review_item(item, index, len(items), index_by_id, questionary, style)
+        actions: dict[str, str] = (
+            {decision.item_id: decision.action for decision in resolution.auto} if resolution else {}
+        )
+        for item in remaining:
+            actions[item.id] = _ask_review_item(
+                item, index_by_id[item.id], len(items), index_by_id, questionary, style, hint=hints.get(item.id)
+            )
         while True:
             decisions = [treview.ReviewDecision(item.id, actions[item.id]) for item in items]
             try:
                 treview.validate_review_decisions(items, decisions)
-                return decisions
+                break
             except treview.ReviewConflictError as exc:
                 console.print(f"[red]{escape(str(exc))}[/red]", highlight=False)
                 for item in _conflicted_review_items(items, actions):
                     actions[item.id] = _ask_review_item(
-                        item, index_by_id[item.id], len(items), index_by_id, questionary, style
+                        item,
+                        index_by_id[item.id],
+                        len(items),
+                        index_by_id,
+                        questionary,
+                        style,
+                        hint=hints.get(item.id),
                     )
+        if history is not None:
+            _remember_decisions(
+                history, items, decisions, source=source, replayed=resolution.replayed if resolution else {}
+            )
+        return decisions
 
     return _decide
 
@@ -1412,7 +1575,9 @@ def _summary_line(label: str, value: str) -> None:
     console.print(f"  {label + ':':<14}{value}", highlight=False)
 
 
-def _print_bug_summary(session_row: SessionRow, index: int, row: AttemptRow, prep: Any) -> None:
+def _print_bug_summary(
+    session_row: SessionRow, index: int, row: AttemptRow, prep: Any, *, upload_target: str = ""
+) -> None:
     """The final confirmation block, rendered from the frozen canonical
     metadata (the text the user approves is the text that ships)."""
     meta = prep.package_metadata
@@ -1457,7 +1622,10 @@ def _print_bug_summary(session_row: SessionRow, index: int, row: AttemptRow, pre
         _summary_line("Redaction", f"{counts} · residual scan: clean")
     console.print(_PII_NOTE, highlight=False)
     _summary_line("Will produce", f"bug report package {prep.report_id}.tar.gz (kept locally)")
-    console.print("  Nothing will be uploaded — the package stays on this machine.")
+    if upload_target:
+        console.print(f"  Will upload to {escape(upload_target)} after the package is created.", highlight=False)
+    else:
+        console.print("  Nothing will be uploaded — the package stays on this machine.")
 
 
 def _confirm_create(questionary: Any, style: Any, prep: Any) -> bool:
@@ -1488,6 +1656,9 @@ def _bug_report_action(
     Any exit before the record lands deletes the staging directory; the pin
     from bundling stays (it cannot be told apart from a user's own pin, and
     the disclosure line covers it)."""
+    base_url = _resolved_upload_url()
+    if base_url is None:
+        return
     status = console.status("Collecting the trajectory snapshot...", spinner="dots")
 
     def _collected() -> None:
@@ -1509,18 +1680,24 @@ def _bug_report_action(
     try:
         fields = _ask_problem_fields(questionary, style)
         try:
-            prep = breport.freeze_export(prep, **fields, decide=make_review_decider(questionary, style))
+            prep = breport.freeze_export(
+                prep,
+                **fields,
+                decide=make_review_decider(questionary, style, history=_report_history(), source="browser"),
+            )
         except breport.PreparationError as exc:
             console.print(
                 f"[red]✗ Could not prepare the trajectory snapshot: {escape(str(exc))}[/red]", highlight=False
             )
             return
-        _print_bug_summary(session_row, index, row, prep)
+        _print_bug_summary(
+            session_row, index, row, prep, upload_target=tupload.upload_target(base_url) if base_url else ""
+        )
         if not _confirm_create(questionary, style, prep):
             console.print(_CANCELLED_MESSAGE)
             return
         try:
-            _record_dir, record = breport.confirm_and_package(prep)
+            record_dir, record = breport.confirm_and_package(prep)
         except breport.StaleAttemptError:
             _print_stale_refresh()
             return
@@ -1532,7 +1709,11 @@ def _bug_report_action(
         except breport.PackagingError as exc:
             _print_packaging_failure(prep.report_id, str(exc), retryable=exc.retryable)
             return
-        _print_report_ready(record)
+        if base_url:
+            _print_report_ready(record, upload_state=False)
+            _upload_and_report(record_dir, base_url)
+        else:
+            _print_report_ready(record)
     except (_ActionCancelledError, treview.ReviewCancelledError):
         console.print(_CANCELLED_MESSAGE)
     finally:
@@ -1556,14 +1737,25 @@ def _print_report_details(record: dict[str, Any]) -> None:
         console.print(f"  [yellow]! {escape(notice)}[/yellow]", highlight=False)
     if record["status"] == breport.STATUS_LOCAL_READY:
         console.print(f"  Package:  [cyan]{escape(record['package']['path'])}[/cyan]", highlight=False)
-        console.print("  Not uploaded — hand the package file to a developer yourself.")
+        _print_upload_state(record)
     elif record["status"] == breport.STATUS_FAILED:
         console.print(f"  Failure:  {escape(record['failure'].get('reason') or '')}", highlight=False)
 
 
+def _report_actions(record: dict[str, Any], base_url: str | None, questionary: Any) -> list[Any]:
+    choices = []
+    if record["status"] == breport.STATUS_FAILED and record["failure"].get("retryable"):
+        choices.append(questionary.Choice("Retry packaging", value="retry"))
+    uploaded = (record.get("upload") or {}).get("state") == breport.UPLOAD_STATE_UPLOADED
+    if record["status"] == breport.STATUS_LOCAL_READY and not uploaded and base_url:
+        choices.append(questionary.Choice("Upload", value="upload"))
+    return choices
+
+
 def _bug_reports_screen(row: AttemptRow, questionary: Any, style: Any) -> None:
-    """List, inspect, and retry this attempt's bug reports (design 1.8)."""
+    """List, inspect, retry, and upload this attempt's bug reports (design 1.8)."""
     reports = breport.reports_for_attempt(row.key, row.traces)
+    base_url = _resolved_upload_url() if reports else ""
     while reports:
         choices = []
         for record_dir, record in reports:
@@ -1578,20 +1770,22 @@ def _bug_reports_screen(row: AttemptRow, questionary: Any, style: Any) -> None:
             return
         record_dir, record = picked
         _print_report_details(record)
-        if record["status"] == breport.STATUS_FAILED and record["failure"].get("retryable"):
-            action = _select_screen(
-                questionary, style, "Action:", _HELP_ACTION, [questionary.Choice("Retry packaging", value="retry")]
-            )
+        choices = _report_actions(record, base_url, questionary)
+        if choices:
+            action = _select_screen(questionary, style, "Action:", _HELP_ACTION, choices)
             if action is _BACK:
                 reports = breport.reports_for_attempt(row.key, row.traces)
                 continue
-            try:
-                with console.status("Packing the report...", spinner="dots"):
-                    retried = breport.retry_packaging(record_dir)
-            except breport.PackagingError as exc:
-                _print_packaging_failure(record["report_id"], str(exc), retryable=exc.retryable)
-            else:
-                _print_report_ready(retried)
+            if action == "retry":
+                try:
+                    with console.status("Packing the report...", spinner="dots"):
+                        retried = breport.retry_packaging(record_dir)
+                except breport.PackagingError as exc:
+                    _print_packaging_failure(record["report_id"], str(exc), retryable=exc.retryable)
+                else:
+                    _print_report_ready(retried)
+            elif action == "upload" and base_url:
+                _print_report_details(_upload_and_report(record_dir, base_url))
         reports = breport.reports_for_attempt(row.key, row.traces)
     console.print("[dim]No bug reports for this attempt.[/dim]")
 

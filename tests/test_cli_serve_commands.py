@@ -449,6 +449,133 @@ class TestTheCommand:
         assert started == [] and supervised == [] and opened == []
 
 
+class TestTheSignInLink:
+    """The one URL that signs a browser in has to reach the person, whatever the
+    browser launch did with it."""
+
+    @staticmethod
+    async def _port(preferred: int, **_kwargs) -> int:
+        return preferred
+
+    @staticmethod
+    async def _rpc_stack(*_args, **_kwargs):
+        """A stack good enough for `_serve_main`: it reads `build_error`, hands the
+        loop to the app builder, and is torn down when the stop lands."""
+        from types import SimpleNamespace
+
+        async def _teardown() -> None:
+            pass
+
+        return SimpleNamespace(
+            build_error=None, agent_loop=None, deliverables=None, dispatcher=None, teardown=_teardown
+        )
+
+    class _Runner:
+        """`AppRunner`/`TCPSite` without binding sockets."""
+
+        def __init__(self, *_args) -> None:
+            pass
+
+        async def setup(self) -> None:
+            pass
+
+        async def cleanup(self) -> None:
+            pass
+
+        async def start(self) -> None:
+            pass
+
+    def test_it_is_printed_when_a_browser_says_it_opened(self, monkeypatch, capsys) -> None:
+        """``webbrowser.open`` answers True whenever it ran something: VS Code's
+        ``browser.sh`` exits 0 on any outcome, and a box with no display hands the
+        URL to w3m, which has no JavaScript and never redeems it. A link printed
+        only on False was therefore never printed at all."""
+        monkeypatch.setattr(serve_commands.webbrowser, "open", lambda url: True)
+
+        serve_commands._open("http://127.0.0.1:18792/auth#n0nce")
+
+        assert "http://127.0.0.1:18792/auth#n0nce" in capsys.readouterr().out
+
+    def test_it_is_on_screen_before_the_browser_is_asked(self, monkeypatch, capsys) -> None:
+        """A console browser holds the terminal until it is quit, and a launch can
+        raise; printed first, the link is there in both cases."""
+        on_screen: list[str] = []
+        monkeypatch.setattr(serve_commands.webbrowser, "open", lambda url: on_screen.append(capsys.readouterr().out))
+
+        serve_commands._open("http://127.0.0.1:18792/auth#n0nce")
+
+        assert "auth#n0nce" in on_screen[0]
+
+    def test_a_standalone_serve_opens_through_the_same_path(self) -> None:
+        """`raven serve --open` with no gateway to attach to opens from inside the
+        coroutine that binds the port; pinned by source, and driven end to end
+        below by `test_a_standalone_serve_prints_the_link_it_opens`."""
+        import inspect
+
+        src = inspect.getsource(serve_commands._serve_main)
+        assert "_open(auth_url)" in src
+        assert "webbrowser.open" not in src
+
+    @pytest.mark.parametrize("built_page", [False, True], ids=["without-page", "with-page"])
+    async def test_a_standalone_serve_prints_the_link_it_opens(
+        self, two_candidates, built_page: bool, monkeypatch, opened: list[str]
+    ) -> None:
+        """The standalone path, run rather than read: the URL it hands the browser
+        is one the gateway minted, and the launch that asked for a browser is the
+        one that gets one, with or without a built page."""
+        from contextlib import suppress
+
+        from raven.cli import serve_commands as sc
+
+        packaged, _source = two_candidates
+        if built_page:
+            _build(packaged, "page")
+
+        printed: list[str] = []
+        monkeypatch.setattr(sc.typer, "echo", printed.append)
+
+        def _arm(_port, _token, _cookie, stop) -> None:
+            # `_serve_main` holds until something asks it to stop; nothing here
+            # does, so arming it is the natural place to ask -- and it is what a
+            # `raven serve --stop` would do.
+            asyncio.get_running_loop().call_soon(stop.set)
+
+        monkeypatch.setattr(sc.SERVE, "arm", _arm)
+        monkeypatch.setattr(sc.SERVE, "disarm", lambda: None)
+        monkeypatch.setattr("raven.rpc.transports.ws.pick_port", TestTheSignInLink._port)
+        monkeypatch.setattr("raven.rpc.bootstrap.build_rpc_stack", TestTheSignInLink._rpc_stack)
+        monkeypatch.setattr(sc, "warm_up_in_background", lambda: None)
+        monkeypatch.setattr("raven.updates.update_notice.maybe_refresh_async", lambda: None)
+        monkeypatch.setattr("raven.rpc.deck_templates.warm_covers_in_background", lambda: None)
+        monkeypatch.setattr("raven.rpc.deck_templates.stop_warming", lambda: None)
+
+        async def _nothing() -> None:
+            return None
+
+        from aiohttp import web
+
+        apps: list[web.Application] = []
+
+        def _runner(app: web.Application) -> TestTheSignInLink._Runner:
+            apps.append(app)
+            return self._Runner()
+
+        monkeypatch.setattr(web, "AppRunner", _runner)
+        monkeypatch.setattr(web, "TCPSite", TestTheSignInLink._Runner)
+        monkeypatch.setattr(serve_commands, "_announce_updates", lambda *a, **k: _nothing())
+        monkeypatch.setattr(serve_commands, "_write_serve_state", lambda *a, **k: None)
+
+        with suppress(KeyboardInterrupt):
+            await sc._serve_main(18999, True)
+
+        assert len(opened) == 1
+        assert opened[0].startswith("http://127.0.0.1:18999/auth#")
+        assert f"sign in with this link (it works once): {opened[0]}" in printed
+        (app,) = apps
+        assert isinstance(app, web.Application)
+        assert any(hook.__name__ == "revalidate" for hook in app.on_response_prepare) is built_page
+
+
 class _FakeProc:
     """A gateway run that ends with ``code``, without running one."""
 
@@ -1380,6 +1507,7 @@ class TestTheSessionSurvivesARestart:
 
         assert gw.session_cookie == "freshly-minted"
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes are not available on Windows")
     def test_the_state_file_stays_owner_only(self, home: Path) -> None:
         """It now carries two credentials rather than one."""
         path = serve_commands._write_serve_state(18792, "tok-1", "cookie-1")
@@ -1658,6 +1786,7 @@ class TestThePollFollowsTheChannelItIsWatching:
         assert asked[:3] == [1, 2, 3]
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Popen.terminate does not deliver SIGTERM on Windows")
 class TestTheSupervisorCleansUpOnTheSignalThatStopsIt:
     """`raven web --stop` sends SIGTERM. Python's default disposition kills the
     process where it stands, so the `finally` that removes `web.json` never ran
@@ -1945,6 +2074,13 @@ def test_serve_starts_the_litellm_warm_up_at_boot() -> None:
     import inspect
 
     assert "warm_up_in_background()" in inspect.getsource(serve_commands._serve_main)
+
+
+def test_serve_starts_the_heap_trimmer_at_boot() -> None:
+    """``_serve_main`` serves forever, so its source is pinned rather than executed."""
+    import inspect
+
+    assert "start_trimmer()" in inspect.getsource(serve_commands._serve_main)
 
 
 def test_serve_warms_the_deck_template_covers_at_boot() -> None:
