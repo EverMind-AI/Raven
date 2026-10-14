@@ -96,6 +96,17 @@ STEER_CAPABILITY = "raven.steer"
 # host's socket lifetime, which needs no agreement from the far side.
 SESSION_MCP_CAPABILITY = "raven.mcp.session"
 
+#: ``session/new`` ``_meta.raven`` key an agent sets when its menus are EMPTY BECAUSE
+#: IT FAILED TO READ THEM, rather than because it offers none.
+#:
+#: The two are one shape on the wire and only one of them is a fact about the
+#: agent, so a reader that cannot tell them apart records a failed read as a
+#: measurement -- and nothing invalidates a measurement, so the empty menu
+#: outlives every restart. Declared for the same reason the capability keys
+#: above are: a caller and a server that spell it differently disagree in
+#: silence.
+MENU_UNREAD_META = "modelMenuUnread"
+
 
 class AcpError(Exception):
     """Base for every ACP transport failure."""

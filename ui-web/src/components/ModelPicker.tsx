@@ -63,6 +63,7 @@ export interface ModelPickerProps {
 
 export function ModelPicker({ title, providers, current, onPick, onClose, emptyNote, anchor, allowTyped = true }: ModelPickerProps): JSX.Element {
   const box = useRef<HTMLDivElement>(null)
+  const field = useRef<HTMLInputElement>(null)
   const [q, setQ] = useState('')
   const want = current ? current.provider : ''
   const [prov, setProv] = useState(() => (providers.some((p) => p.id === want) ? want : (providers[0]?.id ?? '')))
@@ -79,6 +80,13 @@ export function ModelPicker({ title, providers, current, onPick, onClose, emptyN
      below is filtered, not resized, so a search term never moves the panel. */
   useLayoutEffect(() => {
     if (anchor && box.current) anchorRow(box.current, anchor)
+    /* Focused here, after the panel is placed, and without scrolling -- not by
+       `autoFocus`. React runs autoFocus before this effect, while the panel is
+       still in the flow, so a scroller holding it scrolled to show the field:
+       the row moved, the panel was placed against where it had moved to, and
+       the scroller settled back once the panel left the flow, leaving the menu
+       over its own row. */
+    field.current?.focus({ preventScroll: true })
   }, [anchor])
   /* A scroll closes the panel; a resize re-places it. The two events move the
      row for different reasons: a scroll slides it out from under the panel, and
@@ -135,7 +143,20 @@ export function ModelPicker({ title, providers, current, onPick, onClose, emptyN
     return () => document.removeEventListener('pointerdown', off, true)
   }, [anchor, onClose])
   return (
-    <div className="model-picker" role="dialog" aria-label={title} ref={box}>
+    <div
+      className="model-picker"
+      role="dialog"
+      aria-label={title}
+      ref={box}
+      onKeyDown={(e) => {
+        /* The menu keeps the Escape it answers, from the field or from a row the
+           reader moved to: the document owns Escape too, and its escape table
+           would also close the drawer this menu hangs in -- one key, one layer. */
+        if (e.key !== 'Escape') return
+        e.stopPropagation()
+        onClose()
+      }}
+    >
       <div className="model-picker-search">
         <span className="model-picker-title">{title}</span>
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4" /></svg>
@@ -144,7 +165,7 @@ export function ModelPicker({ title, providers, current, onPick, onClose, emptyN
           placeholder={t('gui.model.pick_search')}
           autoComplete="off"
           spellCheck={false}
-          autoFocus
+          ref={field}
           onChange={(e) => {
             const next = e.currentTarget.value
             setQ(next)
@@ -155,7 +176,6 @@ export function ModelPicker({ title, providers, current, onPick, onClose, emptyN
             if (nl && hit.length && !hit.some((p) => p.id === prov)) setProv(hit[0]!.id)
           }}
           onKeyDown={(e) => {
-            if (e.key === 'Escape') onClose()
             if (e.key === 'Enter' && sel && first) onPick(first, sel.id, !sel.models.includes(first))
           }}
         />
@@ -163,9 +183,9 @@ export function ModelPicker({ title, providers, current, onPick, onClose, emptyN
       <div className="model-picker-body">
         <div className="model-picker-left">
           {shown.map((p) => (
-            <button key={p.id} type="button" className="model-picker-prov" aria-current={p.id === selId} onClick={() => setProv(p.id)}>
+            <button key={p.id} type="button" className="model-picker-prov" aria-current={p.id === selId} onClick={() => setProv(p.id)} title={p.name}>
               <ProviderIcon id={p.id} name={p.name} />
-              <span>{p.name}</span><span className="model-picker-count">{hits(p).length}</span>
+              <span className="model-picker-name">{p.name}</span><span className="model-picker-count">{hits(p).length}</span>
               {current && current.provider === p.id && <span className="model-picker-dot" />}
             </button>
           ))}

@@ -569,6 +569,38 @@ async def test_a_mirasim_that_cannot_list_models_still_opens_a_session_with_no_m
     assert nomenu.replies() == ["turn 1 of sess-1 on - effort - files []: hi"]
 
 
+async def test_a_menu_that_could_not_be_read_goes_out_marked_as_unread(tmp_path: Path) -> None:
+    """The two empties are one shape on the wire, and only one is a fact.
+
+    A reader that cannot tell them apart records a failed read as a measurement
+    of "no models", and nothing invalidates a measurement -- so the row offers
+    no model picker until somebody presses Test by hand. The mark is what makes
+    the difference visible off this process.
+    """
+    nomenu = Harness(tmp_path, mode="nomenu")
+    result = await nomenu.ok("session/new", cwd=str(tmp_path), mcpServers=[])
+    assert result["_meta"]["raven"]["modelMenuUnread"] is True
+    validate_def("NewSessionResponse", result)
+
+
+async def test_a_menu_that_was_read_carries_no_unread_mark(harness: Harness) -> None:
+    """Absent means measured, so an agent that answered says nothing extra."""
+    result = await harness.ok("session/new", cwd=str(harness.tmp_path), mcpServers=[])
+    assert "_meta" not in result or "raven" not in result.get("_meta", {})
+    validate_def("NewSessionResponse", result)
+
+
+async def test_menus_read_once_a_failed_read_is_not_cached_as_a_measurement(tmp_path: Path) -> None:
+    """The unread flag clears itself the moment a read lands, without a restart."""
+    flaky = Harness(tmp_path, mode="nomenu")
+    first = await flaky.ok("session/new", cwd=str(tmp_path), mcpServers=[])
+    assert first["_meta"]["raven"]["modelMenuUnread"] is True
+    flaky.use("ok")
+    second = await flaky.ok("session/new", cwd=str(tmp_path), mcpServers=[])
+    assert "configOptions" in second and "_meta" not in second
+    validate_def("NewSessionResponse", second)
+
+
 async def test_malformed_requests_are_invalid_params(harness: Harness) -> None:
     assert (await harness.refused("session/new", mcpServers=[]))["code"] == INVALID_PARAMS
     sid = (await harness.ok("session/new", cwd=str(harness.tmp_path)))["sessionId"]

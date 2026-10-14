@@ -39,6 +39,29 @@ const OWN_BY = 'gui.agent.by_raven'
 const MIRASIM_SHORT = 'gui.agent.short_mirasim'
 const MIRASIM_SITE = 'mirasim.ai/download'
 
+/* The nine presets that reach an agent through mirasim, named by the prefix
+   they share. A family rather than a table of its own: the roster is the
+   server's, and a family spelled here would be a second place for it to
+   drift -- this one only has to answer which card a row folds into.
+   Derived from the preset and never from the name: a preset survives a
+   rename, and `mirasim_` is what the server's own presets are keyed by. */
+export const MIRASIM_FAMILY = 'mirasim'
+
+/* Two, not one: a card standing for a single agent hides the very thing the
+   reader came for, and a family that has come down to one visible member is
+   better drawn as that member. */
+export const MIN_FAMILY = 2
+
+export function familyOf(row: ExtAgentRow): string | null {
+  return row.preset && row.preset.startsWith(`${MIRASIM_FAMILY}_`) ? MIRASIM_FAMILY : null
+}
+
+/* A catalogue key that belongs to a family, by the same prefix test the rows
+   are folded by, so the skeleton and the grid cannot disagree about which
+   entries collapse. */
+const familyOfKey = (key: string): string | null =>
+  key.startsWith(`${MIRASIM_FAMILY}_`) ? MIRASIM_FAMILY : null
+
 const CATALOGUE: Record<string, CatalogueEntry> = {
   Raven: { short: 'gui.agent.short_raven', by: OWN_BY },
   'Raven-Code': { short: 'gui.agent.short_raven_code', by: OWN_BY },
@@ -127,6 +150,22 @@ function entryOf(row: ExtAgentRow): CatalogueEntry | undefined {
    the roster on every machine -- Raven's own agents and every preset, whether
    or not it is installed -- and only a hand-written agent adds to it. */
 export const catalogueSize = (): number => Object.keys(CATALOGUE).length
+
+/* How many CARDS that catalogue makes, which is what the grid's skeleton draws
+   so the first frame lands where the real one will instead of jumping when a
+   family folds. Counted here rather than written down, because a number beside
+   the table is the one thing that goes stale in silence. */
+export const catalogueCards = (): number => {
+  const families = new Map<string, number>()
+  let cards = 0
+  for (const key of Object.keys(CATALOGUE)) {
+    const family = familyOfKey(key)
+    if (family) families.set(family, (families.get(family) ?? 0) + 1)
+    else cards += 1
+  }
+  for (const count of families.values()) cards += count < MIN_FAMILY ? count : 1
+  return cards
+}
 
 export function isOwnRow(row: ExtAgentRow): boolean {
   return !!row.own || !!row.builtin || !!row.vendored || entryOf(row)?.by === OWN_BY

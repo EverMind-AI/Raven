@@ -53,6 +53,17 @@ describe('model picker', () => {
     }
   })
 
+  /* A heading stays on one line and gives way at its end rather than wrapping
+     (page.css, `.model-picker-name`, pinned by scripts/gates/model-picker-css):
+     so the name is its own element for that rule to reach, and the row carries
+     the whole name for the case where it does give way. */
+  it('names each provider in an element of its own, with the whole name on the row', () => {
+    draw({ providers: [{ id: 'minimax_oauth', name: 'MiniMax Global (OAuth)', models: ['MiniMax-M3'] }] })
+    const row = document.querySelector<HTMLElement>('.model-picker-prov')!
+    expect(row.querySelector('.model-picker-name')!.textContent).toBe('MiniMax Global (OAuth)')
+    expect(row.title).toBe('MiniMax Global (OAuth)')
+  })
+
   it('opens on the current provider, shows its models with names and windows, and marks the current one', () => {
     setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
     draw()
@@ -74,6 +85,50 @@ describe('model picker', () => {
     fireEvent.change(box, { target: { value: 'brand-new-model' } })
     fireEvent.click(screen.getByText('gui.model.pick_use {"id":"brand-new-model"}'))
     expect(picks).toEqual([['openai/gpt-4o', 'openrouter', false], ['brand-new-model', 'anthropic', true]])
+  })
+
+  /* The document owns Escape too: the page's escape table closes the drawer the
+     menu hangs in, so a menu that let its Escape through took the drawer with
+     it. From the search field and from a row the reader moved to alike. */
+  it('closes on Escape and does not let it reach the document', () => {
+    const { closes } = draw()
+    let reached = 0
+    const sentinel = (): void => {
+      reached += 1
+    }
+    document.addEventListener('keydown', sentinel)
+    try {
+      fireEvent.keyDown(document.querySelector('.model-picker-search input')!, { key: 'Escape' })
+      fireEvent.keyDown(document.querySelector('.model-picker-prov')!, { key: 'Escape' })
+      expect(closes.length).toBe(2)
+      expect(reached).toBe(0)
+      /* Only Escape is kept: any other key still reaches the page. */
+      fireEvent.keyDown(document.querySelector('.model-picker-search input')!, { key: 'a' })
+      expect(reached).toBe(1)
+    } finally {
+      document.removeEventListener('keydown', sentinel)
+    }
+  })
+
+  /* The field takes focus once the panel is placed, and without a scroll: an
+     autoFocus fired while the panel was still in the flow, the drawer's scroller
+     jumped to show it, and the row the panel was then placed under had moved. */
+  it('takes focus after it is placed, without scrolling anything to reach it', () => {
+    const seen: Array<{ preventScroll?: boolean; placed: string }> = []
+    const focus = HTMLInputElement.prototype.focus
+    HTMLInputElement.prototype.focus = function (this: HTMLInputElement, opts?: FocusOptions) {
+      seen.push({ preventScroll: opts?.preventScroll, placed: this.closest<HTMLElement>('.model-picker')?.style.position ?? '' })
+      return focus.call(this, opts)
+    }
+    try {
+      const anchor = document.createElement('div')
+      document.body.appendChild(anchor)
+      draw({ anchor })
+      expect(seen).toEqual([{ preventScroll: true, placed: 'fixed' }])
+      expect(document.activeElement).toBe(document.querySelector('.model-picker-search input'))
+    } finally {
+      HTMLInputElement.prototype.focus = focus
+    }
   })
 
   it('Enter takes the first match, Escape closes, and an exact typed id is not offered twice', () => {

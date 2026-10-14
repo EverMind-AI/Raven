@@ -110,6 +110,7 @@ from raven.acp.protocol import (
     CANCEL_REQUEST_METHOD,
     INTERNAL_ERROR,
     INVALID_PARAMS,
+    MENU_UNREAD_META,
     METHOD_NOT_FOUND,
     RESOURCE_NOT_FOUND,
     error_response,
@@ -651,6 +652,13 @@ class MirasimAgent:
             state["configOptions"] = options
         if modes := catalog.modes(session.mode):
             state["modes"] = modes
+        # A menu that is empty because the read failed goes out marked as such,
+        # so a prober does not record it as a measurement of no models. Raven's
+        # own key under `_meta`, the way every extension here travels: a
+        # conformant client reads no `_meta` and sees exactly the empty menu it
+        # sees today.
+        if catalog.menus_unread:
+            state.setdefault("_meta", {})["raven"] = {MENU_UNREAD_META: True}
         return state
 
     def _session(self, params: dict[str, Any]) -> Session:

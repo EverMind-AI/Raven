@@ -863,6 +863,26 @@
       "en": "That did not work: {detail}",
       "zh": "没成功：{detail}"
     },
+    "gui.agent.fam_lead": {
+      "en": "Which agent runs through mirasim",
+      "zh": "让哪个智能体经由 mirasim 运行"
+    },
+    "gui.agent.fam_mirasim": {
+      "en": "Mirasim",
+      "zh": "Mirasim"
+    },
+    "gui.agent.fam_mirasim_about": {
+      "en": "Coding agents run through mirasim; pick one, and its model, to connect it on its own.",
+      "zh": "经 mirasim 运行的编码智能体；选一个并选好模型，即可单独接入它。"
+    },
+    "gui.agent.fam_n": {
+      "en": "{n} agents",
+      "zh": "{n} 个智能体"
+    },
+    "gui.agent.fam_pick": {
+      "en": "Pick an agent",
+      "zh": "选择智能体"
+    },
     "gui.agent.g_on": {
       "en": "Connected",
       "zh": "已接入"

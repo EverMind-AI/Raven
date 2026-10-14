@@ -2537,7 +2537,13 @@ textarea:focus, textarea:focus-visible,
 .model-picker-search svg {width:15px; height:15px; flex:0 0 15px; fill:none; stroke:var(--faint); stroke-width:1.7; stroke-linecap:round}
 .model-picker-search input {flex:1; font:inherit; font-size:14px; border:0; background:none; color:var(--text); outline:none}
 .model-picker-search input::placeholder {color:var(--faint)}
-.model-picker-body {display:grid; grid-template-columns:170px 1fr; min-height:0; flex:1}
+/* 200px holds every heading the mirasim agents' menus carry on one line,
+   measured at the worst case -- selected (bold), a two-digit count and the dot:
+   the longest, "Claude Code" and "Antigravity", need 191px with the column's
+   padding. 170px wrapped them. A provider name longer than that (the host's
+   "MiniMax Global (OAuth)") ellipsizes, with the whole name on the row's title,
+   rather than taking a second line or the model column's room. */
+.model-picker-body {display:grid; grid-template-columns:200px 1fr; min-height:0; flex:1}
 @media(max-width:560px) {
   .model-picker-body {grid-template-columns:140px 1fr}
 }
@@ -2547,6 +2553,7 @@ textarea:focus, textarea:focus-visible,
   background:none; border:0; color:var(--text); padding:7px 10px; border-radius:8px; cursor:pointer}
 .model-picker-prov:hover {background:var(--surface)}
 .model-picker-prov[aria-current="true"] {background:var(--raised); font-weight:600}
+.model-picker-prov .model-picker-name {min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 .model-picker-prov .model-picker-count {margin-left:auto; color:var(--faint); font-size:12.5px; font-variant-numeric:tabular-nums}
 .model-picker-prov .model-picker-dot {width:5px; height:5px; border-radius:99px; background:var(--amber); flex:0 0 5px}
 .model-picker-model {display:flex; align-items:center; gap:10px; width:100%; text-align:left; font-family:var(--mono); font-size:13px;
@@ -5641,6 +5648,26 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    native scrollbar and form control to one palette. Guarded by
    ui-web/scripts/gates/agent-mark-css.test.mjs. */
 .agent-mark img { color-scheme: light; }
+/* An agent reached through another one: the plate keeps the route's mark and
+   the agent's own sits on its lower-right corner, on a plate of its own so a
+   mono mark stays legible over the route's strokes. Sized off the slot rather
+   than in px, so the one rule serves every slot that resizes the mark -- the
+   card, the sheet's head, the roster row. `position` on the slot is what the
+   badge anchors to; the slot already clips (`overflow: hidden`), so the badge
+   is drawn inside its corner rather than hanging off it.
+   58% of the slot is where both marks read on the card's 32px slot: the
+   agent's comes out near the 14px the default slot draws one at, where half the
+   slot left it a coloured dot and two thirds buried the route's. The route's
+   mark moves up-left by the same kind of fraction, so the badge covers its last
+   stroke rather than its middle. */
+.agent-mark:has(> .agent-mark-badge) { position: relative; }
+.agent-mark:has(> .agent-mark-badge) > img { translate: -14% -14%; }
+.agent-mark-badge {
+  position: absolute; right: 3%; bottom: 3%; width: 58%; height: 58%;
+  display: grid; place-items: center; box-sizing: border-box;
+  border: 1px solid var(--mark-plate-line); border-radius: 28%; background: var(--mark-plate);
+}
+.agent-mark .agent-mark-badge img { width: 78%; height: 78%; }
 .agent-kind { flex: none; padding: 1px 6px; border: 1px solid var(--line-soft); border-radius: 999px;
   background: var(--surface); color: var(--muted); font: 8.5px/1.45 var(--mono); }
 /* Beside the mode chip in a pane header, in the tabular mono the other elapsed

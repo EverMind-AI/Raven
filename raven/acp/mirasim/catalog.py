@@ -23,7 +23,7 @@ from typing import Any
 
 MODEL_OPTION = "model"
 
-PLATFORM_GROUP = ("platform", "mirasim platform")
+PLATFORM_GROUP = ("platform", "Mirasim")
 OWN_KEY_GROUP = ("own-key", "Own key")
 
 
@@ -48,6 +48,15 @@ class AgentCatalog:
     models: tuple[ModelEntry, ...] = ()
     efforts: tuple[tuple[str, str], ...] = ()
     """The agent-level rungs as ``(id, label)``, which every model's list is drawn from."""
+    menus_unread: bool = False
+    """This catalog is empty because the read failed, not because the agent offers nothing.
+
+    The two are one shape here -- ``models`` and ``efforts`` both empty -- and
+    only one of them is a fact about the agent. A reader that cannot tell them
+    apart records the failure as a measurement, and nothing invalidates a
+    measurement, so a menu that was never read outlives every restart. Set by
+    :func:`read_catalog` from the shape of its second document.
+    """
     _by_id: dict[str, ModelEntry] = field(default_factory=dict, compare=False, repr=False)
 
     def model(self, model_id: str | None) -> ModelEntry | None:
@@ -180,6 +189,10 @@ def read_catalog(agent: str, agents_doc: Any, catalog_doc: Any) -> AgentCatalog:
         default_effort=_text(doc.get("defaultEffort")) or None,
         models=tuple(models),
         efforts=_rungs(doc.get("effort")),
+        # Not ``not models``: an agent that answered with a well-formed catalog
+        # naming no model has offered nothing, and that IS a fact about it. Only
+        # a document that never arrived is a read to take again.
+        menus_unread=not isinstance(catalog_doc, dict),
         _by_id={entry.id: entry for entry in models},
     )
 

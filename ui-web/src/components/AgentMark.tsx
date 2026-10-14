@@ -75,6 +75,24 @@ const MARKS: Record<string, { file: string; tone?: 'mono' | 'hybrid' }> = {
    raven is black under either theme, as the app icon draws it. */
 const OWN_MARK: { file: string } = { file: 'raven' }
 
+/* The group card's mark: one tile standing for the nine `mirasim_*` rows the
+   reader has not picked an agent out of yet.
+
+   Outside `MARKS` on purpose, and parsed separately in the test that reads this
+   file, for the reason `OWN_MARK` is: that table's contract is that it equals
+   the third-party presets one for one, and this stands for nine of them at
+   once. It is mirasim's own file, from `https://mirasim.ai/icon.svg` -- the
+   handwritten "m" the vendor's own `marks.tsx` draws -- copied byte for byte
+   except for the comment the site carries. It answers the theme from a
+   `prefers-color-scheme` rule inside itself, the way raven.svg and
+   miromind.svg do. */
+const GROUP_MARK: { file: string } = { file: 'mirasim' }
+
+/* The preset key the group card is drawn under. Not a preset: no row carries
+   it, and `subagents.list` never sends one. It exists so the group card can
+   reach `AgentMark` through the same door every other mark does. */
+export const MIRASIM_GROUP = 'mirasim'
+
 /* Spelled once, because four call sites read it off three different row types
    and a fifth that forgets `vendored` loses the mark on every Discovered agent
    while `builtin` keeps working -- a difference nobody reviewing one line would
@@ -92,6 +110,7 @@ export const isOwnAgent = (row?: { builtin?: boolean; vendored?: boolean } | nul
    miss, not the inherited hit. */
 function markFor(preset?: string | null, own?: boolean): { file: string; tone?: 'mono' | 'hybrid' } | undefined {
   if (own) return OWN_MARK
+  if (preset === MIRASIM_GROUP) return GROUP_MARK
   return preset && Object.hasOwn(MARKS, preset) ? MARKS[preset] : undefined
 }
 
@@ -120,8 +139,16 @@ function BotIcon(): JSX.Element {
    `own` is the row's `builtin || vendored`, not a name test: it is resolved by
    the caller because the two flags live on the row and their spelling is the
    server's, not this module's. */
-export function AgentMark({ preset, own }: { preset?: string | null; own?: boolean }): JSX.Element {
+export function AgentMark({
+  preset, own, badge,
+}: { preset?: string | null; own?: boolean; badge?: string | null }): JSX.Element {
   const mark = markFor(preset, own)
+  /* The overlaid mark, for an agent that reaches the reader through another
+     one: the plate keeps the route's mark and the badge names the agent. Both
+     files are already in the table -- the route's and the agent's -- so this
+     draws a composite out of what ships rather than adding a third file per
+     agent, which is also why the pair is a prop and not a second table. */
+  const over = badge ? markFor(badge) : undefined
   return (
     <span className="agent-mark" aria-hidden="true">
       {mark ? (
@@ -133,6 +160,17 @@ export function AgentMark({ preset, own }: { preset?: string | null; own?: boole
           data-tone={mark.tone}
         />
       ) : <BotIcon />}
+      {over ? (
+        <span className="agent-mark-badge">
+          <img
+            src={`assets/agents/${over.file}.svg`}
+            alt=""
+            draggable="false"
+            data-agent={badge}
+            data-tone={over.tone}
+          />
+        </span>
+      ) : null}
     </span>
   )
 }

@@ -41,6 +41,16 @@ def test_the_menu_groups_each_model_by_who_pays_for_it() -> None:
     assert option["options"][0]["name"] == "Claude Code"
 
 
+def test_the_platform_heading_reads_as_the_family_does() -> None:
+    """The page calls this family "Mirasim" and each member "<agent>-Mirasim", so its menu does too."""
+    option = read_catalog("claude", AGENTS, catalog_doc()).model_option(None)
+    assert {group["group"]: group["name"] for group in option["options"]} == {
+        "agent": "Claude Code",
+        PLATFORM_GROUP[0]: "Mirasim",
+        OWN_KEY_GROUP[0]: "Own key",
+    }
+
+
 def test_the_effort_rungs_are_session_modes_with_the_default_current() -> None:
     catalog = read_catalog("claude", AGENTS, catalog_doc())
     modes = catalog.modes(None)
