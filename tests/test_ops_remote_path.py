@@ -233,7 +233,6 @@ def registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     path = tmp_path / "connections.json"
     path.write_text(json.dumps({"connections": ROWS}), encoding="utf-8")
     monkeypatch.setenv("RAVEN_CONNECTIONS", str(path))
-    monkeypatch.setenv("RAVEN_DEBUG_MACHINES", "1")
 
 
 @pytest.fixture
@@ -322,14 +321,11 @@ def test_the_fence_is_the_root_a_path_is_under_else_what_was_approved(registry, 
     assert remote_path.fence("read_file", where, "/id", "/root") == "/"
 
 
-def test_with_the_lane_off_no_path_names_a_machine(registry, agents, monkeypatch):
-    # Off, the file tools read every path as they always did: a name with a
-    # colon is a local file, scp:// is a URL, and no registry is consulted.
-    monkeypatch.delenv("RAVEN_DEBUG_MACHINES")
-
-    assert remote_path.target("box2:/root/x") is None
-    assert remote_path.target("scp://root@203.0.113.7:49273//root/x") is None
-    assert remote_path.reading("read_file", {"path": "box2:.ssh/id_rsa"}) is None
+def test_registered_paths_are_remote_without_a_debug_switch(registry, agents, monkeypatch):
+    monkeypatch.delenv("RAVEN_DEBUG_MACHINES", raising=False)
+    assert remote_path.target("box2:/root/x").machine == "box2"
+    assert remote_path.target("scp://root@203.0.113.7:49273//root/x").machine == "box2"
+    assert remote_path.reading("read_file", {"path": "box2:.ssh/id_rsa"}) is not None
 
 
 def test_the_node_pool_is_whatever_assembly_handed_over():

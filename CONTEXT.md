@@ -401,10 +401,14 @@ of it. The entry names only the machine's id, and the entry's `env` reaches the
 agent on the link, never on a command line. Such an entry is added the way any
 preset is, with `machine` (and
 `remote_cwd`, for an `acp` or `cli` one) on `subagents.add` — from a chat through
-`raven_config`, which lists the registered machines while the lane is on; the page's
-add passes no machine yet — refused before anything is spent when the lane is off,
+`raven_config`, which lists the usable registered machines; the page's
+add passes no machine yet — refused before anything is spent when
 the id is not usable or the preset is a built-in agent, and proved by the same
 readiness ping as a local add, run on that machine.
+Registered-machine dispatch, file access and recovery are available without an
+environment switch. An entry without `machine` still runs here. Registration,
+SSH authentication, file permissions and concurrency limits govern remote work;
+listing entries and boot capability backfills do not open machine connections.
 _Avoid_: "host" / "server" / "node" (too broad, no link to the
 `ops connection` registry that supplies the rows); "GPU box" (only some are
 GPU hosts, and the term covers any registered compute destination);

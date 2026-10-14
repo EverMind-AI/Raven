@@ -535,7 +535,7 @@ def _refuse_unless_it_can_run_there(entry: dict, machine: str, *, remote_cwd: st
     with it rather than written and ignored. A built-in agent is Raven's own
     loop in this process and runs on no other machine. The machine is judged
     the way a dispatch judges it (:func:`raven.acp_client.remote.machine`):
-    the lane on, the row registered and usable -- each refusal one sentence,
+    the row registered and usable -- each refusal one sentence,
     with no address in it.
     """
     from raven.acp_client import remote

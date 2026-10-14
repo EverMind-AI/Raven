@@ -679,25 +679,19 @@ def test_an_openai_row_drops_a_remote_cwd_with_a_warning_and_the_write_door_refu
         reject_unsupported_openai_fields([row])
 
 
-def test_with_the_lane_off_a_cli_machine_row_stays_off_the_table(box, monkeypatch):
+def test_machine_and_local_cli_rows_are_on_the_table_without_a_debug_switch(box, monkeypatch):
+    monkeypatch.delenv("RAVEN_DEBUG_MACHINES", raising=False)
     registry = AgentRegistry(build_builtin=lambda row, narrowed: ("backend", row.name))
     local = ThirdPartyCliSubagentConfig(name="here", command="cat")
-
-    monkeypatch.delenv("RAVEN_DEBUG_MACHINES", raising=False)
     registry.apply([cli_config("cat"), local])
-    assert "where@box" not in registry.names() and "here" in registry.names()
-
-    monkeypatch.setenv("RAVEN_DEBUG_MACHINES", "1")
-    registry.apply([cli_config("cat"), local])
-    assert "where@box" in registry.names()
-
-
-async def test_with_the_lane_off_a_cli_dispatch_says_so_and_reaches_nothing(box, monkeypatch, tmp_path):
-    monkeypatch.delenv("RAVEN_DEBUG_MACHINES", raising=False)
-
-    with pytest.raises(RuntimeError, match="the machine lane is debug-only and off"):
-        await _run(cli_config("cat"), "hi", tmp_path)
+    assert "where@box" in registry.names() and "here" in registry.names()
     assert box.calls() == []
+
+
+async def test_a_cli_dispatch_needs_no_debug_switch(box, monkeypatch, tmp_path):
+    monkeypatch.delenv("RAVEN_DEBUG_MACHINES", raising=False)
+    reply = await _run(cli_config("cat"), "hi", tmp_path)
+    assert reply.startswith("hi") and "Ran on machine" in reply
 
 
 async def test_the_announce_names_a_cli_row_s_directory_on_the_machine(box):

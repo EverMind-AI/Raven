@@ -378,7 +378,6 @@ def machines(tmp_path, monkeypatch):
     registry = tmp_path / "connections.json"
     registry.write_text(json.dumps({"connections": [row()]}), encoding="utf-8")
     monkeypatch.setenv("RAVEN_CONNECTIONS", str(registry))
-    monkeypatch.setenv("RAVEN_DEBUG_MACHINES", "1")
     monkeypatch.setattr(remote_path, "_HOMES", {})
     monkeypatch.setattr(remote_path, "_READ", {})
     monkeypatch.setattr(

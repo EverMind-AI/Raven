@@ -3149,13 +3149,12 @@ async def _no_record(cfg: object) -> None:
 
 @pytest.fixture
 def registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A machine registry with one usable row, and the machine lane on."""
+    """A machine registry with one usable row."""
     from raven.ops import connections
 
     path = tmp_path / "connections.json"
     path.write_text(json.dumps({"connections": _MACHINES}), encoding="utf-8")
     monkeypatch.setattr(connections, "store_path", lambda: path)
-    monkeypatch.setenv("RAVEN_DEBUG_MACHINES", "1")
     return path
 
 
@@ -3195,25 +3194,20 @@ async def test_add_on_a_machine_keeps_the_name_the_caller_chose(
     assert entry["machine"] == "ravenx2" and not entry.get("remoteCwd"), "unset: the node's default applies"
 
 
-async def test_add_on_a_machine_is_refused_with_the_lane_off_and_nothing_is_stored_or_pinged(
-    config_path: Path, registry: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.delenv("RAVEN_DEBUG_MACHINES")
-    pinged: list[object] = []
+async def test_add_on_a_machine_needs_no_debug_switch(config_path, registry, monkeypatch):
+    monkeypatch.delenv("RAVEN_DEBUG_MACHINES", raising=False)
+    pinged = []
 
-    async def _ping(cfg: object) -> object:
+    async def ping(cfg):
         pinged.append(cfg)
         return await _pings_ok(cfg)
 
-    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _ping)
-    before = _stored(config_path)
-
-    with pytest.raises(ConfigValidationError) as caught:
-        await subagents_add({"preset": "claude_code", "machine": "ravenx2"})
-
-    assert "machine lane is debug-only" in str(caught.value) and "RAVEN_DEBUG_MACHINES=1" in str(caught.value)
-    assert caught.value.data["field"] == "machine"
-    assert pinged == [] and _stored(config_path) == before
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", ping)
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", _no_record)
+    out = await subagents_add({"preset": "claude_code", "machine": "ravenx2"})
+    assert out == {"added": True, "name": "claude_code@ravenx2"}
+    assert [cfg.machine for cfg in pinged] == ["ravenx2"]
+    assert any(row.get("machine") == "ravenx2" for row in _stored(config_path))
 
 
 @pytest.mark.parametrize(("machine", "said"), [("nowhere", "is not registered"), ("  ", "must not be blank")])

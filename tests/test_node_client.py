@@ -129,8 +129,6 @@ class Machine:
         self.registry = root / "connections.json"
         self.rows(rows or [row()])
         monkeypatch.setenv("RAVEN_CONNECTIONS", str(self.registry))
-        # The lane is debug-only; these tests are about what it does when on.
-        monkeypatch.setenv("RAVEN_DEBUG_MACHINES", "1")
         path = f"{self.bin}{os.pathsep}{os.environ.get('PATH', '/usr/bin:/bin')}"
         monkeypatch.setattr(backend_env, "_LOGIN_ENV", {**os.environ, "PATH": path})
         monkeypatch.setattr("raven.config.paths.get_logs_dir", lambda: root / "logs")
@@ -370,16 +368,13 @@ async def test_a_call_that_runs_out_of_time_closes_the_node(box, pool):
     assert pool.status("box").state == "error"
 
 
-async def test_with_the_lane_off_no_node_is_started(box, pool, monkeypatch):
+@pytest.mark.slow
+async def test_a_node_starts_without_a_debug_switch(box, pool, monkeypatch):
     box.node()
-    monkeypatch.delenv("RAVEN_DEBUG_MACHINES")
-
-    with pytest.raises(
-        NodeError, match="the machine lane is debug-only and off; start raven with RAVEN_DEBUG_MACHINES=1"
-    ):
-        await pool.hello("box")
-
-    assert box.launches() == [] and pool.live() == []
+    monkeypatch.delenv("RAVEN_DEBUG_MACHINES", raising=False)
+    hello = await pool.hello("box")
+    assert hello["protocol"] == protocol.PROTOCOL
+    assert len(box.launches()) == 1
 
 
 async def test_a_machine_that_is_not_registered_is_refused_before_any_ssh(box, pool):

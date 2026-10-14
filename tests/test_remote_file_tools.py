@@ -43,7 +43,6 @@ def registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     path = tmp_path / "connections.json"
     path.write_text(json.dumps({"connections": [row()]}), encoding="utf-8")
     monkeypatch.setenv("RAVEN_CONNECTIONS", str(path))
-    monkeypatch.setenv("RAVEN_DEBUG_MACHINES", "1")
     return path
 
 
@@ -201,13 +200,12 @@ async def test_a_node_that_cannot_answer_is_one_sentence(registry, monkeypatch, 
     assert HOST not in got
 
 
-async def test_with_the_lane_off_a_remote_path_is_read_as_it_always_was(registry, pool, tmp_path, monkeypatch):
-    monkeypatch.delenv("RAVEN_DEBUG_MACHINES")
-
+async def test_a_remote_path_reaches_its_node_without_a_debug_switch(registry, pool, tmp_path, monkeypatch):
+    monkeypatch.delenv("RAVEN_DEBUG_MACHINES", raising=False)
     got = await _tools(tmp_path)["read_file"].execute("box:raven-work/t1/a.md")
-
-    assert got.startswith("Error: File not found: box:raven-work/t1/a.md")
-    assert pool.calls == []
+    assert got == "ok"
+    assert pool.calls[0][0:2] == ("box", "fs/read")
+    assert pool.calls[0][2]["path"] == f"{HOME}/raven-work/t1/a.md"
 
 
 async def test_a_local_path_is_read_here_as_before(registry, pool, tmp_path):

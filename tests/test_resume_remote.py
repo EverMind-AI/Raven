@@ -448,7 +448,6 @@ async def test_a_cli_run_is_picked_up_by_its_cli_entry_and_an_acp_record_is_not_
     from raven.agent.subagent.backends import build_third_party_backend
     from raven.config.schema import ThirdPartyCliSubagentConfig
 
-    monkeypatch.setenv("RAVEN_DEBUG_MACHINES", "1")
     cli = build_third_party_backend(
         ThirdPartyCliSubagentConfig(name="sh@box", command="cat", machine="box", remote_cwd="~/raven-work")
     )
@@ -473,3 +472,36 @@ async def test_a_cli_run_is_picked_up_by_its_cli_entry_and_an_acp_record_is_not_
     _run(task="stub@box-2", agent="sh@box")
     assert await resume_remote.resume_remote_runs(manager) == 1
     assert "no longer on the agent table as an acp agent" in manager.announced[-1]["result"]
+
+
+@pytest.mark.parametrize("kind", ["acp", "cli"])
+@pytest.mark.parametrize("value", [None, "0"])
+async def test_pending_machine_runs_resume_without_a_debug_switch(tmp_path, monkeypatch, kind, value):
+    from raven.agent.subagent.registry import AgentRegistry
+    from raven.config.schema import ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
+
+    if value is None:
+        monkeypatch.delenv("RAVEN_DEBUG_MACHINES", raising=False)
+    else:
+        monkeypatch.setenv("RAVEN_DEBUG_MACHINES", value)
+    cls = ThirdPartyAcpSubagentConfig if kind == "acp" else ThirdPartyCliSubagentConfig
+    cfg = cls(name="stub@box", command="cat", machine="box")
+    registry = AgentRegistry(build_builtin=lambda row, narrowed: ("backend", row.name))
+    registry.apply([cfg])
+    manager = _Manager(None, tmp_path / "s1")
+    manager.registry = registry
+    run = _run(kind=kind)
+    picked = []
+
+    async def pick_up(saved, backend):
+        picked.append(saved.task)
+        assert backend.machine == "box"
+        return remote_resume.PickedUp("ok", "recovered answer")
+
+    monkeypatch.setattr(resume_remote, "_pick_up", pick_up)
+    monkeypatch.setattr(resume_remote, "get_registry", lambda: _Registry())
+    assert await resume_remote.resume_remote_runs(manager) == 1
+    assert picked == [run.task]
+    assert manager.announced[0]["status"] == "ok"
+    assert manager.announced[0]["result"] == "recovered answer"
+    assert remote_runs.pending() == []

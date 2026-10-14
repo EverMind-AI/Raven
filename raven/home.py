@@ -26,11 +26,9 @@ from pathlib import Path
 from raven.contracts.path_policy import CONFIG_FILENAME, DEFAULT_HOME_DIRNAME, HOME_ENV_VAR
 
 __all__ = [
-    "MACHINE_LANE_ENV",
     "SUBAGENT_ENV_VAR",
     "get_config_path",
     "is_subagent_process",
-    "machine_lane_enabled",
     "raven_home",
     "set_config_path",
     "subagent_role_env",
@@ -85,18 +83,3 @@ def subagent_role_env() -> dict[str, str]:
     registry -- the failure this exists to close, and one no error reports.
     """
     return {SUBAGENT_ENV_VAR: "1"}
-
-
-#: Set to ``1`` to turn the machine lane on: acp sub-agents that run on a
-#: registered machine, and files read there through a Raven node. Off by
-#: default -- the lane is debug-only until it matures (ruled 2026-10-11), so an
-#: entry that names a machine stays inert in normal operation. An environment
-#: variable rather than a config field, because the model edits config through
-#: ``raven_config`` and must not be able to turn the lane on itself; whoever
-#: starts the process sets it.
-MACHINE_LANE_ENV = "RAVEN_DEBUG_MACHINES"
-
-
-def machine_lane_enabled() -> bool:
-    """Whether this process may dispatch to, and read files on, registered machines."""
-    return os.environ.get(MACHINE_LANE_ENV, "").strip().lower() in ("1", "true", "yes", "on")

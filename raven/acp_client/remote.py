@@ -44,7 +44,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-from raven.home import MACHINE_LANE_ENV, machine_lane_enabled
 from raven.ops import connections, remote_path
 from raven.ops.transport import TIMED_OUT_RC, TransportError, runner_from, ssh_argv, ssh_target
 
@@ -141,13 +140,6 @@ def machine(conn_id: str) -> Machine:
     launched on half a row fails as a network fault minutes into a dispatch.
     """
     wanted = str(conn_id or "").strip()
-    if not machine_lane_enabled():
-        # The one seam every way onto a machine passes through, so "off" is
-        # off for a dispatch, a verify, a node and a file alike.
-        raise RemoteMachineError(
-            f"machine {wanted!r}: the machine lane is debug-only and off; start raven with "
-            f"{MACHINE_LANE_ENV}=1 to use agents and files on registered machines"
-        )
     found = connections.read()
     if found.state == connections.UNREADABLE:
         raise RemoteMachineError(

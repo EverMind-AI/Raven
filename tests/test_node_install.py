@@ -43,7 +43,6 @@ def registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     write()
     monkeypatch.setenv("RAVEN_CONNECTIONS", str(path))
-    monkeypatch.setenv("RAVEN_DEBUG_MACHINES", "1")
     return write
 
 
@@ -186,13 +185,16 @@ def test_a_look_that_failed_past_ssh_says_so(registry):
         install.plan("box", run=lambda target, command: (2, "df: weird"))
 
 
-def test_with_the_lane_off_a_plan_is_refused_before_any_ssh(registry, monkeypatch):
-    monkeypatch.delenv("RAVEN_DEBUG_MACHINES")
+def test_an_install_plan_needs_no_debug_switch(registry, monkeypatch):
+    monkeypatch.delenv("RAVEN_DEBUG_MACHINES", raising=False)
+    asked = []
 
-    with pytest.raises(
-        InstallError, match="the machine lane is debug-only and off; start raven with RAVEN_DEBUG_MACHINES=1"
-    ):
-        install.plan("box", run=lambda target, command: pytest.fail("no ssh with the lane off"))
+    def run(target, command):
+        asked.append(target.id)
+        return 0, "PYTHON=/usr/bin/python3.12\nUV=/usr/bin/uv\nFREE_KB=1048576\n"
+
+    plan = install.plan("box", run=run)
+    assert plan.target.id == "box" and asked == ["box"]
 
 
 def test_a_machine_that_is_not_registered_is_refused_before_any_ssh(registry):
