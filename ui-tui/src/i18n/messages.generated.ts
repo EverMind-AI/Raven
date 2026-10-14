@@ -3413,7 +3413,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.export.finish': 'Done',
     'gui.export.stop_title': 'Stop the export?',
     'gui.export.stop_body': 'The package being written will be discarded.',
-    'gui.export.stop_label': 'Stop'
+    'gui.export.stop_label': 'Stop',
+    'gui.export.refused_turns': 'These turns can no longer be exported:'
   },
   zh: {
     'gui.act.ing.ask_user': '等待你回答',
@@ -6461,6 +6462,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.export.finish': '完成',
     'gui.export.stop_title': '停止导出？',
     'gui.export.stop_body': '正在写入的导出包将被丢弃。',
-    'gui.export.stop_label': '停止'
+    'gui.export.stop_label': '停止',
+    'gui.export.refused_turns': '以下轮次已无法导出：'
   }
 } as Record<Locale, Record<string, string>>

@@ -86,3 +86,20 @@
 .export-done { display: flex; flex-direction: column; gap: 6px; }
 .export-done p { margin: 0; color: var(--moss); }
 .export-download { align-self: flex-start; color: var(--amber); font-size: 13px; }
+
+/* Narrow: the steps take a row of their own under the title and the close
+   button, and only the current step keeps its name -- the rest are numbered
+   dots -- so neither the strip nor the close button is cut off. The dialog is
+   min(640px, 94vw) wide, so this is where it falls under 640px. Last in the
+   sheet so it outranks the rules it narrows. */
+@media (max-width: 680px) {
+  .export-top { flex-wrap: wrap; row-gap: 10px; padding-left: 18px; }
+  .export-x { margin-left: auto; }
+  .export-steps { order: 3; flex-basis: 100%; }
+  .export-step:not([data-state="current"]) > span:last-child { display: none; }
+  .export-step + .export-step::before { min-width: 12px; margin: 0 8px; }
+  /* A row's words go under its number and time, which would otherwise leave
+     them a few characters wide. 23px is the checkbox and the row's gap. */
+  .export-turn { flex-wrap: wrap; row-gap: 2px; }
+  .export-preview { order: 9; flex: 1 0 100%; padding-left: 23px; }
+}

@@ -1,9 +1,10 @@
 /* The export page: the file name, the warning that the package is the raw
    trace, and the job from start to download.
 
-   The name field is uncontrolled -- its value lives in the caller's ref, so a
-   keystroke re-renders nothing and an IME composition is never cut short --
-   and Enter starts the export unless a composition is still open. The
+   The name field is uncontrolled -- what is typed goes to the store's draft,
+   so a keystroke re-renders nothing and an IME composition is never cut short,
+   and the field is rebuilt from that draft when the page comes back -- and
+   Enter starts the export unless a composition is still open. The
    download is the page's own anchor: clicked once when the job is done, and
    left on the page as "download again" while the dialog stays up. */
 
@@ -13,7 +14,7 @@ import { t } from '../../i18n/t'
 import * as store from './store'
 
 import type { ExportState } from './store'
-import type { JSX, KeyboardEvent, RefObject } from 'react'
+import type { JSX, KeyboardEvent } from 'react'
 
 export function size(bytes: number): string {
   const units = ['B', 'KB', 'MB', 'GB']
@@ -87,15 +88,7 @@ function Download({ s }: { s: ExportState }): JSX.Element | null {
   )
 }
 
-export function ExportPage({
-  s,
-  name,
-  onEnter,
-}: {
-  s: ExportState
-  name: RefObject<string | null>
-  onEnter: () => void
-}): JSX.Element {
+export function ExportPage({ s, onEnter }: { s: ExportState; onEnter: () => void }): JSX.Element {
   const locked = store.working(s) || s.job?.status?.state === 'done'
   const enter = (e: KeyboardEvent<HTMLInputElement>): void => {
     if (e.key !== 'Enter' || e.nativeEvent.isComposing || e.keyCode === 229) return
@@ -111,9 +104,9 @@ export function ExportPage({
           className="export-name"
           type="text"
           spellCheck={false}
-          defaultValue={s.fileName}
+          defaultValue={store.fileName(s)}
           disabled={locked}
-          onInput={(e) => { name.current = e.currentTarget.value }}
+          onInput={(e) => store.editName(e.currentTarget.value)}
           onKeyDown={enter}
         />
       </label>

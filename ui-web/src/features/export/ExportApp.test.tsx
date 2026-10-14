@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'
+import { RpcError } from '../../rpc/transport'
 import * as confirm from '../../state/confirm'
 import { resetSources, setSources } from '../../state/sources'
 import { ExportApp } from './ExportApp'
@@ -24,13 +25,27 @@ const done: ExportStatus = {
 const running: ExportStatus = { ...done, state: 'running', phase: 'writing', download_url: null, size_bytes: null, counts: null }
 
 let turns: ExportTurn[]
+let nextTurns: ExportTurn[] | null
+let refusal: RpcError | null
 let names: string[]
 let statuses: Array<ExportStatus | Error>
 let cancels: string[]
 
 const src: ExportSource = {
-  turns: async () => ({ title: 'Plan', turns }),
-  start: async (_key, _ids, name) => { names.push(name); return { job_id: 'exj-1' } },
+  turns: async () => {
+    const listed = turns
+    if (nextTurns) turns = nextTurns
+    return { title: 'Plan', turns: listed }
+  },
+  start: async (_key, _ids, name) => {
+    names.push(name)
+    if (refusal) {
+      const err = refusal
+      refusal = null
+      throw err
+    }
+    return { job_id: 'exj-1' }
+  },
   status: async () => {
     const next = statuses.length > 1 ? statuses.shift()! : statuses[0]!
     if (next instanceof Error) throw next
@@ -58,6 +73,8 @@ let clicks: ReturnType<typeof vi.spyOn>
 beforeEach(() => {
   vi.useFakeTimers()
   turns = [turn(1), turn(2), turn(3, true)]
+  nextTurns = null
+  refusal = null
   names = []
   statuses = [done]
   cancels = []
@@ -120,6 +137,82 @@ describe('the export wizard', () => {
     press('.export-primary')
     await settle()
     expect(names).toEqual(['mine.tar.gz'])
+  })
+
+  it('keeps the typed name through a step back and sends what it shows', async () => {
+    await show()
+    press('.export-primary')
+    const input = (): HTMLInputElement => $<HTMLInputElement>('.export-name')!
+    const suggested = input().value
+    act(() => {
+      input().value = 'mine.tar.gz'
+      fireEvent.input(input())
+    })
+    press('.export-ghost')
+    expect($('.export-name')).toBeNull()
+    press('.export-primary')
+    expect(input().value).toBe('mine.tar.gz')
+    press('.export-primary')
+    await settle()
+    expect(names).toEqual(['mine.tar.gz'])
+    press('.export-primary')
+    act(() => { store.open('export', 'gui:a') })
+    await settle()
+    press('.export-primary')
+    expect(input().value).toBe(suggested)
+  })
+
+  it('keeps the typed name through a refused selection', async () => {
+    refusal = new RpcError(-32602, 'refused', { reason: 'invalid_selection', invalid: [{ trace_id: 't2', why: 'in_progress' }] })
+    await show()
+    press('.export-primary')
+    const input = (): HTMLInputElement => $<HTMLInputElement>('.export-name')!
+    act(() => {
+      input().value = 'mine.tar.gz'
+      fireEvent.input(input())
+    })
+    press('.export-primary')
+    await settle()
+    expect(store.get().page).toBe('turns')
+    press('.export-primary')
+    expect(input().value).toBe('mine.tar.gz')
+    press('.export-primary')
+    await settle()
+    expect(names).toEqual(['mine.tar.gz', 'mine.tar.gz'])
+  })
+
+  it('names a refused turn the conversation no longer has, and never lets it be chosen', async () => {
+    refusal = new RpcError(-32602, 'refused', { reason: 'invalid_selection', invalid: [{ trace_id: 't2', why: 'not_in_session' }] })
+    nextTurns = [turn(1), turn(3, true)]
+    await show()
+    press('.export-primary')
+    press('.export-primary')
+    await settle()
+    expect(store.get().page).toBe('turns')
+    const rows = [...document.querySelectorAll<HTMLElement>('.export-turn')]
+    expect(rows).toHaveLength(3)
+    const gone = rows[2]!
+    expect(gone.textContent).toContain('input 2')
+    expect(gone.textContent).toContain('gui.export.why_not_in_session')
+    expect(gone.querySelector('input')!.disabled).toBe(true)
+    expect(document.body.textContent).toContain('gui.export.refused_turns')
+    act(() => { fireEvent.click($('.export-all')!) })
+    act(() => { fireEvent.click($('.export-all')!) })
+    expect(store.get().selected).toEqual(['t1'])
+  })
+
+  it('still names the refused turns when the conversation has none left', async () => {
+    refusal = new RpcError(-32602, 'refused', { reason: 'invalid_selection', invalid: [{ trace_id: 't1', why: 'not_in_session' }] })
+    turns = [turn(1)]
+    nextTurns = []
+    await show()
+    expect(store.get().page).toBe('export')
+    press('.export-primary')
+    await settle()
+    expect(document.body.textContent).toContain('gui.export.no_turns')
+    expect($('.export-turn[data-bad]')!.textContent).toContain('gui.export.why_not_in_session')
+    expect($('.export-all')).toBeNull()
+    expect(primary().disabled).toBe(true)
   })
 
   it('starts on Enter outside a composition', async () => {

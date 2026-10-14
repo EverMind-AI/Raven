@@ -14,6 +14,10 @@
  * A status query that fails leaves the job in place (`lost`) and asks again,
  * because the job may well be running fine behind a dropped connection: a new
  * export would leave the old one running and count against the gateway's limit.
+ *
+ * The file name field is uncontrolled, and the page it is on unmounts whenever
+ * the reader steps back, so what was typed lives here (`nameDraft`): the field
+ * is rebuilt from it and the export sends it, which keeps the two the same.
  */
 
 import { t } from '../../i18n/t'
@@ -66,6 +70,9 @@ export interface ExportState {
   selected: string[]
   /** Turns the gateway refused, by trace id, with its reason. */
   invalid: Record<string, string>
+  /* The refused turns as the picker last listed them, so one the conversation
+     no longer has can still be named on the picker with its reason. */
+  refused: ExportTurn[]
   /** The suggested name; the field itself is uncontrolled. */
   fileName: string
   /** `trajectory.export` is in flight. */
@@ -88,6 +95,7 @@ const initial = (): ExportState => ({
   listed: false,
   selected: [],
   invalid: {},
+  refused: [],
   fileName: '',
   starting: false,
   job: null,
@@ -108,6 +116,7 @@ const source = (): ExportSource => ds('export')
 
 let timer: ReturnType<typeof setTimeout> | null = null
 let querying: string | null = null
+let nameDraft: string | null = null
 
 const clearTimer = (): void => {
   if (timer !== null) clearTimeout(timer)
@@ -123,6 +132,14 @@ const forget = (jobId: string): void => {
 }
 
 /* -- what the page reads ------------------------------------------------- */
+
+/** The file name as the reader left it; the suggestion until they type. */
+export const fileName = (s: ExportState = store.get()): string => nameDraft ?? s.fileName
+
+/** What the file name field holds now; nothing is drawn again for it. */
+export function editName(value: string): void {
+  nameDraft = value
+}
 
 /** Whether the conversation on screen may be exported. */
 export const exportable = (sessionKey: string | null, offered: boolean): boolean => offered && sessionKey !== null
@@ -192,6 +209,7 @@ async function listTurns(epoch: number): Promise<void> {
 export function open(flow: Flow, sessionKey: string): void {
   if (store.get().open) close()
   clearTimer()
+  nameDraft = null
   const epoch = store.get().epoch + 1
   store.set({ ...initial(), open: true, flow, sessionKey, epoch })
   void listTurns(epoch)
@@ -232,15 +250,16 @@ export function back(): void {
 
 /* -- the job ------------------------------------------------------------- */
 
-/** Starts the export; a second press while one is starting or running does nothing. */
-export async function start(fileName: string): Promise<void> {
+/** Starts the export under the drafted name; a second press while one is starting or running does nothing. */
+export async function start(): Promise<void> {
   const s = store.get()
   if (!s.open || working(s) || s.sessionKey === null || !s.selected.length) return
   const mine = s.epoch
+  const name = fileName(s)
   set({ starting: true, error: null, job: null, downloaded: null })
   let answer
   try {
-    answer = await source().start(s.sessionKey, s.selected, fileName)
+    answer = await source().start(s.sessionKey, s.selected, name)
   } catch (err) {
     if (current(mine)) refused(err, mine)
     return
@@ -258,9 +277,13 @@ function refused(err: unknown, epoch: number): void {
   if (selection && selection.invalid.length) {
     const s = store.get()
     const invalid = Object.fromEntries(selection.invalid.map((row) => [row.trace_id, row.why]))
+    const listed = new Map((s.turns ?? []).map((turn) => [turn.trace_id, turn]))
     set({
       starting: false,
       invalid,
+      refused: selection.invalid.map((row) => listed.get(row.trace_id) ?? {
+        trace_id: row.trace_id, number: 0, start: '', input_preview: row.trace_id, in_progress: false,
+      }),
       selected: s.selected.filter((id) => !(id in invalid)),
       pages: ['turns', 'export'],
       page: 'turns',
@@ -340,6 +363,7 @@ export function markDownloaded(jobId: string): void {
 export function close(): void {
   const s = store.get()
   clearTimer()
+  nameDraft = null
   if (s.job && !terminal(s.job)) forget(s.job.id)
   store.set({ ...initial(), epoch: s.epoch + 1 })
 }
@@ -362,5 +386,6 @@ export function dismiss(): void {
 export function _resetForTests(): void {
   clearTimer()
   querying = null
+  nameDraft = null
   store._resetForTests()
 }

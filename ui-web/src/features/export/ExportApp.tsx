@@ -9,7 +9,7 @@
  * asks before stopping work under way.
  */
 
-import { useEffect, useRef, useSyncExternalStore } from 'react'
+import { useEffect, useSyncExternalStore } from 'react'
 
 import { t } from '../../i18n/t'
 import * as lang from '../../state/lang'
@@ -40,7 +40,6 @@ function faultText(fault: Fault): string {
 export function ExportApp(): JSX.Element | null {
   useSyncExternalStore(lang.subscribe, lang.get)
   const s = useSyncExternalStore(store.subscribe, store.get)
-  const name = useRef<string | null>(null)
 
   useEffect(() => {
     const veil = document.getElementById('exportVeil')
@@ -48,15 +47,11 @@ export function ExportApp(): JSX.Element | null {
     if (s.open) document.getElementById('exportModal')?.focus()
   }, [s.open])
 
-  useEffect(() => {
-    name.current = null
-  }, [s.epoch])
-
   if (!s.open) return null
   const at = s.pages.indexOf(s.page)
   const busy = store.working(s)
   const done = s.job?.status?.state === 'done'
-  const begin = (): void => void store.start(name.current ?? s.fileName)
+  const begin = (): void => void store.start()
 
   return (
     <div className="export-app">
@@ -85,7 +80,7 @@ export function ExportApp(): JSX.Element | null {
         </button>
       </header>
       <div className="export-main">
-        {s.page === 'turns' ? <TurnsPage s={s} /> : <ExportPage s={s} name={name} onEnter={begin} />}
+        {s.page === 'turns' ? <TurnsPage s={s} /> : <ExportPage s={s} onEnter={begin} />}
       </div>
       <footer className="export-foot">
         {at > 0 && !busy && !done ? (

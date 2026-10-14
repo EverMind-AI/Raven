@@ -12422,6 +12422,10 @@
     "gui.export.stop_label": {
       "en": "Stop",
       "zh": "停止"
+    },
+    "gui.export.refused_turns": {
+      "en": "These turns can no longer be exported:",
+      "zh": "以下轮次已无法导出："
     }
   }
 }

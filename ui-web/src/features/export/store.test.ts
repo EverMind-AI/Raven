@@ -161,13 +161,14 @@ describe('starting the job', () => {
     await atExportPage()
     const pending = deferred<{ job_id: string }>()
     onStart = () => pending.promise
-    void store.start('a.tar.gz')
-    void store.start('a.tar.gz')
+    store.editName('a.tar.gz')
+    void store.start()
+    void store.start()
     expect(of('start')).toEqual([['start', 'gui:a', ['t1', 't2', 't3'], 'a.tar.gz']])
     expect(store.working()).toBe(true)
     pending.resolve({ job_id: 'exj-1' })
     await settle()
-    void store.start('a.tar.gz')
+    void store.start()
     expect(of('start')).toHaveLength(1)
   })
 
@@ -175,7 +176,7 @@ describe('starting the job', () => {
     await atExportPage()
     const pending = deferred<{ job_id: string }>()
     onStart = () => pending.promise
-    void store.start('a.tar.gz')
+    void store.start()
     store.dismiss()
     expect(confirm.get().open).toBe(true)
     confirm.answer(true)
@@ -195,7 +196,7 @@ describe('starting the job', () => {
       reason: 'invalid_selection', invalid: [{ trace_id: 't2', why: 'in_progress' }],
     }))
     onTurns = () => Promise.resolve({ title: 'Plan', turns: [turn(1), turn(2, true), turn(3)] })
-    await store.start('a.tar.gz')
+    await store.start()
     await settle()
     const s = store.get()
     expect(s.page).toBe('turns')
@@ -212,7 +213,7 @@ describe('starting the job', () => {
       reason: 'invalid_selection', invalid: [{ trace_id: 't1', why: 'not_in_session' }],
     }))
     onTurns = () => Promise.resolve({ title: 'Plan', turns: [] })
-    await store.start('a.tar.gz')
+    await store.start()
     await settle()
     expect(store.get().pages).toEqual(['turns', 'export'])
     expect(store.get().page).toBe('turns')
@@ -222,11 +223,11 @@ describe('starting the job', () => {
   it('names the limit and the policy, and lets the export be tried again', async () => {
     await atExportPage()
     onStart = () => Promise.reject(new RpcError(-32025, 'busy', { limit: 2 }))
-    await store.start('a.tar.gz')
+    await store.start()
     expect(store.get().error).toEqual({ kind: 'limit' })
     expect(store.working()).toBe(false)
     onStart = () => Promise.reject(new RpcError(-32020, 'off'))
-    await store.start('a.tar.gz')
+    await store.start()
     expect(store.get().error).toEqual({ kind: 'disabled' })
     expect(of('start')).toHaveLength(2)
   })
@@ -235,7 +236,7 @@ describe('starting the job', () => {
 describe('following the job', () => {
   it('asks every 700 ms until the job settles, then stops', async () => {
     await atExportPage()
-    await store.start('a.tar.gz')
+    await store.start()
     await settle()
     expect(of('status')).toHaveLength(1)
     await settle(store.POLL_MS)
@@ -250,7 +251,7 @@ describe('following the job', () => {
   it('keeps the same job through a failed query and picks it up again', async () => {
     await atExportPage()
     onStatus = () => Promise.reject(new Error('socket closed'))
-    await store.start('a.tar.gz')
+    await store.start()
     await settle()
     expect(store.get().job).toMatchObject({ id: 'exj-1', lost: 'socket closed' })
     expect(store.working()).toBe(true)
@@ -265,7 +266,7 @@ describe('following the job', () => {
   it('checks now on request, with one query in flight at a time', async () => {
     await atExportPage()
     onStatus = () => Promise.reject(new Error('socket closed'))
-    await store.start('a.tar.gz')
+    await store.start()
     await settle()
     const pending = deferred<ExportStatus>()
     onStatus = () => pending.promise
@@ -282,13 +283,13 @@ describe('following the job', () => {
   it('lets a job the gateway no longer has go, and starts a new one on request', async () => {
     await atExportPage()
     onStatus = () => Promise.reject(new RpcError(-32024, 'gone', { id: 'exj-1' }))
-    await store.start('a.tar.gz')
+    await store.start()
     await settle()
     expect(store.get().job).toBeNull()
     expect(store.get().error).toEqual({ kind: 'gone' })
     onStart = () => Promise.resolve({ job_id: 'exj-2' })
     onStatus = (jobId) => Promise.resolve(status('running', jobId))
-    await store.start('a.tar.gz')
+    await store.start()
     expect(store.get().job?.id).toBe('exj-2')
     expect(of('start')).toHaveLength(2)
   })
@@ -297,7 +298,7 @@ describe('following the job', () => {
     await atExportPage()
     const pending = deferred<ExportStatus>()
     onStatus = () => pending.promise
-    await store.start('a.tar.gz')
+    await store.start()
     store.close()
     pending.resolve(status('done'))
     await settle(10_000)
@@ -310,13 +311,13 @@ describe('following the job', () => {
 describe('closing', () => {
   it('cancels a running job and leaves a finished one alone', async () => {
     await atExportPage()
-    await store.start('a.tar.gz')
+    await store.start()
     await settle()
     store.close()
     expect(of('cancel')).toEqual([['cancel', 'exj-1']])
     await atExportPage()
     onStatus = () => Promise.resolve(status('done'))
-    await store.start('a.tar.gz')
+    await store.start()
     await settle()
     store.close()
     expect(of('cancel')).toHaveLength(1)
@@ -324,7 +325,7 @@ describe('closing', () => {
 
   it('asks before stopping work, and stops only on yes', async () => {
     await atExportPage()
-    await store.start('a.tar.gz')
+    await store.start()
     await settle()
     store.dismiss()
     expect(confirm.get().open).toBe(true)
@@ -346,7 +347,7 @@ describe('closing', () => {
 
   it('lets an old question close only the wizard it was asked about', async () => {
     await atExportPage()
-    await store.start('a.tar.gz')
+    await store.start()
     await settle()
     store.dismiss()
     store.close()
