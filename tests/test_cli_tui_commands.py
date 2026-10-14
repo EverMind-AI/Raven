@@ -1330,3 +1330,31 @@ async def test_the_terminal_host_starts_the_heap_trimmer(monkeypatch: pytest.Mon
     await _run_until_done_with_immediate_proc_done(monkeypatch, rpc_server_deps)
 
     assert started == [1]
+
+
+async def test_the_tui_host_leaves_the_agents_on_machines_running_at_exit_and_picks_them_up_at_start(
+    monkeypatch: pytest.MonkeyPatch, rpc_server_deps
+) -> None:
+    """As the gateway and the served page do: the stop says the agents stay before it cancels, the start schedules the pick-up."""
+    from raven.acp_client import remote
+
+    ctx = rpc_server_deps
+    leaving_at_cancel: list[bool] = []
+
+    async def cancel_all(**kwargs: Any) -> int:
+        leaving_at_cancel.append(remote.leaving())
+        return 0
+
+    ctx["agent_loop"].subagents.cancel_all = cancel_all
+    scheduled: list[Any] = []
+    monkeypatch.setattr(
+        "raven.agent.subagent.resume_remote.schedule_remote_resume",
+        lambda subagents: scheduled.append(subagents) or None,
+    )
+    try:
+        await _run_until_done_with_immediate_proc_done(monkeypatch, ctx)
+    finally:
+        remote.staying()
+
+    assert leaving_at_cancel == [True], "said before the cancel, so a run on a machine is left, not ended"
+    assert scheduled == [ctx["agent_loop"].subagents]

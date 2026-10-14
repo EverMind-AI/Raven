@@ -5235,3 +5235,71 @@ async def test_a_dispatch_left_running_on_its_machine_when_the_host_stops_is_nei
     )
     assert not (nodes / "r1.out.md").exists() and not (nodes / "r1.error.md").exists()
     assert submitted == [] and finalized == [], "nothing is announced or closed here"
+
+
+async def test_a_dispatch_left_on_its_machine_has_its_origin_and_summary_added_to_its_record_for_the_next_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What the next host's announce needs and the backend never had: written when this host learns the run was left."""
+    from raven.acp_client import remote_runs
+    from raven.agent.subagent.spawn_tool import SpawnTool
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+    from raven.session.manager import SessionManager
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("RAVEN_HOME", str(home))
+    mgr = SubagentManager(
+        provider=_StubProvider(),
+        workspace=home,
+        session_dir=lambda key: SessionManager(home).session_dir(key),
+        max_concurrent=2,
+        agents=[ThirdPartyCliSubagentConfig(name="Remote", command="cat {prompt_file}")],
+    )
+    mgr.set_submit(lambda request: None)
+    started = asyncio.Event()
+
+    class _OnMachine:
+        async def run(self, task: str, *, task_id: str, authored_task: str | None = None, **kwargs: Any) -> str:
+            remote_runs.record(
+                remote_runs.RemoteRun(
+                    kind="cli",
+                    machine="box",
+                    task=f"remote-{task_id}",
+                    agent="Remote",
+                    session_key=kwargs["session_key"],
+                    handle=kwargs.get("instance") or task_id,
+                    task_id=task_id,
+                    session_id="",
+                    prompt_id=0,
+                    next_id=0,
+                    initialize=None,
+                    launch_key="",
+                    config_key="",
+                    session_cwd="/root/raven-work/x",
+                    stateful=False,
+                    authored_task=authored_task or "",
+                )
+            )
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                remote_runs.mark_left(task_id)
+                raise
+            return "never"
+
+    mgr.registry._backends["Remote"] = _OnMachine()
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _DummyExecutor())
+    tool = SpawnTool(manager=mgr)
+    tool.set_context("cli", "direct", "cli:direct")
+    await tool.execute(node_id="r1", task_summary="Run on the machine", task="Go.", subagent="Remote")
+    await asyncio.wait_for(started.wait(), timeout=5)
+
+    assert await mgr.cancel_all(reason="the gateway stopped") == 1
+
+    (run,) = remote_runs.pending()
+    assert run.task_summary == "Run on the machine" and run.authored_task == "Go."
+    assert run.origin["node_id"] == "r1" and run.origin["session_key"] == "cli:direct"
+    assert run.origin["authored_task"] == "Go." and run.origin["handle"] == run.task_id, (
+        "no instance: the handle is the dispatch"
+    )

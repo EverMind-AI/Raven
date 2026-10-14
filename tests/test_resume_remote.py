@@ -139,10 +139,18 @@ async def test_a_picked_up_reply_finishes_the_dispatch_s_record_and_is_announced
     assert manager.finalized == ["n1"] and manager.remembered == ["tui:s1"]
     assert registry.committed == [("tui:s1", "stub@box", "t1", "sess-1", "acp")]
     (said,) = manager.announced
-    assert said["status"] == "ok" and said["result"].startswith("pong") and said["task"] == "say hi to the machine"
-    assert (
-        said["origin"] == {"session_key": "tui:s1", "channel": "tui", "chat_id": "s1"} and said["summary"] == "say hi"
-    )
+    # The summary stands for the task: nothing authored was recorded, and the prompt file is never quoted.
+    assert said["status"] == "ok" and said["result"].startswith("pong") and said["task"] == "say hi"
+    assert said["origin"] == {
+        "session_key": "tui:s1",
+        "channel": "tui",
+        "chat_id": "s1",
+        "agent": "stub@box",
+        "handle": "t1",
+        "instance": None,
+        "node_id": "n1",
+    }
+    assert said["summary"] == "say hi"
     assert said["record"].endswith("n1.out.md")
     assert remote_runs.pending() == []
 
@@ -325,3 +333,143 @@ async def test_a_stop_during_a_pick_up_keeps_that_record_and_the_ones_after_it(t
     assert [run.task for run in remote_runs.pending()] == ["first", "second"]
     assert remote_runs.claim("first") and remote_runs.claim("second"), "nothing is left claimed"
     assert "wait for the next start" in "\n".join(logs)
+
+
+def _picked(status: str, reply: str):
+    async def pick_up(run, backend, *, pool=None):
+        return remote_resume.PickedUp(status, reply)
+
+    return pick_up
+
+
+async def test_a_resumed_announce_carries_the_dispatch_s_origin_and_quotes_the_task_as_authored(tmp_path, monkeypatch):
+    """What the announce here would have said: instance, handle, node and the task as the model wrote it, never the rendered prompt."""
+    backend = _backend()
+    session_dir = tmp_path / "s1"
+    record = _open_record(session_dir, handle="r1")
+    record.file("prompt.md").write_text(
+        "say hi to the machine\n\n<the whole referenced file, rendered>", encoding="utf-8"
+    )
+    origin = {
+        "channel": "tui",
+        "chat_id": "s1",
+        "session_key": "tui:s1",
+        "agent": "stub@box",
+        "instance": "r1",
+        "instance_auto": False,
+        "handle": "r1",
+        "workspace": "/w",
+        "authored_task": "say hi {{ ref:notes.md }}",
+        "tool_call_id": "call-9",
+        "node_id": "n1",
+    }
+    run = _run(handle="r1", authored_task="say hi {{ ref:notes.md }}", task_summary="say hi", origin=origin)
+    manager = _Manager(backend, session_dir)
+    monkeypatch.setattr(resume_remote, "get_registry", lambda: _Registry())
+    monkeypatch.setattr(remote_resume, "pick_up", _picked("ok", "pong"))
+
+    assert await resume_remote.resume_remote_runs(manager) == 1
+
+    (said,) = manager.announced
+    assert said["task"] == "say hi {{ ref:notes.md }}" and said["summary"] == "say hi"
+    assert said["origin"]["instance"] == "r1" and said["origin"]["node_id"] == "n1"
+    assert said["origin"]["tool_call_id"] == "call-9" and said["origin"]["authored_task"] == "say hi {{ ref:notes.md }}"
+    assert said["origin"]["chat_id"] == "s1" and said["task_id"] == run.task_id
+
+
+async def test_without_the_manager_s_fields_the_origin_comes_from_the_record_and_the_prompt_file_is_never_quoted(
+    tmp_path, monkeypatch
+):
+    """A host killed outright never annotated the record: the spawn record names the node, the handle is the instance, the summary stands for the task."""
+    backend = _backend()
+    session_dir = tmp_path / "s1"
+    record = _open_record(session_dir, handle="r1", node_id="n7")
+    record.file("prompt.md").write_text("say hi\n\n<the whole referenced file, rendered>", encoding="utf-8")
+    _run(handle="r1")
+    manager = _Manager(backend, session_dir)
+    monkeypatch.setattr(resume_remote, "get_registry", lambda: _Registry())
+    monkeypatch.setattr(remote_resume, "pick_up", _picked("ok", "pong"))
+
+    assert await resume_remote.resume_remote_runs(manager) == 1
+
+    (said,) = manager.announced
+    assert said["task"] == "say hi" and "rendered" not in said["task"]
+    assert said["origin"]["node_id"] == "n7" and said["origin"]["instance"] == "r1" and said["origin"]["handle"] == "r1"
+    assert said["origin"]["agent"] == "stub@box" and said["origin"]["session_key"] == "tui:s1"
+
+
+async def test_the_record_goes_only_once_the_announce_is_taken_and_stays_when_the_scheduler_refuses_it(
+    tmp_path, monkeypatch
+):
+    backend = _backend()
+    session_dir = tmp_path / "s1"
+    _open_record(session_dir)
+    run = _run()
+    manager = _Manager(backend, session_dir)
+    monkeypatch.setattr(resume_remote, "get_registry", lambda: _Registry())
+    monkeypatch.setattr(remote_resume, "pick_up", _picked("ok", "pong"))
+    seen: list[list[str]] = []
+
+    async def refused(*args, **kwargs):
+        seen.append([kept.task for kept in remote_runs.pending()])
+        return False
+
+    manager._announce_result = refused
+
+    assert await resume_remote.resume_remote_runs(manager) == 0
+
+    assert seen == [[run.task]], "the record is still there while the announce runs"
+    assert [kept.task for kept in remote_runs.pending()] == [run.task], "and stays for the next start"
+    assert remote_runs.claim(run.task), "with its claim released"
+
+
+async def test_a_conclusion_that_fails_keeps_the_record_and_releases_the_claim(tmp_path, monkeypatch, logs):
+    backend = _backend()
+    session_dir = tmp_path / "s1"
+    _open_record(session_dir)
+    run = _run()
+    manager = _Manager(backend, session_dir)
+
+    async def boom(session_key, record):
+        raise RuntimeError("the index is locked")
+
+    manager._finalize_node_claim = boom
+    monkeypatch.setattr(resume_remote, "get_registry", lambda: _Registry())
+    monkeypatch.setattr(remote_resume, "pick_up", _picked("ok", "pong"))
+
+    assert await resume_remote.resume_remote_runs(manager) == 0
+
+    assert [kept.task for kept in remote_runs.pending()] == [run.task] and manager.announced == []
+    assert remote_runs.claim(run.task)
+    assert any("its record stays for the next start" in line for line in logs)
+
+
+async def test_a_cli_run_is_picked_up_by_its_cli_entry_and_an_acp_record_is_not_a_cli_entry_s(tmp_path, monkeypatch):
+    from raven.agent.subagent.backends import build_third_party_backend
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+
+    monkeypatch.setenv("RAVEN_DEBUG_MACHINES", "1")
+    cli = build_third_party_backend(
+        ThirdPartyCliSubagentConfig(name="sh@box", command="cat", machine="box", remote_cwd="~/raven-work")
+    )
+    picked: list[str] = []
+
+    async def pick_up(run, *, pool=None):
+        picked.append(run.task)
+        return remote_resume.PickedUp("ok", "one\ntwo")
+
+    monkeypatch.setattr(cli, "pick_up", pick_up)
+    session_dir = tmp_path / "s1"
+    _open_record(session_dir, agent="sh@box")
+    run = _run(
+        kind="cli", agent="sh@box", session_id="", prompt_id=0, next_id=0, initialize=None, launch_key="", config_key=""
+    )
+    manager = _Manager(cli, session_dir)
+    monkeypatch.setattr(resume_remote, "get_registry", lambda: _Registry())
+
+    assert await resume_remote.resume_remote_runs(manager) == 1
+    assert picked == [run.task] and manager.announced[0]["result"] == "one\ntwo"
+
+    _run(task="stub@box-2", agent="sh@box")
+    assert await resume_remote.resume_remote_runs(manager) == 1
+    assert "no longer on the agent table as an acp agent" in manager.announced[-1]["result"]

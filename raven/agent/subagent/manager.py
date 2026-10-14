@@ -1897,6 +1897,10 @@ class SubagentManager:
                     # the next process picks the run up and does both
                     # (raven.agent.subagent.resume_remote).
                     left = True
+                    # The record the backend wrote lacks what only this side
+                    # knows and the announce after a restart shows: the
+                    # dispatch's origin (instance, node, tool call) and summary.
+                    remote_runs.annotate(task_id, origin=origin, task_summary=task_summary)
                     logger.info(
                         "Subagent [{}] stays running on its machine; picked up when this computer starts again", task_id
                     )
@@ -2092,8 +2096,12 @@ class SubagentManager:
         status: str,
         record_path: str | None = None,
         activity: Any = None,
-    ) -> None:
-        """Announce the subagent result to the main agent via the spine.
+    ) -> bool:
+        """Announce the subagent result to the main agent via the spine; whether a turn took it.
+
+        ``False`` when the scheduler is draining and no turn could carry the
+        words (``_inject``): what a caller that can report again later reads
+        (the pick-up after a restart, :mod:`raven.agent.subagent.resume_remote`).
 
         Note: this inbound system message already triggers a main-agent turn,
         so subagent completion is event-driven end-to-end. Do NOT also
@@ -2176,7 +2184,7 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
         # The delivered marker draws the seam where a result re-entered its
         # conversation; a refused inject re-entered nothing, so there is none.
         if not self._inject(announce_content, origin, mark):
-            return
+            return False
         # `content` is the text that was injected, verbatim. A client draws the
         # reader-facing part of it by dropping everything outside the untrusted
         # fence -- and a client REPLAYING this turn later reads the same string
@@ -2184,6 +2192,7 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
         # disagree about what was delivered.
         self._emit_delivered(origin, {**mark, "content": announce_content})
         logger.debug("Subagent [{}] announced result to {}", task_id, origin["session_key"])
+        return True
 
     async def _report_undispatched_cancel(
         self, task_id: str, task_summary: str, task: str, origin: dict[str, Any], reason: str

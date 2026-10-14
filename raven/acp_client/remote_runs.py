@@ -8,9 +8,11 @@ run up where this one left it: whose run it is (the Raven session, the agent,
 the instance handle, the dispatch), the ACP session the turn runs in, the id
 of the prompt whose answer is awaited, how many of the agent's frames reached
 here, the ids this side has used, and what the agent answered to
-``initialize`` on the connection. One file per run under
+``initialize`` on the connection -- none of the ACP part for a cli entry's
+command, whose whole output is its reply, read from the start. One file per run under
 ``<raven home>/machines/runs/<task>.json``, owner-only, written when the turn
-starts, kept current as frames arrive, and removed when the turn ends here. A
+starts, kept current as frames arrive, and removed when the turn ends here or
+once the process that picked it up has reported it. A
 file left behind is a run to pick up (:mod:`raven.acp_client.remote_resume`),
 by one process at a time: the pick-up is made under a claim beside the record
 (:func:`claim`), since two processes of one Raven home can start together.
@@ -66,6 +68,16 @@ class RemoteRun:
     received: int = 0
     """How many of the agent's frames this computer has read on the connection: where an attach goes on from."""
     started: float = field(default_factory=time.time)
+    kind: str = "acp"
+    """``acp`` for a turn in an ACP session, ``cli`` for a command whose whole output is the reply
+    (:mod:`raven.agent.subagent.backends.cli_agent`): which entry picks the run up, and how."""
+    authored_task: str = ""
+    """The task as the dispatching model wrote it: what the announce after a restart quotes, never the rendered prompt."""
+    task_summary: str = ""
+    """The dispatch's summary, as the announce names the run."""
+    origin: dict[str, Any] | None = None
+    """The dispatch's origin as the manager built it (instance, handle, node, tool call), added when the run is
+    left (:func:`annotate`); ``None`` for a host that stopped before it could say so."""
 
     def as_json(self) -> dict[str, Any]:
         return {"version": VERSION, **asdict(self)}
@@ -80,7 +92,7 @@ class RemoteRun:
             run = cls(**{key: value for key, value in data.items() if key in fields})
         except TypeError:
             return None
-        if not (run.machine and run.task and run.agent and run.session_id):
+        if not (run.machine and run.task and run.agent and (run.session_id or run.kind == "cli")):
             return None
         return run
 
@@ -104,9 +116,32 @@ def record(run: RemoteRun) -> Path:
     tmp = path.with_suffix(".json.tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        json.dump(run.as_json(), handle)
+        json.dump(run.as_json(), handle, default=str)
     os.replace(tmp, path)
     return path
+
+
+def annotate(task_id: str, **fields: Any) -> bool:
+    """Add ``fields`` to the record of the dispatch ``task_id`` (the manager's id); whether there was one.
+
+    What the manager knows and the backend that wrote the record did not --
+    the dispatch's origin and summary -- written when the manager learns the
+    run was left, so the announce after a restart carries what the announce
+    here would have. A host killed outright never gets here, and the record
+    is read without them then (:mod:`raven.agent.subagent.resume_remote`).
+    """
+    for run in pending():
+        if run.task_id != task_id:
+            continue
+        for name, value in fields.items():
+            setattr(run, name, value)
+        try:
+            record(run)
+        except OSError as exc:
+            logger.warning("remote run record {} could not be annotated: {}", run.task, exc)
+            return False
+        return True
+    return False
 
 
 def forget(task: str) -> None:
@@ -310,6 +345,7 @@ __all__ = [
     "RUNS_DIR",
     "RemoteRun",
     "Tracker",
+    "annotate",
     "claim",
     "claim_path",
     "forget",

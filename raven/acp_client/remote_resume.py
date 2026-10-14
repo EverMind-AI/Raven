@@ -8,7 +8,8 @@ what was never read and hands the rest over as it comes (``agent/attach``),
 a connection over that channel is taken into the pool as if started here, the
 turn's collector reads the agent's messages off it, and the answer to the
 prompt -- sent by the other process, awaited by this one -- ends the wait. What
-to do with the reply is the manager's business (:mod:`raven.agent.subagent.resume_remote`).
+to do with the reply is the manager's business (:mod:`raven.agent.subagent.resume_remote`),
+and a cli entry's run is read by the entry itself (``CliAgentBackend.pick_up``).
 """
 
 from __future__ import annotations

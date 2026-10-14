@@ -225,3 +225,46 @@ def test_a_claim_is_made_whole_without_hard_links_too_and_one_that_cannot_be_mad
     monkeypatch.setattr(remote_runs, "runs_dir", lambda: tmp_path / "a-file" / "runs")
     assert remote_runs.claim("nowhere") is False
     assert "a claim could not be made" in "\n".join(logs)
+
+
+def test_a_record_carries_what_the_announce_after_a_restart_needs_and_an_older_one_reads_with_defaults(
+    _home: Path,
+) -> None:
+    """``kind``, the task as authored, the summary and the dispatch's origin ride the record; one without them reads with defaults."""
+    origin = {"node_id": "n1", "instance": None, "handle": "t1"}
+    remote_runs.record(
+        _run(
+            "echo@box-cli1",
+            kind="cli",
+            session_id="",
+            authored_task="count the rows",
+            task_summary="count",
+            origin=origin,
+        )
+    )
+    older = {k: v for k, v in _run().as_json().items() if k not in ("kind", "authored_task", "task_summary", "origin")}
+    (remote_runs.runs_dir() / "echo@box-1a2b3c4d.json").write_text(json.dumps(older), encoding="utf-8")
+
+    back = {run.task: run for run in remote_runs.pending()}
+
+    cli = back["echo@box-cli1"]
+    assert (cli.kind, cli.authored_task, cli.task_summary, cli.origin) == ("cli", "count the rows", "count", origin)
+    acp = back["echo@box-1a2b3c4d"]
+    assert (acp.kind, acp.authored_task, acp.task_summary, acp.origin) == ("acp", "", "", None)
+
+
+def test_a_cli_record_needs_no_acp_session_and_an_acp_one_still_does() -> None:
+    assert remote_runs.RemoteRun.from_json(_run(kind="cli", session_id="").as_json()) is not None
+    assert remote_runs.RemoteRun.from_json(_run(session_id="").as_json()) is None
+
+
+def test_annotate_adds_the_manager_s_fields_to_the_record_of_a_dispatch_and_says_when_there_is_none(
+    _home: Path,
+) -> None:
+    remote_runs.record(_run(task_id="d1"))
+
+    assert remote_runs.annotate("d1", origin={"node_id": "n1", "workspace": Path("/w")}, task_summary="say hi") is True
+
+    (back,) = remote_runs.pending()
+    assert back.origin == {"node_id": "n1", "workspace": "/w"} and back.task_summary == "say hi"
+    assert remote_runs.annotate("nobody", task_summary="x") is False
