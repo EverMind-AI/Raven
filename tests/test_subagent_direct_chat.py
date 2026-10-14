@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 from typing import Any
 
@@ -1730,7 +1731,12 @@ async def test_a_spawn_queued_behind_a_direct_chat_stays_pending_and_leaves_the_
     async def gated(task, **kw):
         if task == "hold":
             await release.wait()
-        return await original(task, **kw)
+        # ``**kw`` tells the manager this stand-in takes every keyword, so it
+        # is handed the ones the fake behind it does not declare (the record
+        # keyword a run on a machine takes): forwarded only as far as the
+        # fake's own paper, the way the manager hands them over.
+        taken = inspect.signature(original).parameters
+        return await original(task, **{key: value for key, value in kw.items() if key in taken})
 
     monkeypatch.setattr(manager.registry.backend("raven"), "run", gated)
     statuses: list[str] = []
