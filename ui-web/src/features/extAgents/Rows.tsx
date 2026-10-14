@@ -15,6 +15,7 @@
 import { AgentMark } from '../../components/AgentMark'
 import { Glyph } from '../../components/Ico'
 import { t } from '../../i18n/t'
+import { agentKindLabel } from '../../lib/agentKind'
 import { ask as confirmAsk } from '../../state/confirm'
 import { catalogueSize, isOwnRow, shortOf } from './catalogue'
 import { healthOf, kindOf, ledClass, pendingLabel, refusedWrite, shownOf } from './health'
@@ -25,17 +26,6 @@ import type { Health, Shown } from './health'
 import type { ExtAgentsState, Failure } from './store'
 import type { ExtAgentRow, Remedy } from './types'
 import type { JSX, ReactNode } from 'react'
-
-const kindText = (kind: string): string =>
-  t(
-    kind === 'builtin'
-      ? 'gui.agent.kind_builtin'
-      : kind === 'openai'
-        ? 'gui.agent.kind_openai'
-        : kind === 'acp'
-          ? 'gui.agent.kind_acp'
-          : 'gui.agent.kind_cli',
-  )
 
 export function Spin(): JSX.Element {
   return <span className="extAgents-spin" aria-hidden="true" />
@@ -73,7 +63,7 @@ function oneLine(row: ExtAgentRow): string {
   const short = shortOf(row)
   const stale = stageOf(row) === 'stale' ? t('gui.agent.tag_stale') : ''
   const base =
-    short || ((row.probe_status === 'attention' || row.probe_status === 'missing') && row.probe_detail) || kindText(row.kind)
+    short || ((row.probe_status === 'attention' || row.probe_status === 'missing') && row.probe_detail) || agentKindLabel(row.kind)
   return stale ? `${base} · ${stale}` : base
 }
 
@@ -268,7 +258,7 @@ export function connect(row: ExtAgentRow): void {
   if (stageOf(row) === 'stale') {
     confirmAsk(
       t('gui.agent.migrate_do'),
-      t('gui.agent.migrate_body', { name: row.name, to: kindText(row.upgrade_to || '') }),
+      t('gui.agent.migrate_body', { name: row.name, to: agentKindLabel(row.upgrade_to) }),
       t('gui.agent.migrate_do'),
       () => store.connectRow(row),
     )
