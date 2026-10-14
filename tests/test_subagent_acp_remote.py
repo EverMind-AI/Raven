@@ -11,9 +11,11 @@ where the ssh line asked (``-E``).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -148,6 +150,20 @@ class Machine:
             return []
         return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
+    def daemons(self) -> list[int]:
+        """The daemons serving this machine's node directory, as the process table shows them."""
+        mark = f"--serve --dir {self.home / '.raven-node'}"
+        listed = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True).stdout
+        return [int(line.split(None, 1)[0]) for line in listed.splitlines() if mark in line]
+
+    def agents_left(self) -> list[int]:
+        """The agents still under this machine's daemons: what a test must not leave behind."""
+        out: list[int] = []
+        for daemon in self.daemons():
+            children = subprocess.run(["pgrep", "-P", str(daemon)], capture_output=True, text=True).stdout
+            out += [int(pid) for pid in children.split()]
+        return out
+
 
 @pytest.fixture
 async def box(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -155,13 +171,37 @@ async def box(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         pytest.skip("the stand-in ssh hands the ssh line to a POSIX shell")
     machine = Machine(tmp_path, monkeypatch)
     yield machine
+    # The pool before the links, as the host's own stop orders them: an agent
+    # is ended through its link, and a link closed first leaves its agent with
+    # the daemon -- right for a host, a leak for a test, whose daemon then
+    # never goes idle (this module left ten daemons and their stubs behind per
+    # run, before this). The links the test itself closed are covered by the
+    # check after: an agent still under a daemon fails the test and is ended.
+    await close_pool()
     await machine.nodes.close_all()
+    deadline = time.monotonic() + 3.0
+    while (left := machine.agents_left()) and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+    for daemon in machine.daemons():
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(daemon, signal.SIGTERM)
+    assert not left, f"agents left running under the stand-in machine's daemon: {left}"
 
 
 def _agent_pid(name: str = "stub@box") -> int | None:
     """The pid of the agent process on the machine, read off the pooled connection's endpoint."""
     (connection,) = get_pool().connections(name)
     return connection.client._endpoint.pid
+
+
+def _alive(pid: int | None) -> bool:
+    if pid is None:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
 
 
 def remote_config(*, mode: str = "ok", command: str | None = None, **kw: Any) -> ThirdPartyAcpSubagentConfig:
@@ -455,16 +495,6 @@ async def test_a_link_that_goes_mid_turn_is_waited_out_and_the_turn_finishes_whe
     assert len([argv for argv in box.calls() if "-T" in argv]) == 2
 
 
-def _alive(pid: int | None) -> bool:
-    if pid is None:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    return True
-
-
 class _Manager:
     """What the pick-up asks of the sub-agent manager, recorded."""
 
@@ -609,6 +639,28 @@ async def test_a_stop_that_lands_under_a_pick_up_leaves_the_run_for_the_start_af
     (said,) = manager.announced
     assert said["status"] == "ok" and said["result"].split("\n\n[raven]")[0] == "pong"
     assert remote_runs.pending() == [] and _agent_pid() == agent
+
+
+async def test_the_pool_closed_before_the_links_leaves_no_agent_and_the_daemon_goes_idle(box, tmp_path):
+    """What the fixture's teardown relies on: ended through its link, the agent goes, and the daemon leaves on its own."""
+    backend = build_third_party_backend(remote_config())
+    await backend.run("hi", task_id="t1", workspace=tmp_path, executor=None)
+    agent = _agent_pid()
+    (daemon,) = box.daemons()
+    assert box.agents_left() == [agent]
+
+    await close_pool()
+    await box.nodes.close_all()
+
+    deadline = time.monotonic() + 3.0
+    while _alive(agent) and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+    assert not _alive(agent) and box.agents_left() == []
+    # Idle two seconds after the last link closed (the stand-in ssh's RAVEN_NODE_IDLE_S), checked every second.
+    deadline = time.monotonic() + 8.0
+    while daemon in box.daemons() and time.monotonic() < deadline:
+        await asyncio.sleep(0.1)
+    assert daemon not in box.daemons(), "the daemon stays only while an agent runs or a link is open"
 
 
 async def test_a_daemon_that_stops_mid_turn_fails_the_turn_in_one_sentence(box, tmp_path):
