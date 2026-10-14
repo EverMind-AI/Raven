@@ -2959,9 +2959,10 @@ class TestTheSupervisorStartsWithoutTheCommandTable:
         assert ended.value.code == code
 
     @staticmethod
-    def _launch_on(platform: str, argv: list[str], monkeypatch) -> list[tuple]:
+    def _launch_on(platform: str, argv: list[str], monkeypatch, *, switchable: bool = True) -> list[tuple]:
         """Run the entry point with stdout and stderr in an ANSI code page, recording how
         both streams and ``PYTHONIOENCODING`` stood when the process was handed over."""
+        import io
         import os
 
         from raven.cli import commands, entry
@@ -2972,6 +2973,8 @@ class TestTheSupervisorStartsWithoutTheCommandTable:
             reconfigured: dict | None = None
 
             def reconfigure(self, **kwargs) -> None:
+                if not switchable:
+                    raise io.UnsupportedOperation("reconfigure")
                 self.reconfigured = kwargs
 
         out, err = Stream(), Stream()
@@ -2999,6 +3002,9 @@ class TestTheSupervisorStartsWithoutTheCommandTable:
         utf8 = {"encoding": "utf-8", "errors": "replace"}
 
         assert self._launch_on("win32", argv, monkeypatch) == [(utf8, utf8, "utf-8")]
+
+    def test_a_stream_that_cannot_switch_leaves_the_launch_standing(self, monkeypatch) -> None:
+        assert self._launch_on("win32", self.ARGV, monkeypatch, switchable=False) == [(None, None, "utf-8")]
 
     def test_elsewhere_the_streams_are_left_as_they_are(self, monkeypatch) -> None:
         assert self._launch_on("linux", self.ARGV, monkeypatch) == [(None, None, None)]
