@@ -2042,6 +2042,20 @@ manifest's `missing_messages`. Bundling declares the trajectory corpus, so the i
 auto-pinned.
 _Avoid_: "archive" — that names the tracing store's rotated-log directory.
 
+**Trajectory Export** (`raven/trajectory/export.py`):
+The `tar.gz` the web page's "Export" downloads for chosen Main-line Turns of one
+session: `<export-id>/export.json` (`schema: "raven_trajectory_export"` plus a
+`format_version`, the selected turns and dispatched traces, counts, and what is
+missing) + `spans.jsonl` + the session record cut to those turns + `artifacts/` at
+their store-relative paths + the Message Blobs their v2 shells reference. It is the
+input contract `web-traj-import` reads, so its layout and manifest change only with
+the version. Unlike a Trajectory Bundle it is selected by turn rather than by
+Attempt, keeps v2 shells as shells, carries only the selected turns' messages and
+pins nothing; unlike a Bug Report Package its content is neither redacted nor
+trimmed, and it travels only from the local gateway to the browser, fetched by a
+one-hour token (`raven/trajectory/export_jobs.py`).
+_Avoid_: calling it a bundle or a report.
+
 **Message Blob** (`raven/tracing/artifact_v2.py`):
 One model-input message stored once, at
 `<state_dir>/logs/audit-artifacts/_messages/<sha1[:2]>/<sha1>.json`, addressed by the
