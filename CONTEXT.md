@@ -1985,6 +1985,14 @@ attribute, which read paths keep resolving; new spans never carry it
 (`attempt.id` is a reserved attribute key stripped by `raven/tracing/spans.py`).
 _Avoid_: "run id" / "task id" — neither is bound to span records.
 
+**Turn Trace Mark** (`raven/agent/loop/turn_path.py`):
+The `trace_id` stored on a turn's opening user message while tracing is on, naming
+the trace of that turn's `session.turn` span. Cutting a session record down to
+selected turns uses it to find each turn's messages; messages written before the
+mark existed are matched by the turn's input text inside the turn's time window,
+and a turn that matches nothing keeps its trajectory only. The mark never reaches
+a model request (history is read through field whitelists).
+
 **Attempt Definition** (`raven/trajectory/store.py`):
 The mutable sidecar record in `attempts.json` (trace state dir) mapping a minted
 `att-*` id to its member trace ids plus the historical ids it absorbed (`aliases`),

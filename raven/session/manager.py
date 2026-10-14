@@ -265,8 +265,10 @@ class Session:
         (``add_message``, the agent loop's ``_save_turn``, clarification
         appends) must come through here so no message lands unstamped. A
         caller-set ``timestamp`` is preserved. Per-message ordering and
-        turn grouping derive from append order and the ``role`` boundary,
-        so no separate received_at / turn_id stamp is kept.
+        turn grouping derive from append order and the ``role`` boundary;
+        the only per-turn stamp is the ``trace_id`` the agent loop puts on a
+        turn's opening user message while tracing is on, which lets a
+        selection of turns find each turn's messages in the record.
         """
         msg.setdefault("timestamp", datetime.now().isoformat())
         self.messages.append(msg)
