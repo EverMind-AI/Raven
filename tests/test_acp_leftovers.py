@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import ctypes
 import errno
 import io
 import json
@@ -13,6 +14,7 @@ import select
 import shlex
 import shutil
 import signal
+import struct
 import subprocess
 import sys
 import threading
@@ -1196,6 +1198,170 @@ def test_an_agent_ends_with_a_host_that_is_killed(tmp_path: Path) -> None:
         if agent_pid is not None and _alive(agent_pid):
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(agent_pid, signal.SIGKILL)
+
+
+# The macOS readers below run on every system: the native calls are replaced, so what
+# is checked is how each answer is read. The macos_only tests read the real ones.
+
+
+@pytest.mark.parametrize(
+    ("platform", "expected"),
+    [("linux", "linux"), ("darwin", "darwin"), ("win32", None)],
+    ids=["linux", "macos", "windows"],
+)
+def test_the_platform_is_named_from_sys_platform(
+    monkeypatch: pytest.MonkeyPatch, platform: str, expected: str | None
+) -> None:
+    monkeypatch.setattr(leftovers.sys, "platform", platform)
+    assert leftovers._platform() == expected
+
+
+def _kinfo(seconds: int, micros: int) -> bytes:
+    return struct.pack("=qi", seconds, micros).ljust(leftovers._KINFO_PROC_SIZE, b"\0")
+
+
+def _procargs(argc: int, words: bytes) -> bytes:
+    """A ``KERN_PROCARGS2`` answer: argc, the executable's path padded with NULs, then ``words``."""
+    return struct.pack("=i", argc) + b"/usr/local/bin/agent\0\0\0\0" + words
+
+
+def _fake_sysctl(monkeypatch: pytest.MonkeyPatch, answers: dict[int, bytes | OSError]) -> None:
+    """Answer each pid's ``KERN_PROC_PID`` or ``KERN_PROCARGS2`` query from ``answers``."""
+
+    def sysctl(mib: list[int], size: int) -> bytes:
+        if mib == [leftovers._CTL_KERN, leftovers._KERN_ARGMAX]:
+            return struct.pack("=i", 1 << 20)
+        answer = answers[mib[-1]]
+        if isinstance(answer, OSError):
+            raise answer
+        assert len(answer) <= size
+        return answer
+
+    monkeypatch.setattr(leftovers, "_sysctl", sysctl)
+
+
+def test_a_macos_start_time_is_read_in_microseconds(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_sysctl(monkeypatch, {42: _kinfo(1_700_000_000, 250_000), 43: b""})
+    assert leftovers._darwin_start_time(42) == 1_700_000_000_250_000
+    assert leftovers._darwin_start_time(43) is None
+
+
+@pytest.mark.parametrize(
+    ("argc", "words", "expected"),
+    [
+        (2, b"agent\0--acp\0A=1\0B=2\0\0\0ptr_munge=\0", [b"A=1", b"B=2"]),
+        (3, b"agent\0\0--acp\0A=1\0\0", [b"A=1"]),
+        (2, b"sleep\0120\0\0\0", []),
+    ],
+    ids=["stops-before-the-apple-strings", "past-an-empty-argument", "a-platform-binary"],
+)
+def test_a_macos_environment_is_read_after_the_arguments(
+    monkeypatch: pytest.MonkeyPatch, argc: int, words: bytes, expected: list[bytes]
+) -> None:
+    _fake_sysctl(monkeypatch, {42: _procargs(argc, words)})
+    assert leftovers._darwin_environment(42) == expected
+
+
+def test_a_macos_environment_without_its_path_is_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_sysctl(monkeypatch, {42: struct.pack("=i", 1) + b"/usr/local/bin/agent"})
+    assert leftovers._darwin_environment(42) == []
+
+
+def test_a_macos_environment_the_system_will_not_show_is_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_sysctl(monkeypatch, {42: OSError(errno.EINVAL, "Invalid argument")})
+    assert leftovers._darwin_environment(42) is None
+
+
+def test_a_macos_environment_that_fails_otherwise_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_sysctl(monkeypatch, {42: OSError(errno.ENOMEM, "Cannot allocate memory")})
+    with pytest.raises(OSError) as raised:
+        leftovers._darwin_environment(42)
+    assert raised.value.errno == errno.ENOMEM
+
+
+class _FakeListpids:
+    """``proc_listpids`` over a fixed group, recording the room each call was given."""
+
+    def __init__(self, members: list[int], err: int = 0) -> None:
+        self.members, self.err = members, err
+        self.capacities: list[int] = []
+
+    def proc_listpids(self, kind: int, pgid: int, pids, size: int) -> int:
+        assert kind == leftovers._PROC_PGRP_ONLY
+        if self.err:
+            ctypes.set_errno(self.err)
+            return 0
+        capacity = size // ctypes.sizeof(ctypes.c_int)
+        self.capacities.append(capacity)
+        shown = self.members[:capacity]
+        for i, pid in enumerate(shown):
+            pids[i] = pid
+        return len(shown) * ctypes.sizeof(ctypes.c_int)
+
+
+def test_the_macos_member_list_grows_until_the_whole_group_fits(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _FakeListpids(list(range(1000, 1300)))
+    monkeypatch.setattr(leftovers, "_darwin_libc", lambda: fake)
+    assert leftovers._darwin_members(1000) == list(range(1000, 1300))
+    assert fake.capacities == [256, 1024]
+
+
+def test_an_empty_macos_group_has_no_members(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(leftovers, "_darwin_libc", lambda: _FakeListpids([]))
+    assert leftovers._darwin_members(1000) == []
+
+
+def test_a_macos_member_list_that_fails_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(leftovers, "_darwin_libc", lambda: _FakeListpids([], err=errno.EPERM))
+    with pytest.raises(PermissionError):
+        leftovers._darwin_members(1000)
+
+
+def _fake_sysctl_by_name(monkeypatch: pytest.MonkeyPatch, answers: dict[str, bytes | OSError]) -> None:
+    def by_name(name: str) -> bytes:
+        answer = answers[name]
+        if isinstance(answer, OSError):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(leftovers, "_platform", lambda: "darwin")
+    monkeypatch.setattr(leftovers, "_sysctl_by_name", by_name)
+
+
+def test_a_macos_boot_is_named_by_its_session_uuid_and_boot_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_sysctl_by_name(
+        monkeypatch,
+        {
+            "kern.bootsessionuuid": b"060AF420-11D6-43CC-859F-D52B200D9B20\0",
+            "kern.boottime": struct.pack("=qi", 1_700_000_000, 500_000).ljust(16, b"\0"),
+        },
+    )
+    assert leftovers._boot_id() == "060AF420-11D6-43CC-859F-D52B200D9B20"
+    assert leftovers._boot_time() == 1_700_000_000.5
+    assert leftovers._pid_namespace() == leftovers._DARWIN_PID_NAMESPACE
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [OSError(errno.ENOENT, "No such file or directory"), b""],
+    ids=["refused", "short"],
+)
+def test_a_macos_boot_that_cannot_be_read_is_none(monkeypatch: pytest.MonkeyPatch, answer: bytes | OSError) -> None:
+    _fake_sysctl_by_name(monkeypatch, {"kern.bootsessionuuid": answer, "kern.boottime": answer})
+    assert leftovers._boot_id() is None
+    assert leftovers._boot_time() is None
+
+
+def test_on_macos_each_read_goes_to_the_macos_reader(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(leftovers, "_platform", lambda: "darwin")
+    monkeypatch.setattr(leftovers, "_darwin_start_time", lambda pid: pid * 10)
+    monkeypatch.setattr(leftovers, "_darwin_members", lambda pgid: [pgid, pgid + 1])
+    environments = {1: [b"RAVEN_ACP_HOST=1-2"], 2: [], 3: None}
+    monkeypatch.setattr(leftovers, "_darwin_environment", lambda pid: environments[pid])
+    assert leftovers._start_time(7) == 70
+    assert leftovers._members(7) == [7, 8]
+    mark = b"RAVEN_ACP_HOST=1-2"
+    assert [leftovers._carries(pid, mark) for pid in (1, 2, 3)] == [True, False, False]
 
 
 # Starts a child of its own, as an npx launcher starts the real server, and names both.

@@ -302,7 +302,7 @@ _KINFO_PROC_SIZE = 648
 _libc: Any = None
 
 
-def _darwin_libc() -> Any:
+def _darwin_libc() -> Any:  # pragma: no cover - native macOS declarations
     global _libc
     if _libc is None:
         libc = ctypes.CDLL(None, use_errno=True)
@@ -317,7 +317,7 @@ def _errno_error() -> OSError:
     return OSError(err, os.strerror(err))
 
 
-def _sysctl(mib: list[int], size: int) -> bytes:
+def _sysctl(mib: list[int], size: int) -> bytes:  # pragma: no cover - native macOS call
     name = (ctypes.c_int * len(mib))(*mib)
     buf = ctypes.create_string_buffer(size)
     length = ctypes.c_size_t(size)
@@ -326,7 +326,7 @@ def _sysctl(mib: list[int], size: int) -> bytes:
     return buf.raw[: length.value]
 
 
-def _sysctl_by_name(name: str) -> bytes:
+def _sysctl_by_name(name: str) -> bytes:  # pragma: no cover - native macOS call
     libc = _darwin_libc()
     length = ctypes.c_size_t(0)
     if libc.sysctlbyname(name.encode(), None, ctypes.byref(length), None, 0) != 0:
