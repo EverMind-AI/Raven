@@ -32,6 +32,12 @@ def _console_host_modules() -> tuple[ModuleType, ...]:
 def register_console_feature() -> None:
     """Idempotent; every entrance that mounts a console calls this at assembly."""
     import raven.cli.commands as commands
+    from raven.cli._theme import _can_probe
     from raven.rpc import cli_socket
 
-    cli_socket.register_cli(commands, _console_host_modules())
+    # Finding the hosts imports every CLI module, and one of them asks the terminal
+    # for its colours as it is imported. A host with no terminal to ask, such as the
+    # gateway `raven web` detaches, finds them on its first console command; one
+    # that shares a terminal, as the TUI's host does with the Ink screen, still
+    # asks now, before the session starts.
+    cli_socket.register_cli(commands, _console_host_modules() if _can_probe() else _console_host_modules)

@@ -16,17 +16,30 @@ dispatch answers not-compatible, the catalog answers empty with a warning.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from types import ModuleType
 
 _commands_module: ModuleType | None = None
 _console_hosts: tuple[ModuleType, ...] = ()
+_find_console_hosts: Callable[[], tuple[ModuleType, ...]] | None = None
 
 
-def register_cli(commands_module: ModuleType, console_hosts: tuple[ModuleType, ...] = ()) -> None:
-    """Called by the hosting entrance at assembly; idempotent."""
-    global _commands_module, _console_hosts
+def register_cli(
+    commands_module: ModuleType,
+    console_hosts: tuple[ModuleType, ...] | Callable[[], tuple[ModuleType, ...]] = (),
+) -> None:
+    """Called by the hosting entrance at assembly; idempotent.
+
+    ``console_hosts`` may be a function that finds them, called on the first
+    :func:`console_hosts` rather than here, so a host that never runs a console
+    command never imports the modules it would name.
+    """
+    global _commands_module, _console_hosts, _find_console_hosts
     _commands_module = commands_module
-    _console_hosts = tuple(console_hosts)
+    if callable(console_hosts):
+        _console_hosts, _find_console_hosts = (), console_hosts
+    else:
+        _console_hosts, _find_console_hosts = tuple(console_hosts), None
 
 
 def cli_commands() -> ModuleType | None:
@@ -36,14 +49,17 @@ def cli_commands() -> ModuleType | None:
 
 def console_hosts() -> tuple[ModuleType, ...]:
     """The modules whose ``console`` the injection swaps; empty when unhosted."""
+    global _console_hosts, _find_console_hosts
+    if _find_console_hosts is not None:
+        _console_hosts, _find_console_hosts = tuple(_find_console_hosts()), None
     return _console_hosts
 
 
 def reset() -> None:
     """Tests only: return the socket to the unregistered state."""
-    global _commands_module, _console_hosts
+    global _commands_module, _console_hosts, _find_console_hosts
     _commands_module = None
-    _console_hosts = ()
+    _console_hosts, _find_console_hosts = (), None
 
 
 __all__ = ["cli_commands", "console_hosts", "register_cli", "reset"]

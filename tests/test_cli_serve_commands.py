@@ -2896,3 +2896,107 @@ def test_the_serve_command_hands_its_options_on(monkeypatch) -> None:
     monkeypatch.setattr(serve_commands, "_run", lambda *a, **kw: seen.append((a, kw)))
     assert CliRunner().invoke(app, ["serve"]).exit_code == 0
     assert seen == [((18792, False), {})]
+
+
+class TestTheSupervisorStartsWithoutTheCommandTable:
+    """`raven web` leaves its supervisor running for as long as the page is up, and
+    the supervisor only restarts the gateway. The entry point hands the argv both
+    launchers start it with straight to ``_web``, so the command table is never
+    imported for it; any other argv is still parsed by the table."""
+
+    ARGV = ["web", "--supervise", "--port", "18999"]
+    CALL = ((18999,), {"foreground": False, "stop": False, "supervise": True})
+
+    @pytest.fixture
+    def web_calls(self, monkeypatch) -> list[tuple[tuple, dict]]:
+        seen: list[tuple[tuple, dict]] = []
+        monkeypatch.setattr(serve_commands, "_web", lambda *a, **kw: seen.append((a, kw)))
+        return seen
+
+    def test_it_calls_web_the_way_the_command_does(self, web_calls) -> None:
+        from typer.testing import CliRunner
+
+        from raven.cli.commands import app
+
+        assert CliRunner().invoke(app, self.ARGV).exit_code == 0
+        assert serve_commands.supervise_from_argv(self.ARGV) is True
+
+        assert web_calls == [self.CALL, self.CALL]
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["web", "--supervise"],
+            ["web", "--supervise", "--port"],
+            ["web", "--supervise", "--port", "x"],
+            ["web", "--supervise", "--port", "-1"],
+            # A superscript two passes str.isdigit, and int() refuses it.
+            ["web", "--supervise", "--port", chr(0xB2)],
+            ["web", "--supervise", "--port=18999"],
+            ["web", "--supervise", "--port", "18999", "--foreground"],
+            ["web", "--port", "18999", "--supervise"],
+            ["serve", "--supervise", "--port", "18999"],
+        ],
+    )
+    def test_any_other_argv_is_left_to_the_command_table(self, web_calls, argv: list[str]) -> None:
+        assert serve_commands.supervise_from_argv(argv) is False
+        assert web_calls == []
+
+    def test_a_refusal_ends_the_process_with_the_code_the_command_would(self, monkeypatch) -> None:
+        from typer.testing import CliRunner
+
+        from raven.cli.commands import app
+
+        def refuse(*_a, **_kw):
+            raise typer.Exit(1)
+
+        monkeypatch.setattr(serve_commands, "_web", refuse)
+
+        assert CliRunner().invoke(app, self.ARGV).exit_code == 1
+        with pytest.raises(SystemExit) as ended:
+            serve_commands.supervise_from_argv(self.ARGV)
+        assert ended.value.code == 1
+
+    def test_raven_web_starts_it_with_that_argv(self, home: Path, web_calls, monkeypatch) -> None:
+        import subprocess
+
+        launched: list[list[str]] = []
+        monkeypatch.setattr(subprocess, "Popen", lambda argv, **_kw: launched.append(list(argv)))
+
+        serve_commands._spawn_supervisor(18999)
+
+        assert launched[0][:4] == [sys.executable, "-P", "-m", "raven"]
+        assert serve_commands.supervise_from_argv(launched[0][4:]) is True
+        assert web_calls == [self.CALL]
+
+    @pytest.mark.slow
+    def test_that_launch_never_imports_the_command_table(self, tmp_path: Path) -> None:
+        """Checked in a fresh interpreter: ``sys.modules`` is process-wide, and this one
+        imported the table long ago."""
+        import os
+        import subprocess
+
+        probe = (
+            "import sys\n"
+            "from raven.cli import entry, serve_commands\n"
+            "seen = []\n"
+            "serve_commands._web = lambda *a, **kw: seen.append((a, kw))\n"
+            "sys.argv = ['raven', 'web', '--supervise', '--port', '18999']\n"
+            "try:\n"
+            "    entry.run()\n"
+            "except SystemExit:\n"
+            "    pass\n"
+            "print('calls:', seen)\n"
+            "print('command table imported:', 'raven.cli.commands' in sys.modules)\n"
+        )
+        done = subprocess.run(
+            [sys.executable, "-P", "-c", probe],
+            env={**os.environ, "RAVEN_HOME": str(tmp_path / "home")},
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+        assert f"calls: {[self.CALL]}" in done.stdout, done.stdout + done.stderr
+        assert "command table imported: False" in done.stdout, done.stdout + done.stderr

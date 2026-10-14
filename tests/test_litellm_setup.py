@@ -253,3 +253,71 @@ def test_a_second_caller_during_the_import_does_not_leave_the_levels_raised(monk
 
     assert not first.is_alive() and not second.is_alive()
     assert [logger.level for logger in loggers] == [logging.INFO] * 3
+
+
+# litellm's import leaves two tokenizer copies resident that nothing reads: the
+# dict its utils module loads Anthropic's tokenizer JSON into, kept beside the
+# string the Claude tokenizer is built from, and the Python copy of cl100k's
+# ranks, kept beside the one tiktoken's core encodes with.
+
+_TEXT = "malloc_trim returns freed arenas"
+
+
+def test_import_litellm_frees_the_tokenizer_copies_nothing_reads() -> None:
+    import litellm.utils
+    import tiktoken
+
+    import_litellm()
+
+    assert litellm.utils.json_data is None
+    assert isinstance(litellm.utils.claude_json_str, str)
+    assert "_mergeable_ranks" not in vars(tiktoken.get_encoding("cl100k_base"))
+
+
+def test_every_tokenizer_counts_the_same_without_them() -> None:
+    """Anthropic's tokenizer, built from the string, counts this text as 7; cl100k
+    counts it as 5 through raven's estimate, through litellm, and through a copy of
+    the encoding made by pickling, which a registered encoding does by name."""
+    import pickle
+
+    import tiktoken
+
+    from raven.utils.tokens import estimate_message_tokens
+
+    litellm = import_litellm()
+    encoding = tiktoken.get_encoding("cl100k_base")
+
+    assert encoding.encode(_TEXT) == [16561, 71125, 4780, 28634, 98767]
+    assert pickle.loads(pickle.dumps(encoding)).encode(_TEXT) == [16561, 71125, 4780, 28634, 98767]
+    assert estimate_message_tokens({"role": "user", "content": _TEXT}) == 5
+    assert litellm.token_counter(model="gpt-4", text=_TEXT) == 5
+    assert litellm.token_counter(model="claude-sonnet-4-5", text=_TEXT) == 7
+
+
+def test_a_tokenizer_built_from_the_dict_itself_keeps_it(monkeypatch) -> None:
+    """The dict goes only where its string form exists, since the string is what the
+    tokenizer is built from; a litellm that read the dict instead keeps it."""
+    import types
+
+    data = {"model": {"vocab": {}}}
+    utils = types.ModuleType("litellm.utils")
+    utils.json_data = data
+    monkeypatch.setitem(sys.modules, "litellm.utils", utils)
+
+    litellm_setup._drop_unread_tokenizer_copies()
+
+    assert utils.json_data is data
+
+
+def test_a_failure_to_free_them_leaves_the_import_standing(monkeypatch) -> None:
+    """Both sit in other libraries' undocumented internals, so freeing them is best effort."""
+
+    def moved() -> None:
+        raise AttributeError("a later release moved them")
+
+    monkeypatch.setattr(litellm_setup, "_drop_unread_tokenizer_copies", moved)
+
+    litellm = import_litellm()
+
+    assert litellm is sys.modules["litellm"]
+    assert litellm_setup._READY is litellm

@@ -1398,3 +1398,29 @@ def test_an_earlier_turns_delivery_is_not_announced_again(tmp_path: Path) -> Non
 
     decision = asyncio.run(run())
     assert "Published a" not in (decision.modified_content or "")
+
+
+@pytest.mark.slow
+def test_loading_the_plugin_leaves_python_pptx_for_the_first_deck(tmp_path: Path) -> None:
+    """Every gateway imports this module to read its factories, deck or no deck, and
+    python-pptx is needed only once a deck is read. Checked in a fresh interpreter,
+    since this one imported python-pptx at the top of the file."""
+    import subprocess
+    import sys
+
+    probe = (
+        "import sys\n"
+        "from pathlib import Path\n"
+        "import raven_ppt.plugin\n"
+        "print('at import:', 'pptx' in sys.modules)\n"
+        "from raven_ppt.contracts import Project\n"
+        "from raven_ppt.services import state\n"
+        f"state.read(Project(workspace=Path({str(tmp_path)!r}), slug='deck'))\n"
+        "print('after reading a deck:', 'pptx' in sys.modules)\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-P", "-c", probe], cwd=tmp_path, capture_output=True, text=True, timeout=120
+    )
+
+    assert "at import: False" in done.stdout, done.stdout + done.stderr
+    assert "after reading a deck: True" in done.stdout, done.stdout + done.stderr

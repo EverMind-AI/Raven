@@ -270,6 +270,13 @@ class TestUpgradingFromAGatewayHostedPage:
             SERVE.disarm()
 
         assert spawned["relaunch"] == [str(bin_dir / "raven"), "web", "--supervise", "--port", "18792"]
+        # The argv the entry point takes to the supervisor without the command table.
+        from raven.cli import serve_commands
+
+        taken: list[tuple] = []
+        monkeypatch.setattr(serve_commands, "_web", lambda *a, **kw: taken.append((a, kw)))
+        assert serve_commands.supervise_from_argv(spawned["relaunch"][1:]) is True
+        assert taken == [((18792,), {"foreground": False, "stop": False, "supervise": True})]
         assert spawned["extra_env"] == {
             "RAVEN_SERVE_PORT_STRICT": "1",
             "RAVEN_SERVE_TOKEN": "tok",

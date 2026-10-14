@@ -707,3 +707,117 @@ async def test_an_unregistered_host_is_not_dispatch_compatible():
     finally:
         if saved[0] is not None:
             cli_socket.register_cli(saved[0], saved[1])
+
+
+# ---------------------------------------------------------------------------
+# Finding the console hosts
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def unregistered_socket():
+    """The socket with nothing registered, then what the suite registered put back."""
+    from raven.rpc import cli_socket
+
+    saved = (cli_socket.cli_commands(), cli_socket.console_hosts())
+    cli_socket.reset()
+    yield cli_socket
+    cli_socket.reset()
+    if saved[0] is not None:
+        cli_socket.register_cli(saved[0], saved[1])
+
+
+def test_a_finder_handed_to_the_socket_runs_once_on_the_first_lookup(unregistered_socket) -> None:
+    import types
+
+    host = types.ModuleType("host")
+    finds: list[str] = []
+
+    def find() -> tuple[types.ModuleType, ...]:
+        finds.append("find")
+        return (host,)
+
+    unregistered_socket.register_cli(types.ModuleType("commands"), find)
+    assert finds == []
+
+    assert unregistered_socket.console_hosts() == (host,)
+    assert unregistered_socket.console_hosts() == (host,)
+    assert finds == ["find"]
+
+
+def test_a_reset_drops_a_finder_that_never_ran(unregistered_socket) -> None:
+    import types
+
+    finds: list[str] = []
+
+    def find() -> tuple[types.ModuleType, ...]:
+        finds.append("find")
+        return ()
+
+    unregistered_socket.register_cli(types.ModuleType("commands"), find)
+    unregistered_socket.reset()
+
+    assert unregistered_socket.console_hosts() == ()
+    assert finds == []
+
+
+@pytest.mark.parametrize(
+    ("terminal", "at_registration"),
+    [(False, []), (True, ["find"])],
+    ids=["no terminal", "a terminal"],
+)
+def test_the_hosts_are_found_at_registration_only_where_the_terminal_can_be_asked(
+    unregistered_socket, monkeypatch, terminal: bool, at_registration: list[str]
+) -> None:
+    """Finding the hosts imports every CLI module, and one of them asks the terminal
+    for its colours as it is imported. A host with no terminal to ask, such as the
+    gateway `raven web` detaches, finds them on its first console command; one that
+    shares a terminal, as the TUI's host does with the Ink screen, asks before the
+    session starts."""
+    from raven.cli import _console_feature, _theme
+    from raven.cli import commands as commands_module
+
+    find = _console_feature._console_host_modules
+    finds: list[str] = []
+
+    def counted():
+        finds.append("find")
+        return find()
+
+    monkeypatch.setattr(_console_feature, "_console_host_modules", counted)
+    monkeypatch.setattr(_theme, "_can_probe", lambda: terminal)
+
+    _console_feature.register_console_feature()
+    assert finds == at_registration
+
+    assert commands_module in unregistered_socket.console_hosts()
+    assert finds == ["find"]
+
+
+@pytest.mark.slow
+def test_a_host_without_a_terminal_imports_no_host_module_until_a_console_asks(tmp_path) -> None:
+    """Checked in a fresh interpreter whose stdin and stdout are not a terminal."""
+    import subprocess
+    import sys
+
+    probe = (
+        "import sys\n"
+        "import raven.cli.commands\n"
+        "from raven.cli._console_feature import register_console_feature\n"
+        "from raven.rpc import cli_socket\n"
+        "register_console_feature()\n"
+        "print('after registration:', 'raven.cli._styles' in sys.modules)\n"
+        "hosts = cli_socket.console_hosts()\n"
+        "print('after the first lookup:', 'raven.cli._styles' in sys.modules, len(hosts) > 0)\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-P", "-c", probe],
+        stdin=subprocess.DEVNULL,
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    assert "after registration: False" in done.stdout, done.stdout + done.stderr
+    assert "after the first lookup: True True" in done.stdout, done.stdout + done.stderr

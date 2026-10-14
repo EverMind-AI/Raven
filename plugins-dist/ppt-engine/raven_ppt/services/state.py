@@ -17,10 +17,13 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from raven_ppt.contracts import DeckBrief, Project, brief_path, load_brief
 from raven_ppt.services.ingest import CATALOGUE_FILE, MATERIALS_FILE, READ_FILE
-from raven_ppt.services.template import PREPARED_FILE, BoundTemplate, bound
+
+if TYPE_CHECKING:
+    from raven_ppt.services.template import BoundTemplate
 
 # How much of the materials the intake pass is shown, and in how many pieces.
 # Enough to tell what these documents are about; not so much that its question
@@ -192,6 +195,10 @@ def read(project: Project) -> DeckState:
     read_record = _json(project.ingest_dir / READ_FILE)
     materials = _text(project.ingest_dir / MATERIALS_FILE)
     script = project.build_dir / "build.py"
+    # Imported here: the template service loads python-pptx, which every gateway
+    # would otherwise hold from the moment the plugin loads, deck or no deck.
+    from raven_ppt.services.template import bound
+
     deck = project.build_dir / "deck.pptx"
     return DeckState(
         project=project,
@@ -247,6 +254,8 @@ def _loose_templates(project: Project) -> tuple[str, ...]:
     workspace with a checkout in it would make `rglob` the expensive part of an
     otherwise free call. Two levels is where a user drops a file.
     """
+    from raven_ppt.services.template import PREPARED_FILE
+
     workspace = project.workspace
     skip = {"deck", "out"}
     found: list[str] = []
