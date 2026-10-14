@@ -75,10 +75,16 @@
 /* the export page */
 .export-page { display: flex; flex-direction: column; gap: 14px; }
 .export-field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }
-.export-name { font: inherit; font-size: 14px; color: var(--text); padding: 8px 10px; border: 1px solid var(--line);
-  border-radius: 8px; background: var(--paper); }
-.export-name:focus { outline: none; border-color: var(--amber); }
-.export-name:disabled { color: var(--muted); background: var(--surface); }
+/* Scoped under the app so these outrank the page's own field rules
+   (styles/page.css's `input[type="text"], select`), which fix a 32px height,
+   a 13px monospace face and no vertical padding: kept, they clipped the text
+   these fields hold at the wizard's size. */
+.export-app .export-name, .export-app .export-select { box-sizing: border-box; height: auto; min-height: 38px;
+  font-family: inherit; font-size: 14px; line-height: 1.4; color: var(--text); padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--paper); }
+.export-app .export-name:focus, .export-app .export-select:focus { outline: none; border-color: var(--amber);
+  box-shadow: none; }
+.export-app .export-name:disabled, .export-app .export-select:disabled { color: var(--muted); background: var(--surface); }
 .export-warn { padding: 10px 12px; border: 1px solid color-mix(in oklab, var(--clay) 45%, transparent);
   border-radius: 8px; background: color-mix(in oklab, var(--clay) 8%, transparent); color: var(--clay);
   font-size: 13px; font-weight: 600; }
@@ -97,24 +103,34 @@
 .export-download { align-self: flex-start; color: var(--amber); font-size: 13px; }
 
 /* the problem */
-.export-text, .export-select { font: inherit; font-size: 14px; color: var(--text); padding: 8px 10px;
-  border: 1px solid var(--line); border-radius: 8px; background: var(--paper); }
-.export-text { resize: vertical; min-height: 60px; line-height: 1.5; }
-.export-text:focus, .export-select:focus { outline: none; border-color: var(--amber); }
-.export-text:disabled, .export-select:disabled { color: var(--muted); background: var(--surface); }
+.export-text { font: inherit; font-size: 14px; color: var(--text); padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--paper);
+  resize: vertical; min-height: 60px; line-height: 1.5; }
+.export-text:focus { outline: none; border-color: var(--amber); }
+.export-text:disabled { color: var(--muted); background: var(--surface); }
 .export-page > .export-hint { margin: -8px 0 0; }
 
 /* the decisions */
-.export-decide { display: flex; flex-direction: column; gap: 10px; }
-.export-decide .two-pane { height: 360px; }
+/* The page fills the dialog and the two columns take what the history line
+   and the buttons leave, each scrolling on its own. */
+.export-decide { display: flex; flex-direction: column; gap: 10px; min-height: 100%; }
+.export-decide .two-pane { flex: 1; min-height: 340px; grid-template-columns: 340px minmax(0, 1fr); }
+/* A value in full, however long: it wraps rather than being cut, in the face
+   the contexts show it in. */
+.export-decide .two-pane-txt .nm, .export-decide .two-pane-head .ttl .nm { font-family: var(--mono);
+  white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-all; text-overflow: clip; }
+.export-decide .two-pane-txt .nm { font-size: 12.5px; line-height: 1.45; }
+.export-decide .two-pane-head .ttl .nm { font-size: 14px; }
+.export-item[data-action="redacted"] .nm { text-decoration: line-through; color: var(--muted); }
+.export-item[data-kind="confirmed"] .nm { color: var(--clay); }
 .export-history { display: flex; flex-direction: column; gap: 2px; font-size: 13px; color: var(--muted); }
 .export-history p { margin: 0; }
 .export-history p[data-bad] { color: var(--clay); }
 .export-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .export-tools .export-btn { padding: 5px 12px; font-size: 13px; }
 .export-item[data-bad] { border-radius: 8px; box-shadow: inset 0 0 0 1px var(--clay); }
-.export-ack { flex: none; display: flex; align-items: center; gap: 5px; margin-right: 8px; font-size: 12px;
-  color: var(--muted); cursor: pointer; }
+.export-ack { flex: none; display: flex; align-items: center; gap: 6px; font-size: 13px;
+  color: var(--text); cursor: pointer; white-space: nowrap; }
 .export-ack input { margin: 0; accent-color: var(--amber); }
 .export-pager { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px;
   color: var(--muted); }
@@ -139,8 +155,8 @@
 /* Narrow: the steps take a row of their own under the title and the close
    button, and only the current step keeps its name -- the rest are numbered
    dots -- so neither the strip nor the close button is cut off. The dialog is
-   min(640px, 94vw) wide, so this is where it falls under 640px. Last in the
-   sheet so it outranks the rules it narrows. */
+   94vw wide on a window this narrow, so this is where it falls under 640px.
+   Last in the sheet so it outranks the rules it narrows. */
 @media (max-width: 680px) {
   .export-top { flex-wrap: wrap; row-gap: 10px; padding-left: 18px; }
   .export-x { margin-left: auto; }
@@ -153,6 +169,6 @@
   .export-preview { order: 9; flex: 1 0 100%; padding-left: 23px; }
   /* The decisions' two columns stack: the list over the contexts. */
   .export-decide .two-pane { grid-template-columns: 1fr; grid-template-rows: minmax(0, 45%) minmax(0, 1fr);
-    height: 520px; }
+    min-height: 520px; }
   .export-decide .two-pane-side { border-right: 0; border-bottom: 1px solid var(--line-soft); }
 }

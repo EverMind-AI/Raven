@@ -92,6 +92,7 @@ describe('the upload page', () => {
     expect(text()).toContain('gui.export.summary_counts:{"auto":4,"kept":2,"redacted":1,"acknowledged":1}')
     expect(text()).not.toContain('gui.export.summary_size')
     expect($('.export-warnings')!.textContent).toBe('a value was kept')
+    expect(text()).not.toContain('complete')
     expect($('.export-step[data-state="skipped"]')!.textContent).toContain('gui.export.step_decide')
   })
 

@@ -1152,6 +1152,27 @@ def test_environment_summary_lands_in_package(state, workspace, tmp_path):
     assert record["completeness"]["status"] in ("complete", "degraded", "unreplayable")
 
 
+@pytest.mark.parametrize("source", ["attempt", "selection"])
+def test_completeness_is_written_into_the_record_and_the_package(state, workspace, source):
+    """The verdict and its reasons travel in both JSON files whichever way the
+    report was made: the command line's attempt or the web page's selection."""
+    if source == "attempt":
+        _log_simple(state)
+        prep = breport.prepare_trajectory("trace-1", workspace=workspace, state_dir=state)
+    else:
+        _selection_world(state, workspace)
+        prep = breport.prepare_selection(_plan(state, "trace-a"), workspace=workspace, state_dir=state)
+    prep = breport.freeze_export(prep, description="it broke", decide=_decide_all())
+    record_dir, record = breport.confirm_and_package(prep, state_dir=state)
+
+    on_disk = json.loads((record_dir / "record.json").read_text(encoding="utf-8"))["completeness"]
+    with tarfile.open(record["package"]["path"]) as tar:
+        packaged = json.loads(tar.extractfile(f"{record['report_id']}/{breport.PACKAGE_METADATA_FILE}").read())
+    assert on_disk == packaged["completeness"] == {"status": prep.completeness[0], "reasons": prep.completeness[1]}
+    assert on_disk["status"] in ("complete", "degraded", "unreplayable", "unknown")
+    assert isinstance(on_disk["reasons"], list)
+
+
 def test_unreadable_config_degrades_environment_and_classification(state, workspace, tmp_path):
     config = _config_file(tmp_path, "{broken")
     _log_simple(state)

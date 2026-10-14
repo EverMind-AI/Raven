@@ -6234,11 +6234,14 @@ class BugReportSource(_Strict):
 
 
 class BugReportItem(_Strict):
-    """One Review Item still to decide, masked; the plain value never leaves the gateway."""
+    """One Review Item still to decide: the value in full, which is what the reader
+    decides on, and its masked sample. A confirmed item, replaced whatever the
+    reader says, has no value of its own and shows its replacement."""
 
     id: str
     kind: Literal["suspected", "confirmed"]
     category: str
+    value: str
     masked_sample: str
     count: int
     sources: list[BugReportSource]

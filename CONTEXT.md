@@ -2267,8 +2267,11 @@ drops its plain values and leaves only its last status, readable for ten minutes
 The worker checks for a cancel after every step and starts nothing further, so a
 report cancelled while it was packaging is never sent. Cancelling or failing
 before the report landed removes its staging, after it landed the Bug Report
-Record stays for `raven trajectory upload-bug-report`. The page only ever
-receives masked samples and, one item at a time, the contexts a decision needs.
+Record stays for `raven trajectory upload-bug-report`. While it waits on the
+decisions, its status carries each remaining value in full beside its masked
+sample, since the value is what the reader decides on (a private key, replaced
+whatever the reader says, is carried only as its replacement); the contexts a
+decision needs come one item at a time. No other phase carries a value.
 _Avoid_: calling it the record -- the Bug Report Record is the file that lands on
 disk.
 

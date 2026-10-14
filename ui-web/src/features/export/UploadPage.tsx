@@ -39,8 +39,6 @@ export function UploadPage({ s }: { s: ExportState }): JSX.Element {
               acknowledged: summary.acknowledged,
             })}
           </dd>
-          <dt>{t('gui.export.completeness')}</dt>
-          <dd>{summary.completeness}</dd>
         </dl>
       )}
       {summary?.warnings.length ? (

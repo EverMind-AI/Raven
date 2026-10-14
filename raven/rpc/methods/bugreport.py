@@ -2,8 +2,8 @@
 
 - ``bugreport.start`` -- validate the problem fields and the turn selection, then
   start collecting; answers a handle the page polls.
-- ``bugreport.status`` -- the phase, the masked items to decide, the summary, the
-  receipt.
+- ``bugreport.status`` -- the phase, the items to decide (each value in full and
+  masked), the summary, the receipt.
 - ``bugreport.item`` -- one item's contexts, asked for one at a time.
 - ``bugreport.decide`` / ``bugreport.upload`` / ``bugreport.retry_upload`` /
   ``bugreport.cancel`` -- move the report on.

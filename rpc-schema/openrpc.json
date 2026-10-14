@@ -11181,7 +11181,7 @@
     },
     {
       "name": "bugreport.status",
-      "summary": "Where a bug report stands: its phase, the masked items to decide, the summary and the receipt.",
+      "summary": "Where a bug report stands: its phase, the items to decide, the summary and the receipt.",
       "params": [
         {
           "name": "report_id",
@@ -17609,6 +17609,7 @@
           "id",
           "kind",
           "category",
+          "value",
           "masked_sample",
           "count",
           "sources",
@@ -17627,6 +17628,10 @@
           },
           "category": {
             "type": "string"
+          },
+          "value": {
+            "type": "string",
+            "description": "The value in full, for the reader to decide on; a confirmed item, replaced whatever the reader says, shows its replacement."
           },
           "masked_sample": {
             "type": "string"
