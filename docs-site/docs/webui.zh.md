@@ -26,8 +26,9 @@ raven web
 
 **问题报告**：只有 Raven 有可发送的问题报告服务器时才出现（`RAVEN_BUGREPORT_URL`，或内置的默认地址）。它是
 `raven trajectory report-bug` 的网页版本：选轮次、填写问题、对脱敏扫描不确定的值逐一决定（脱敏历史已全部决定时跳过这一页），
-然后上传并拿到回执号。这一页上的所有决定，包括"全部保持"和批量按钮，都会以 `web` 为来源记入脱敏历史。上传失败可以重试；
-放弃的报告保留在本机，可稍后用 `raven trajectory upload-bug-report <id>` 发送。背后的流程见
+然后上传并拿到回执号。这一页上的所有决定，包括"全部保持"和批量按钮，都会以 `web` 为来源记入脱敏历史。
+在开始上传之前关闭向导，会丢弃正在准备的报告。一旦开始上传，报告就会保存到本机：上传失败时，被标为可重试的失败会提供"重试"；
+无论哪种情况，都可以用页面上显示的报告编号，稍后通过 `raven trajectory upload-bug-report <id>` 发送已保存的报告。背后的流程见
 [轨迹调试](trajectory-debugging.md#produce-a-reviewed-report)。
 
 安装及模型服务商配置请参阅[快速开始](quick-start.md)；Docker 和源码部署请参阅

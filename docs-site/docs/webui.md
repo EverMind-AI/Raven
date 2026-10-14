@@ -40,9 +40,13 @@ version of `raven trajectory report-bug`: pick the turns, describe the problem,
 decide the values the redaction scan was unsure about (this page is skipped
 when the redaction history already decided them all), then upload and get a
 receipt. Every decision on that page, including "keep all" and the bulk
-buttons, is remembered in the redaction history with `web` as its source. A
-failed upload can be retried, and a report you give up on stays on this
-machine; send it later with `raven trajectory upload-bug-report <id>`. See
+buttons, is remembered in the redaction history with `web` as its source.
+Closing the wizard before the upload starts discards the report being
+prepared. Once an upload has started the report is saved on this machine: if
+the upload fails, a failure marked as retryable offers a retry, and either way
+the saved report can be sent later with
+`raven trajectory upload-bug-report <id>`, using the report id the page shows.
+See
 [Trajectory debugging](trajectory-debugging.md#produce-a-reviewed-report) for
 the pipeline behind it.
 
