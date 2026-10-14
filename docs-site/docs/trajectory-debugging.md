@@ -59,6 +59,10 @@ receipt is then written into the record. Review flagged items and the package
 before sharing. `--yes` is not sensitive-data risk consent. Do not routinely
 bypass findings with `--accept-risk` or declare every token harmless.
 
+The WebUI's **Report a problem** runs the same pipeline on the turns you pick
+in a conversation, with the decisions made on a page instead of a prompt; see
+[Export and report a problem](webui.md#export-and-report-a-problem).
+
 ### Remembered redaction decisions
 
 Every keep or replace answer you give in the review is remembered on this
@@ -77,6 +81,11 @@ raven trajectory redaction-history list                        # what is remembe
 raven trajectory redaction-history forget 3f9a1c2b7d4e          # drop one decision by id
 raven trajectory redaction-history clear --yes                  # drop all of them
 ```
+
+A report made in the WebUI follows a different rule on purpose: every
+decision on its decisions page is remembered, including the default "keep all"
+and the bulk buttons, with `web` as its source, because the page shows every
+value it asks about.
 
 Set `RAVEN_BUGREPORT_REDACTION_HISTORY=off` to neither replay nor record
 decisions. A history file that cannot be read is backed up next to it before
