@@ -445,7 +445,12 @@ left with the daemon (`remote.leave_agents_running()`), remembered while in flig
 next start (`raven/agent/subagent/resume_remote.py`): attached from the frame last read
 (a cli entry's command from its first line, its whole output being the reply), its reply
 read off the machine and announced into the conversation that asked -- the task quoted as
-the model wrote it, the record removed only once the announce was taken. Only
+the model wrote it, the record removed only once the announce was taken. An MCP server the
+host lends an agent there is carried on the same link: the agent runs the install's bridge
+(`python -I -m raven.node --mcp`) as a stdio server, the daemon relays its frames as a stream
+(`mcp/open`, `mcp/frame`, `mcp/close`, under a token the daemon leaves beside the task's record),
+and the host pumps them into the endpoint it opened on its own side (`raven/node/bridge.py`,
+`NodePool.lend`); the server's definition and keys stay here. Only
 `--stdio` (tests, a fallback) ties the agents to the connection.
 _Avoid_: "node" alone (a DAG node is a `run_subagent_dag` step, and the Machine
 entry already rules the bare word out for a computer); "node id" for the install

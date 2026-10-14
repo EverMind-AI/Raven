@@ -122,6 +122,14 @@ def _uploads_root() -> Path | None:
 
 
 @dataclass(frozen=True)
+class _Lent:
+    """A machine row's endpoints, opened here and paired on the link: the stanzas are rendered once the agent's task is known."""
+
+    paths: dict[str, str]
+    """By server name, the socket of the endpoint opened for this dispatch."""
+
+
+@dataclass(frozen=True)
 class _OnMachine:
     """One dispatch's place on its machine, resolved through the machine's Raven node."""
 
@@ -1374,24 +1382,33 @@ class AcpAgentBackend:
 
         return not session_mcp_delivered(session_mcp=self.session_mcp, snapshot=self._snapshot, machine=self.machine)
 
-    def _mcp_note(self, grant: McpGrant) -> str:
-        """Every secret-free reason this dispatch's MCP is degraded.
+    def _mcp_note(self, grant: McpGrant, lent: tuple[str, ...] | None = None) -> str:
+        """Every secret-free reason this dispatch's MCP is degraded, and on a machine, how it was delivered.
 
         The withholding decided here is not a ``McpGrant`` reason, so it is
         joined onto ``note_text`` rather than routed through it -- a grant whose
         servers all resolved cleanly still owes the user this sentence, because a
         sub-agent that silently received no servers looks exactly like one nobody
-        configured.
+        configured. ``lent`` is what a run on a machine was handed through the
+        machine's node (``None`` for a run here): the names, or none when the
+        node carries no streams.
         """
         notes = []
+        if lent is not None and grant.granted and self.machine:
+            names = ", ".join(repr(server.name) for server in grant.granted)
+            if lent:
+                notes.append(
+                    f"MCP servers {names} were lent to acp agent {self.name!r} through the Raven node on machine "
+                    f"{self.machine!r}: the servers themselves run here"
+                )
+            else:
+                notes.append(
+                    f"MCP servers {names} were not lent to acp agent {self.name!r}: the Raven node on machine "
+                    f"{self.machine!r} carries no MCP streams (it serves without a daemon)"
+                )
         if self._session_mcp_refused and grant.granted:
             names = ", ".join(repr(server.name) for server in grant.granted)
-            if self.machine:
-                notes.append(
-                    f"MCP servers {names} were not lent to acp agent {self.name!r}: it runs on machine "
-                    f"{self.machine!r}, and the host's servers are reached through a socket on this computer"
-                )
-            elif not self.session_mcp:
+            if not self.session_mcp:
                 notes.append(
                     f"MCP servers {names} were withheld because acp agent {self.name!r} is configured as not "
                     f"keeping one session's servers to that session (sessionMcp: false); raven pools one "
@@ -1427,8 +1444,17 @@ class AcpAgentBackend:
             raise
 
     @asynccontextmanager
-    async def _mcp_endpoints(self, node_id: str, grant: McpGrant) -> AsyncIterator[list[dict[str, Any]]]:
-        """The bridge stanzas for one dispatch, live for exactly as long as it runs.
+    async def _mcp_endpoints(
+        self, node_id: str, grant: McpGrant, launched: _OnMachine | None = None
+    ) -> AsyncIterator[list[dict[str, Any]] | _Lent]:
+        """The bridge stanzas for one dispatch, live for exactly as long as it runs; on a machine, the endpoints to pair.
+
+        ``launched`` is the dispatch's place on its machine, when it has one:
+        the endpoints are opened here all the same, paired on the link to that
+        machine under this dispatch's id (``NodePool.lend``), and what is
+        yielded is :class:`_Lent` -- the stanzas name the machine's own bridge
+        and the agent's task there, which only the launch knows
+        (``_lent_stanzas``).
 
         ``node_id`` is this dispatch's identity -- a DAG node's id, a spawn's
         task id -- because reaping is per node and not per run: a graph of a
@@ -1459,8 +1485,10 @@ class AcpAgentBackend:
             if not grant.granted:
                 yield []
                 return
-            argv = bridge_command(path=await asyncio.to_thread(self._adapter_path))
-            if argv is None or self._session_mcp_refused:
+            # On a machine the agent runs the node's bridge, not this
+            # computer's: no raven need be on the adapter's PATH there.
+            argv = None if launched is not None else bridge_command(path=await asyncio.to_thread(self._adapter_path))
+            if (argv is None and launched is None) or self._session_mcp_refused:
                 if self._session_mcp_refused:
                     # Two independent reasons reach here and they call for
                     # different actions, so they must not share a sentence: one
@@ -1471,9 +1499,7 @@ class AcpAgentBackend:
                         "acp agent {!r}: withholding {} MCP server(s); {}",
                         self.name,
                         len(grant.granted),
-                        f"it runs on machine {self.machine!r}"
-                        if self.machine
-                        else "configured as not keeping a session's servers to that session (sessionMcp: false)"
+                        "configured as not keeping a session's servers to that session (sessionMcp: false)"
                         if not self.session_mcp
                         else f"a raven build with no {SESSION_MCP_CAPABILITY} declaration",
                     )
@@ -1490,13 +1516,52 @@ class AcpAgentBackend:
                 )
                 for server in grant.granted
             }
-            yield grant.with_endpoints(paths).for_acp(argv)
+            if launched is None:
+                yield grant.with_endpoints(paths).for_acp(argv or [])
+                return
+            # Paired before the agent is handed the stanzas: a bridge that
+            # opens as soon as the session does must find its server.
+            launched.link.lend(launched.target.id, node_id, paths)
+            try:
+                yield _Lent(paths)
+            finally:
+                await launched.link.unlend(launched.target.id, node_id)
         finally:
             # Through close(), never by closing the listeners here: it also
             # cancels the in-flight relays, and without that wait_closed blocks
             # for as long as the sub-agent keeps its bridge open -- which is
             # exactly this moment.
             await endpoints.close(node_id)
+
+    async def _lent_stanzas(
+        self, endpoints: list[dict[str, Any]] | _Lent, launched: _OnMachine | None, client: Any, node_id: str
+    ) -> tuple[list[dict[str, Any]], tuple[str, ...] | None]:
+        """The stanzas ``session/new`` carries, and on a machine the names lent: the node's bridge, once per server.
+
+        Here, the stanzas as opened. On a machine, each server is one stdio
+        stanza running the machine's own bridge (``node/hello`` says its argv),
+        named by the agent's task there, this dispatch (what the host pairs
+        the stream with) and the server; nothing of the server's definition is
+        in it. A node that offers no bridge -- one serving without a daemon --
+        gets no stanzas, and the reply says so (``_mcp_note``).
+        """
+        if not isinstance(endpoints, _Lent):
+            return endpoints, None
+        if launched is None or not endpoints.paths:
+            return [], ()
+        argv = await launched.link.bridge_argv(launched.target.id)
+        task = getattr(getattr(client, "endpoint", None), "task", None)
+        if argv is None or not isinstance(task, str):
+            return [], ()
+        return [
+            {
+                "name": name,
+                "command": argv[0],
+                "args": [*argv[1:], "--task", task, "--lend", node_id, "--server", name],
+                "env": [],
+            }
+            for name in endpoints.paths
+        ], tuple(endpoints.paths)
 
     @property
     def is_stateful(self) -> bool:
@@ -1569,7 +1634,8 @@ class AcpAgentBackend:
             sent_text = f"{task}\n\n{note}"
         started = time.monotonic()
         grant = mcp_grant if mcp_grant is not None else await self.resolve_mcp_grant_async(mcps)
-        async with self._mcp_endpoints(task_id, grant) as mcp_servers:
+        lent: tuple[str, ...] | None = None
+        async with self._mcp_endpoints(task_id, grant, launched) as endpoints:
             with (
                 external_agent_span(agent=self.name, transport="acp", task_id=task_id, instance=handle) as span,
                 self._annotate_mcp_failure(grant),
@@ -1626,6 +1692,9 @@ class AcpAgentBackend:
                     launcher=launched.launcher if launched is not None else None,
                 )
                 client = connection.client
+                # On a machine, rendered only now: the stanzas name the
+                # agent's task there, which the launch just settled.
+                mcp_servers, lent = await self._lent_stanzas(endpoints, launched, client, task_id)
                 # Marked after acquire, so a call's range covers its own traffic and
                 # not the handshake of a connection it merely inherited. The pool
                 # records where that handshake ends, and it is carried alongside so a
@@ -1849,7 +1918,7 @@ class AcpAgentBackend:
                     await self._registry.commit(skey, self.name, handle, session_id, kind="acp")
 
                 reply = await self._finished(collector.reply, stop_reason=stop_reason, span=span, sink=on_delta)
-                notes = [self._mcp_note(grant)]
+                notes = [self._mcp_note(grant, lent)]
                 if launched is not None:
                     # Where to find what it made: the caller's workspace line names
                     # this computer, and what it wrote is there, by address --

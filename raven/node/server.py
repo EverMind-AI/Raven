@@ -21,6 +21,14 @@ frame the host last read (``agent/attach``). Ending a task ends its whole
 process tree, the commands the agent put in the background or in a session
 of its own included. Only ``--stdio`` ties the agents to the connection.
 
+An MCP server the host lends an agent here is reached through this daemon:
+the agent runs the install's bridge (``python -I -m raven.node --mcp``) as a
+stdio server, the bridge connects to the socket and opens a *stream* for its
+task with the token left beside the task's record at launch, and the daemon
+relays the pieces of each frame between the bridge and the host holding the
+task (``mcp/open``, ``mcp/frame``, ``mcp/close``), keeping nothing. A stream
+ends with either end, or with the task.
+
 Deliberately small. It imports the file tools and nothing that talks to a
 model, reads a config or opens a network port, so a machine needs Python
 3.12 and the packages in :data:`raven.node.protocol.REQUIREMENTS` beside
@@ -38,10 +46,12 @@ import base64
 import contextlib
 import fcntl
 import hashlib
+import hmac
 import json
 import os
 import platform
 import re
+import secrets
 import shlex
 import shutil
 import signal
@@ -531,6 +541,14 @@ def _end_tree(pid: int) -> None:
 #: lock of each install under ``run/``, the task records under ``tasks/``, the
 #: daemon's own log under ``log/``.
 RUN_DIR, TASKS_DIR, LOG_DIR = "run", "tasks", "log"
+#: Beside a task's record: the token a bridge of that task presents to open an MCP stream (``mcp/open``).
+TOKEN_FILE = "mcp.token"  # noqa: S105 - a file name, not a secret
+
+
+def task_record_dir(root: Path, task_id: str) -> Path:
+    """Where the daemon under ``root`` keeps the record of ``task_id``: what a bridge reads its token from."""
+    return root / TASKS_DIR / task_id
+
 
 #: How long a daemon with no connection and no running task waits before it
 #: leaves; the next relay starts it again.
@@ -656,6 +674,33 @@ class _StreamOut:
                 self._out.flush()
 
 
+class _Stream:
+    """One MCP connection of an agent on this machine to a server the host holds, carried on the host's link.
+
+    The bridge the agent spawned is one end -- a connection of its own to the
+    daemon's socket, carrying this stream and nothing else -- and the host
+    holding the task is the other. The daemon relays the pieces of each
+    frame as they come (``mcp/frame``) and keeps nothing: a stream outlives
+    neither end, nor the task.
+    """
+
+    def __init__(self, stream_id: int, task: _Task, bridge: Node, host: Node, server: str, lend: str) -> None:
+        self.id = stream_id
+        self.task = task
+        self.bridge = bridge
+        self.host = host
+        self.server = server
+        self.lend = lend
+
+    def other(self, node: Node) -> Node | None:
+        """The end that is not ``node``; ``None`` for a connection that is neither end."""
+        if node is self.bridge:
+            return self.host
+        if node is self.host:
+            return self.bridge
+        return None
+
+
 class _Task:
     """One agent the daemon started for a host, under the host's task id; it outlives the connection that asked.
 
@@ -680,6 +725,15 @@ class _Task:
         self.rc: int | None = None
         self.frames = 0
         self.subscriber: tuple[Node, int] | None = None
+        self.streams: dict[int, _Stream] = {}
+        # The token a bridge of this task presents to open a stream: made
+        # here, kept beside the record where only this user reads, and read
+        # by the bridge from there -- never on a command line. Two hosts'
+        # tasks on one machine run as one user, so the socket's mode alone
+        # would let either's agent reach the other's servers.
+        self.token = secrets.token_hex(32)
+        with own_file(record / TOKEN_FILE, "w") as handle:
+            handle.write(self.token)
         self._send_lock = asyncio.Lock()
         self._frames_file = own_file(record / "frames.jsonl")
         self._stderr_file = own_file(record / "stderr.log")
@@ -780,6 +834,7 @@ class _Task:
                 self.subscriber = None
                 node.channels.pop(channel, None)
                 await self._tell(node, protocol.AGENT_EXIT, {"channel": channel, "rc": rc})
+        await self.daemon.end_streams(self, "the agent ended")
         self.daemon.touch()
 
     async def attach(self, node: Node, channel: int, after: int) -> dict[str, Any]:
@@ -874,6 +929,9 @@ class Daemon:
         self.tasks: dict[str, _Task] = {}
         self._starting: set[str] = set()
         """The task ids whose launch is under way: they take a place before their task is registered."""
+        self.streams: dict[int, _Stream] = {}
+        """The MCP streams open on this machine, by id, across every task."""
+        self._next_stream = 1
         self.connections: set[Node] = set()
         self._env: dict[str, str] | None = None
         self._env_lock = asyncio.Lock()
@@ -894,7 +952,52 @@ class Daemon:
         return [task for task in self.tasks.values() if task.rc is None]
 
     def record_dir(self, task_id: str) -> Path:
-        return self.root / TASKS_DIR / task_id
+        return task_record_dir(self.root, task_id)
+
+    def open_stream(self, bridge: Node, params: dict[str, Any]) -> _Stream:
+        """A stream for ``bridge``, on the task its token names, to the host holding that task; refused by code otherwise."""
+        task_id = _task_id(params)
+        token, server, lend = params.get("token"), params.get("server"), params.get("lend")
+        if not all(isinstance(v, str) and v for v in (token, server, lend)):
+            raise _RefusedError(_INVALID_PARAMS, "token, server and lend must be non-empty strings")
+        task = self.tasks.get(task_id)
+        if task is None or task.rc is not None:
+            raise _RefusedError(protocol.STREAM_REFUSED, f"task {task_id!r} is not running on this machine")
+        if not hmac.compare_digest(str(token), task.token):
+            raise _RefusedError(protocol.STREAM_REFUSED, f"the token is not task {task_id!r}'s")
+        if task.subscriber is None:
+            raise _RefusedError(protocol.STREAM_REFUSED, f"no host holds task {task_id!r} right now")
+        if len(task.streams) >= protocol.MAX_STREAMS:
+            raise _RefusedError(
+                protocol.STREAM_REFUSED, f"task {task_id!r} has {protocol.MAX_STREAMS} MCP streams open already"
+            )
+        stream = _Stream(self._next_stream, task, bridge, task.subscriber[0], str(server), str(lend))
+        self._next_stream += 1
+        task.streams[stream.id] = stream
+        self.streams[stream.id] = stream
+        self.touch()
+        return stream
+
+    def drop_stream(self, stream: _Stream) -> None:
+        self.streams.pop(stream.id, None)
+        stream.task.streams.pop(stream.id, None)
+
+    async def close_stream(self, stream: _Stream, reason: str, *, by: Node | None) -> None:
+        """``stream`` is over, said by ``by`` or by nobody: the other end is told, and the bridge's connection hung up."""
+        self.drop_stream(stream)
+        for end in (stream.host, stream.bridge):
+            if end is by:
+                continue
+            with contextlib.suppress(ConnectionError, OSError, ValueError):
+                await end.notify(protocol.MCP_CLOSE, {"stream": stream.id, "task": stream.task.id, "reason": reason})
+        if by is not stream.bridge:
+            stream.bridge.hang_up()
+        self.touch()
+
+    async def end_streams(self, task: _Task, reason: str) -> None:
+        """Every stream of ``task`` is over: the agent ended, or the host's link did."""
+        for stream in list(task.streams.values()):
+            await self.close_stream(stream, reason, by=None)
 
     async def launch(self, node: Node, channel: int, params: dict[str, Any]) -> _Task:
         task_id = _task_id(params)
@@ -1029,6 +1132,8 @@ class Node:
         self._out = _StreamOut(out)
         self.daemon = daemon or Daemon(Path(tempfile.mkdtemp(prefix="raven-node-")), ephemeral=True)
         self.channels: dict[int, _Task] = {}
+        self.stream: _Stream | None = None
+        """The one stream this connection carries, when it is a bridge's rather than a host's."""
         self.stopping = False
         self.stopped = asyncio.Event()
         self.daemon.connections.add(self)
@@ -1059,13 +1164,68 @@ class Node:
             out.close()
 
     async def detach_all(self) -> None:
-        """This connection is over: its tasks go on, held by nobody until the next connection attaches."""
+        """This connection is over: its tasks go on, held by nobody until the next connection attaches.
+
+        Its streams do not: a host's link that ends takes every stream it
+        carried with it (the bridges are hung up, their agents see the server
+        end), and a bridge that ends tells the host its stream is over.
+        """
         for channel, task in list(self.channels.items()):
             if task.subscriber is not None and task.subscriber[0] is self:
                 task.subscriber = None
         self.channels.clear()
+        for stream in [s for s in self.daemon.streams.values() if s.host is self]:
+            await self.daemon.close_stream(stream, "the host's link ended", by=self)
+        if self.stream is not None and self.stream.id in self.daemon.streams:
+            await self.daemon.close_stream(self.stream, "the bridge ended", by=self)
+        self.stream = None
         self.daemon.connections.discard(self)
         self.daemon.touch()
+
+    async def mcp_open(self, params: dict[str, Any]) -> dict[str, Any]:
+        """A bridge opens its one stream: checked by the daemon, told to the host, answered with the stream's id."""
+        if self.stream is not None:
+            raise _RefusedError(_INVALID_PARAMS, "this connection carries a stream already")
+        stream = self.daemon.open_stream(self, params)
+        self.stream = stream
+        try:
+            await stream.host.notify(
+                protocol.MCP_OPEN,
+                {"task": stream.task.id, "stream": stream.id, "server": stream.server, "lend": stream.lend},
+            )
+        except (ConnectionError, OSError, ValueError):
+            self.daemon.drop_stream(stream)
+            self.stream = None
+            raise _RefusedError(protocol.STREAM_REFUSED, "the host holding this task could not be told") from None
+        return {"stream": stream.id}
+
+    async def mcp_frame(self, params: dict[str, Any]) -> None:
+        """One piece of a frame, from either end of a stream, handed to the other as it is."""
+        stream = self._stream_of(params)
+        other = stream.other(self) if stream is not None else None
+        text = params.get("text")
+        if stream is None or other is None or not isinstance(text, str):
+            return
+        try:
+            await other.notify(
+                protocol.MCP_FRAME, {"stream": stream.id, "text": text, "end": bool(params.get("end", True))}
+            )
+        except (ConnectionError, OSError, ValueError):
+            await self.daemon.close_stream(stream, "the other end of the stream is gone", by=other)
+        self.daemon.touch()
+
+    async def mcp_close(self, params: dict[str, Any]) -> None:
+        stream = self._stream_of(params)
+        if stream is None or stream.other(self) is None:
+            return
+        reason = params.get("reason")
+        await self.daemon.close_stream(stream, reason if isinstance(reason, str) else "closed", by=self)
+
+    def _stream_of(self, params: dict[str, Any]) -> _Stream | None:
+        stream_id = params.get("stream")
+        if not isinstance(stream_id, int) or isinstance(stream_id, bool):
+            return None
+        return self.daemon.streams.get(stream_id)
 
     def _channel(self, params: dict[str, Any], *, free: bool) -> int:
         channel = _number(params, "channel")
@@ -1084,6 +1244,12 @@ class Node:
         answer = await _hello(params)
         answer["mode"] = "stdio" if self.daemon.ephemeral else "daemon"
         answer["tasks"] = len(self.daemon.running())
+        if not self.daemon.ephemeral:
+            # What an agent here runs as a stdio MCP server to reach a server
+            # the host lends it: this install's own bridge, which the host
+            # names by task, dispatch and server (`mcp/open`). A stdio node
+            # has no socket for a bridge to reach, so it offers none.
+            answer["bridge"] = [sys.executable, "-I", "-m", "raven.node", "--mcp", "--dir", str(self.daemon.root)]
         return answer
 
     async def launch(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -1238,6 +1404,9 @@ def _node_handlers(node: Node) -> dict[str, Callable[[dict[str, Any]], Awaitable
         protocol.AGENT_CANCEL: node.cancel,
         protocol.AGENT_CLOSE: node.close,
         protocol.TASK_LIST: node.tasks,
+        protocol.MCP_OPEN: node.mcp_open,
+        protocol.MCP_FRAME: node.mcp_frame,
+        protocol.MCP_CLOSE: node.mcp_close,
         protocol.PROBE_AGENT: node.probe_agent,
         protocol.SHUTDOWN: node.shutdown,
     }

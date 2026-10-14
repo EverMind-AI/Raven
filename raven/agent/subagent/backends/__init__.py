@@ -228,12 +228,13 @@ def session_mcp_delivered(*, session_mcp: bool, snapshot: Any, machine: str | No
     :func:`~raven.agent.subagent.presets.session_mcp_for`; ``snapshot`` carries
     the transitional half. Both are spelled out in
     ``AcpAgentBackend._session_mcp_refused``, which is the reader for why each
-    exists and why only one of them is temporary. ``machine`` is the third
-    reason, and not the peer's: the host's servers are reached through a
-    socket on this computer, which an agent on another machine cannot open.
+    exists and why only one of them is temporary. ``machine`` was once a third
+    reason -- the host's servers were reached through a socket on this computer
+    alone -- and no longer is: an agent on a registered machine reaches them
+    through the machine's Raven node, which carries each server's frames over
+    the link to the endpoint here (``raven.node.bridge``). The argument stays
+    for the callers' sake and decides nothing.
     """
-    if machine:
-        return False
     if not session_mcp:
         return False
     if snapshot is None or snapshot.session_mcp:

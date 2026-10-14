@@ -2133,7 +2133,10 @@ class ThirdPartyAcpSubagentConfig(Base):
     this entry's ``env`` over it; raven reaches the machine over one ssh link
     with the address, port and key the registry holds, and none of those is
     written here. Each session works in ``<remoteCwd>/<instance or task id>``
-    there. MCP servers are not lent to it, files are not handed to it, and
+    there. MCP servers the entry is granted are lent to it through the
+    machine's Raven node: the agent runs the node's bridge as a stdio server
+    and the node carries its frames over the link to the server here, which
+    stays here with its definition and keys. Files are not handed to it, and
     what it writes stays on that machine. See :mod:`raven.node.client` and
     :mod:`raven.acp_client.remote`.
 

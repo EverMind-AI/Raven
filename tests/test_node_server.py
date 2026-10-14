@@ -1158,7 +1158,8 @@ async def test_a_task_s_records_are_its_owner_s_alone(tmp_path, agent):
             "task.json": 0o600,
             "frames.jsonl": 0o600,
             "stderr.log": 0o600,
-        }, "the frames hold the agent's output as it was"
+            server.TOKEN_FILE: 0o600,
+        }, "the frames hold the agent's output as it was, and the token opens its MCP streams"
     finally:
         daemon.tasks["t-own"].end()
         await daemon.tasks["t-own"].proc.wait()
@@ -1435,3 +1436,192 @@ async def test_a_launch_in_progress_counts_toward_the_limit(tmp_path, agent, mon
     assert len(host.node.daemon.running()) == 1
     await host.ask(protocol.AGENT_CANCEL, {"channel": 1}, request_id=3)
     await host.until(lambda: host.node.daemon.running() == [])
+
+
+# ---- MCP lent across the link: streams -------------------------------------------
+
+
+class _Peer:
+    """One connection to a shared daemon, as the host's or a bridge's: every line the daemon wrote to it, decoded."""
+
+    def __init__(self, daemon: server.Daemon) -> None:
+        self.out = io.BytesIO()
+        self.node = server.Node(self.out, daemon)
+
+    def frames(self) -> list[dict[str, Any]]:
+        return [json.loads(line) for line in self.out.getvalue().splitlines() if line.strip()]
+
+    def notified(self, method: str) -> list[dict[str, Any]]:
+        return [frame["params"] for frame in self.frames() if frame.get("method") == method]
+
+    async def ask(self, method: str, params: dict[str, Any], request_id: int = 1) -> dict[str, Any]:
+        answer = await server.handle(
+            {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}, self.node
+        )
+        assert answer is not None
+        return answer
+
+    async def tell(self, method: str, params: dict[str, Any]) -> None:
+        assert await server.handle({"jsonrpc": "2.0", "method": method, "params": params}, self.node) is None
+
+    async def until(self, check: Any, *, timeout: float = 10.0) -> None:
+        deadline = time.monotonic() + timeout
+        while not check():
+            assert time.monotonic() < deadline, "did not happen in time"
+            await asyncio.sleep(0.02)
+
+
+async def _launched(daemon: server.Daemon, host: _Peer, tmp_path: Path, task: str = "agent@box-1") -> str:
+    """An agent of the host's on the daemon, under ``task``, whose token the test reads as a bridge would."""
+    started = await host.ask(
+        protocol.AGENT_LAUNCH, {"channel": 1, "task": task, "command": "sleep 30", "cwd": str(tmp_path)}
+    )
+    assert started["result"]["task"] == task
+    return (daemon.record_dir(task) / server.TOKEN_FILE).read_text(encoding="utf-8")
+
+
+def _opening(token: str, *, task: str = "agent@box-1", server_name: str = "pg", lend: str = "d1") -> dict[str, Any]:
+    return {"task": task, "token": token, "server": server_name, "lend": lend}
+
+
+@pytest.fixture
+async def daemon(tmp_path: Path):
+    d = server.Daemon(tmp_path / "node")
+    yield d
+    await d.end_all()
+
+
+async def test_hello_names_the_bridge_an_agent_runs_to_reach_a_lent_server_and_a_stdio_node_names_none(tmp_path):
+    with_daemon = server.Node(io.BytesIO(), server.Daemon(tmp_path / "node"))
+    answer = await with_daemon.hello({"protocol": protocol.PROTOCOL})
+    assert answer["bridge"] == [sys.executable, "-I", "-m", "raven.node", "--mcp", "--dir", str(tmp_path / "node")]
+    assert "bridge" not in await server.Node(io.BytesIO()).hello({"protocol": protocol.PROTOCOL})
+
+
+@pytest.mark.slow
+async def test_a_launch_leaves_the_task_s_token_beside_its_record_for_this_user_alone(tmp_path, daemon):
+    host = _Peer(daemon)
+
+    token = await _launched(daemon, host, tmp_path)
+
+    path = daemon.record_dir("agent@box-1") / server.TOKEN_FILE
+    assert len(token) == 64 and path.stat().st_mode & 0o077 == 0
+    assert daemon.tasks["agent@box-1"].token == token
+
+
+@pytest.mark.slow
+async def test_a_stream_is_opened_with_the_task_s_token_and_refused_without_it(tmp_path, daemon):
+    host = _Peer(daemon)
+    token = await _launched(daemon, host, tmp_path)
+    bridge = _Peer(daemon)
+
+    wrong = await bridge.ask(protocol.MCP_OPEN, _opening("0" * 64))
+    assert wrong["error"]["code"] == protocol.STREAM_REFUSED and "token" in wrong["error"]["message"]
+    unknown = await bridge.ask(protocol.MCP_OPEN, _opening(token, task="nobody@box-9"))
+    assert unknown["error"]["code"] == protocol.STREAM_REFUSED and "not running" in unknown["error"]["message"]
+    assert host.notified(protocol.MCP_OPEN) == [], "a refused stream is not told to the host"
+
+    opened = await bridge.ask(protocol.MCP_OPEN, _opening(token))
+
+    assert opened["result"] == {"stream": 1}
+    assert host.notified(protocol.MCP_OPEN) == [{"task": "agent@box-1", "stream": 1, "server": "pg", "lend": "d1"}]
+    again = await bridge.ask(protocol.MCP_OPEN, _opening(token), request_id=2)
+    assert again["error"]["code"] == -32602 and "already" in again["error"]["message"], "one stream per bridge"
+
+
+@pytest.mark.slow
+async def test_a_stream_needs_a_host_holding_the_task_and_a_task_holds_a_bounded_number(tmp_path, daemon):
+    host = _Peer(daemon)
+    token = await _launched(daemon, host, tmp_path)
+    await host.node.detach_all()
+    refused = await _Peer(daemon).ask(protocol.MCP_OPEN, _opening(token))
+    assert refused["error"]["code"] == protocol.STREAM_REFUSED and "no host holds" in refused["error"]["message"]
+
+    back = _Peer(daemon)
+    await back.ask(protocol.AGENT_ATTACH, {"channel": 1, "task": "agent@box-1", "after": 0})
+    bridges = [_Peer(daemon) for _ in range(protocol.MAX_STREAMS + 1)]
+    answers = [await b.ask(protocol.MCP_OPEN, _opening(token, server_name=f"s{i}")) for i, b in enumerate(bridges)]
+
+    assert all("result" in a for a in answers[: protocol.MAX_STREAMS])
+    assert answers[-1]["error"]["code"] == protocol.STREAM_REFUSED and "open already" in answers[-1]["error"]["message"]
+    assert len(daemon.tasks["agent@box-1"].streams) == protocol.MAX_STREAMS
+
+
+@pytest.mark.slow
+async def test_the_pieces_of_a_frame_cross_the_daemon_both_ways_as_they_are(tmp_path, daemon):
+    host = _Peer(daemon)
+    token = await _launched(daemon, host, tmp_path)
+    bridge = _Peer(daemon)
+    stream = (await bridge.ask(protocol.MCP_OPEN, _opening(token)))["result"]["stream"]
+
+    await bridge.tell(protocol.MCP_FRAME, {"stream": stream, "text": '{"jsonrpc":"2.0","id":1,', "end": False})
+    await bridge.tell(protocol.MCP_FRAME, {"stream": stream, "text": '"method":"tools/list"}', "end": True})
+    await host.tell(protocol.MCP_FRAME, {"stream": stream, "text": '{"jsonrpc":"2.0","id":1,"result":{}}', "end": True})
+
+    assert host.notified(protocol.MCP_FRAME) == [
+        {"stream": stream, "text": '{"jsonrpc":"2.0","id":1,', "end": False},
+        {"stream": stream, "text": '"method":"tools/list"}', "end": True},
+    ]
+    assert bridge.notified(protocol.MCP_FRAME) == [
+        {"stream": stream, "text": '{"jsonrpc":"2.0","id":1,"result":{}}', "end": True}
+    ]
+    stranger = _Peer(daemon)
+    await stranger.tell(protocol.MCP_FRAME, {"stream": stream, "text": "x", "end": True})
+    assert len(host.notified(protocol.MCP_FRAME)) == 2 and len(bridge.notified(protocol.MCP_FRAME)) == 1, (
+        "a connection that is neither end carries nothing"
+    )
+
+
+@pytest.mark.slow
+async def test_a_stream_ends_with_either_end_or_the_agent_and_the_other_end_is_told(tmp_path, daemon):
+    host = _Peer(daemon)
+    token = await _launched(daemon, host, tmp_path)
+
+    # The bridge closes: the host hears it, the stream is gone.
+    bridge = _Peer(daemon)
+    first = (await bridge.ask(protocol.MCP_OPEN, _opening(token)))["result"]["stream"]
+    await bridge.tell(protocol.MCP_CLOSE, {"stream": first, "reason": "the agent closed the server"})
+    assert host.notified(protocol.MCP_CLOSE) == [
+        {"stream": first, "task": "agent@box-1", "reason": "the agent closed the server"}
+    ]
+    assert first not in daemon.streams and daemon.tasks["agent@box-1"].streams == {}
+
+    # The host closes: the bridge hears it.
+    bridge = _Peer(daemon)
+    second = (await bridge.ask(protocol.MCP_OPEN, _opening(token)))["result"]["stream"]
+    await host.tell(protocol.MCP_CLOSE, {"stream": second, "reason": "the dispatch ended"})
+    assert bridge.notified(protocol.MCP_CLOSE) == [
+        {"stream": second, "task": "agent@box-1", "reason": "the dispatch ended"}
+    ]
+
+    # The bridge's connection ends without a word: the host is told.
+    bridge = _Peer(daemon)
+    third = (await bridge.ask(protocol.MCP_OPEN, _opening(token)))["result"]["stream"]
+    await bridge.node.detach_all()
+    assert host.notified(protocol.MCP_CLOSE)[-1] == {
+        "stream": third,
+        "task": "agent@box-1",
+        "reason": "the bridge ended",
+    }
+
+    # The host's link ends: its streams go, the bridges are told.
+    bridge = _Peer(daemon)
+    fourth = (await bridge.ask(protocol.MCP_OPEN, _opening(token)))["result"]["stream"]
+    await host.node.detach_all()
+    assert bridge.notified(protocol.MCP_CLOSE) == [
+        {"stream": fourth, "task": "agent@box-1", "reason": "the host's link ended"}
+    ]
+    assert daemon.streams == {}
+
+    # The agent ends: the streams of its task end with it.
+    back = _Peer(daemon)
+    await back.ask(protocol.AGENT_ATTACH, {"channel": 1, "task": "agent@box-1", "after": 0})
+    bridge = _Peer(daemon)
+    fifth = (await bridge.ask(protocol.MCP_OPEN, _opening(token)))["result"]["stream"]
+    await back.ask(protocol.AGENT_CANCEL, {"channel": 1}, request_id=2)
+    await back.until(lambda: back.notified(protocol.AGENT_EXIT))
+    await back.until(lambda: bridge.notified(protocol.MCP_CLOSE))
+    assert bridge.notified(protocol.MCP_CLOSE) == [
+        {"stream": fifth, "task": "agent@box-1", "reason": "the agent ended"}
+    ]
+    assert daemon.streams == {}

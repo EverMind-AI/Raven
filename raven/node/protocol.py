@@ -23,13 +23,23 @@ not hold a heartbeat behind it.
 Every ``fs/*`` call carries ``roots``, the directories it may touch. The host
 decides them; the daemon checks them again, because only the machine can
 resolve its own symlinks.
+
+An MCP server the host holds for an agent is lent across the same connection.
+The agent spawns the install's bridge (``python -I -m raven.node --mcp``) as a
+stdio MCP server; the bridge connects to the daemon's socket and opens a
+*stream* for its task (``mcp/open``, with the token the daemon left beside the
+task's record at launch), and from then on the frames travel as ``mcp/frame``
+notifications between the bridge and the host, which pumps them into the socket
+of the endpoint it opened on its own side (:func:`pieces` says how a frame is
+cut to fit a line). Nothing of a server's definition reaches the machine; the
+daemon relays and keeps nothing.
 """
 
 from __future__ import annotations
 
 #: Bumped when a method or a field changes meaning. A daemon and a host that
 #: disagree refuse each other at ``node/hello`` instead of misreading a reply.
-PROTOCOL = 5
+PROTOCOL = 6
 
 HELLO = "node/hello"
 PING = "node/ping"
@@ -48,6 +58,13 @@ AGENT_EXIT = "agent/exit"
 AGENT_CANCEL = "agent/cancel"
 AGENT_CLOSE = "agent/close"
 TASK_LIST = "task/list"
+
+MCP_OPEN = "mcp/open"
+"""A bridge on the machine asks for one of the host's servers for its task; the daemon tells the host that holds it."""
+MCP_FRAME = "mcp/frame"
+"""One piece of one MCP frame on a stream, either way: ``text``, and ``end`` on the last piece."""
+MCP_CLOSE = "mcp/close"
+"""A stream is over, said by either end, with a ``reason``."""
 
 READ = "fs/read"
 LIST = "fs/list"
@@ -68,6 +85,8 @@ CHANGED = -32012
 """``fs/write``: the file is not as ``expect`` said it was when it was read."""
 UNKNOWN_TASK = -32014
 """``agent/attach``: no task of that id is running or recorded on the machine."""
+STREAM_REFUSED = -32015
+"""``mcp/open``: the task is not running here, the token is not its, no host holds it, or its streams are all taken."""
 
 #: The most bytes one ``fs/pull`` returns per chunk, before base64. A line of
 #: the protocol holds one chunk and little else.
@@ -75,6 +94,15 @@ CHUNK = 1024 * 1024
 
 #: How many agents one machine runs at once; a launch past it is refused with :data:`BUSY`.
 MAX_AGENTS = 8
+
+#: How many MCP streams one task holds open at once: one per server per session its agent runs.
+MAX_STREAMS = 16
+
+#: The most characters one ``mcp/frame`` line carries; a longer MCP frame goes as several, the last marked ``end``.
+MCP_CHUNK = 256 * 1024
+
+#: The largest MCP frame a stream carries, in bytes: what the host's own bridge allows (a tool result can hold an image).
+MCP_MAX_FRAME = 32 * 1024 * 1024
 
 #: How long a finished task's record (its frames, its exit) is kept on the
 #: machine for a host to come back for.
@@ -131,3 +159,16 @@ __all__ = [
     "UNKNOWN_TASK",
     "WRITE",
 ]
+
+
+def pieces(frame: bytes) -> list[tuple[str, bool]]:
+    """One MCP frame as the ``mcp/frame`` lines that carry it: text of at most :data:`MCP_CHUNK` characters each, the last marked.
+
+    Cut by characters rather than bytes, so every piece is a string a line can
+    hold whole; the receiver joins the pieces and writes the frame with its
+    line break. An empty frame is one piece, so the end is still said.
+    """
+    text = frame.decode("utf-8", "replace")
+    out = [(text[i : i + MCP_CHUNK], False) for i in range(0, len(text), MCP_CHUNK)] or [("", False)]
+    out[-1] = (out[-1][0], True)
+    return out
