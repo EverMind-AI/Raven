@@ -375,6 +375,163 @@ def test_the_preview_stands_in_for_a_missing_input_artifact(state, tmp_path, utc
     assert [m["content"] for m in sel.cut_session_record(path, _plan("trace-a")).messages] == ["hello world"]
 
 
+def _turn_at(trace: str, start: str, end: str | None, *, preview: str) -> dict[str, Any]:
+    record = _turn(trace, minute=0, preview=preview, checkpoint=end is None)
+    record["startTime"] = start
+    record["endTime"] = end or start
+    return record
+
+
+def test_an_undone_turn_retyped_inside_its_window_is_left_unmatched(state, tmp_path, utc):
+    """The old turn was undone and the same words sent again within the slack:
+    the one block left could be either turn, so neither claims it."""
+    _write(
+        state,
+        _turn_at("trace-old", "2026-10-01T10:01:00+00:00", "2026-10-01T10:02:00+00:00", preview="go"),
+        _turn_at("trace-new", "2026-10-01T10:02:03+00:00", "2026-10-01T10:03:00+00:00", preview="go"),
+    )
+    path = _session_file(
+        tmp_path, [_user("go", "2026-10-01T10:02:03"), _assistant("new answer only", "2026-10-01T10:03:00")]
+    )
+    old = sel.cut_session_record(path, _plan("trace-old"))
+    assert old.messages == () and old.unmatched == ("trace-old",)
+    new = sel.cut_session_record(path, _plan("trace-new"))
+    assert new.messages == () and new.unmatched == ("trace-new",)
+
+
+def test_overlapping_windows_are_resolved_by_the_order_of_the_record(state, tmp_path, utc):
+    """The second block also fits the first turn's slack, but the first block
+    can only be the first turn, and blocks keep the order of their turns."""
+    _write(
+        state,
+        _turn_at("trace-a", "2026-10-01T10:01:00+00:00", "2026-10-01T10:02:00+00:00", preview="go"),
+        _turn_at("trace-b", "2026-10-01T10:02:03+00:00", "2026-10-01T10:03:00+00:00", preview="go"),
+    )
+    path = _session_file(
+        tmp_path,
+        [
+            _user("go", "2026-10-01T10:01:00"),
+            _assistant("first", "2026-10-01T10:02:00"),
+            _user("go", "2026-10-01T10:02:03"),
+            _assistant("second", "2026-10-01T10:03:00"),
+        ],
+    )
+    assert [m["content"] for m in sel.cut_session_record(path, _plan("trace-a")).messages] == ["go", "first"]
+    assert [m["content"] for m in sel.cut_session_record(path, _plan("trace-b")).messages] == ["go", "second"]
+
+
+def test_two_quick_turns_with_the_same_words_follow_the_record_order(state, tmp_path, utc):
+    _write(
+        state,
+        _turn_at("trace-a", "2026-10-01T10:01:00+00:00", "2026-10-01T10:01:02+00:00", preview="next"),
+        _turn_at("trace-b", "2026-10-01T10:01:03+00:00", "2026-10-01T10:01:05+00:00", preview="next"),
+    )
+    path = _session_file(
+        tmp_path,
+        [
+            _user("next", "2026-10-01T10:01:00"),
+            _assistant("one", "2026-10-01T10:01:02"),
+            _user("next", "2026-10-01T10:01:03"),
+            _assistant("two", "2026-10-01T10:01:05"),
+        ],
+    )
+    assert [m["content"] for m in sel.cut_session_record(path, _plan("trace-b")).messages] == ["next", "two"]
+
+
+def test_only_the_certain_block_is_claimed_when_a_turn_was_undone_between(state, tmp_path, utc):
+    """Three turns, two blocks left: the first block can only be the first turn;
+    the second could be either later one, so it is reported, not guessed."""
+    _write(
+        state,
+        _turn_at("trace-a", "2026-10-01T10:01:00+00:00", "2026-10-01T10:01:30+00:00", preview="hello"),
+        _turn_at("trace-b", "2026-10-01T10:02:00+00:00", "2026-10-01T10:02:30+00:00", preview="go"),
+        _turn_at("trace-c", "2026-10-01T10:02:31+00:00", "2026-10-01T10:03:00+00:00", preview="go"),
+    )
+    path = _session_file(
+        tmp_path,
+        [
+            _user("hello", "2026-10-01T10:01:00"),
+            _user("go", "2026-10-01T10:02:31"),
+            _assistant("?", "2026-10-01T10:03:00"),
+        ],
+    )
+    cut = sel.cut_session_record(path, _plan("trace-a", "trace-b", "trace-c"))
+    assert [m["content"] for m in cut.messages] == ["hello"]
+    assert cut.unmatched == ("trace-b", "trace-c")
+
+
+def test_a_checkpoint_window_closes_at_the_next_turn_even_when_that_turn_is_marked(state, tmp_path, utc):
+    """The marked turn is claimed by its block, but it still ends the window of
+    the checkpoint before it: the stray block long after cannot be that turn."""
+    _write(
+        state,
+        _turn_at("trace-old", "2026-10-01T10:01:00+00:00", None, preview="go"),
+        _turn_at("trace-marked", "2026-10-01T10:02:00+00:00", "2026-10-01T10:02:30+00:00", preview="other"),
+        _turn_at("trace-late", "2026-10-01T10:30:00+00:00", "2026-10-01T10:31:00+00:00", preview="later"),
+    )
+    path = _session_file(
+        tmp_path,
+        [
+            _user("go", "2026-10-01T10:10:00"),
+            _assistant("not the old turn's", "2026-10-01T10:10:30"),
+            _user("other", "2026-10-01T10:02:00", trace_id="trace-marked"),
+        ],
+    )
+    cut = sel.cut_session_record(path, _plan("trace-old"))
+    assert cut.messages == () and cut.unmatched == ("trace-old",)
+
+
+def test_marked_blocks_bound_where_an_unmarked_block_may_land(state, tmp_path, utc):
+    _write(
+        state,
+        _turn_at("trace-a", "2026-10-01T10:01:00+00:00", "2026-10-01T10:05:00+00:00", preview="go"),
+        _turn_at("trace-m", "2026-10-01T10:02:00+00:00", "2026-10-01T10:02:30+00:00", preview="mid"),
+        _turn_at("trace-b", "2026-10-01T10:03:00+00:00", "2026-10-01T10:04:00+00:00", preview="go"),
+    )
+    path = _session_file(
+        tmp_path,
+        [_user("mid", "2026-10-01T10:02:00", trace_id="trace-m"), _user("go", "2026-10-01T10:03:00")],
+    )
+    cut = sel.cut_session_record(path, _plan("trace-a", "trace-b"))
+    assert [m["content"] for m in cut.messages] == ["go"]
+    assert cut.unmatched == ("trace-a",)
+
+
+def test_blocks_that_cannot_all_be_placed_claim_nothing(state, tmp_path, utc):
+    """Each block fits only a turn on the wrong side of the other: no order-
+    preserving assignment exists, so the premise is broken and nothing is claimed."""
+    _write(
+        state,
+        _turn_at("trace-a", "2026-10-01T10:01:00+00:00", "2026-10-01T10:01:30+00:00", preview="first"),
+        _turn_at("trace-b", "2026-10-01T10:02:00+00:00", "2026-10-01T10:02:30+00:00", preview="second"),
+    )
+    path = _session_file(tmp_path, [_user("second", "2026-10-01T10:02:00"), _user("first", "2026-10-01T10:01:00")])
+    cut = sel.cut_session_record(path, _plan("trace-a", "trace-b"))
+    assert cut.messages == () and cut.unmatched == ("trace-a", "trace-b")
+
+
+def test_a_broken_stretch_does_not_cost_the_stretch_after_a_mark(state, tmp_path, utc):
+    _write(
+        state,
+        _turn_at("trace-a", "2026-10-01T10:01:00+00:00", "2026-10-01T10:01:30+00:00", preview="first"),
+        _turn_at("trace-b", "2026-10-01T10:02:00+00:00", "2026-10-01T10:02:30+00:00", preview="second"),
+        _turn_at("trace-m", "2026-10-01T10:03:00+00:00", "2026-10-01T10:03:30+00:00", preview="mark"),
+        _turn_at("trace-c", "2026-10-01T10:04:00+00:00", "2026-10-01T10:04:30+00:00", preview="third"),
+    )
+    path = _session_file(
+        tmp_path,
+        [
+            _user("second", "2026-10-01T10:02:00"),
+            _user("first", "2026-10-01T10:01:00"),
+            _user("mark", "2026-10-01T10:03:00", trace_id="trace-m"),
+            _user("third", "2026-10-01T10:04:00"),
+        ],
+    )
+    cut = sel.cut_session_record(path, _plan("trace-a", "trace-c"))
+    assert [m["content"] for m in cut.messages] == ["third"]
+    assert cut.unmatched == ("trace-a",)
+
+
 def test_list_content_is_compared_by_its_text_parts(state, tmp_path, utc):
     _write(state, _turn("trace-a", minute=1, artifact=_input_artifact(state, "a", "look at this")))
     blocks = [{"type": "text", "text": "look at this"}, {"type": "image_url", "image_url": {"url": "x"}}]

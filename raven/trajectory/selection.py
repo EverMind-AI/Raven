@@ -17,8 +17,9 @@ The session record is cut to the same turns by :func:`cut_session_record`: the
 messages are split into blocks at each turn's opening user message, a block is
 matched to its trace through the Turn Trace Mark the agent loop stores on that
 message, and records written before the mark existed are matched by the turn's
-input text inside the turn's time window. A turn that cannot be matched keeps
-its trajectory only.
+input text inside the turn's time window -- but only where the record's order
+leaves a single possible turn. A turn that cannot be matched with certainty
+keeps its trajectory only.
 
 Nothing here has side effects: no pin, no attempt definition, no bundle.
 """
@@ -447,26 +448,92 @@ def _in_window(stamp: datetime | None, turn: TurnSummary, following: TurnSummary
     return upper is None or stamp <= upper + _WINDOW_SLACK
 
 
+def _forced(blocks: list[int], options: dict[int, set[int]], turns: list[int]) -> dict[int, int]:
+    """Block -> turn for the pairs every order-preserving assignment agrees on.
+
+    ``blocks`` and ``turns`` are both in record order; each block has to land
+    on a distinct turn later than the previous block's. ``prefix[i][j]`` says
+    the first ``i`` blocks fit into the first ``j`` turns, ``suffix[i][j]``
+    that the blocks from ``i`` on fit into the turns from ``j`` on; a pair is
+    possible when both halves around it fit. When no assignment fits at all
+    the premise is wrong (a block whose turn left no span), and nothing is
+    claimed.
+    """
+    n, m = len(blocks), len(turns)
+    fits = [[turns[j] in options[blocks[i]] for j in range(m)] for i in range(n)]
+    prefix = [[False] * (m + 1) for _ in range(n + 1)]
+    prefix[0] = [True] * (m + 1)
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            prefix[i][j] = prefix[i][j - 1] or (prefix[i - 1][j - 1] and fits[i - 1][j - 1])
+    suffix = [[False] * (m + 1) for _ in range(n + 1)]
+    suffix[n] = [True] * (m + 1)
+    for i in range(n - 1, -1, -1):
+        for j in range(m - 1, -1, -1):
+            suffix[i][j] = suffix[i][j + 1] or (fits[i][j] and suffix[i + 1][j + 1])
+    if not prefix[n][m]:
+        return {}
+    forced: dict[int, int] = {}
+    for i in range(n):
+        possible = [j for j in range(m) if fits[i][j] and prefix[i][j] and suffix[i + 1][j + 1]]
+        if len(possible) == 1:
+            forced[blocks[i]] = turns[possible[0]]
+    return forced
+
+
 def _match_unmarked(
-    blocks: list[list[dict[str, Any]]], candidates: list[TurnSummary], state_dir: Path
+    blocks: list[list[dict[str, Any]]], owner: dict[int, str], timeline: list[TurnSummary], state_dir: Path
 ) -> dict[int, str]:
-    """Block index -> trace id for blocks without a mark, by ordered greedy alignment."""
+    """Block index -> trace id for the unmarked blocks whose turn is certain.
+
+    Messages are appended in turn order, so the record's unmarked blocks map
+    onto distinct unclaimed turns in timeline order, and each marked block pins
+    where the stretch around it sits. A block may only be a turn whose input
+    matches its text and whose window holds its stamp; the window of a turn
+    left as a checkpoint closes at the next turn of the whole timeline, claimed
+    or not. Among the assignments that satisfy all of that, a block is given a
+    turn only when every one of them agrees: an undone turn whose words were
+    typed again stays ambiguous, and an ambiguous block keeps its trajectory
+    only rather than lending its messages to the wrong turn.
+    """
+    position = {turn.trace_id: index for index, turn in enumerate(timeline)}
+    claimed = set(owner.values())
+    anchors = sorted((index, position[trace_id]) for index, trace_id in owner.items() if trace_id in position)
+    turns = [index for index, turn in enumerate(timeline) if turn.trace_id not in claimed]
     inputs: dict[str, str | None] = {}
-    matched: dict[int, str] = {}
-    pointer = 0
-    for index, block in enumerate(blocks):
-        opener = block[0]
+    options: dict[int, set[int]] = {}
+    stretch: dict[int, tuple[int, int]] = {}
+    for index in range(len(blocks)):
+        if index in owner:
+            continue
+        low = max((at for block, at in anchors if block < index), default=-1)
+        high = min((at for block, at in anchors if block > index), default=len(timeline))
+        stretch[index] = (low, high)
+        opener = blocks[index][0]
         text = _text_of(opener.get("content"))
         stamp = _instant(opener.get("timestamp"))
-        for position in range(pointer, len(candidates)):
-            turn = candidates[position]
+        fitting: set[int] = set()
+        for at in turns:
+            if not low < at < high:
+                continue
+            turn = timeline[at]
+            following = timeline[at + 1] if at + 1 < len(timeline) else None
+            if not _in_window(stamp, turn, following):
+                continue
             if turn.trace_id not in inputs:
                 inputs[turn.trace_id] = _turn_input(turn, state_dir)
-            following = candidates[position + 1] if position + 1 < len(candidates) else None
-            if _same_input(turn, text, inputs[turn.trace_id]) and _in_window(stamp, turn, following):
-                matched[index] = turn.trace_id
-                pointer = position + 1
-                break
+            if _same_input(turn, text, inputs[turn.trace_id]):
+                fitting.add(at)
+        if fitting:
+            options[index] = fitting
+    # Marked blocks cut the record into stretches that cannot share a turn, so
+    # each is solved on its own and one inconsistent stretch costs only itself.
+    matched: dict[int, str] = {}
+    for low, high in sorted({stretch[index] for index in options}):
+        members = sorted(index for index in options if stretch[index] == (low, high))
+        within = [at for at in turns if low < at < high]
+        for index, at in _forced(members, options, within).items():
+            matched[index] = timeline[at].trace_id
     return matched
 
 
@@ -478,21 +545,12 @@ def cut_session_record(session_path: Path, plan: SelectionPlan, *, state_dir: Pa
     metadata, messages = read
     blocks = _blocks(messages)
     owner: dict[int, str] = {}
-    unmarked: list[int] = []
     for index, block in enumerate(blocks):
         mark = block[0].get(TURN_TRACE_KEY)
         if isinstance(mark, str) and mark:
             owner[index] = mark
-        else:
-            unmarked.append(index)
-    claimed = set(owner.values())
-    candidates = sorted(
-        (turn for turn in plan.session_turns if turn.trace_id not in claimed),
-        key=lambda turn: (turn.start, turn.span_id),
-    )
-    matched = _match_unmarked([blocks[index] for index in unmarked], candidates, _state(state_dir))
-    for position, trace_id in matched.items():
-        owner[unmarked[position]] = trace_id
+    timeline = sorted(plan.session_turns, key=lambda turn: (turn.start, turn.span_id))
+    owner.update(_match_unmarked(blocks, owner, timeline, _state(state_dir)))
     closure = plan.closure
     kept: list[dict[str, Any]] = []
     for index, block in enumerate(blocks):

@@ -2000,7 +2000,8 @@ The `trace_id` stored on a turn's opening user message while tracing is on, nami
 the trace of that turn's `session.turn` span. Cutting a session record down to
 selected turns uses it to find each turn's messages; messages written before the
 mark existed are matched by the turn's input text inside the turn's time window,
-and a turn that matches nothing keeps its trajectory only. The mark never reaches
+only where the record's order leaves one possible turn, and a turn that cannot be
+matched with certainty keeps its trajectory only. The mark never reaches
 a model request (history is read through field whitelists).
 
 **Attempt Definition** (`raven/trajectory/store.py`):
