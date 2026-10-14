@@ -5,6 +5,7 @@
 
 import { t } from '../../i18n/t'
 import { size } from './ExportPage'
+import { ReportLost } from './ReportLost'
 import * as store from './store'
 
 import type { ExportState } from './store'
@@ -66,12 +67,7 @@ export function UploadPage({ s }: { s: ExportState }): JSX.Element {
       {status?.record_dir && phase !== 'uploaded' ? (
         <p className="export-hint">{t('gui.export.kept_local', { dir: status.record_dir, id })}</p>
       ) : null}
-      {s.report?.lost ? (
-        <p className="export-lost" role="status">
-          <span>{t('gui.export.lost', { error: s.report.lost })}</span>
-          <button type="button" className="export-btn export-ghost" onClick={store.requery}>{t('gui.export.retry_status')}</button>
-        </p>
-      ) : null}
+      <ReportLost s={s} />
     </div>
   )
 }

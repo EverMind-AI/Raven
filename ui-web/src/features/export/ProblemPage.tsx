@@ -7,6 +7,7 @@
    failed or was cancelled elsewhere says why here, and can be filed again. */
 
 import { t } from '../../i18n/t'
+import { ReportLost } from './ReportLost'
 import * as store from './store'
 
 import type { ExportState } from './store'
@@ -90,12 +91,7 @@ export function ProblemPage({ s }: { s: ExportState }): JSX.Element {
       {s.reportStarting || status?.phase === 'collecting' ? (
         <p className="export-state"><span className="export-spin" aria-hidden="true" />{t('gui.export.collecting')}</p>
       ) : null}
-      {s.report?.lost ? (
-        <p className="export-lost" role="status">
-          <span>{t('gui.export.lost', { error: s.report.lost })}</span>
-          <button type="button" className="export-btn export-ghost" onClick={store.requery}>{t('gui.export.retry_status')}</button>
-        </p>
-      ) : null}
+      <ReportLost s={s} />
       {ended ? (
         <p className="export-state" data-bad="true">
           {status?.phase === 'cancelled'

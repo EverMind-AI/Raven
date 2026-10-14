@@ -11,6 +11,19 @@ import * as store from './store'
 
 import type { ExportSource, ExportTurn, ReportContexts, ReportItem, ReportStatus } from './types'
 
+interface Deferred<T> {
+  promise: Promise<T>
+  resolve: (value: T) => void
+  reject: (err: unknown) => void
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void
+  let reject!: (err: unknown) => void
+  const promise = new Promise<T>((ok, no) => { resolve = ok; reject = no })
+  return { promise, resolve, reject }
+}
+
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const turn = (n: number): ExportTurn => ({
@@ -25,6 +38,8 @@ let items: ReportItem[]
 let history: ReportStatus['history']
 let contexts: Record<string, ReportContexts>
 let decide: () => Promise<{ ok: boolean }>
+let decided: number
+let answer: () => Promise<ReportStatus>
 
 const deciding = (): ReportStatus => ({
   report_id: 'rs-1', bug_report_id: 'br-1', phase: 'deciding', error: null, history, items, summary: null, receipt: null, record_dir: null,
@@ -36,9 +51,9 @@ const src: ExportSource = {
   status: () => Promise.reject(new Error('not scripted')),
   cancel: async () => ({ ok: true }),
   reportStart: async () => ({ report_id: 'rs-1' }),
-  reportStatus: async () => deciding(),
+  reportStatus: () => answer(),
   reportItem: async (_id, itemId) => contexts[itemId] ?? { groups: [], total_groups: 0 },
-  reportDecide: () => decide(),
+  reportDecide: () => { decided += 1; return decide() },
   reportUpload: () => Promise.reject(new Error('not scripted')),
   reportRetry: () => Promise.reject(new Error('not scripted')),
   reportCancel: async () => ({ ok: true }),
@@ -79,6 +94,8 @@ beforeEach(() => {
     },
   }
   decide = async () => ({ ok: true })
+  decided = 0
+  answer = async () => deciding()
   setSources({ export: src })
   setTranslator((key, vars) => (vars ? `${key}:${JSON.stringify(vars)}` : key))
 })
@@ -171,5 +188,41 @@ describe('the decisions page', () => {
     tap(button('gui.export.next_page'))
     expect(rows().map((row) => row.querySelector('.nm')!.textContent)).toEqual(['s200...masked'])
     expect(button('gui.export.next_page').disabled).toBe(true)
+  })
+
+  it('says the status could not be read after a decision, and asks again on request without deciding again', async () => {
+    await atDecisions()
+    tap(rows()[0]!.querySelector('.export-ack input')!)
+    answer = () => Promise.reject(new RpcError(-1, 'connection closed'))
+    tap($('.export-primary'))
+    await settle()
+    expect($('.export-lost').textContent).toContain('gui.export.lost:{"error":"connection closed"}')
+    expect($('.export-primary').textContent).toBe('gui.export.applying')
+    expect($('.export-primary').hasAttribute('disabled')).toBe(true)
+    tap($('.export-primary'))
+    const ready = deferred<ReportStatus>()
+    answer = () => ready.promise
+    tap(button('gui.export.retry_status'))
+    ready.resolve({ ...deciding(), phase: 'ready', items: null,
+      summary: { classification: 'clean', warnings: [], size_bytes: null, auto_replaced: 0, kept: 3, redacted: 0, acknowledged: 1, completeness: 'complete' } })
+    await settle()
+    expect(store.get().page).toBe('upload')
+    expect(document.querySelector('.export-lost')).toBeNull()
+    expect(decided).toBe(1)
+  })
+
+  it('writes nothing from a status that lands after the wizard closed', async () => {
+    await atDecisions()
+    tap(rows()[0]!.querySelector('.export-ack input')!)
+    const late = deferred<ReportStatus>()
+    answer = () => late.promise
+    tap($('.export-primary'))
+    await settle()
+    act(() => { store.close() })
+    late.resolve({ ...deciding(), phase: 'ready', items: null })
+    await settle(10_000)
+    expect(store.get().open).toBe(false)
+    expect(store.get().report).toBeNull()
+    expect(decided).toBe(1)
   })
 })

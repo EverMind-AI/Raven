@@ -12,6 +12,7 @@
 
 import { TwoPane, TwoPaneHead, TwoPaneList, TwoPaneRow, TwoPaneWait } from '../../components/TwoPane'
 import { t } from '../../i18n/t'
+import { ReportLost } from './ReportLost'
 import { segments } from './spans'
 import * as store from './store'
 
@@ -119,6 +120,7 @@ export function DecidePage({ s }: { s: ExportState }): JSX.Element {
   return (
     <div className="export-decide">
       <History s={s} />
+      <ReportLost s={s} />
       <div className="export-tools">
         <button type="button" className="export-btn export-ghost" disabled={locked} onClick={() => store.choose('kept', 'all')}>
           {t('gui.export.keep_all')}
