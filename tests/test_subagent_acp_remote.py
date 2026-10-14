@@ -248,7 +248,7 @@ async def test_a_dispatch_runs_on_the_machine_in_a_directory_made_there_and_says
     there = box.home / "raven-work" / "reviewer"
     assert there.is_dir(), "the session directory is made on the machine"
     assert "[raven] Ran on machine 'Lab box' (box), in " in reply
-    # Shown the way scp writes it, which the file tools read back as it is.
+    # Shown the way scp writes it.
     assert f"in scp://worker@{HOST}:{PORT}//{str(there.resolve()).lstrip('/')};" in reply
     where = reply.split("in scp://", 1)[1].split(";", 1)[0]
     assert where.split("@", 1)[1].split(":", 1)[0] == HOST, "the address a model reads is the registry's, never the id"

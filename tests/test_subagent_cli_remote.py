@@ -15,6 +15,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -64,7 +65,10 @@ if mode == "silent":
 if "-N" not in args or "-L" not in args:
     sys.stderr.write("this stand-in only forwards\\n")
     sys.exit(2)
-bind_host, bind_port, far_host, far_port = args[args.index("-L") + 1].rsplit(":", 3)
+# The forward as ssh reads it: a bracketed IPv6 far host keeps its own colons.
+bind_host, bind_port, far = args[args.index("-L") + 1].split(":", 2)
+far_host, far_port = far.rsplit(":", 1)
+far_host = far_host.strip("[]")
 listener = socket.socket()
 listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 listener.bind((bind_host, int(bind_port)))
@@ -333,6 +337,21 @@ async def test_the_files_that_came_with_the_task_are_named_by_address_and_not_co
     assert not (box.home / "raven-work" / "counter" / "sales.csv").exists()
 
 
+async def test_the_command_is_split_the_way_the_machine_s_shell_reads_it_whatever_this_computer_s_is(
+    box, tmp_path, monkeypatch
+):
+    """From a Windows host, ``sh -c 'echo one; cat'`` reaches the machine as the three words its shell reads."""
+    from raven.utils import commands
+
+    cfg = cli_config("sh -c 'echo one; cat'")
+    # This computer as Windows, for the splitter alone: ``command_argv`` reads ``os.name`` from its own module.
+    monkeypatch.setattr(commands, "os", SimpleNamespace(**{**vars(os), "name": "nt"}))
+
+    head, _ = _split(await _run(cfg, "two", tmp_path))
+
+    assert head.strip() == "one\ntwo"
+
+
 async def test_mcp_servers_are_not_lent_to_a_cli_agent_on_a_machine_and_the_reply_says_why(box, tmp_path):
     cfg = cli_config("cat {mcp_file}", mcps=["pg"])
     grant = McpGrant(granted=(GrantedServer("pg", "stdio", MCPServerConfig(command="/bin/true")),))
@@ -434,8 +453,8 @@ async def test_a_failed_ping_of_a_cli_row_says_the_fix_is_made_on_the_machine(bo
 # ---- an openai agent reached from the machine -------------------------------------------
 
 
-async def _chat_completions_stub() -> tuple[Any, int, list[tuple[list[str], dict[str, Any]]]]:
-    """An endpoint on this computer's loopback: the far end of the stand-in tunnel."""
+async def _chat_completions_stub(host: str = "127.0.0.1") -> tuple[Any, int, list[tuple[list[str], dict[str, Any]]]]:
+    """An endpoint on this computer's loopback, at ``host``: the far end of the stand-in tunnel."""
     seen: list[tuple[list[str], dict[str, Any]]] = []
 
     async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -459,7 +478,7 @@ async def _chat_completions_stub() -> tuple[Any, int, list[tuple[list[str], dict
         await writer.drain()
         writer.close()
 
-    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    server = await asyncio.start_server(handle, host, 0)
     return server, server.sockets[0].getsockname()[1], seen
 
 
@@ -485,6 +504,52 @@ async def test_an_openai_row_on_a_machine_is_reached_through_a_tunnel_from_it(fo
     assert forward.startswith("127.0.0.1:") and forward.endswith(f":localhost:{port}")
     pid = int((forwarding.bin / "tunnel.pid").read_text(encoding="utf-8"))
     await _until(lambda: _gone(pid))  # the tunnel ends with the turn
+
+
+async def test_the_files_that_came_with_an_openai_row_s_task_are_named_by_address_and_not_copied(forwarding, tmp_path):
+    """The openai lane says of the files what the acp and cli lanes say: their addresses here, nothing carried."""
+    server, port, seen = await _chat_completions_stub()
+    data = tmp_path / "sales.csv"
+    data.write_text("day,amount\n1,3\n", encoding="utf-8")
+    media = (Media(path=str(data), mime="text/csv", kind="file"),)
+    try:
+        reply = await _run(http_config(f"http://localhost:{port}/v1"), "count the rows", tmp_path, media=media)
+    finally:
+        server.close()
+        await server.wait_closed()
+
+    assert reply == "pong through the tunnel"
+    sent = seen[-1][1]["messages"][-1]["content"]
+    assert sent.startswith("count the rows\n\nFiles that came with this task, by their address on the computer")
+    assert "Nothing was copied here" in sent and f"- {data}" in sent
+    assert "[attachments, by absolute path]" not in sent, "not the local note, whose paths mean nothing there"
+
+
+async def test_an_ipv6_endpoint_is_forwarded_to_with_its_address_bracketed_as_ssh_reads_it(forwarding, tmp_path):
+    """``http://[::1]:8000/v1`` asks for ``-L 127.0.0.1:<port>:[::1]:8000``; bare, ssh refuses the forward."""
+    forwarding.mode("unreachable")
+
+    with pytest.raises(RuntimeError, match="did not answer within the connection timeout"):
+        await _run(http_config("http://[::1]:8000/v1"), "hi", tmp_path)
+
+    (argv,) = forwarding.calls()
+    forward = argv[argv.index("-L") + 1]
+    assert forward.startswith("127.0.0.1:") and forward.endswith(":[::1]:8000"), forward
+
+
+async def test_an_endpoint_on_the_machine_s_ipv6_loopback_answers_through_the_tunnel(forwarding, tmp_path):
+    try:
+        server, port, seen = await _chat_completions_stub(host="::1")
+    except OSError:
+        pytest.skip("this computer has no IPv6 loopback")
+    try:
+        reply = await _run(http_config(f"http://[::1]:{port}/v1"), "hi", tmp_path)
+    finally:
+        server.close()
+        await server.wait_closed()
+
+    assert reply == "pong through the tunnel"
+    assert any(h.lower() == f"host: [::1]:{port}" for h in seen[-1][0]), "the name the server knows itself by"
 
 
 async def test_the_free_probe_of_an_openai_row_asks_no_network_and_a_test_asks_through_the_tunnel(forwarding, tmp_path):

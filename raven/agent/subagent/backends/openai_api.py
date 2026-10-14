@@ -13,7 +13,10 @@ An entry that names a ``machine`` is posted to through that registered
 machine: each turn opens an ssh tunnel to it (:func:`raven.acp_client.remote.tunnel`)
 and the request goes to ``base_url`` as the machine resolves it, for an
 endpoint that answers only on that machine's network, or only on the machine
-itself. The tunnel ends with the turn.
+itself. The tunnel ends with the turn. The files that came with the task
+are named to such an entry by their address on this computer, nothing
+being copied to the machine, as the acp and cli lanes to a machine say it
+(:func:`raven.acp_client.remote.files_note`).
 """
 
 from __future__ import annotations
@@ -36,7 +39,25 @@ from raven.agent.subagent.openai_steps import OpenAIStepReader
 from raven.spine.message import Media
 
 if TYPE_CHECKING:
+    from raven.acp_client.remote import Machine
     from raven.contracts.llm_provider import LLMProvider
+
+
+def _with_files(task: str, media: Sequence[Media], target: Machine | None) -> str:
+    """The task with the files that came with it named at the end, the way the entry's reader can use them.
+
+    From this computer, by absolute path (``with_attachment_note``). On a
+    machine, by their address on this computer and with the word that nothing
+    was copied there (``remote.files_note``), as the acp and cli lanes to a
+    machine say it: the endpoint answers from the machine, where a path of
+    this computer's names nothing unless the disk is shared.
+    """
+    if target is None:
+        return with_attachment_note(task, media)
+    from raven.acp_client import remote
+
+    note = remote.files_note(media, target)
+    return f"{task}\n\n{note}" if note else task
 
 
 class OpenAIApiBackend:
@@ -69,24 +90,37 @@ class OpenAIApiBackend:
         # The registered machine the endpoint is reached from, or None for this computer.
         self.machine = (machine or "").strip() or None
 
+    async def _placed(self) -> Machine | None:
+        """The entry's machine, as the registry has it; ``None`` for an entry posted to from this computer."""
+        if not self.machine:
+            return None
+        from raven.acp_client import remote
+
+        try:
+            return await asyncio.to_thread(remote.machine, self.machine)
+        except remote.RemoteMachineError as exc:
+            raise RuntimeError(f"OpenAI-API agent {self.name!r}: {exc}") from None
+
     @contextlib.asynccontextmanager
-    async def _reached(self, url: str, headers: dict[str, str]) -> AsyncIterator[tuple[str, dict[str, str]]]:
+    async def _reached(
+        self, url: str, headers: dict[str, str], target: Machine | None
+    ) -> AsyncIterator[tuple[str, dict[str, str]]]:
         """``url`` and ``headers`` as this turn posts them.
 
-        As they are from this computer; through a tunnel from the entry's
-        machine otherwise, opened for this turn and closed after it. The
-        request then arrives at a port on this computer's loopback: ``Host``
-        carries the name the server knows itself by, and the proxy variables
-        of this computer's environment are not read for it (``_post_chat``),
-        since a proxy would take a loopback address somewhere else.
+        As they are from this computer, for no ``target``; through a tunnel
+        from the entry's machine otherwise, opened for this turn and closed
+        after it. The request then arrives at a port on this computer's
+        loopback: ``Host`` carries the name the server knows itself by, and
+        the proxy variables of this computer's environment are not read for
+        it (``_post_chat``), since a proxy would take a loopback address
+        somewhere else.
         """
-        if not self.machine:
+        if target is None:
             yield url, headers
             return
         from raven.acp_client import remote
 
         try:
-            target = await asyncio.to_thread(remote.machine, self.machine)
             log = await asyncio.to_thread(remote.ssh_log_path, f"{self.name}-tunnel")
         except remote.RemoteMachineError as exc:
             raise RuntimeError(f"OpenAI-API agent {self.name!r}: {exc}") from None
@@ -257,7 +291,8 @@ class OpenAIApiBackend:
         messages: list[dict[str, Any]] = list(history) if history else []
         if not messages and self.system_prompt:
             messages.append({"role": "system", "content": self.system_prompt})
-        messages.append({"role": "user", "content": with_attachment_note(task, media)})
+        target = await self._placed()
+        messages.append({"role": "user", "content": _with_files(task, media, target)})
         # Always explicit, never omitted: a provider whose default is SSE
         # (mirothinker) answers an omitted `stream` with text/event-stream, which
         # `resp.json()` cannot read. A spawn asks for false and keeps the single
@@ -284,7 +319,7 @@ class OpenAIApiBackend:
         client_timeout = aiohttp.ClientTimeout(total=self.timeout, connect=30)
 
         reader = OpenAIStepReader()
-        async with self._reached(url, headers) as (url, headers):
+        async with self._reached(url, headers, target) as (url, headers):
             if on_delta is not None:
                 content: Any = await self._stream_chat(
                     url,
