@@ -398,7 +398,10 @@ async def tunnel(
         raise RemoteMachineError(f"machine {target.label}: the endpoint's URL names no host to reach from it")
     host, port, key, user = _target(target)
     local = _free_port()
-    forward = f"127.0.0.1:{local}:{parts.hostname}:{parts.port or 80}"
+    # An IPv6 address is bracketed in the forward as it is in the URL, which
+    # ``hostname`` gives bare; ssh refuses the bare one.
+    far = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
+    forward = f"127.0.0.1:{local}:{far}:{parts.port or 80}"
     extra = TUNNEL + ("-L", forward, "-E", os.fspath(ssh_log))
     argv = ssh_argv(host, port, key, user=user, connect_timeout=connect_timeout, extra=extra)
     try:

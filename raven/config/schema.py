@@ -1798,11 +1798,14 @@ class ThirdPartyOpenAISubagentConfig(Base):
     Set, each turn opens an ssh tunnel to that machine and closes it after: a
     port on this computer's loopback forwarded to ``baseUrl``'s host and port
     as the machine resolves them, for an endpoint that answers only on that
-    machine's network, or only on the machine itself (``http://127.0.0.1:...``).
-    ``baseUrl`` has to be ``http``: the tunnel ends at this computer's
-    loopback, which an ``https`` certificate would not name. The address, port
-    and key the registry holds are read for the tunnel alone and written
-    nowhere here. Debug-only as for the other kinds: unless raven was started
+    machine's network, or only on the machine itself (``http://127.0.0.1:...``,
+    or ``http://[::1]:...``). ``baseUrl`` has to be ``http``: the tunnel ends
+    at this computer's loopback, which an ``https`` certificate would not
+    name. The files that come with a task are named to the endpoint by their
+    address on this computer and not copied, as to the other kinds on a
+    machine. The address, port and key the registry holds are read for the
+    tunnel alone and written nowhere here. Debug-only as for the other kinds:
+    unless raven was started
     with ``RAVEN_DEBUG_MACHINES=1``, the entry is left off the table and no
     machine is reached for it. There is no ``remoteCwd``: an endpoint has no
     working directory on the machine, and one written here is dropped with a

@@ -292,10 +292,20 @@ class CliAgentBackend:
         prompt_file: str,
         agent_id: str | None,
         mcp_file: str | None = None,
+        *,
+        split: Callable[[str], list[str]] = command_argv,
     ) -> tuple[list[str], bool]:
+        """The argv of one launch: ``template`` split by ``split``, its placeholders filled in.
+
+        ``split`` reads this computer's grammar by default (``command_argv``:
+        POSIX here, CommandLineToArgvW on Windows), right for a process
+        started here. A launch on a machine passes the machine's instead: its
+        node runs the command under a POSIX shell, so ``shlex.split`` reads
+        the template the way that shell will, whatever this computer is.
+        """
         argv: list[str] = []
         used_placeholder = False
-        for tok in command_argv(template):
+        for tok in split(template):
             if agent_id is not None:
                 tok = tok.replace("{agent_id}", agent_id)
             if mcp_file is not None:
@@ -603,7 +613,9 @@ class CliAgentBackend:
     ) -> tuple[str, str]:
         """One invocation on the entry's machine, through its node: the same argv, run and read there.
 
-        What differs from :meth:`_exec` is where each piece lives. The prompt
+        What differs from :meth:`_exec` is where each piece lives, and whose
+        grammar splits the command -- the machine's POSIX shell's, not this
+        computer's. The prompt
         file is written into the run's directory on the machine, under its
         ``.raven/``, since a path here means nothing there; stdin travels on
         the link and is closed after it -- for every command, not only one
@@ -637,7 +649,10 @@ class CliAgentBackend:
                 await placed.link.write_file(placed.target.id, mcp_there, empty, roots=[cwd])
         except remote_path.NodeCallError as exc:
             raise RuntimeError(f"CLI agent {self.name!r}: {exc}") from None
-        argv, used_placeholder = self._build_argv(template, task, prompt_path, agent_id, mcp_there)
+        # Split for the machine's shell, not this computer's: the node runs
+        # the command under a POSIX shell, and a Windows host's own splitter
+        # would hand it ``sh -c 'a; b'`` as the words ``'a;`` and ``b'``.
+        argv, used_placeholder = self._build_argv(template, task, prompt_path, agent_id, mcp_there, split=shlex.split)
         env = {**subagent_role_env(), **self.env}
         logger.info("Subagent [{}] CLI agent {!r} on machine {}: {}", task_id, self.name, placed.target.id, argv[:1])
         try:
