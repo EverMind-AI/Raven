@@ -176,7 +176,8 @@ class ChannelEndpoint:
         """How many of the agent's frames reached here: where an attach goes on from."""
         self.watchers: list[Callable[[int], None]] = []
         """Told, after each frame the connection has dealt with, how many it has read: what a record of the
-        run keeps, so a process that comes after this one attaches from there (:mod:`raven.acp_client.remote_runs`)."""
+        run keeps until its prompt is out, so a process that comes after this one attaches from there and reads
+        the turn whole (:mod:`raven.acp_client.remote_runs`)."""
         self._handing = 0
         self._frames: asyncio.Queue[tuple[int, bytes] | None] = asyncio.Queue()
         self._stderr: asyncio.Queue[bytes | None] = asyncio.Queue()

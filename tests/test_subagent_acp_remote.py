@@ -661,6 +661,49 @@ async def test_a_stop_that_lands_under_a_pick_up_leaves_the_run_for_the_start_af
     assert remote_runs.pending() == [] and _agent_pid() == agent
 
 
+async def test_a_reply_the_caller_reports_keeps_its_record_and_a_host_that_stops_before_the_announce_reads_it_again(
+    box, tmp_path, monkeypatch
+):
+    """The manager announces the reply after the backend returns it: the record stays until then, at the prompt, so the next start replays the turn whole."""
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    backend = build_third_party_backend(remote_config())
+    await backend.run("hi", task_id="t0", workspace=tmp_path, executor=None, session_key="tui:s1")
+    assert remote_runs.pending() == [], "a caller that takes the reply as its own result leaves no record"
+
+    reply = await backend.run(
+        "hi", task_id="t1", workspace=tmp_path, executor=None, session_key="tui:s1", reported_by_caller=True
+    )
+
+    assert reply.split("\n\n[raven]")[0] == "pong"
+    agent = _agent_pid()
+    (run,) = remote_runs.pending()
+    assert run.task_id == "t1" and run.prompt_id > 0, "the record outlives the reply, for the manager to forget"
+    (connection,) = get_pool().connections(backend.name)
+    assert run.received < connection.client.endpoint.received, (
+        "and it stayed at the prompt: the turn is read again whole"
+    )
+
+    # This computer stops between the reply and its announce.
+    remote.leave_agents_running()
+    try:
+        await close_pool()
+        await box.nodes.close_all()
+    finally:
+        remote.staying()
+    assert _alive(agent)
+    session_dir = tmp_path / "sessions" / "s1"
+    meta = {"call_id": "n1", "session_key": "tui:s1", "agent": backend.name, "handle": "t1", "task_summary": "say hi"}
+    SpawnRecord.open(session_dir, task_id="t1", task="hi", meta=meta, node_id="n1")
+    manager = _Manager(backend, session_dir)
+    monkeypatch.setattr(resume_remote, "get_registry", lambda: _Registry())
+
+    assert await asyncio.wait_for(resume_remote.resume_remote_runs(manager), timeout=30) == 1
+
+    (said,) = manager.announced
+    assert said["status"] == "ok" and said["result"].split("\n\n[raven]")[0] == "pong", "the whole reply, read again"
+    assert remote_runs.pending() == [] and _agent_pid() == agent
+
+
 async def test_the_pool_closed_before_the_links_leaves_no_agent_and_the_daemon_goes_idle(box, tmp_path):
     """What the fixture's teardown relies on: ended through its link, the agent goes, and the daemon leaves on its own."""
     backend = build_third_party_backend(remote_config())

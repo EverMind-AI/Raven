@@ -1536,6 +1536,11 @@ class AcpAgentBackend:
         authored_task: str | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
         media: Sequence[Media] = (),
+        # Whether the caller reports the reply itself (the manager's announce)
+        # and removes the run's record on its machine then
+        # (`remote_runs.forget_dispatch`); otherwise the record goes as this
+        # returns, as for a caller that takes the reply as its own result.
+        reported_by_caller: bool = False,
     ) -> str:
         # The parent binding is forwarded when the pooled ACP worker launches.
         # Without this, a long-lived worker keeps the provider/model captured
@@ -1717,6 +1722,7 @@ class AcpAgentBackend:
                     connection.responders.attach(session_id, responder)
                     if self.can_steer or steer_offered(connection.initialize):
                         activity.offer_steer(collector._run, self._steerer(client, session_id))
+                    answered = False
                     try:
                         result = await client.request(
                             "session/prompt",
@@ -1738,6 +1744,7 @@ class AcpAgentBackend:
                             cancel_session=session_id,
                             sent=tracker.prompt_sent if tracker is not None else None,
                         )
+                        answered = True
                     except asyncio.CancelledError:
                         if tracker is not None and remote.leaving():
                             # This process is stopping: the turn goes on under
@@ -1776,7 +1783,13 @@ class AcpAgentBackend:
                         raise
                     finally:
                         if tracker is not None:
-                            self._untrack(client, tracker, keep=remote.leaving())
+                            # The record goes with a turn that ended here with no
+                            # reply. It stays while this process leaves the turn
+                            # running, and with the reply for a caller that reports
+                            # it (`remote_runs.forget_dispatch`): a host that stops
+                            # between the answer and the announce has no other way
+                            # back to the run.
+                            self._untrack(client, tracker, keep=remote.leaving() or (answered and reported_by_caller))
                         activity.offer_steer(collector._run, None)
                         connection.router.detach(session_id, collector)
                         connection.elicitors.detach(session_id, elicitor)
@@ -1915,7 +1928,7 @@ class AcpAgentBackend:
         task_id: str,
         session_cwd: str,
     ) -> remote_runs.Tracker | None:
-        """The record of this turn on its machine, kept current as the agent's frames arrive."""
+        """The record of this turn on its machine, kept current until the prompt is out (``remote_runs.Tracker``)."""
         endpoint = client.endpoint
         task = getattr(endpoint, "task", None)
         watchers = getattr(endpoint, "watchers", None)

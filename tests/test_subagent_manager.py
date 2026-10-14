@@ -1256,6 +1256,69 @@ def _spawn_origin(agent: str | None, instance: str | None) -> dict[str, Any]:
     }
 
 
+async def test_a_run_s_record_on_its_machine_goes_once_its_announce_was_taken_and_stays_when_it_was_refused(
+    monkeypatch, tmp_path
+) -> None:
+    """The backend leaves the run's record with the reply (`reported_by_caller`); the manager forgets it after the
+    announce, or, when the draining scheduler refused the announce, keeps it with what the next start's announce needs."""
+    from raven.acp_client import remote_runs
+
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    told: list[bool] = []
+
+    class _OnMachine:
+        streams = False
+
+        async def run(self, task: str, *, task_id: str, reported_by_caller: bool = False, **_: Any) -> str:
+            told.append(reported_by_caller)
+            remote_runs.record(
+                remote_runs.RemoteRun(
+                    machine="box",
+                    task=f"stub@box-{task_id}",
+                    agent="stub@box",
+                    session_key="tui:s1",
+                    handle=task_id,
+                    task_id=task_id,
+                    session_id="s",
+                    prompt_id=3,
+                    next_id=4,
+                    initialize={},
+                    launch_key="k",
+                    config_key="c",
+                    session_cwd="/w",
+                    stateful=False,
+                )
+            )
+            return "what it found"
+
+    manager = SubagentManager(provider=_StubProvider(), workspace=tmp_path)
+    monkeypatch.setattr(manager, "_resolve_backend", lambda agent: _OnMachine())
+    taken = True
+
+    async def _announce(*_a: Any, **_k: Any) -> bool:
+        return taken
+
+    monkeypatch.setattr(manager, "_announce_result", _announce)
+    origin = {"channel": "tui", "chat_id": "s1", "session_key": "tui:s1", "agent": "stub@box"}
+
+    await manager._run_subagent_inner(
+        "t1", "find it", "find", dict(origin), _DummyExecutor(), manager.provider, manager.model
+    )
+
+    assert told == [True], "the backend is told the reply is reported here"
+    assert remote_runs.pending() == [], "announced: the record is gone"
+
+    taken = False
+    await manager._run_subagent_inner(
+        "t2", "find it", "find", dict(origin), _DummyExecutor(), manager.provider, manager.model
+    )
+
+    (kept,) = remote_runs.pending()
+    assert (kept.task_id, kept.task_summary, kept.origin["session_key"]) == ("t2", "find", "tui:s1"), (
+        "refused: kept for the next start, with what its announce needs"
+    )
+
+
 async def test_announcement_carries_the_instance_handle() -> None:
     mgr = _make_manager(max_concurrent=1)
     submitted: list[Any] = []
