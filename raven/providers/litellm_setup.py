@@ -97,15 +97,17 @@ RAVEN_MODEL_ROWS: dict[str, dict] = {
 
 
 def _drop_unread_tokenizer_copies() -> None:
-    """Free two tokenizer copies litellm's import leaves resident that nothing reads.
+    """Free two tokenizer copies litellm's import leaves resident and nothing it runs reads.
 
     ``litellm.utils`` loads Anthropic's tokenizer JSON into ``json_data`` and keeps
     it after dumping it to ``claude_json_str``, which is what its Claude tokenizer
     is built from. The cl100k encoding litellm loads at import, which raven's own
     estimator shares through tiktoken's registry, keeps a Python copy of its ranks
-    beside the one its core encodes with; only pickling an encoding outside the
-    registry reads that copy, since a registered one pickles by name. Together
-    about 25 MiB.
+    beside the one its core encodes with; tiktoken itself reads that copy only to
+    pickle an encoding outside the registry, since a registered one pickles by
+    name. Code that reads the private copy off the registered encoding, as
+    tiktoken's README does to extend one, gets an AttributeError after this.
+    Together about 25 MiB.
     """
     utils = sys.modules.get("litellm.utils")
     if isinstance(getattr(utils, "json_data", None), dict) and isinstance(getattr(utils, "claude_json_str", None), str):

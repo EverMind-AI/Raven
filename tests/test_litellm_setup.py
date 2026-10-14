@@ -263,7 +263,7 @@ def test_a_second_caller_during_the_import_does_not_leave_the_levels_raised(monk
 _TEXT = "malloc_trim returns freed arenas"
 
 
-def test_import_litellm_frees_the_tokenizer_copies_nothing_reads() -> None:
+def test_import_litellm_frees_both_tokenizer_copies() -> None:
     import litellm.utils
     import tiktoken
 
@@ -276,6 +276,30 @@ def test_import_litellm_frees_the_tokenizer_copies_nothing_reads() -> None:
     # release that moved them would leave the line above passing with nothing freed.
     unregistered = tiktoken.Encoding(name="unregistered", pat_str=r"\S+", mergeable_ranks={b"a": 0}, special_tokens={})
     assert "_mergeable_ranks" in vars(unregistered)
+
+
+@pytest.mark.slow
+def test_litellm_s_own_import_registers_the_encoding_whose_ranks_it_frees(tmp_path) -> None:
+    """The ranks are freed only if cl100k is registered by the time the import
+    returns, and litellm's import does that today only through its token counter.
+    In this process an earlier test may have registered it first, so the import is
+    checked alone, in a fresh interpreter."""
+    import subprocess
+
+    probe = (
+        "import tiktoken.registry as registry\n"
+        "from raven.providers.litellm_setup import import_litellm\n"
+        "import_litellm()\n"
+        "encoding = registry.ENCODINGS.get('cl100k_base')\n"
+        "print('registered by the import:', encoding is not None)\n"
+        "print('ranks left:', encoding is not None and '_mergeable_ranks' in vars(encoding))\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-P", "-c", probe], cwd=tmp_path, capture_output=True, text=True, timeout=120
+    )
+
+    assert "registered by the import: True" in done.stdout, done.stdout + done.stderr
+    assert "ranks left: False" in done.stdout, done.stdout + done.stderr
 
 
 def test_every_tokenizer_counts_the_same_without_them() -> None:
