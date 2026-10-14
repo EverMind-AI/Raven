@@ -560,8 +560,9 @@ async def session_close(
     """``session.close`` — flush any unpersisted messages for the given session.
 
     With per-turn saves the session is normally already fully persisted.
-    This handler handles the edge case where a message was added after the
-    last save. An absent or unknown ``session_id`` param is silently ignored.
+    This handler handles the edge cases: a message added after the last save,
+    or a cut (``session.clear``, ``session.undo``) whose own save failed. An
+    absent or unknown ``session_id`` param is silently ignored.
     """
     session_key = params.get("session_id")
     if not session_key:

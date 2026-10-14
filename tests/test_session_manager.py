@@ -830,6 +830,17 @@ def test_flush_returns_false_when_save_fails(tmp_path: Path, monkeypatch):
     assert mgr.flush("tui:flush03") is False
 
 
+def test_flush_writes_a_cut_whose_own_save_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    mgr = SessionManager(tmp_path)
+    session = _seed(mgr, "tui:flush-cut", ("user", "q1"), ("assistant", "a1"), ("user", "q2"), ("assistant", "a2"))
+    session.undo_last_turn()
+    _fail_to_rewrite(monkeypatch, mgr, session)
+
+    assert mgr.flush("tui:flush-cut") is True
+    reloaded = SessionManager(tmp_path).get_or_create("tui:flush-cut")
+    assert [m["content"] for m in reloaded.messages] == ["q1", "a1"]
+
+
 def test_exists_true_for_saved_session(tmp_path: Path):
     """exists() is True once the session file is on disk."""
     mgr = SessionManager(tmp_path)
@@ -1077,6 +1088,64 @@ def test_undo_then_save_truncates_file_on_disk(tmp_path):
     reloaded = fresh.get_or_create("tui:undome")
     assert [m["content"] for m in reloaded.messages] == ["q1", "a1"]
     assert reloaded.key == "tui:undome"
+
+
+def _fail_to_rewrite(monkeypatch: pytest.MonkeyPatch, mgr: SessionManager, session: Session) -> None:
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise OSError("disk full")
+
+    with monkeypatch.context() as patched:
+        patched.setattr(manager_mod, "atomic_replace", _boom)
+        with pytest.raises(OSError):
+            mgr.save(session)
+
+
+@pytest.mark.parametrize("turns_after", [1, 2], ids=["back-to-the-saved-count", "past-the-saved-count"])
+def test_turns_after_an_undo_whose_save_failed_replace_the_undone_one_on_disk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, turns_after: int
+) -> None:
+    mgr = SessionManager(tmp_path)
+    session = _seed(mgr, "tui:undo-unsaved", ("user", "q1"), ("assistant", "a1"), ("user", "q2"), ("assistant", "a2"))
+    assert session.undo_last_turn() == 2
+    _fail_to_rewrite(monkeypatch, mgr, session)
+    for n in range(turns_after):
+        session.add_message("user", f"again {n}")
+        session.add_message("assistant", f"answer {n}")
+    mgr.save(session)
+
+    reloaded = SessionManager(tmp_path).get_or_create("tui:undo-unsaved")
+    assert [m["content"] for m in reloaded.messages] == [m["content"] for m in session.messages]
+
+
+def test_a_turn_after_a_clear_whose_save_failed_replaces_the_cleared_one_on_disk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mgr = SessionManager(tmp_path)
+    session = _seed(mgr, "tui:clear-unsaved", ("user", "old question"), ("assistant", "old answer"))
+    session.clear()
+    _fail_to_rewrite(monkeypatch, mgr, session)
+    session.add_message("user", "new question")
+    session.add_message("assistant", "new answer")
+    mgr.save(session)
+
+    reloaded = SessionManager(tmp_path).get_or_create("tui:clear-unsaved")
+    assert [m["content"] for m in reloaded.messages] == ["new question", "new answer"]
+
+
+def test_once_a_cut_is_on_disk_a_save_keeps_what_another_writer_appended(tmp_path: Path) -> None:
+    mgr = SessionManager(tmp_path)
+    session = _seed(mgr, "tui:cut-saved", ("user", "q1"), ("assistant", "a1"), ("user", "q2"), ("assistant", "a2"))
+    session.undo_last_turn()
+    mgr.save(session)
+    elsewhere_mgr = SessionManager(tmp_path)
+    elsewhere = elsewhere_mgr.get_or_create("tui:cut-saved")
+    elsewhere.add_message("user", "from elsewhere")
+    elsewhere_mgr.save(elsewhere)
+    session.add_message("user", "from here")
+    mgr.save(session)
+
+    reloaded = SessionManager(tmp_path).get_or_create("tui:cut-saved")
+    assert [m["content"] for m in reloaded.messages] == ["q1", "a1", "from elsewhere", "from here"]
 
 
 # ── fork (session fork/branch) ──────────────────────────────────────────────
@@ -1487,6 +1556,19 @@ def test_a_session_with_unsaved_messages_is_never_dropped(tmp_path: Path, monkey
     mgr.get_or_create("tui:pending").add_message("user", "not saved yet")
     _crowd_out(mgr)
     assert [m["content"] for m in mgr.get_or_create("tui:pending").messages] == ["not saved yet"]
+
+
+def test_a_session_cut_since_its_last_save_is_never_dropped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manager_mod, "_CACHE_LIMIT", 1)
+    mgr = SessionManager(tmp_path)
+    session = _seed(mgr, "tui:cut-unsaved", ("user", "q1"), ("assistant", "a1"), ("user", "q2"), ("assistant", "a2"))
+    session.undo_last_turn()
+    _fail_to_rewrite(monkeypatch, mgr, session)
+    session.add_message("user", "q2")
+    session.add_message("assistant", "a2, retried")
+    del session
+    _crowd_out(mgr)
+    assert [m["content"] for m in mgr.get_or_create("tui:cut-unsaved").messages] == ["q1", "a1", "q2", "a2, retried"]
 
 
 def test_metadata_changed_in_memory_keeps_its_session_cached(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
