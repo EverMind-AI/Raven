@@ -1985,6 +1985,16 @@ attribute, which read paths keep resolving; new spans never carry it
 (`attempt.id` is a reserved attribute key stripped by `raven/tracing/spans.py`).
 _Avoid_: "run id" / "task id" — neither is bound to span records.
 
+**Main-line Turn** (`raven/trajectory/selection.py`):
+A `session.turn` root recorded under a session's key that no other trace dispatched
+(it carries no `trace.dispatched_in_trace_id`). It is the unit the web page's
+export and bug report select by; selecting one brings along every trace it
+dispatched -- sub-agents, their own sub-agents, follow-up turns reporting back --
+resolved through those links. A main-line turn counts as in progress only when it
+is the session's latest, its record is still only a checkpoint, and the session is
+answering right now; a checkpoint left behind by a process that died is selectable.
+_Avoid_: selecting a dispatched trace as a turn of its own.
+
 **Turn Trace Mark** (`raven/agent/loop/turn_path.py`):
 The `trace_id` stored on a turn's opening user message while tracing is on, naming
 the trace of that turn's `session.turn` span. Cutting a session record down to
