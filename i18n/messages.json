@@ -388,67 +388,67 @@
   },
   "ui": {
     "gui.act.ing.ask_user": {
-      "en": "waiting for you",
+      "en": "Waiting for you",
       "zh": "等待你回答"
     },
     "gui.act.ing.cron": {
-      "en": "scheduling",
+      "en": "Scheduling",
       "zh": "正在设置定时"
     },
     "gui.act.ing.edit_file": {
-      "en": "editing",
+      "en": "Editing",
       "zh": "正在修改"
     },
     "gui.act.ing.exec": {
-      "en": "running command",
+      "en": "Running command",
       "zh": "正在运行命令"
     },
     "gui.act.ing.find": {
-      "en": "finding",
+      "en": "Finding",
       "zh": "正在查找"
     },
     "gui.act.ing.grep": {
-      "en": "searching",
+      "en": "Searching",
       "zh": "正在检索"
     },
     "gui.act.ing.image_generate": {
-      "en": "generating image",
+      "en": "Generating image",
       "zh": "正在生成图片"
     },
     "gui.act.ing.list_dir": {
-      "en": "listing",
+      "en": "Listing",
       "zh": "正在列目录"
     },
     "gui.act.ing.message": {
-      "en": "messaging",
+      "en": "Messaging",
       "zh": "正在发消息"
     },
     "gui.act.ing.read_file": {
-      "en": "reading",
+      "en": "Reading",
       "zh": "正在读取"
     },
     "gui.act.ing.read_skill": {
-      "en": "reading skill",
+      "en": "Reading skill",
       "zh": "正在读技能"
     },
     "gui.act.ing.spawn": {
-      "en": "delegating",
+      "en": "Delegating",
       "zh": "正在委派"
     },
     "gui.act.ing.subagent_call": {
-      "en": "calling a tool",
+      "en": "Calling a tool",
       "zh": "正在调用工具"
     },
     "gui.act.ing.run_subagent_dag": {
-      "en": "orchestrating",
+      "en": "Orchestrating",
       "zh": "正在编排"
     },
     "gui.act.v.run_subagent_dag": {
-      "en": "orchestrated",
+      "en": "Orchestrated",
       "zh": "编排"
     },
     "gui.act.n.run_subagent_dag": {
-      "en": "ran {n} task graphs",
+      "en": "Ran {n} task graphs",
       "zh": "编排 {n} 个任务图"
     },
     "gui.deleg.d_task": {
@@ -476,11 +476,11 @@
       "zh": "规模"
     },
     "gui.deleg.st_run": {
-      "en": "running",
+      "en": "Running",
       "zh": "进行中"
     },
     "gui.deleg.st_ok": {
-      "en": "completed",
+      "en": "Completed",
       "zh": "已完成"
     },
     "gui.deleg.spawn_verb": {
@@ -488,31 +488,31 @@
       "zh": "派出"
     },
     "gui.deleg.st_bad": {
-      "en": "failed",
+      "en": "Failed",
       "zh": "失败"
     },
     "gui.deleg.self": {
-      "en": "raven",
-      "zh": "raven 分身"
+      "en": "Raven",
+      "zh": "Raven 分身"
     },
     "gui.deleg.open_hint": {
       "en": "Open this run's transcript",
       "zh": "打开这次运行的详情"
     },
     "gui.deleg.delivered": {
-      "en": "finished",
+      "en": "Finished",
       "zh": "已完成"
     },
     "gui.deleg.body": {
-      "en": "what came back",
+      "en": "What came back",
       "zh": "交付内容"
     },
     "gui.deleg.body_cap": {
-      "en": "what entered this turn",
+      "en": "What entered this turn",
       "zh": "注入本轮对话的内容"
     },
     "gui.deleg.body_hide": {
-      "en": "collapse",
+      "en": "Collapse",
       "zh": "收起"
     },
     "gui.deleg.by_cron": {
@@ -532,11 +532,11 @@
       "zh": "子智能体回报"
     },
     "gui.deleg.dlv_partial": {
-      "en": "partly done",
+      "en": "Partly done",
       "zh": "部分完成"
     },
     "gui.deleg.dlv_stopped": {
-      "en": "stopped",
+      "en": "Stopped",
       "zh": "已停止"
     },
     "gui.deleg.body_aria": {
@@ -544,7 +544,7 @@
       "zh": "展开子智能体交付的内容"
     },
     "gui.deleg.delivered_err": {
-      "en": "failed",
+      "en": "Failed",
       "zh": "失败"
     },
     "gui.deleg.delivered_cancelled": {
@@ -552,7 +552,7 @@
       "zh": "运行被取消，未完成，取消通知已注入本轮对话"
     },
     "gui.deleg.delivered_exception": {
-      "en": "waiting on a decision",
+      "en": "Waiting on a decision",
       "zh": "等待裁决"
     },
     "gui.deleg.dag_title": {
@@ -584,235 +584,235 @@
       "zh": "跳过 {n}"
     },
     "gui.act.ing.text_to_speech": {
-      "en": "generating speech",
+      "en": "Generating speech",
       "zh": "正在生成语音"
     },
     "gui.act.ing.tool_search": {
-      "en": "searching tools",
+      "en": "Searching tools",
       "zh": "正在找工具"
     },
     "gui.act.ing.understand_media": {
-      "en": "parsing attachment",
+      "en": "Parsing attachment",
       "zh": "正在解析附件"
     },
     "gui.act.ing.use_skill": {
-      "en": "using skill",
+      "en": "Using skill",
       "zh": "正在调技能"
     },
     "gui.act.ing.video_generate": {
-      "en": "generating video",
+      "en": "Generating video",
       "zh": "正在生成视频"
     },
     "gui.act.ing.web_fetch": {
-      "en": "reading page",
+      "en": "Reading page",
       "zh": "正在读取网页"
     },
     "gui.act.ing.web_search": {
-      "en": "searching",
+      "en": "Searching",
       "zh": "正在搜索"
     },
     "gui.act.ing.write_file": {
-      "en": "writing",
+      "en": "Writing",
       "zh": "正在写入"
     },
     "gui.act.ing.raven_config_read": {
-      "en": "checking settings",
+      "en": "Checking settings",
       "zh": "正在查看配置"
     },
     "gui.act.ing.raven_config_change": {
-      "en": "changing settings",
+      "en": "Changing settings",
       "zh": "正在修改配置"
     },
     "gui.act.ing.raven_config_restart": {
-      "en": "reloading Raven",
+      "en": "Reloading Raven",
       "zh": "正在重载 Raven"
     },
     "gui.act.ing.plugin_read": {
-      "en": "checking plugins",
+      "en": "Checking plugins",
       "zh": "正在查看插件"
     },
     "gui.act.ing.plugin_connect": {
-      "en": "connecting a plugin",
+      "en": "Connecting a plugin",
       "zh": "正在连接插件"
     },
     "gui.act.ing.plugin_remove": {
-      "en": "removing a plugin",
+      "en": "Removing a plugin",
       "zh": "正在移除插件"
     },
     "gui.act.n.edit_file": {
-      "en": "edited {n} files",
+      "en": "Edited {n} files",
       "zh": "修改 {n} 个文件"
     },
     "gui.act.n.exec": {
-      "en": "ran {n} commands",
+      "en": "Ran {n} commands",
       "zh": "运行 {n} 条命令"
     },
     "gui.act.n.find": {
-      "en": "looked up {n} patterns",
+      "en": "Looked up {n} patterns",
       "zh": "查找 {n} 次"
     },
     "gui.act.n.grep": {
-      "en": "searched {n} times",
+      "en": "Searched {n} times",
       "zh": "检索 {n} 次"
     },
     "gui.act.n.list_dir": {
-      "en": "listed {n} dirs",
+      "en": "Listed {n} dirs",
       "zh": "列 {n} 个目录"
     },
     "gui.act.n.read_file": {
-      "en": "read {n} files",
+      "en": "Read {n} files",
       "zh": "读取 {n} 个文件"
     },
     "gui.act.n.spawn": {
-      "en": "delegated {n} subtasks",
+      "en": "Delegated {n} subtasks",
       "zh": "委派 {n} 个子任务"
     },
     "gui.act.n.understand_media": {
-      "en": "parsed {n} attachments",
+      "en": "Parsed {n} attachments",
       "zh": "解析 {n} 个附件"
     },
     "gui.act.n.web_fetch": {
-      "en": "fetched {n} pages",
+      "en": "Fetched {n} pages",
       "zh": "抓取 {n} 个页面"
     },
     "gui.act.n.web_search": {
-      "en": "searched {n} times",
+      "en": "Searched {n} times",
       "zh": "搜索 {n} 次"
     },
     "gui.act.n.write_file": {
-      "en": "wrote {n} files",
+      "en": "Wrote {n} files",
       "zh": "写入 {n} 个文件"
     },
     "gui.act.n.raven_config_read": {
-      "en": "checked settings {n} times",
+      "en": "Checked settings {n} times",
       "zh": "查看配置 {n} 次"
     },
     "gui.act.n.raven_config_change": {
-      "en": "changed settings {n} times",
+      "en": "Changed settings {n} times",
       "zh": "修改配置 {n} 次"
     },
     "gui.act.n.raven_config_restart": {
-      "en": "reloaded Raven {n} times",
+      "en": "Reloaded Raven {n} times",
       "zh": "重载 Raven {n} 次"
     },
     "gui.act.n.plugin_read": {
-      "en": "checked plugins {n} times",
+      "en": "Checked plugins {n} times",
       "zh": "查看插件 {n} 次"
     },
     "gui.act.n.plugin_connect": {
-      "en": "connected {n} plugins",
+      "en": "Connected {n} plugins",
       "zh": "连接插件 {n} 次"
     },
     "gui.act.n.plugin_remove": {
-      "en": "removed {n} plugins",
+      "en": "Removed {n} plugins",
       "zh": "移除插件 {n} 次"
     },
     "gui.act.v.ask_user": {
-      "en": "asked",
+      "en": "Asked",
       "zh": "询问"
     },
     "gui.act.v.cron": {
-      "en": "scheduled",
+      "en": "Scheduled",
       "zh": "定时"
     },
     "gui.act.v.edit_file": {
-      "en": "edited",
+      "en": "Edited",
       "zh": "修改"
     },
     "gui.act.v.exec": {
-      "en": "ran command",
+      "en": "Ran command",
       "zh": "运行命令"
     },
     "gui.act.v.find": {
-      "en": "found",
+      "en": "Found",
       "zh": "查找"
     },
     "gui.act.v.grep": {
-      "en": "searched",
+      "en": "Searched",
       "zh": "检索"
     },
     "gui.act.v.image_generate": {
-      "en": "generated image",
+      "en": "Generated image",
       "zh": "生成图片"
     },
     "gui.act.v.list_dir": {
-      "en": "listed",
+      "en": "Listed",
       "zh": "列目录"
     },
     "gui.act.v.message": {
-      "en": "messaged",
+      "en": "Messaged",
       "zh": "发消息"
     },
     "gui.act.v.read_file": {
-      "en": "read",
+      "en": "Read",
       "zh": "读取"
     },
     "gui.act.v.read_skill": {
-      "en": "read skill",
+      "en": "Read skill",
       "zh": "读技能"
     },
     "gui.act.v.spawn": {
-      "en": "delegated",
+      "en": "Delegated",
       "zh": "委派"
     },
     "gui.act.v.subagent_call": {
-      "en": "called a tool",
+      "en": "Called a tool",
       "zh": "调用工具"
     },
     "gui.act.v.text_to_speech": {
-      "en": "generated speech",
+      "en": "Generated speech",
       "zh": "生成语音"
     },
     "gui.act.v.tool_search": {
-      "en": "searched tools",
+      "en": "Searched tools",
       "zh": "找工具"
     },
     "gui.act.v.understand_media": {
-      "en": "parsed",
+      "en": "Parsed",
       "zh": "解析附件"
     },
     "gui.act.v.use_skill": {
-      "en": "used skill",
+      "en": "Used skill",
       "zh": "调技能"
     },
     "gui.act.v.video_generate": {
-      "en": "generated video",
+      "en": "Generated video",
       "zh": "生成视频"
     },
     "gui.act.v.web_fetch": {
-      "en": "read page",
+      "en": "Read page",
       "zh": "读取网页"
     },
     "gui.act.v.web_search": {
-      "en": "searched",
+      "en": "Searched",
       "zh": "搜索"
     },
     "gui.act.v.write_file": {
-      "en": "wrote",
+      "en": "Wrote",
       "zh": "写入"
     },
     "gui.act.v.raven_config_read": {
-      "en": "checked settings",
+      "en": "Checked settings",
       "zh": "查看配置"
     },
     "gui.act.v.raven_config_change": {
-      "en": "changed settings",
+      "en": "Changed settings",
       "zh": "修改配置"
     },
     "gui.act.v.raven_config_restart": {
-      "en": "reloaded Raven",
+      "en": "Reloaded Raven",
       "zh": "重载 Raven"
     },
     "gui.act.v.plugin_read": {
-      "en": "checked plugins",
+      "en": "Checked plugins",
       "zh": "查看插件"
     },
     "gui.act.v.plugin_connect": {
-      "en": "connected a plugin",
+      "en": "Connected a plugin",
       "zh": "连接插件"
     },
     "gui.act.v.plugin_remove": {
-      "en": "removed a plugin",
+      "en": "Removed a plugin",
       "zh": "移除插件"
     },
     "gui.add": {
@@ -872,23 +872,23 @@
       "zh": "API key"
     },
     "gui.agent.key_set": {
-      "en": "already set",
+      "en": "Already set",
       "zh": "已设置"
     },
     "gui.agent.kind_acp": {
-      "en": "acp",
-      "zh": "acp"
+      "en": "ACP",
+      "zh": "ACP"
     },
     "gui.agent.kind_cli": {
-      "en": "command line",
+      "en": "Command line",
       "zh": "命令行"
     },
     "gui.agent.kind_openai": {
-      "en": "openai",
-      "zh": "openai"
+      "en": "OpenAI",
+      "zh": "OpenAI"
     },
     "gui.agent.not_installed": {
-      "en": "Not Installed",
+      "en": "Not installed",
       "zh": "未安装"
     },
     "gui.agent.unauthorized": {
@@ -968,7 +968,7 @@
       "zh": "移除 {name}"
     },
     "gui.att.show_all": {
-      "en": "show every attachment",
+      "en": "Show every attachment",
       "zh": "展开全部附件"
     },
     "gui.att.too_big": {
@@ -976,7 +976,7 @@
       "zh": "{name} 有 {size}，这条连接最多只能传 {limit}"
     },
     "gui.att.uploading": {
-      "en": "uploading...",
+      "en": "Uploading...",
       "zh": "上传中…"
     },
     "gui.attach": {
@@ -1148,7 +1148,7 @@
       "zh": "输入网址"
     },
     "gui.br.waiting": {
-      "en": "rendering...",
+      "en": "Rendering...",
       "zh": "渲染中…"
     },
     "gui.cancel": {
@@ -1352,7 +1352,7 @@
       "zh": "跳过这个问题"
     },
     "gui.clarify.skipped": {
-      "en": "skipped",
+      "en": "Skipped",
       "zh": "已跳过"
     },
     "gui.clarify.skipped_msg": {
@@ -1504,11 +1504,11 @@
       "zh": "还没有可用的渠道"
     },
     "gui.conn.st_off": {
-      "en": "switched off",
+      "en": "Switched off",
       "zh": "已停用"
     },
     "gui.conn.st_live": {
-      "en": "receiving",
+      "en": "Receiving",
       "zh": "正在收消息"
     },
     "gui.conn.st_missing": {
@@ -1544,19 +1544,19 @@
       "zh": "{name} 已{state}"
     },
     "gui.conn.out_missing_dep": {
-      "en": "its package is not installed.",
+      "en": "Its package is not installed.",
       "zh": "缺少这个渠道的依赖包。"
     },
     "gui.conn.out_bad_config": {
-      "en": "the gateway refused its settings; its log names the field.",
+      "en": "The gateway refused its settings; its log names the field.",
       "zh": "后台拒绝了它的配置，后台日志里写着是哪一项。"
     },
     "gui.conn.out_deny_all": {
-      "en": "its allow-list is empty, so it would let nobody in.",
+      "en": "Its allow-list is empty, so it would let nobody in.",
       "zh": "它的允许名单是空的，谁都进不来。"
     },
     "gui.conn.out_refused": {
-      "en": "the gateway would not start it ({outcome}).",
+      "en": "The gateway would not start it ({outcome}).",
       "zh": "后台没有启动它（{outcome}）。"
     },
     "gui.conn_where": {
@@ -1724,7 +1724,7 @@
       "en": "Scheduled tasks"
     },
     "gui.cron.reading": {
-      "en": "reading...",
+      "en": "Reading...",
       "zh": "读取中…"
     },
     "gui.cron.hist_none": {
@@ -1748,7 +1748,7 @@
       "zh": "手动补跑"
     },
     "gui.cron.menu_aria": {
-      "en": "actions for {name}",
+      "en": "Actions for {name}",
       "zh": "{name} 的操作"
     },
     "gui.cron.never": {
@@ -1844,7 +1844,7 @@
       "zh": "上下文 {pct}%"
     },
     "gui.ctx.tip": {
-      "en": "context {used}/{max} {pct}%",
+      "en": "Context {used}/{max} {pct}%",
       "zh": "上下文使用 {used}/{max} {pct}%"
     },
     "gui.dag.aria": {
@@ -1864,8 +1864,8 @@
       "zh": "剧本"
     },
     "gui.dag.run_id": {
-      "en": "Run id",
-      "zh": "运行 id"
+      "en": "Run ID",
+      "zh": "运行 ID"
     },
     "gui.dag.done": {
       "en": "{n}/{t} done",
@@ -1884,11 +1884,11 @@
       "zh": "这个节点还没有产出。"
     },
     "gui.dag.parallel": {
-      "en": "up to {n} at once",
+      "en": "Up to {n} at once",
       "zh": "最多 {n} 个并行"
     },
     "gui.dag.serial": {
-      "en": "one after another",
+      "en": "One after another",
       "zh": "依次串行"
     },
     "gui.dag.skipped": {
@@ -2024,15 +2024,15 @@
       "zh": "版本"
     },
     "gui.dtl.copy": {
-      "en": "copy",
+      "en": "Copy",
       "zh": "复制"
     },
     "gui.dtl.exit": {
-      "en": "exit {n}",
+      "en": "Exit {n}",
       "zh": "exit {n}"
     },
     "gui.dtl.output": {
-      "en": "output",
+      "en": "Output",
       "zh": "输出"
     },
     "gui.dtl.cite_page": {
@@ -2040,11 +2040,11 @@
       "zh": "第 {n} 页"
     },
     "gui.dtl.plain": {
-      "en": "plain text",
+      "en": "Plain text",
       "zh": "纯文本"
     },
     "gui.dtl.via": {
-      "en": "via tool_call",
+      "en": "Via tool_call",
       "zh": "经 tool_call 调用"
     },
     "gui.dur.h": {
@@ -2116,7 +2116,7 @@
       "zh": "按状态筛选"
     },
     "gui.fold.aria": {
-      "en": "show the work behind this answer",
+      "en": "Show the work behind this answer",
       "zh": "展开这次回答之前的过程"
     },
     "gui.fold.steps": {
@@ -2168,7 +2168,7 @@
       "zh": "创建"
     },
     "gui.cron.no_time": {
-      "en": "no time picked yet",
+      "en": "No time picked yet",
       "zh": "还没选时间"
     },
     "gui.cron.u_hour": {
@@ -2256,7 +2256,7 @@
       "zh": "{n} 行"
     },
     "gui.arts.file": {
-      "en": "FILE",
+      "en": "File",
       "zh": "文件"
     },
     "gui.arts.away": {
@@ -2276,7 +2276,7 @@
       "zh": "搜索"
     },
     "gui.onb.step_agents": {
-      "en": "Agent Connector",
+      "en": "Agent connector",
       "zh": "Agent 接入"
     },
     "gui.onb.step_sync": {
@@ -2616,11 +2616,11 @@
       "zh": "全部"
     },
     "gui.img.close": {
-      "en": "close the image",
+      "en": "Close the image",
       "zh": "关闭图片"
     },
     "gui.img.open": {
-      "en": "open {name}",
+      "en": "Open {name}",
       "zh": "查看 {name}"
     },
     "gui.job.bad_time": {
@@ -2684,7 +2684,7 @@
       "zh": "到点发给 Raven 的话，像平时对话一样写"
     },
     "gui.live.busy": {
-      "en": "working · {t}",
+      "en": "Working · {t}",
       "zh": "输出中 · {t}"
     },
     "gui.mem.down": {
@@ -2824,8 +2824,8 @@
       "zh": "{calls} 次调用 · {in}k in / {out}k out"
     },
     "gui.model.add_ph": {
-      "en": "A model id the catalogue lacks",
-      "zh": "目录里没有的 model id，手动加"
+      "en": "A model ID the catalogue lacks",
+      "zh": "目录里没有的 model ID，手动加"
     },
     "gui.model.base_ph": {
       "en": "API base (optional, for your own gateway)",
@@ -2924,7 +2924,7 @@
       "zh": "API 地址"
     },
     "gui.model.api_key": {
-      "en": "API Key",
+      "en": "API key",
       "zh": "API 密钥"
     },
     "gui.model.docs": {
@@ -2932,7 +2932,7 @@
       "zh": "模型文档"
     },
     "gui.model.get_key": {
-      "en": "Get API Key",
+      "en": "Get API key",
       "zh": "获取密钥"
     },
     "gui.model.get_list": {
@@ -2944,8 +2944,8 @@
       "zh": "模型"
     },
     "gui.model.none_yet": {
-      "en": "No models yet. Add one by id below.",
-      "zh": "还没有模型，可在下方按 id 添加。"
+      "en": "No models yet. Add one by ID below.",
+      "zh": "还没有模型，可在下方按 ID 添加。"
     },
     "gui.model.select_platform": {
       "en": "Select the platform",
@@ -2980,8 +2980,8 @@
       "zh": "名称"
     },
     "gui.model.add_name_ph": {
-      "en": "Optional, shown instead of the id",
-      "zh": "可选，列表中代替 id 显示"
+      "en": "Optional, shown instead of the ID",
+      "zh": "可选，列表中代替 ID 显示"
     },
     "gui.model.add_title": {
       "en": "Add model",
@@ -3144,7 +3144,7 @@
       "zh": "展开其余 {n} 家"
     },
     "gui.model.is_default": {
-      "en": "default",
+      "en": "Default",
       "zh": "默认"
     },
     "gui.model.key_ph": {
@@ -3324,7 +3324,7 @@
       "zh": "添加文档"
     },
     "gui.kb.add_source": {
-      "en": "Add Data Source",
+      "en": "Add data source",
       "zh": "添加数据源"
     },
     "gui.kb.cancel": {
@@ -3372,7 +3372,7 @@
       "zh": "文件"
     },
     "gui.kb.doc_view_chunks": {
-      "en": "View Chunks",
+      "en": "View chunks",
       "zh": "查看分块"
     },
     "gui.kb.download": {
@@ -3384,7 +3384,7 @@
       "zh": "该文件无法在此预览。"
     },
     "gui.kb.embed_model": {
-      "en": "Embedding Model",
+      "en": "Embedding model",
       "zh": "嵌入模型"
     },
     "gui.kb.embed_off": {
@@ -3396,7 +3396,7 @@
       "zh": "不使用嵌入模型。该知识库仅保存文档，不进行向量检索。"
     },
     "gui.kb.new_title": {
-      "en": "New Knowledge Base",
+      "en": "New knowledge base",
       "zh": "新建知识库"
     },
     "gui.kb.pick_base": {
@@ -3404,7 +3404,7 @@
       "zh": "请选择一个知识库以查看其内容。"
     },
     "gui.kb.recall_test": {
-      "en": "Recall Test",
+      "en": "Recall test",
       "zh": "召回测试"
     },
     "gui.kb.soon": {
@@ -3476,7 +3476,7 @@
       "zh": "新任务"
     },
     "gui.page.agents": {
-      "en": "Agent Connector",
+      "en": "Agent connector",
       "zh": "智能体连接"
     },
     "gui.page.agents_sub": {
@@ -3552,7 +3552,7 @@
       "zh": "没有匹配的模型"
     },
     "gui.picker.search_or_type_ph": {
-      "en": "Search or type a model id...",
+      "en": "Search or type a model ID...",
       "zh": "搜索或输入模型 ID…"
     },
     "gui.picker.search_ph": {
@@ -3560,7 +3560,7 @@
       "zh": "搜索模型…"
     },
     "gui.pill.bottom": {
-      "en": "back to bottom",
+      "en": "Back to bottom",
       "zh": "回到底部"
     },
     "gui.pinned_ok": {
@@ -3956,19 +3956,19 @@
       "zh": "移除"
     },
     "gui.qa.a": {
-      "en": "ANSWER",
+      "en": "Answer",
       "zh": "回答"
     },
     "gui.qa.answered": {
-      "en": "answered",
+      "en": "Answered",
       "zh": "已回答"
     },
     "gui.qa.q": {
-      "en": "QUESTION",
+      "en": "Question",
       "zh": "问题"
     },
     "gui.qa.skipped": {
-      "en": "skipped",
+      "en": "Skipped",
       "zh": "已跳过提问"
     },
     "gui.queue_note": {
@@ -4084,11 +4084,11 @@
       "zh": "分叉会话"
     },
     "gui.sess.branched": {
-      "en": "branched from the current session",
+      "en": "Branched from the current session",
       "zh": "从当前会话分叉"
     },
     "gui.sess.cleared": {
-      "en": "cleared",
+      "en": "Cleared",
       "zh": "已清空"
     },
     "gui.sess.delete": {
@@ -4108,7 +4108,7 @@
       "zh": "删除「{title}」没有成功：{err}"
     },
     "gui.sess.delete_kept": {
-      "en": "the session file is still on disk",
+      "en": "The session file is still on disk",
       "zh": "会话文件还在磁盘上"
     },
     "gui.sess.delete_title": {
@@ -4168,7 +4168,7 @@
       "zh": "{n} 条消息"
     },
     "gui.sess.not_started": {
-      "en": "not started",
+      "en": "Not started",
       "zh": "还没开始"
     },
     "gui.sess.naming": {
@@ -4220,7 +4220,7 @@
       "zh": "任务完成"
     },
     "gui.set.tls.key_set": {
-      "en": "configured",
+      "en": "Configured",
       "zh": "已配置"
     },
     "gui.set.usg.cost": {
@@ -4264,7 +4264,7 @@
       "zh": "技能"
     },
     "gui.think.label": {
-      "en": "thought",
+      "en": "Thought",
       "zh": "已思考"
     },
     "gui.think.live": {
@@ -4396,7 +4396,7 @@
       "zh": "已经等了 20 分钟，Raven 仍然没有响应。"
     },
     "gui.upg.go": {
-      "en": "upgrade",
+      "en": "Upgrade",
       "zh": "升级"
     },
     "gui.upg.manual": {
@@ -4404,11 +4404,11 @@
       "zh": "改在终端里跑这条命令："
     },
     "gui.upg.note": {
-      "en": "new version {v}",
+      "en": "New version {v}",
       "zh": "有新版 {v}"
     },
     "gui.upg.note_bare": {
-      "en": "new version available",
+      "en": "New version available",
       "zh": "有新版本"
     },
     "gui.upg.phase.download": {
@@ -4592,11 +4592,11 @@
       "zh": "继续和 {name} 对话"
     },
     "gui.ws.instance_resumable": {
-      "en": "can continue",
+      "en": "Can continue",
       "zh": "可继续"
     },
     "gui.ws.instance_of_graph": {
-      "en": "from a graph",
+      "en": "From a graph",
       "zh": "来自编排"
     },
     "gui.ws.instance_live": {
@@ -4696,7 +4696,7 @@
       "zh": "系统默认"
     },
     "gui.ws.open_with_now": {
-      "en": "current",
+      "en": "Current",
       "zh": "当前"
     },
     "gui.ws.copy_url": {
@@ -4708,11 +4708,11 @@
       "zh": "这里没法读取文件"
     },
     "gui.ws.expand_lines": {
-      "en": "show {n} more",
+      "en": "Show {n} more",
       "zh": "展开 {n} 行"
     },
     "gui.ws.fold_lines": {
-      "en": "hide {n} lines",
+      "en": "Hide {n} lines",
       "zh": "收起 {n} 行"
     },
     "gui.ws.expand_panel": {
@@ -4748,11 +4748,11 @@
       "zh": "这个文件已经不在了。"
     },
     "gui.ws.file_loading": {
-      "en": "reading...",
+      "en": "Reading...",
       "zh": "读取中…"
     },
     "gui.ws.file_rendering": {
-      "en": "rendering as PDF...",
+      "en": "Rendering as PDF...",
       "zh": "正在转成 PDF…"
     },
     "gui.ws.page_n": {
@@ -4772,11 +4772,11 @@
       "zh": "未打开文件"
     },
     "gui.ws.file_rendered": {
-      "en": "rendered",
+      "en": "Rendered",
       "zh": "渲染"
     },
     "gui.ws.file_source": {
-      "en": "source",
+      "en": "Source",
       "zh": "源码"
     },
     "gui.ws.unseen_tab": {
@@ -4796,7 +4796,7 @@
       "zh": "还没有产物"
     },
     "gui.ws.dlv_turn": {
-      "en": "turn {n}",
+      "en": "Turn {n}",
       "zh": "第 {n} 轮"
     },
     "gui.ws.dlv_here": {
@@ -4892,11 +4892,11 @@
       "zh": "{n} 项新变更"
     },
     "gui.ws.web_fetched": {
-      "en": "fetched",
+      "en": "Fetched",
       "zh": "抓取"
     },
     "gui.ws.web_searched": {
-      "en": "searched",
+      "en": "Searched",
       "zh": "搜索"
     },
     "tool.ask_user": {
@@ -4964,7 +4964,7 @@
       "zh": "应用 App ID"
     },
     "gui.connf.app_secret": {
-      "en": "App Secret",
+      "en": "App secret",
       "zh": "应用 App Secret"
     },
     "gui.connf.app_token": {
@@ -4988,7 +4988,7 @@
       "zh": "应用 Client ID"
     },
     "gui.connf.client_secret": {
-      "en": "Client Secret",
+      "en": "Client secret",
       "zh": "应用 Client Secret"
     },
     "gui.connf.imap_host": {
@@ -5028,7 +5028,7 @@
       "zh": "账号 User ID"
     },
     "gui.agent.kind_builtin": {
-      "en": "built-in",
+      "en": "Built-in",
       "zh": "内置"
     },
     "gui.conn.cost_scan_line": {
@@ -5036,7 +5036,7 @@
       "zh": "手机扫码登录"
     },
     "gui.conn.foot_dirty": {
-      "en": "unsaved",
+      "en": "Unsaved",
       "zh": "未保存"
     },
     "gui.conn.g_imap": {
@@ -5108,7 +5108,7 @@
       "zh": "{name} 的预设改成走 {to} 了 · 会先移除再按新预设装回来，已经在跑的会话句柄会失效"
     },
     "gui.agent.tag_stale": {
-      "en": "moved",
+      "en": "Moved",
       "zh": "需迁移"
     },
     "gui.agent.g_avail": {
@@ -5420,11 +5420,11 @@
       "zh": "测试没通过"
     },
     "gui.agent.why_sign_in": {
-      "en": "needs sign-in",
+      "en": "Needs sign-in",
       "zh": "需要先登录"
     },
     "gui.agent.why_setup": {
-      "en": "no provider yet",
+      "en": "No provider yet",
       "zh": "还没选模型服务商"
     },
     "gui.agent.why_api_key": {
@@ -5432,7 +5432,7 @@
       "zh": "API key 不可用"
     },
     "gui.agent.why_download": {
-      "en": "download failed",
+      "en": "Download failed",
       "zh": "没能下载"
     },
     "gui.agent.why_model": {
@@ -5476,11 +5476,11 @@
       "zh": "配置文件有错"
     },
     "gui.agent.why_open": {
-      "en": "see why",
+      "en": "See why",
       "zh": "点开看原因"
     },
     "gui.agent.why_hover": {
-      "en": "hover to see why",
+      "en": "Hover to see why",
       "zh": "悬停看原始报错"
     },
     "gui.agent.test_again": {
@@ -5492,7 +5492,7 @@
       "zh": "再测"
     },
     "gui.agent.row_download": {
-      "en": "download failed; check the network, the npm registry or the proxy, then press {button}",
+      "en": "Download failed; check the network, the npm registry or the proxy, then press {button}",
       "zh": "没能下载，检查网络、npm 源或代理后点「{button}」"
     },
     "gui.agent.row_run": {
@@ -5908,7 +5908,7 @@
       "zh": "自动"
     },
     "gui.imode.agent_default": {
-      "en": "the agent's own default",
+      "en": "The agent's own default",
       "zh": "该子智能体自己的默认"
     },
     "gui.imode.auto_tip": {
@@ -6480,8 +6480,8 @@
       "zh": "把这些提供商的 Raven 密钥交给智能体使用；它的消耗都计在这把密钥上"
     },
     "gui.confirm.cfg.why.tools.connectionAdd": {
-      "en": "lets the agent write the owner's ssh config",
-      "zh": "允许智能体改写所有者的 ssh 配置"
+      "en": "lets the agent write the owner's SSH config",
+      "zh": "允许智能体改写所有者的 SSH 配置"
     },
     "gui.confirm.cfg.why.tools.disabledTools": {
       "en": "taking a tool off the list gives back one the user withheld",
@@ -6512,7 +6512,7 @@
       "zh": "所有网页搜索与抓取（连同搜索 API 密钥）都会经由该主机转发"
     },
     "gui.confirm.ev.created": {
-      "en": "new file",
+      "en": "New file",
       "zh": "新建文件"
     },
     "gui.confirm.ev.nodiff": {
@@ -6520,7 +6520,7 @@
       "zh": "无法预览改动"
     },
     "gui.confirm.ev.cut": {
-      "en": "shortened to what fits -- the rest is not shown",
+      "en": "Shortened to what fits -- the rest is not shown",
       "zh": "内容过长，这里只显示了前一部分"
     },
     "gui.confirm.land.always": {
@@ -6640,7 +6640,7 @@
       "zh": "已保存。重启网关后即可开始对话：它启动时还没有模型。"
     },
     "gui.model.refused": {
-      "en": "set a model in Settings first - this gateway started without one",
+      "en": "Set a model in Settings first - this gateway started without one",
       "zh": "先在设置里设一个模型——这个网关启动时还没有"
     },
     "gui.op.switch_failed": {
@@ -6768,15 +6768,15 @@
       "zh": "摘要"
     },
     "gui.panel.tools": {
-      "en": "Available Tools",
+      "en": "Available tools",
       "zh": "可用工具"
     },
     "gui.panel.skills": {
-      "en": "Available Skills",
+      "en": "Available skills",
       "zh": "可用技能"
     },
     "gui.panel.system_prompt": {
-      "en": "System Prompt",
+      "en": "System prompt",
       "zh": "系统提示词"
     },
     "gui.panel.mcp_servers": {
@@ -7144,7 +7144,7 @@
       "zh": "正在保存..."
     },
     "gui.kb.recall_title": {
-      "en": "Recall Test",
+      "en": "Recall test",
       "zh": "召回测试"
     },
     "gui.kb.recall_ask": {
@@ -7204,11 +7204,11 @@
       "zh": "已不在该知识库中"
     },
     "gui.kb.set_title": {
-      "en": "Knowledge Base Settings",
+      "en": "Knowledge base settings",
       "zh": "知识库设置"
     },
     "gui.kb.set_proc": {
-      "en": "File Processing",
+      "en": "File processing",
       "zh": "文件处理"
     },
     "gui.kb.set_proc_help": {
@@ -7220,7 +7220,7 @@
       "zh": "不使用"
     },
     "gui.kb.set_embed": {
-      "en": "Embedding Model",
+      "en": "Embedding model",
       "zh": "向量模型"
     },
     "gui.kb.set_embed_help": {
@@ -7236,11 +7236,11 @@
       "zh": "每次检索该知识库最多返回的分块数量。"
     },
     "gui.kb.set_adv": {
-      "en": "Advanced Settings",
+      "en": "Advanced settings",
       "zh": "高级设置"
     },
     "gui.kb.set_smart": {
-      "en": "Smart Chunking",
+      "en": "Smart chunking",
       "zh": "智能分块"
     },
     "gui.kb.set_smart_help": {
@@ -7256,7 +7256,7 @@
       "zh": "关闭智能分块时，普通切分允许断开的位置。"
     },
     "gui.kb.set_size": {
-      "en": "Chunk Size",
+      "en": "Chunk size",
       "zh": "分块大小"
     },
     "gui.kb.set_size_help": {
@@ -7264,7 +7264,7 @@
       "zh": "单个分块的目标大小。超过向量模型输入上限的分块会被拒绝。"
     },
     "gui.kb.set_lap": {
-      "en": "Overlap Size",
+      "en": "Overlap size",
       "zh": "重叠大小"
     },
     "gui.kb.set_lap_help": {
@@ -7280,7 +7280,7 @@
       "zh": "分块设置仅对新添加的内容生效"
     },
     "gui.kb.set_restore": {
-      "en": "Restore Defaults",
+      "en": "Restore defaults",
       "zh": "恢复默认"
     },
     "gui.kb.set_save": {
@@ -7292,7 +7292,7 @@
       "zh": "设置已保存。"
     },
     "gui.kb.proc_local": {
-      "en": "Local Document",
+      "en": "Local document",
       "zh": "本地文档"
     },
     "gui.kb.proc_notdl": {
@@ -7340,7 +7340,7 @@
       "zh": "重命名知识库"
     },
     "gui.kb.delete_base": {
-      "en": "Delete Knowledge Base",
+      "en": "Delete knowledge base",
       "zh": "删除知识库"
     },
     "gui.kb.save": {
@@ -7384,7 +7384,7 @@
       "zh": "收起 · 共 {n} 个文件"
     },
     "gui.tasks.step": {
-      "en": "step {i}/{n}",
+      "en": "Step {i}/{n}",
       "zh": "第 {i}/{n} 步"
     },
     "gui.ws.tasks_none": {
@@ -7396,7 +7396,7 @@
       "zh": "1 个文件改动"
     },
     "gui.tasks.graph_tag": {
-      "en": "graph",
+      "en": "Graph",
       "zh": "图"
     },
     "gui.tasks.rec_more": {
@@ -7424,7 +7424,7 @@
       "zh": "{n} 失败"
     },
     "gui.tasks.call_no_result": {
-      "en": "no result",
+      "en": "No result",
       "zh": "未返回"
     },
     "gui.tasks.call_no_result_n": {
@@ -7436,7 +7436,7 @@
       "zh": "一张图"
     },
     "gui.tasks.exit_code": {
-      "en": "exit code {n}",
+      "en": "Exit code {n}",
       "zh": "退出码 {n}"
     },
     "gui.tasks.canvas": {
@@ -7468,11 +7468,11 @@
       "zh": "获取密钥"
     },
     "gui.settings.key_ph": {
-      "en": "API Key",
-      "zh": "API Key"
+      "en": "API key",
+      "zh": "API key"
     },
     "gui.settings.key_set_ph": {
-      "en": "a new key here replaces it",
+      "en": "A new key here replaces it",
       "zh": "填入新的密钥才会覆盖"
     },
     "gui.settings.less": {
@@ -7736,7 +7736,7 @@
       "zh": "写入缓存"
     },
     "gui.settings.usage.no_price": {
-      "en": "no price",
+      "en": "No price",
       "zh": "无价格"
     },
     "gui.settings.usage.none": {
@@ -7893,7 +7893,7 @@
     },
     "gui.settings.providers.paste_key": {
       "en": "Paste an API key",
-      "zh": "粘贴 API Key"
+      "zh": "粘贴 API key"
     },
     "gui.settings.providers.pick_one": {
       "en": "Choose a provider on the left",
@@ -7901,15 +7901,15 @@
     },
     "gui.settings.providers.key_first": {
       "en": "Enter the API key first",
-      "zh": "先填入 API Key"
+      "zh": "先填入 API key"
     },
     "gui.settings.providers.key_unchanged": {
       "en": "No new API key to save. To replace the saved one, type a new key in the API key field, then press {button}.",
-      "zh": "没有新的 API Key 要保存。要更换，先在「API 密钥」框里填入新的，再点「{button}」。"
+      "zh": "没有新的 API key 要保存。要更换，先在「API 密钥」框里填入新的，再点「{button}」。"
     },
     "gui.settings.providers.key_not_ascii": {
       "en": "This doesn't look like an API key: it has characters a key never contains. Check what was pasted",
-      "zh": "这不像是 API Key：里面有 Key 不会包含的字符，请检查粘贴的内容"
+      "zh": "这不像是 API key：里面有 Key 不会包含的字符，请检查粘贴的内容"
     },
     "gui.settings.providers.base": {
       "en": "Service address",
@@ -7932,8 +7932,8 @@
       "zh": "部署名"
     },
     "gui.settings.providers.deployment_ph": {
-      "en": "Leave empty when it equals the model id",
-      "zh": "与模型 id 相同则可留空"
+      "en": "Leave empty when it equals the model ID",
+      "zh": "与模型 ID 相同则可留空"
     },
     "gui.settings.providers.api_version": {
       "en": "API version",
@@ -7981,7 +7981,7 @@
     },
     "gui.settings.providers.needs_key": {
       "en": "Needs an API key",
-      "zh": "需要 API Key"
+      "zh": "需要 API key"
     },
     "gui.settings.providers.in_use": {
       "en": "{roles} run on this provider; change them before disconnecting",
@@ -8008,12 +8008,12 @@
       "zh": "收起"
     },
     "gui.settings.providers.all_added": {
-      "en": "Every model this vendor lists is already added. Type an id to add one it does not list.",
-      "zh": "这家列出的模型都已添加。要加它没列出的，直接填 id。"
+      "en": "Every model this vendor lists is already added. Type an ID to add one it does not list.",
+      "zh": "这家列出的模型都已添加。要加它没列出的，直接填 ID。"
     },
     "gui.settings.providers.no_models_yet": {
-      "en": "No models yet. Use \"Add model\" to pick from this vendor's list, or type an id.",
-      "zh": "还没有模型。点「添加模型」从这家的列表里挑，或者直接填一个 id。"
+      "en": "No models yet. Use \"Add model\" to pick from this vendor's list, or type an ID.",
+      "zh": "还没有模型。点「添加模型」从这家的列表里挑，或者直接填一个 ID。"
     },
     "gui.settings.providers.remove_model": {
       "en": "Remove {model}",
@@ -8060,8 +8060,8 @@
       "zh": "浏览器授权"
     },
     "gui.settings.providers.no_list": {
-      "en": "This vendor has no model list endpoint; type a model id",
-      "zh": "这家没有模型列表接口，直接输入模型 id"
+      "en": "This vendor has no model list endpoint; type a model ID",
+      "zh": "这家没有模型列表接口，直接输入模型 ID"
     },
     "gui.settings.providers.no_match": {
       "en": "No matching model",
@@ -8124,8 +8124,8 @@
       "zh": "移除 {model} 的显示名"
     },
     "gui.settings.providers.model_id": {
-      "en": "Model id",
-      "zh": "模型 id"
+      "en": "Model ID",
+      "zh": "模型 ID"
     },
     "gui.settings.providers.label_ph": {
       "en": "Shown as",
@@ -8148,7 +8148,7 @@
       "zh": "模型分配"
     },
     "gui.settings.roles.optional": {
-      "en": "optional",
+      "en": "Optional",
       "zh": "可选"
     },
     "gui.settings.roles.params": {
@@ -8408,19 +8408,19 @@
       "zh": "打开 {file}"
     },
     "gui.settings.skills.safety": {
-      "en": "safety {n}",
+      "en": "Safety {n}",
       "zh": "安全分 {n}"
     },
     "gui.settings.skills.trig_use": {
-      "en": "installed in conversation",
+      "en": "Installed in conversation",
       "zh": "对话中安装"
     },
     "gui.settings.skills.trig_auto": {
-      "en": "installed automatically",
+      "en": "Installed automatically",
       "zh": "自动安装"
     },
     "gui.settings.skills.trig_rpc": {
-      "en": "installed from a client",
+      "en": "Installed from a client",
       "zh": "客户端安装"
     },
     "gui.settings.tools.counter": {
@@ -8452,8 +8452,8 @@
       "zh": "抓取服务"
     },
     "gui.settings.tools.vendor_key": {
-      "en": "{name} API Key",
-      "zh": "{name} API Key"
+      "en": "{name} API key",
+      "zh": "{name} API key"
     },
     "gui.settings.tools.key_first": {
       "en": "Enter the key first",
@@ -8564,8 +8564,8 @@
       "zh": "撤销"
     },
     "gui.settings.plugins.api_key": {
-      "en": "API Key",
-      "zh": "API Key"
+      "en": "API key",
+      "zh": "API key"
     },
     "gui.settings.plugins.key_first": {
       "en": "Enter the key first",
@@ -8592,15 +8592,15 @@
       "zh": "{n} 个"
     },
     "gui.model.pick_search": {
-      "en": "Search or type a model id",
-      "zh": "搜索或输入模型 id…"
+      "en": "Search or type a model ID",
+      "zh": "搜索或输入模型 ID…"
     },
     "gui.model.pick_use": {
       "en": "Use {id}",
       "zh": "使用 {id}"
     },
     "gui.model.pick_add_to": {
-      "en": "add to {name}",
+      "en": "Add to {name}",
       "zh": "加入 {name}"
     },
     "gui.model.pick_none": {
@@ -8617,7 +8617,7 @@
     },
     "gui.settings.providers.key_optional_ph": {
       "en": "API key, if the server wants one",
-      "zh": "API Key（服务要求时填）"
+      "zh": "API key（服务要求时填）"
     },
     "gui.settings.providers.api_key_optional": {
       "en": "API key (optional)",
@@ -8704,7 +8704,7 @@
       "zh": "{n} tokens"
     },
     "gui.tasks.no_output": {
-      "en": "no output",
+      "en": "No output",
       "zh": "无输出"
     },
     "gui.tasks.tools_n": {
@@ -8716,7 +8716,7 @@
       "zh": "停止"
     },
     "gui.tasks.why_at": {
-      "en": "stuck at: ",
+      "en": "Stuck at: ",
       "zh": "挂在："
     },
     "gui.tasks.why_interrupted": {
@@ -8732,11 +8732,11 @@
       "zh": "被一次重新规划取代了。"
     },
     "gui.tasks.replan_at": {
-      "en": "continues as: {id}",
+      "en": "Continues as: {id}",
       "zh": "转到：{id}"
     },
     "gui.tasks.depends_on_pre": {
-      "en": "depends on",
+      "en": "Depends on",
       "zh": "依赖"
     },
     "gui.tasks.depends_on_post": {
@@ -9048,8 +9048,8 @@
       "zh": "依赖"
     },
     "gui.dag.node_id": {
-      "en": "Node id",
-      "zh": "节点 id"
+      "en": "Node ID",
+      "zh": "节点 ID"
     },
     "gui.dag.deps_none": {
       "en": "nothing - starts with the graph",
@@ -9152,8 +9152,8 @@
       "en": "Deleted"
     },
     "gui.onb.base_ph": {
-      "en": "API Base URL",
-      "zh": "API Base URL"
+      "en": "API base URL",
+      "zh": "API base URL"
     },
     "gui.onb.connected": {
       "en": "Connected",
@@ -11076,11 +11076,11 @@
       "zh": "第 {a}-{b} 页"
     },
     "gui.knowledge.chunk_manual": {
-      "en": "written",
+      "en": "Written",
       "zh": "手写"
     },
     "gui.knowledge.chunk_off": {
-      "en": "not searched",
+      "en": "Not searched",
       "zh": "已停用"
     },
     "gui.knowledge.set_title": {
@@ -11188,7 +11188,7 @@
       "zh": "知识库设置"
     },
     "gui.knowledge.chunk_crop": {
-      "en": "the page region chunk {n} was cut from",
+      "en": "The page region chunk {n} was cut from",
       "zh": "第 {n} 块所在的页面区域"
     },
     "gui.knowledge.chunks_total": {
@@ -11276,7 +11276,7 @@
       "zh": "下一页"
     },
     "gui.knowledge.chunk_noid": {
-      "en": "written before pieces had ids; rebuild the document to act on it",
+      "en": "Written before pieces had IDs; rebuild the document to act on it",
       "zh": "该分块早于分块编号，重建文档后才能操作"
     },
     "gui.knowledge.folder_new": {
@@ -11368,7 +11368,7 @@
       "zh": "（无预览）"
     },
     "gui.trajectory.failed": {
-      "en": "failed",
+      "en": "Failed",
       "zh": "失败"
     },
     "gui.trajectory.list_label": {
@@ -11476,15 +11476,15 @@
       "zh": "状态"
     },
     "gui.trajectory.details.source_derived": {
-      "en": "derived",
+      "en": "Derived",
       "zh": "推导"
     },
     "gui.trajectory.details.source_attribute": {
-      "en": "attribute",
+      "en": "Attribute",
       "zh": "属性"
     },
     "gui.trajectory.details.source_artifact": {
-      "en": "artifact",
+      "en": "Artifact",
       "zh": "记录"
     },
     "gui.trajectory.details.omitted_n": {
@@ -11820,19 +11820,19 @@
       "zh": "未知"
     },
     "gui.trajectory.evidence.span_error": {
-      "en": "the span recorded an error",
+      "en": "The span recorded an error",
       "zh": "span 记录了错误"
     },
     "gui.trajectory.evidence.tool_error": {
-      "en": "the tool reported an error",
+      "en": "The tool reported an error",
       "zh": "工具报告了错误"
     },
     "gui.trajectory.evidence.tool_result_error": {
-      "en": "the tool result carries an error",
+      "en": "The tool result carries an error",
       "zh": "工具结果含错误"
     },
     "gui.trajectory.evidence.outer_only": {
-      "en": "outer call only",
+      "en": "Outer call only",
       "zh": "仅外层调用"
     },
     "gui.trajectory.basis.zero": {
@@ -11916,7 +11916,7 @@
       "zh": "另有 {n} 条耗时未知"
     },
     "gui.trajectory.bar.sum_overlap": {
-      "en": "nested calls overlap",
+      "en": "Nested calls overlap",
       "zh": "含父子调用重叠"
     },
     "gui.trajectory.bar.event_at": {
@@ -11956,7 +11956,7 @@
       "zh": "耗时构成条：{n} 条，计入 {known}"
     },
     "gui.trajectory.bar.failed": {
-      "en": "failed",
+      "en": "Failed",
       "zh": "失败"
     },
     "gui.trajectory.kind.skill_read": {
@@ -12120,11 +12120,11 @@
       "zh": "按消息前 8 KiB 解析"
     },
     "gui.trajectory.details.skill_used": {
-      "en": "used",
+      "en": "Used",
       "zh": "已使用"
     },
     "gui.trajectory.details.skill_unused": {
-      "en": "not used",
+      "en": "Not used",
       "zh": "未使用"
     },
     "gui.trajectory.block.outline": {
@@ -12152,7 +12152,7 @@
       "zh": "输出"
     },
     "gui.trajectory.usage.reasoning": {
-      "en": "reasoning",
+      "en": "Reasoning",
       "zh": "推理"
     },
     "gui.trajectory.usage.cost": {
@@ -12160,23 +12160,23 @@
       "zh": "费用"
     },
     "gui.trajectory.usage.unknown": {
-      "en": "unknown",
+      "en": "Unknown",
       "zh": "未知"
     },
     "gui.trajectory.usage.not_recorded": {
-      "en": "not recorded",
+      "en": "Not recorded",
       "zh": "未记录"
     },
     "gui.trajectory.evidence.result_error_key": {
-      "en": "the tool result carries an error field",
+      "en": "The tool result carries an error field",
       "zh": "工具结果带有 error 字段"
     },
     "gui.trajectory.evidence.result_error_flag": {
-      "en": "the tool result flags itself as failed",
+      "en": "The tool result flags itself as failed",
       "zh": "工具结果自标为失败"
     },
     "gui.trajectory.evidence.result_error_status": {
-      "en": "the tool result reports an error status",
+      "en": "The tool result reports an error status",
       "zh": "工具结果报告错误状态"
     },
     "gui.trajectory.kind.turn_end": {

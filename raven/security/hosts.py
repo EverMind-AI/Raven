@@ -83,6 +83,12 @@ def as_ip(host: str) -> Address | None:
         return None
 
 
+def is_loopback_ip(host: str) -> bool:
+    """Whether a canonical IP literal denotes loopback, without resolving names."""
+    addr = as_ip(host)
+    return addr is not None and addr.is_loopback
+
+
 def is_legacy_ip_form(host: str) -> bool:
     """Whether ``host`` is an address written in a form resolvers disagree on.
 
@@ -220,6 +226,7 @@ __all__ = [
     "embedded_v4",
     "is_legacy_ip_form",
     "is_local_name",
+    "is_loopback_ip",
     "is_public",
     "legacy_ipv4",
     "mapped_host",

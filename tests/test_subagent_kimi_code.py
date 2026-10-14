@@ -445,21 +445,34 @@ async def test_an_ask_that_runs_out_without_killpg_still_says_nothing(
 
 
 @pytest.mark.skipif(not hasattr(os, "killpg"), reason="process groups are POSIX")
-async def test_an_ask_that_runs_out_takes_what_its_kimi_started(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The group goes, not only the `kimi`: killing the `kimi` alone leaves what it started running."""
-    monkeypatch.setattr(kimi_code, "_ASK_TIMEOUT_S", 0.3)
+async def test_ask_cancelled_once_running_takes_what_its_kimi_started(tmp_path: Path) -> None:
+    """Ending an ask takes the group, not only the `kimi`, so what the `kimi` started goes with it.
 
-    assert await kimi_code.ask(_through_kimi(tmp_path, "ok", slow_ask=True, ask_worker=True), "hi") == (None, "")
+    Cancelled once the `kimi` is up rather than on the clock: the timeout runs
+    from the spawn, so an ask given a sliver of the cap is killed while the
+    `kimi` is still starting and has no worker to take. Readiness comes from
+    `ask.pid`, which the stand-in writes only after the worker is noted.
+    """
+    asking = asyncio.create_task(kimi_code.ask(_through_kimi(tmp_path, "ok", slow_ask=True, ask_worker=True), "hi"))
+    started = tmp_path / "ask.pid"
+    for _ in range(500):
+        if started.exists() and started.read_text().strip():
+            break
+        await asyncio.sleep(0.01)
+    assert started.exists() and started.read_text().strip(), "the `kimi` never came up"
 
     worker = int((tmp_path / "worker.pid").read_text())
-    for _ in range(40):
-        if not _alive(worker):
-            break
-        await asyncio.sleep(0.05)
+    assert _alive(worker), "the ask was cancelled before its `kimi` started a worker to take"
+    asking.cancel()
     try:
-        assert not _alive(worker)
+        with pytest.raises(asyncio.CancelledError):
+            await asking
+        # The group kill is signalled, not awaited: give the worker time to go.
+        for _ in range(40):
+            if not _alive(worker):
+                break
+            await asyncio.sleep(0.05)
+        assert not _alive(worker), "what the `kimi` started outlives the ask"
     finally:
         if _alive(worker):
             os.kill(worker, signal.SIGKILL)

@@ -1194,8 +1194,8 @@ describe('createChatStream — delegated delivery wording', () => {
 
     fake.__pushEvent({ type: 'subagent.delivered', payload: { label: 'stuck-node', status: 'exception' } })
 
-    expect(sysCalls.some(m => m.includes('waiting on a decision'))).toBe(true)
-    expect(sysCalls.some(m => m.includes('finished;'))).toBe(false)
+    expect(sysCalls).toContain('↩ stuck-node — Waiting on a decision')
+    expect(sysCalls.some(m => m.includes('Finished'))).toBe(false)
   })
 })
 
