@@ -11,6 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from raven.config.agent_names import THIRD_PARTY_PRESET_NAMES
 from raven.contracts.path_policy import WORKSPACE_DEFAULT_SENTINEL
+from raven.home import MACHINE_LANE_ENV, machine_lane_enabled
 from raven.sandbox.config import SandboxConfig
 
 #: The loop's outer LLM-error retry ladder when the config names none: one wait
@@ -1484,6 +1485,25 @@ class SubagentEngineConfig(Base):
         return data
 
 
+def _settle_machine(entry: Any) -> str | None:
+    """``entry.machine`` as an id or ``None``, with the lane's state said once on load.
+
+    Shared by every kind that can name a machine, so a row of any kind that
+    names one while the lane is off is said to stay off the table in the same
+    words; the registry's gate reads the same field for every kind.
+    """
+    machine = (getattr(entry, "machine", None) or "").strip() or None
+    if machine and not machine_lane_enabled():
+        logger.info(
+            "sub-agent {!r} names machine {!r}, and the machine lane is debug-only: the entry stays "
+            "off the table until raven is started with {}=1",
+            entry.name,
+            machine,
+            MACHINE_LANE_ENV,
+        )
+    return machine
+
+
 class ThirdPartyCliSubagentConfig(Base):
     """A third-party CLI agent (claude code, codex, …) callable as a native subagent.
 
@@ -1593,6 +1613,31 @@ class ThirdPartyCliSubagentConfig(Base):
     transcript_format: Literal["text", "codex_jsonl", "claude_stream_json", "openclaw_json", "opencode_json"] = "text"
     cwd: str | None = None
     env: dict[str, str] = Field(default_factory=dict)
+    machine: str | None = None
+    """The registered machine this agent runs on, by its ``connections.json`` id, or
+    ``None`` for this computer.
+
+    Set, ``command`` is started on that machine by its Raven node, in the
+    registered user's login environment there with this entry's ``env`` over
+    it -- never this computer's login shell -- and each run works in
+    ``<remoteCwd>/<instance or task id>`` there (``cwd`` names a directory on
+    this computer and is not read). The prompt reaches it the three ways it
+    does here: a ``{prompt}`` token as one argument, a ``{prompt_file}`` as a
+    file written into that directory, or on stdin, which the node closes after
+    it. The host's MCP servers are not lent to it, the files that come with a
+    task are named to it by address and not copied, and what it writes stays
+    on that machine. Raven reaches the machine over one ssh link with the
+    address, port and key the registry holds, none of which is written here.
+    See :mod:`raven.node.client` and
+    :class:`raven.agent.subagent.backends.cli_agent.CliAgentBackend`.
+
+    Debug-only until the lane matures, as for an acp entry: unless raven was
+    started with ``RAVEN_DEBUG_MACHINES=1`` (:func:`raven.home.machine_lane_enabled`),
+    an entry that names a machine is left off the table and no machine is
+    reached for it."""
+    remote_cwd: str | None = None
+    """Where on ``machine`` this agent works, ``~/raven-work`` when unset; ignored
+    without ``machine``. ``~`` is the registered user's home there."""
     timeout: int | None = None
     max_output_chars: int = 30000
     memory: SubagentMemoryConfig | None = Field(default=None, validation_alias=AliasChoices("memory", "everos"))
@@ -1639,6 +1684,11 @@ class ThirdPartyCliSubagentConfig(Base):
             raise ValueError("command and resumeCommand must either both contain {mcp_file} or both omit it")
         if self.mcps and not carries[0]:
             raise ValueError("mcps is set but command does not contain {mcp_file}")
+        return self
+
+    @model_validator(mode="after")
+    def _settle_machine_row(self) -> "ThirdPartyCliSubagentConfig":
+        self.machine = _settle_machine(self)
         return self
 
     @model_validator(mode="after")
@@ -1741,12 +1791,40 @@ class ThirdPartyOpenAISubagentConfig(Base):
     memory: SubagentMemoryConfig | None = Field(default=None, validation_alias=AliasChoices("memory", "everos"))
     """How the host addresses this agent's memories, or ``None`` for an agent
     the host records none for."""
+    machine: str | None = None
+    """The registered machine this agent's endpoint is reached from, by its
+    ``connections.json`` id, or ``None`` to reach ``baseUrl`` from this computer.
+
+    Set, each turn opens an ssh tunnel to that machine and closes it after: a
+    port on this computer's loopback forwarded to ``baseUrl``'s host and port
+    as the machine resolves them, for an endpoint that answers only on that
+    machine's network, or only on the machine itself (``http://127.0.0.1:...``,
+    or ``http://[::1]:...``). ``baseUrl`` has to be ``http``: the tunnel ends
+    at this computer's loopback, which an ``https`` certificate would not
+    name. The files that come with a task are named to the endpoint by their
+    address on this computer and not copied, as to the other kinds on a
+    machine. The address, port and key the registry holds are read for the
+    tunnel alone and written nowhere here. Debug-only as for the other kinds:
+    unless raven was started
+    with ``RAVEN_DEBUG_MACHINES=1``, the entry is left off the table and no
+    machine is reached for it. There is no ``remoteCwd``: an endpoint has no
+    working directory on the machine, and one written here is dropped with a
+    warning."""
 
     @model_validator(mode="before")
     @classmethod
     def _drop_unsupported_mcp_fields(cls, data: Any) -> Any:
         if not isinstance(data, dict):
             return data
+        if "remoteCwd" in data or "remote_cwd" in data:
+            # Named here for the reason the mcp fields are: a field that loads
+            # and does nothing is the failure that takes longest to find.
+            logger.warning(
+                "remoteCwd is not supported for kind 'openai' (sub-agent {!r}); ignoring -- an endpoint reached "
+                "from a machine has no working directory there",
+                data.get("name") or "<unnamed>",
+            )
+            data = {k: v for k, v in data.items() if k not in ("remoteCwd", "remote_cwd")}
         declared_mcps = data.get("mcps")
         allow_secrets = data.get("allowMcpSecrets", data.get("allow_mcp_secrets"))
         if declared_mcps or allow_secrets:
@@ -1785,6 +1863,18 @@ class ThirdPartyOpenAISubagentConfig(Base):
                 self.name,
             )
             self.reads_local_files = False
+        return self
+
+    @model_validator(mode="after")
+    def _settle_machine_row(self) -> "ThirdPartyOpenAISubagentConfig":
+        self.machine = _settle_machine(self)
+        if self.machine and (self.base_url or "").strip().lower().startswith("https:"):
+            logger.warning(
+                "openai sub-agent {!r} reaches its endpoint from machine {!r}, and the tunnel there carries http "
+                "only: every dispatch will be refused until baseUrl is http or `machine` is removed",
+                self.name,
+                self.machine,
+            )
         return self
 
     @model_validator(mode="after")
@@ -2034,6 +2124,26 @@ class ThirdPartyAcpSubagentConfig(Base):
     the field on the write path."""
     cwd: str | None = None
     env: dict[str, str] = Field(default_factory=dict)
+    machine: str | None = None
+    """The registered machine this agent runs on, by its ``connections.json`` id, or
+    ``None`` for this computer.
+
+    Set, ``command`` is what runs on that machine, started there by the
+    machine's Raven node in its registered user's login environment, with
+    this entry's ``env`` over it; raven reaches the machine over one ssh link
+    with the address, port and key the registry holds, and none of those is
+    written here. Each session works in ``<remoteCwd>/<instance or task id>``
+    there. MCP servers are not lent to it, files are not handed to it, and
+    what it writes stays on that machine. See :mod:`raven.node.client` and
+    :mod:`raven.acp_client.remote`.
+
+    Debug-only until the lane matures: unless raven was started with
+    ``RAVEN_DEBUG_MACHINES=1`` (:func:`raven.home.machine_lane_enabled`), an
+    entry that names a machine is left off the table and no machine is
+    reached for it."""
+    remote_cwd: str | None = None
+    """Where on ``machine`` this agent works, ``~/raven-work`` when unset; ignored
+    without ``machine``. ``~`` is the registered user's home there."""
     lend_keys: list[str] = Field(default_factory=list)
     """Raven providers whose key this agent is started with, by name (``openrouter``).
 
@@ -2098,6 +2208,29 @@ class ThirdPartyAcpSubagentConfig(Base):
                 data.get("name") or "<unnamed>",
             )
         return data
+
+    @model_validator(mode="after")
+    def _remote_rows_borrow_no_keys(self) -> "ThirdPartyAcpSubagentConfig":
+        """A row on another machine is started without Raven's keys; drop and warn.
+
+        Lending lets an agent here use a provider key Raven holds without
+        holding it itself; on another machine it would mean copying Raven's key
+        to that machine, which is that machine's own sign-in to provide.
+        Warn-and-drop on load for the startup reason
+        ``_warn_on_declared_cli_fields`` gives; the write path refuses it
+        (``update_subagents.reject_unsupported_acp_fields``).
+        """
+        self.machine = _settle_machine(self)
+        if self.machine and self.lend_keys:
+            logger.warning(
+                "sub-agent {!r} runs on machine {!r}, so Raven's keys {} are not lent to it; "
+                "sign it in on that machine instead",
+                self.name,
+                self.machine,
+                sorted(self.lend_keys),
+            )
+            self.lend_keys = []
+        return self
 
     @model_validator(mode="after")
     def _warn_on_prompt_placeholders(self) -> "ThirdPartyAcpSubagentConfig":
@@ -2179,6 +2312,31 @@ class BuiltinAgentConfig(Base):
     row that says nothing about confinement cannot loosen it."""
     timeout: int | None = None
     max_output_chars: int = 30000
+    machine: str | None = None
+    """Declared so that a row naming one is told, not so that it runs there.
+
+    A built-in agent is Raven's own loop in this process, where its model keys
+    and tools are, so it has no process to start on another machine; a value
+    here is dropped on load with a warning and the row runs on this computer,
+    reaching a machine the way the main loop does (``exec`` with a
+    ``machine``). Undeclared, the key would be dropped without a
+    word, which is how a row ends up running here while its author believes
+    it runs there."""
+
+    @model_validator(mode="after")
+    def _runs_here(self) -> "BuiltinAgentConfig":
+        machine = (self.machine or "").strip()
+        if machine:
+            logger.warning(
+                "built-in sub-agent {!r} names machine {!r}, which it cannot run on: Raven's own loop runs in "
+                "this process, where its model keys and tools are. The entry runs on this computer and reaches "
+                "the machine as the main loop does (exec with a machine); remove `machine` "
+                "from it",
+                self.name,
+                machine,
+            )
+        self.machine = None
+        return self
 
 
 AgentConfig = Annotated[

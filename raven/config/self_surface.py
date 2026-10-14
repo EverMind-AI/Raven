@@ -35,6 +35,7 @@ import string
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -412,7 +413,7 @@ SECTIONS: tuple[Section, ...] = (
                 "Let the agent register remote machines",
                 "bool",
                 _E.RELOAD,
-                sensitive="lets the agent write the owner's ssh config",
+                sensitive="lets the agent write the owner's SSH config",
             ),
             Setting(
                 "tools.browser.headfulOnAgentUse",
@@ -781,6 +782,47 @@ def find(path: str) -> tuple[Setting, list[str]] | None:
         if "*" in setting.path and (bound := _matches(setting.path, path)) is not None:
             return setting, list(bound.values())
     return None
+
+
+@lru_cache(maxsize=1024)
+def _wildcard_indexes(path: str) -> frozenset[int]:
+    """The positions in ``path`` that stand for a map entry rather than a field.
+
+    Asked of the longest catalog entry whose path is a *prefix* of this one, not
+    of a full match: the catalog carries ``tools.mcpServers.*.enabled`` and the
+    tool may not write ``tools.mcpServers.fooBar.command``, but a map entry is
+    named the same way however deep inside it a path reaches. The binding is a
+    property of the segment, so it is read before the rest of the path is known.
+
+    A path with no catalog entry anywhere along it (an extension section, a
+    second-level sub-agent field) has no wildcard to find, and the tolerant rule
+    that was there before is what reads it. The catalog is the only thing that
+    knows a segment was named by the caller, so it is asked rather than guessed
+    from the shape of the name.
+
+    Cached on the path: the catalog is a module constant, so the answer cannot
+    change while the process runs, and ``lookup`` is called once per leaf on
+    every settings read. Uncached, this walked the 95 catalog entries once per
+    prefix -- 48us a call against the 22us the walk itself costs, on a path a
+    page reload repeats for every row it draws.
+    """
+    parts = path.split(".")
+    wildcards: frozenset[int] = frozenset()
+    for end in range(1, len(parts) + 1):
+        found = find(".".join(parts[:end]))
+        if found is not None:
+            pattern = found[0].path.split(".")
+            wildcards = frozenset(index for index, part in enumerate(pattern) if part == "*")
+    return wildcards
+
+
+def _provider_bound(path: str) -> bool:
+    """Whether a wildcard in ``path`` binds a provider name.
+
+    ``providers`` is the one map whose reader folds spellings, so it is the one
+    map where a segment naming an entry keeps the tolerant rule.
+    """
+    return path.split(".", 1)[0] == "providers"
 
 
 def section_of(path: str) -> Section | None:
@@ -1424,11 +1466,12 @@ def read_raw(config_path: Path | None = None) -> dict[str, Any]:
 
 def lookup(data: dict[str, Any], path: str) -> tuple[bool, Any]:
     """``(present, value)`` for ``path`` in a raw config dict, either spelling."""
+    wildcards = _wildcard_indexes(path) if not _provider_bound(path) else frozenset()
     node: Any = data
-    for part in path.split("."):
+    for index, part in enumerate(path.split(".")):
         if not isinstance(node, dict):
             return False, None
-        key = _spelled(node, part)
+        key = _spelled(node, part, top_level=node is data, exact=index in wildcards)
         if key not in node:
             return False, None
         node = node[key]
@@ -1559,13 +1602,17 @@ def remove_value(path: str, *, config_path: Path | None = None) -> Any:
 def _mutate(path: str, value: Any, *, remove: bool, config_path: Path | None) -> Any:
     target = config_path or get_config_path()
     parts = path.split(".")
+    # The segments standing for a map entry, which the file's own key names:
+    # see ``_wildcard_indexes``. Read once, outside the retry, since the
+    # catalog does not depend on the file's contents.
+    wildcards = _wildcard_indexes(path) if not _provider_bound(path) else frozenset()
 
     def _apply(_text: str | None) -> tuple[str | None, Any]:
         data = read_raw_or_raise(target) if target.exists() else {}
         before = copy.deepcopy(data)
         node = data
-        for part in parts[:-1]:
-            key = _spelled(node, part)
+        for index, part in enumerate(parts[:-1]):
+            key = _spelled(node, part, top_level=node is data, exact=index in wildcards)
             child = node.get(key)
             if child is None:
                 if remove:
@@ -1574,7 +1621,7 @@ def _mutate(path: str, value: Any, *, remove: bool, config_path: Path | None) ->
             if not isinstance(child, dict):
                 raise ValueError(f"{path}: {key} is not an object in config.json")
             node = child
-        leaf = _spelled(node, parts[-1])
+        leaf = _spelled(node, parts[-1], top_level=node is data, exact=len(parts) - 1 in wildcards)
         previous = node.get(leaf)
         if remove:
             if leaf not in node:

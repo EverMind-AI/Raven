@@ -222,7 +222,10 @@ def make_ssh_runner(
             host, port, key, user=user, connect_timeout=connect_timeout, identities_only=identities_only
         ) + [cmd]
         try:
-            proc = subprocess.run(argv, capture_output=True, text=True, timeout=cap_seconds)
+            # Its own stdin, never the caller's: ssh reads stdin for the far
+            # side, and under ``raven acp`` the caller's stdin carries ACP
+            # frames, which a one-shot ssh would otherwise swallow.
+            proc = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=cap_seconds)
         except subprocess.TimeoutExpired as exc:
             got = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
             return TIMED_OUT_RC, got

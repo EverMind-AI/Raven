@@ -381,8 +381,30 @@ keeping the registry and handing it over: a launcher points the agent's
 `RAVEN_CONNECTIONS` at the owner's store rather than copying rows into the
 agent's own home, and a sub-agent inherits `RAVEN_HOME` so it resolves the
 same file. Which machine a job lands on, and whether it can run at all, is
-settled inside the agent that runs it. Nothing on the dispatch path reads the
-registry, so no graph and no spawn is ever refused over the state of it.
+settled inside the agent that runs it, with one exception: an agent entry that
+names a `machine`, of any kind. An `acp` or `cli` entry is started there by the
+machine's **Raven node**, reached over the one ssh link the host keeps to the machine
+(`raven/node/client.py`) -- a link that may go and come back while the agent runs on;
+an `openai` entry's endpoint is reached from that machine through an ssh tunnel the
+host opens for the turn and closes after it (`remote.tunnel`); a `builtin` entry cannot
+name one -- Raven's own loop runs here -- and is loaded with a warning and runs here.
+The row's key opens that link or tunnel and goes nowhere else, and the ssh line built
+from the row stays in memory; the row's user, address and port open it too and also name
+every path on the machine that a model, a reply, a record or an RPC result carries, written
+the way scp writes one -- `user@host:/abs`, or `scp://user@host:port//abs` off port 22
+(`remote.shown`, `raven/acp_client/remote.py`) -- and never by the machine's id.
+Its dispatch reads the registry once (`remote.machine`), and the run fails before
+anything starts when the id is not registered, is listed twice, cannot be used, or
+is this computer; the `spawn` itself has already answered that it started. No other
+dispatch reads the registry, so no graph and no spawn is ever refused over the state
+of it. The entry names only the machine's id, and the entry's `env` reaches the
+agent on the link, never on a command line. Such an entry is added the way any
+preset is, with `machine` (and
+`remote_cwd`, for an `acp` or `cli` one) on `subagents.add` — from a chat through
+`raven_config`, which lists the registered machines while the lane is on; the page's
+add passes no machine yet — refused before anything is spent when the lane is off,
+the id is not usable or the preset is a built-in agent, and proved by the same
+readiness ping as a local add, run on that machine.
 _Avoid_: "host" / "server" / "node" (too broad, no link to the
 `ops connection` registry that supplies the rows); "GPU box" (only some are
 GPU hosts, and the term covers any registered compute destination);
@@ -390,12 +412,61 @@ GPU hosts, and the term covers any registered compute destination);
 here the rows name compute destinations with that binding as an
 implementation detail).
 
+**Raven node** (`raven/node/`):
+The Raven process on a registered **Machine** that owns the agents the host runs there:
+a daemon (`python -I -m raven.node --serve --dir <node_dir>`) that the host's relay
+starts over ssh when none is up (`--attach`: the relay bridges the ssh session to the
+daemon's socket -- under `node_dir/run/`, or in a directory of the user's own under the temp
+directory when that path is too long for a socket; either way the relay forwards only to a
+socket of the user's -- and leaves with the ssh; the daemon leaves on its
+own once idle). It does three things there and nothing else: answers file calls with
+Raven's own file tools (`read_file`, `list_dir`, `find`, `grep`, `write_file`, `edit_file`)
+fenced to the directories each call names, so a read of 50 lines of a large file moves
+those 50 lines, and fetches one file whole (`fs/pull`); starts the `acp` and `cli` agents
+whose entries name the machine, each under a task id of the host's, in its own process
+group in the machine user's login environment, forwards what they write (an ACP agent's
+frames, a CLI agent's output lines) on numbered channels of the connection that holds them
+-- a CLI agent's prompt reaches its stdin the other way (`agent/stdin`), which also closes
+it -- and keeps those lines in the task's record
+(`node_dir/tasks/<task>/`, owner-only like the host's journal), so a connection that goes
+leaves the agent running and the next
+one takes it over from the frame the host last read (`agent/attach`); and answers probes of
+the machine and of an agent's command. It holds no conversation, calls no model and opens
+no network port. It runs exactly the host's code, checked by protocol and digest at every
+connection (`raven/node/bundle.py`); `raven ops connection install-node` puts it on a
+machine, under the row's `node_dir` (`~/.raven-node` when it names none), in a directory
+named by the code's version and digest -- its install name, `bundle.install_name()`. The
+host keeps at most one live link per machine and watches it with a heartbeat
+(`raven/node/client.py`): a link silent for 15 s is lost, the agents on it wait, and the
+link is tried again on a backoff for as long as any waits; a link that comes back attaches
+each agent again by its task id. Only `--stdio` (tests, a fallback) ties the agents to the
+connection.
+_Avoid_: "node" alone (a DAG node is a `run_subagent_dag` step, and the Machine
+entry already rules the bare word out for a computer); "node id" for the install
+name (a **Node id** is a delegated task's address); "agent" or "server" (it
+answers only the Raven that reaches it, only over ssh).
+
+**By address** (`remote.files_note`, `raven/ops/remote_path.py`):
+How a file crosses machines: it does not. A file that comes with a task is named to the
+agent on the **Machine** by its address on the computer that sent it, and the agent uses
+it where the machine can read it (the same path on a disk both mount, a copy already
+there) or says it could not be found and goes on; what a session makes stays on the
+machine, named in the reply by address (the scp form), where the file tools read it by
+that address and `deliver_files` fetches one file by it on request. Nothing is copied
+ahead of a prompt, nothing is brought back unasked, and no two machines are ever told to
+share a disk: whether they do shows in whether a path reads there.
+_Avoid_: "transfer", "sync", "collect" (nothing moves on its own); "shared disk" as a
+registry fact (it is not recorded: a path either reads on a machine or does not).
+
 **Roster** (`format_agent_listing`):
 The agent table rendered as the text spliced into `spawn`'s and `run_subagent_dag`'s tool
 descriptions — `name [stateful, local-files, live-progress] (description)`. The model's only
 account of which agents exist, so an agent absent from it cannot be chosen; the `enum` on
 the `subagent` parameter constrains the same set. All three capabilities render positive *or*
-negative, because "no tag" and "the roster does not say" are indistinguishable otherwise.
+negative, because "no tag" and "the roster does not say" are indistinguishable otherwise. A
+row of any kind that names a **Machine** renders a fourth tag after them, `on machine <id>`:
+the one conditional tag, since a local row has nothing to say in that position, and the id
+only, never the address.
 Also spliced into the skill gate's prompt under push discovery, where it is the account of
 what can be delegated and so decides which candidate skills are dropped as already covered;
 that copy omits the generic `builtin` row, which claims no capability bias and would read as
@@ -456,7 +527,14 @@ one the dispatching turn's own tools get. Every dispatch supplies it — `spawn`
 read), a DAG node takes the same, and a Direct Chat resolves `session_workdir` because its
 branch returns before `workdir.bind` wraps the turn body. Distinct from **Agent home**
 (`SubagentManager.workspace`, `~/.raven/workspace`), which holds raven's memory and skills
-and is only the fallback for a dispatch that supplied nothing.
+and is only the fallback for a dispatch that supplied nothing. An `acp` or `cli` entry that
+names a **Machine** is the exception: its session works on that machine, in
+`<remoteCwd>/<instance or task id>` (`remoteCwd` defaults to `~/raven-work`), made and
+resolved there by the machine's **Raven node** for each dispatch before the session
+opens (`session/dir`); this computer's working directory never reaches the machine.
+The files that come with the turn are named to the agent by address (`remote.files_note`);
+nothing is copied to the machine, and nothing comes back unasked: what the session made
+stays there, named in the reply by address.
 _Avoid_: treating the fallback as the default — a sub-agent working in Agent home inspects
 raven's own memory instead of the user's checkout, and says nothing about having done so.
 
@@ -1685,9 +1763,9 @@ turns through its schedulers and sentinel but is an engine the loop and the asse
 consume, not a transport), and `core` (the L2 assembly root). `templates` is packaged data
 and takes no seat. Surfaces: `cli`, `rpc`, `acp` (an entrance: Raven serving as an
 agent for another host) and `a2a` (the same entrance for a peer agent, over
-Agent2Agent rather than ACP). `browser` and `importer` are seated inner (feature
-libraries consumed by surfaces, importing none themselves -- the edge is watched
-by the contract now, not by a ruling note). `evolver` is not a seat at all: it left the
+Agent2Agent rather than ACP). `browser`, `importer` and `node` (the **Raven node**)
+are seated inner (feature libraries consumed by surfaces, importing none themselves --
+the edge is watched by the contract now, not by a ruling note). `evolver` is not a seat at all: it left the
 package for the repo-level `evolver/` tool (outside the wheel) that drives raven as a library,
 and a fifth import-linter contract keeps the runtime from importing it back. `agents/` is the
 same kind of non-seat: repo-level agent definitions (the A/B pilots whose A side is the

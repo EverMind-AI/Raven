@@ -195,6 +195,10 @@ class Session:
     pending_clarification: dict | None = field(default=None)
     # Messages already on disk; save() appends only past this index.
     _persisted_count: int = field(default=0, repr=False)
+    # ``truncations`` when this copy last read or wrote the file. A cut since then
+    # leaves the file holding the messages that were cut, which only a rewrite
+    # drops, however far the list has grown back.
+    _persisted_truncations: int = field(default=0, repr=False)
     # What the transcript looked like the last time this copy read or wrote it,
     # as (size, mtime_ns). save() compares it to decide whether anybody else
     # has written since, and only then re-reads the record to merge under.
@@ -371,8 +375,12 @@ def _saved_time(value: Any) -> datetime | None:
         return None
 
 
+def _cut_since_persisted(session: Session) -> bool:
+    return session.truncations != session._persisted_truncations
+
+
 def _is_clean(session: Session) -> bool:
-    if len(session.messages) != session._persisted_count:
+    if len(session.messages) != session._persisted_count or _cut_since_persisted(session):
         return False
     current = _fingerprint(session)
     # None is "could not tell", never "unchanged": two failures must not read as a match.
@@ -842,8 +850,11 @@ class SessionManager:
 
         Appends a fresh metadata record plus the not-yet-persisted messages
         under a cross-process lock, so concurrent writers never lose each
-        other's turns and a turn's messages stay contiguous. A shrunken
-        message list (clear) rewrites the file atomically instead.
+        other's turns and a turn's messages stay contiguous. A message list
+        cut since this copy last read or wrote the file (``clear``,
+        ``undo_last_turn``) rewrites it atomically instead, however far the
+        list has grown back: the cut messages are still in the file, and an
+        append would leave them there.
 
         An untitled session is auto-named here from its first user message
         (first line, collapsed whitespace, capped at 40 chars); a title set
@@ -889,7 +900,7 @@ class SessionManager:
                 ensure_ascii=False,
             )
 
-            if len(session.messages) < session._persisted_count:
+            if len(session.messages) < session._persisted_count or _cut_since_persisted(session):
                 lines = [metadata_line]
                 lines += [json.dumps(m, ensure_ascii=False) for m in session.messages]
                 atomic_replace(path, "".join(line + "\n" for line in lines))
@@ -902,6 +913,7 @@ class SessionManager:
             session._persisted_metadata = dict(session.metadata)
 
         session._persisted_count = len(session.messages)
+        session._persisted_truncations = session.truncations
         session._clean_fingerprint = _fingerprint(session)
         self._remember(session)
 
@@ -1062,14 +1074,16 @@ class SessionManager:
     def flush(self, key: str) -> bool:
         """Save the session in memory, cached or held elsewhere, iff it has unpersisted messages.
 
-        Uses the _persisted_count dirty check. Returns False only when a save
-        was attempted and failed (the failure is swallowed); True otherwise,
-        including the no-op cases (key not in memory / no new messages).
+        Unpersisted means messages past ``_persisted_count``, or a cut the file
+        has not seen yet, such as one whose own save failed. Returns False only
+        when a save was attempted and failed (the failure is swallowed); True
+        otherwise, including the no-op cases (key not in memory / nothing
+        unpersisted).
         """
         cached = self._live(key)
         if cached is None:
             return True
-        if len(cached.messages) > cached._persisted_count:
+        if len(cached.messages) > cached._persisted_count or _cut_since_persisted(cached):
             try:
                 self.save(cached)
             except Exception:

@@ -754,9 +754,10 @@ async def test_a_failed_test_after_a_config_edit_keeps_the_capabilities_the_rost
 
 async def test_the_connect_records_what_a_test_would(tmp_path: Path, monkeypatch) -> None:
     """``record_capabilities`` is the writer the manual test and the connect
-    share, and ``capabilities_wanted`` is the boot backfill's own three cases:
-    no record, a record for a launch config that changed, a record from before
-    the menu was measured. A complete record is not re-measured."""
+    share, and ``capabilities_wanted`` decides when a connect measures: no
+    record, a record for a launch config that changed, a record from before the
+    menu was measured, among the cases its docstring lists. A complete record is
+    not re-measured."""
     path = tmp_path / "caps.json"
     monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: path)
     cfg = stub_config("a")
@@ -2519,16 +2520,24 @@ def test_the_launch_key_covers_every_launch_parameter() -> None:
     # handler does not make the running process the wrong one. `ready_timeout_s`
     # is how long this caller waits for the handshake, not what was launched: two
     # entries differing only in patience share the connection they both wanted.
-    outside = {"self", "name", "on_request", "ready_timeout_s"}
+    # `launcher` is how a process on a `machine` is started, derived from the
+    # launch arguments the key already covers.
+    outside = {"self", "name", "on_request", "ready_timeout_s", "launcher"}
     params = {p for p in inspect.signature(AcpConnectionPool.acquire).parameters} - outside
     assert params == set(LAUNCH_PARAMS)
 
     base = {"command": "agent acp", "cwd": "/w", "env": {"A": "1"}}
-    for field, other in (("command", "agent acp --url x"), ("cwd", "/other"), ("env", {"A": "2"})):
+    for field, other in (
+        ("command", "agent acp --url x"),
+        ("cwd", "/other"),
+        ("env", {"A": "2"}),
+        ("machine", "box"),
+    ):
         assert launch_key(**base) != launch_key(**{**base, field: other}), field
     assert launch_key(**base) == launch_key(**base)
-    # An absent env and an empty one are the same launch.
+    # An absent env and an empty one are the same launch, and so is a machine that is this computer.
     assert launch_key(command="a", cwd=None, env=None) == launch_key(command="a", cwd=None, env={})
+    assert launch_key(command="a", cwd=None, env=None) == launch_key(command="a", cwd=None, env=None, machine=None)
 
 
 async def test_two_bindings_of_one_agent_hold_their_own_connections(tmp_path: Path) -> None:

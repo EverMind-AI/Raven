@@ -22,6 +22,7 @@ as absent rather than shown as current, which also covers a hand-edited
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import os
@@ -35,10 +36,12 @@ from typing import Any, Literal
 
 from loguru import logger
 
-from raven.acp_client import protocol
+from raven.acp_client import protocol, remote
 from raven.acp_client.client import AcpClient
 from raven.acp_client.permissions import auto_approver
 from raven.acp_client.protocol import SESSION_MCP_CAPABILITY, STEER_CAPABILITY, AcpError, AcpRemoteError, reason_of
+from raven.home import subagent_role_env
+from raven.ops import remote_path
 from raven.utils.atomic_io import atomic_update
 from raven.utils.commands import command_argv
 
@@ -56,6 +59,11 @@ _CLOSE_TIMEOUT_S = 10.0
 SnapshotStatus = Literal["ready", "attention", "missing", "unknown"]
 
 _LAUNCH_FIELDS = ("command", "cwd", "env", "ready_timeout_ms")
+
+#: Where an acp agent runs, when that is a registered machine rather than here.
+#: Folded into launch digests only when set, so a digest recorded before these
+#: fields existed still matches the row it was taken from.
+REMOTE_LAUNCH_FIELDS = ("machine", "remote_cwd")
 
 # Substrings that mark a remote error as "the operator has to authenticate",
 # which is a different action from "this thing is not reachable". Matched on the
@@ -319,6 +327,10 @@ def snapshot_fingerprint(cfg: Any) -> str:
     # Only when set, so every snapshot measured before the field existed holds.
     if getattr(cfg, "lend_keys", None):
         payload["lend_keys"] = list(cfg.lend_keys)
+    # Same rule: a row moved to another machine is another agent install.
+    for name in REMOTE_LAUNCH_FIELDS:
+        if getattr(cfg, name, None):
+            payload[name] = getattr(cfg, name)
     raw = json.dumps(payload, sort_keys=True, default=str)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
@@ -785,6 +797,41 @@ def npx_fetch_lead(verdict: str) -> str:
     return f"npx could not download it ({verdict}); check the network, the npm registry or the proxy"
 
 
+class _NotThereError(Exception):
+    """A machine an agent cannot be verified on, in one sentence."""
+
+
+@dataclass(frozen=True)
+class _OnMachine:
+    """The link to a machine, with the agent's command confirmed to be there."""
+
+    link: Any
+    target: remote.Machine
+
+
+async def _reach(machine_id: str, command: str, env: dict[str, str]) -> _OnMachine:
+    """The machine's node, after it has found ``command`` there; :class:`_NotThereError` says why not.
+
+    One round trip on the link (``probe/agent``) before the real handshake,
+    so "not installed there" is told apart from "installed and broken"
+    without starting anything.
+    """
+    try:
+        target = await asyncio.to_thread(remote.machine, machine_id)
+    except remote.RemoteMachineError as exc:
+        raise _NotThereError(str(exc)) from None
+    link = remote_path.nodes()
+    if link is None:
+        raise _NotThereError(f"machine {target.label}: this process does not reach registered machines")
+    try:
+        probed = await link.probe_agent(machine_id, command, env)
+    except remote_path.NodeCallError as exc:
+        raise _NotThereError(str(exc)) from None
+    if not probed.get("found"):
+        raise _NotThereError(remote.agent_missing(target))
+    return _OnMachine(link, target)
+
+
 async def verify_agent(cfg: Any, *, env: dict[str, str] | None = None) -> CapabilitySnapshot:
     """Connect once, read what the agent reports, and disconnect. Never raises.
 
@@ -843,19 +890,42 @@ async def verify_agent(cfg: Any, *, env: dict[str, str] | None = None) -> Capabi
             elapsed_ms=int((time.monotonic() - started) * 1000),
         )
 
+    agent_env = dict(env if env is not None else (getattr(cfg, "env", None) or {}))
+    command = getattr(cfg, "command", "") or ""
+    machine_id = (getattr(cfg, "machine", None) or "").strip()
+    there: _OnMachine | None = None
+    if machine_id:
+        # An agent on a registered machine is verified where it runs, through
+        # the machine's Raven node as a dispatch starts it, after the node has
+        # said the command is there. Every failure there is "attention", never
+        # "missing": the roster answers "missing" with an installer, and that
+        # installer would run on this computer.
+        try:
+            there = await _reach(machine_id, command, agent_env)
+        except _NotThereError as exc:
+            return done("attention", str(exc))
     client: AcpClient | None = None
     try:
-        client = await AcpClient.launch(
-            name=name,
-            command=getattr(cfg, "command", "") or "",
-            cwd=getattr(cfg, "cwd", None),
-            env=dict(env if env is not None else (getattr(cfg, "env", None) or {})),
-            # Nothing here is prompted, so no permission request is expected.
-            # One that arrives anyway still has to be answered, or the agent
-            # waits for a reply that never comes and the handshake stalls behind
-            # its own timeout.
-            on_request=auto_approver(name),
-        )
+        # Nothing here is prompted, so no permission request is expected. One
+        # that arrives anyway still has to be answered, or the agent waits for
+        # a reply that never comes and the handshake stalls behind its own
+        # timeout.
+        if there is not None:
+            try:
+                endpoint = await there.link.open_channel(
+                    machine_id,
+                    name=name,
+                    command=command,
+                    cwd=remote.root_of(getattr(cfg, "remote_cwd", None)),
+                    env={**subagent_role_env(), **agent_env},
+                )
+            except remote_path.NodeCallError as exc:
+                return done("attention", str(exc))
+            client = AcpClient.over(endpoint, name=name, on_request=auto_approver(name))
+        else:
+            client = await AcpClient.launch(
+                name=name, command=command, cwd=getattr(cfg, "cwd", None), env=agent_env, on_request=auto_approver(name)
+            )
         try:
             init = await client.request("initialize", protocol.initialize_params(), timeout=budget)
         except AcpRemoteError as exc:
@@ -866,6 +936,10 @@ async def verify_agent(cfg: Any, *, env: dict[str, str] | None = None) -> Capabi
         except AcpError as exc:
             tail = client.stderr_tail(400)
             suffix = f"; stderr: {tail}" if tail else ""
+            if there is not None:
+                # In the far side's own words (a full disk, a crash), never
+                # "missing": whatever is absent is absent there.
+                return done("attention", f"handshake failed: {exc}{suffix}")
             unfetched = npx_fetch_failure(getattr(cfg, "command", "") or "", exc, client.stderr_tail() or None)
             if unfetched is not None:
                 # Not `missing`: nothing is absent that an install would bring, and
@@ -881,7 +955,19 @@ async def verify_agent(cfg: Any, *, env: dict[str, str] | None = None) -> Capabi
                 f"agent speaks ACP v{handshake.protocol_version}, raven speaks v{protocol.PROTOCOL_VERSION}"
             )
 
-        with tempfile.TemporaryDirectory(prefix="raven_acp_verify_") as tmp:
+        with contextlib.ExitStack() as scratch:
+            if there is None:
+                tmp = scratch.enter_context(tempfile.TemporaryDirectory(prefix="raven_acp_verify_"))
+            else:
+                # On the machine, the one directory every check reuses: a local
+                # temp dir does not exist where the agent runs, and it refuses one.
+                try:
+                    tmp, _since = await there.link.session_dir(
+                        machine_id,
+                        remote.session_root(getattr(cfg, "remote_cwd", None), remote.CHECK_HANDLE),
+                    )
+                except remote_path.NodeCallError as exc:
+                    return done("attention", str(exc), handshake)
             try:
                 session = await client.request("session/new", {"cwd": tmp, "mcpServers": []}, timeout=budget)
             except AcpRemoteError as exc:
@@ -931,6 +1017,8 @@ async def verify_agent(cfg: Any, *, env: dict[str, str] | None = None) -> Capabi
         )
         return done("ready", detail, handshake)
     except AcpError as exc:
+        if there is not None:
+            return done("attention", str(exc))
         return done("missing", str(exc))
     except Exception as exc:  # noqa: BLE001 - a raising verify would blank the page
         logger.opt(exception=True).warning("acp verify for {!r} failed unexpectedly: {}", name, exc)

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -361,3 +363,212 @@ def test_a_re_delivery_refreshes_what_the_registry_says_the_file_is(tmp_path) ->
 
     rows = store.for_conversation("web:s1")
     assert [r.title for r in rows] == ["second cut"]
+
+
+# --- a file on a registered machine is brought back first ----------------------------------
+
+
+@pytest.fixture
+def machines(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from raven.ops import remote_path
+    from tests.test_node_client import row
+
+    registry = tmp_path / "connections.json"
+    registry.write_text(json.dumps({"connections": [row()]}), encoding="utf-8")
+    monkeypatch.setenv("RAVEN_CONNECTIONS", str(registry))
+    monkeypatch.setenv("RAVEN_DEBUG_MACHINES", "1")
+    monkeypatch.setattr(remote_path, "_HOMES", {})
+    monkeypatch.setattr(remote_path, "_READ", {})
+    monkeypatch.setattr(
+        "raven.config.loader.load_config", lambda *a, **k: SimpleNamespace(subagents=SimpleNamespace(agents=[]))
+    )
+    pool = _RemotePool()
+    monkeypatch.setattr(remote_path, "_NODES", lambda: pool)
+    return pool
+
+
+def _landed(tmp_path: Path, place: str, *, name: str | None = None, machine: str = "box") -> Path:
+    """Where a file of the machine lands, as deliver.py lays it out: under a key of its path, by its name."""
+    key = hashlib.sha256(f"{machine}\0{place}".encode()).hexdigest()[:16]
+    return tmp_path / "chanwork" / "pulled" / machine / key / (name or PurePosixPath(place).name)
+
+
+class _RemotePool:
+    """A node pool with one file of a given size, which it hands over as x's."""
+
+    def __init__(self) -> None:
+        self.size = 5
+        self.kind = "file"
+        self.pulled: list[tuple[str, Path, list[str]]] = []
+
+    async def home(self, machine: str) -> str:
+        return "/root"
+
+    async def stat(self, machine: str, path: str, *, roots: list[str], hash: bool = False) -> dict:
+        return {"exists": self.kind != "missing", "kind": self.kind, "size": self.size, "mtime": 1.0}
+
+    async def pull_file(self, machine: str, remote_file: str, local: Path, *, roots: list[str]) -> int:
+        local.parent.mkdir(parents=True, exist_ok=True)
+        local.write_bytes(b"x" * self.size)
+        self.pulled.append((remote_file, local, roots))
+        return self.size
+
+
+async def test_a_file_on_a_machine_is_brought_back_and_delivered(tool, tmp_path, machines) -> None:
+    summary = await tool.execute(files=[{"path": "box:raven-work/t1/report.pdf", "title": "Report"}])
+
+    manifest = tool.take_metadata()["raven_delivery"]
+    assert manifest["invalid"] == [], summary
+    (entry,) = manifest["files"]
+    landed = _landed(tmp_path, "/root/raven-work/t1/report.pdf")
+    assert entry["name"] == "report.pdf" and entry["path"] == str(landed) and entry["size"] == 5
+    assert landed.read_bytes() == b"xxxxx"
+    assert machines.pulled == [("/root/raven-work/t1/report.pdf", landed, ["/root/raven-work"])]
+
+
+async def test_a_name_holding_the_other_platform_s_separators_lands_as_one_name_under_the_delivery_directory(
+    tool, tmp_path, machines
+) -> None:
+    # A Linux file name may hold backslashes, which a Windows host reads as steps up.
+    summary = await tool.execute(files=[{"path": "box:raven-work/t1/..\\..\\..\\review_escape.txt"}])
+
+    manifest = tool.take_metadata()["raven_delivery"]
+    assert manifest["invalid"] == [], summary
+    (landed,) = (Path(entry["path"]) for entry in manifest["files"])
+    assert landed == _landed(
+        tmp_path, "/root/raven-work/t1/..\\..\\..\\review_escape.txt", name="..%5C..%5C..%5Creview_escape.txt"
+    )
+    assert landed.is_file() and not list(tmp_path.glob("**/review_escape.txt"))
+    assert machines.pulled[0][0] == "/root/raven-work/t1/..\\..\\..\\review_escape.txt"
+
+
+async def test_two_names_that_differ_only_by_one_written_out_land_apart(tool, tmp_path, machines) -> None:
+    # `a\b.txt` is written `a%5Cb.txt` here, so a file named `a%5Cb.txt` must not land on it.
+    summary = await tool.execute(
+        files=[{"path": "box:raven-work/t1/a\\b.txt"}, {"path": "box:raven-work/t1/a%5Cb.txt"}]
+    )
+
+    manifest = tool.take_metadata()["raven_delivery"]
+    assert manifest["invalid"] == [], summary
+    landed = [Path(entry["path"]) for entry in manifest["files"]]
+    assert landed == [
+        _landed(tmp_path, "/root/raven-work/t1/a\\b.txt", name="a%5Cb.txt"),
+        _landed(tmp_path, "/root/raven-work/t1/a%5Cb.txt", name="a%255Cb.txt"),
+    ]
+    assert all(place.is_file() for place in landed)
+    assert [where for where, _, _ in machines.pulled] == [
+        "/root/raven-work/t1/a\\b.txt",
+        "/root/raven-work/t1/a%5Cb.txt",
+    ]
+
+
+async def test_two_paths_this_filesystem_would_read_as_one_name_land_apart(tool, tmp_path, machines) -> None:
+    # Windows and macOS read `Report.txt` and `report.txt` as one name, and Windows drops a trailing dot: the
+    # key of each path keeps them apart, whatever the filesystem makes of the name.
+    names = ("Report.txt", "report.txt", "report.txt.")
+
+    summary = await tool.execute(files=[{"path": f"box:raven-work/t1/{name}"} for name in names])
+
+    manifest = tool.take_metadata()["raven_delivery"]
+    assert manifest["invalid"] == [], summary
+    landed = [Path(entry["path"]) for entry in manifest["files"]]
+    assert landed == [_landed(tmp_path, f"/root/raven-work/t1/{name}") for name in names]
+    assert len({place.parent for place in landed}) == 3 and all(place.is_file() for place in landed)
+    assert [where for where, _, _ in machines.pulled] == [f"/root/raven-work/t1/{name}" for name in names]
+
+
+async def test_nothing_is_fetched_to_a_landing_outside_the_delivery_directory(
+    tool, tmp_path, machines, monkeypatch
+) -> None:
+    from raven.agent.tools import deliver
+
+    monkeypatch.setattr(deliver, "_local_name", lambda part: "..")
+
+    summary = await tool.execute(files=[{"path": "box:raven-work/t1/report.pdf"}])
+
+    assert "has a name this computer cannot keep under its delivery directory; read it there instead" in summary
+    assert machines.pulled == [] and not (tmp_path / "chanwork" / "pulled").exists()
+
+
+async def test_two_files_of_one_name_from_two_directories_land_apart(tool, tmp_path, machines) -> None:
+    summary = await tool.execute(
+        files=[{"path": "box:raven-work/a/report.pdf"}, {"path": "box:raven-work/b/report.pdf"}]
+    )
+
+    manifest = tool.take_metadata()["raven_delivery"]
+    assert manifest["invalid"] == [], summary
+    landed = [Path(entry["path"]) for entry in manifest["files"]]
+    assert landed == [
+        _landed(tmp_path, "/root/raven-work/a/report.pdf"),
+        _landed(tmp_path, "/root/raven-work/b/report.pdf"),
+    ]
+    assert [where for where, _, _ in machines.pulled] == [
+        "/root/raven-work/a/report.pdf",
+        "/root/raven-work/b/report.pdf",
+    ]
+
+
+async def test_a_file_over_the_budget_stays_on_its_machine(tool, machines) -> None:
+    machines.size = 21 * 1024 * 1024
+
+    await tool.execute(files=[{"path": "box:raven-work/t1/model.bin"}])
+
+    assert tool.take_metadata() is None, "nothing was delivered, so no manifest"
+    assert machines.pulled == []
+
+
+async def test_what_was_not_delivered_says_why(tool, machines) -> None:
+    from raven.ops import remote_path
+
+    machines.size = 21 * 1024 * 1024
+    big = await tool.execute(files=[{"path": "box:raven-work/t1/model.bin"}])
+    machines.size = 5
+    outside = await tool.execute(files=[{"path": "box:.ssh/id_rsa"}])
+    remote_path.remember_read("box", "/root/.ssh/id_rsa", "ab" * 32)
+    read_first = await tool.execute(files=[{"path": "box:.ssh/id_rsa"}])
+    after_a_read = read_first
+    nobody = await tool.execute(files=[{"path": "nobox:/etc/hostname"}])
+    machines.kind = "dir"
+    folder = await tool.execute(files=[{"path": "box:raven-work/t1"}])
+
+    assert (
+        "21.0 MB is over the 20.0 MB limit for a file brought back from machine 'Lab box' (box); read it there instead"
+        in big
+    )
+    assert (
+        "is outside the directories this Raven's agents work in on machine 'Lab box' (box); read it there instead"
+        in outside
+    )
+    assert "outside" in after_a_read, "a read by some conversation is no evidence for this one"
+    assert machines.pulled == [], "nothing outside the roots is fetched"
+    assert "is written as a path on another machine" in nobody
+    assert "not found or not a regular file on machine 'Lab box' (box)" in folder
+    # The machine is named by its label in every sentence; its address appears
+    # only inside a path shown the way scp writes it.
+    assert (
+        outside.count("203.0.113.7") == 1 and "scp://worker@203.0.113.7:58717//root/.ssh/id_rsa is outside" in outside
+    )
+    assert "203.0.113.7" not in big + nobody + folder
+
+
+async def test_a_file_one_byte_over_the_budget_is_refused_in_bytes_not_in_a_size_that_reads_as_the_limit(
+    tool, machines
+) -> None:
+    """20 MiB goes; 20 MiB + 1 is refused, and the sentence does not read "20.0 MB is over the 20.0 MB limit"."""
+    from raven.agent.tools.deliver import PULL_FILE_BUDGET
+
+    machines.size = PULL_FILE_BUDGET
+    exact = await tool.execute(files=[{"path": "box:raven-work/t1/exact.bin"}])
+    tool.take_metadata()
+    machines.size = PULL_FILE_BUDGET + 1
+    over = await tool.execute(files=[{"path": "box:raven-work/t1/over.bin"}])
+
+    assert exact.startswith("Delivered 1 file(s): exact.bin (20.0 MB)")
+    assert (
+        "20,971,521 bytes is over the 20,971,520-byte (20.0 MB) limit for a file brought back from machine "
+        "'Lab box' (box); read it there instead" in over
+    )
+    assert "20.0 MB is over the 20.0 MB" not in over
+    assert [where for where, _, _ in machines.pulled] == ["/root/raven-work/t1/exact.bin"]

@@ -163,6 +163,13 @@ def build_runtime(
     frozen ``RavenRuntime`` this returns is FREEZE.
     """
     from raven.agent.tools.deliverables import DeliverableStore
+    from raven.node.client import get_node_pool
+    from raven.ops.remote_path import use_nodes
+
+    # A file call on a registered machine is answered by that machine's Raven
+    # node. The tools reach the pool through the registry's package, because
+    # the node package imports the tools and the reverse would close a cycle.
+    use_nodes(get_node_pool)
     from raven.config.paths import get_deliverables_path
 
     if provider_pool is None:

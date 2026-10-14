@@ -8,12 +8,23 @@ key lives in config; the raw JSON is read directly so provider extension
 fields survive. ``reasoning_steps`` is one of those: it is how a deep-research
 endpoint reports the work behind an answer, and it reaches the run's own record
 through :mod:`raven.agent.subagent.openai_steps`.
+
+An entry that names a ``machine`` is posted to through that registered
+machine: each turn opens an ssh tunnel to it (:func:`raven.acp_client.remote.tunnel`)
+and the request goes to ``base_url`` as the machine resolves it, for an
+endpoint that answers only on that machine's network, or only on the machine
+itself. The tunnel ends with the turn. The files that came with the task
+are named to such an entry by their address on this computer, nothing
+being copied to the machine, as the acp and cli lanes to a machine say it
+(:func:`raven.acp_client.remote.files_note`).
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json as jsonlib
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -28,7 +39,25 @@ from raven.agent.subagent.openai_steps import OpenAIStepReader
 from raven.spine.message import Media
 
 if TYPE_CHECKING:
+    from raven.acp_client.remote import Machine
     from raven.contracts.llm_provider import LLMProvider
+
+
+def _with_files(task: str, media: Sequence[Media], target: Machine | None) -> str:
+    """The task with the files that came with it named at the end, the way the entry's reader can use them.
+
+    From this computer, by absolute path (``with_attachment_note``). On a
+    machine, by their address on this computer and with the word that nothing
+    was copied there (``remote.files_note``), as the acp and cli lanes to a
+    machine say it: the endpoint answers from the machine, where a path of
+    this computer's names nothing unless the disk is shared.
+    """
+    if target is None:
+        return with_attachment_note(task, media)
+    from raven.acp_client import remote
+
+    note = remote.files_note(media, target)
+    return f"{task}\n\n{note}" if note else task
 
 
 class OpenAIApiBackend:
@@ -47,6 +76,7 @@ class OpenAIApiBackend:
         max_tokens: int | None = None,
         timeout: int | None = None,
         max_output_chars: int = 128000,
+        machine: str | None = None,
     ) -> None:
         self.name = name
         self.base_url = base_url
@@ -57,6 +87,58 @@ class OpenAIApiBackend:
         self.max_tokens = max_tokens
         self.timeout = timeout
         self.max_output_chars = max_output_chars
+        # The registered machine the endpoint is reached from, or None for this computer.
+        self.machine = (machine or "").strip() or None
+
+    async def _placed(self) -> Machine | None:
+        """The entry's machine, as the registry has it; ``None`` for an entry posted to from this computer."""
+        if not self.machine:
+            return None
+        from raven.acp_client import remote
+
+        try:
+            return await asyncio.to_thread(remote.machine, self.machine)
+        except remote.RemoteMachineError as exc:
+            raise RuntimeError(f"OpenAI-API agent {self.name!r}: {exc}") from None
+
+    @contextlib.asynccontextmanager
+    async def _reached(
+        self, url: str, headers: dict[str, str], target: Machine | None
+    ) -> AsyncIterator[tuple[str, dict[str, str]]]:
+        """``url`` and ``headers`` as this turn posts them.
+
+        As they are from this computer, for no ``target``; through a tunnel
+        from the entry's machine otherwise, opened for this turn and closed
+        after it. The request then arrives at a port on this computer's
+        loopback: ``Host`` carries the name the server knows itself by, and
+        the proxy variables of this computer's environment are not read for
+        it (``_post_chat``), since a proxy would take a loopback address
+        somewhere else.
+        """
+        if target is None:
+            yield url, headers
+            return
+        from raven.acp_client import remote
+
+        try:
+            log = await asyncio.to_thread(remote.ssh_log_path, f"{self.name}-tunnel")
+        except remote.RemoteMachineError as exc:
+            raise RuntimeError(f"OpenAI-API agent {self.name!r}: {exc}") from None
+        try:
+            # Emptied per turn, so a failure is read from this turn's lines.
+            log.write_text("", encoding="utf-8")
+        except OSError:
+            pass
+        try:
+            async with remote.tunnel(target, url, ssh_log=log) as reached:
+                yield reached.url, {**headers, "Host": reached.host}
+        except remote.RemoteMachineError as exc:
+            raise RuntimeError(f"OpenAI-API agent {self.name!r}: {exc}") from None
+        except aiohttp.ClientConnectionError as exc:
+            raise RuntimeError(
+                f"OpenAI-API agent {self.name!r}: its endpoint did not answer through the tunnel from machine "
+                f"{target.label}: {exc}"
+            ) from None
 
     async def _post_chat(
         self,
@@ -74,8 +156,10 @@ class OpenAIApiBackend:
         # otherwise ignores -- unlike httpx (the rest of the codebase), which honors
         # them by default. On a host that can only reach the provider through a
         # proxy, a direct connection is not a connection error but whatever the
-        # provider says to an unexpected origin (mirothinker: HTTP 451).
-        async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
+        # provider says to an unexpected origin (mirothinker: HTTP 451). Not
+        # for a row on a machine: its request goes to a port on this computer's
+        # loopback (``_reached``), which a proxy would take somewhere else.
+        async with aiohttp.ClientSession(timeout=timeout, trust_env=not self.machine) as session:
             async with session.post(url, json=json, headers=headers) as resp:
                 await self._raise_for_status(resp)
                 return await resp.json()
@@ -120,7 +204,7 @@ class OpenAIApiBackend:
         content: list[str] = []
         reasoning: list[str] = []
         usage: Any = None
-        async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
+        async with aiohttp.ClientSession(timeout=timeout, trust_env=not self.machine) as session:
             async with session.post(url, json=payload, headers=headers) as resp:
                 await self._raise_for_status(resp)
                 async for raw in resp.content:
@@ -207,7 +291,8 @@ class OpenAIApiBackend:
         messages: list[dict[str, Any]] = list(history) if history else []
         if not messages and self.system_prompt:
             messages.append({"role": "system", "content": self.system_prompt})
-        messages.append({"role": "user", "content": with_attachment_note(task, media)})
+        target = await self._placed()
+        messages.append({"role": "user", "content": _with_files(task, media, target)})
         # Always explicit, never omitted: a provider whose default is SSE
         # (mirothinker) answers an omitted `stream` with text/event-stream, which
         # `resp.json()` cannot read. A spawn asks for false and keeps the single
@@ -234,34 +319,35 @@ class OpenAIApiBackend:
         client_timeout = aiohttp.ClientTimeout(total=self.timeout, connect=30)
 
         reader = OpenAIStepReader()
-        if on_delta is not None:
-            content: Any = await self._stream_chat(
-                url,
-                payload=body,
-                headers=headers,
-                timeout=client_timeout,
-                on_delta=bounded_delta(on_delta, self.max_output_chars),
-                reader=reader,
-                task_id=task_id,
-                session_key=session_key,
-            )
-        else:
-            data = await self._post_chat(url, json=body, headers=headers, timeout=client_timeout)
-            try:
-                message = data["choices"][0]["message"]
-            except (KeyError, IndexError, TypeError) as exc:
-                raise RuntimeError(f"OpenAI-API agent {self.name!r}: unexpected response shape") from exc
-            content = message.get("content")
-            if not content:
-                # Some reasoning models put the answer only in a reasoning field.
-                content = message.get("reasoning_content") or message.get("reasoning") or ""
-            reader.feed_steps(message.get("reasoning_steps"))
-            await activity.note_provider_usage(
-                data.get("usage"),
-                model=self.model,
-                session_key=session_key,
-                task_id=task_id,
-            )
+        async with self._reached(url, headers, target) as (url, headers):
+            if on_delta is not None:
+                content: Any = await self._stream_chat(
+                    url,
+                    payload=body,
+                    headers=headers,
+                    timeout=client_timeout,
+                    on_delta=bounded_delta(on_delta, self.max_output_chars),
+                    reader=reader,
+                    task_id=task_id,
+                    session_key=session_key,
+                )
+            else:
+                data = await self._post_chat(url, json=body, headers=headers, timeout=client_timeout)
+                try:
+                    message = data["choices"][0]["message"]
+                except (KeyError, IndexError, TypeError) as exc:
+                    raise RuntimeError(f"OpenAI-API agent {self.name!r}: unexpected response shape") from exc
+                content = message.get("content")
+                if not content:
+                    # Some reasoning models put the answer only in a reasoning field.
+                    content = message.get("reasoning_content") or message.get("reasoning") or ""
+                reader.feed_steps(message.get("reasoning_steps"))
+                await activity.note_provider_usage(
+                    data.get("usage"),
+                    model=self.model,
+                    session_key=session_key,
+                    task_id=task_id,
+                )
         # The answer is deliberately not among these rows: the record keeps it and
         # its reader appends it as the closing message, the same contract the acp
         # lane follows.

@@ -1556,6 +1556,26 @@ async def test_session_undo_rejects_when_turn_active(tmp_path, monkeypatch):
         await session_undo({"session_id": key}, agent_loop_factory=lambda: _LoopWithManager(mgr))
 
 
+async def test_a_retry_after_an_undo_whose_save_failed_reaches_the_disk(tmp_path, monkeypatch):
+    from raven.rpc.methods.session import session_undo
+
+    def _boom(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    mgr, key = _seed_manager(tmp_path)
+    with monkeypatch.context() as patched:
+        patched.setattr("raven.session.manager.atomic_replace", _boom)
+        result = await session_undo({"session_id": key}, agent_loop_factory=lambda: _LoopWithManager(mgr))
+    assert result == {"removed": 2}
+    session = mgr.get_or_create(key)
+    session.record({"role": "user", "content": "q2"})
+    session.record({"role": "assistant", "content": "a2, retried"})
+    mgr.save(session)
+
+    reloaded = SessionManager(tmp_path).get_or_create(key)
+    assert [m["content"] for m in reloaded.messages] == ["q1", "a1", "q2", "a2, retried"]
+
+
 # ---------------------------------------------------------------------------
 # session.branch — fork the session
 # ---------------------------------------------------------------------------

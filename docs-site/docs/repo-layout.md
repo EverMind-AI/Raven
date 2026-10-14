@@ -52,6 +52,7 @@ repository's commit conventions.
 | `market` | PlugHub catalog, trust checks, installation, and contribution ledgers |
 | `mcp` | MCP server connections and tool integration |
 | `memory_engine` | Memory recall and consolidation, local skills, and SkillForge retrieval |
+| `node` | The Raven node: Raven's own file tools and the agents it dispatches, run on a registered machine over one ssh link |
 | `observability` | Span semantics, attribute extraction, and usage attribution |
 | `ops` | Local and remote machine registry and execution transports |
 | `permissions` | Tool-call decisions: allow, request approval, or deny |

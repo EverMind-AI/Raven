@@ -194,7 +194,7 @@ def _model_check(value: str, row: dict[str, Any]) -> str:
     return f"The agent does not list it ({', '.join(choices[:12])}); it may refuse it -- pick one of those."
 
 
-_ADD_KEYS = ("preset", "name", "description", "model", "lend_key")
+_ADD_KEYS = ("preset", "name", "description", "model", "lend_key", "machine", "remote_cwd")
 
 
 def _add_params(value: dict[str, Any]) -> dict[str, Any]:
@@ -241,11 +241,31 @@ def _lend_line(preset: str, name: str | None, can_lend: list[str]) -> str:
 
 
 def _what_it_needs(
-    preset: str, row: dict[str, Any], *, remedy: dict[str, Any] | None, detail: str, model: str
+    preset: str,
+    row: dict[str, Any],
+    *,
+    remedy: dict[str, Any] | None,
+    detail: str,
+    model: str,
+    machine: str | None = None,
 ) -> list[str]:
-    """The next step for one agent that did not answer, read off its refusal's remedy."""
+    """The next step for one agent that did not answer, read off its refusal's remedy.
+
+    On a registered machine the fix is made there: the agent, its install and
+    its sign-in are all on that machine. exec can look there -- it takes the
+    machine's id -- but a sign-in or an install is the user's, in a terminal of
+    their own on it.
+    """
     from raven.agent.subagent.presets import DIAGNOSE_HINTS
 
+    if machine:
+        lines = [
+            f"- It runs on machine {machine!r}, so the fix is made there by the user, in a terminal on that "
+            f"machine: install, sign-in or setup, as the refusal says. exec(machine={machine!r}) can look there "
+            "first (command -v <agent>, its --version), capped at 60s; it is not where a sign-in or an install "
+            "happens. Tell the user what the refusal and the look said, then retry once they have."
+        ]
+        return lines + _menu_line(row, model)
     remedy = remedy or {}
     kind = str(remedy.get("kind") or "")
     fallback = {
@@ -278,10 +298,41 @@ def _what_it_needs(
             if run
             else "- Run it on its own with exec in its one-shot mode (its --help names it); that prints the real error."
         ]
+    return lines + _menu_line(row, model)
+
+
+def _menu_line(row: dict[str, Any], model: str) -> list[str]:
+    """The agent's own model menu, when it was measured: the retry for a model its provider refused."""
     choices = [c.get("value") for c in row.get("model_choices") or [] if isinstance(c, dict) and c.get("value")]
-    if choices:
-        lines.append(f"- Models it lists: {', '.join(str(c) for c in choices[:12])}. To try another, {model}.")
-    return lines
+    if not choices:
+        return []
+    return [f"- Models it lists: {', '.join(str(c) for c in choices[:12])}. To try another, {model}."]
+
+
+def _machines_line() -> str | None:
+    """The registered machines a preset can be added on, while the machine lane is on; else nothing."""
+    from raven.home import machine_lane_enabled
+    from raven.ops import connections
+
+    if not machine_lane_enabled():
+        return None
+    try:
+        rows = connections.usable(connections.load())
+    except (OSError, ValueError):
+        return None
+    names = [
+        f"{row['id']} ({row['display_name']})" if row.get("display_name") else str(row["id"])
+        for row in rows
+        if row.get("id") and connections.transport_of(row) == connections.SSH
+    ]
+    if not names:
+        return None
+    return (
+        f"  machines a preset can be added on: {', '.join(names)} -- add subagents "
+        '{"preset": "<preset>", "machine": "<id>", "remote_cwd"?: "~/raven-work"}: an acp or cli preset runs '
+        "there, signed in there; an openai preset's endpoint is reached from there through an ssh tunnel (no "
+        "remote_cwd); the name defaults to <preset>@<id>"
+    )
 
 
 def _fix_rules(retry: str) -> list[str]:
@@ -306,7 +357,7 @@ def _fix_it_yourself(
     preset: str, row: dict[str, Any], *, remedy: dict[str, Any] | None, detail: str, retry: str, model: str
 ) -> str:
     """What to do about an agent that did not answer: fix what Raven can, ask only for what needs the user."""
-    needs = _what_it_needs(preset, row, remedy=remedy, detail=detail, model=model)
+    needs = _what_it_needs(preset, row, remedy=remedy, detail=detail, model=model, machine=row.get("machine"))
     rules = _fix_rules(retry)
     return "\n".join([rules[0], *needs, *rules[1:]])
 
@@ -645,6 +696,8 @@ class RavenConfigTool(Tool):
             view = self._subagent_view(row)
             state = "not added" if view.get("added") is False else ("on" if view.get("enabled") else "off")
             bits = [state, str(view.get("kind") or "")]
+            if view.get("machine"):
+                bits.append(f"on machine {view['machine']}")
             if view.get("model"):
                 bits.append(f"model {view['model']}")
             if view.get("status") not in (None, "ready", "installed"):
@@ -659,6 +712,8 @@ class RavenConfigTool(Tool):
             "not listed here cannot be connected from here; several agents go in one add as a list; "
             "describe subagents.<name> for one agent's settings and health"
         )
+        if machines := _machines_line():
+            lines.append(machines)
         return lines
 
     async def _search_reply(self, query: str, raw: dict[str, Any]) -> str:
@@ -752,6 +807,8 @@ class RavenConfigTool(Tool):
     def _subagent_view(row: dict[str, Any]) -> dict[str, Any]:
         """One roster row with what explains a failure: added or not, health, the last test."""
         out: dict[str, Any] = {k: row.get(k) for k in ("name", "kind", "enabled", "description", "model")}
+        if row.get("machine"):
+            out["machine"] = row["machine"]
         if not (row.get("configured") or row.get("builtin") or row.get("vendored")):
             preset = row.get("preset") or row.get("name")
             out["added"] = False
@@ -1197,8 +1254,8 @@ class RavenConfigTool(Tool):
         specs = value if isinstance(value, list) else [value]
         if not specs or not all(isinstance(v, dict) and isinstance(v.get("preset"), str) for v in specs):
             raise ValueError(
-                'add takes {"preset": "<preset>", "model"?: ...} for an agent in the describe list -- or a list '
-                "of those to connect several under one confirmation"
+                'add takes {"preset": "<preset>", "model"?: ..., "machine"?: "<registered machine>"} for an agent '
+                "in the describe list -- or a list of those to connect several under one confirmation"
             )
         params_list = [_add_params(v) for v in specs]
         rows: list[dict[str, Any]] | None = None
@@ -1230,6 +1287,7 @@ class RavenConfigTool(Tool):
                     remedy=remedy if isinstance(remedy, dict) else None,
                     detail=text,
                     model=f"add with {json.dumps(again, ensure_ascii=False)}",
+                    machine=params.get("machine"),
                 )
                 failed.append("\n".join([f"Not added: {text}", *needs]))
                 continue

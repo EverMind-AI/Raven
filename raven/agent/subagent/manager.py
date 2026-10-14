@@ -1170,12 +1170,23 @@ class SubagentManager:
         ``media`` is the turn's attachments, handed to the backend by path (see
         ``raven.agent.subagent.attachments``). An agent the roster tags
         [no-local-files] cannot open a path, so it is told the attachments stayed
-        behind rather than handed a spelling that means nothing where it runs.
+        behind rather than handed a spelling that means nothing where it runs --
+        except a row on a registered machine, which carries the same tag: its
+        backend names each attachment to the agent by its address on this
+        computer and copies nothing (``remote.files_note``), so the attachments
+        are kept for it to name, and the page's bullets are spelled the same way.
         """
         self.remember_session(session_key)
         self._require_addressable(agent, doing=f"chat with instance {handle!r}")
         row = self.registry.get(agent)
-        if media and row is not None and not row.caps.reads_local_files:
+        # A row on a registered machine cannot read a path here either; what
+        # its backend sends is the address of each file on this computer, with
+        # the word that nothing was copied, so the agent looks for the file
+        # where its machine can read it or says it could not. The bullets are
+        # pointed at this computer's disk for the same reason as a local
+        # row's: relative to the session directory there they name nothing.
+        on_machine = bool(row is not None and row.caps.machine)
+        if media and row is not None and not row.caps.reads_local_files and not on_machine:
             text = with_undeliverable_note(text, media)
             media = ()
         text = retarget_note(text, media, self.workspace)
@@ -1736,6 +1747,12 @@ class SubagentManager:
         agent = origin.get("agent") or GENERIC_AGENT
         handle = origin.get("handle") or task_id
         effective_workspace = origin.get("workspace") or self.workspace
+        # A run on a registered machine works there, in a directory the
+        # machine makes; the record names it as written, since this computer's
+        # workspace is not where anything of the run is.
+        machine, where = self._machine_workdir(agent, handle)
+        if machine:
+            effective_workspace = f"{machine}:{where}"
         # Opened before dispatch so a call that never returns still leaves its
         # input on disk. Rooted at the session's metadata directory, not at
         # effective_workspace: the record has to outlive whatever the working
@@ -2041,6 +2058,16 @@ class SubagentManager:
             payload["ended_at"] = ended_at
         self._emit_event(origin["session_key"], {"type": "subagent.status", "payload": payload})
 
+    def _machine_workdir(self, agent: str, handle: str) -> tuple[str, str]:
+        """``(machine, <remoteCwd>/<handle>)`` for an agent on a registered machine, else two empty strings."""
+        row = self.registry.get(agent)
+        machine = row.caps.machine if row is not None else ""
+        if not machine:
+            return "", ""
+        from raven.acp_client import remote
+
+        return machine, remote.session_root(getattr(row.config, "remote_cwd", None), handle)
+
     async def _announce_result(
         self,
         task_id: str,
@@ -2085,6 +2112,16 @@ class SubagentManager:
         # Where the run was dispatched to work, so the parent can find what it
         # left there without searching the disk for it.
         workdir_line = f"Working directory: {origin['workspace']}\n" if origin.get("workspace") else ""
+        machine, where = self._machine_workdir(origin.get("agent") or "", origin.get("handle") or task_id)
+        if machine:
+            # Not this computer's directory: the agent worked on its machine,
+            # in a directory made there as the run started. Named here on
+            # every path, since a failed or cancelled run's result does not
+            # close with it the way a finished one's does -- but only a run
+            # that returned is known to have got as far as making it: one
+            # refused by the registry, the ssh or the node never did.
+            made = "made there when the run started" if status == "ok" else "made there only if the run got that far"
+            workdir_line = f"Working directory: on machine {machine!r}, {where} ({made})\n"
         record_line = f"\n\nRecord: {record_path}" if record_path else ""
         # How the run's calls went, which nothing on this path carried. Measured
         # on a real dispatch: two of three calls timed out, the run produced no

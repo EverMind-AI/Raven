@@ -303,14 +303,26 @@ class ExecTool(Tool):
             # Typed ssh to a registered machine is the registry bypassed: the
             # cap, the process-group sweep and the ledger all live on the
             # other two paths. Refused by name so the model learns the path,
-            # not just that this one closed.
+            # not just that this one closed. A copy there with scp, sftp or
+            # rsync starts nothing and passes this tool's own question like
+            # any other command, so it is left alone; and the file tools are
+            # named only while they read a remote path, with the machine
+            # lane on -- with it off they would write that spelling here.
+            from raven.home import machine_lane_enabled
+
             conn_id = str(row.get("id") or "").strip()
+            files = (
+                " Its files are read and written with read_file, write_file and edit_file on the path the way "
+                "scp writes it."
+                if machine_lane_enabled()
+                else ""
+            )
             return (
                 f"Error: this command reaches {row.get('display_name') or conn_id} over raw ssh from "
                 f"this computer, and that machine is registered as {conn_id!r}. Look at it with "
                 f"exec(machine={conn_id!r}) (capped at 60s, nothing left running), and hand anything "
                 "longer, or anything that must keep running, to the on-call agent's ops_submit "
-                "(budget, dedup, ledger). scp and rsync to it are still fine here. Nothing was run."
+                f"(budget, dedup, ledger).{files} scp and rsync to it are still fine here. Nothing was run."
             )
 
         cwd = self._cwd_for(working_dir)

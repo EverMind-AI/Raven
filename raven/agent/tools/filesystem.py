@@ -10,8 +10,9 @@ from pathlib import Path
 from typing import Any
 
 from raven.agent import workdir
-from raven.agent.tools import tree_walk
+from raven.agent.tools import remote_files, tree_walk
 from raven.contracts.tool import FileChange, Tool, ToolResult
+from raven.ops import remote_path
 from raven.utils.images import detect_image_mime
 
 _DIFF_MAX_LINES = 400
@@ -19,6 +20,93 @@ _DIFF_MAX_LINES = 400
 # path; a file this large is not read at all (the diff would be dropped by the
 # line cap anyway) and the prompt shows the path alone.
 _PREVIEW_MAX_BYTES = 256 * 1024
+
+#: How a page of a text file is read: this many bytes at a time, the line
+#: breaks counted as the bytes come and only the page's own lines decoded.
+#: ``read_text().splitlines()`` held the interpreter for the whole file --
+#: 7.5 s on a 1 GiB file (decode 2.7 s, split 4.8 s, measured 2026-10-13),
+#: during which nothing else ran: on a Raven node, no heartbeat answered;
+#: here, no turn served. Each step is now one chunk's, and the file is never
+#: whole in memory.
+_PAGE_CHUNK = 4 * 1024 * 1024
+
+# Where ``str.splitlines`` ends a line, as UTF-8 bytes: the two-byte ``\r\n``
+# first so it counts once, the one-byte breaks, then NEL, LS and PS.
+_LINE_BREAK = re.compile(rb"\r\n|[\n\r\x0b\x0c\x1c\x1d\x1e]|\xc2\x85|\xe2\x80[\xa8\xa9]")
+# The breaks other than ``\n``: a chunk with none splits on ``\n`` alone, the
+# common case, in one C call. Looked for one by one with ``in``, a search at
+# memchr speed; a regular expression over the same bytes took twenty times
+# as long (measured 2026-10-13 on a 1 GiB file: 80 ms a chunk against 4).
+_ODD_BREAKS = (b"\r", b"\x0b", b"\x0c", b"\x1c", b"\x1d", b"\x1e", b"\xc2\x85", b"\xe2\x80\xa8", b"\xe2\x80\xa9")
+
+
+def _split_lines(body: bytes) -> list[bytes]:
+    """``body`` cut at every break ``str.splitlines`` knows; the last piece is what follows the last break."""
+    odd = any(sign in body for sign in _ODD_BREAKS)
+    return _LINE_BREAK.split(body) if odd else body.split(b"\n")
+
+
+def _page_of_lines(handle: Any, start: int, limit: int) -> tuple[list[bytes], int]:
+    """Lines ``start`` to ``start + limit`` (0-based) of the bytes ``handle`` reads, and how many lines there are.
+
+    Exactly the lines ``read_text(encoding="utf-8").splitlines()`` would give,
+    read a chunk at a time and each chunk looked at once: the bytes of the
+    line in progress are kept only while that line may be on the page, so a
+    line longer than a chunk costs its length and nothing more, wherever it
+    falls. (Held whole and looked at again with every chunk, a file with no
+    break in it cost time square in its size: 256 MiB took half a minute.)
+    A break may straddle two chunks, so the bytes that could begin one are
+    held back until the next chunk says; the tail after the last break is a
+    line only when it holds something, as ``splitlines`` has it.
+    """
+    page: list[bytes] = []
+    total = 0
+    stop = start + limit
+    # The line in progress is line ``total``: its bytes, kept while it may be
+    # on the page, and whether it holds anything at all.
+    line: list[bytes] = []
+    begun = False
+
+    def wanted() -> bool:
+        return start <= total < stop
+
+    def feed(body: bytes) -> None:
+        nonlocal total, line, begun
+        head, *rest = _split_lines(body)
+        if head:
+            begun = True
+            if wanted():
+                line.append(head)
+        if not rest:
+            return
+        # The first break ends the line in progress, the pieces between
+        # breaks are whole lines, and the last piece begins the next line.
+        if wanted():
+            page.append(b"".join(line))
+        total += 1
+        line = []
+        *middle, last = rest
+        if middle:
+            if total < stop and total + len(middle) > start:
+                page.extend(middle[max(start - total, 0) : stop - total])
+            total += len(middle)
+        begun = bool(last)
+        if last and wanted():
+            line = [last]
+
+    kept = b""
+    while chunk := handle.read(_PAGE_CHUNK):
+        body = kept + chunk
+        hold = 2 if body.endswith(b"\xe2\x80") else (1 if body.endswith((b"\r", b"\xc2", b"\xe2")) else 0)
+        kept = body[len(body) - hold :] if hold else b""
+        feed(body[: len(body) - hold] if hold else body)
+    if kept:
+        feed(kept)
+    if begun:
+        if wanted():
+            page.append(b"".join(line))
+        total += 1
+    return page, total
 
 
 def _write_text_bytes(content: str) -> bytes:
@@ -29,6 +117,15 @@ def _write_text_bytes(content: str) -> bytes:
     plain UTF-8 encoding of the string.
     """
     return content.replace("\n", os.linesep).encode("utf-8")
+
+
+def _machine_of(path: str) -> str | None:
+    """The registered machine ``path`` is written for, or ``None`` for a path here (or one that names no machine)."""
+    try:
+        where = remote_path.target(path)
+    except remote_path.RemotePathError:
+        return None
+    return where.machine if where is not None else None
 
 
 def _unified(before: str, after: str, name: str) -> str | None:
@@ -228,6 +325,9 @@ class ReadFileTool(_FsTool):
         )
 
     async def execute(self, path: str, offset: int = 1, limit: int | None = None, **kwargs: Any) -> str | ToolResult:
+        # A file on a registered machine is read there, by its Raven node.
+        if (remote := await remote_files.answer("read_file", path, {"offset": offset, "limit": limit})) is not None:
+            return remote
         try:
             fp = self._resolve(path)
             if not fp.exists():
@@ -261,19 +361,21 @@ class ReadFileTool(_FsTool):
                         return f"Error decoding image {path}: {e}"
                     # An extension-only guess that would not decode: fall through.
 
-            all_lines = fp.read_text(encoding="utf-8").splitlines()
-            total = len(all_lines)
-
             if offset < 1:
                 offset = 1
+            start = offset - 1
+            with fp.open("rb") as fh:
+                raw_page, total = _page_of_lines(fh, start, limit or self._DEFAULT_LIMIT)
             if total == 0:
                 return f"(Empty file: {path})"
             if offset > total:
                 return f"Error: offset {offset} is beyond end of file ({total} lines)"
 
-            start = offset - 1
-            end = min(start + (limit or self._DEFAULT_LIMIT), total)
-            numbered = [f"{start + i + 1}| {line}" for i, line in enumerate(all_lines[start:end])]
+            # Strict, as the whole-file decode was: a byte that is not UTF-8
+            # on the page refuses the read with the codec's own sentence.
+            lines = [raw.decode("utf-8") for raw in raw_page]
+            end = start + len(lines)
+            numbered = [f"{start + i + 1}| {line}" for i, line in enumerate(lines)]
             result = "\n".join(numbered)
 
             if len(result) > self._MAX_CHARS:
@@ -315,6 +417,10 @@ class WriteFileTool(_FsTool):
         """The write as a diff against the file as it stands, before it happens."""
         path = str(params.get("path") or "")
         content = str(params.get("content") or "")
+        if (where := _machine_of(path)) is not None:
+            # The file is on another machine, so there is no file here to diff
+            # against; the card names the machine and shows the path as written.
+            return {"path": path, "machine": where}
         try:
             fp = self._resolve(path)
         except PermissionError:
@@ -382,6 +488,9 @@ class WriteFileTool(_FsTool):
         # it must never silently become is an overwrite.
         if mode == "append" and not content:
             return "Error: write_file with mode=append needs content; refusing to append nothing."
+        # A file on a registered machine is written there, by its Raven node.
+        if (remote := await remote_files.answer("write_file", path, {"content": content, "mode": mode})) is not None:
+            return remote
         try:
             fp = self._resolve(path)
             # Read before writing: a whole-file write carries no record of what
@@ -503,11 +612,13 @@ class EditFileTool(_FsTool):
         The snippets, not the file: the file is read only if the edit runs, and
         what the reader is asked to allow is exactly this substitution."""
         path = str(params.get("path") or "")
+        old, new = str(params.get("old_text") or ""), str(params.get("new_text") or "")
+        if (where := _machine_of(path)) is not None:
+            return {"path": path, "machine": where, "created": False, "diff": _unified(old, new, path)}
         try:
             shown = str(self._resolve(path))
         except PermissionError:
             shown = path
-        old, new = str(params.get("old_text") or ""), str(params.get("new_text") or "")
         return {"path": shown, "created": False, "diff": _unified(old, new, shown)}
 
     @property
@@ -542,6 +653,10 @@ class EditFileTool(_FsTool):
         replace_all: bool = False,
         **kwargs: Any,
     ) -> str | ToolResult:
+        # A file on a registered machine is edited there, by its Raven node.
+        sent = {"old_text": old_text, "new_text": new_text, "replace_all": replace_all}
+        if (remote := await remote_files.answer("edit_file", path, sent)) is not None:
+            return remote
         try:
             fp = self._resolve(path)
             if not fp.exists():
@@ -658,6 +773,9 @@ class ListDirTool(_FsTool):
         max_entries: int | None = None,
         **kwargs: Any,
     ) -> str:
+        params = {"recursive": recursive, "max_entries": max_entries}
+        if (remote := await remote_files.answer("list_dir", path, params)) is not None:
+            return str(remote)
         try:
             dp = self._resolve(path)
             if not dp.exists():

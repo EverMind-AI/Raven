@@ -820,21 +820,21 @@ def _write_raw_key(key: str, value: Any, *, merge: bool = False) -> dict:
         node = raw
         parts = key.split(".")
         for p in parts[:-1]:
-            name = _as_written(node, p)
+            name = _as_written(node, p, top_level=node is raw)
             child = node.get(name)
             if child is None:
                 child = node[name] = {}
             elif not isinstance(child, dict):
                 raise ConfigValidationError(f"config path {key} blocked by non-object")
             node = child
-        leaf = _as_written(node, parts[-1])
+        leaf = _as_written(node, parts[-1], top_level=node is raw)
         prev = node.get(leaf)
         if merge:
             if prev is not None and not isinstance(prev, dict):
                 raise ConfigValidationError(f"config path {key} blocked by non-object")
             existing = prev or {}
             # Each field of the pair, under the spelling the block already uses.
-            fields = {_as_written(existing, k): v for k, v in value.items()}
+            fields = {_as_written(existing, k, top_level=False): v for k, v in value.items()}
             node[leaf] = {**existing, **fields}
             prev = {k: existing.get(k) for k in fields}
         else:

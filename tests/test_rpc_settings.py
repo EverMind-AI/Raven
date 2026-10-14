@@ -1352,6 +1352,39 @@ async def test_settings_write_refuses_an_invalid_alias_beside_null(cfg, invalid)
     assert cfg.read_bytes() == before
 
 
+@pytest.mark.parametrize(
+    "camel,snake,previous,value",
+    [
+        ("contextWindowTokens", "context_window_tokens", 200000, 100000),
+        ("reasoningEffort", "reasoning_effort", "low", "high"),
+    ],
+)
+async def test_settings_leaf_write_lands_on_the_alias_pydantic_reads(cfg, camel, snake, previous, value):
+    """A null camelCase leaf beside a populated snake_case one.
+
+    pydantic takes the alias whenever it is present, null or not, so the schema
+    reads None here while the live reader falls through to the snake_case
+    value. The write replaces the null alias: afterwards ``load_config`` and the
+    live reader both read the new value, and ``previous`` is the null the schema
+    was reading.
+    """
+    from raven.config import live
+    from raven.config.loader import load_config
+
+    # Each leaf's live reader carries its snake_case field name.
+    live_reader = getattr(live, snake)
+    cfg.write_text(json.dumps({"agents": {"defaults": {camel: None, snake: previous}}}), encoding="utf-8")
+    assert getattr(load_config(cfg).agents.defaults, snake) is None
+    assert live_reader(live.LiveConfig(path=cfg)) == previous
+
+    result = await rpc_console.settings_set({"key": f"agents.defaults.{camel}", "value": value})
+
+    assert result == {"applied": True, "previous": None}
+    assert _read(cfg) == {"agents": {"defaults": {camel: value, snake: previous}}}
+    assert getattr(load_config(cfg).agents.defaults, snake) == value
+    assert live_reader(live.LiveConfig(path=cfg)) == value
+
+
 @pytest.mark.parametrize("raw", [{"tools": None}, {"tools": {"media": None}}])
 async def test_settings_set_initializes_null_parents_of_a_merged_object(cfg, raw):
     cfg.write_text(json.dumps(raw), encoding="utf-8")
