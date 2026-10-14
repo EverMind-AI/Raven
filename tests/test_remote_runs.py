@@ -52,14 +52,20 @@ def _run(task: str = "echo@box-1a2b3c4d", **kw) -> remote_runs.RemoteRun:
     return remote_runs.RemoteRun(**fields)
 
 
-def test_a_record_is_written_owner_only_and_read_back_whole(_home: Path) -> None:
+def test_a_record_is_read_back_whole(_home: Path) -> None:
     path = remote_runs.record(_run(received=7, started=1.5))
 
     assert path == _home / "machines" / "runs" / "echo@box-1a2b3c4d.json"
-    assert path.stat().st_mode & 0o777 == 0o600 and path.parent.stat().st_mode & 0o777 == 0o700
     (back,) = remote_runs.pending()
     assert back == _run(received=7, started=1.5)
     assert json.loads(path.read_text(encoding="utf-8"))["version"] == remote_runs.VERSION
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not available on Windows")
+def test_a_record_and_its_directory_are_owner_only(_home: Path) -> None:
+    path = remote_runs.record(_run())
+
+    assert path.stat().st_mode & 0o777 == 0o600 and path.parent.stat().st_mode & 0o777 == 0o700
 
 
 def test_pending_lists_the_runs_oldest_first_and_names_what_it_cannot_read(_home: Path, logs) -> None:
