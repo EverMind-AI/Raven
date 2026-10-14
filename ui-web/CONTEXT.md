@@ -150,7 +150,7 @@ Switching to it parks the scroller (`#scroll[data-parked]`: out of the flow,
 hidden, its size and scroll position kept) rather than unmounting it, so the
 transcript goes on streaming underneath and comes back exactly where it was.
 The header's toggle (`#trajBtn`) appears only when the gateway announced
-`trajectory-v1` (only a gateway launched with `--dev` does), `trajectory.state` says the view is on, a conversation is open
+`trajectory-v1` (every gateway does while its trajectory policy is on, which is the default), `trajectory.state` says the view is on, a conversation is open
 and that conversation is not in its empty state (`state/session/conversation.ts`'s
 flag); the store's `available` is that one condition. Picking a row opens the
 details pane beside the list (`features/trajectory/detailStore.ts`): a descriptor
@@ -398,7 +398,7 @@ vocabulary a card is the drawer's content.
 
 **Escape order**:
 The ordered table in `src/state/escapeOrder.ts` (`ESCAPE_ORDER`, of
-`EscapeLayer`): eleven layers that can be on screen at once, and which one an
+`EscapeLayer`): fifteen layers that can be on screen at once, and which one an
 Escape takes back. A table rather than a
 stack, because each entry answers "am I open" when the key arrives -- the
 channel dialog opens over the entries page and closes first, while the shared
@@ -407,6 +407,33 @@ docked sheets register run ahead of it. Approval and credential cards consume
 Escape after denying or skipping, leaving the turn running. A later Escape
 reaches the normal close order and stops a running turn only when no higher
 layer is open.
+
+**Export Wizard**:
+The dialog `#exportVeil` holds (`src/App.tsx` renders the veil, the box and the
+empty `#exportBody`), drawn by `features/export/` and opened from the header's
+conversation menu (`#moreBtn` in `src/chrome/ChatTop.tsx`, the corner slot,
+with the desk launcher one slot in over `#wsBtn`). A flow is a sequence of
+pages: the export is the turn picker, then the export page; the bug report
+(offered while the handshake carries `bugreport-v1`) is the picker, the
+problem, the decisions and the upload. The picker drops out when the
+conversation has a single finished turn, and the decisions are marked skipped
+when the Redaction History or a clean snapshot leaves nothing to decide. The
+export runs as a gateway job (`trajectory.export`) the page follows through
+`trajectory.export_status` and downloads with the job's link; the report is a
+Report Session the page follows through `bugreport.status`, which carries only
+masked values -- an item's contexts come one item at a time (`bugreport.item`),
+their hit spans counted in code points. The close button and Escape both
+cancel, asking first while a job is under way or a report is started and not
+over, and closing cancels the report (`bugreport.cancel`) whatever its phase.
+Every answer is checked against the wizard's `epoch` and the job or report it
+was asked about: a start that lands after its wizard closed has its job or
+report cancelled on arrival, and a status query, or a report step whose
+answer is lost, keeps the same job or report and asks its status rather than
+starting or sending again. `exportable` is the one place that says whether the
+conversation on screen may be exported, and the menu button is disabled
+exactly when it says no.
+_Avoid_: "report dialog" for the bug report -- it is this wizard on another
+flow, not a dialog of its own.
 
 **Menu**:
 `src/state/menu.ts` plus `<ContextMenu/>` (`src/App.tsx`) -- the one context

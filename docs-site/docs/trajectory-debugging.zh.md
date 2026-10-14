@@ -51,6 +51,9 @@ Bug Report Receiver 时才上传（见[发送与接收问题报告](#send-and-re
 `--yes` 不代表敏感数据风险授权，不应习惯性使用 `--accept-risk` 绕过，
 或宣称所有 token 都无害。
 
+WebUI 中的**问题报告**对会话里选中的轮次运行同一条流程，只是决定在页面上做，而不是在终端提示里；
+见[导出与问题报告](webui.md#export-and-report-a-problem)。
+
 ### 记住的脱敏裁决 { #remembered-redaction-decisions }
 
 你在审核中给出的每个"保留"或"替换"回答都会记在本机 Raven home（`~/.raven`，
@@ -66,6 +69,9 @@ raven trajectory redaction-history list                        # what is remembe
 raven trajectory redaction-history forget 3f9a1c2b7d4e          # drop one decision by id
 raven trajectory redaction-history clear --yes                  # drop all of them
 ```
+
+WebUI 中的报告有意采用不同的规则：决策页上的每个决定都会被记住，包括默认的"全部保持"和批量按钮，
+来源记为 `web`，因为页面把它询问的每个值都展示给了用户。
 
 设置 `RAVEN_BUGREPORT_REDACTION_HISTORY=off` 可既不回放也不记录。读不了的历史
 文件会在下一次保存前备份到同目录；在那之前每个条目都会询问。

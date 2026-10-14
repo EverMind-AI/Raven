@@ -87,6 +87,9 @@ div.app
               rect
               path
             span#wsBdg.bdg
+          button#moreBtn.ghost-ic.tipdn
+            svg
+              path
         div#scroll.scroll
           div#bannerHost
           div#flash.flash

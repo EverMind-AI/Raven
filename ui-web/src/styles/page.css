@@ -5020,6 +5020,18 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
   background: var(--black); filter: brightness(1.18);
 }
 
+/* The export wizard's dialog (src/App.tsx's ExportVeil): sized between the
+   confirm sheet and the settings dialog, a column whose middle scrolls. The
+   wizard inside is features/export/'s, styled by its own sheet. */
+.chrome-export-modal {
+  width: min(640px, 94vw); height: min(560px, 88vh); display: flex; flex-direction: column;
+  background: var(--ink); border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: 0 24px 64px -20px rgba(0,0,0,.45), 0 2px 8px rgba(0,0,0,.12);
+  overflow: hidden; animation: up .18s ease both;
+}
+.chrome-export-modal:focus { outline: none; }
+.chrome-export-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
 /* The page behind is dimmed and blurred the way the settings dialog's is
    (.setveil), not blacked out. */
 .veil { position: fixed; inset: 0; background: var(--scrim-soft); backdrop-filter: blur(3px);
@@ -5377,7 +5389,7 @@ body:has(#onb:not([hidden])) .mpick { z-index: calc(var(--z-onboarding) + 1); }
   .backpill { transition: bottom .18s ease; }
 }
 
-#deskHost { --desk-anchor-width: 0px; --desk-launcher-size: 30px; --desk-launcher-edge: 12px;
+#deskHost { --desk-anchor-width: 0px; --desk-launcher-size: 30px; --desk-launcher-edge: 50px;
   --desk-palette-gap: 12px; --desk-launcher-center: 27px;
   position: fixed; inset: 0; z-index: var(--z-desk); pointer-events: none; }
 /* The desk hangs off the workspace's left edge while the workspace is a column
@@ -5611,7 +5623,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    ui-web/scripts/gates/agent-mark-css.test.mjs. */
 .agent-mark img { color-scheme: light; }
 .agent-kind { flex: none; padding: 1px 6px; border: 1px solid var(--line-soft); border-radius: 999px;
-  background: var(--surface); color: var(--muted); font: 8.5px/1.45 var(--mono); text-transform: lowercase; }
+  background: var(--surface); color: var(--muted); font: 8.5px/1.45 var(--mono); }
 /* Beside the mode chip in a pane header, in the tabular mono the other elapsed
    numbers use -- a proportional font makes a per-second clock jitter sideways
    as its digits change width. */

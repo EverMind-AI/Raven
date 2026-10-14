@@ -7,6 +7,28 @@ tasks and stateful agent instances; they are different things.
 Set up agents first with [Agent Integrations](agent-integrations.md). This page
 covers using them, not installing their transports.
 
+## Work on a registered machine
+
+Register the destination with `raven ops connection add`, then install its node
+with `raven ops connection install-node <machine-id>`. Set an agent entry's
+`machine` to that registry id, or ask Raven to add a preset on that machine.
+Start Raven normally, for example with `raven serve`; no environment switch is
+required. Entries without `machine` continue to run locally.
+
+ACP and CLI entries run under the machine's node. An OpenAI entry reaches its
+HTTP endpoint through an SSH tunnel from that machine; built-in entries run
+locally. The registered SSH credentials, file permission prompts and concurrency
+limits still apply. Attachments are named by address, not copied automatically.
+
+If Raven stops during a remote ACP or CLI task, the machine keeps working. The
+next start uses the records in the same Raven home to recover the result into
+the original conversation. Keep the machine registration and agent entry
+available for that recovery.
+
+`RAVEN_DEBUG_MACHINES` was a default-off trial switch for machine dispatch and
+remote file access. It is no longer read; an old value of `0` does not disable
+these features or prevent task recovery.
+
 ## Choose a collaboration shape
 
 | Need | Use | Completion evidence |

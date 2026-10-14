@@ -413,7 +413,7 @@ SECTIONS: tuple[Section, ...] = (
                 "Let the agent register remote machines",
                 "bool",
                 _E.RELOAD,
-                sensitive="lets the agent write the owner's ssh config",
+                sensitive="lets the agent write the owner's SSH config",
             ),
             Setting(
                 "tools.browser.headfulOnAgentUse",

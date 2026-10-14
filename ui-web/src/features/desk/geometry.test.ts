@@ -20,8 +20,9 @@ import {
 } from './geometry'
 
 /* The launcher, at the size and place the stylesheet gives it: a 30px button
-   centred on y=27 against the right edge with a 12px gutter. */
-const EDGE = 12
+   centred on y=27, 50px in from the right edge: the 12px gutter plus the
+   header slot the conversation menu takes. */
+const EDGE = 50
 
 function launcher(): number {
   const right = window.innerWidth - EDGE
@@ -187,9 +188,9 @@ describe('the reserve the anchored desk asks the chat for', () => {
 
   it('gives a wider panel up sooner, because it is asking for more', () => {
     /* The panel is resizable, so the floor is a fact about the pair rather than
-       about one width: the same chat that can spare 324px cannot spare 504px. */
-    const chat = 324 + DESK_COLUMN_FLOOR
-    expect(deskReserve({ shown: true, w: 300, chatWidth: chat })).toBe(324)
+       about one width: the same chat that can spare 362px cannot spare 542px. */
+    const chat = 362 + DESK_COLUMN_FLOOR
+    expect(deskReserve({ shown: true, w: 300, chatWidth: chat })).toBe(362)
     expect(deskReserve({ shown: true, w: 480, chatWidth: chat })).toBe(0)
   })
 })

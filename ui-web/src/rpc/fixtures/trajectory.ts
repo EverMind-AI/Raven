@@ -11,6 +11,11 @@
  *
  * English content, deliberately: these are demo rows for a shape the real
  * gateway fills in; the page's own words come from the catalogue through t().
+ *
+ * The turn picker and the export answer from the same demo: three turns, the
+ * last still running, and an export that is done the moment it is asked for.
+ * There is no gateway behind the offline page, so its download link leads
+ * nowhere; the wizard's own states are what the demo shows.
  */
 
 import type { FixtureEnv, Fixtures } from '../fixtureTransport'
@@ -20,7 +25,9 @@ import type {
   TrajectoryBlockResult,
   TrajectoryDetailResult,
   TrajectoryEntry,
+  TrajectoryExportStatusResult,
   TrajectoryIndexState,
+  TrajectoryTurnsResult,
 } from '../generated'
 
 export interface TrajectoryFixture {
@@ -350,6 +357,34 @@ export function createTrajectory(env: FixtureEnv): TrajectoryFixture {
           truncated: false,
         }
       },
+      'trajectory.turns': (): TrajectoryTurnsResult => ({
+        title: 'Plan a weekend in Kyoto',
+        turns: TURNS.map((turn, index) => ({
+          trace_id: turn.trace,
+          number: index + 1,
+          start: iso(base + turn.offset * SEC),
+          input_preview: turn.input,
+          in_progress: index === TURNS.length - 1,
+        })),
+      }),
+      'trajectory.export': () => ({ job_id: 'exj-demo' }),
+      'trajectory.export_status': (p): TrajectoryExportStatusResult => ({
+        job_id: p.job_id ?? 'exj-demo',
+        state: 'done',
+        phase: 'done',
+        file_name: 'Plan a weekend in Kyoto.tar.gz',
+        download_url: '/trajectory/export/download?token=demo',
+        size_bytes: 48213,
+        counts: { spans: 42, artifacts: 17, messages: 9 },
+        error: null,
+      }),
+      'trajectory.export_cancel': () => ({ ok: true }),
     },
   }
 }
+
+const TURNS = [
+  { trace: 'trace-demo-1', offset: 0, input: 'Plan a weekend in Kyoto for two.' },
+  { trace: 'trace-demo-2', offset: 120, input: 'Swap the second day for a day trip to Nara.' },
+  { trace: 'trace-demo-3', offset: 300, input: 'Book the ryokan you suggested.' },
+]

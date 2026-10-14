@@ -266,6 +266,7 @@ const LEGACY_LOCAL = {
      with `.pmhero` gone: the page's title is the connections hub's shared
      header now (components/HubHead.tsx). */
   extAgents: 0,
+  export: 0,
   importSync: 0,
   installed: 0,
   /* Down from 14 with the memory section: the page's hero, its own list and
@@ -336,6 +337,7 @@ const LEGACY_EXPR = {
      left with it. */
   dag: 2,
   desk: 2,
+  export: 0,
   extAgents: 0,
   importSync: 0,
   installed: 0,

@@ -950,18 +950,9 @@ def test_on_a_windows_host_the_words_are_read_without_their_quotes(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_typed_ssh_s_refusal_leaves_copies_alone_and_names_the_file_tools_only_with_the_lane_on(
-    registry, tmp_path, monkeypatch
-):
-    # With the lane off the file tools read a remote spelling as a path here,
-    # so naming them would send the model to write on this computer.
+async def test_typed_ssh_s_refusal_names_file_tools_without_a_debug_switch(registry, tmp_path, monkeypatch):
     tool = ExecTool(working_dir=str(tmp_path))
     monkeypatch.delenv("RAVEN_DEBUG_MACHINES", raising=False)
-
-    off = await tool.execute(command="ssh -p 58717 root@203.0.113.7 ls")
-    monkeypatch.setenv("RAVEN_DEBUG_MACHINES", "1")
-    on = await tool.execute(command="ssh -p 58717 root@203.0.113.7 ls")
-
-    assert "scp and rsync to it are still fine here" in off and "read_file" not in off
-    assert "scp and rsync to it are still fine here" in on
-    assert "read_file, write_file and edit_file on the path the way scp writes it" in on
+    said = await tool.execute(command="ssh -p 58717 root@203.0.113.7 ls")
+    assert "scp and rsync to it are still fine here" in said
+    assert "read_file, write_file and edit_file on the path the way scp writes it" in said

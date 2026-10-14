@@ -287,16 +287,14 @@ async def test_a_page_reached_through_a_port_forward_opens_its_socket(forwarded)
         assert not ws.closed
 
 
-async def test_a_page_reached_as_localhost_through_a_port_forward_signs_in(forwarded) -> None:
-    """A browser may reach the gateway as `localhost` rather than `127.0.0.1`, and
-    the two are different origins to it. Through a forward neither is on the bound
-    port's allowlist, so the forwarded rule has to know the name as well as the
-    loopback addresses."""
+@pytest.mark.parametrize("host", ["localhost", "LOCALHOST", "127.0.0.2", "[::1]"])
+async def test_a_page_reached_as_a_loopback_host_through_a_port_forward_signs_in(forwarded, host: str) -> None:
+    """Each loopback spelling must pass when Host and Origin name the same forwarded port."""
     gateway, client, browser_port = forwarded
     resp = await client.post(
         "/auth/exchange",
         json={"nonce": gateway.mint_nonce()},
-        headers={"Origin": f"http://localhost:{browser_port}", "Host": f"localhost:{browser_port}"},
+        headers={"Origin": f"http://{host}:{browser_port}", "Host": f"{host}:{browser_port}"},
     )
     assert resp.status == 200, await resp.text()
 
@@ -316,11 +314,29 @@ async def test_a_page_on_another_local_port_is_refused(gateway_client) -> None:
     assert resp.status == 403
 
 
-async def test_a_name_that_only_resolves_to_this_machine_is_refused(gateway_client) -> None:
-    """DNS rebinding: a site whose name answers 127.0.0.1 asks its own origin, so
-    its Origin and Host agree. Requiring a loopback host is what refuses it."""
+@pytest.mark.parametrize(
+    "host",
+    [
+        "rebind.example",
+        "127.0.0.1.evil.example",
+        "evil.localhost",
+        "localhost.localdomain",
+        "localhost.",
+        "localhost.localdomain.",
+        "127.0.0.1.",
+        "10.1.2.3",
+        "8.8.8.8",
+        "127.1",
+        "2130706433",
+        "0x7f000001",
+        "0177.0.0.1",
+        "[::ffff:8.8.8.8]",
+    ],
+)
+async def test_matching_origin_and_host_do_not_allow_other_names_or_addresses(gateway_client, host: str) -> None:
+    """Matching headers cannot grant a name or address the browser sign-in policy refuses."""
     gateway, client = gateway_client
-    rebound = f"rebind.example:{gateway.port}"
+    rebound = f"{host}:{gateway.port}"
     resp = await client.post(
         "/auth/exchange",
         json={"nonce": gateway.mint_nonce()},

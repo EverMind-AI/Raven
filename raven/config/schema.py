@@ -11,7 +11,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from raven.config.agent_names import THIRD_PARTY_PRESET_NAMES
 from raven.contracts.path_policy import WORKSPACE_DEFAULT_SENTINEL
-from raven.home import MACHINE_LANE_ENV, machine_lane_enabled
 from raven.sandbox.config import SandboxConfig
 
 #: The loop's outer LLM-error retry ladder when the config names none: one wait
@@ -1486,22 +1485,8 @@ class SubagentEngineConfig(Base):
 
 
 def _settle_machine(entry: Any) -> str | None:
-    """``entry.machine`` as an id or ``None``, with the lane's state said once on load.
-
-    Shared by every kind that can name a machine, so a row of any kind that
-    names one while the lane is off is said to stay off the table in the same
-    words; the registry's gate reads the same field for every kind.
-    """
-    machine = (getattr(entry, "machine", None) or "").strip() or None
-    if machine and not machine_lane_enabled():
-        logger.info(
-            "sub-agent {!r} names machine {!r}, and the machine lane is debug-only: the entry stays "
-            "off the table until raven is started with {}=1",
-            entry.name,
-            machine,
-            MACHINE_LANE_ENV,
-        )
-    return machine
+    """``entry.machine`` as a stripped registry id, or ``None`` for a local entry."""
+    return (getattr(entry, "machine", None) or "").strip() or None
 
 
 class ThirdPartyCliSubagentConfig(Base):
@@ -1629,12 +1614,7 @@ class ThirdPartyCliSubagentConfig(Base):
     on that machine. Raven reaches the machine over one ssh link with the
     address, port and key the registry holds, none of which is written here.
     See :mod:`raven.node.client` and
-    :class:`raven.agent.subagent.backends.cli_agent.CliAgentBackend`.
-
-    Debug-only until the lane matures, as for an acp entry: unless raven was
-    started with ``RAVEN_DEBUG_MACHINES=1`` (:func:`raven.home.machine_lane_enabled`),
-    an entry that names a machine is left off the table and no machine is
-    reached for it."""
+    :class:`raven.agent.subagent.backends.cli_agent.CliAgentBackend`."""
     remote_cwd: str | None = None
     """Where on ``machine`` this agent works, ``~/raven-work`` when unset; ignored
     without ``machine``. ``~`` is the registered user's home there."""
@@ -1804,10 +1784,7 @@ class ThirdPartyOpenAISubagentConfig(Base):
     name. The files that come with a task are named to the endpoint by their
     address on this computer and not copied, as to the other kinds on a
     machine. The address, port and key the registry holds are read for the
-    tunnel alone and written nowhere here. Debug-only as for the other kinds:
-    unless raven was started
-    with ``RAVEN_DEBUG_MACHINES=1``, the entry is left off the table and no
-    machine is reached for it. There is no ``remoteCwd``: an endpoint has no
+    tunnel alone and written nowhere here. There is no ``remoteCwd``: an endpoint has no
     working directory on the machine, and one written here is dropped with a
     warning."""
 
@@ -2138,12 +2115,7 @@ class ThirdPartyAcpSubagentConfig(Base):
     and the node carries its frames over the link to the server here, which
     stays here with its definition and keys. Files are not handed to it, and
     what it writes stays on that machine. See :mod:`raven.node.client` and
-    :mod:`raven.acp_client.remote`.
-
-    Debug-only until the lane matures: unless raven was started with
-    ``RAVEN_DEBUG_MACHINES=1`` (:func:`raven.home.machine_lane_enabled`), an
-    entry that names a machine is left off the table and no machine is
-    reached for it."""
+    :mod:`raven.acp_client.remote`."""
     remote_cwd: str | None = None
     """Where on ``machine`` this agent works, ``~/raven-work`` when unset; ignored
     without ``machine``. ``~`` is the registered user's home there."""

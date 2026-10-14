@@ -122,8 +122,6 @@ class Machine:
             encoding="utf-8",
         )
         monkeypatch.setenv("RAVEN_CONNECTIONS", str(registry))
-        # The lane is debug-only; these tests are about what it does when on.
-        monkeypatch.setenv("RAVEN_DEBUG_MACHINES", "1")
         path = f"{self.bin}{os.pathsep}{os.environ.get('PATH', '/usr/bin:/bin')}"
         # Both ways ssh is started: the one-shot runner inherits this process's
         # PATH, and an agent's launch takes the captured login-shell one.
@@ -962,41 +960,30 @@ async def test_the_announce_and_the_record_name_the_machine_s_directory_for_any_
     assert mgr._machine_workdir("nobody", "t1") == ("", "")
 
 
-# ---- the lane is debug-only --------------------------------------------------------------
+# ---- registered machines ----------------------------------------------------------------
 
 
-def _lane_off(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("RAVEN_DEBUG_MACHINES", raising=False)
-
-
-def test_with_the_lane_off_a_machine_row_stays_off_the_table(box, monkeypatch):
+def test_machine_and_local_acp_rows_are_on_the_table_without_a_debug_switch(box, monkeypatch):
     from raven.agent.subagent.registry import AgentRegistry
 
-    local = ThirdPartyAcpSubagentConfig(name="here", command=f"{sys.executable} {_STUB}")
+    monkeypatch.delenv("RAVEN_DEBUG_MACHINES", raising=False)
     registry = AgentRegistry(build_builtin=lambda row, narrowed: ("backend", row.name))
-
-    _lane_off(monkeypatch)
+    local = ThirdPartyAcpSubagentConfig(name="here", command="stub")
     registry.apply([remote_config(), local])
-    assert "stub@box" not in registry.names() and "here" in registry.names()
-
-    monkeypatch.setenv("RAVEN_DEBUG_MACHINES", "1")
-    registry.apply([remote_config(), local])
-    assert "stub@box" in registry.names()
+    assert "stub@box" in registry.names() and "here" in registry.names()
+    assert box.calls() == [], "constructing the table does not connect to a machine"
 
 
-async def test_with_the_lane_off_nothing_reaches_the_machine_and_each_door_says_so(box, monkeypatch, tmp_path):
-    _lane_off(monkeypatch)
-    said = "the machine lane is debug-only and off; start raven with RAVEN_DEBUG_MACHINES=1"
-
-    with pytest.raises(AcpConnectionError, match=said):
-        await build_third_party_backend(remote_config()).run("hi", task_id="t1", workspace=tmp_path, executor=None)
-    probed = await probe.probe_one(remote_config(), source="config")
-    assert probed.status == "attention" and said in probed.detail
-    verified = await verify_agent(remote_config())
-    assert verified.status == "attention" and said in verified.detail
-    tested = await probe.run_test(remote_config(), source="config")
-    assert tested.ok is False and said in tested.detail and tested.remedy is None
-    assert box.calls() == [], "off is off: no ssh for a dispatch, a probe, a verify or a test"
+async def test_acp_dispatch_and_checks_need_no_debug_switch(box, monkeypatch, tmp_path):
+    monkeypatch.delenv("RAVEN_DEBUG_MACHINES", raising=False)
+    cfg = remote_config()
+    probed = await probe.probe_one(cfg, source="config")
+    assert box.calls() == [], "the free probe must not open a connection"
+    assert "debug-only" not in probed.detail
+    reply = await build_third_party_backend(cfg).run("hi", task_id="default-on", workspace=tmp_path, executor=None)
+    assert "pong" in reply
+    assert (await verify_agent(cfg)).status == "ready"
+    assert (await probe.run_test(cfg, source="config")).ok
 
 
 async def test_the_boot_backfill_never_logs_in_to_a_machine(box):

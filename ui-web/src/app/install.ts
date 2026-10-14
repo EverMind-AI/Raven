@@ -18,6 +18,7 @@ import { startTaskWith } from '../features/composer/startTaskWith'
 import { connSource } from '../features/connections/source'
 import { cronSource } from '../features/cron/source'
 import { openDeskTask } from '../features/desk/store'
+import { exportSource } from '../features/export/source'
 import { AgentsStepBody } from '../features/extAgents/AgentsBody'
 import { extAgentsSource } from '../features/extAgents/source'
 import * as extAgentsStore from '../features/extAgents/store'
@@ -206,6 +207,7 @@ export function installSources(): void {
       done: memoryStepDone,
     },
   })
+  sources.export = exportSource
   sources.importSync = importSyncSource
   /* The rail's import row reads the run the wizard's last step starts. Wired
      here rather than by either domain reading the other: the wizard closes,

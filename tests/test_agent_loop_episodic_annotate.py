@@ -344,8 +344,11 @@ class TestOrigins:
         await loop._process_message(_req("again", origin=Origin.USER), origin=Origin.USER)
         await _settle(loop)
         assert len(fake.tails) == 2
-        assert fake.tails[1][0] == {k: v for k, v in fake.tails[1][0].items() if k in ("role", "content", "timestamp")}
+        assert fake.tails[1][0] == {
+            k: v for k, v in fake.tails[1][0].items() if k in ("role", "content", "timestamp", "trace_id")
+        }
         assert fake.tails[1][0]["content"] == "again"
+        assert fake.tails[1][0]["trace_id"].startswith("trace-")
 
 
 def _req(text: str, *, origin: Origin = Origin.USER) -> TurnRequest:

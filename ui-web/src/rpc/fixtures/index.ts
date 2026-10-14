@@ -24,6 +24,7 @@
  */
 
 import { createBrowser } from './browser'
+import { createBugReport } from './bugreport'
 import { createChannels } from './channels'
 import { createCron } from './cron'
 import { createDeck } from './deck'
@@ -82,6 +83,7 @@ export function demoFixtures(env: FixtureEnv): Fixtures {
     ...createBrowser(env).fixtures,
     ...createKnowledge(env).fixtures,
     ...createTrajectory(env).fixtures,
+    ...createBugReport(env).fixtures,
   }
 }
 

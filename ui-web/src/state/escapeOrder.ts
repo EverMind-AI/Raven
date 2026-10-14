@@ -82,6 +82,9 @@ const CLOSERS: Record<PageId, () => void> = {
 const ABOVE: readonly EscapeLayer[] = [
   { id: '.lightbox', isOpen: imageOpen, close: closeImage },
   { id: '#veil', isOpen: flagged('veil'), close: cancels('cfNo') },
+  /* Under the confirm sheet, which it raises before stopping an export, and
+     over the details pane it covers. Its own close button is the cancel. */
+  { id: '#exportVeil', isOpen: flagged('exportVeil'), close: cancels('exportClose') },
   { id: '#detail', isOpen: flagged('detail'), close: detail.close },
 ]
 
@@ -155,7 +158,7 @@ const BELOW: readonly EscapeLayer[] = [
   { id: 'turn.busy()', isOpen: turnBusy, close: () => ds('composer').stop() },
 ]
 
-/** The twelve, in the order Escape reaches them. */
+/** The fifteen, in the order Escape reaches them. */
 export const ESCAPE_ORDER: readonly EscapeLayer[] = [
   ...ABOVE,
   ...byEscape().map((page) => ({

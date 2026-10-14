@@ -401,10 +401,14 @@ of it. The entry names only the machine's id, and the entry's `env` reaches the
 agent on the link, never on a command line. Such an entry is added the way any
 preset is, with `machine` (and
 `remote_cwd`, for an `acp` or `cli` one) on `subagents.add` — from a chat through
-`raven_config`, which lists the registered machines while the lane is on; the page's
-add passes no machine yet — refused before anything is spent when the lane is off,
+`raven_config`, which lists the usable registered machines; the page's
+add passes no machine yet — refused before anything is spent when
 the id is not usable or the preset is a built-in agent, and proved by the same
 readiness ping as a local add, run on that machine.
+Registered-machine dispatch, file access and recovery are available without an
+environment switch. An entry without `machine` still runs here. Registration,
+SSH authentication, file permissions and concurrency limits govern remote work;
+listing entries and boot capability backfills do not open machine connections.
 _Avoid_: "host" / "server" / "node" (too broad, no link to the
 `ops connection` registry that supplies the rows); "GPU box" (only some are
 GPU hosts, and the term covers any registered compute destination);
@@ -2077,6 +2081,25 @@ attribute, which read paths keep resolving; new spans never carry it
 (`attempt.id` is a reserved attribute key stripped by `raven/tracing/spans.py`).
 _Avoid_: "run id" / "task id" — neither is bound to span records.
 
+**Main-line Turn** (`raven/trajectory/selection.py`):
+A `session.turn` root recorded under a session's key that no other trace dispatched
+(it carries no `trace.dispatched_in_trace_id`). It is the unit the web page's
+export and bug report select by; selecting one brings along every trace it
+dispatched -- sub-agents, their own sub-agents, follow-up turns reporting back --
+resolved through those links. A main-line turn counts as in progress only when it
+is the session's latest, its record is still only a checkpoint, and the session is
+answering right now; a checkpoint left behind by a process that died is selectable.
+_Avoid_: selecting a dispatched trace as a turn of its own.
+
+**Turn Trace Mark** (`raven/agent/loop/turn_path.py`):
+The `trace_id` stored on a turn's opening user message while tracing is on, naming
+the trace of that turn's `session.turn` span. Cutting a session record down to
+selected turns uses it to find each turn's messages; messages written before the
+mark existed are matched by the turn's input text inside the turn's time window,
+only where the record's order leaves one possible turn, and a turn that cannot be
+matched with certainty keeps its trajectory only. The mark never reaches
+a model request (history is read through field whitelists).
+
 **Attempt Definition** (`raven/trajectory/store.py`):
 The mutable sidecar record in `attempts.json` (trace state dir) mapping a minted
 `att-*` id to its member trace ids plus the historical ids it absorbed (`aliases`),
@@ -2114,6 +2137,20 @@ becomes a labelled placeholder at its own index and its sha1 is listed under the
 manifest's `missing_messages`. Bundling declares the trajectory corpus, so the id is
 auto-pinned.
 _Avoid_: "archive" — that names the tracing store's rotated-log directory.
+
+**Trajectory Export** (`raven/trajectory/export.py`):
+The `tar.gz` the web page's "Export" downloads for chosen Main-line Turns of one
+session: `<export-id>/export.json` (`schema: "raven_trajectory_export"` plus a
+`format_version`, the selected turns and dispatched traces, counts, and what is
+missing) + `spans.jsonl` + the session record cut to those turns + `artifacts/` at
+their store-relative paths + the Message Blobs their v2 shells reference. It is the
+input contract `web-traj-import` reads, so its layout and manifest change only with
+the version. Unlike a Trajectory Bundle it is selected by turn rather than by
+Attempt, keeps v2 shells as shells, carries only the selected turns' messages and
+pins nothing; unlike a Bug Report Package its content is neither redacted nor
+trimmed, and it travels only from the local gateway to the browser, fetched by a
+one-hour token (`raven/trajectory/export_jobs.py`).
+_Avoid_: calling it a bundle or a report.
 
 **Message Blob** (`raven/tracing/artifact_v2.py`):
 One model-input message stored once, at
@@ -2173,7 +2210,10 @@ path-sanitized problem metadata, merged redaction summary with
 `risk_accepted`, environment, content manifest) plus an embedded Trajectory
 Report. Its entire content is frozen under the report's `snapshot/export/`
 before the user confirms, so a packaging retry reuses the approved bytes and
-never re-collects.
+never re-collects. A report the web page files for chosen turns carries a
+synthetic attempt, `sel-<12 hex>` of the selected trace ids, whose
+`member_traces` are those turns and every trace they dispatched; the receiver
+reads it like any other.
 _Avoid_: confusing it with the Trajectory Report it embeds — the Package wraps
 one and adds the problem metadata envelope.
 
@@ -2212,9 +2252,30 @@ up, never overwritten in place, before the next save. The bug report review
 records the human decisions once the decision set is valid; decisions made by
 the blanket `--keep-findings` / `--redact-findings` flags are neither replayed
 over nor recorded, `--review-all` asks again, and
-`RAVEN_BUGREPORT_REDACTION_HISTORY=off` disables it.
+`RAVEN_BUGREPORT_REDACTION_HISTORY=off` disables it. The web page's bug report
+records every value it showed with the final decision, source `web` -- the
+default "keep" and the bulk buttons included -- because the page puts each
+value in front of the reader; that differs from the CLI's blanket flags on
+purpose.
 _Avoid_: "memory" (the agent memory engine), "cache" (it is an authoritative
 record, never evicted automatically).
+
+**Report Session** (`raven/trajectory/report_session.py`):
+One web bug report in progress, held in the gateway's memory between the page's
+requests: the preparation, the Review Items with their plain values, what the
+Redaction History decided, and the phase (`collecting`, `deciding`, `finishing`,
+`ready`, `uploading`, `uploaded`, `upload_failed`, `failed`, `cancelled`). It lives
+from `bugreport.start` until the report fails, is uploaded, is cancelled, sits
+idle for thirty minutes, or the gateway stops. At most two are held at once, each
+until its worker thread has cleaned up and exited; a failed or uploaded one then
+drops its plain values and leaves only its last status, readable for ten minutes.
+The worker checks for a cancel after every step and starts nothing further, so a
+report cancelled while it was packaging is never sent. Cancelling or failing
+before the report landed removes its staging, after it landed the Bug Report
+Record stays for `raven trajectory upload-bug-report`. The page only ever
+receives masked samples and, one item at a time, the contexts a decision needs.
+_Avoid_: calling it the record -- the Bug Report Record is the file that lands on
+disk.
 
 **Bug Report Receiver** (`raven/trajectory/receiver.py`):
 The standalone HTTP service that takes Bug Report Packages in: it validates each

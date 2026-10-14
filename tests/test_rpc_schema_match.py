@@ -574,6 +574,11 @@ EXPECTED_ERROR_CODES = {
     -32021: "entry_not_found",
     -32022: "cursor_expired",
     -32023: "revision_changed",
+    -32024: "trajectory_task_not_found",
+    -32025: "trajectory_task_limit",
+    -32026: "bugreport_unavailable",
+    -32027: "review_conflict",
+    -32028: "bugreport_state",
 }
 
 

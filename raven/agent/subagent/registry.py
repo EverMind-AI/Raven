@@ -40,7 +40,6 @@ from raven.agent.subagent.backends.routing import RouteTarget, RoutingBackend
 from raven.agent.subagent.builtin_agents import LEGACY_AGENT_ALIASES, canonical_agent_name, merge_builtin_seeds
 from raven.agent.subagent.instances import get_registry
 from raven.agent.subagent.vendored_agents import discover_product_rows, merge_product_seeds
-from raven.home import machine_lane_enabled
 
 if TYPE_CHECKING:
     from raven.agent.subagent.backends.routing import Router, TargetReady
@@ -309,13 +308,6 @@ class AgentRegistry:
         merged = merge_product_seeds(list(configs or []), discover_product_rows())
         for cfg in merge_builtin_seeds(merged):
             name = getattr(cfg, "name", None)
-            if (getattr(cfg, "machine", None) or "").strip() and not machine_lane_enabled():
-                # The machine lane is debug-only: an entry on a registered
-                # machine stays off the table, so the model is never offered a
-                # dispatch the host would then refuse. The listing still shows
-                # the row, and its probe says the same.
-                logger.info("Sub-agent {!r} stays off the table: the machine lane is debug-only", name)
-                continue
             try:
                 row = _row_for(cfg)
                 if not row.name:

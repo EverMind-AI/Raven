@@ -25,10 +25,9 @@ form scp reads back: ``user@host:/abs/path`` on port 22, else
 ``scp://user@host:port//abs/path`` -- the port only fits the URI form.
 
 Reads the registry, and for :func:`reading` and :func:`writing` the agent
-entries' ``remoteCwd``; never ssh, never a node. The machine lane is debug-only
-(:func:`raven.home.machine_lane_enabled`): with it off, :func:`target` names
-no machine for any path, and the file tools read every path as they always
-did.
+entries' ``remoteCwd``; never ssh, never a node. Remote spellings are always
+resolved against the registry; an explicit local spelling such as ``./a:b``
+stays on this computer.
 """
 
 from __future__ import annotations
@@ -39,8 +38,6 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
-
-from raven.home import machine_lane_enabled
 
 #: Where an agent works on its machine when its entry names nowhere else, and
 #: so the one directory every registered machine reads from without asking.
@@ -215,8 +212,8 @@ def forget_read(machine: str, path: str, *, reader: str = "") -> None:
 
 
 def target(text: str) -> RemotePath | None:
-    """:func:`parse` against the registry as it is now; ``None`` for every path while the lane is off."""
-    if not machine_lane_enabled() or not looks_remote(text):
+    """:func:`parse` against the registry as it is now; ``None`` for a local path."""
+    if not looks_remote(text):
         return None
     from raven.ops.connections import load
 

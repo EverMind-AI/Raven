@@ -212,7 +212,7 @@ describe('toTranscriptMessages: resumed tool calls', () => {
       }
     ])
 
-    expect(msgs[0]!.text).toBe('↩ raven-code — finished')
+    expect(msgs[0]!.text).toBe('↩ raven-code — Finished')
   })
 
   it('draws the failed variant of the delivered-arrow line for an error status', () => {
@@ -225,7 +225,7 @@ describe('toTranscriptMessages: resumed tool calls', () => {
       }
     ])
 
-    expect(msgs[0]!.text).toBe('↩ raven-research — failed')
+    expect(msgs[0]!.text).toBe('↩ raven-research — Failed')
   })
 
   it('draws the waiting variant of the delivered-arrow line for a suspended node, not the finished one', () => {
@@ -241,7 +241,7 @@ describe('toTranscriptMessages: resumed tool calls', () => {
       }
     ])
 
-    expect(msgs[0]!.text).toBe('↩ stuck-node — waiting on a decision')
+    expect(msgs[0]!.text).toBe('↩ stuck-node — Waiting on a decision')
   })
 
   it('restores delivered and changed files after a restart', () => {

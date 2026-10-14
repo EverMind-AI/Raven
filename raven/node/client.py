@@ -595,9 +595,10 @@ class NodePool:
         """``task`` on the machine, onto a channel of its link, from the frame past the ``after``-th.
 
         What a process that comes after the one that started the agent uses
-        to pick the run up: the daemon replays what this computer never read
-        and hands the rest over as it comes, or, for a task that has ended,
-        replays its record and says so. The endpoint returned is what an
+        to pick the run up: the daemon replays the frames past the record's
+        count -- the turn whole, from where its prompt went out -- and hands
+        the rest over as it comes, or, for a task that has ended, replays its
+        record and says so. The endpoint returned is what an
         :class:`AcpClient` runs over; the answer says the pid, the frames
         and the exit code (``None`` while the agent runs).
         """

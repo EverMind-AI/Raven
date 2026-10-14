@@ -17,6 +17,7 @@ import {
   hasUpdateFlag,
   resetCapabilities,
   serves,
+  servesBugReport,
   servesChannels,
 } from './capabilities'
 
@@ -84,6 +85,12 @@ describe("the handshake's own list", () => {
   it('survives a gateway that sends no list at all', () => {
     absorb(undefined)
     expect(serves('subscriptions')).toBe(false)
+  })
+  it('offers the bug report only where the gateway announced a receiver', () => {
+    absorb(['jsonrpc-2.0', 'trajectory-v1'])
+    expect(servesBugReport()).toBe(false)
+    absorb(['jsonrpc-2.0', 'trajectory-v1', 'bugreport-v1'])
+    expect(servesBugReport()).toBe(true)
   })
 })
 

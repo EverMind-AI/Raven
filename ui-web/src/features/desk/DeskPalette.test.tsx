@@ -952,7 +952,7 @@ describe('the reserve the palette publishes', () => {
     /* Nothing unmounts the palette today -- `DeskApp` renders it once and a
        module page hides `#deskHost` rather than dropping it. This pins the
        cleanup anyway, because the property lives outside React and the failure
-       is silent: a transcript left 324px narrow with nothing on screen to
+       is silent: a transcript left 362px narrow with nothing on screen to
        explain it. */
     chatIs(want + DESK_COLUMN_FLOOR + 40)
     const view = render(<DeskPalette />)

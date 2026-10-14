@@ -2,9 +2,10 @@
 
 The run's record (:mod:`raven.acp_client.remote_runs`) says which machine,
 which task its daemon runs the agent under, which ACP session the turn is in,
-which prompt is awaited and how many frames that process had read. This
-module turns that into the reply the turn owes: the machine's daemon replays
-what was never read and hands the rest over as it comes (``agent/attach``),
+which prompt is awaited and how many frames that process had read when the
+prompt went out. This module turns that into the reply the turn owes: the
+machine's daemon replays the turn from there, whole, and hands the rest over
+as it comes (``agent/attach``),
 a connection over that channel is taken into the pool as if started here, the
 turn's collector reads the agent's messages off it, and the answer to the
 prompt -- sent by the other process, awaited by this one -- ends the wait. What

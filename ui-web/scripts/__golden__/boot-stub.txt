@@ -88,6 +88,9 @@ div.app[data-rail=on]
               rect
               path
             span#wsBdg.bdg
+          button#moreBtn.ghost-ic.tipdn[data-tip]
+            svg
+              path
         div#scroll.scroll
           div#bannerHost
           div#flash.flash
@@ -339,6 +342,9 @@ div#setVeil.veil.setveil[data-open=false][data-section=usage]
       div#spanels.spanels
       div#cronBody.spanels[data-for=cron]
       div#memoryBody.spanels[data-for=memory]
+div#exportVeil.veil[data-open=false]
+  div#exportModal.chrome-export-modal
+    div#exportBody.chrome-export-body
 div#veil.veil[data-open=false]
   div.sheet
     header#cfTitle
