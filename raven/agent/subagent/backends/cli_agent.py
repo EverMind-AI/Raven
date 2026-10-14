@@ -206,10 +206,14 @@ class _OnMachine:
     """The dispatch's handle, for the record."""
     authored_task: str = ""
     """The task as the dispatching model wrote it, for the record: what an announce after a restart quotes."""
+    reported_by_caller: bool = False
+    """Whether the caller reports the reply itself and forgets the record then (``remote_runs.forget_dispatch``):
+    the record outlives the command's output; otherwise it goes with it."""
 
 
 def _untrack(tracker: Any, *, keep: bool) -> None:
-    """The run's record on this computer goes with a turn that ended here, or stays for the next process."""
+    """The run's record on this computer goes with a command that ended here, or stays: for the next process, or
+    for the caller that reports the output (``_OnMachine.reported_by_caller``)."""
     if tracker is not None:
         tracker.close(keep=keep)
 
@@ -736,7 +740,9 @@ class CliAgentBackend:
             await endpoint.end()
             _untrack(tracker, keep=False)
             raise
-        _untrack(tracker, keep=False)
+        # The output is the reply: a caller that reports it keeps the record
+        # until it has, so a host that stops in between reads the output again.
+        _untrack(tracker, keep=placed.reported_by_caller)
         if (why := endpoint.ended()) is not None:
             raise RuntimeError(f"CLI agent {self.name!r}: {why}")
         stdout = "".join(f"{line}\n" for line in out_lines)
@@ -809,6 +815,11 @@ class CliAgentBackend:
         authored_task: str | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
         media: Sequence[Media] = (),
+        # Whether the caller reports the reply itself (the manager's announce)
+        # and removes the run's record on its machine then
+        # (`remote_runs.forget_dispatch`); otherwise the record goes as this
+        # returns. Read on a machine only: a command here leaves no record.
+        reported_by_caller: bool = False,
     ) -> str:
         # A path here means nothing on another machine: the files that came
         # with the task are named to an agent there by address instead, once
@@ -869,6 +880,7 @@ class CliAgentBackend:
                         mcp_file=mcp_path,
                         media=media,
                         authored_task=authored_task,
+                        reported_by_caller=reported_by_caller,
                     )
                     for note in filter(None, (self._withheld_note(grant), grant.note_text())):
                         notice = f"\n\n[raven] {note}."
@@ -937,6 +949,7 @@ class CliAgentBackend:
         mcp_file: str | None = None,
         media: Sequence[Media] = (),
         authored_task: str | None = None,
+        reported_by_caller: bool = False,
     ) -> str:
         skey = session_key or "default"
         if self.machine:
@@ -951,6 +964,7 @@ class CliAgentBackend:
                 notice_sink=notice_sink,
                 media=media,
                 authored_task=authored_task,
+                reported_by_caller=reported_by_caller,
             )
         cwd = self.cwd or str(workspace)
         # Here rather than beside either launch: this lane sees nothing of what
@@ -989,6 +1003,7 @@ class CliAgentBackend:
         notice_sink: Callable[[str], Awaitable[None]] | None,
         media: Sequence[Media],
         authored_task: str | None = None,
+        reported_by_caller: bool = False,
     ) -> str:
         """The run on the entry's machine: placed there first, with the task's files named by address.
 
@@ -999,7 +1014,13 @@ class CliAgentBackend:
         """
         from raven.acp_client import remote
 
-        placed = replace(await self._on_machine(handle), skey=skey, handle=handle, authored_task=authored_task or "")
+        placed = replace(
+            await self._on_machine(handle),
+            skey=skey,
+            handle=handle,
+            authored_task=authored_task or "",
+            reported_by_caller=reported_by_caller,
+        )
         # Nothing is carried to the machine: the files that come with the
         # task are named to the agent by address, and it looks for them there.
         if note := remote.files_note(media, placed.target):

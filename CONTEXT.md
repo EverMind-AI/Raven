@@ -442,10 +442,13 @@ link is tried again on a backoff for as long as any waits; a link that comes bac
 each agent again by its task id. A turn running on a machine when this computer stops is
 left with the daemon (`remote.leave_agents_running()`), remembered while in flight in
 `<raven home>/machines/runs/` (`raven/acp_client/remote_runs.py`), and picked up by the
-next start (`raven/agent/subagent/resume_remote.py`): attached from the frame last read
-(a cli entry's command from its first line, its whole output being the reply), its reply
-read off the machine and announced into the conversation that asked -- the task quoted as
-the model wrote it, the record removed only once the announce was taken. An MCP server the
+next start (`raven/agent/subagent/resume_remote.py`): attached from the frame its prompt
+went out after, so the turn is read again whole (a cli entry's command from its first line,
+its whole output being the reply), its reply read off the machine and announced into the
+conversation that asked -- the task quoted as the model wrote it, the record removed only
+once the announce was taken. A turn that returned here keeps its record the same way until
+the manager's announce of the reply was taken (`remote_runs.forget_dispatch`), so a host
+that stops between the two reads the reply again. An MCP server the
 host lends an agent there is carried on the same link: the agent runs the install's bridge
 (`python -I -m raven.node --mcp`) as a stdio server, the daemon relays its frames as a stream
 (`mcp/open`, `mcp/frame`, `mcp/close`, under a token the daemon leaves beside the task's record),

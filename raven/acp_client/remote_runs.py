@@ -11,8 +11,13 @@ here, the ids this side has used, and what the agent answered to
 ``initialize`` on the connection -- none of the ACP part for a cli entry's
 command, whose whole output is its reply, read from the start. One file per run under
 ``<raven home>/machines/runs/<task>.json``, owner-only, written when the turn
-starts, kept current as frames arrive, and removed when the turn ends here or
-once the process that picked it up has reported it. A
+starts and removed once its outcome has reached the conversation: by the
+manager, after its announce of the reply was taken (:func:`forget_dispatch`),
+by the backend when the turn ended here with no reply, or by the process that
+picked the run up, once it has reported it. A host that stops between the
+agent's answer and the announce has the record still, and the next start
+reads the reply again: the record moves past no frame of the turn itself, so
+the turn is replayed whole. A
 file left behind is a run to pick up (:mod:`raven.acp_client.remote_resume`),
 by one process at a time: the pick-up is made under a claim beside the record
 (:func:`claim`), since two processes of one Raven home can start together.
@@ -66,7 +71,8 @@ class RemoteRun:
     session_cwd: str
     stateful: bool
     received: int = 0
-    """How many of the agent's frames this computer has read on the connection: where an attach goes on from."""
+    """How many of the agent's frames this computer had read when the prompt went out: where an attach goes on
+    from, so a pick-up reads the turn from its first frame."""
     started: float = field(default_factory=time.time)
     kind: str = "acp"
     """``acp`` for a turn in an ACP session, ``cli`` for a command whose whole output is the reply
@@ -149,6 +155,21 @@ def forget(task: str) -> None:
     with contextlib.suppress(FileNotFoundError, OSError):
         path_of(task).unlink()
     release(task)
+
+
+def forget_dispatch(task_id: str) -> bool:
+    """Remove the record of the dispatch ``task_id`` (the manager's id), and its claim; whether there was one.
+
+    The manager's end of a run that returned here. The backend leaves the
+    record behind with the reply when the caller reports the reply itself
+    (``reported_by_caller``), and it goes once the announce was taken: a
+    host that stops between the two has the way back to the run still.
+    """
+    for run in pending():
+        if run.task_id == task_id:
+            forget(run.task)
+            return True
+    return False
 
 
 def claim_path(task: str) -> Path:
@@ -286,11 +307,14 @@ def pending() -> list[RemoteRun]:
 
 
 class Tracker:
-    """One run's record, kept current as the agent's frames arrive, and removed when the turn ends here.
+    """One run's record, kept current until the prompt is out, and removed when the turn ends here.
 
     ``received`` is what a channel endpoint's watcher calls after every frame
-    the connection has handed on (:class:`raven.node.client.ChannelEndpoint`),
-    so a later attach replays only what this computer never read.
+    the connection has handed on (:class:`raven.node.client.ChannelEndpoint`).
+    It moves the record only until ``prompt_sent``: the turn's own frames are
+    never checkpointed, since the reply is put together from all of them --
+    the chunks before the answer as much as the answer -- and a process that
+    picks the run up has to read the turn from its first frame.
     """
 
     def __init__(self, run: RemoteRun) -> None:
@@ -308,7 +332,7 @@ class Tracker:
             logger.warning("remote run record {} could not be updated: {}", self.run.task, exc)
 
     def received(self, n: int) -> None:
-        if n <= self.run.received:
+        if self.run.prompt_id > 0 or n <= self.run.received:
             return
         self.run.received = n
         try:
@@ -317,7 +341,8 @@ class Tracker:
             logger.warning("remote run record {} could not be updated: {}", self.run.task, exc)
 
     def close(self, *, keep: bool) -> None:
-        """The turn ended here (``keep`` false) or goes on without this process (``keep`` true)."""
+        """The turn ended here (``keep`` false), or the record stays (``keep`` true): the turn goes on without
+        this process, or the caller reports the reply and forgets the record then (:func:`forget_dispatch`)."""
         self.kept = keep
         if not keep:
             forget(self.run.task)
@@ -349,6 +374,7 @@ __all__ = [
     "claim",
     "claim_path",
     "forget",
+    "forget_dispatch",
     "mark_left",
     "path_of",
     "pending",
