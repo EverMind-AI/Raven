@@ -17,14 +17,19 @@ Every method is safe to call from the event loop: the registry lock guards
 in-memory state only, and anything touching the disk or a file lock -- the
 snapshot, the redaction history, packaging, the upload -- runs on the entry's
 worker thread. Each entry has at most one worker. An entry holds one of the
-``limit`` slots from ``start`` until it is finished or cancelled *and* its
-worker has cleaned up and exited, so a cancelled worker blocked on the
+``limit`` slots from ``start`` until it is failed, uploaded or cancelled *and*
+its worker has cleaned up and exited, so a cancelled worker blocked on the
 history's file lock still counts, and cancelling and starting again cannot
 pile threads up. Entries waiting on the reader (``deciding``, ``ready``,
 ``upload_failed``) hold their slot too; an entry nobody asked about for
-``idle`` seconds is cancelled.
+``idle`` seconds is cancelled. A failed or uploaded entry gives its slot and
+its plaintext up as its worker exits, leaving only what ``status`` answered
+for the page to read for ``keep_ended`` seconds.
 
-Cancelling before the report landed removes its staging directory; after it
+A worker checks for a cancel after every blocking step and starts nothing
+further once it sees one: an upload already sent is not taken back, but a
+report cancelled while it was packaging is never sent. Cancelling, or
+failing, before the report landed removes its staging directory; after it
 landed the record and package stay under ``<state>/bugreports/<id>/`` for
 ``raven trajectory upload-bug-report``.
 
@@ -35,6 +40,7 @@ the page shows every value it asks about.
 
 from __future__ import annotations
 
+import copy
 import secrets
 import threading
 import time
@@ -60,6 +66,7 @@ PHASE_UPLOADED = "uploaded"
 PHASE_UPLOAD_FAILED = "upload_failed"
 PHASE_FAILED = "failed"
 PHASE_CANCELLED = "cancelled"
+_ENDED_PHASES = (PHASE_FAILED, PHASE_UPLOADED)
 
 HISTORY_ON = "on"
 HISTORY_OFF = "off"
@@ -69,6 +76,7 @@ HISTORY_UNAVAILABLE = "unavailable"
 ITEM_GROUP_LIMIT = 10
 THREAD_PREFIX = "bug-report"
 _ERROR_LIMIT = 300
+_ENDED_LIMIT = 16
 
 
 class ReportNotFoundError(LookupError):
@@ -135,6 +143,7 @@ class ReportSessions:
         *,
         limit: int = 2,
         idle: float = 1800.0,
+        keep_ended: float = 600.0,
         clock: Callable[[], float] = time.monotonic,
         history: Callable[[], rhistory.RedactionHistory] = rhistory.RedactionHistory,
         history_enabled: Callable[[], bool] = rhistory.enabled,
@@ -145,6 +154,7 @@ class ReportSessions:
     ) -> None:
         self.limit = limit
         self.idle = idle
+        self.keep_ended = keep_ended
         self._clock = clock
         self._history = history
         self._history_enabled = history_enabled
@@ -155,30 +165,47 @@ class ReportSessions:
         self._lock = threading.Lock()
         self._idle_cond = threading.Condition(self._lock)
         self._reports: dict[str, _Report] = {}
+        self._ended: dict[str, tuple[float, dict[str, Any]]] = {}
 
     # -- slots and workers ------------------------------------------------
 
-    def _spawn(self, report: _Report, target: Callable[[], None], kind: str) -> None:
+    def _spawn(
+        self,
+        report: _Report,
+        target: Callable[[], None],
+        kind: str,
+        undo: Callable[[], None] | None = None,
+    ) -> None:
         """Run ``target`` as the report's worker; the caller marked ``worker_alive`` under the lock.
 
-        On the way out the worker removes the staging of a report cancelled
-        before it landed, then releases the slot in the same locked step as
-        its last look at the report.
+        An exception no step expected still ends the report in a phase the
+        page can read. On the way out the worker removes the staging of a
+        report cancelled or failed before it landed, then, in the same locked
+        step as its last look at the report, releases the slot of a report
+        that is over. When no thread starts, ``undo`` puts back under the lock
+        what the caller changed in order to start one.
         """
 
         def body() -> None:
             try:
                 target()
-            except Exception:  # noqa: BLE001 - a worker never takes the registry down
+            except Exception as exc:  # noqa: BLE001 - a worker never takes the registry down
                 logger.opt(exception=True).warning("bug report {}: worker failed", report.report_id)
+                self._crashed(report, exc)
             finally:
                 while True:
                     with self._lock:
-                        doomed = report.prep if report.cancelled and report.landed is None else None
+                        doomed = (
+                            report.prep
+                            if (report.cancelled or report.phase == PHASE_FAILED) and report.landed is None
+                            else None
+                        )
                         if doomed is None:
                             report.worker_alive = False
                             if report.cancelled:
                                 self._reports.pop(report.report_id, None)
+                            elif report.phase in _ENDED_PHASES:
+                                self._end_locked(report)
                             self._idle_cond.notify_all()
                             return
                         report.prep = None
@@ -190,11 +217,24 @@ class ReportSessions:
         except BaseException:
             with self._lock:
                 report.worker_alive = False
+                if undo is not None:
+                    undo()
+                if report.cancelled:
+                    # Nothing is left to remove its staging; the stale-staging
+                    # sweep at the next start does.
+                    self._reports.pop(report.report_id, None)
                 self._idle_cond.notify_all()
             raise
 
     def _occupied_locked(self) -> int:
         return len(self._reports)
+
+    def _end_locked(self, report: _Report) -> None:
+        """Release a failed or uploaded report's slot, keeping only what ``status`` answers."""
+        self._reports.pop(report.report_id, None)
+        self._ended[report.report_id] = (self._clock() + self.keep_ended, self._view_locked(report))
+        while len(self._ended) > _ENDED_LIMIT:
+            del self._ended[min(self._ended, key=lambda key: self._ended[key][0])]
 
     def _retire_locked(self, report: _Report) -> bool:
         """Cancel ``report`` in memory; True when a cleaning worker must be started."""
@@ -213,6 +253,8 @@ class ReportSessions:
 
     def _sweep_locked(self) -> list[_Report]:
         now = self._clock()
+        for report_id in [key for key, (expires, _view) in self._ended.items() if expires <= now]:
+            del self._ended[report_id]
         to_clean: list[_Report] = []
         for report in list(self._reports.values()):
             if not report.cancelled and report.last_seen + self.idle <= now and self._retire_locked(report):
@@ -229,17 +271,51 @@ class ReportSessions:
     def _get_locked(self, report_id: str) -> _Report:
         report = self._reports.get(report_id)
         if report is None:
+            ended = self._ended.get(report_id)
+            if ended is not None:
+                raise ReportStateError(ended[1]["phase"], "wrong_phase", "this report has ended")
             raise ReportNotFoundError(report_id)
         report.last_seen = self._clock()
         return report
 
     # -- worker steps -----------------------------------------------------
 
+    def _cancelled(self, report: _Report) -> bool:
+        with self._lock:
+            return report.cancelled
+
     def _fail(self, report: _Report, exc: BaseException) -> None:
         with self._lock:
             if not report.cancelled:
                 report.phase = PHASE_FAILED
                 report.error = _error(f"{type(exc).__name__}: {exc}")
+
+    def _crashed(self, report: _Report, exc: BaseException) -> None:
+        """End a report whose step raised what it did not expect, unless it was cancelled meanwhile."""
+        if self._cancelled(report):
+            return
+        with self._lock:
+            phase = report.phase
+        if phase == PHASE_UPLOADING:
+            self._note_landed(report)
+            self._upload_failed(report, _error(f"{type(exc).__name__}: {exc}"))
+        elif phase in (PHASE_COLLECTING, PHASE_FINISHING):
+            self._fail(report, exc)
+
+    def _note_landed(self, report: _Report) -> None:
+        """Remember a record that landed before its step failed, so a retry starts from it."""
+        with self._lock:
+            prep, landed = report.prep, report.landed
+        if landed is not None or prep is None:
+            return
+        record_dir = breport.bugreports_root(prep.state_dir) / prep.report_id
+        try:
+            landed_now = record_dir.is_dir()
+        except OSError:
+            return
+        if landed_now:
+            with self._lock:
+                report.landed = record_dir
 
     def _collect(self, report: _Report) -> None:
         try:
@@ -252,12 +328,15 @@ class ReportSessions:
             )
             with self._lock:
                 report.prep = prep
+                if report.cancelled:
+                    return
             stage = breport.stage_review(prep, **report.problem)
+            if self._cancelled(report):
+                return
             resolution, state, warning = self._resolve(stage.items)
         except Exception as exc:  # noqa: BLE001 - becomes the report's error, read by the page
             logger.opt(exception=True).warning("bug report {}: collecting failed", report.report_id)
             self._fail(report, exc)
-            self._drop_staging(report)
             return
         remaining = list(resolution.remaining) if resolution is not None else list(stage.items)
         confirmed_first = sorted(remaining, key=lambda item: item.kind != treview.KIND_CONFIRMED)
@@ -274,13 +353,6 @@ class ReportSessions:
             report.phase = PHASE_FINISHING
         self._finish(report)
 
-    def _drop_staging(self, report: _Report) -> None:
-        with self._lock:
-            prep = report.prep if report.landed is None else None
-            report.prep = None
-        if prep is not None:
-            prep.cleanup()
-
     def _resolve(self, items: list[treview.ReviewItem]) -> tuple[rhistory.HistoryResolution | None, str, str | None]:
         if not self._history_enabled():
             return None, HISTORY_OFF, None
@@ -294,6 +366,8 @@ class ReportSessions:
 
     def _finish(self, report: _Report) -> None:
         with self._lock:
+            if report.cancelled:
+                return
             stage, prep, decisions = report.stage, report.prep, list(report.decisions)
             resolution, state = report.resolution, report.history_state
         if stage is None or prep is None:
@@ -317,12 +391,13 @@ class ReportSessions:
             if warning:
                 with self._lock:
                     report.history_warning = warning
+            if self._cancelled(report):
+                return
         try:
             breport.finish_export(prep, stage, decisions)
         except Exception as exc:  # noqa: BLE001 - becomes the report's error, read by the page
             logger.opt(exception=True).warning("bug report {}: freezing failed", report.report_id)
             self._fail(report, exc)
-            self._drop_staging(report)
             return
         with self._lock:
             if not report.cancelled:
@@ -330,6 +405,8 @@ class ReportSessions:
 
     def _deliver(self, report: _Report) -> None:
         with self._lock:
+            if report.cancelled:
+                return
             prep, landed = report.prep, report.landed
         try:
             if landed is None:
@@ -346,15 +423,13 @@ class ReportSessions:
         except breport.PackagingError as exc:
             # The record landed before packaging failed; a retry repackages it
             # from there instead of landing it again.
-            if prep is not None and landed is None:
-                record_dir = breport.bugreports_root(prep.state_dir) / prep.report_id
-                if record_dir.is_dir():
-                    with self._lock:
-                        report.landed = record_dir
+            self._note_landed(report)
             self._upload_failed(report, _error(str(exc), retryable=exc.retryable))
             return
         except (breport.StaleAttemptError, breport.BugReportError, OSError, ValueError) as exc:
             self._upload_failed(report, _error(f"{type(exc).__name__}: {exc}"))
+            return
+        if self._cancelled(report):
             return
         size = int(record["package"]["size_bytes"])
         with self._lock:
@@ -376,6 +451,15 @@ class ReportSessions:
             return
         except UploadConfigError as exc:
             self._upload_failed(report, _error(str(exc)))
+            return
+        except OSError as exc:
+            # Reading the package or writing the receipt into the record; the
+            # package stays, and a retry that finds it already delivered is
+            # answered as a duplicate.
+            self._upload_failed(report, _error(f"{type(exc).__name__}: {exc}", retryable=True))
+            return
+        except ValueError as exc:
+            self._upload_failed(report, _error(f"{type(exc).__name__}: {exc}"))
             return
         with self._lock:
             if not report.cancelled:
@@ -418,23 +502,21 @@ class ReportSessions:
         self._clean(to_clean)
         if report is None:
             raise ReportLimitError(self.limit)
-        try:
-            self._spawn(report, lambda: self._collect(report), "collect")
-        except RuntimeError:
-            with self._lock:
-                self._reports.pop(report.report_id, None)
-            raise
+        self._spawn(report, lambda: self._collect(report), "collect", lambda: self._reports.pop(report.report_id, None))
         return report.report_id
 
     def status(self, report_id: str) -> dict[str, Any]:
         with self._lock:
             to_clean = self._sweep_locked()
             report = self._reports.get(report_id)
+            view = None
             if report is not None:
                 report.last_seen = self._clock()
                 view = self._view_locked(report)
+            elif report_id in self._ended:
+                view = copy.deepcopy(self._ended[report_id][1])
         self._clean(to_clean)
-        if report is None:
+        if view is None:
             raise ReportNotFoundError(report_id)
         return view
 
@@ -552,7 +634,13 @@ class ReportSessions:
             report.decisions = full
             report.phase = PHASE_FINISHING
             report.worker_alive = True
-        self._spawn(report, lambda: self._finish(report), "finish")
+
+        def undo() -> None:
+            if not report.cancelled:
+                report.phase = PHASE_DECIDING
+                report.decisions = []
+
+        self._spawn(report, lambda: self._finish(report), "finish", undo)
 
     def upload(self, report_id: str, *, risk_accepted: bool) -> None:
         with self._lock:
@@ -565,31 +653,46 @@ class ReportSessions:
             report.phase = PHASE_UPLOADING
             report.error = None
             report.worker_alive = True
-        self._spawn(report, lambda: self._deliver(report), "upload")
+
+        def undo() -> None:
+            if not report.cancelled:
+                report.phase = PHASE_READY
+
+        self._spawn(report, lambda: self._deliver(report), "upload", undo)
 
     def retry_upload(self, report_id: str) -> None:
         with self._lock:
             report = self._get_locked(report_id)
             if report.phase != PHASE_UPLOAD_FAILED or report.worker_alive or not (report.error or {}).get("retryable"):
                 raise ReportStateError(report.phase, "not_retryable", "this report cannot be retried")
+            failure = report.error
             report.phase = PHASE_UPLOADING
             report.error = None
             report.worker_alive = True
-        self._spawn(report, lambda: self._deliver(report), "upload")
+
+        def undo() -> None:
+            if not report.cancelled:
+                report.phase = PHASE_UPLOAD_FAILED
+                report.error = failure
+
+        self._spawn(report, lambda: self._deliver(report), "upload", undo)
 
     def cancel(self, report_id: str) -> None:
+        """Stop a report; for one that already failed or uploaded this only forgets its result."""
         with self._lock:
             to_clean = self._sweep_locked()
             report = self._reports.get(report_id)
+            ended = self._ended.pop(report_id, None)
             if report is not None and self._retire_locked(report):
                 to_clean.append(report)
         self._clean(to_clean)
-        if report is None:
+        if report is None and ended is None:
             raise ReportNotFoundError(report_id)
 
     def shutdown(self, *, timeout: float = 10.0) -> bool:
         """Cancel every report and wait until their workers have cleaned up; blocks, so run it off the loop."""
         with self._lock:
+            self._ended.clear()
             to_clean = [report for report in list(self._reports.values()) if self._retire_locked(report)]
         self._clean(to_clean)
         with self._lock:

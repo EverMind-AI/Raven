@@ -2169,12 +2169,15 @@ One web bug report in progress, held in the gateway's memory between the page's
 requests: the preparation, the Review Items with their plain values, what the
 Redaction History decided, and the phase (`collecting`, `deciding`, `finishing`,
 `ready`, `uploading`, `uploaded`, `upload_failed`, `failed`, `cancelled`). It lives
-from `bugreport.start` until the report is uploaded and closed, cancelled, idle
-for thirty minutes, or the gateway stops. At most two are held at once, each until
-its worker thread has cleaned up and exited; cancelling before the report landed
-removes its staging, after it landed the Bug Report Record stays for
-`raven trajectory upload-bug-report`. The page only ever receives masked samples
-and, one item at a time, the contexts a decision needs.
+from `bugreport.start` until the report fails, is uploaded, is cancelled, sits
+idle for thirty minutes, or the gateway stops. At most two are held at once, each
+until its worker thread has cleaned up and exited; a failed or uploaded one then
+drops its plain values and leaves only its last status, readable for ten minutes.
+The worker checks for a cancel after every step and starts nothing further, so a
+report cancelled while it was packaging is never sent. Cancelling or failing
+before the report landed removes its staging, after it landed the Bug Report
+Record stays for `raven trajectory upload-bug-report`. The page only ever
+receives masked samples and, one item at a time, the contexts a decision needs.
 _Avoid_: calling it the record -- the Bug Report Record is the file that lands on
 disk.
 

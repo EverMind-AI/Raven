@@ -6,7 +6,7 @@ import json
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 import pytest
 
@@ -77,7 +77,9 @@ def uploads(monkeypatch) -> _Uploads:
 
 
 @pytest.fixture
-def make(state: Path, tmp_path: Path, history_path: Path) -> Callable[..., rs.ReportSessions]:
+def make(state: Path, tmp_path: Path, history_path: Path) -> Iterator[Callable[..., rs.ReportSessions]]:
+    built: list[rs.ReportSessions] = []
+
     def build(**overrides: Any) -> rs.ReportSessions:
         options: dict[str, Any] = {
             "history": lambda: rhistory.RedactionHistory(history_path),
@@ -87,9 +89,13 @@ def make(state: Path, tmp_path: Path, history_path: Path) -> Callable[..., rs.Re
             "state_dir": lambda: state,
         }
         options.update(overrides)
-        return rs.ReportSessions(**options)
+        built.append(rs.ReportSessions(**options))
+        return built[-1]
 
-    return build
+    yield build
+    # A worker still running would call into the next test's stand-ins.
+    for reports in built:
+        assert reports.shutdown(timeout=10)
 
 
 def _plan(state: Path) -> tsel.SelectionPlan:
@@ -490,3 +496,214 @@ def test_unknown_reports_are_reported(make):
     for call in (lambda: reports.status("x"), lambda: reports.cancel("x"), lambda: reports.item("x", "y")):
         with pytest.raises(rs.ReportNotFoundError):
             call()
+
+
+# -- a cancel stops the worker at the end of its current step ----------------------
+
+
+def _spy(monkeypatch, owner: Any, name: str) -> list[int]:
+    calls: list[int] = []
+    real = getattr(owner, name)
+
+    def counted(*args: Any, **kwargs: Any) -> Any:
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(owner, name, counted)
+    return calls
+
+
+def _flaky_first_package(monkeypatch) -> None:
+    calls = {"n": 0}
+    real_verify = breport._verify_export
+
+    def flaky_verify(record, export_dir):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("disk hiccup")
+        return real_verify(record, export_dir)
+
+    monkeypatch.setattr(breport, "_verify_export", flaky_verify)
+
+
+@pytest.mark.parametrize("path", ["first", "retry"])
+def test_a_report_cancelled_while_packaging_is_never_sent(make, state, uploads, path, monkeypatch):
+    barrier = _Barrier()
+    reports = make()
+    rid = reports.start(_plan(state), _problem("plain words only"))
+    bug_report_id = _wait(reports, rid, "ready")["bug_report_id"]
+    if path == "first":
+        monkeypatch.setattr(breport, "confirm_and_package", barrier.wrap(breport.confirm_and_package))
+        reports.upload(rid, risk_accepted=False)
+    else:
+        _flaky_first_package(monkeypatch)
+        reports.upload(rid, risk_accepted=False)
+        assert _wait(reports, rid, "upload_failed")["error"]["retryable"] is True
+        monkeypatch.setattr(breport, "retry_packaging", barrier.wrap(breport.retry_packaging))
+        reports.retry_upload(rid)
+    assert barrier.entered.acquire(timeout=5)
+    reports.cancel(rid)
+    assert reports.status(rid)["phase"] == "cancelled"
+    barrier.open.set()
+    _quiet(reports)
+    assert uploads.calls == []
+    assert reports._reports == {} and rid not in reports._ended, "nothing replaced the cancel"
+    record = breport.load_record(breport.bugreports_root(state) / bug_report_id)
+    assert record["status"] == breport.STATUS_LOCAL_READY and Path(record["package"]["path"]).is_file()
+    assert reports.start(_plan(state), _problem("plain words only"))
+
+
+@pytest.mark.parametrize(
+    ("blocked", "following"),
+    [
+        ((breport, "prepare_selection"), (breport, "stage_review")),
+        ((breport, "stage_review"), (rhistory.RedactionHistory, "resolve")),
+        ((rhistory.RedactionHistory, "remember"), (breport, "finish_export")),
+    ],
+    ids=["preparing", "staging", "remembering"],
+)
+def test_a_cancel_stops_the_worker_after_its_current_step(make, state, uploads, blocked, following, monkeypatch):
+    barrier = _Barrier()
+    monkeypatch.setattr(blocked[0], blocked[1], barrier.wrap(getattr(blocked[0], blocked[1])))
+    after = _spy(monkeypatch, following[0], following[1])
+    reports = make()
+    rid = reports.start(_plan(state), _problem())
+    if blocked[1] == "remember":
+        reports.decide(rid, *_decide_all(_wait(reports, rid, "deciding")))
+    assert barrier.entered.acquire(timeout=5)
+    reports.cancel(rid)
+    barrier.open.set()
+    _quiet(reports)
+    assert after == []
+    assert _staging(state) == [] and reports._reports == {}
+
+
+# -- a failed or uploaded report gives its slot up --------------------------------
+
+
+@pytest.mark.parametrize("end", ["failed", "uploaded"])
+def test_ended_reports_release_their_slots_and_keep_their_result_for_a_while(make, state, uploads, end, monkeypatch):
+    if end == "failed":
+        monkeypatch.setattr(
+            breport, "prepare_selection", lambda *a, **k: (_ for _ in ()).throw(breport.PreparationError("gone"))
+        )
+    now = [100.0]
+    reports = make(clock=lambda: now[0], keep_ended=60.0)
+    ids = []
+    for _ in range(2):
+        rid = reports.start(_plan(state), _problem("plain words only"))
+        if end == "uploaded":
+            _wait(reports, rid, "ready")
+            reports.upload(rid, risk_accepted=False)
+        _wait(reports, rid, end)
+        ids.append(rid)
+    _quiet(reports)
+    assert reports._reports == {}, "nothing that ended holds a slot or its plaintext"
+    for rid in ids:
+        view = reports.status(rid)
+        assert view["phase"] == end and view["items"] is None
+        if end == "failed":
+            assert "gone" in view["error"]["message"]
+        else:
+            assert view["receipt"]["receipt_id"] == "rcpt-1" and view["summary"] is not None
+        with pytest.raises(rs.ReportStateError) as excinfo:
+            reports.upload(rid, risk_accepted=True)
+        assert excinfo.value.phase == end
+    assert _staging(state) == []
+    third = reports.start(_plan(state), _problem("plain words only"))
+    assert third not in ids
+    reports.cancel(ids[0])
+    with pytest.raises(rs.ReportNotFoundError):
+        reports.status(ids[0])
+    now[0] += 61
+    with pytest.raises(rs.ReportNotFoundError):
+        reports.status(ids[1])
+
+
+# -- a worker that raises still ends the report ------------------------------------
+
+
+def test_a_receipt_that_cannot_be_written_is_retried_from_the_landed_package(make, state, uploads, monkeypatch):
+    uploads.outcomes = [OSError("receipt record write failed")]
+    prepared = _spy(monkeypatch, breport, "prepare_selection")
+    packaged = _spy(monkeypatch, breport, "confirm_and_package")
+    reports = make()
+    rid = reports.start(_plan(state), _problem("plain words only"))
+    _wait(reports, rid, "ready")
+    reports.upload(rid, risk_accepted=False)
+    view = _wait(reports, rid, "upload_failed")
+    assert view["error"]["retryable"] is True and "receipt record write failed" in view["error"]["message"]
+    assert Path(view["record_dir"]).is_dir()
+    reports.retry_upload(rid)
+    assert _wait(reports, rid, "uploaded")["receipt"]["receipt_id"] == "rcpt-1"
+    assert len(prepared) == 1 and len(packaged) == 1 and len(uploads.calls) == 2
+
+
+@pytest.mark.parametrize("error", [ValueError("record is not json"), RuntimeError("nobody expected this")])
+def test_an_upload_that_raises_otherwise_ends_without_a_retry(make, state, uploads, error):
+    uploads.outcomes = [error]
+    reports = make()
+    rid = reports.start(_plan(state), _problem("plain words only"))
+    _wait(reports, rid, "ready")
+    reports.upload(rid, risk_accepted=False)
+    view = _wait(reports, rid, "upload_failed")
+    assert view["error"]["retryable"] is False and str(error) in view["error"]["message"]
+    record = breport.load_record(Path(view["record_dir"]))
+    assert Path(record["package"]["path"]).is_file()
+    with pytest.raises(rs.ReportStateError):
+        reports.retry_upload(rid)
+
+
+def test_a_finishing_step_that_raises_fails_the_report_and_frees_its_slot(make, state, uploads, monkeypatch):
+    def broken(*a: Any, **k: Any) -> Any:
+        raise RuntimeError("history exploded")
+
+    monkeypatch.setattr(rhistory.RedactionHistory, "remember", broken)
+    reports = make(limit=1)
+    rid = reports.start(_plan(state), _problem())
+    reports.decide(rid, *_decide_all(_wait(reports, rid, "deciding")))
+    assert "history exploded" in _wait(reports, rid, "failed")["error"]["message"]
+    _quiet(reports)
+    assert _staging(state) == [] and reports._reports == {}
+    assert reports.start(_plan(state), _problem())
+
+
+def test_a_cancel_is_not_overwritten_by_the_failure_that_follows_it(make, state, uploads, monkeypatch):
+    barrier = _Barrier()
+    uploads.outcomes = [OSError("too late")]
+    monkeypatch.setattr(rs, "upload_record", barrier.wrap(uploads))
+    reports = make()
+    rid = reports.start(_plan(state), _problem("plain words only"))
+    _wait(reports, rid, "ready")
+    reports.upload(rid, risk_accepted=False)
+    assert barrier.entered.acquire(timeout=5)
+    reports.cancel(rid)
+    barrier.open.set()
+    _quiet(reports)
+    assert len(uploads.calls) == 1, "an upload already under way is not taken back"
+    assert reports._reports == {} and rid not in reports._ended
+
+
+class _NoThreads:
+    class Thread:
+        def __init__(self, *a: Any, **k: Any) -> None:
+            pass
+
+        def start(self) -> None:
+            raise RuntimeError("can't start new thread")
+
+
+def test_a_thread_that_does_not_start_leaves_the_report_where_it_was(make, state, uploads, monkeypatch):
+    reports = make()
+    rid = reports.start(_plan(state), _problem())
+    view = _wait(reports, rid, "deciding")
+    monkeypatch.setattr(rs, "threading", _NoThreads)
+    with pytest.raises(RuntimeError):
+        reports.decide(rid, *_decide_all(view))
+    assert reports.status(rid)["phase"] == "deciding"
+    with pytest.raises(RuntimeError):
+        reports.start(_plan(state), _problem())
+    assert list(reports._reports) == [rid]
+    monkeypatch.setattr(rs, "threading", threading)
+    reports.decide(rid, *_decide_all(view))
+    _wait(reports, rid, "ready")

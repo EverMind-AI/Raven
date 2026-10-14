@@ -20,6 +20,7 @@ from raven.trajectory import bugreport as breport
 from raven.trajectory import policy as tpol
 from raven.trajectory import redaction_history as rhistory
 from raven.trajectory import report_session as rs
+from raven.trajectory.upload import UploadReceipt
 
 SESSION = "tui:s1"
 TOKEN = "aB3xK9mQ7pL2vR8sT4wZ6yN1"
@@ -236,6 +237,32 @@ async def test_a_wrong_phase_says_which(tmp_path):
     response = await _call(dispatcher, "bugreport.retry_upload", {"report_id": rid})
     assert response["error"]["code"] == -32028
     assert response["error"]["data"]["phase"] == "deciding" and response["error"]["data"]["reason"] == "not_retryable"
+
+
+async def test_an_uploaded_report_answers_its_status_but_takes_no_more_steps(tmp_path, monkeypatch):
+    def delivered(record_dir: Path, *, base_url: str):
+        record = breport.load_record(record_dir)
+        return record, UploadReceipt("rcpt-1", record["report_id"], record["package"]["sha256"], 1, "now", False)
+
+    monkeypatch.setattr(rs, "upload_record", delivered)
+    _write(tmp_path, _turn("trace-a", 1))
+    dispatcher = _dispatcher()
+    started = await _call(dispatcher, "bugreport.start", _start_params(["trace-a"], "plain words only"))
+    rid = started["result"]["report_id"]
+    await _wait(dispatcher, rid, "ready")
+    await _call(dispatcher, "bugreport.upload", {"report_id": rid, "risk_accepted": True})
+    await _wait(dispatcher, rid, "uploaded")
+    deadline = time.monotonic() + 10
+    while rs.REPORTS._reports:
+        assert time.monotonic() < deadline
+        time.sleep(0.02)
+    status = (await _call(dispatcher, "bugreport.status", {"report_id": rid}))["result"]
+    BugReportStatusResult.model_validate(status)
+    assert status["receipt"]["receipt_id"] == "rcpt-1"
+    response = await _call(dispatcher, "bugreport.retry_upload", {"report_id": rid})
+    assert response["error"]["code"] == -32028 and response["error"]["data"]["phase"] == "uploaded"
+    assert (await _call(dispatcher, "bugreport.cancel", {"report_id": rid}))["result"] == {"ok": True}
+    assert (await _call(dispatcher, "bugreport.status", {"report_id": rid}))["error"]["code"] == -32024
 
 
 # -- the handshake --------------------------------------------------------------------
