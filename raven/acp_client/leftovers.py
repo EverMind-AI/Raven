@@ -7,12 +7,17 @@ its teardown -- killed, crashed, ended by the OOM killer -- leaves every agent
 it launched running with nobody on the other end of its pipes, holding its
 memory until someone kills it by hand.
 
-Two layers close that on Linux. The agent starts through a one-line exec
-wrapper that arms ``PR_SET_PDEATHSIG``, so its direct process ends with the
-host. That reaches the direct child only, and an ``npx`` launcher's real server
-is a grandchild, so each host also records the process groups it launched --
-one file per host under ``<data dir>/acp-launches/`` -- and the first launch in
-any process ends the groups recorded by hosts that have since died.
+Two layers close that on Linux and macOS. The agent starts through a one-line
+exec wrapper that ties it to the host. On Linux the wrapper arms
+``PR_SET_PDEATHSIG``, so the agent's direct process ends with the host. macOS has
+no such signal, so there the wrapper leaves a small watcher in the agent's group
+before the exec: it waits on the host's exit with kqueue and then ends the whole
+group. Neither layer is sure to fire -- the parent-death signal reaches the
+direct child only, and an ``npx`` launcher's real server is a grandchild; a
+watcher can be ended on its own -- so each host also records the process groups
+it launched -- one file per host under ``<data dir>/acp-launches/`` -- and the
+first launch in any process ends the groups recorded by hosts that have since
+died.
 
 Ending a group by number is safe only while the number still names that group.
 A record is honoured only inside the boot and PID namespace that wrote it, and a
@@ -24,16 +29,24 @@ host's mark in its environment, which every process the agent starts inherits,
 and a group is ended only while one of its members carries the mark of the host
 that died. What cannot be read is reason to leave a group alone, never to end it.
 
-Everything here is a no-op off Linux.
+What each check reads differs by system: ``/proc`` on Linux; ``sysctl`` and
+``libproc`` on macOS, which has no PID namespaces and does not show the
+environment of its own platform binaries (``/bin/sh``, ``/bin/sleep``), so a
+group there is marked only by a member that is not one.
+
+Everything here is a no-op off Linux and macOS.
 """
 
 from __future__ import annotations
 
 import asyncio
+import ctypes
+import errno
 import json
 import os
 import shutil
 import signal
+import struct
 import sys
 import threading
 import time
@@ -47,16 +60,14 @@ from loguru import logger
 from raven.config.paths import get_runtime_subdir
 from raven.utils.atomic_io import atomic_replace, remove_with_lock
 
-# Run by the interpreter that becomes the agent. The signal is armed before the
-# exec and survives it; a host that died between the fork and the prctl would
-# never send it, so the parent is checked once the signal is armed. Arming is
-# best effort: without ctypes or prctl the agent starts as it would have.
-# The interpreter's own startup ignores SIGPIPE and SIGXFSZ, which the exec would
-# hand on, so both go back to the default the spawn gave the wrapper. Its startup
-# also coerces a C locale to C.UTF-8 (PEP 538); that LC_CTYPE reaches the agent
-# and is left in place.
+# Run by the interpreter that becomes the agent; each system's wrapper ties the
+# agent to its host and then runs the shared exec below.
+# Linux: the signal is armed before the exec and survives it; a host that died
+# between the fork and the prctl would never send it, so the parent is checked
+# once the signal is armed. Arming is best effort: without ctypes or prctl the
+# agent starts as it would have.
 # PR_SET_PDEATHSIG is 1 and SIGKILL is 9 on every Linux architecture.
-_WRAPPER = (
+_LINUX_BINDING = (
     "import os, signal, sys\n"
     "try:\n"
     "    import ctypes\n"
@@ -65,6 +76,55 @@ _WRAPPER = (
     "    armed = False\n"
     "if armed and os.getppid() != int(sys.argv[1]):\n"
     "    os._exit(1)\n"
+)
+# macOS: the watcher is forked twice and the middle child reaped before the exec,
+# so launchd adopts it and the agent has no child it did not start. It keeps the agent's group, closes every
+# descriptor it inherited -- a pipe it held open would hide the agent's exit from
+# the host -- and leaves the agent's directory. A host already gone when the
+# watch is set fails it with ESRCH and counts as an exit. It ends the group only
+# while the agent leads one of its own, as every launch does; any other failure
+# leaves the agent as it would have been. The parent is checked first, so an
+# agent whose host died before the wrapper ran never starts.
+_DARWIN_BINDING = (
+    "import os, select, signal, sys\n"
+    "host = int(sys.argv[1])\n"
+    "if os.getppid() != host:\n"
+    "    os._exit(1)\n"
+    "agent = os.getpid()\n"
+    "try:\n"
+    "    child = os.fork()\n"
+    "except OSError:\n"
+    "    child = -1\n"
+    "if child == 0:\n"
+    "    try:\n"
+    "        if os.fork() == 0:\n"
+    "            os.chdir('/')\n"
+    "            for fd in os.listdir('/dev/fd'):\n"
+    "                try:\n"
+    "                    os.close(int(fd))\n"
+    "                except OSError:\n"
+    "                    pass\n"
+    "            exited = select.kevent(host, select.KQ_FILTER_PROC, select.KQ_EV_ADD, select.KQ_NOTE_EXIT)\n"
+    "            try:\n"
+    "                watch = select.kqueue()\n"
+    "                watch.control([exited], 0)\n"
+    "            except ProcessLookupError:\n"
+    "                pass\n"
+    "            else:\n"
+    "                watch.control(None, 1)\n"
+    "            if os.getpgrp() == agent:\n"
+    "                os.killpg(agent, signal.SIGKILL)\n"
+    "    except BaseException:\n"
+    "        pass\n"
+    "    os._exit(0)\n"
+    "if child > 0:\n"
+    "    os.waitpid(child, 0)\n"
+)
+# The interpreter's own startup ignores SIGPIPE and SIGXFSZ, which the exec would
+# hand on, so both go back to the default the spawn gave the wrapper. Its startup
+# also coerces a C locale to C.UTF-8 (PEP 538); that LC_CTYPE reaches the agent
+# and is left in place.
+_EXEC = (
     "signal.signal(signal.SIGPIPE, signal.SIG_DFL)\n"
     "signal.signal(signal.SIGXFSZ, signal.SIG_DFL)\n"
     "try:\n"
@@ -73,10 +133,16 @@ _WRAPPER = (
     "    sys.stderr.write(f'raven: cannot start {sys.argv[2]}: {exc}\\n')\n"
     "    os._exit(127)\n"
 )
+_WRAPPERS = {"linux": _LINUX_BINDING + _EXEC, "darwin": _DARWIN_BINDING + _EXEC}
 
 
-def _on_linux() -> bool:
-    return sys.platform.startswith("linux")
+def _platform() -> str | None:
+    """``"linux"`` or ``"darwin"`` where an agent can be tied to its host; None elsewhere."""
+    if sys.platform.startswith("linux"):
+        return "linux"
+    if sys.platform == "darwin":
+        return "darwin"
+    return None
 
 
 def bind_to_host(argv: list[str], env: Mapping[str, str], cwd: str | None) -> list[str]:
@@ -89,7 +155,8 @@ def bind_to_host(argv: list[str], env: Mapping[str, str], cwd: str | None) -> li
     is a path (a relative one from the child's ``cwd``), a bare name is looked
     up on the PATH the child is handed.
     """
-    if not _on_linux() or not argv:
+    wrapper = _WRAPPERS.get(_platform() or "")
+    if wrapper is None or not argv:
         return argv
     interpreter = sys.executable
     if not interpreter or not os.access(interpreter, os.X_OK):
@@ -97,7 +164,7 @@ def bind_to_host(argv: list[str], env: Mapping[str, str], cwd: str | None) -> li
     program = _resolve(argv[0], env, cwd)
     if program is None:
         return argv
-    return [interpreter, "-I", "-S", "-c", _WRAPPER, str(os.getpid()), program, *argv]
+    return [interpreter, "-I", "-S", "-c", wrapper, str(os.getpid()), program, *argv]
 
 
 def _resolve(name: str, env: Mapping[str, str], cwd: str | None) -> str | None:
@@ -154,13 +221,25 @@ def _stat_fields(pid: int) -> list[str] | None:
     return stat[stat.rindex(")") + 2 :].split()
 
 
-def _start_ticks(pid: int) -> int | None:
-    """When ``pid`` started, in clock ticks since boot (field 22); None when there is no such process."""
+def _start_time(pid: int) -> int | None:
+    """When ``pid`` started; None when there is no such process.
+
+    Linux counts clock ticks since boot (``/proc/<pid>/stat`` field 22), macOS
+    microseconds since the epoch. A value is only ever compared with one read on
+    the same boot, so the two units never meet.
+    """
+    if _platform() == "darwin":
+        return _darwin_start_time(pid)
     fields = _stat_fields(pid)
     return None if fields is None else int(fields[19])
 
 
 def _boot_id() -> str | None:
+    if _platform() == "darwin":
+        try:
+            return _sysctl_by_name("kern.bootsessionuuid").rstrip(b"\0").decode("ascii") or None
+        except (OSError, ValueError):
+            return None
     try:
         with open("/proc/sys/kernel/random/boot_id", encoding="ascii") as f:
             return f.read().strip() or None
@@ -168,7 +247,13 @@ def _boot_id() -> str | None:
         return None
 
 
+# macOS has no PID namespaces: every process on the machine is in this one.
+_DARWIN_PID_NAMESPACE = "darwin"
+
+
 def _pid_namespace() -> str | None:
+    if _platform() == "darwin":
+        return _DARWIN_PID_NAMESPACE
     try:
         return os.readlink("/proc/self/ns/pid")
     except OSError:
@@ -176,7 +261,13 @@ def _pid_namespace() -> str | None:
 
 
 def _boot_time() -> float | None:
-    """When this machine booted, in seconds since the epoch; None where /proc cannot say."""
+    """When this machine booted, in seconds since the epoch; None where the system cannot say."""
+    if _platform() == "darwin":
+        try:
+            seconds, micros = struct.unpack_from("=qi", _sysctl_by_name("kern.boottime"))
+        except (OSError, struct.error):
+            return None
+        return seconds + micros / 1_000_000
     try:
         with open("/proc/stat", encoding="ascii", errors="replace") as f:
             for line in f:
@@ -197,9 +288,116 @@ def _written_before_boot(path: Path) -> bool:
         return False
 
 
+# sysctl names (<sys/sysctl.h>) and the libproc list flavour, the same on every Mac.
+_CTL_KERN = 1
+_KERN_ARGMAX = 8
+_KERN_PROC = 14
+_KERN_PROC_PID = 1
+_KERN_PROCARGS2 = 49
+_PROC_PGRP_ONLY = 2
+# sizeof(struct kinfo_proc) on arm64 and x86_64. Its first field is the process's
+# start time, a struct timeval of a 64-bit tv_sec and a 32-bit tv_usec.
+_KINFO_PROC_SIZE = 648
+
+_libc: Any = None
+
+
+def _darwin_libc() -> Any:
+    global _libc
+    if _libc is None:
+        libc = ctypes.CDLL(None, use_errno=True)
+        libc.proc_listpids.argtypes = [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_int]
+        libc.proc_listpids.restype = ctypes.c_int
+        _libc = libc
+    return _libc
+
+
+def _errno_error() -> OSError:
+    err = ctypes.get_errno()
+    return OSError(err, os.strerror(err))
+
+
+def _sysctl(mib: list[int], size: int) -> bytes:
+    name = (ctypes.c_int * len(mib))(*mib)
+    buf = ctypes.create_string_buffer(size)
+    length = ctypes.c_size_t(size)
+    if _darwin_libc().sysctl(name, len(mib), buf, ctypes.byref(length), None, 0) != 0:
+        raise _errno_error()
+    return buf.raw[: length.value]
+
+
+def _sysctl_by_name(name: str) -> bytes:
+    libc = _darwin_libc()
+    length = ctypes.c_size_t(0)
+    if libc.sysctlbyname(name.encode(), None, ctypes.byref(length), None, 0) != 0:
+        raise _errno_error()
+    buf = ctypes.create_string_buffer(length.value)
+    if libc.sysctlbyname(name.encode(), buf, ctypes.byref(length), None, 0) != 0:
+        raise _errno_error()
+    return buf.raw[: length.value]
+
+
+def _darwin_start_time(pid: int) -> int | None:
+    # Any process, another user's and a zombie included, as ps reads it; a pid
+    # with no process answers with nothing at all.
+    info = _sysctl([_CTL_KERN, _KERN_PROC, _KERN_PROC_PID, pid], _KINFO_PROC_SIZE)
+    if not info:
+        return None
+    seconds, micros = struct.unpack_from("=qi", info)
+    return seconds * 1_000_000 + micros
+
+
+def _darwin_members(pgid: int) -> list[int]:
+    libc = _darwin_libc()
+    capacity = 256
+    while True:
+        pids = (ctypes.c_int * capacity)()
+        ctypes.set_errno(0)
+        filled = libc.proc_listpids(_PROC_PGRP_ONLY, pgid, pids, ctypes.sizeof(pids))
+        if filled <= 0:
+            if ctypes.get_errno():
+                raise _errno_error()
+            return []
+        count = filled // ctypes.sizeof(ctypes.c_int)
+        # A full buffer may have cut the list short.
+        if count < capacity:
+            return [pid for pid in pids[:count] if pid > 0]
+        capacity *= 4
+
+
+def _darwin_environment(pid: int) -> list[bytes] | None:
+    """The environment ``pid`` was started with; None where the system will not show it.
+
+    ``KERN_PROCARGS2`` answers EINVAL alike for a process that is gone, a zombie,
+    and one that belongs to another user. For a platform binary it leaves the
+    environment out and the list comes back empty.
+    """
+    (argmax,) = struct.unpack("=i", _sysctl([_CTL_KERN, _KERN_ARGMAX], 4))
+    try:
+        raw = _sysctl([_CTL_KERN, _KERN_PROCARGS2, pid], argmax)
+    except OSError as exc:
+        if exc.errno == errno.EINVAL:
+            return None
+        raise
+    # argc, the executable's path padded with NULs, argv, then the environment,
+    # which ends at the first empty string.
+    (argc,) = struct.unpack_from("=i", raw)
+    start = raw.find(b"\0", 4)
+    if start < 0:
+        return []
+    while start < len(raw) and raw[start] == 0:
+        start += 1
+    environment = []
+    for word in raw[start:].split(b"\0")[argc:]:
+        if not word:
+            break
+        environment.append(word)
+    return environment
+
+
 def _host() -> dict[str, Any] | None:
-    """This host as its record file names it; None where /proc cannot name it."""
-    start = _start_ticks(os.getpid())
+    """This host as its record file names it; None where the system cannot name it."""
+    start = _start_time(os.getpid())
     boot_id, pid_ns = _boot_id(), _pid_namespace()
     if start is None or boot_id is None or pid_ns is None:
         return None
@@ -212,7 +410,7 @@ def _stem(host_pid: int, host_start: int) -> str:
 
 def launch_env() -> dict[str, str]:
     """The mark an agent this host launches carries in its environment; empty where there is none."""
-    if not _on_linux():
+    if _platform() is None:
         return {}
     try:
         host = _host()
@@ -223,11 +421,11 @@ def launch_env() -> dict[str, str]:
 
 def record(pgid: int, agent: str) -> None:
     """Note a group this host launched, so a later host can end it if this one dies first."""
-    if not _on_linux():
+    if _platform() is None:
         return
     try:
         host = _host()
-        leader_start = _start_ticks(pgid)
+        leader_start = _start_time(pgid)
         if host is None or leader_start is None:
             return
         path = get_runtime_subdir(_DIR_NAME) / f"{_stem(host['host_pid'], host['host_start'])}.json"
@@ -275,7 +473,7 @@ async def sweep_before_first_launch() -> None:
     the launches nor, being a daemon, the host's exit.
     """
     global _swept
-    if not _on_linux():
+    if _platform() is None:
         return
     done = _sweep_done
     if not _swept:
@@ -369,7 +567,7 @@ def _sweep_file(path: Path, own: dict[str, Any]) -> None:
     # and nothing here can tell, so its file is neither acted on nor removed.
     if data.get("pid_ns") != own["pid_ns"]:
         return
-    if _start_ticks(host_pid) == host_start:
+    if _start_time(host_pid) == host_start:
         return
     mark = f"{_MARK}={_stem(host_pid, host_start)}".encode()
     for pgid, (leader_start, agent) in groups.items():
@@ -381,7 +579,7 @@ def _end_group(pgid: int, leader_start: int, agent: str, host_pid: int, mark: by
     # killpg(0) signals the caller's own group, and group 1 is init's.
     if pgid <= 1 or pgid == os.getpgrp():
         return
-    started = _start_ticks(pgid)
+    started = _start_time(pgid)
     if started is not None and started != leader_start:
         return
     # The number alone does not show the group is the one recorded: it may have
@@ -405,6 +603,8 @@ def _end_group(pgid: int, leader_start: int, agent: str, host_pid: int, mark: by
 
 def _members(pgid: int) -> list[int]:
     """The processes now in group ``pgid``."""
+    if _platform() == "darwin":
+        return _darwin_members(pgid)
     members: list[int] = []
     for name in os.listdir("/proc"):
         if not name.isdigit():
@@ -424,10 +624,14 @@ def _carries(pid: int, mark: bytes) -> bool:
     """Whether ``pid`` was started with ``mark`` in its environment.
 
     A process that is gone carries nothing, and neither does one whose environment
-    this user may not read -- another user's, or one that made itself undumpable as
-    ssh-agent does -- since nothing here can show it is this host's. Any other
-    failure to read it raises, which leaves the record for a later sweep.
+    this user may not read -- another user's, one that made itself undumpable as
+    ssh-agent does, or a macOS platform binary -- since nothing here can show it is
+    this host's. Any other failure to read it raises, which leaves the record for a
+    later sweep.
     """
+    if _platform() == "darwin":
+        environment = _darwin_environment(pid)
+        return environment is not None and mark in environment
     try:
         with open(f"/proc/{pid}/environ", "rb") as f:
             return mark in f.read().split(b"\0")

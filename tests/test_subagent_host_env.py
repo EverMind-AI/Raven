@@ -424,7 +424,7 @@ async def test_windows_probe_finds_agents_on_the_captured_path(
 
 
 def _unbound(argv: list[str], env: Any, cwd: str | None) -> list[str]:
-    """The Linux parent-death wrapper is no part of a simulated Windows launch."""
+    """The wrapper that ties an agent to its host on Linux and macOS is no part of a simulated Windows launch."""
     return argv
 
 
