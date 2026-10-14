@@ -49,8 +49,26 @@ export interface KnowledgeState {
    *  panel should not pay for it. */
   models: KbModel[] | null
   tab: Tab
-  /** A write is in flight; the page's controls are disabled meanwhile. */
+  /** What this install can index, lowercased and dotted. Null until it has
+   *  been read, which is not the empty list an install with no parsers would
+   *  answer with. Read once per page: it moves with what is installed, not
+   *  with what the reader is doing. */
+  extensions: string[] | null
+  /** A structural write is in flight -- a create, a delete, a rename, a move.
+   *  Every one of those is a single sub-second call, so the controls they
+   *  guard are held for about as long as a click.
+   *
+   *  Indexing is deliberately not one of them. It is tens of seconds on a long
+   *  PDF, and holding this across it made every other control on the page do
+   *  nothing, silently: a reader confirmed a delete and watched the row stay
+   *  where it was, with no toast and nothing in the console. Indexing says
+   *  what it is doing on the row it is doing it to, which is where a reader
+   *  is already looking; it does not need the page's lock as well. */
   busy: boolean
+  /** A document is being parsed and embedded. Not a lock over the page --
+   *  only over starting a second one, which would be the same endpoint asked
+   *  to do two documents at once. */
+  indexing: boolean
   /** The base whose documents are showing, or null for the grid of cards.
    *  Held as the row rather than an id: the breadcrumb needs its name, and a
    *  base deleted while it is open should not leave the path looking up an id
@@ -139,6 +157,8 @@ const store = makeStore<KnowledgeState>({
   models: null,
   tab: 'all',
   busy: false,
+  indexing: false,
+  extensions: null,
   opened: null,
   documents: null,
   view: 'list',
@@ -209,6 +229,11 @@ export function openBase(base: KbBase): void {
   patch({ opened: base, documents: null, folders: [], folder: '' })
   void loadDocuments(base.id)
   void loadFolders(base.id)
+  /* Here rather than on the click that opens the picker: the picker is built
+     and clicked in one synchronous go, so a list fetched at that moment is
+     not back in time to be its `accept`. Read once, and only inside a base,
+     which is the only place anything is uploaded. */
+  void loadExtensions()
 }
 
 export function closeBase(): void {
@@ -610,6 +635,20 @@ async function refreshBase(baseId: string): Promise<void> {
   if (row && get().opened?.id === baseId) patch({ opened: row })
 }
 
+/* Say the row is being worked on, before the call that works on it.
+
+   Both paths that index a document run for tens of seconds on a long PDF, and
+   the status the row carries until they answer is whatever the last call left
+   there -- `pending` for a fresh upload, which the page draws as Queued. The
+   server moves the document to `indexing` the moment it starts, so a reader
+   who reloaded saw the truth and a reader who waited watched a file that
+   never appeared to start. */
+function marking(doc: KbDoc): void {
+  patch({
+    documents: (get().documents ?? []).map((row) => (row.id === doc.id ? { ...row, status: 'indexing' } : row)),
+  })
+}
+
 function put(baseId: string, doc: KbDoc): void {
   if (get().opened?.id !== baseId) return
   const rows = get().documents ?? []
@@ -631,13 +670,18 @@ function put(baseId: string, doc: KbDoc): void {
    queued for good. */
 async function added(make: () => Promise<KbDoc>): Promise<void> {
   const base = get().opened
-  if (!base || get().busy) return
-  patch({ busy: true })
+  if (!base || get().indexing) return
+  patch({ indexing: true })
+  let settle = (): void => {}
+  runningIndex = new Promise<void>((resolve) => {
+    settle = resolve
+  })
   try {
     let doc = await make()
     if (get().folder) doc = await source().move(doc.id, get().folder)
     put(base.id, doc)
     await loadFolders(base.id)
+    marking(doc)
     /* Failure comes back as a row that says failed and why, not as a throw:
        the manager records it on the document. */
     put(base.id, await source().reindex(doc.id))
@@ -648,7 +692,8 @@ async function added(make: () => Promise<KbDoc>): Promise<void> {
        guess, and the status is the server's to say. */
     if (get().opened?.id === base.id) await loadDocuments(base.id)
   } finally {
-    patch({ busy: false })
+    patch({ indexing: false })
+    settle()
   }
 }
 
@@ -755,15 +800,15 @@ export function setView(view: View): void {
    changes the status and the piece count, and a page that guessed either would
    be showing a document as ready before it is. */
 export async function reindex(doc: KbDoc): Promise<void> {
-  if (get().busy) return
-  patch({ busy: true })
-  /* Marked as indexing the moment it is asked for, not when it answers. The
-     call runs for as long as parsing and embedding the file takes -- tens of
-     seconds on a long PDF -- and a row that does not move until it is over
-     reads as a press that did nothing. */
-  patch({
-    documents: (get().documents ?? []).map((row) => (row.id === doc.id ? { ...row, status: 'indexing' } : row)),
+  if (get().indexing) return
+  patch({ indexing: true })
+  let settle = (): void => {}
+  runningIndex = new Promise<void>((resolve) => {
+    settle = resolve
   })
+  /* Marked as indexing the moment it is asked for, not when it answers: a row
+     that does not move until it is over reads as a press that did nothing. */
+  marking(doc)
   try {
     const written = await source().reindex(doc.id)
     patch({ documents: (get().documents ?? []).map((row) => (row.id === written.id ? written : row)) })
@@ -785,7 +830,8 @@ export async function reindex(doc: KbDoc): Promise<void> {
     const base = get().opened
     if (base) await loadDocuments(base.id)
   } finally {
-    patch({ busy: false })
+    patch({ indexing: false })
+    settle()
   }
 }
 
@@ -821,6 +867,49 @@ export function openCreate(): void {
    Failure is the empty list rather than a message: the panel still opens, with
    the model it is on and nothing to change it to, and a reader who cannot see
    a catalogue can still read every other setting. */
+/* What this install can read, for the pickers and for the folder walk.
+
+   Failure is the empty list rather than a message, and the empty list means
+   "do not filter": a reader whose gateway blipped while the menu opened
+   should get the upload they asked for and the server's own answer on each
+   row, not a picker that silently drops every file they chose. */
+export async function loadExtensions(): Promise<void> {
+  if (get().extensions !== null) return
+  try {
+    patch({ extensions: await source().extensions() })
+  } catch {
+    patch({ extensions: [] })
+  }
+}
+
+/** The extension of a filename, lowercased and dotted, or '' where it has
+ *  none. Dotted because that is the shape the server answers in, and a
+ *  leading dot is also what keeps `.gitignore` from reading as a file whose
+ *  extension is `gitignore`. */
+function extensionOf(name: string): string {
+  const cut = name.lastIndexOf('.')
+  return cut > 0 ? name.slice(cut).toLowerCase() : ''
+}
+
+/* Sort what was picked into what can be indexed and what cannot.
+
+   The picker's own `accept` cannot do this alone: a browser ignores it
+   entirely for a directory, which is the case that needs it most -- a chosen
+   folder arrives as every file under it, .DS_Store and node_modules and the
+   lock files included, and each one that is not a document is an upload, a
+   parse and a row that says Failed for a file nobody meant to add.
+
+   Kept in the order they were picked, because they are uploaded in that order
+   and a reader watching the list is watching their own folder fill in. */
+export function sortBySupported(names: readonly string[]): { kept: string[]; skipped: string[] } {
+  const known = get().extensions
+  if (!known || !known.length) return { kept: [...names], skipped: [] }
+  const kept: string[] = []
+  const skipped: string[] = []
+  for (const name of names) (known.includes(extensionOf(name)) ? kept : skipped).push(name)
+  return { kept, skipped }
+}
+
 async function loadModels(): Promise<void> {
   if (get().models !== null) return
   try {
@@ -871,6 +960,7 @@ export async function create(name: string, description: string, embedding = true
 export async function write(base: KbBase, settings: KbSettings): Promise<void> {
   if (get().busy) return
   patch({ busy: true })
+  let drain = ''
   try {
     const written = await source().settings(base.id, settings)
     patch({
@@ -893,12 +983,17 @@ export async function write(base: KbBase, settings: KbSettings): Promise<void> {
        this the base comes back reading Queued on every row and stays there
        until each is rebuilt by hand -- which is the page this change was
        meant to stop producing. */
-    if (settings.embedding_model !== undefined) await drainPending(written.id)
+    if (settings.embedding_model !== undefined) drain = written.id
   } catch (e) {
     toast(reasonOf(e))
   } finally {
     patch({ busy: false })
   }
+  /* Outside the lock above, and after it is released. The write itself is one
+     call; draining what it requeued is a base's worth of embedding, and a
+     reader who moved a base onto another model should still be able to rename
+     a document while it runs. */
+  if (drain) await drainPending(drain)
 }
 
 /* Index what a rebuild requeued, oldest first and one at a time.
@@ -908,7 +1003,41 @@ export async function write(base: KbBase, settings: KbSettings): Promise<void> {
    the same endpoint asked to do everything simultaneously. Each row is put
    back as it lands, so the panel empties its queue in front of the reader
    rather than after. */
+/* The index running now, for a caller that has to wait for it rather than
+   give up. Already resolved when nothing is running. */
+let runningIndex: Promise<void> = Promise.resolve()
+
+/* Take the indexing flag, waiting for whatever holds it.
+
+   The difference between this and the plain `if (get().indexing) return` the
+   two user-initiated paths use is the difference between a press and a
+   consequence. A reader pressing Rebuild while another document indexes meant
+   that press for now, and refusing it is the honest answer.
+
+   A drain is not a press. The save already happened, the server has already
+   sent every document in the base back to the queue, and there is no second
+   chance: nothing else drains that queue in this process. Skipped, the whole
+   base reads Queued with nothing that will ever pick it up -- which is the
+   headline flow of the settings panel, moving a base onto a model that works.
+
+   No race in the gap: there is no await between the test and the patch, and
+   this runs on one thread. */
 async function drainPending(baseId: string): Promise<void> {
+  while (get().indexing) await runningIndex
+  patch({ indexing: true })
+  const work = drainQueue(baseId)
+  runningIndex = work.then(
+    () => undefined,
+    () => undefined,
+  )
+  try {
+    await work
+  } finally {
+    patch({ indexing: false })
+  }
+}
+
+async function drainQueue(baseId: string): Promise<void> {
   await loadDocuments(baseId)
   const queued = (get().documents ?? []).filter((row) => row.status === 'pending').map((row) => row.id)
   for (const id of queued) {

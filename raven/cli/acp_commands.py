@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import ctypes
 import os
 import sys
 import threading
+import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -27,6 +29,7 @@ from raven.acp.stdio import MAX_FRAME_BYTES, claim_stdout
 from raven.cli._log_file import redirect_loguru_to_file
 from raven.config.loader import set_config_path
 from raven.utils import asyncio_runner as bounded_asyncio
+from raven.utils.heap import start_trimmer
 
 _THREAD_CHUNK = 64 * 1024
 
@@ -196,6 +199,8 @@ async def _serve(*, verbose: bool = False) -> bool:
         "acp.log", file_level=_file_log_level(verbose), retention=3, terminal_level="WARNING"
     )
     install_crash_handlers()
+    # A pooled host outlives every deck it renders, so it trims like the gateway.
+    start_trimmer()
     with claim_stdout() as out:
         logger.info("acp: serving on stdio, logs at {}", log_path)
         async with _open_stdin() as reader:
@@ -220,8 +225,8 @@ async def _open_stdin() -> AsyncIterator[asyncio.StreamReader]:
     The fallback reads the descriptor on a daemon thread and feeds the same
     reader, which costs a thread and gives up the transport's own backpressure
     (the reader's buffer grows past its limit rather than pausing a producer that
-    cannot be paused) -- acceptable for the case that reaches it, which is a file
-    of bounded size. An editor gets a pipe and never takes this branch.
+    cannot be paused). Windows stdin also takes this path: inherited anonymous
+    pipes do not support the overlapped I/O the Proactor transport requires.
 
     On the pipe path the transport is closed rather than left to the garbage
     collector: a dropped read transport is collected with the loop still holding
@@ -230,6 +235,10 @@ async def _open_stdin() -> AsyncIterator[asyncio.StreamReader]:
     """
     reader = asyncio.StreamReader(limit=MAX_FRAME_BYTES)
     loop = asyncio.get_running_loop()
+    if sys.platform == "win32":
+        _spawn_stdin_feeder(reader)
+        yield reader
+        return
     try:
         transport, _ = await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), sys.stdin)
     except (ValueError, OSError) as exc:
@@ -264,7 +273,8 @@ def _spawn_stdin_feeder(reader: asyncio.StreamReader) -> threading.Thread:
     # nothing until 64 KiB had accumulated -- one frame at a time is exactly the
     # traffic pattern this has to carry. ``read1`` returns whatever one raw read
     # produced. The fallback is for a stream object that has no ``read1`` at all.
-    read = getattr(stream, "read1", None) or stream.read
+    read = _windows_stdin_read(stream) if os.name == "nt" else None
+    read = read or getattr(stream, "read1", None) or stream.read
 
     def _pump() -> None:
         try:
@@ -292,6 +302,72 @@ def _spawn_stdin_feeder(reader: asyncio.StreamReader) -> threading.Thread:
     thread = threading.Thread(target=_pump, name="acp-stdin", daemon=True)
     thread.start()
     return thread
+
+
+def _windows_stdin_read(stream):
+    """Read Windows stdin without a CRT lock that can block native-module imports."""
+    try:
+        fd = stream.fileno()
+    except (AttributeError, OSError, ValueError):
+        return None
+    api = _windows_stdin_api(fd)
+    if api is None:
+        return None
+    read_file, peek_pipe, handle, last_error = api
+
+    def read(size, _stream=stream):
+        while True:
+            available = ctypes.c_uint32()
+            if not peek_pipe(handle, None, 0, None, ctypes.byref(available), None):
+                error = last_error()
+                if error in (38, 109):
+                    return b""
+                raise OSError(error, "checking Windows stdin failed")
+            if available.value:
+                length = min(size, available.value)
+                buffer = ctypes.create_string_buffer(length)
+                count = ctypes.c_uint32()
+                if not read_file(handle, buffer, length, ctypes.byref(count), None):
+                    error = last_error()
+                    if error in (38, 109):
+                        return b""
+                    raise OSError(error, "reading Windows stdin failed")
+                return buffer.raw[: count.value]
+            # A pending read on synchronous stdin can block native imports inspecting its handle.
+            time.sleep(0.01)
+
+    return read
+
+
+def _windows_stdin_api(fd):  # pragma: no cover - native Windows declarations
+    """Bind nonblocking pipe inspection and reads to the inherited stdin handle."""
+    import msvcrt
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    handle = msvcrt.get_osfhandle(fd)
+    kernel32.GetFileType.argtypes = [wintypes.HANDLE]
+    kernel32.GetFileType.restype = wintypes.DWORD
+    if kernel32.GetFileType(handle) != 3:
+        return None
+    kernel32.ReadFile.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(ctypes.c_uint32),
+        ctypes.c_void_p,
+    ]
+    kernel32.ReadFile.restype = wintypes.BOOL
+    kernel32.PeekNamedPipe.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_uint32),
+        ctypes.c_void_p,
+    ]
+    kernel32.PeekNamedPipe.restype = wintypes.BOOL
+    return kernel32.ReadFile, kernel32.PeekNamedPipe, handle, ctypes.get_last_error
 
 
 __all__ = ["acp_app"]

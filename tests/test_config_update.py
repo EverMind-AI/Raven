@@ -176,6 +176,13 @@ def test_update_cron_config_unknown_key_raises(cfg_path: Path) -> None:
         update_cron_config("nonexistent_key", "x", config_path=cfg_path)
 
 
+@pytest.mark.parametrize("spelling", ["defaultTimezone", "default_timezone"])
+def test_update_cron_config_keeps_the_written_key(cfg_path: Path, spelling: str) -> None:
+    cfg_path.write_text(json.dumps({"cron": {spelling: "UTC"}}), encoding="utf-8")
+    assert update_cron_config("default_timezone", "Asia/Tokyo", config_path=cfg_path) == "UTC"
+    assert _read(cfg_path)["cron"] == {spelling: "Asia/Tokyo"}
+
+
 def test_update_cron_config_retired_forward_channels_raises(cfg_path: Path) -> None:
     with pytest.raises(KeyError, match="Unknown cron config key"):
         update_cron_config("forward_channels", ["telegram"], config_path=cfg_path)

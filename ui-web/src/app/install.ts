@@ -71,6 +71,7 @@ import * as settingsDialog from '../state/settings'
 import { ds, sources } from '../state/sources'
 import { show as toast } from '../state/toast'
 import * as visibility from '../state/visibility'
+import { staged as stagedWorkdir } from '../state/workdir'
 import { onReset as onWsReset } from '../state/ws'
 import { installConnectionUI, onReconnect, surface } from './connection'
 import { showUpNote } from './updates'
@@ -258,6 +259,12 @@ export function installSources(): void {
   sources.prose = proseSource
   sources.workspace = workspaceSource
 
+  const attachmentContext = () => {
+    const session = sessionCurrent()
+    const workdir = session ? null : stagedWorkdir()
+    return { session: session || 'tui:', ...(workdir ? { workdir } : {}) }
+  }
+
   /* Files are uploaded into <workspace>/uploads and handed to the agent as
      paths: every file tool is already workspace-scoped, so a path is all it
      needs. Bytes never ride inside the message. */
@@ -272,7 +279,7 @@ export function installSources(): void {
       content_b64: p.content_b64,
       /* Read per call, not captured: a file can be staged in a draft that
          becomes a session between the pick and the upload. */
-      session: sessionCurrent() || '',
+      ...attachmentContext(),
     })
   }
 
@@ -281,7 +288,7 @@ export function installSources(): void {
      on it. */
   composer.templates = {
     list: () => gateway().call('deck.templates.list', { covers: true }),
-    pick: (name) => gateway().call('deck.templates.pick', { name }),
+    pick: (name) => gateway().call('deck.templates.pick', { name, ...attachmentContext() }),
     pages: (name) => gateway().call('deck.templates.pages', { name }),
   }
 }

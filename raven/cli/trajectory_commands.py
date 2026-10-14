@@ -16,7 +16,19 @@ wrappers over the trajectory layer:
   ``report``, its deliverable embeds the trajectory inside a problem-metadata
   envelope and is gated by the redaction classification: review findings are
   adjudicated per item, and shipping a review report always takes an explicit
-  risk authorization (never implied by ``--yes``).
+  risk authorization (never implied by ``--yes``); decisions remembered from
+  earlier reviews are replayed (:mod:`raven.trajectory.redaction_history`).
+  When ``RAVEN_BUGREPORT_URL``
+  names a receiver, the package is uploaded as soon as it lands
+  (:mod:`raven.trajectory.upload`).
+- ``redaction-history`` — ``list`` / ``forget`` / ``clear`` the keep/replace
+  decisions the bug report review remembers
+  (:mod:`raven.trajectory.redaction_history`).
+- ``upload-bug-report`` — send (or send again) a filed report's package to the
+  receiver; the same package twice yields the same receipt.
+- ``receiver`` — run the Bug Report Receiver itself: the HTTP service that takes
+  packages in, checks them, and stores them by day
+  (:mod:`raven.trajectory.receiver`).
 - ``replay``  — feed a bundle's recorded model replies and tool results back
   through the live harness (:func:`raven.trajectory.replay.run_replay`; no
   real tool code runs, no spans are emitted).
@@ -65,6 +77,8 @@ console = Console()
 
 trajectory_app = typer.Typer(help="Package, label, and protect agent trajectories.")
 trajectory_app.add_typer(regression_app, name="regression")
+redaction_history_app = typer.Typer(help="Inspect and edit the remembered redaction review decisions.")
+trajectory_app.add_typer(redaction_history_app, name="redaction-history")
 
 
 @trajectory_app.callback(invoke_without_command=True)
@@ -286,6 +300,76 @@ def _report_attempt(
         shutil.rmtree(staging, ignore_errors=True)
 
 
+def _print_review_failure(
+    items: list, undecided: list, reasons: list[str], missing: list[str], resolution: Any
+) -> None:
+    from raven.cli import trajectory_browse as tbrowse
+
+    if undecided:
+        console.print(f"[red]The redaction needs review; {len(undecided)} item(s) require your decision:[/red]")
+    else:
+        console.print("[red]The redaction needs review:[/red]")
+    console.print(f"  {tbrowse._REVIEW_PATHS_NOTE}", highlight=False)
+    for warning in tbrowse._review_warnings(reasons):
+        console.print(f"  [yellow]! {escape(warning)}[/yellow]", highlight=False)
+    tbrowse._print_history_decisions(resolution, items)
+    index_by_id = {item.id: index for index, item in enumerate(items, 1)}
+    for item in undecided:
+        tbrowse._print_review_item(item, index_by_id[item.id], len(items), index_by_id)
+    console.print(f"[red]Pass: {'; '.join(missing)} (--yes does not imply them).[/red]")
+
+
+def _decide_without_tty(
+    items: list,
+    reasons: list[str],
+    *,
+    keep_findings: bool,
+    redact_findings: bool,
+    accept_risk: bool,
+    history: Any,
+) -> list:
+    """``report-bug``'s decisions with no TTY: flags, then remembered decisions.
+
+    ``history`` is None when replay is off. Missing flags are judged before
+    any decision application and before any history write: otherwise a run
+    whose items are all covered but that lacks --accept-risk would keep
+    exporting and fail late without the item listing (a redact run would even
+    rewrite the context before failing). Exits 1 listing every undecided item
+    and every missing flag at once.
+    """
+    from raven.cli import trajectory_browse as tbrowse
+    from raven.trajectory import review as treview
+
+    flagged = keep_findings or redact_findings
+    resolution = None
+    if history is not None and not flagged:
+        resolution, history_warnings = tbrowse._resolve_history(history, items)
+        tbrowse._print_history_warnings(history_warnings)
+    replayed = {decision.item_id: decision.action for decision in resolution.auto} if resolution else {}
+    undecided = [item for item in items if item.id not in replayed]
+    missing = []
+    if any(item.kind == treview.KIND_SUSPECTED for item in undecided) and not flagged:
+        missing.append("--keep-findings or --redact-findings")
+    if not accept_risk:
+        missing.append("--accept-risk")
+    if missing:
+        _print_review_failure(items, undecided, reasons, missing, resolution)
+        raise typer.Exit(code=1)
+    tbrowse._print_history_decisions(resolution, items)
+    flag_action = treview.ACTION_REDACTED if redact_findings else treview.ACTION_KEPT
+    decisions = []
+    for item in items:
+        if item.id in replayed:
+            decisions.append(treview.ReviewDecision(item.id, replayed[item.id]))
+        elif item.kind == treview.KIND_CONFIRMED:
+            decisions.append(treview.ReviewDecision(item.id, treview.ACTION_ACKNOWLEDGED))
+        else:
+            decisions.append(treview.ReviewDecision(item.id, flag_action))
+    if resolution is not None and replayed:
+        tbrowse._remember_decisions(history, items, decisions, source="cli", replayed=resolution.replayed)
+    return decisions
+
+
 @trajectory_app.command("report-bug")
 def trajectory_report_bug(
     id_: str = typer.Argument(..., metavar="ID", help="Attempt id or trace id"),
@@ -308,6 +392,12 @@ def trajectory_report_bug(
     redact_findings: bool = typer.Option(
         False, "--redact-findings", help="Replace every suspected finding with [REDACTED:user-confirmed]"
     ),
+    review_all: bool = typer.Option(
+        False,
+        "--review-all",
+        help="Ignore remembered redaction decisions for this run and decide every item again"
+        " (new answers replace the remembered ones)",
+    ),
     workspace: Path | None = typer.Option(
         None, "--workspace", "-w", help="Workspace holding the session records (default: the configured workspace)"
     ),
@@ -324,9 +414,16 @@ def trajectory_report_bug(
     need --keep-findings or --redact-findings, and every review report needs
     --accept-risk — a run missing flags fails listing all items and every
     missing flag at once, producing nothing.
+
+    Decisions remembered from earlier reviews are replayed first and listed
+    (with or without a TTY), so only the other items need an answer or a
+    flag; --review-all ignores them for one run. The blanket keep/redact
+    flags neither read nor write the history, and
+    RAVEN_BUGREPORT_REDACTION_HISTORY=off turns it off.
     """
     from raven.trajectory import bugreport as breport
     from raven.trajectory import review as treview
+    from raven.trajectory import upload as tupload
 
     description = description.strip()
     if not description:
@@ -350,6 +447,7 @@ def trajectory_report_bug(
     if not interactive and not yes:
         console.print("[red]--yes is required without a TTY; nothing was collected or pinned.[/red]")
         raise typer.Exit(code=1)
+    base_url = _resolved_upload_url()
 
     try:
         prep = breport.prepare_trajectory(id_, workspace=workspace, config_path=config)
@@ -369,54 +467,47 @@ def trajectory_report_bug(
         for reason in reasons:
             console.print(f"  - {escape(reason)}", highlight=False)
 
-    def _print_review_failure(items: list, reasons: list[str], missing: list[str]) -> None:
-        from raven.cli import trajectory_browse as tbrowse
+    from raven.trajectory import redaction_history as thistory
 
-        console.print(f"[red]The redaction needs review; {len(items)} item(s) require your decision:[/red]")
-        console.print(f"  {tbrowse._REVIEW_PATHS_NOTE}", highlight=False)
-        for warning in tbrowse._review_warnings(reasons):
-            console.print(f"  [yellow]! {escape(warning)}[/yellow]", highlight=False)
-        index_by_id = {item.id: index for index, item in enumerate(items, 1)}
-        for index, item in enumerate(items, 1):
-            tbrowse._print_review_item(item, index, len(items), index_by_id)
-        console.print(f"[red]Pass: {'; '.join(missing)} (--yes does not imply them).[/red]")
+    history = thistory.RedactionHistory() if thistory.enabled() else None
+    replay = history is not None and not review_all
 
     def _decide(items: list, reasons: list[str]) -> list:
+        from raven.cli import trajectory_browse as tbrowse
+
+        flagged = keep_findings or redact_findings
         if not interactive:
-            # Missing flags are judged on the ORIGINAL items, before any
-            # early return or decision application: otherwise a run whose
-            # items are all flag-covered but that lacks --accept-risk would
-            # keep exporting and fail late without the item listing (a
-            # redact run would even rewrite the context before failing).
-            missing = []
-            if any(item.kind == treview.KIND_SUSPECTED for item in items) and not (keep_findings or redact_findings):
-                missing.append("--keep-findings or --redact-findings")
-            if not accept_risk:
-                missing.append("--accept-risk")
-            if missing:
-                _print_review_failure(items, reasons, missing)
-                raise typer.Exit(code=1)
+            return _decide_without_tty(
+                items,
+                reasons,
+                keep_findings=keep_findings,
+                redact_findings=redact_findings,
+                accept_risk=accept_risk,
+                history=history if replay else None,
+            )
         flag_decisions: list = []
         remaining: list = []
         for item in items:
             if item.kind == treview.KIND_CONFIRMED and accept_risk:
                 flag_decisions.append(treview.ReviewDecision(item.id, treview.ACTION_ACKNOWLEDGED))
-            elif item.kind == treview.KIND_SUSPECTED and (keep_findings or redact_findings):
+            elif item.kind == treview.KIND_SUSPECTED and flagged:
                 action = treview.ACTION_REDACTED if redact_findings else treview.ACTION_KEPT
                 flag_decisions.append(treview.ReviewDecision(item.id, action))
             else:
                 remaining.append(item)
         if not remaining:
             return flag_decisions
-        # Only reachable on a TTY (without one, missing flags exited above
-        # and complete flags leave nothing remaining). Linked groups exist
-        # only among suspected items and the flags cover a kind whole, so a
-        # group is never split between flags and interaction.
-        from raven.cli import trajectory_browse as tbrowse
+        # Linked groups exist only among suspected items and the flags cover
+        # a kind whole, so a group is never split between flags and
+        # interaction; history replays whole linked groups, so it never
+        # splits one either.
         from raven.cli._styles import RAVEN_STYLE
 
         try:
-            decided = tbrowse.make_review_decider(tbrowse._require_questionary(), RAVEN_STYLE)(remaining, reasons)
+            decide = tbrowse.make_review_decider(
+                tbrowse._require_questionary(), RAVEN_STYLE, history=history, replay=replay, source="cli"
+            )
+            decided = decide(remaining, reasons)
         except (tbrowse._ActionCancelledError, tbrowse._CancelledError) as exc:
             # Esc/Ctrl-C during adjudication: the CLI has no outer screen
             # to unwind to, so both mean "cancel this report".
@@ -447,7 +538,7 @@ def trajectory_report_bug(
             exit_code = 1
             return
 
-        _print_bug_cli_summary(prep)
+        _print_bug_cli_summary(prep, upload_target=tupload.upload_target(base_url) if base_url else "")
         if prep.classification == breport.CLASSIFICATION_NEEDS_REVIEW and not accept_risk:
             # The review authorization can only come from --accept-risk or
             # this risk-worded consent; --yes never grants it.
@@ -468,7 +559,7 @@ def trajectory_report_bug(
             return
 
         try:
-            _record_dir, record = breport.confirm_and_package(prep)
+            record_dir, record = breport.confirm_and_package(prep)
         except breport.StaleAttemptError:
             console.print("[red]The attempt changed while the report was being prepared — nothing was created.[/red]")
             exit_code = 1
@@ -487,7 +578,10 @@ def trajectory_report_bug(
             return
         console.print(f"[green]✓[/green] Bug report {escape(record['report_id'])} ready (local_ready)", highlight=False)
         console.print(f"  Package: [cyan]{escape(record['package']['path'])}[/cyan]", highlight=False)
-        console.print("  Not uploaded — hand the package file to a developer yourself.")
+        if base_url:
+            exit_code = _upload_and_report(record_dir, base_url)
+        else:
+            console.print("  Not uploaded — hand the package file to a developer yourself.")
     finally:
         # A no-op once the record landed; on every earlier exit it removes the
         # pre-confirmation staging state (mirrors the browser flow).
@@ -502,12 +596,169 @@ def _stdin_is_tty() -> bool:
     return sys.stdin.isatty()
 
 
-def _print_bug_cli_summary(prep) -> None:
+def _resolved_upload_url() -> str:
+    """The receiver to upload to ("" when off), or exit before any side effect."""
+    from raven.trajectory import upload as tupload
+
+    try:
+        return tupload.resolve_upload_url()
+    except tupload.UploadConfigError as exc:
+        console.print(f"[red]✗ Bug report upload is misconfigured: {escape(str(exc))}[/red]", highlight=False)
+        raise typer.Exit(code=1)
+
+
+def _upload_and_report(record_dir: Path, base_url: str) -> int:
+    """Upload a landed report's package and print the outcome; the exit code to use."""
+    from raven.trajectory import upload as tupload
+
+    try:
+        with console.status("Uploading the package...", spinner="dots"):
+            _record, receipt = tupload.upload_record(record_dir, base_url=base_url)
+    except tupload.UploadError as exc:
+        console.print(f"  [red]✗ Upload failed: {escape(str(exc))}[/red]", highlight=False, soft_wrap=True)
+        console.print(
+            f"  The package is kept; retry with: raven trajectory upload-bug-report {escape(record_dir.name)}",
+            highlight=False,
+            soft_wrap=True,
+        )
+        return 1
+    verb = "Already uploaded" if receipt.duplicate else "Uploaded"
+    console.print(f"  {verb} — receipt {escape(receipt.receipt_id)}", highlight=False)
+    return 0
+
+
+@trajectory_app.command("upload-bug-report")
+def trajectory_upload_bug_report(
+    report_id: str = typer.Argument(..., metavar="REPORT_ID", help="Bug report id (br-...)"),
+    url: str | None = typer.Option(None, "--url", help="Receiver base URL (default: $RAVEN_BUGREPORT_URL)"),
+) -> None:
+    """Upload, or upload again, a filed Bug Report Package to the receiver.
+
+    The package is the one the report was created with; a package that has
+    been changed since is refused. Uploading the same package twice is safe:
+    the receiver answers with the receipt it already holds.
+    """
+    from raven.trajectory import bugreport as breport
+    from raven.trajectory import upload as tupload
+
+    try:
+        base_url = tupload.validate_upload_url(url) if url is not None else tupload.resolve_upload_url()
+    except tupload.UploadConfigError as exc:
+        console.print(f"[red]✗ Bug report upload is misconfigured: {escape(str(exc))}[/red]", highlight=False)
+        raise typer.Exit(code=1)
+    if not base_url:
+        console.print(f"[red]✗ No upload URL is configured; set {tupload.UPLOAD_URL_ENV} or pass --url.[/red]")
+        raise typer.Exit(code=2)
+    record_dir = breport.bugreports_root() / report_id
+    if not breport.is_report_id(report_id) or not (record_dir / breport.RECORD_FILE).is_file():
+        console.print(f"[red]✗ Unknown bug report {escape(report_id)}[/red]", highlight=False)
+        raise typer.Exit(code=1)
+    try:
+        breport.load_record(record_dir)
+    except ValueError as exc:
+        console.print(f"[red]✗ Bug report {escape(report_id)} is damaged: {escape(str(exc))}[/red]", highlight=False)
+        raise typer.Exit(code=1)
+    raise typer.Exit(code=_upload_and_report(record_dir, base_url))
+
+
+def _receiver_address(host: str, port: int) -> str:
+    return f"http://[{host}]:{port}" if ":" in host else f"http://{host}:{port}"
+
+
+@trajectory_app.command("receiver")
+def trajectory_receiver(
+    save_dir: Path = typer.Option(..., "--save-dir", help="Directory that receives packages (created 0700)"),
+    host: str = typer.Option(
+        "127.0.0.1", "--host", help="Bind address; anything but loopback belongs behind a TLS proxy"
+    ),
+    port: int = typer.Option(18795, "--port", min=0, max=65535, help="TCP port; 0 picks a free one and prints it"),
+    trusted_proxy: list[str] = typer.Option(
+        [], "--trusted-proxy", help="CIDR of a proxy whose X-Forwarded-For is believed (repeatable)"
+    ),
+    max_package_mib: int = typer.Option(64, "--max-package-mib", min=1, help="Largest package accepted, in MiB"),
+    max_unpacked_mib: int = typer.Option(
+        256, "--max-unpacked-mib", min=1, help="Largest decompressed volume inspected per package, in MiB"
+    ),
+    max_daily_mib: int = typer.Option(2048, "--max-daily-mib", min=0, help="Bytes accepted per UTC day, in MiB"),
+    max_daily_count: int = typer.Option(500, "--max-daily-count", min=0, help="Packages accepted per UTC day"),
+    min_free_mib: int = typer.Option(1024, "--min-free-mib", min=0, help="Free disk space to keep, in MiB"),
+    rate_burst: int = typer.Option(
+        10, "--rate-burst", min=0, help="Uploads one address may make at once; 0 disables rate limiting"
+    ),
+    rate_per_10min: int = typer.Option(
+        30, "--rate-per-10min", min=0, help="Uploads one address regains per ten minutes"
+    ),
+    concurrency: int = typer.Option(4, "--concurrency", min=1, help="Uploads handled at the same time"),
+    idle_timeout: float = typer.Option(
+        30.0, "--idle-timeout", min=0.0, help="Seconds without body data before an upload is dropped"
+    ),
+    total_timeout: float = typer.Option(600.0, "--total-timeout", min=0.0, help="Seconds one upload may take"),
+) -> None:
+    """Run the Bug Report Receiver: accept packages into --save-dir until stopped.
+
+    The receiver authenticates nobody; who can reach it is decided by the
+    network it listens on. It binds loopback by default -- put a TLS proxy in
+    front of it for anything else, and name that proxy with --trusted-proxy
+    so uploads are rate-limited per real client. Ctrl-C or SIGTERM stops it.
+    """
+    import ipaddress
+
+    from raven.trajectory import receiver as trecv
+    from raven.trajectory.package_check import PackageLimits
+
+    for cidr in trusted_proxy:
+        try:
+            ipaddress.ip_network(cidr, strict=False)
+        except ValueError:
+            raise typer.BadParameter(f"not a CIDR network: {cidr}", param_hint="--trusted-proxy")
+    save_dir = save_dir.resolve()
+    if save_dir.exists() and not save_dir.is_dir():
+        console.print(f"[red]✗ --save-dir is not a directory: {escape(str(save_dir))}[/red]", highlight=False)
+        raise typer.Exit(code=1)
+    config = trecv.ReceiverConfig(
+        save_dir=save_dir,
+        host=host,
+        port=port,
+        trusted_proxies=tuple(trusted_proxy),
+        limits=PackageLimits(max_package_bytes=max_package_mib * 2**20, max_unpacked_bytes=max_unpacked_mib * 2**20),
+        max_daily_bytes=max_daily_mib * 2**20,
+        max_daily_count=max_daily_count,
+        min_free_bytes=min_free_mib * 2**20,
+        rate_burst=rate_burst,
+        rate_per_10min=rate_per_10min,
+        concurrency=concurrency,
+        idle_timeout=idle_timeout,
+        total_timeout=total_timeout,
+    )
+
+    def _announce(bound_host: str, bound_port: int) -> None:
+        console.print(
+            f"Bug report receiver listening on {escape(_receiver_address(bound_host, bound_port))}",
+            highlight=False,
+            soft_wrap=True,
+        )
+        console.print(f"Saving packages under {escape(str(save_dir))}", highlight=False, soft_wrap=True)
+        console.print("Press Ctrl-C to stop.")
+
+    try:
+        trecv.run_receiver(config, ready=_announce)
+    except OSError as exc:
+        console.print(
+            f"[red]✗ Cannot prepare the receiver (save dir {escape(str(save_dir))}): {escape(str(exc))}[/red]",
+            highlight=False,
+            soft_wrap=True,
+        )
+        raise typer.Exit(code=1)
+    console.print("Bug report receiver stopped.")
+
+
+def _print_bug_cli_summary(prep, *, upload_target: str = "") -> None:
     """The final confirmation block, rendered from the frozen canonical metadata.
 
     Everything the package will carry must be on screen at the confirmation
     point — the optional problem fields, the externally shipped reporter
-    identity, and the full completeness reasons included.
+    identity, the full completeness reasons, and whether the package will
+    leave this machine.
     """
     from raven.trajectory import bugreport as breport
 
@@ -567,7 +818,10 @@ def _print_bug_cli_summary(prep) -> None:
         highlight=False,
     )
     console.print(f"  Will produce: bug report package {escape(prep.report_id)}.tar.gz (kept locally)")
-    console.print("  Nothing will be uploaded — the package stays on this machine.")
+    if upload_target:
+        console.print(f"  Will upload to {escape(upload_target)} after the package is created.", highlight=False)
+    else:
+        console.print("  Nothing will be uploaded — the package stays on this machine.")
 
 
 def _manifest_summary(bundle_dir: Path) -> dict[str, Any] | None:
@@ -822,6 +1076,105 @@ def trajectory_split(
     )
     for member in members:
         console.print(f"  [dim]{escape(member)}[/dim]")
+
+
+@redaction_history_app.command("list")
+def redaction_history_list() -> None:
+    """List the remembered redaction decisions, newest first."""
+    from raven.trajectory import redaction_history as thistory
+    from raven.trajectory import review as treview
+
+    history = thistory.RedactionHistory()
+    try:
+        snapshot = history.read()
+    except thistory.HistoryStorageError as exc:
+        console.print(f"[red]✗ {escape(str(exc))}[/red]", highlight=False)
+        raise typer.Exit(code=1)
+    if snapshot.corrupt:
+        console.print(
+            f"[red]✗ The redaction history at {escape(str(history.path))} could not be read"
+            f" ({escape(snapshot.corrupt)}); it is backed up on the next save.[/red]",
+            highlight=False,
+        )
+        raise typer.Exit(code=1)
+    if not thistory.enabled():
+        console.print(
+            "[yellow]! RAVEN_BUGREPORT_REDACTION_HISTORY is off: bug reports neither replay nor record"
+            " these decisions.[/yellow]",
+            highlight=False,
+        )
+    if not snapshot.entries:
+        console.print("No remembered redaction decisions.", highlight=False)
+        return
+    table = Table()
+    table.add_column("ID", style="cyan", overflow="fold")
+    table.add_column("Token")
+    table.add_column("Category")
+    table.add_column("Action")
+    table.add_column("Decided")
+    table.add_column("Reused", justify="right")
+    for entry in snapshot.entries:
+        table.add_row(
+            escape(entry.id),
+            escape(entry.masked),
+            escape(entry.category),
+            "kept" if entry.action == treview.ACTION_KEPT else "replaced",
+            escape(entry.decided_at[:10]),
+            str(entry.applied),
+        )
+    console.print(table)
+    console.print(f"{len(snapshot.entries)} remembered decision(s) in {escape(str(history.path))}.", highlight=False)
+
+
+@redaction_history_app.command("forget")
+def redaction_history_forget(
+    ids: list[str] = typer.Argument(..., metavar="ID...", help="Decision id from 'list' (12 to 64 hex digits)"),
+) -> None:
+    """Forget remembered decisions by id; nothing is removed unless every id matches exactly one."""
+    from raven.trajectory import redaction_history as thistory
+
+    try:
+        result = thistory.RedactionHistory().forget(ids)
+    except thistory.HistoryStorageError as exc:
+        console.print(f"[red]✗ {escape(str(exc))}; nothing was forgotten.[/red]", highlight=False)
+        raise typer.Exit(code=1)
+    if result.unknown or result.ambiguous:
+        for item_id in result.unknown:
+            console.print(f"[red]✗ No remembered decision matches {escape(item_id)}.[/red]", highlight=False)
+        for item_id in result.ambiguous:
+            console.print(
+                f"[red]✗ {escape(item_id)} matches more than one decision; give more digits.[/red]", highlight=False
+            )
+        console.print("[red]Nothing was forgotten.[/red]", highlight=False)
+        raise typer.Exit(code=1)
+    for item_id in result.removed:
+        console.print(f"Forgot {escape(item_id)}.", highlight=False)
+    if result.backup is not None:
+        console.print(f"Backed up the unreadable redaction history to {escape(str(result.backup))}.", highlight=False)
+
+
+@redaction_history_app.command("clear")
+def redaction_history_clear(
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation (required without a TTY)"),
+) -> None:
+    """Forget every remembered redaction decision."""
+    from raven.trajectory import redaction_history as thistory
+
+    if not yes:
+        if not _stdin_is_tty():
+            console.print("[red]✗ --yes is required without a TTY; nothing was cleared.[/red]", highlight=False)
+            raise typer.Exit(code=1)
+        if not typer.confirm("Forget every remembered redaction decision?", default=False):
+            console.print("Cancelled — nothing was cleared.", highlight=False)
+            raise typer.Exit(code=1)
+    try:
+        result = thistory.RedactionHistory().clear()
+    except thistory.HistoryStorageError as exc:
+        console.print(f"[red]✗ {escape(str(exc))}; nothing was cleared.[/red]", highlight=False)
+        raise typer.Exit(code=1)
+    console.print(f"Removed {result.removed} remembered decision(s).", highlight=False)
+    if result.backup is not None:
+        console.print(f"Backed up the unreadable redaction history to {escape(str(result.backup))}.", highlight=False)
 
 
 @trajectory_app.command("list")

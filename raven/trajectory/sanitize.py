@@ -110,17 +110,21 @@ def _token_end(text: str, start: int, prev: str) -> int:
     return j
 
 
-def find_absolute_paths(text: str) -> list[tuple[int, int]]:
+def find_absolute_paths(text: str, *, limit: int | None = None) -> list[tuple[int, int]]:
     """Spans of absolute-path tokens in ``text`` (POSIX, Windows drive, UNC).
 
     The single parser behind sanitization and the export assertions — both
     must agree on what a path is, or a "clean" scan would not imply a clean
-    package.
+    package. ``limit`` stops the scan once that many spans are found, for a
+    caller that only reports the first few and must not hold a list that
+    grows with hostile input.
     """
     spans: list[tuple[int, int]] = []
     n = len(text)
     i = 0
     while i < n:
+        if limit is not None and len(spans) >= limit:
+            break
         ch = text[i]
         prev = text[i - 1] if i > 0 else ""
         at_boundary = i == 0 or prev.isspace() or prev in _BOUNDARY
@@ -309,37 +313,48 @@ def scan_absolute_paths(root: Path, roots: Iterable[str] = ()) -> list[tuple[str
     return hits
 
 
-def find_absolute_paths_in_json(value: Any, roots: Iterable[str] = ()) -> list[tuple[str, str]]:
+def find_absolute_paths_in_json(
+    value: Any, roots: Iterable[str] = (), *, limit: int | None = None
+) -> list[tuple[str, str]]:
     """Assertion pass over a parsed JSON value: ``(field path, sample)`` per hit.
 
     Parse first, then scan each string: ``json.dumps`` writes one backslash as
     two, so a literal ``\\n`` inside a value reads as a UNC prefix in the
     serialized text. Every string value and every object key runs through the
     same parser sanitization used, plus the known-root substring check.
+    ``limit`` ends the walk once that many hits are collected, as in
+    :func:`find_absolute_paths`.
     """
     needles = _root_needles(roots)
     hits: list[tuple[str, str]] = []
 
+    def full() -> bool:
+        return limit is not None and len(hits) >= limit
+
     def scan(text: str, where: str) -> None:
-        for start, end in find_absolute_paths(text):
+        for start, end in find_absolute_paths(text, limit=None if limit is None else limit - len(hits)):
             hits.append((where, text[start:end][:120]))
         for needle in needles:
-            if needle in text:
+            if not full() and needle in text:
                 hits.append((where, needle))
 
-    def walk(node: Any, where: str) -> None:
+    # An explicit stack, not recursion: json.loads accepts nesting close to
+    # the interpreter's limit, and a walk that recursed would overflow on a
+    # document the decoder had just accepted.
+    pending: list[tuple[Any, str]] = [(value, "")]
+    while pending and not full():
+        node, where = pending.pop()
         if isinstance(node, str):
             scan(node, where)
         elif isinstance(node, list):
-            for index, item in enumerate(node):
-                walk(item, f"{where}[{index}]")
+            pending.extend(reversed([(item, f"{where}[{index}]") for index, item in enumerate(node)]))
         elif isinstance(node, dict):
+            children: list[tuple[Any, str]] = []
             for key, item in node.items():
                 child = f"{where}.{key}" if where else str(key)
-                scan(str(key), f"{child} (key)")
-                walk(item, child)
-
-    walk(value, "")
+                children.append((str(key), f"{child} (key)"))
+                children.append((item, child))
+            pending.extend(reversed(children))
     return hits
 
 

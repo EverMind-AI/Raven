@@ -33,6 +33,7 @@ from typer.testing import CliRunner
 from raven.cli.commands import app
 from raven.cli.tui_commands import _UI_TUI_DIR
 from raven.config.raven import TokenWiseConfig
+from raven.utils import heap
 from tests.conftest import wired_kwarg
 
 runner = CliRunner()
@@ -372,6 +373,8 @@ def rpc_server_deps(monkeypatch: pytest.MonkeyPatch):
 
     Returns a ``ctx`` dict with the spy backend and call-tracking lists.
     """
+    # Keep the real trimmer out: it would read /proc and leave heap._task set after the test.
+    monkeypatch.setattr(heap, "start_trimmer", lambda: None)
     ctx: dict[str, Any] = {
         "start_calls": [],
         "stop_calls": [],
@@ -1317,3 +1320,13 @@ def test_bare_raven_dev_without_a_browser_keeps_the_tui_flag_plain(monkeypatch: 
     assert r.exit_code == 0, r.output
     assert received["dev"] is False
     assert "--dev is ignored" in r.output
+
+
+async def test_the_terminal_host_starts_the_heap_trimmer(monkeypatch: pytest.MonkeyPatch, rpc_server_deps) -> None:
+    """The terminal's rpc host lives as long as the TUI does, so it trims like the gateway."""
+    started: list[int] = []
+    monkeypatch.setattr(heap, "start_trimmer", lambda: started.append(1))
+
+    await _run_until_done_with_immediate_proc_done(monkeypatch, rpc_server_deps)
+
+    assert started == [1]

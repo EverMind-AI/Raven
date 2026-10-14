@@ -1099,6 +1099,35 @@ class SkillForgeConfig(_Base):
 # Plugin / Memory backend / SkillForgeRouter
 # ---------------------------------------------------------------------------
 
+SHIPPED_DEFAULT_BACKEND = "everos"
+"""The value ``memory.backend`` carries when nobody has chosen one.
+
+Named rather than compared inline, because the places that test for it are not
+treating this backend as special -- they are answering "the default names
+something that is not here", which is the commonest way an install reaches
+those lines and the only one where the reader did not pick the name
+themselves.
+"""
+
+MEMORY_BACKEND_DISTRIBUTIONS: dict[str, str] = {
+    SHIPPED_DEFAULT_BACKEND: "everos-memory",
+    "everos-cloud": "everos-cloud-memory",
+}
+"""Which distribution contributes each memory backend raven ships a name for.
+
+The join between the two fields below: ``MemoryConfig.backend`` names a
+contribution, ``PluginsConfig.config`` is keyed by the distribution that
+provides it. The registry answers the same question by activating a manifest;
+this answers it for the readers that have no registry -- the launcher that
+renders an agent product's config, and anything reporting on a backend whose
+distribution is not installed. Here rather than beside the registry because
+``raven.core`` may import this package and not the other way round
+(``tests/test_import_cycle_budget.py``).
+"""
+
+EVEROS_PLUGIN_DISTRIBUTION = MEMORY_BACKEND_DISTRIBUTIONS[SHIPPED_DEFAULT_BACKEND]
+"""The distribution that contributes the ``everos`` memory backend."""
+
 
 class PluginsConfig(_Base):
     """Plugin-system top-level config.
@@ -1161,6 +1190,15 @@ class MemoryConfig(_Base):
     memory_top_k: int = 5
     """Top-K passed to ``backend.recall(user_id=user_id)`` per turn for
     the ``# Recalled memory`` block."""
+
+    annotate_every_turns: int = 0
+    """How many user turns accumulate before the unannotated tail is handed
+    to the annotator and written to ``episodes.md``. ``0``, the default,
+    turns the step off: it costs one provider call per cadence, and an
+    install that never reads the log should not pay for it. The tail always
+    starts and ends on a turn boundary because the step runs after a turn,
+    so this is a cadence, not a cut point. Read at boot; a change needs a
+    gateway reload."""
 
 
 class EmbeddingConfig(_Base):

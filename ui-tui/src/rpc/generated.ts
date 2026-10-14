@@ -5108,6 +5108,10 @@ export interface SettingsEverosResult {
    */
   note?: string | null;
   /**
+   * Why available is false, when the page should draw none of the role slots: 'other_backend' means memory.backend names a backend that does not read EverOS's roles. Absent when the plugin is merely not installed, which keeps the slots drawn with their not-installed note.
+   */
+  reason?: string | null;
+  /**
    * Whether raven manages this EverOS root. False makes the role slots read-only: raven neither writes that install's config nor starts or stops its server.
    */
   owned?: boolean;
@@ -5158,6 +5162,45 @@ export interface SettingsEverosSetResult {
    * Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted.
    */
   warning?: string | null;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SettingsEverosCloudParams".
+ */
+export interface SettingsEverosCloudParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SettingsEverosCloudResult".
+ */
+export interface SettingsEverosCloudResult {
+  /**
+   * Whether the everos-cloud-memory distribution is installed.
+   */
+  available: boolean;
+  /**
+   * Whether memory.backend names everos-cloud; the card is drawn only then.
+   */
+  selected: boolean;
+  /**
+   * Whether a key resolves, from the file or the environment.
+   */
+  api_key_set: boolean;
+  /**
+   * 'file' or 'env' when a key resolves; null otherwise.
+   */
+  key_source?: string | null;
+  /**
+   * The cloud address in force: the slice's base_url or the default.
+   */
+  base_url?: string;
+  /**
+   * The health probe's verdict when selected: 'ok', 'degraded' or 'missing'; null when not probed.
+   */
+  status?: string | null;
+  /**
+   * What a person should look at, in the backend's own words.
+   */
+  hint?: string | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -5345,7 +5388,14 @@ export interface FsReadResult {
 export interface FsUploadParams {
   name: string;
   content_b64: string;
+  /**
+   * An existing session key, or a channel prefix such as tui: for a draft.
+   */
   session?: string;
+  /**
+   * A draft's selected working directory, used only to avoid attachment name collisions.
+   */
+  workdir?: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -5353,9 +5403,12 @@ export interface FsUploadParams {
  */
 export interface FsUploadResult {
   /**
-   * Workspace-relative path to hand the agent; uploads never return bytes.
+   * The file relative to agent home (uploads/<name>). turn.send looks for a relative path under the conversation's own working directory first, so a same-named file there answers for it; uploads never return bytes.
    */
   path: string;
+  /**
+   * The file the upload wrote, and the path to hand turn.send: it names the upload whatever the conversation's own directory holds.
+   */
   abs_path: string;
   size: number;
 }
@@ -5413,6 +5466,14 @@ export interface DeckTemplatesPickParams {
    * A row's name from deck.templates.list.
    */
   name: string;
+  /**
+   * An existing session key, or a channel prefix such as tui: for a draft.
+   */
+  session?: string;
+  /**
+   * A draft's selected working directory, used only to avoid attachment name collisions.
+   */
+  workdir?: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -5420,9 +5481,12 @@ export interface DeckTemplatesPickParams {
  */
 export interface DeckTemplatesPickResult {
   /**
-   * Workspace-relative path to hand the agent; uploads never return bytes.
+   * The file relative to agent home (uploads/<name>). turn.send looks for a relative path under the conversation's own working directory first, so a same-named file there answers for it; uploads never return bytes.
    */
   path: string;
+  /**
+   * The file the upload wrote, and the path to hand turn.send: it names the upload whatever the conversation's own directory holds.
+   */
   abs_path: string;
   size: number;
 }

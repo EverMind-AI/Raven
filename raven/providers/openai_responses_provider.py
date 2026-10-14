@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 import httpx
+from loguru import logger
 
 from raven.providers.base import (
     ErrorClassification,
@@ -25,6 +26,27 @@ from raven.providers.usage import responses_usage
 
 _GPT_VERSION = re.compile(r"(?:^|/)gpt-(\d+)\.(\d+)(?:$|[-/])", re.IGNORECASE)
 _DEFAULT_BASE = "https://api.openai.com/v1"
+
+
+def _relax_forced_tool_choice(body: dict[str, Any], error_text: str) -> bool:
+    """Drop a forced tool choice the model refused, so one retry can land.
+
+    A vendor can accept a tool list and still reject being told it must call
+    one -- DeepSeek's thinking mode answers "Thinking mode does not support
+    this tool_choice" with a 400. Under ``auto`` the tool stays on offer and a
+    model that declines it answers in plain text, which every caller here
+    already handles. Mirrors the same repair on the Anthropic adapter.
+    """
+    if "tool_choice" not in (error_text or ""):
+        return False
+    forced = body.get("tool_choice")
+    forcing = forced in ("required", "any") or (
+        isinstance(forced, dict) and forced.get("type") in {"function", "tool", "any"}
+    )
+    if not forcing:
+        return False
+    body["tool_choice"] = "auto"
+    return True
 
 
 class OpenAIResponsesProvider(LLMProvider):
@@ -101,33 +123,43 @@ class OpenAIResponsesProvider(LLMProvider):
         url = f"{(self.api_base or _DEFAULT_BASE).rstrip('/')}/responses"
         headers = {"Accept": "text/event-stream", **self.extra_headers}
         raw_usage: dict[str, Any] = {}
+        relaxed = False
         try:
             async with httpx.AsyncClient(timeout=httpx_timeout(self.generation) or self.generation.timeout) as client:
-                async with client.stream(
-                    "POST",
-                    url,
-                    headers={"Authorization": f"Bearer {self.api_key}", **headers},
-                    json=body,
-                ) as response:
-                    if response.status_code >= 400:
-                        detail = (await response.aread()).decode("utf-8", "replace")
-                        raise RuntimeError(f"HTTP {response.status_code}: {detail[:2000]}")
-                    # The per-event watchdog runs on the stream-idle budget, not
-                    # the call budget: with llmCallTimeout 600 and
-                    # streamIdleTimeout 7 this adapter still waited 600 s on a
-                    # silent stream and the setting did nothing here (reviewed
-                    # 2026-09-07). getattr: a GenerationSettings from before the
-                    # field falls back to the call budget, as it always did.
-                    idle_timeout = getattr(self.generation, "stream_idle_timeout", None) or self.generation.timeout
-                    # And the first event on the first-byte bound, which is the
-                    # one a stream that never starts needs: the idle cap is for a
-                    # stream that stopped mid-answer, minutes further out.
-                    content, tool_calls, finish_reason = await _consume_sse(
-                        response,
-                        idle_timeout,
-                        usage_sink=raw_usage,
-                        first_byte=stream_first_byte_budget(self.generation),
-                    )
+                while True:
+                    async with client.stream(
+                        "POST",
+                        url,
+                        headers={"Authorization": f"Bearer {self.api_key}", **headers},
+                        json=body,
+                    ) as response:
+                        if response.status_code >= 400:
+                            detail = (await response.aread()).decode("utf-8", "replace")
+                            if response.status_code == 400 and not relaxed and _relax_forced_tool_choice(body, detail):
+                                relaxed = True
+                                logger.info(
+                                    "{} refused a forced tool choice; retrying with tool_choice=auto",
+                                    stored_model,
+                                )
+                                continue
+                            raise RuntimeError(f"HTTP {response.status_code}: {detail[:2000]}")
+                        # The per-event watchdog runs on the stream-idle budget, not
+                        # the call budget: with llmCallTimeout 600 and
+                        # streamIdleTimeout 7 this adapter still waited 600 s on a
+                        # silent stream and the setting did nothing here (reviewed
+                        # 2026-09-07). getattr: a GenerationSettings from before the
+                        # field falls back to the call budget, as it always did.
+                        idle_timeout = getattr(self.generation, "stream_idle_timeout", None) or self.generation.timeout
+                        # And the first event on the first-byte bound, which is the
+                        # one a stream that never starts needs: the idle cap is for a
+                        # stream that stopped mid-answer, minutes further out.
+                        content, tool_calls, finish_reason = await _consume_sse(
+                            response,
+                            idle_timeout,
+                            usage_sink=raw_usage,
+                            first_byte=stream_first_byte_budget(self.generation),
+                        )
+                        break
             return LLMResponse(
                 content=content or None,
                 tool_calls=tool_calls,

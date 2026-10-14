@@ -114,6 +114,18 @@ def test_run_starts_the_litellm_warm_up_before_the_first_request() -> None:
     assert "warm_up_in_background()" in run_body
 
 
+def test_run_starts_the_heap_trimmer_at_boot() -> None:
+    """Freed native memory goes back to the system while the gateway serves.
+    ``run()`` blocks forever, so its source is pinned rather than executed."""
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    run_body = src.split("async def run():", 1)[1].split("bounded_asyncio.run(run())", 1)[0]
+    assert "start_trimmer()" in run_body
+
+
 def test_every_page_mount_hands_the_gateway_stop_to_the_page() -> None:
     """The page's upgrade restarts this whole process, so it needs the same
     graceful stop and busy check the control plane uses. Handed over on every

@@ -36,6 +36,11 @@ from typing import Any
 from pydantic import BaseModel
 
 from raven.knowledge._types import Section
+from raven.knowledge.parser._media import register as _register_media_types
+
+# Before anything below guesses a type or reverses one. The host's own table is
+# whatever the image happens to carry, and a slim one carries no OOXML at all.
+_register_media_types()
 
 READING_ORDER = "reading_order"
 """Metadata key: the section's 0-based place in its source file."""

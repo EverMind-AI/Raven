@@ -20,6 +20,8 @@ class _Proc:
     def __init__(self, *, gone: bool = False) -> None:
         self.gone = gone
         self.killed = 0
+        self.pid = 4242
+        self.returncode = None
 
     def kill(self) -> None:
         if self.gone:
@@ -29,42 +31,61 @@ class _Proc:
 
 def _as_posix(monkeypatch: pytest.MonkeyPatch) -> None:
     """The POSIX branch, wherever the test runs: Windows has no SIGKILL to name, so one is lent for the read."""
-    monkeypatch.setattr(acp_client, "_POSIX", True)
     monkeypatch.setattr(acp_client.signal, "SIGKILL", getattr(acp_client.signal, "SIGKILL", 9), raising=False)
 
 
-def test_on_posix_the_process_group_is_killed(monkeypatch):
+async def test_on_posix_the_process_group_is_killed(monkeypatch):
     swept: list[tuple[int, int]] = []
     _as_posix(monkeypatch)
     monkeypatch.setattr(os, "killpg", lambda pgid, sig: swept.append((pgid, sig)), raising=False)
     proc = _Proc()
 
-    acp_client._end(4242, proc)
+    await acp_client._end(4242, proc)
 
     assert swept == [(4242, acp_client.signal.SIGKILL)]
     assert proc.killed == 0
 
 
-def test_a_group_already_gone_is_not_an_error(monkeypatch):
+async def test_a_group_already_gone_is_not_an_error(monkeypatch):
     def gone(pgid, sig):
         raise ProcessLookupError
 
     _as_posix(monkeypatch)
     monkeypatch.setattr(os, "killpg", gone, raising=False)
 
-    acp_client._end(4242, _Proc())
+    await acp_client._end(4242, _Proc())
 
 
-def test_without_process_groups_the_child_itself_is_killed(monkeypatch):
-    monkeypatch.setattr(acp_client, "_POSIX", False)
-    monkeypatch.setattr(os, "killpg", lambda pgid, sig: pytest.fail("killpg has no meaning here"), raising=False)
+async def test_without_process_groups_the_child_itself_is_killed(monkeypatch):
+    """No ``killpg`` and no ``taskkill`` on the PATH: the child is ended by handle, and one already gone is no error."""
+    monkeypatch.delattr(os, "killpg", raising=False)
+    monkeypatch.setattr(acp_client.shutil, "which", lambda name, *a, **k: None)
     proc = _Proc()
 
-    acp_client._end(4242, proc)
+    await acp_client._end(4242, proc)
 
     assert proc.killed == 1
-    acp_client._end(4242, _Proc(gone=True))
+    await acp_client._end(4242, _Proc(gone=True))
 
 
-def test_the_platform_is_read_once_from_what_os_offers():
-    assert acp_client._POSIX is hasattr(os, "killpg")
+async def test_without_process_groups_taskkill_walks_the_tree_first(monkeypatch):
+    """Where ``taskkill`` exists it ends the launcher's children by pid, bounded, before the launcher itself."""
+    monkeypatch.delattr(os, "killpg", raising=False)
+    monkeypatch.setattr(acp_client.shutil, "which", lambda name, *a, **k: "taskkill" if name == "taskkill" else None)
+    calls: list[tuple[list[str], float]] = []
+
+    def run(argv, **kwargs):
+        calls.append((list(argv), kwargs["timeout"]))
+        return acp_client.subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(acp_client.subprocess, "run", run)
+    proc = _Proc()
+
+    await acp_client._end(4242, proc)
+
+    assert calls == [(["taskkill", "/T", "/F", "/PID", "4242"], acp_client._TEARDOWN_TASKKILL_S)]
+    assert proc.killed == 1
+    exited = _Proc()
+    exited.returncode = 0
+    await acp_client._end(4242, exited)
+    assert len(calls) == 1, "a launcher that has exited is not walked: its pid may name another process by now"

@@ -17,9 +17,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HOST_DIR = REPO_ROOT / "raven"
-PLUGIN_DIR = REPO_ROOT / "plugins-dist" / "everos-memory" / "raven_everos"
+# Every distribution beside the host wheel, by its package directory: a scan
+# that knew one plugin by name would let any other import whatever it liked.
+PLUGIN_DIRS = sorted(d for d in (REPO_ROOT / "plugins-dist").glob("*/raven_*") if d.is_dir())
 
-_PLUGIN_IMPORT = re.compile(r"^\s*(from|import)\s+raven_everos\b", re.M)
+_PLUGIN_IMPORT = re.compile(r"^\s*(from|import)\s+raven_everos(_cloud)?\b", re.M)
 _HOST_PRIVATE = re.compile(
     r"^\s*(?:from\s+raven\.(cli|config\.loader|config\.raven)\b|import\s+raven\.(cli|config\.loader|config\.raven)\b)",
     re.M,
@@ -47,12 +49,14 @@ def _host_files() -> list[Path]:
 
 
 def _plugin_files() -> list[Path]:
-    return list(PLUGIN_DIR.rglob("*.py"))
+    return [f for d in PLUGIN_DIRS for f in d.rglob("*.py")]
 
 
 def test_scan_roots_exist() -> None:
     assert _host_files(), f"no host sources under {HOST_DIR}: the scan would pass vacuously"
-    assert _plugin_files(), f"no plugin sources under {PLUGIN_DIR}: the scan would pass vacuously"
+    assert {"raven_everos", "raven_everos_cloud"} <= {d.name for d in PLUGIN_DIRS}, PLUGIN_DIRS
+    for d in PLUGIN_DIRS:
+        assert any(d.rglob("*.py")), f"no plugin sources under {d}: the scan would pass vacuously"
 
 
 def test_host_does_not_import_plugin_internals() -> None:
