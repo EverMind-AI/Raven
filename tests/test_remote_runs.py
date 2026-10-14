@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from pathlib import Path
 
 import pytest
@@ -155,6 +156,52 @@ def test_a_claim_left_by_a_process_that_is_gone_is_taken_over(monkeypatch) -> No
     assert remote_runs.claim("gone") is True and remote_runs.claim_path("gone").read_text() == str(os.getpid())
     assert remote_runs.claim("held") is False and remote_runs.claim_path("held").read_text() == "12345"
     assert remote_runs.claim("blank") is True, "a claim that names nobody holds nothing"
+
+
+def test_two_starters_taking_over_one_dead_holder_leave_one_claim(monkeypatch) -> None:
+    """A judged the claim dead and took it; B, who judged it dead a moment earlier, must not remove A's.
+
+    Judging and taking are two steps: B's liveness check is held until A has
+    claimed, which is the interleaving in which B used to unlink A's fresh
+    claim and win its own retry, two processes picking one run up.
+    """
+    stale = 4000000
+    remote_runs.claim_path("t").write_text(str(stale), encoding="utf-8")
+    a_inside = threading.Event()
+    a_done = threading.Event()
+    real_take, real_alive = remote_runs._take, remote_runs.pid_alive
+
+    def take(path):
+        if threading.current_thread().name == "A":
+            a_inside.set()
+        return real_take(path)
+
+    def alive(pid):
+        if pid == stale:
+            if threading.current_thread().name == "B":
+                a_done.wait(5)
+            return False
+        return real_alive(pid)
+
+    monkeypatch.setattr(remote_runs, "_take", take)
+    monkeypatch.setattr(remote_runs, "pid_alive", alive)
+    results: dict[str, bool] = {}
+
+    def run(name: str) -> None:
+        results[name] = remote_runs.claim("t")
+        if name == "A":
+            a_done.set()
+
+    a = threading.Thread(target=run, args=("A",), name="A")
+    b = threading.Thread(target=run, args=("B",), name="B")
+    a.start()
+    assert a_inside.wait(5)
+    b.start()
+    a.join(10)
+    b.join(10)
+
+    assert sorted(results.values()) == [False, True], results
+    assert remote_runs.claim_path("t").read_text(encoding="utf-8") == str(os.getpid())
 
 
 def test_a_claim_is_made_whole_without_hard_links_too_and_one_that_cannot_be_made_is_named(

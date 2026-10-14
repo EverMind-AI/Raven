@@ -23,6 +23,7 @@ import contextlib
 import json
 import os
 import time
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -134,15 +135,61 @@ def claim(task: str) -> bool:
     record; :func:`release` alone, when the run is left for a later start.
     """
     path = claim_path(task)
-    for _ in range(2):
-        if _take(path):
-            return True
-        holder = _holder(path)
-        if holder is not None and pid_alive(holder):
-            return False
-        with contextlib.suppress(OSError):
-            path.unlink()
+    with _one_at_a_time():
+        for _ in range(2):
+            if _take(path):
+                return True
+            holder = _holder(path)
+            if holder is not None and pid_alive(holder):
+                return False
+            with contextlib.suppress(OSError):
+                path.unlink()
     return False
+
+
+@contextlib.contextmanager
+def _one_at_a_time() -> Iterator[None]:
+    """The claims of this home taken one process at a time, so the claim a process removes is the one it judged dead.
+
+    Judging a claim stale and taking it over are two steps, and between them
+    another process could make a fresh claim at the same path -- which the
+    first then removed and took, two processes picking one run up after all.
+    An advisory lock on one file beside the claims holds the two steps
+    together; the kernel drops it with the process, so a holder that dies
+    leaves no lock behind. Where the lock file cannot be made, the claim
+    goes on without it and says so if it fails.
+    """
+    try:
+        fd = os.open(runs_dir() / "claims.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError:
+        yield
+        return
+    try:
+        _lock(fd)
+        yield
+    finally:
+        with contextlib.suppress(OSError):
+            _unlock(fd)
+        os.close(fd)
+
+
+try:
+    import fcntl
+
+    def _lock(fd: int) -> None:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+
+    def _unlock(fd: int) -> None:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+except ImportError:  # pragma: no cover - the other platform
+    import msvcrt
+
+    def _lock(fd: int) -> None:
+        msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+
+    def _unlock(fd: int) -> None:
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
 
 
 def release(task: str) -> None:
