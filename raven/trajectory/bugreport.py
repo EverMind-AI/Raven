@@ -53,7 +53,7 @@ from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
 
 from raven import __version__
 from raven.tracing import config as tracing_config
-from raven.trajectory.bundle import BUNDLE_FORMAT_VERSION, collect_bundle
+from raven.trajectory.bundle import BUNDLE_FORMAT_VERSION, _session_source, collect_bundle, write_bundle_tree
 from raven.trajectory.errors import BugReportError as BugReportError
 from raven.trajectory.errors import PreparationError as PreparationError
 from raven.trajectory.redact import KnownSecret, RedactionReport, _variants, collect_known_secrets, redact_bundle
@@ -64,7 +64,9 @@ from raven.trajectory.sanitize import (
     scan_absolute_paths,
     tree_digest,
 )
+from raven.trajectory.selection import SelectionPlan, collect_selection, cut_session_record, traces_present
 from raven.trajectory.store import member_traces
+from raven.trajectory.verdict import read_verdicts
 
 if TYPE_CHECKING:
     from raven.trajectory.review import ReviewDecision, ReviewItem
@@ -538,6 +540,7 @@ class ExportPreparation:
     package_metadata: dict[str, Any] | None = None
     source_digest: str = ""
     export_digest: str = ""
+    selected_traces: tuple[str, ...] = ()
 
     @property
     def snapshot_dir(self) -> Path:
@@ -609,6 +612,96 @@ def prepare_trajectory(
             classification=classification,
             config_path=config_path,
             reasons=reasons,
+        )
+    except BaseException as exc:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        if isinstance(exc, (OSError, tarfile.TarError)):
+            raise PreparationError(str(exc) or exc.__class__.__name__) from exc
+        raise
+
+
+def selection_attempt_id(selected: Sequence[str]) -> str:
+    """The synthetic attempt id of a turn selection: stable for the same set of traces."""
+    return "sel-" + hashlib.sha1(",".join(sorted(set(selected))).encode("utf-8")).hexdigest()[:12]
+
+
+def prepare_selection(
+    plan: SelectionPlan,
+    *,
+    workspace: Path | None = None,
+    config_path: Path | None = None,
+    state_dir: Path | None = None,
+) -> ExportPreparation:
+    """Collect and redact a snapshot of selected turns, as :func:`prepare_trajectory` does for an attempt.
+
+    ``plan`` is what :func:`raven.trajectory.selection.plan_selection`
+    validated, so a turn still running cannot get here. The turns and the
+    traces they dispatched are written in the bundle layout under a synthetic
+    attempt (:func:`selection_attempt_id`), with the session record cut to
+    those turns; nothing is pinned and no attempt is defined. A selected turn
+    whose spans were purged since the plan was made is a
+    :class:`StaleAttemptError`.
+    """
+    if not isinstance(plan, SelectionPlan):
+        raise TypeError("prepare_selection takes the SelectionPlan that plan_selection returned")
+    resolved_state = (state_dir or tracing_config.state_dir()).resolve()
+    root = bugreports_root(resolved_state)
+    staging_root = root / STAGING_DIR
+    staging_root.mkdir(parents=True, exist_ok=True)
+    report_id = new_report_id(root)
+    staging_dir = staging_root / report_id
+    snapshot_dir = staging_dir / "snapshot"
+    snapshot_dir.mkdir(parents=True)
+
+    try:
+        try:
+            chosen = collect_selection(plan, state_dir=resolved_state)
+        except LookupError as exc:
+            raise StaleAttemptError("the selected turns changed while the report was being prepared") from exc
+        attempt_id = selection_attempt_id(plan.selected)
+        cut = cut_session_record(_session_source(plan.session_key, workspace), plan, state_dir=resolved_state)
+        bundle_dir = snapshot_dir / "bundle" / attempt_id
+        bundle_dir.mkdir(parents=True)
+
+        def write_session(target: Path, _session_key: str | None) -> bool:
+            if not cut.included:
+                return False
+            target.write_text(cut.jsonl(), encoding="utf-8")
+            return True
+
+        manifest = write_bundle_tree(
+            bundle_dir,
+            chosen.spans,
+            attempt_id=attempt_id,
+            state_dir=resolved_state,
+            write_session=write_session,
+            verdicts=read_verdicts(resolved_state, attempt_ids=plan.closure),
+            session_key=plan.session_key,
+            confine=(resolved_state / "logs" / "audit-artifacts").resolve(),
+        )
+
+        secrets, config_loaded = collect_known_secrets(config_path)
+        report = redact_bundle(bundle_dir, snapshot_dir / "redacted" / attempt_id, secrets=secrets)
+        report.config_loaded = config_loaded
+        classification, reasons = classify_redaction(report)
+
+        return ExportPreparation(
+            report_id=report_id,
+            state_dir=resolved_state,
+            staging_dir=staging_dir,
+            attempt_id=attempt_id,
+            session_key=plan.session_key,
+            member_traces=_bundle_traces(bundle_dir),
+            merged_definition=False,
+            manifest=manifest,
+            secrets=secrets,
+            config_loaded=config_loaded,
+            roots=_local_roots(workspace, config_path, resolved_state),
+            trajectory_report=report,
+            classification=classification,
+            config_path=config_path,
+            reasons=reasons,
+            selected_traces=tuple(plan.selected),
         )
     except BaseException as exc:
         shutil.rmtree(staging_dir, ignore_errors=True)
@@ -1018,9 +1111,15 @@ def confirm_and_package(prep: ExportPreparation, *, state_dir: Path | None = Non
     :class:`PackagingError`.
     """
     resolved_state = (state_dir or prep.state_dir).resolve()
-    current = member_traces(prep.attempt_id, resolved_state)
-    if current is None or set(current) != set(prep.member_traces):
-        raise StaleAttemptError("the attempt changed while the report was being prepared")
+    if prep.selected_traces:
+        # A synthetic attempt has no definition to change under it; what can
+        # change is the store losing a selected turn.
+        if traces_present(prep.selected_traces, state_dir=resolved_state) != set(prep.selected_traces):
+            raise StaleAttemptError("a selected turn is gone from the trace store")
+    else:
+        current = member_traces(prep.attempt_id, resolved_state)
+        if current is None or set(current) != set(prep.member_traces):
+            raise StaleAttemptError("the attempt changed while the report was being prepared")
 
     record_dir = bugreports_root(resolved_state) / prep.report_id
     try:
@@ -1230,10 +1329,12 @@ __all__ = [
     "list_reports",
     "load_record",
     "new_report_id",
+    "prepare_selection",
     "prepare_trajectory",
     "recover_interrupted",
     "reports_for_attempt",
     "retry_packaging",
     "save_record",
+    "selection_attempt_id",
     "stage_review",
 ]
