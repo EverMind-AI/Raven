@@ -828,13 +828,19 @@ async def test_a_copy_to_a_registered_machine_is_not_refused(registry, tmp_path,
 
     The file tools cannot carry what a copy carries -- a directory, a binary
     file, a file over the fetch budget -- so a refusal left those with no
-    route, and taught the very spelling it objected to. ``true`` stands for
+    route, and taught the very spelling it objected to. Python stands for
     the client: nothing here connects anywhere.
     """
+    import sys
+
     tool = ExecTool(working_dir=str(tmp_path))
     marker = tmp_path / "ran"
+    # Python stands for the client on any host (``true`` and ``touch`` are not
+    # on a Windows one): the copy's words are its arguments, and the marker
+    # says the line ran.
+    client = f'"{sys.executable}" -c "import pathlib, sys; pathlib.Path(sys.argv[-1]).touch()"'
 
-    out = await tool.execute(command=f"true {command}; touch {marker}")
+    out = await tool.execute(command=f'{client} {command} "{marker}"')
 
     assert "Error:" not in out
     assert marker.exists()
