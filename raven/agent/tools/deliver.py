@@ -97,10 +97,7 @@ async def _brought_back(where: RemotePath, workspace: Path | None) -> tuple[Path
             return None, f"not found or not a regular file on machine {label}"
         size = int(info.get("size") or 0)
         if size > PULL_FILE_BUDGET:
-            return None, (
-                f"{_human_size(size)} is over the {_human_size(PULL_FILE_BUDGET)} "
-                f"limit for a file brought back from machine {label}; read it there instead"
-            )
+            return None, f"{_over_budget(size)} for a file brought back from machine {label}; read it there instead"
         try:
             local = _landing(workspace, where.machine, place)
         except ValueError:
@@ -159,6 +156,18 @@ def _landing(workspace: Path | None, machine: str, place: str) -> Path:
     if not name or local.resolve() == pulled.resolve() or not local.resolve().is_relative_to(pulled.resolve()):
         raise ValueError(f"{place} would not land under {pulled}")
     return local
+
+
+def _over_budget(size: int) -> str:
+    """``size`` against :data:`PULL_FILE_BUDGET`, said so the two never read as one number.
+
+    A file one byte over the budget rounds to the budget's own figure, and
+    "20.0 MB is over the 20.0 MB limit" says nothing; the bytes do.
+    """
+    shown, cap = _human_size(size), _human_size(PULL_FILE_BUDGET)
+    if shown == cap:
+        return f"{size:,} bytes is over the {PULL_FILE_BUDGET:,}-byte ({cap}) limit"
+    return f"{shown} is over the {cap} limit"
 
 
 def _human_size(size: int) -> str:
