@@ -39,6 +39,7 @@ import contextlib
 import fnmatch
 import functools
 import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -1129,3 +1130,21 @@ def _one_memory_plugin_in_discovery(request: pytest.FixtureRequest, monkeypatch:
         return metadata.EntryPoints(ep for ep in eps if ep.name != "everos-cloud-memory")
 
     monkeypatch.setattr(metadata, "entry_points", _without_the_cloud_plugin)
+
+
+@pytest.fixture(autouse=True)
+def _this_process_goes_on() -> Iterator[None]:
+    """After a test that ran a host's shutdown, the next test is a process that goes on.
+
+    ``raven.acp_client.remote.leave_agents_running`` is said once by a host
+    that is stopping and never unsaid, which is right for a process about to
+    end and wrong for a worker that runs more tests: with it still said,
+    every later close leaves a stand-in machine's agent with its daemon, and
+    the leak check of ``tests/test_subagent_acp_remote.py`` fails for the
+    rest of the worker's life (``tests/test_rpc_bootstrap.py`` runs that
+    shutdown).
+    """
+    yield
+    remote = sys.modules.get("raven.acp_client.remote")
+    if remote is not None:
+        remote.staying()
