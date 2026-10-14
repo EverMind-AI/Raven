@@ -181,6 +181,7 @@ class ExportJobs:
                 and job.finished is not None
                 and job.finished + self.keep_finished <= now
             ):
+                self._tokens.pop(job.token, None)
                 del self._jobs[job_id]
         return wake
 
@@ -211,6 +212,7 @@ class ExportJobs:
             logger.opt(exception=True).warning("trajectory export {} failed", job.job_id)
             with self._lock:
                 if job.state == STATE_RUNNING:
+                    self._tokens.pop(job.token, None)
                     job.state, job.finished = STATE_FAILED, self._clock()
                     job.error = f"{type(exc).__name__}: {exc}"[:_ERROR_LIMIT]
         finally:

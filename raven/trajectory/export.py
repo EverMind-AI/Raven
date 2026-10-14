@@ -31,6 +31,7 @@ import json
 import os
 import re
 import secrets
+import stat
 import tarfile
 import time
 from dataclasses import dataclass
@@ -129,13 +130,33 @@ def _member(name: str, size: int, mtime: float) -> tarfile.TarInfo:
     return info
 
 
-def _read(path: Path) -> tuple[bytes, float] | None:
+def _read(path: Path, root: Path) -> tuple[bytes, float] | None:
+    """(bytes, mtime) of a regular file inside ``root``, else None.
+
+    The path is resolved first, so a file or directory link leading out of the
+    store is refused, and the file is opened without blocking and checked by
+    descriptor before anything is read: a FIFO or a device swapped in after a
+    check must not hang the export, which cannot be cancelled mid-read.
+    """
     try:
-        with path.open("rb") as handle:
-            data = handle.read()
-            return data, os.fstat(handle.fileno()).st_mtime
+        target = path.resolve()
+        if not target.is_relative_to(root):
+            return None
+        fd = os.open(target, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0))
+    except (OSError, ValueError):
+        return None
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            return None
+        with os.fdopen(fd, "rb") as handle:
+            fd = -1
+            return handle.read(), info.st_mtime
     except OSError:
         return None
+    finally:
+        if fd != -1:
+            os.close(fd)
 
 
 def write_export(
@@ -192,7 +213,7 @@ def write_export(
                 stop_check()
 
             for name, source in sorted(source_of.items()):
-                read = _read(source)
+                read = _read(source, artifacts_root)
                 if read is None:
                     continue
                 data, mtime = read
@@ -208,7 +229,7 @@ def write_export(
 
             written_blobs = 0
             for sha1, name in sorted(blob_names.items()):
-                read = _read(artifact_v2.message_path(artifacts_root, sha1))
+                read = _read(artifact_v2.message_path(artifacts_root, sha1), artifacts_root)
                 if read is None:
                     missing_messages.add(sha1)
                     continue

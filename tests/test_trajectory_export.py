@@ -12,6 +12,7 @@ import io
 import json
 import os
 import tarfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -311,8 +312,8 @@ def test_a_hard_linked_artifact_is_packed_as_a_plain_file(state, world, tmp_path
 def test_a_file_that_vanishes_while_packing_is_reported_missing(state, world, tmp_path, monkeypatch):
     real = ex._read
 
-    def flaky(path: Path):
-        return None if path.name == "a-tool.txt" else real(path)
+    def flaky(path: Path, root: Path):
+        return None if path.name == "a-tool.txt" else real(path, root)
 
     monkeypatch.setattr(ex, "_read", flaky)
     out, summary = _export(state, world, tmp_path)
@@ -330,7 +331,7 @@ def test_every_pointer_to_a_file_that_fails_to_read_keeps_its_original_value(sta
     )
     log.write_text(log.read_text(encoding="utf-8") + json.dumps(extra) + "\n", encoding="utf-8")
     real = ex._read
-    monkeypatch.setattr(ex, "_read", lambda path: None if path.name == "a-tool.txt" else real(path))
+    monkeypatch.setattr(ex, "_read", lambda path, root: None if path.name == "a-tool.txt" else real(path, root))
     out, summary = _export(state, world, tmp_path)
     members = _members(out)
     assert f"{EXPORT_ID}/artifacts/tool.output/2026-10-01/a-tool.txt" not in members
@@ -341,6 +342,62 @@ def test_every_pointer_to_a_file_that_fails_to_read_keeps_its_original_value(sta
     manifest = json.loads(_read(out, ex.MANIFEST_FILE))
     assert manifest["counts"]["artifacts"] == 3
     assert str(world["secret"]) in manifest["missing_artifacts"]
+
+
+def _blob_path(state: Path, sha1: str) -> Path:
+    return artifact_v2.message_path(state / "logs" / "audit-artifacts", sha1)
+
+
+def test_a_blob_linked_out_of_the_store_is_not_carried(state, world, tmp_path):
+    outside = tmp_path / "outside-secret.json"
+    outside.write_text('{"role": "user", "content": "from outside the store"}', encoding="utf-8")
+    blob = _blob_path(state, world["kept"])
+    blob.unlink()
+    blob.symlink_to(outside)
+    out, summary = _export(state, world, tmp_path)
+    assert f"{EXPORT_ID}/messages/{world['kept'][:2]}/{world['kept']}.json" not in _members(out)
+    assert world["kept"] in summary.missing_messages
+
+
+def test_a_blob_directory_linked_out_of_the_store_is_not_carried(state, world, tmp_path):
+    shard = _blob_path(state, world["prompt"]).parent
+    elsewhere = tmp_path / "elsewhere-shard"
+    elsewhere.mkdir()
+    for entry in shard.iterdir():
+        entry.rename(elsewhere / entry.name)
+    shard.rmdir()
+    shard.symlink_to(elsewhere, target_is_directory=True)
+    out, summary = _export(state, world, tmp_path)
+    assert world["prompt"] in summary.missing_messages
+    assert not any(name.endswith(f"{world['prompt']}.json") for name in _members(out))
+
+
+def test_a_blob_that_is_a_directory_is_missing(state, world, tmp_path):
+    blob = _blob_path(state, world["kept"])
+    blob.unlink()
+    blob.mkdir()
+    _, summary = _export(state, world, tmp_path)
+    assert world["kept"] in summary.missing_messages
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs FIFOs")
+def test_a_fifo_never_blocks_the_export(state, world, tmp_path, monkeypatch):
+    """A FIFO in the blob slot, and one swapped in after the artifact check:
+    both are refused by descriptor, so the export ends without a writer."""
+    blob = _blob_path(state, world["kept"])
+    blob.unlink()
+    os.mkfifo(blob)
+    world["secret"].unlink()
+    os.mkfifo(world["secret"])
+    real = ex.store_artifact
+    monkeypatch.setattr(
+        ex, "store_artifact", lambda value, root: Path(value) if value == str(world["secret"]) else real(value, root)
+    )
+    started = time.monotonic()
+    _, summary = _export(state, world, tmp_path)
+    assert time.monotonic() - started < 5
+    assert world["kept"] in summary.missing_messages
+    assert str(world["secret"]) in summary.missing_artifacts
 
 
 def test_cancelling_leaves_nothing_behind(state, world, tmp_path):

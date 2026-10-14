@@ -329,3 +329,43 @@ def test_shutdown_gives_up_on_a_worker_that_does_not_stop_in_time(jobs, gate, tm
     gate.open.set()
     _wait(lambda: _quiet(jobs))
     assert _files(tmp_path) == []
+
+
+def test_failed_jobs_give_up_their_tokens_at_once(jobs, gate, clock, tmp_path):
+    gate.fail = LookupError("no spans left")
+    gate.open.set()
+    for _ in range(3):
+        job = _start(jobs, tmp_path)
+        _wait(lambda job=job: jobs.status(job)["state"] == "failed")
+        _wait(lambda: _quiet(jobs))
+    assert jobs._tokens == {}
+    clock.now += 31
+    assert jobs.download("anything") is None
+    assert jobs._jobs == {} and jobs._tokens == {}
+
+
+def test_a_finished_job_keeps_its_token_until_its_ttl_beside_failed_ones(jobs, gate, clock, tmp_path):
+    gate.open.set()
+    good = _start(jobs, tmp_path)
+    _wait(lambda: jobs.status(good)["state"] == "done")
+    _wait(lambda: _quiet(jobs))
+    gate.fail = LookupError("no spans left")
+    bad = _start(jobs, tmp_path)
+    _wait(lambda: jobs.status(bad)["state"] == "failed")
+    _wait(lambda: _quiet(jobs))
+    token = jobs.status(good)["download_url"].split("token=", 1)[1]
+    assert list(jobs._tokens) == [token]
+    clock.now += 31
+    assert jobs.download(token) is not None, "the record window does not touch a finished job"
+    clock.now += 30
+    assert jobs.download(token) is None and jobs._tokens == {}
+
+
+def test_shutdown_leaves_no_token_behind(jobs, gate, tmp_path):
+    gate.open.set()
+    _start(jobs, tmp_path)
+    gate.fail = LookupError("no spans left")
+    _start(jobs, tmp_path)
+    _wait(lambda: _quiet(jobs) and len(jobs._jobs) == 2 and all(j.state != "running" for j in jobs._jobs.values()))
+    assert jobs.shutdown() is True
+    assert jobs._tokens == {}
