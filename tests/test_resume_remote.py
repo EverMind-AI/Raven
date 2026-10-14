@@ -276,3 +276,52 @@ async def test_a_pick_up_that_raises_in_the_background_is_logged_not_raised(tmp_
     await asyncio.wait_for(task, timeout=5)
 
     assert "picking up the runs left on machines failed" in "\n".join(logs)
+
+
+async def test_two_processes_starting_together_pick_a_run_up_once(tmp_path, monkeypatch, logs):
+    """A gateway and a page stack of one home start at once: the run is picked up by one and reported once."""
+    backend = _backend()
+    managers = [_Manager(backend, tmp_path / "s1"), _Manager(backend, tmp_path / "s1")]
+    monkeypatch.setattr(resume_remote, "get_registry", lambda: _Registry())
+    _open_record(tmp_path / "s1")
+    _run()
+    picked_by: list[str] = []
+
+    async def picked(run, backend, *, pool=None):
+        picked_by.append(run.task)
+        await asyncio.sleep(0.1)
+        return remote_resume.PickedUp("ok", "pong")
+
+    monkeypatch.setattr(remote_resume, "pick_up", picked)
+
+    counts = await asyncio.gather(*(resume_remote.resume_remote_runs(manager) for manager in managers))
+
+    assert sorted(counts) == [0, 1] and picked_by == ["stub@box-1a2b3c4d"]
+    assert sum(len(manager.announced) for manager in managers) == 1
+    assert "is being picked up by another process of this computer" in "\n".join(logs)
+    assert remote_runs.pending() == [] and not remote_runs.claim_path("stub@box-1a2b3c4d").exists()
+
+
+async def test_a_stop_during_a_pick_up_keeps_that_record_and_the_ones_after_it(tmp_path, monkeypatch, logs):
+    from raven.acp_client import remote
+
+    manager = _Manager(_backend(), tmp_path / "s1")
+    _run(task="first", started=1.0)
+    _run(task="second", started=2.0)
+    asked: list[str] = []
+
+    async def picked(run, backend, *, pool=None):
+        asked.append(run.task)
+        remote.leave_agents_running()
+        raise remote_resume.UnreachableError("this computer stopped while the run was being picked up")
+
+    monkeypatch.setattr(remote_resume, "pick_up", picked)
+    try:
+        assert await resume_remote.resume_remote_runs(manager) == 0
+    finally:
+        remote.staying()
+
+    assert asked == ["first"] and manager.announced == []
+    assert [run.task for run in remote_runs.pending()] == ["first", "second"]
+    assert remote_runs.claim("first") and remote_runs.claim("second"), "nothing is left claimed"
+    assert "wait for the next start" in "\n".join(logs)

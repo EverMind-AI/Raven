@@ -130,3 +130,45 @@ def test_a_dispatch_left_on_its_machine_is_read_as_left_once() -> None:
 def test_the_directory_is_made_under_the_raven_home(_home: Path) -> None:
     assert remote_runs.runs_dir() == _home / "machines" / "runs"
     assert os.path.isdir(_home / "machines" / "runs")
+
+
+def test_a_claim_is_taken_once_per_live_process_and_goes_with_the_record() -> None:
+    """Two processes of one home starting together: the one that claims a run picks it up; the other leaves it."""
+    remote_runs.record(_run())
+
+    assert remote_runs.claim("echo@box-1a2b3c4d") is True
+    assert remote_runs.claim("echo@box-1a2b3c4d") is False, "held by a process that is alive: this one"
+    assert remote_runs.claim_path("echo@box-1a2b3c4d").read_text(encoding="utf-8") == str(os.getpid())
+    remote_runs.release("echo@box-1a2b3c4d")
+    assert remote_runs.claim("echo@box-1a2b3c4d") is True, "released for a later start, it can be taken again"
+    remote_runs.forget("echo@box-1a2b3c4d")
+    assert not remote_runs.claim_path("echo@box-1a2b3c4d").exists() and remote_runs.pending() == []
+    remote_runs.release("never-claimed")
+
+
+def test_a_claim_left_by_a_process_that_is_gone_is_taken_over(monkeypatch) -> None:
+    remote_runs.claim_path("gone").write_text("4000000", encoding="utf-8")
+    remote_runs.claim_path("held").write_text("12345", encoding="utf-8")
+    remote_runs.claim_path("blank").write_text("", encoding="utf-8")
+    monkeypatch.setattr(remote_runs, "pid_alive", lambda pid: pid == 12345)
+
+    assert remote_runs.claim("gone") is True and remote_runs.claim_path("gone").read_text() == str(os.getpid())
+    assert remote_runs.claim("held") is False and remote_runs.claim_path("held").read_text() == "12345"
+    assert remote_runs.claim("blank") is True, "a claim that names nobody holds nothing"
+
+
+def test_a_claim_is_made_whole_without_hard_links_too_and_one_that_cannot_be_made_is_named(
+    tmp_path, monkeypatch, logs
+) -> None:
+    def no_links(src, dst, *a, **k):
+        raise OSError("hard links are not supported here")
+
+    monkeypatch.setattr(os, "link", no_links)
+    assert remote_runs.claim("plain") is True
+    assert remote_runs.claim_path("plain").read_text(encoding="utf-8") == str(os.getpid())
+    assert remote_runs.claim("plain") is False
+
+    (tmp_path / "a-file").write_text("x", encoding="utf-8")
+    monkeypatch.setattr(remote_runs, "runs_dir", lambda: tmp_path / "a-file" / "runs")
+    assert remote_runs.claim("nowhere") is False
+    assert "a claim could not be made" in "\n".join(logs)

@@ -11,7 +11,9 @@ here, the ids this side has used, and what the agent answered to
 ``initialize`` on the connection. One file per run under
 ``<raven home>/machines/runs/<task>.json``, owner-only, written when the turn
 starts, kept current as frames arrive, and removed when the turn ends here. A
-file left behind is a run to pick up (:mod:`raven.acp_client.remote_resume`).
+file left behind is a run to pick up (:mod:`raven.acp_client.remote_resume`),
+by one process at a time: the pick-up is made under a claim beside the record
+(:func:`claim`), since two processes of one Raven home can start together.
 No address is in it: the machine is named by its registry id.
 """
 
@@ -28,6 +30,7 @@ from typing import Any
 from loguru import logger
 
 from raven.home import raven_home
+from raven.utils.pid import pid_alive
 
 #: Where the records live under the raven home.
 RUNS_DIR = ("machines", "runs")
@@ -106,9 +109,82 @@ def record(run: RemoteRun) -> Path:
 
 
 def forget(task: str) -> None:
-    """Remove the record of ``task``: the turn ended here."""
+    """Remove the record of ``task``, and the claim on it: the turn ended here, or was concluded here."""
     with contextlib.suppress(FileNotFoundError, OSError):
         path_of(task).unlink()
+    release(task)
+
+
+def claim_path(task: str) -> Path:
+    """Beside the record: the file naming the process that is picking ``task`` up."""
+    return runs_dir() / f"{task}.json.claim"
+
+
+def claim(task: str) -> bool:
+    """Take the pick-up of ``task`` for this process; ``False`` while a live process of this computer holds it.
+
+    Two processes of one Raven home can start together -- a gateway and a
+    page stack -- and each would pick the same run up: the machine's daemon
+    hands the task to whichever attaches last, and the other waits out a
+    prompt that will never answer it, then reports to the conversation a
+    failure the run did not have. So a run is picked up under a claim: a
+    file beside its record naming the process that holds it, made whole and
+    linked into place, so two processes cannot both make it. A claim whose
+    process is gone is taken over. :func:`forget` removes it with the
+    record; :func:`release` alone, when the run is left for a later start.
+    """
+    path = claim_path(task)
+    for _ in range(2):
+        if _take(path):
+            return True
+        holder = _holder(path)
+        if holder is not None and pid_alive(holder):
+            return False
+        with contextlib.suppress(OSError):
+            path.unlink()
+    return False
+
+
+def release(task: str) -> None:
+    """Give the claim on ``task`` up: the run waits for a later start."""
+    with contextlib.suppress(FileNotFoundError, OSError):
+        claim_path(task).unlink()
+
+
+def _take(path: Path) -> bool:
+    """``path`` made as this process's claim, whole, and only where nothing is: ``True`` when it is ours."""
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(str(os.getpid()))
+        try:
+            os.link(tmp, path)
+        except FileExistsError:
+            return False
+        except OSError:
+            # No hard links here: made in place, with a moment in which it names nobody yet.
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(str(os.getpid()))
+        return True
+    except FileExistsError:
+        return False
+    except OSError as exc:
+        logger.warning("remote run record {}: a claim could not be made: {}", path.name, exc)
+        return False
+    finally:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+
+
+def _holder(path: Path) -> int | None:
+    """The process a claim names, or ``None`` for one that names nobody."""
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return int(text) if text.isdigit() else None
 
 
 def pending() -> list[RemoteRun]:
@@ -187,11 +263,14 @@ __all__ = [
     "RUNS_DIR",
     "RemoteRun",
     "Tracker",
+    "claim",
+    "claim_path",
     "forget",
     "mark_left",
     "path_of",
     "pending",
     "record",
+    "release",
     "runs_dir",
     "was_left",
 ]

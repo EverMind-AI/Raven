@@ -558,6 +558,59 @@ async def test_a_run_left_on_the_machine_when_this_computer_stops_is_picked_up_b
     assert _agent_pid() == agent, "the agent's process is the pool's connection again"
 
 
+async def test_a_stop_that_lands_under_a_pick_up_leaves_the_run_for_the_start_after(box, tmp_path, monkeypatch):
+    """This computer stops again while a pick-up is attached: the record and the agent stay, and the next start reads the answer."""
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    backend = build_third_party_backend(remote_config(env={"ACP_STUB_PROMPT_DELAY_S": "4"}))
+    turn = asyncio.ensure_future(
+        backend.run("hi", task_id="t1", workspace=tmp_path, executor=None, session_key="tui:s1")
+    )
+    deadline = time.monotonic() + 20
+    while not any(run.prompt_id > 0 for run in remote_runs.pending()):
+        assert time.monotonic() < deadline and not turn.done(), "the prompt never went out"
+        await asyncio.sleep(0.05)
+    agent = _agent_pid()
+    remote.leave_agents_running()
+    try:
+        turn.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await turn
+        remote_runs.was_left("t1")
+        await close_pool()
+        await box.nodes.close_all()
+    finally:
+        remote.staying()
+    (run,) = remote_runs.pending()
+    session_dir = tmp_path / "sessions" / "s1"
+    meta = {"call_id": "n1", "session_key": "tui:s1", "agent": backend.name, "handle": "t1", "task_summary": "say hi"}
+    SpawnRecord.open(session_dir, task_id="t1", task="hi", meta=meta, node_id="n1")
+    manager = _Manager(backend, session_dir)
+    monkeypatch.setattr(resume_remote, "get_registry", lambda: _Registry())
+
+    # The next start begins the pick-up, and stops the moment its attach is on the machine.
+    picking = asyncio.ensure_future(resume_remote.resume_remote_runs(manager))
+    deadline = time.monotonic() + 10
+    while not any(row.get("task") == run.task and row.get("attached") for row in await box.nodes.tasks("box")):
+        assert time.monotonic() < deadline and not picking.done(), "the pick-up never attached"
+        await asyncio.sleep(0.05)
+    remote.leave_agents_running()
+    try:
+        await close_pool()
+        await box.nodes.close_all()
+        assert await asyncio.wait_for(picking, timeout=10) == 0
+    finally:
+        remote.staying()
+    assert manager.announced == [], "nothing is reported for a run this computer did not finish reading"
+    assert [kept.task for kept in remote_runs.pending()] == [run.task], "the record is the next start's"
+    assert _alive(agent), "the agent stays with the machine's daemon"
+
+    # The start after that reads the answer.
+    assert await asyncio.wait_for(resume_remote.resume_remote_runs(manager), timeout=30) == 1
+    (said,) = manager.announced
+    assert said["status"] == "ok" and said["result"].split("\n\n[raven]")[0] == "pong"
+    assert remote_runs.pending() == [] and _agent_pid() == agent
+
+
 async def test_a_daemon_that_stops_mid_turn_fails_the_turn_in_one_sentence(box, tmp_path):
     box.nodes._heartbeat_s = 0.1
     box.nodes._lost_after_s = 1.0

@@ -7,7 +7,10 @@ owes an answer for. Its reply is read off the machine
 the session is finished with it, the registry row and the node index are
 closed, and the result is announced into the conversation that asked, as a
 turn that ended here would have been. A machine that cannot be asked keeps
-its record for the next start.
+its record for the next start; so does a stop of this computer that lands
+under a pick-up. Each run is picked up under a claim on its record
+(:func:`raven.acp_client.remote_runs.claim`): two processes of one Raven home
+that start together pick it up once, not once each.
 """
 
 from __future__ import annotations
@@ -19,7 +22,7 @@ from typing import Any
 
 from loguru import logger
 
-from raven.acp_client import remote_resume, remote_runs
+from raven.acp_client import remote, remote_resume, remote_runs
 from raven.acp_client.acp_agent import AcpAgentBackend
 from raven.agent.subagent.history import SpawnRecord, nodes_root
 from raven.agent.subagent.instances import get_registry
@@ -55,6 +58,16 @@ async def resume_remote_runs(manager: Any) -> int:
     """Every run left on a machine, picked up and reported; how many were concluded here."""
     concluded = 0
     for run in remote_runs.pending():
+        if remote.leaving():
+            logger.info("this computer is stopping: the runs left on machines wait for the next start")
+            break
+        if not remote_runs.claim(run.task):
+            logger.info(
+                "the run of {!r} on machine {} is being picked up by another process of this computer",
+                run.agent,
+                run.machine,
+            )
+            continue
         backend = _backend_of(manager, run)
         if backend is None:
             await _conclude(
@@ -70,6 +83,7 @@ async def resume_remote_runs(manager: Any) -> int:
         try:
             picked = await remote_resume.pick_up(run, backend)
         except remote_resume.UnreachableError as exc:
+            remote_runs.release(run.task)
             logger.warning("the run of {!r} on machine {} waits for a later start: {}", run.agent, run.machine, exc)
             continue
         except Exception as exc:  # noqa: BLE001 - one run's failure is reported as its own, the next is tried

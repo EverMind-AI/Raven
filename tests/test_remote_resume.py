@@ -204,3 +204,19 @@ async def test_a_pick_up_beside_a_live_connection_of_the_name_closes_its_own_aft
     assert picked.status == "ok"
     assert _pool.connections("stub@box") == [live], "the live connection stays the pool's"
     assert link.pipe.returncode == 0, "the pick-up's own connection was closed"
+
+
+async def test_a_connection_closed_while_this_computer_is_leaving_keeps_the_record(_pool):
+    """The stop that closes the pools lands under a pick-up: the run is the next start's, not an error."""
+    from raven.acp_client import remote
+
+    link = _Link()
+    picking = asyncio.ensure_future(remote_resume.pick_up(_run(), _backend(), pool=link))
+    await asyncio.sleep(0.05)
+    remote.leave_agents_running()
+    try:
+        await link.pipe.end()
+        with pytest.raises(remote_resume.UnreachableError, match="stopped while the run of 'stub@box'"):
+            await asyncio.wait_for(picking, timeout=5)
+    finally:
+        remote.staying()

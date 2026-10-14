@@ -52,9 +52,10 @@ class _Span:
 async def pick_up(run: RemoteRun, backend: AcpAgentBackend, *, pool: Any = None) -> PickedUp:
     """The reply the turn in ``run`` owes, read off the machine; or why there is none.
 
-    Raises :class:`UnreachableError` when the machine cannot be asked at all, so
-    the caller keeps the record for a later start; every other outcome is a
-    :class:`PickedUp`, and the record is the caller's to remove.
+    Raises :class:`UnreachableError` when the machine cannot be asked at all,
+    or when this computer stops under the pick-up, so the caller keeps the
+    record for a later start; every other outcome is a :class:`PickedUp`,
+    and the record is the caller's to remove.
     """
     link = pool if pool is not None else remote_path.nodes()
     if link is None:
@@ -107,6 +108,13 @@ async def pick_up(run: RemoteRun, backend: AcpAgentBackend, *, pool: Any = None)
                     timeout=_prompt_deadline(backend.timeout),
                 )
             except AcpConnectionError as exc:
+                if remote.leaving():
+                    # This computer is stopping under the pick-up: the agent
+                    # stays with its machine, and the run is the next start's.
+                    raise UnreachableError(
+                        f"this computer stopped while the run of {run.agent!r} on machine {target.label} was being "
+                        "picked up; it waits for the next start"
+                    ) from None
                 rc = attached.get("rc")
                 ended = f" (exit {rc})" if isinstance(rc, int) else ""
                 return PickedUp(
