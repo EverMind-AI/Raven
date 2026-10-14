@@ -272,6 +272,10 @@ def test_import_litellm_frees_the_tokenizer_copies_nothing_reads() -> None:
     assert litellm.utils.json_data is None
     assert isinstance(litellm.utils.claude_json_str, str)
     assert "_mergeable_ranks" not in vars(tiktoken.get_encoding("cl100k_base"))
+    # Where tiktoken keeps the ranks, read off an encoding outside the registry: a
+    # release that moved them would leave the line above passing with nothing freed.
+    unregistered = tiktoken.Encoding(name="unregistered", pat_str=r"\S+", mergeable_ranks={b"a": 0}, special_tokens={})
+    assert "_mergeable_ranks" in vars(unregistered)
 
 
 def test_every_tokenizer_counts_the_same_without_them() -> None:
