@@ -2942,20 +2942,21 @@ class TestTheSupervisorStartsWithoutTheCommandTable:
         assert serve_commands.supervise_from_argv(argv) is False
         assert web_calls == []
 
-    def test_a_refusal_ends_the_process_with_the_code_the_command_would(self, monkeypatch) -> None:
+    @pytest.mark.parametrize("code", [1, 3])
+    def test_a_refusal_ends_the_process_with_the_code_the_command_would(self, monkeypatch, code: int) -> None:
         from typer.testing import CliRunner
 
         from raven.cli.commands import app
 
         def refuse(*_a, **_kw):
-            raise typer.Exit(1)
+            raise typer.Exit(code)
 
         monkeypatch.setattr(serve_commands, "_web", refuse)
 
-        assert CliRunner().invoke(app, self.ARGV).exit_code == 1
+        assert CliRunner().invoke(app, self.ARGV).exit_code == code
         with pytest.raises(SystemExit) as ended:
             serve_commands.supervise_from_argv(self.ARGV)
-        assert ended.value.code == 1
+        assert ended.value.code == code
 
     @staticmethod
     def _launch_on(platform: str, argv: list[str], monkeypatch) -> list[tuple]:
