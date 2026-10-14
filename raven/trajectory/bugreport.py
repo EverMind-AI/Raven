@@ -629,6 +629,7 @@ def prepare_selection(
     plan: SelectionPlan,
     *,
     workspace: Path | None = None,
+    session_path: Path | None = None,
     config_path: Path | None = None,
     state_dir: Path | None = None,
 ) -> ExportPreparation:
@@ -638,7 +639,8 @@ def prepare_selection(
     validated, so a turn still running cannot get here. The turns and the
     traces they dispatched are written in the bundle layout under a synthetic
     attempt (:func:`selection_attempt_id`), with the session record cut to
-    those turns; nothing is pinned and no attempt is defined. A selected turn
+    those turns (read from ``session_path``, by default the session's file
+    under ``workspace``); nothing is pinned and no attempt is defined. A selected turn
     whose spans were purged since the plan was made is a
     :class:`StaleAttemptError`.
     """
@@ -659,7 +661,8 @@ def prepare_selection(
         except LookupError as exc:
             raise StaleAttemptError("the selected turns changed while the report was being prepared") from exc
         attempt_id = selection_attempt_id(plan.selected)
-        cut = cut_session_record(_session_source(plan.session_key, workspace), plan, state_dir=resolved_state)
+        source = session_path if session_path is not None else _session_source(plan.session_key, workspace)
+        cut = cut_session_record(source, plan, state_dir=resolved_state)
         bundle_dir = snapshot_dir / "bundle" / attempt_id
         bundle_dir.mkdir(parents=True)
 

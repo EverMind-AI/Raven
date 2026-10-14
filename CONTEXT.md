@@ -2114,7 +2114,10 @@ path-sanitized problem metadata, merged redaction summary with
 `risk_accepted`, environment, content manifest) plus an embedded Trajectory
 Report. Its entire content is frozen under the report's `snapshot/export/`
 before the user confirms, so a packaging retry reuses the approved bytes and
-never re-collects.
+never re-collects. A report the web page files for chosen turns carries a
+synthetic attempt, `sel-<12 hex>` of the selected trace ids, whose
+`member_traces` are those turns and every trace they dispatched; the receiver
+reads it like any other.
 _Avoid_: confusing it with the Trajectory Report it embeds — the Package wraps
 one and adds the problem metadata envelope.
 
@@ -2153,9 +2156,27 @@ up, never overwritten in place, before the next save. The bug report review
 records the human decisions once the decision set is valid; decisions made by
 the blanket `--keep-findings` / `--redact-findings` flags are neither replayed
 over nor recorded, `--review-all` asks again, and
-`RAVEN_BUGREPORT_REDACTION_HISTORY=off` disables it.
+`RAVEN_BUGREPORT_REDACTION_HISTORY=off` disables it. The web page's bug report
+records every value it showed with the final decision, source `web` -- the
+default "keep" and the bulk buttons included -- because the page puts each
+value in front of the reader; that differs from the CLI's blanket flags on
+purpose.
 _Avoid_: "memory" (the agent memory engine), "cache" (it is an authoritative
 record, never evicted automatically).
+
+**Report Session** (`raven/trajectory/report_session.py`):
+One web bug report in progress, held in the gateway's memory between the page's
+requests: the preparation, the Review Items with their plain values, what the
+Redaction History decided, and the phase (`collecting`, `deciding`, `finishing`,
+`ready`, `uploading`, `uploaded`, `upload_failed`, `failed`, `cancelled`). It lives
+from `bugreport.start` until the report is uploaded and closed, cancelled, idle
+for thirty minutes, or the gateway stops. At most two are held at once, each until
+its worker thread has cleaned up and exited; cancelling before the report landed
+removes its staging, after it landed the Bug Report Record stays for
+`raven trajectory upload-bug-report`. The page only ever receives masked samples
+and, one item at a time, the contexts a decision needs.
+_Avoid_: calling it the record -- the Bug Report Record is the file that lands on
+disk.
 
 **Bug Report Receiver** (`raven/trajectory/receiver.py`):
 The standalone HTTP service that takes Bug Report Packages in: it validates each
