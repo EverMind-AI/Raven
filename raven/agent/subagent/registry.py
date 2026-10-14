@@ -71,8 +71,7 @@ class AgentCaps:
     A menu rather than a capability, so unlike the three above it is not
     rendered as a roster tag -- see ``AgentMeta.modes``."""
     machine: str = ""
-    """The registered machine the agent runs on, or ``""`` for this computer
-    (acp only) -- see ``AgentMeta.machine``."""
+    """The registered machine the agent runs on, or ``""`` for this computer -- see ``AgentMeta.machine``."""
 
 
 @dataclass(frozen=True)

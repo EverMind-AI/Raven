@@ -544,7 +544,7 @@ def _refuse_unless_it_can_run_there(entry: dict, machine: str, *, remote_cwd: st
     if entry.get("kind") == "builtin":
         raise ConfigValidationError(
             f"preset {shown!r} is a built-in agent: Raven's own loop in this process, which runs on no other "
-            "machine; reach the machine from it with exec and the file tools instead",
+            "machine; reach the machine from it with exec instead",
             data={"field": "machine", "machine": machine},
         )
     if entry.get("kind") == "openai" and remote_cwd:
