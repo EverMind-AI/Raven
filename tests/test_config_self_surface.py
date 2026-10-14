@@ -205,6 +205,54 @@ def test_raw_write_refuses_an_invalid_alias_beside_null(tmp_path, monkeypatch, i
     assert path.read_bytes() == before
 
 
+@pytest.mark.parametrize(
+    "camel,snake,previous,value",
+    [
+        ("contextWindowTokens", "context_window_tokens", 200000, 100000),
+        ("reasoningEffort", "reasoning_effort", "low", "high"),
+    ],
+)
+def test_raw_leaf_access_lands_on_the_alias_pydantic_reads(tmp_path, monkeypatch, camel, snake, previous, value):
+    """Below the top level pydantic reads a null alias over a populated snake_case key.
+
+    So ``lookup`` reports that null, as the schema does, and a write replaces
+    it: afterwards ``load_config`` reads the new value and the snake_case key
+    is left as it was.
+    """
+    from raven.config.loader import load_config
+
+    path = _home(tmp_path, monkeypatch, {"agents": {"defaults": {camel: None, snake: previous}}})
+    leaf = f"agents.defaults.{camel}"
+    assert getattr(load_config(path).agents.defaults, snake) is None
+    assert surface.lookup(surface.read_raw(path), leaf) == (True, None)
+
+    assert surface.write_value(leaf, value, config_path=path) is None
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {"agents": {"defaults": {camel: value, snake: previous}}}
+    assert getattr(load_config(path).agents.defaults, snake) == value
+
+
+def test_a_nested_block_write_lands_on_the_alias_pydantic_reads(tmp_path, monkeypatch):
+    """Only the top level drops a null block; below it pydantic reads the null alias.
+
+    So this file does not load, and a write into the populated snake_case block
+    would leave it unloadable. The write goes to the alias instead, which is
+    the block the schema then reads.
+    """
+    from raven.config.loader import load_config
+
+    path = _home(tmp_path, monkeypatch, {"tools": {"askUser": None, "ask_user": {"timeout": 30}}})
+    with pytest.raises(ValueError, match="fails schema validation"):
+        load_config(path)
+
+    assert surface.write_value("tools.askUser.timeout", 45, config_path=path) is None
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "tools": {"askUser": {"timeout": 45}, "ask_user": {"timeout": 30}}
+    }
+    assert load_config(path).tools.ask_user.timeout == 45
+
+
 def test_a_write_the_schema_rejects_is_refused_and_nothing_changes(tmp_path, monkeypatch):
     path = _home(tmp_path, monkeypatch, {"tools": {"exec": {"timeout": 60}}})
     before = path.read_text()
@@ -545,3 +593,81 @@ def test_a_url_with_a_credential_in_it_is_one_to_the_gate_the_card_and_the_scrub
     monkeypatch.setattr(held_secrets, "_cache", None)
     assert "0123456789abcdef0123456789abcdef" not in held_secrets.scrub_held_secrets(f"dsn={dsn}")
     assert "https://api.openai.com/v1" == held_secrets.scrub_held_secrets("https://api.openai.com/v1")
+
+
+def test_a_wildcard_segment_is_an_identity_not_a_field_name(tmp_path, monkeypatch):
+    """``tools.mcpServers.<name>`` names a server; the name is not a schema field.
+
+    Below the top level the helper falls back to the other spelling of a key,
+    which is right for a schema field (``apiBase`` under ``api_base`` is one
+    field read twice) and wrong here: the map is read by exact key, so a path
+    naming ``foo_bar`` reaches the server called ``foo_bar`` or nothing -- never
+    the server called ``fooBar``, which is a different entry with its own
+    command, credentials and enabled flag.
+    """
+    from raven.config.live import LiveConfig, mcp_server_configs
+
+    path = _home(tmp_path, monkeypatch, {"tools": {"mcpServers": {"fooBar": {"enabled": True, "command": "a"}}}})
+
+    assert surface.lookup(surface.read_raw(path), "tools.mcpServers.foo_bar.enabled") == (False, None)
+    assert surface.lookup(surface.read_raw(path), "tools.mcpServers.fooBar.enabled") == (True, True)
+
+    assert surface.write_value("tools.mcpServers.foo_bar.enabled", False) is None
+    assert surface.write_value("tools.mcpServers.foo_bar.args", ["--b"]) is None
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["tools"]["mcpServers"]["fooBar"] == {"enabled": True, "command": "a"}
+    assert data["tools"]["mcpServers"]["foo_bar"] == {"enabled": False, "args": ["--b"]}
+
+    servers = mcp_server_configs(LiveConfig(path))
+    assert servers["fooBar"].enabled is True and servers["fooBar"].command == "a"
+    assert servers["foo_bar"].enabled is False and servers["foo_bar"].args == ["--b"]
+
+
+def test_a_wildcard_segment_updates_the_entry_it_names(tmp_path, monkeypatch):
+    """And when the entry is there, the write lands on it rather than beside it."""
+    from raven.config.live import LiveConfig, mcp_server_configs
+
+    path = _home(
+        tmp_path,
+        monkeypatch,
+        {"tools": {"mcpServers": {"fooBar": {"enabled": True, "command": "a"}, "foo_bar": {"enabled": True}}}},
+    )
+
+    assert surface.write_value("tools.mcpServers.foo_bar.enabled", False) is True
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["tools"]["mcpServers"]["fooBar"] == {"enabled": True, "command": "a"}
+    assert data["tools"]["mcpServers"]["foo_bar"] == {"enabled": False}
+    assert mcp_server_configs(LiveConfig(path))["fooBar"].enabled is True
+
+
+def test_a_schema_segment_keeps_its_spelling_tolerance(tmp_path, monkeypatch):
+    """The rule is per segment, not per file: a field is still read either way.
+
+    ``tools.mcp_servers`` is the snake_case name of a declared field, so a path
+    spelling it that way reads the same block --  the exactness above is for the
+    segment standing in for a map entry, and applying it to every segment would
+    have stopped this working.
+    """
+    path = _home(tmp_path, monkeypatch, {"tools": {"mcpServers": {"fooBar": {"enabled": True}}}})
+    assert surface.lookup(surface.read_raw(path), "tools.mcp_servers.fooBar.enabled") == (True, True)
+    assert surface.write_value("tools.mcp_servers.fooBar.enabled", False) is True
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["tools"]["mcpServers"]["fooBar"]["enabled"] is False
+
+
+def test_a_provider_segment_still_folds_its_spellings(tmp_path, monkeypatch):
+    """``providers.<name>`` is the one map the runtime itself matches loosely.
+
+    ``ProvidersConfig.get`` folds a name through ``names_same_provider``, so a
+    section filed as ``jina`` answers a lookup for ``Jina``. Exactness there
+    would be a second rule for one map, and the wrong one: the section the
+    runtime reads is the section the write has to update.
+    """
+    path = _home(tmp_path, monkeypatch, {"providers": {"jina": {"apiBase": "https://a"}}})
+    assert surface.lookup(surface.read_raw(path), "providers.Jina.apiBase") == (True, "https://a")
+    assert surface.write_value("providers.jina.apiBase", "https://b") == "https://a"
+    assert surface.write_value("providers.Jina.apiKey", "k") is None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["providers"] == {"jina": {"apiBase": "https://b", "apiKey": "k"}}
