@@ -1082,10 +1082,10 @@ def test_checkpoint_upgrade_invalidates_preview_cache(state, clock, monkeypatch)
 
 def test_policy_defaults_and_replacement():
     policy = tpol.TrajectoryPolicy()
-    assert policy.enabled() is False and policy.revision == 0
-    assert tpol.TrajectoryPolicy.fixed(True).enabled() is True
-    policy.replace_source(lambda: True)
-    assert policy.enabled() is True and policy.revision == 1
+    assert policy.enabled() is True and policy.revision == 0
+    assert tpol.TrajectoryPolicy.fixed(False).enabled() is False
+    policy.replace_source(lambda: False)
+    assert policy.enabled() is False and policy.revision == 1
 
 
 # ── review regressions ────────────────────────────────────────────────
