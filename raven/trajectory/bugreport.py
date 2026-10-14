@@ -30,6 +30,8 @@ Record status is ``draft`` -> ``local_ready`` | ``failed`` (retryable only
 while the frozen snapshot verifies). A persisted ``draft`` can only be an
 interrupted process — the normal flow reaches a terminal state in the same
 call — so readers atomically convert it to ``failed`` (crash recovery).
+``upload.state`` is a separate axis (``""`` -> ``uploaded`` | ``failed``) that
+only moves once the record is ``local_ready``: there is nothing to send before.
 """
 
 from __future__ import annotations
@@ -55,7 +57,13 @@ from raven.trajectory.bundle import BUNDLE_FORMAT_VERSION, collect_bundle
 from raven.trajectory.errors import BugReportError as BugReportError
 from raven.trajectory.errors import PreparationError as PreparationError
 from raven.trajectory.redact import KnownSecret, RedactionReport, _variants, collect_known_secrets, redact_bundle
-from raven.trajectory.sanitize import sanitize_export_tree, sanitize_text, scan_absolute_paths, tree_digest
+from raven.trajectory.sanitize import (
+    find_absolute_paths_in_json,
+    sanitize_export_tree,
+    sanitize_text,
+    scan_absolute_paths,
+    tree_digest,
+)
 from raven.trajectory.store import member_traces
 
 if TYPE_CHECKING:
@@ -81,9 +89,15 @@ STATUS_FAILED = "failed"
 PROBLEM_FIELDS = ("description", "expected", "actual", "severity", "steps")
 SEVERITIES = ("low", "medium", "high", "critical")
 
+UPLOAD_STATE_NONE = ""
+UPLOAD_STATE_UPLOADED = "uploaded"
+UPLOAD_STATE_FAILED = "failed"
+UPLOAD_STATES = (UPLOAD_STATE_NONE, UPLOAD_STATE_UPLOADED, UPLOAD_STATE_FAILED)
+
 _STALE_STAGING_SECONDS = 24 * 3600
 _ID_COLLISION_RETRIES = 16
-_REPORT_ID = re.compile(r"^br-\d{8}-[0-9a-f]{6}$")
+REPORT_ID = re.compile(r"^br-\d{8}-[0-9a-f]{6}$")
+_REPORT_ID = REPORT_ID
 
 REASON_INTERRUPTED = "interrupted before the package was written"
 REASON_INTERRUPTED_INCOMPLETE = "interrupted and the snapshot is incomplete; delete the report and file a new one"
@@ -112,6 +126,10 @@ class PackagingError(BugReportError):
 
 class _SnapshotCorruptedError(Exception):
     """Internal: the frozen export tree no longer matches its digest."""
+
+
+def is_report_id(value: object) -> bool:
+    return isinstance(value, str) and REPORT_ID.fullmatch(value) is not None
 
 
 def bugreports_root(state_dir: Path | None = None) -> Path:
@@ -368,7 +386,7 @@ def _validate_record(payload: dict[str, Any], dir_name: str) -> None:
             raise ValueError(f"invalid bug report record ({what}): {dir_name}")
 
     report_id = payload.get("report_id")
-    _check(isinstance(report_id, str) and _REPORT_ID.fullmatch(report_id), "report id")
+    _check(is_report_id(report_id), "report id")
     _check(report_id == dir_name, "report id does not match its directory")
     for key in ("created_at", "raven_version", "reporter"):
         _check(isinstance(payload.get(key), str), key)
@@ -435,6 +453,16 @@ def _validate_record(payload: dict[str, Any], dir_name: str) -> None:
     _check(isinstance(upload, dict), "upload")
     for key in ("state", "issue_url", "receipt"):
         _check(isinstance(upload.get(key), str), f"upload {key}")
+    _check(upload["state"] in UPLOAD_STATES, "upload state")
+    # Absent on records written before uploads existed; validated when present.
+    for key in ("uploaded_at", "error"):
+        if key in upload:
+            _check(isinstance(upload[key], str), f"upload {key}")
+    if upload["state"] == UPLOAD_STATE_UPLOADED:
+        _check(upload["receipt"] != "", "uploaded needs a receipt")
+    elif upload["state"] == UPLOAD_STATE_FAILED:
+        _check(upload.get("error", "") != "", "failed upload needs an error")
+    _check(upload["state"] == UPLOAD_STATE_NONE or status == STATUS_LOCAL_READY, "upload before local_ready")
     links = payload.get("links")
     _check(isinstance(links, dict), "links")
     for key in ("issue", "pr", "regression_case"):
@@ -830,8 +858,8 @@ def _assert_export_ready(prep: ExportPreparation, metadata: dict[str, Any]) -> N
     """The final gate before anything may be shown as shippable.
 
     Manifest, type, and metadata assertions over ``export/``: the files on
-    disk match ``contents`` exactly, all are regular files, and the metadata
-    text carries no absolute path.
+    disk match ``contents`` exactly, all are regular files, and no metadata
+    string (value or key) carries an absolute path.
     """
     export_dir = prep.export_dir
     expected = {entry["path"] for entry in metadata["contents"]}
@@ -849,9 +877,10 @@ def _assert_export_ready(prep: ExportPreparation, metadata: dict[str, Any]) -> N
             f"export manifest mismatch: extra={sorted(actual - expected)} missing={sorted(expected - actual)}"
         )
     metadata_text = (export_dir / PACKAGE_METADATA_FILE).read_text(encoding="utf-8")
-    hits = _metadata_leaks(metadata_text, prep.roots)
+    hits = find_absolute_paths_in_json(json.loads(metadata_text), prep.roots)
     if hits:
-        raise ExportLeakError(f"absolute path leaked into the export: {PACKAGE_METADATA_FILE}: {hits[0]}")
+        where, sample = hits[0]
+        raise ExportLeakError(f"absolute path leaked into the export: {PACKAGE_METADATA_FILE} {where}: {sample}")
     # The record's redaction/problem/completeness fields come from the same
     # prep values this metadata serializes, so this one gate covers both
     # landing surfaces.
@@ -861,17 +890,6 @@ def _assert_export_ready(prep: ExportPreparation, metadata: dict[str, Any]) -> N
         for variant in _variants(secret.value):
             if variant and variant in metadata_text:
                 raise ExportLeakError(f"user-redacted content leaked into the export: {PACKAGE_METADATA_FILE}")
-
-
-def _metadata_leaks(text: str, roots: list[str]) -> list[str]:
-    from raven.trajectory.sanitize import find_absolute_paths
-
-    hits = [text[start:end][:120] for start, end in find_absolute_paths(text)]
-    for root in roots:
-        needle = root.rstrip("/\\")
-        if needle and needle in text:
-            hits.append(needle)
-    return hits
 
 
 def _file_sha256(path: Path) -> str:

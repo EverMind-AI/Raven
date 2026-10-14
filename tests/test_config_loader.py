@@ -1039,7 +1039,10 @@ def test_migration_write_back_does_not_materialise_defaults(tmp_path: Path) -> N
     assert "tools" not in on_disk
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="chmod 0o500 does not block root")
+@pytest.mark.skipif(
+    os.name == "nt" or os.geteuid() == 0,
+    reason="POSIX directory permissions are not enforced on Windows or for root",
+)
 def test_migration_is_correct_even_when_the_file_cannot_be_written(tmp_path: Path) -> None:
     """A read-only home must not brick the boot: the in-memory migration is
     what makes the process correct, the write only keeps the file honest."""
@@ -1127,6 +1130,7 @@ def test_a_clean_config_is_stamped_without_being_touched(tmp_path: Path) -> None
     assert load_config(p).agents.defaults.context_window_tokens == 65536
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not available on Windows")
 def test_migration_preserves_the_config_file_mode(tmp_path: Path) -> None:
     """``os.replace`` swaps the inode, so a replacing writer owns the mode of
     what it puts there. config.json holds providers.*.apiKey -- a user who
@@ -1618,6 +1622,65 @@ def test_an_address_that_is_not_a_string_reads_as_a_schema_error_not_a_crash(tmp
 
     with pytest.raises(ValueError, match="fails schema validation"):
         load_config(p)
+
+
+def test_the_planted_cron_timezone_goes_once_and_a_later_choice_stays(tmp_path: Path) -> None:
+    """Up to 0.1.12 the first-run bootstrap wrote every default to disk, among
+    them ``cron.defaultTimezone: "Asia/Shanghai"``. That value was inert in every
+    release; now that new cron jobs read it, a planted copy would move an
+    upgraded install's "every day at 9" to 9 in Shanghai.
+
+    A config stamped 12 (the literal a shipped build wrote) loses it from the
+    file, in either spelling, hears about it once, and keeps its neighbours. A
+    second load, now stamped current, leaves a zone put back by hand alone."""
+    p = tmp_path / "config.json"
+    _write(p, {"cron": {"defaultTimezone": "Asia/Shanghai", "notifyMissed": True}})
+    _stamp_path(p).write_text(json.dumps({"version": 12}), encoding="utf-8")
+
+    drain_migration_notices()
+    cfg = load_config(p)
+
+    assert cfg.cron.default_timezone is None
+    assert json.loads(p.read_text(encoding="utf-8"))["cron"] == {"notifyMissed": True}
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+    notices = drain_migration_notices()
+    assert len([n for n in notices if "cron.defaultTimezone" in n]) == 1, notices
+
+    _write(p, {"cron": {"defaultTimezone": "Asia/Shanghai", "notifyMissed": True}})
+    assert load_config(p).cron.default_timezone == "Asia/Shanghai"
+    assert json.loads(p.read_text(encoding="utf-8"))["cron"]["defaultTimezone"] == "Asia/Shanghai"
+    assert drain_migration_notices() == []
+
+
+def test_the_cron_timezone_migration_clears_only_the_planted_value() -> None:
+    """The bootstrap only ever wrote ``Asia/Shanghai``, so that exact value is the
+    only one that can be ours. Any other zone, a null, and a config already past
+    the floor are the user's.
+
+    The floors are literals, for the reason
+    test_the_retired_deep_research_section_goes_and_its_disabled_entry_stays gives.
+    """
+    from raven.config import loader
+
+    loader._migration_notices.clear()
+    snake = {"cron": {"default_timezone": "Asia/Shanghai"}}
+    loader._migrate_config(snake, from_version=12)
+    assert snake == {"cron": {}}
+    assert len(loader.drain_migration_notices()) == 1
+
+    loader._migrate_config(snake, from_version=12)
+    assert loader.drain_migration_notices() == []
+
+    for chosen in ("UTC", "Asia/Tokyo", None):
+        data = {"cron": {"defaultTimezone": chosen}}
+        loader._migrate_config(data, from_version=12)
+        assert data == {"cron": {"defaultTimezone": chosen}}
+    assert loader.drain_migration_notices() == []
+
+    stamped = {"cron": {"defaultTimezone": "Asia/Shanghai"}}
+    loader._migrate_config(stamped, from_version=13)
+    assert stamped == {"cron": {"defaultTimezone": "Asia/Shanghai"}}
+    assert loader.drain_migration_notices() == []
 
 
 def test_channels_section_settings_are_not_mistaken_for_channels(tmp_path: Path, caplog) -> None:

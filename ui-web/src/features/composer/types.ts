@@ -4,11 +4,14 @@
  * row that rides the tail of the transcript.
  */
 
-/* A staged file. `path` and `size` are the server's answer once the upload
-   lands; `url` is the data URL kept for display only, and only for an image. */
+/* A staged file. For an upload, `path` and `size` are the server's answer once
+   it lands and `url` is the data URL kept for display; for a file attached
+   where it already is, `path` is its own and `url` the address it is served
+   at. `url` is set only for an image. */
 export interface Attachment {
   name: string
-  size: number
+  /* Null for a file attached where it already is: its bytes were never read here. */
+  size: number | null
   uploading: boolean
   path: string | null
   url: string | null
@@ -29,6 +32,10 @@ export interface UploadReq {
 
 export interface UploadRes {
   path: string
+  /* The file itself, which is what the composer stages: `path` is relative to
+     agent home, and `uploads/<name>` can also name a session root's own file.
+     A test double need not answer one. */
+  abs_path?: string
   size: number
 }
 

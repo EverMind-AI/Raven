@@ -32,6 +32,19 @@ describe('settings store', () => {
     expect(n).toBe(2)
   })
 
+  it('patches the cloud probe into the snapshot when it lands after load', async () => {
+    let land: (c: SettingsSnapshot['everosCloud']) => void = () => {}
+    const probe = new Promise<SettingsSnapshot['everosCloud']>((resolve) => { land = resolve })
+    setSources({ settings: { load: async () => snapOf('m'), everosCloud: () => probe } as unknown as SettingsSource })
+    await store.refresh()
+    expect(store.get().snap.everosCloud ?? null).toBe(null)
+    const cloud = { available: true, selected: true, api_key_set: true, key_source: 'file', base_url: 'http://fake', status: 'ok', hint: null }
+    land(cloud)
+    await probe
+    await Promise.resolve()
+    expect(store.get().snap.everosCloud).toEqual(cloud)
+  })
+
   it('setTab closes every drawer of the section it leaves', () => {
     store.set({ provider: 'openai', sheet: { slug: 'openai', q: '', state: 'ready', items: [], kind: 'all', picked: [], typed: null }, skill: 's', toolOpen: 'exec', plugOpen: 'p', err: 'oops' })
     store.setTab('tools')

@@ -4,6 +4,7 @@ import { useSyncExternalStore } from 'react'
 import { AgentMark, isOwnAgent } from '../../components/AgentMark'
 import { SendGlyph } from '../../components/Ico'
 import { t } from '../../i18n/t'
+import { agentKindLabel } from '../../lib/agentKind'
 import * as lang from '../../state/lang'
 import { ds } from '../../state/sources'
 import { composing, fmtSize } from '../composer/store'
@@ -294,7 +295,7 @@ export function AgentList({ s, onOpen, compact = false }: {
                 </span>
                 <AgentMark preset={registered?.preset} own={isOwnAgent(registered)} />
                 <b title={name}>{name}</b>
-                <span className="agent-kind">{registered?.kind || children[0]?.kind || 'agent'}</span>
+                <span className="agent-kind">{agentKindLabel(registered?.kind || children[0]?.kind)}</span>
               </button>
               {/* Outside the head, not inside it: the head is a button, and a
                   button cannot hold another one.
@@ -457,7 +458,8 @@ function InstanceComposer(
   }
   const up = uploader()
   /* The page composer's `addFiles`, for one instance: bytes go up through the
-     same seam into <workspace>/uploads, and the message carries paths. */
+     same seam into <workspace>/uploads, and the message carries paths -- an
+     upload's being the file it wrote, as the main composer stages it. */
   const addFiles = (files: ArrayLike<File>): void => {
     if (!up) return
     Array.from(files).forEach((file) => {
@@ -469,7 +471,7 @@ function InstanceComposer(
         const b64 = String(reader.result).split(',')[1] || ''
         up({ name: file.name, content_b64: b64 })
           .then((r) => {
-            entry.path = r.path
+            entry.path = r.abs_path || r.path
             entry.size = r.size
             entry.uploading = false
             paintAtts(held.current.slice())

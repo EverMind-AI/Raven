@@ -22,9 +22,11 @@ import * as session from '../lib/session'
 import * as confirmStore from '../state/confirm'
 import * as ctx from '../state/ctxChip'
 import * as lang from '../state/lang'
+import * as mentions from '../state/mentions'
 import * as pageStore from '../state/page'
 import * as perm from '../state/perm'
 import * as plus from '../state/plus'
+import { mediaOf } from '../state/session/runtime'
 import { setSources } from '../state/sources'
 import * as tier from '../state/tier'
 import * as wd from '../state/workdir'
@@ -122,7 +124,7 @@ describe('the dock', () => {
     render()
     for (const id of [
       'sheetRack', 'queued', 'ta',
-      'plusBtn', 'wdChip', 'wdName', 'permChip', 'permName', 'envChip', 'envName', 'meter', 'ctxChip',
+      'plusBtn', 'atBtn', 'permChip', 'permName', 'envChip', 'envName', 'meter', 'ctxChip',
       'modelChip', 'modelName', 'go',
       'slashPop', 'slashList', 'plusPop', 'wdPop', 'permPop', 'wdTag',
     ]) {
@@ -140,7 +142,7 @@ describe('the dock', () => {
     expect(el('wdPop').getAttribute('role')).toBe('dialog')
     expect(el('wdPop').dataset.view).toBe('menu')
     expect(el('plusBtn').getAttribute('aria-haspopup')).toBe('true')
-    expect(el('wdChip').getAttribute('aria-haspopup')).toBe('true')
+    expect(el('atBtn').getAttribute('aria-haspopup')).toBe('true')
     expect(el('permChip').getAttribute('aria-haspopup')).toBe('true')
     expect(el('permChip').getAttribute('aria-expanded')).toBe('false')
     expect(el('modelChip').getAttribute('aria-haspopup')).toBe('true')
@@ -148,11 +150,9 @@ describe('the dock', () => {
     expect(ta().placeholder).not.toBe('')
     /* Four things the page is served hidden or disabled: the "+" waits for the
        composer's first repaint to say what it can offer, and the title tag for
-       a conversation. The workspace chip is a draft's, and the page is served
-       on a draft. */
+       a conversation. The page is served on a draft. */
     expect(el('envChip').hidden).toBe(true)
     expect(anchor('plusBtn').hidden).toBe(true)
-    expect(anchor('wdChip').hidden).toBe(false)
     expect(el('wdTag').hidden).toBe(true)
     expect(el('ctxChip').hidden).toBe(true)
     expect((el('go') as HTMLButtonElement).disabled).toBe(true)
@@ -205,23 +205,25 @@ describe('the dock', () => {
     expect([...el('plusPop').querySelectorAll('.prow .nm')].map((n) => n.textContent)).toEqual(['t:gui.plus.template'])
   })
 
-  /* The chip is a draft's: it names the default, then the folder picked, and
-     opens the folder list off itself. A conversation cannot change its folder,
-     so the chip goes and the tag beside the title says which folder it is. */
-  it('shows the workspace chip on a draft and the title tag in a conversation', () => {
+  /* The folder is a draft's to choose, from the "@" menu's row; the popover it
+     is chosen from hangs off that button. A conversation cannot change its
+     folder, so the row is not offered and the tag beside the title says which
+     folder it is. */
+  it('chooses the folder from the at menu on a draft, and says it beside the title in a conversation', () => {
     render()
     act(() => { wd.draw() })
-    expect(anchor('wdChip').hidden).toBe(false)
-    expect(el('wdName').textContent).toBe('t:gui.wd.none')
     expect(el('wdTag').hidden).toBe(true)
     act(() => { wd.pick('/w/thesis') })
-    expect(el('wdName').textContent).toBe('thesis')
-    expect(el('wdChip').className).toBe('chip chrome-wd-set')
-    act(() => { el('wdChip').click() })
+    act(() => { el('atBtn').click() })
+    act(() => {
+      ;[...el('atPop').querySelectorAll<HTMLElement>('.prow')]
+        .find((row) => row.textContent?.includes('t:gui.at.folder'))!
+        .click()
+    })
     expect(el('wdPop').dataset.open).toBe('true')
-    expect(el('wdPop').closest('.chrome-anch')).toBe(anchor('wdChip'))
-    act(() => { el('wdChip').click() })
-    expect(el('wdPop').dataset.open).toBe('false')
+    /* Under the same anchor as the button that raised it, which is what the
+       stylesheet hangs it off. */
+    expect(el('wdPop').closest('.chrome-anch')).toBe(anchor('atBtn'))
 
     setSources({
       rail: {
@@ -232,7 +234,6 @@ describe('the dock', () => {
     })
     session.setCurrent('s1')
     act(() => { wd.draw() })
-    expect(anchor('wdChip').hidden).toBe(true)
     expect(el('wdTag').hidden).toBe(false)
     expect(el('wdTag').textContent).toBe('thesis')
     expect(el('wdTag').title).toBe('/w/thesis')
@@ -282,12 +283,13 @@ describe('the dock', () => {
      leaves an empty onclick on every element it takes a click of (the trap that
      makes clicks fire on iOS), so a bare .onclick is what says the element is
      still the other writer's, and that trap is what says the buttons are this
-     tree's (src/chrome/PlusMenu.tsx, src/chrome/WorkdirChip.tsx,
-     src/chrome/PermChip.tsx, src/chrome/ModelChip.tsx). */
+     tree's (src/chrome/PlusMenu.tsx, src/chrome/AtMenu.tsx,
+     src/chrome/WorkdirChip.tsx, src/chrome/PermChip.tsx,
+     src/chrome/ModelChip.tsx). */
   it('takes the chips, and leaves the send button to the module that owns it', () => {
     render()
     expect(el('go').onclick).toBe(null)
-    const OWN = ['plusBtn', 'wdChip', 'permChip', 'modelChip']
+    const OWN = ['plusBtn', 'atBtn', 'permChip', 'modelChip']
     for (const id of OWN) expect(typeof el(id).onclick, id).toBe('function')
     for (const node of dock().querySelectorAll('*')) {
       if (OWN.includes(node.id)) continue
@@ -464,7 +466,7 @@ describe('the bar under the field', () => {
 
   it('lets every box between a label and the bar give, and ends the label in an ellipsis', () => {
     styled()
-    for (const id of ['wdName', 'permName', 'modelName', 'meter']) {
+    for (const id of ['permName', 'modelName', 'meter']) {
       for (const n of upTo(id)) {
         const at = `${id} at ${n.id || n.className}`
         expect(style(n).minWidth, at).toMatch(/^0(px)?$/)
@@ -482,7 +484,7 @@ describe('the bar under the field', () => {
      width -- a short name stays whole while a long one gives. */
   it('shares what the controls leave equally, each at most its own width', () => {
     styled()
-    for (const n of [anchor('wdChip'), anchor('permChip'), el('modelChip'), el('meter')]) {
+    for (const n of [anchor('permChip'), el('modelChip'), el('meter')]) {
       const at = n.id || (n.firstElementChild as Element).id
       expect([style(n).flexGrow, style(n).maxWidth], at).toEqual(['1', 'max-content'])
       expect(style(n).flexBasis, at).toMatch(/^0(px|%)?$/)
@@ -514,9 +516,19 @@ describe('the anchored popovers', () => {
     readonly close: () => void
     readonly isOpen: () => boolean
   }
-  const POPOVERS: ReadonlyArray<{ name: string, pop: string, chip: string, popover: Popover }> = [
+  /* `toggles` is false for the folder, which is the one popover with no button
+     of its own: it is raised from a row of the "@" menu, which shares its
+     anchor. Everything else about it is every other popover's. */
+  const POPOVERS: ReadonlyArray<{
+    name: string
+    pop: string
+    chip: string
+    popover: Popover
+    toggles?: boolean
+  }> = [
     { name: 'plus', pop: 'plusPop', chip: 'plusBtn', popover: plus },
-    { name: 'workdir', pop: 'wdPop', chip: 'wdChip', popover: wd },
+    { name: 'at', pop: 'atPop', chip: 'atBtn', popover: mentions },
+    { name: 'workdir', pop: 'wdPop', chip: 'atBtn', popover: wd, toggles: false },
     { name: 'perm', pop: 'permPop', chip: 'permChip', popover: perm },
   ]
 
@@ -527,10 +539,13 @@ describe('the anchored popovers', () => {
     act(() => { composer.goPaint(); wd.draw() })
   }
 
-  it('stands beside its chip, in the card, open or closed', () => {
+  it('stands in its button\'s anchor, in the card, open or closed', () => {
     ready()
     for (const { name, pop, chip, popover } of POPOVERS) {
-      expect(el(pop).previousElementSibling, name).toBe(el(chip))
+      /* The anchor its button is in, which is what the stylesheet hangs it
+         off. Not the button's immediate sibling: one anchor carries two
+         popovers, because one button raises both. */
+      expect(el(pop).parentElement, name).toBe(anchor(chip))
       expect(el(pop).parentElement!.className, name).toBe('chrome-anch')
       popover.open()
       expect(el(pop).dataset.open, name).toBe('true')
@@ -547,7 +562,8 @@ describe('the anchored popovers', () => {
      step moved it into the component. */
   it('takes exactly one handler per chip, so one press toggles once', () => {
     ready()
-    for (const { name, chip, popover } of POPOVERS) {
+    for (const { name, chip, popover, toggles } of POPOVERS) {
+      if (toggles === false) continue
       act(() => { el(chip).click() })
       expect(popover.isOpen(), name).toBe(true)
       expect(el(chip).getAttribute('aria-expanded'), name).toBe('true')
@@ -588,5 +604,146 @@ describe('the anchored popovers', () => {
       expect(el(pop).dataset.open, name).toBe('true')
       expect(document.querySelectorAll(`#${pop}`), name).toHaveLength(1)
     }
+  })
+})
+
+/* A picture dragged out of the transcript names its file in `text/uri-list`,
+   by this origin's own /file route, and the field attaches that file where it
+   is rather than reading the picture and sending it up as a second copy. A drag
+   is taken at its word only when it began in this document: any site the
+   reader drags from can put one of these addresses in the list just as well. */
+describe('a drop onto the field', () => {
+  /* state/globalListeners registers the two drag listeners with the
+     document's other listeners, which this harness does not install; a case
+     here registers just those two. */
+  beforeEach(() => {
+    document.addEventListener('dragstart', composer.onPageDragStart)
+    document.addEventListener('dragend', composer.onPageDragEnd)
+  })
+  afterEach(() => {
+    document.removeEventListener('dragstart', composer.onPageDragStart)
+    document.removeEventListener('dragend', composer.onPageDragEnd)
+  })
+  const fileAt = (path: string): string => `${location.origin}/file?path=${encodeURIComponent(path)}&session=s1`
+  const carrying = (uris: string[], files: File[] = []): DataTransfer => {
+    const dt = new DataTransfer()
+    dt.setData('text/uri-list', uris.join('\r\n'))
+    for (const file of files) dt.items.add(file)
+    return dt
+  }
+  /* happy-dom builds a drag event as a plain Event, so the transfer goes on by hand. */
+  const fire = (type: string, target: Element, dt: DataTransfer): void => {
+    const ev = new Event(type, { bubbles: true, cancelable: true })
+    Object.defineProperty(ev, 'dataTransfer', { value: dt })
+    act(() => { target.dispatchEvent(ev) })
+  }
+  const field = (): Element => ta().closest('.field') as Element
+  /* What a drag starts from: anything in the document, since the document is what listens. */
+  const picture = (): Element => document.body.appendChild(document.createElement('img'))
+  /* FileReader lands on a macrotask, so an upload starts two turns of the loop after the drop. */
+  const settle = async (): Promise<void> => {
+    await act(async () => {
+      for (let i = 0; i < 4; i += 1) await new Promise((r) => setTimeout(r, 0))
+    })
+  }
+  const staged = (): Array<string | null> => store.get().atts.map((a) => a.path)
+  const ready = (): { upload: ReturnType<typeof vi.fn> } => {
+    const upload = vi.fn(async (req: { name: string }) => ({ path: `uploads/${req.name}`, size: 4 }))
+    render({ upload })
+    composer.install()
+    return { upload }
+  }
+
+  /* Chrome on macOS hands the same picture over as a File named `download` as
+     well; the address wins, so nothing goes up twice. */
+  it('attaches the file a picture dragged out of this document names, and sends nothing up', async () => {
+    const { upload } = ready()
+    const dt = carrying([fileAt('uploads/shot.png'), fileAt('/work/out/chart.png')],
+      [new File(['x'], 'download', { type: 'image/png' })])
+    fire('dragstart', picture(), dt)
+    fire('drop', field(), dt)
+    await settle()
+    expect(upload).not.toHaveBeenCalled()
+    expect(staged()).toEqual(['uploads/shot.png', '/work/out/chart.png'])
+  })
+
+  it('leaves an address alone when its drag began elsewhere, and uploads what the drop carries', async () => {
+    const { upload } = ready()
+    fire('drop', field(), carrying([fileAt('/etc/passwd')], [new File(['x'], 'shot.png', { type: 'image/png' })]))
+    await settle()
+    expect(upload).toHaveBeenCalledTimes(1)
+    expect(staged()).toEqual(['uploads/shot.png'])
+  })
+
+  it('takes only a file its own drag carried, and only while that drag lasts', async () => {
+    const { upload } = ready()
+    const shot = carrying([fileAt('uploads/shot.png')])
+    fire('dragstart', picture(), carrying([fileAt('uploads/shot.png')]))
+    /* Not what the drag carried, and then the drag is spent: a drop ends it. */
+    fire('drop', field(), carrying([fileAt('/etc/passwd')]))
+    fire('drop', field(), shot)
+    fire('dragstart', picture(), shot)
+    fire('dragend', picture(), shot)
+    fire('drop', field(), shot)
+    await settle()
+    expect(upload).not.toHaveBeenCalled()
+    expect(staged()).toEqual([])
+    /* The same drop, from a drag that is still under way, is taken. */
+    fire('dragstart', picture(), shot)
+    fire('drop', field(), shot)
+    expect(staged()).toEqual(['uploads/shot.png'])
+  })
+
+  it('takes an address only on this origin and only on the /file route', async () => {
+    ready()
+    const dt = carrying([
+      'http://elsewhere.example/file?path=%2Fetc%2Fpasswd',
+      `${location.origin}/files/download?token=t&path=%2Fetc%2Fpasswd`,
+      `${location.origin}/file`,
+      fileAt('uploads/shot.png'),
+    ])
+    fire('dragstart', picture(), dt)
+    fire('drop', field(), dt)
+    await settle()
+    expect(staged()).toEqual(['uploads/shot.png'])
+  })
+
+  /* The platform's drag plumbing may respell the address on the way through;
+     the file it names is what has to match. */
+  it('matches the dropped file to the dragged one by its path, not by how the address is spelled', () => {
+    ready()
+    fire('dragstart', picture(), carrying([`${location.origin}/file?path=uploads%2fshot.png&session=s1`]))
+    fire('drop', field(), carrying([`${location.origin}/file?session=s1&path=uploads/shot.png`]))
+    expect(staged()).toEqual(['uploads/shot.png'])
+  })
+
+  /* `uploads/shot.png` can name two files: what an upload wrote under agent
+     home, and a session root's own file, which the workspace pane lists and a
+     drag stages by that spelling. An upload staged earlier must not answer for
+     the dragged one, so the two are told apart where they are staged. */
+  it('hands the turn a dragged file, not an earlier upload of the same name', async () => {
+    const upload = vi.fn(async (req: { name: string }) => ({
+      path: `uploads/${req.name}`,
+      abs_path: `/home/me/.raven/workspace/uploads/${req.name}`,
+      size: 4,
+    }))
+    render({ upload })
+    /* The i18n catalogue's own words: the send reads the note back by its heading. */
+    resetTranslator()
+    composer.install()
+    fire('drop', field(), carrying([], [new File(['x'], 'shot.png', { type: 'image/png' })]))
+    await settle()
+    act(() => { store.fireSend() })
+    const dt = carrying([fileAt('uploads/shot.png')])
+    fire('dragstart', picture(), dt)
+    fire('drop', field(), dt)
+    await settle()
+    act(() => { store.fireSend() })
+
+    expect(upload).toHaveBeenCalledTimes(1)
+    expect(sent.map((text) => mediaOf(text).media)).toEqual([
+      ['/home/me/.raven/workspace/uploads/shot.png'],
+      ['uploads/shot.png'],
+    ])
   })
 })

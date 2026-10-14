@@ -317,3 +317,68 @@ async def test_a_refusal_carries_the_servers_own_sentence(monkeypatch):
 
     with pytest.raises(InternalError, match="set enable_llm_rerank=true"):
         await memory.memory_list({"kind": "agent_case", "q": "x"})
+
+
+# ── the cloud backend behind the same page ───────────────────────────────
+
+
+def _raven_config(backend, slice_=None):
+    plugins = SimpleNamespace(config={"everos-cloud-memory": slice_ or {}})
+    return SimpleNamespace(memory=SimpleNamespace(backend=backend, user_id="u1", agent_id="a1"), plugins=plugins)
+
+
+@pytest.mark.asyncio
+async def test_cloud_backend_adds_bearer_header_and_skips_health(monkeypatch):
+    """With ``memory.backend = "everos-cloud"`` the page reads the cloud slice,
+    sends the key as a Bearer header and never asks the OSS ``/health``."""
+    import httpx
+
+    monkeypatch.undo()  # the autouse ``_cfg`` stub stands in for the local plugin; this test wants the real one
+    monkeypatch.setattr(
+        "raven.config.raven.load_raven_config",
+        lambda: _raven_config("everos-cloud", {"api_key": "ecm-key-7f3a", "base_url": "http://cloud.test"}),
+    )
+
+    def _boom(*a, **k):
+        raise AssertionError("the cloud backend must not probe /health")
+
+    monkeypatch.setattr("raven_everos.health.probe_capabilities", _boom)
+    seen: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"data": {"episodes": [], "total_count": 0, "count": 0}})
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(_handler), **kw))
+
+    assert memory._cfg() == ("http://cloud.test", "u1", "a1")
+    assert memory._auth_headers() == {"Authorization": "Bearer ecm-key-7f3a"}
+    assert await memory._search_tuning("http://cloud.test", "profile") == {"include_profile": True}
+    assert await memory._search_tuning("http://cloud.test", "agent_case") == {}
+    await memory._post("http://cloud.test", "/api/v2/memory/get", {"user_id": "u1", "memory_type": "episode"})
+    assert seen[0].headers["authorization"] == "Bearer ecm-key-7f3a"
+    assert seen[0].url.path == "/api/v2/memory/get"
+
+
+@pytest.mark.asyncio
+async def test_everos_backend_sends_no_header_and_keeps_its_probe(monkeypatch):
+    monkeypatch.undo()
+    monkeypatch.setattr("raven.config.raven.load_raven_config", lambda: _raven_config("everos"))
+    monkeypatch.setattr("raven_everos.health.probe_capabilities", _server_that(embedding=False, rerank=True))
+    assert memory._auth_headers() == {}
+    assert await memory._search_tuning("http://x", "episode") == {"method": "keyword"}
+
+
+def test_missing_cloud_distribution_note_names_it(monkeypatch):
+    monkeypatch.undo()
+    monkeypatch.setattr("raven.config.raven.load_raven_config", lambda: _raven_config("everos-cloud"))
+    monkeypatch.setattr("importlib.util.find_spec", lambda name: None if name == "raven_everos_cloud" else object())
+    note = memory._unavailable_note()
+    assert note is not None and "everos-cloud-memory" in note and "everos-cloud" in note
+
+
+def test_installed_cloud_distribution_means_the_page_is_available(monkeypatch):
+    monkeypatch.undo()
+    monkeypatch.setattr("raven.config.raven.load_raven_config", lambda: _raven_config("everos-cloud"))
+    assert memory._unavailable_note() is None

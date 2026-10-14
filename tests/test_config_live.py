@@ -40,6 +40,59 @@ def _write(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+class TestCronTimezoneAdmission:
+    @pytest.mark.parametrize("spelling", ["defaultTimezone", "default_timezone"])
+    @pytest.mark.parametrize("invalid", [7, False, "", "Not/AZone", [], {}])
+    def test_invalid_edits_keep_the_last_zone(self, tmp_path, spelling, invalid):
+        path = tmp_path / "config.json"
+        live = LiveConfig(path)
+        _write(path, {"cron": {spelling: "UTC"}})
+        assert live_module.cron_default_timezone(live) == "UTC"
+        _write(path, {"cron": {spelling: invalid}})
+        assert live_module.cron_default_timezone(live) == "UTC"
+        _write(path, {"cron": {spelling: "Europe/Paris"}})
+        assert live_module.cron_default_timezone(live) == "Europe/Paris"
+
+    @pytest.mark.parametrize("spelling", ["defaultTimezone", "default_timezone"])
+    def test_null_returns_new_jobs_to_local_time(self, tmp_path, spelling):
+        path = tmp_path / "config.json"
+        live = LiveConfig(path)
+        _write(path, {"cron": {spelling: "UTC"}})
+        assert live_module.cron_default_timezone(live) == "UTC"
+        _write(path, {"cron": {spelling: None}})
+        assert live_module.cron_default_timezone(live) is None
+
+    @pytest.mark.parametrize("removed", [{}, {"cron": {}}])
+    def test_removal_forgets_the_admitted_zone(self, tmp_path, removed):
+        path = tmp_path / "config.json"
+        live = LiveConfig(path)
+        _write(path, {"cron": {"defaultTimezone": "UTC"}})
+        assert live_module.cron_default_timezone(live) == "UTC"
+        _write(path, removed)
+        assert live_module.cron_default_timezone(live) is None
+        _write(path, {"cron": {"defaultTimezone": 7}})
+        assert live_module.cron_default_timezone(live) is None
+
+    @pytest.mark.parametrize("invalid", [None, [], 7])
+    def test_an_invalid_section_keeps_the_zone_without_changing_initial_defaults(self, tmp_path, invalid):
+        path = tmp_path / "config.json"
+        live = LiveConfig(path)
+        _write(path, {"cron": invalid})
+        assert live_module.cron_default_timezone(live) is None
+        _write(path, {"cron": {"default_timezone": "UTC"}})
+        assert live_module.cron_default_timezone(live) == "UTC"
+        _write(path, {"cron": invalid})
+        assert live_module.cron_default_timezone(live) == "UTC"
+
+    def test_alias_precedence_matches_the_schema(self, tmp_path):
+        path = tmp_path / "config.json"
+        live = LiveConfig(path)
+        _write(path, {"cron": {"defaultTimezone": "UTC", "default_timezone": "Europe/Paris"}})
+        assert live_module.cron_default_timezone(live) == "UTC"
+        _write(path, {"cron": {"defaultTimezone": 7, "default_timezone": "Europe/Paris"}})
+        assert live_module.cron_default_timezone(live) == "UTC"
+
+
 class TestReadingNowRatherThanOnce:
     def test_a_change_on_disk_is_the_next_answer(self, tmp_path: Path) -> None:
         path = tmp_path / "config.json"

@@ -29,12 +29,14 @@ import os
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from raven.acp_client import remote
 from raven.acp_client.acp_dialects import AcpDialect, ToolCall, content_texts, dialect_for
 from raven.acp_client.ask_user import AskUserResponder, clarify_responder
 from raven.acp_client.capabilities import (
@@ -50,6 +52,7 @@ from raven.acp_client.protocol import (
     SESSION_MCP_CAPABILITY,
     STEER_METHOD,
     AcpBusyError,
+    AcpConnectionError,
     AcpError,
     AcpRemoteError,
     AcpTimeoutError,
@@ -72,7 +75,9 @@ from raven.agent.tools.removals import RemovalWatch
 from raven.agent.tools.snapshot import take as take_snapshot
 from raven.contracts.subagent_backend import SubagentActionAbortedError
 from raven.contracts.tool import FileChange
+from raven.home import subagent_role_env
 from raven.mcp.endpoint import McpEndpoints, bridge_command
+from raven.ops import remote_path
 from raven.spine.message import Media
 
 if TYPE_CHECKING:
@@ -114,6 +119,23 @@ def _uploads_root() -> Path | None:
         return Path(load_config().workspace_path)
     except Exception:
         return None
+
+
+@dataclass(frozen=True)
+class _OnMachine:
+    """One dispatch's place on its machine, resolved through the machine's Raven node."""
+
+    target: remote.Machine
+    root: str
+    """Where the agent process starts there: the entry's ``remoteCwd`` or the default, as written."""
+    session_cwd: str
+    """The session's directory under the root, made there and resolved to an absolute path."""
+    since: float
+    """The machine's clock as the session directory was made: what counts as the session's output comes after."""
+    link: Any
+    """The machine's node pool, for the files sent there and brought back."""
+    launcher: Callable[[], Awaitable[Any]]
+    """Starts the agent through the node; what the pool runs the connection over."""
 
 
 class AcpEmptyTurnError(RuntimeError):
@@ -241,6 +263,7 @@ class _TurnCollector:
         prompt: str | None = None,
         workspace: Path | None = None,
         limit: int | None = None,
+        track_files: bool = True,
     ) -> None:
         # The reply's cap, renewed for every message rather than spent across
         # the turn: the reply is one message, and narration spending a shared
@@ -273,6 +296,10 @@ class _TurnCollector:
         # of its commands produced is only ever visible as a directory that
         # changed around the call, which is what the per-call listings are for.
         self._workspace = workspace
+        # Off for an agent on another machine: its paths name that machine's
+        # disk, so a listing here would see none of its files, and a path it
+        # wrote that is absent here would be recorded as a delete.
+        self._track_files = track_files
         self._blocks: dict[str, dict[str, list[dict[str, Any]]]] = {}
         self._listings: dict[str, Any] = {}
         self._settled_calls: set[str] = set()
@@ -442,7 +469,8 @@ class _TurnCollector:
                         }
                     )
                     self._backfill_subject(str(update.get("toolCallId") or ""), update)
-            await self._note_files(update)
+            if self._track_files:
+                await self._note_files(update)
         elif kind == "plan":
             self._plan(update)
         elif kind == "usage_update":
@@ -1013,10 +1041,16 @@ class AcpAgentBackend:
         allow_mcp_secrets: bool = False,
         session_mcp: bool = True,
         pool: Any = None,
+        machine: str | None = None,
+        remote_cwd: str | None = None,
     ) -> None:
         self.name = name
         self.command = command
         self.cwd = cwd
+        # The registered machine this agent runs on, or None for this computer;
+        # see ``raven.acp_client.remote`` for what changes when it is set.
+        self.machine = (machine or "").strip() or None
+        self.remote_cwd = remote_cwd
         self.env = env or {}
         self.ready_timeout_ms = ready_timeout_ms
         self.timeout = timeout
@@ -1338,7 +1372,7 @@ class AcpAgentBackend:
         """
         from raven.agent.subagent.backends import session_mcp_delivered
 
-        return not session_mcp_delivered(session_mcp=self.session_mcp, snapshot=self._snapshot)
+        return not session_mcp_delivered(session_mcp=self.session_mcp, snapshot=self._snapshot, machine=self.machine)
 
     def _mcp_note(self, grant: McpGrant) -> str:
         """Every secret-free reason this dispatch's MCP is degraded.
@@ -1352,7 +1386,12 @@ class AcpAgentBackend:
         notes = []
         if self._session_mcp_refused and grant.granted:
             names = ", ".join(repr(server.name) for server in grant.granted)
-            if not self.session_mcp:
+            if self.machine:
+                notes.append(
+                    f"MCP servers {names} were not lent to acp agent {self.name!r}: it runs on machine "
+                    f"{self.machine!r}, and the host's servers are reached through a socket on this computer"
+                )
+            elif not self.session_mcp:
                 notes.append(
                     f"MCP servers {names} were withheld because acp agent {self.name!r} is configured as not "
                     f"keeping one session's servers to that session (sessionMcp: false); raven pools one "
@@ -1432,7 +1471,9 @@ class AcpAgentBackend:
                         "acp agent {!r}: withholding {} MCP server(s); {}",
                         self.name,
                         len(grant.granted),
-                        "configured as not keeping a session's servers to that session (sessionMcp: false)"
+                        f"it runs on machine {self.machine!r}"
+                        if self.machine
+                        else "configured as not keeping a session's servers to that session (sessionMcp: false)"
                         if not self.session_mcp
                         else f"a raven build with no {SESSION_MCP_CAPABILITY} declaration",
                     )
@@ -1510,8 +1551,22 @@ class AcpAgentBackend:
         # it, so it must be the caller's workspace whatever the entry pinned.
         # Conflating them sent a pinned entry's own folder to `session/new`, and
         # the agent then edited that tree instead of the caller's.
-        launch_cwd = self.cwd or str(workspace)
-        session_cwd = str(workspace)
+        # An agent on another machine has neither: its machine's Raven node
+        # starts it in the entry's root there, and the session works in a
+        # directory made under that root (`_on_machine`), never in this
+        # computer's workspace, which does not exist there.
+        launched = await self._on_machine(handle) if self.machine else None
+        if launched is not None:
+            launch_cwd = launched.root
+            session_cwd = launched.session_cwd
+        else:
+            launch_cwd = self.cwd or str(workspace)
+            session_cwd = str(workspace)
+        # Nothing is carried to the machine: the files that come with the
+        # task are named to the agent by address, and it looks for them there.
+        sent_text = task
+        if launched is not None and (note := remote.files_note(media, launched.target)):
+            sent_text = f"{task}\n\n{note}"
         started = time.monotonic()
         grant = mcp_grant if mcp_grant is not None else await self.resolve_mcp_grant_async(mcps)
         async with self._mcp_endpoints(task_id, grant) as mcp_servers:
@@ -1533,13 +1588,16 @@ class AcpAgentBackend:
                 # binding gets a connection of its own and the two coexist.
 
                 binding: dict[str, str] = {}
-                if model:
+                if model and launched is None:
                     binding["RAVEN_PARENT_MODEL"] = model
                 parent_provider = str(getattr(provider, "provider_name", "") or "")
-                if parent_provider:
+                # Not for an agent on another machine: the binding is launch
+                # environment for a process of raven's own, and there it would
+                # start a second agent process per parent model for nothing.
+                if parent_provider and launched is None:
                     binding["RAVEN_PARENT_PROVIDER"] = parent_provider
                 parent_protocol = str(getattr(provider, "api_protocol", "") or "")
-                if parent_protocol:
+                if parent_protocol and launched is None:
                     binding["RAVEN_PARENT_PROTOCOL"] = parent_protocol
                 # One of raven's own with no pin of its own follows the parent.
                 # The binding above puts a fresh worker on the parent's model at
@@ -1562,6 +1620,10 @@ class AcpAgentBackend:
                     env=dict(self.env),
                     binding=binding or None,
                     ready_timeout_s=budget,
+                    # On a machine the node starts the process (`launcher`);
+                    # the command, root and env still key the connection.
+                    machine=self.machine,
+                    launcher=launched.launcher if launched is not None else None,
                 )
                 client = connection.client
                 # Marked after acquire, so a call's range covers its own traffic and
@@ -1609,8 +1671,9 @@ class AcpAgentBackend:
                     on_delta,
                     dialect_for(connection.initialize),
                     prompt=task,
-                    workspace=Path(session_cwd),
+                    workspace=Path(session_cwd) if launched is None else None,
                     limit=self.max_output_chars,
+                    track_files=launched is None,
                 )
                 # Built here, in the turn's context, for the reason `_TurnCollector`
                 # documents: the read loop's ContextVars predate this run, and the
@@ -1647,8 +1710,11 @@ class AcpAgentBackend:
                                 # text, the block an editor sends for an @-mentioned
                                 # file; see raven.agent.subagent.attachments.
                                 "prompt": [
-                                    {"type": "text", "text": task},
-                                    *attachment_blocks(media, root=_uploads_root()),
+                                    {"type": "text", "text": sent_text},
+                                    # Links to this computer's files, which an agent
+                                    # on another machine cannot open; the manager has
+                                    # already told the caller they were not sent.
+                                    *(attachment_blocks(media, root=_uploads_root()) if launched is None else ()),
                                 ],
                             },
                             timeout=_prompt_deadline(self.timeout),
@@ -1758,13 +1824,60 @@ class AcpAgentBackend:
                     await self._registry.commit(skey, self.name, handle, session_id, kind="acp")
 
                 reply = await self._finished(collector.reply, stop_reason=stop_reason, span=span, sink=on_delta)
-                if note := self._mcp_note(grant):
+                notes = [self._mcp_note(grant)]
+                if launched is not None:
+                    # Where to find what it made: the caller's workspace line names
+                    # this computer, and what it wrote is there, by address --
+                    # nothing is brought back unasked.
+                    notes.append(
+                        f"Ran on machine {launched.target.label}, in "
+                        f"{remote.shown(launched.target, session_cwd)}; the files it wrote are there, "
+                        "not on this computer -- read_file, list_dir, find, grep, write_file and edit_file take "
+                        "that path as it is, and deliver_files fetches one by it"
+                    )
+                for note in filter(None, notes):
                     notice = f"\n\n[raven] {note}."
                     activity.append_closing(notice)
                     if on_delta is not None:
                         await on_delta(notice)
                     reply += notice
                 return reply
+
+    async def _on_machine(self, handle: str) -> _OnMachine:
+        """This dispatch's place on its machine, or a connection error that says why not.
+
+        The session directory is made fresh for every dispatch, never cached:
+        one removed on the machine between two dispatches would otherwise be
+        named to ``session/new`` and refused there, and the round trip costs
+        milliseconds on the link against a turn. The launcher is handed to the
+        pool, which calls it only when no connection of this entry is live.
+        """
+        try:
+            target = await asyncio.to_thread(remote.machine, self.machine or "")
+        except remote.RemoteMachineError as exc:
+            raise AcpConnectionError(f"acp agent {self.name!r}: {exc}") from None
+        link = remote_path.nodes()
+        if link is None:
+            raise AcpConnectionError(
+                f"acp agent {self.name!r}: this process does not reach registered machines, so it cannot run on "
+                f"machine {target.label}"
+            )
+        root = remote.root_of(self.remote_cwd)
+        try:
+            session_cwd, since = await link.session_dir(target.id, remote.session_root(self.remote_cwd, handle))
+        except remote_path.NodeCallError as exc:
+            raise AcpConnectionError(f"acp agent {self.name!r}: {exc}") from None
+        # The role goes on before the entry's own map, as the local launch
+        # puts it; the host's identity stays here, where it means something.
+        env = {**subagent_role_env(), **self.env}
+
+        async def launcher() -> Any:
+            try:
+                return await link.open_channel(target.id, name=self.name, command=self.command, cwd=root, env=env)
+            except remote_path.NodeCallError as exc:
+                raise AcpConnectionError(f"acp agent {self.name!r}: {exc}") from None
+
+        return _OnMachine(target=target, root=root, session_cwd=session_cwd, since=since, link=link, launcher=launcher)
 
     @property
     def can_steer(self) -> bool:

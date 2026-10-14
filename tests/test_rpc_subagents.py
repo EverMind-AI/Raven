@@ -2740,8 +2740,9 @@ async def test_a_reserved_name_entry_is_reported_once_and_as_ignored(config_path
     assert rows[0]["enabled"] is True
 
 
+@pytest.mark.parametrize("stale", [False, True])
 async def test_a_row_carries_the_credential_verdict_its_snapshot_measured(
-    config_path: Path, monkeypatch: pytest.MonkeyPatch
+    config_path: Path, monkeypatch: pytest.MonkeyPatch, stale: bool
 ) -> None:
     """The agents page draws `Unauthorized` off this and nothing else.
 
@@ -2758,14 +2759,20 @@ async def test_a_row_carries_the_credential_verdict_its_snapshot_measured(
         if getattr(cfg, "name", "") != "Codex":
             return None
         return CapabilitySnapshot(
-            agent="Codex", fingerprint="f", status="attention", detail="no session", measured_at_ms=0, needs_auth=True
+            agent="Codex",
+            fingerprint="f",
+            status="attention",
+            detail="no session",
+            measured_at_ms=0,
+            needs_auth=True,
+            stale=stale,
         )
 
     monkeypatch.setattr(mod, "acp_snapshot_for", snapshot_for, raising=False)
     monkeypatch.setattr("raven.agent.subagent.probe.acp_snapshot_for", snapshot_for)
 
     rows = {row["name"]: row for row in (await subagents_list({"probe": False}))["rows"]}
-    assert rows["Codex"]["needs_auth"] is True
+    assert rows["Codex"]["needs_auth"] is not stale
     # Every other row says so too, rather than leaving the key out: a missing key
     # and a false one read the same to a client, right up until one of them means
     # "this server is too old to know". A cli row and an openai row have no
@@ -3126,3 +3133,172 @@ async def test_the_capability_probe_starts_the_agent_with_its_lent_key(
     (cfg,) = _as_configs([{"name": "Pi", "kind": "acp", "preset": "pi", "command": "x", "lendKeys": ["openrouter"]}])
     await probe.record_capabilities(cfg)
     assert launched and launched[0]["OPENROUTER_API_KEY"] == "sk-or-raven"
+
+
+# --- an add on a registered machine ------------------------------------------
+
+
+_MACHINES = [
+    {"id": "ravenx2", "display_name": "RavenX 2", "host": "203.0.113.8", "port": 22, "user": "root", "key": "/k"},
+]
+
+
+async def _no_record(cfg: object) -> None:
+    """A ``record_capabilities`` stand-in: the real one would open the machine's link, over a real ssh."""
+
+
+@pytest.fixture
+def registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A machine registry with one usable row, and the machine lane on."""
+    from raven.ops import connections
+
+    path = tmp_path / "connections.json"
+    path.write_text(json.dumps({"connections": _MACHINES}), encoding="utf-8")
+    monkeypatch.setattr(connections, "store_path", lambda: path)
+    monkeypatch.setenv("RAVEN_DEBUG_MACHINES", "1")
+    return path
+
+
+async def test_add_on_a_registered_machine_writes_the_machine_and_names_the_row_after_it(
+    config_path: Path, registry: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One preset is added once per machine it runs on, and the gate proves the entry there."""
+    seen: list[object] = []
+
+    async def _capture(cfg: object) -> object:
+        seen.append(cfg)
+        return await _pings_ok(cfg)
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _capture)
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", _no_record)
+
+    out = await subagents_add({"preset": "claude_code", "machine": " ravenx2 ", "remote_cwd": " ~/work "})
+
+    assert out == {"added": True, "name": "claude_code@ravenx2"}
+    entry = next(e for e in _stored(config_path) if e["name"] == "claude_code@ravenx2")
+    assert entry["machine"] == "ravenx2" and entry["remoteCwd"] == "~/work" and entry["kind"] == "acp"
+    assert entry["enabled"] is True
+    assert [getattr(c, "machine", None) for c in seen] == ["ravenx2"], "the gate proves the entry on its machine"
+    assert "203.0.113" not in json.dumps(_stored(config_path)), "the row names the machine, never its address"
+
+
+async def test_add_on_a_machine_keeps_the_name_the_caller_chose(
+    config_path: Path, registry: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _pings_ok)
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", _no_record)
+
+    out = await subagents_add({"preset": "claude_code", "machine": "ravenx2", "name": "lab"})
+
+    assert out == {"added": True, "name": "lab"}
+    entry = next(e for e in _stored(config_path) if e["name"] == "lab")
+    assert entry["machine"] == "ravenx2" and not entry.get("remoteCwd"), "unset: the node's default applies"
+
+
+async def test_add_on_a_machine_is_refused_with_the_lane_off_and_nothing_is_stored_or_pinged(
+    config_path: Path, registry: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("RAVEN_DEBUG_MACHINES")
+    pinged: list[object] = []
+
+    async def _ping(cfg: object) -> object:
+        pinged.append(cfg)
+        return await _pings_ok(cfg)
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _ping)
+    before = _stored(config_path)
+
+    with pytest.raises(ConfigValidationError) as caught:
+        await subagents_add({"preset": "claude_code", "machine": "ravenx2"})
+
+    assert "machine lane is debug-only" in str(caught.value) and "RAVEN_DEBUG_MACHINES=1" in str(caught.value)
+    assert caught.value.data["field"] == "machine"
+    assert pinged == [] and _stored(config_path) == before
+
+
+@pytest.mark.parametrize(("machine", "said"), [("nowhere", "is not registered"), ("  ", "must not be blank")])
+async def test_add_on_a_machine_nobody_registered_is_refused_by_name_without_an_address(
+    config_path: Path, registry: Path, monkeypatch: pytest.MonkeyPatch, machine: str, said: str
+) -> None:
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _pings_ok)
+    before = _stored(config_path)
+
+    with pytest.raises(ConfigValidationError) as caught:
+        await subagents_add({"preset": "claude_code", "machine": machine})
+
+    assert said in str(caught.value) and "203.0.113" not in str(caught.value)
+    assert _stored(config_path) == before
+
+
+async def test_add_on_a_machine_takes_an_openai_preset_and_no_directory_for_it(
+    config_path: Path, registry: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An openai preset's endpoint is reached from the machine through a tunnel: it works in no directory there."""
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _pings_ok)
+
+    out = await subagents_add({"preset": "mirothinker", "machine": "ravenx2"})
+
+    assert out == {"added": True, "name": "mirothinker@ravenx2"}
+    entry = next(e for e in _stored(config_path) if e["name"] == "mirothinker@ravenx2")
+    assert entry["machine"] == "ravenx2" and entry["kind"] == "openai" and "remoteCwd" not in entry
+    assert "203.0.113" not in json.dumps(_stored(config_path))
+
+    with pytest.raises(ConfigValidationError) as caught:
+        await subagents_add({"preset": "mirothinker", "machine": "ravenx2", "name": "lab-llm", "remote_cwd": "~/x"})
+
+    assert "leave remote_cwd out" in str(caught.value) and caught.value.data["field"] == "remote_cwd"
+    assert all(e["name"] != "lab-llm" for e in _stored(config_path))
+
+
+def test_a_built_in_agent_is_refused_a_machine_in_one_sentence() -> None:
+    """Raven's own loop runs in this process: there is no process of it to start elsewhere."""
+    from raven.rpc.methods.subagents import _refuse_unless_it_can_run_there
+
+    with pytest.raises(ConfigValidationError) as caught:
+        _refuse_unless_it_can_run_there({"kind": "builtin", "name": "research-raven"}, "ravenx2")
+
+    assert "built-in agent" in str(caught.value) and "runs on no other machine" in str(caught.value)
+    assert caught.value.data == {"field": "machine", "machine": "ravenx2"}
+
+
+async def test_add_on_a_machine_lends_no_key(
+    config_path: Path, registry: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Raven's key would have to be copied to that machine; the write path refuses, as it does for a stored row."""
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _pings_ok)
+    monkeypatch.setattr("raven.rpc.methods.subagents._lend_keys", lambda preset, providers: ["openrouter"])
+
+    with pytest.raises(ConfigValidationError) as caught:
+        await subagents_add({"preset": "opencode", "machine": "ravenx2", "lend_key": "openrouter"})
+
+    assert "Raven's keys" in str(caught.value) and "sign it in there" in str(caught.value)
+    assert all(e.get("machine") is None for e in _stored(config_path))
+
+
+async def test_the_login_shell_is_not_read_again_for_an_agent_on_a_machine(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Its node captures that machine's login environment; this computer's shell says nothing about it."""
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.config.schema import ThirdPartyAcpSubagentConfig
+
+    captured: list[int] = []
+    monkeypatch.setattr(subagents_mod, "refresh_login_shell_env", lambda: captured.append(1))
+    there = ThirdPartyAcpSubagentConfig(name="lab", command="x acp", machine="ravenx2")
+    here = ThirdPartyAcpSubagentConfig(name="local", command="x acp")
+
+    await _read_the_shell_again(there)
+    assert captured == []
+    await _read_the_shell_again(here)
+    assert captured == [1]
+
+
+async def test_list_rows_carry_the_machine_an_acp_row_runs_on(config_path: Path, registry: Path) -> None:
+    raw = json.loads(config_path.read_text(encoding="utf-8"))
+    raw["subagents"]["agents"].append(
+        {"name": "lab", "kind": "acp", "command": "x acp", "machine": "ravenx2", "enabled": True}
+    )
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
+
+    assert rows["lab"]["machine"] == "ravenx2"
+    assert rows["Coder"]["machine"] is None

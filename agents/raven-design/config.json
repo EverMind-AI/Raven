@@ -64,9 +64,6 @@
   },
   "plugins": {
     "config": {
-      "everos-memory": {
-        "base_url": "http://localhost:18791"
-      },
       "design-engine": {
         "enabled": true,
         "visualDomainSelector": {

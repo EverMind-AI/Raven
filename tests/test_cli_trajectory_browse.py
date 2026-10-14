@@ -2278,6 +2278,37 @@ def test_bug_report_optional_details_reach_summary_and_record(
     assert record["reporter"] == "forrest"
 
 
+def test_bug_report_backslashes_in_fields_do_not_stop_the_report(
+    state, workspace, monkeypatch, capsys, _no_machine_secrets
+):
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+
+    _bug_flow(
+        monkeypatch,
+        workspace,
+        [
+            "problem: \\n- first",
+            True,
+            "\\d+ at start",
+            "",
+            ("pick", "(skip)"),
+            "\\n- one \\n- two",
+            "",
+            True,
+            _CANCEL,
+        ],
+    )
+
+    out = capsys.readouterr().out
+    assert "Could not prepare" not in out
+    _record_dir, record = _single_report(state)
+    assert record["status"] == "local_ready"
+    assert f"Bug report {record['report_id']} ready (local_ready)" in out
+    assert record["problem"]["description"] == "problem: \\n- first"
+    assert record["problem"]["expected"] == "\\d+ at start"
+    assert record["problem"]["steps"] == "\\n- one \\n- two"
+
+
 def test_bug_report_cancel_keeps_nothing(state, workspace, monkeypatch, capsys, _no_machine_secrets):
     from raven.trajectory import bugreport as breport
 
@@ -2348,6 +2379,152 @@ def test_bug_report_review_kept_finding_ships(state, workspace, monkeypatch, cap
         meta = json.loads(tar.extractfile(f"{record['report_id']}/bugreport.json").read().decode("utf-8"))
     assert meta["redaction"]["risk_accepted"] is True
     assert meta["redaction"]["user_decisions"] == record["redaction"]["user_decisions"]
+
+
+def _one_line(text):
+    return " ".join(text.split())
+
+
+def test_bug_report_replays_remembered_decisions(state, workspace, monkeypatch, capsys, _no_machine_secrets):
+    from raven.trajectory import redaction_history as thistory
+
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1", session_key="cli:a", attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})],
+    )
+    thistory.RedactionHistory().record(_ENTROPY_TOKEN, "kept", category="high-entropy", source="cli")
+
+    fake = _bug_flow(monkeypatch, workspace, ["it broke", False, True, _CANCEL])
+
+    out = _one_line(capsys.readouterr().out)
+    assert "Redaction review — every item was decided from your redaction history" in out
+    assert "1 item(s) decided from your redaction history:" in out
+    assert not any(str(msg).startswith("Decision") for _k, msg, _t in fake.prompts)
+    _record_dir, record = _single_report(state)
+    assert [entry["action"] for entry in record["redaction"]["user_decisions"]] == ["kept"]
+    assert thistory.RedactionHistory().lookup(_ENTROPY_TOKEN).applied == 1
+
+
+def test_bug_report_records_browser_decisions(state, workspace, monkeypatch, _no_machine_secrets):
+    from raven.trajectory import redaction_history as thistory
+
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1", session_key="cli:a", attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})],
+    )
+
+    _bug_flow(monkeypatch, workspace, ["it broke", False, "k", True, _CANCEL])
+
+    entry = thistory.RedactionHistory().lookup(_ENTROPY_TOKEN)
+    assert (entry.action, entry.source) == ("kept", "browser")
+
+
+_INNER_TOKEN = "Hj5tR8uE3iO7pA1sD4fGk9lZ"
+_OUTER_TOKEN = _INNER_TOKEN + "W6xC2v"
+_OTHER_TOKEN = "Qw8eR3tY6uI1oP4aS7dF2gH5"
+
+
+def _review_items(tmp_path, text):
+    from raven.trajectory import redact as tredact
+    from raven.trajectory import review as treview
+
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (tree / "spans.jsonl").write_text(text, encoding="utf-8")
+    report = tredact.RedactionReport(bundle_dir=tree, redacted_dir=tree.resolve())
+    report.findings = tredact.scan_residuals(tree)
+    return treview.build_review_items([report])
+
+
+def _decider_history(tmp_path):
+    from raven.trajectory import redaction_history as thistory
+
+    return thistory.RedactionHistory(tmp_path / "home" / thistory.HISTORY_FILENAME)
+
+
+def test_decider_asks_a_partly_remembered_group_with_a_hint(tmp_path, capsys):
+    items = _review_items(tmp_path, f"a {_INNER_TOKEN} b {_OUTER_TOKEN}\n")
+    assert len(items) == 2 and all(item.linked for item in items)
+    history = _decider_history(tmp_path)
+    history.record(_INNER_TOKEN, "kept", category="high-entropy", source="cli")
+    fake = _FakeQuestionary(["k", "k"])
+
+    decisions = tbrowse.make_review_decider(fake, None, history=history)(items, [])
+
+    out = _one_line(capsys.readouterr().out)
+    assert "Redaction review — 2 item(s) need your decision" in out
+    assert out.count("History: you kept this value on") == 1
+    assert len(fake.prompts) == 2
+    assert [d.action for d in decisions] == ["kept", "kept"]
+    assert history.lookup(_OUTER_TOKEN).action == "kept"
+
+
+def test_decider_replays_an_agreeing_group_without_asking(tmp_path, capsys):
+    items = _review_items(tmp_path, f"a {_INNER_TOKEN} b {_OUTER_TOKEN}\n")
+    history = _decider_history(tmp_path)
+    for token in (_INNER_TOKEN, _OUTER_TOKEN):
+        history.record(token, "redacted", category="high-entropy", source="cli")
+    fake = _FakeQuestionary([])
+
+    decisions = tbrowse.make_review_decider(fake, None, history=history)(items, [])
+
+    out = _one_line(capsys.readouterr().out)
+    assert "Redaction review — every item was decided from your redaction history" in out
+    assert "2 item(s) decided from your redaction history:" in out
+    assert out.count("-- replaced (decided ") == 2
+    assert fake.prompts == []
+    assert [d.action for d in decisions] == ["redacted", "redacted"]
+    assert {history.lookup(token).applied for token in (_INNER_TOKEN, _OUTER_TOKEN)} == {1}
+
+
+def test_decider_without_replay_asks_and_replaces(tmp_path, capsys):
+    items = _review_items(tmp_path, f"a {_OTHER_TOKEN}\n")
+    history = _decider_history(tmp_path)
+    seeded = history.record(_OTHER_TOKEN, "kept", category="high-entropy", source="cli")
+    fake = _FakeQuestionary(["r"])
+
+    decisions = tbrowse.make_review_decider(fake, None, history=history, replay=False, source="browser")(items, [])
+
+    assert "decided from your redaction history" not in capsys.readouterr().out
+    assert [d.action for d in decisions] == ["redacted"]
+    entry = history.lookup(_OTHER_TOKEN)
+    assert (entry.action, entry.source) == ("redacted", "browser")
+    assert entry.revision != seeded.revision
+
+
+def test_decider_reports_a_decision_changed_during_review(tmp_path, capsys):
+    from raven.trajectory import redaction_history as thistory
+
+    items = _review_items(tmp_path, f"a {_INNER_TOKEN}\nb {_OTHER_TOKEN}\n")
+    history = _decider_history(tmp_path)
+    history.record(_INNER_TOKEN, "kept", category="high-entropy", source="cli")
+    elsewhere = thistory.RedactionHistory(history.path)
+
+    def _change_then_keep():
+        elsewhere.record(_INNER_TOKEN, "redacted", category="high-entropy", source="web")
+        return "k"
+
+    fake = _FakeQuestionary([_change_then_keep])
+
+    tbrowse.make_review_decider(fake, None, history=history)(items, [])
+
+    out = _one_line(capsys.readouterr().out)
+    assert "1 remembered decision(s) changed elsewhere during this review" in out
+    assert history.lookup(_INNER_TOKEN).action == "redacted"
+    assert history.lookup(_OTHER_TOKEN).action == "kept"
+
+
+def test_decider_without_history_is_unchanged(tmp_path, capsys):
+    from raven.trajectory import redaction_history as thistory
+
+    items = _review_items(tmp_path, f"a {_OTHER_TOKEN}\n")
+    fake = _FakeQuestionary(["k"])
+
+    decisions = tbrowse.make_review_decider(fake, None)(items, [])
+
+    assert "Redaction review — 1 item(s) need your decision" in _one_line(capsys.readouterr().out)
+    assert [d.action for d in decisions] == ["kept"]
+    assert not thistory.RedactionHistory().path.exists()
 
 
 def test_bug_report_private_key_acknowledged_ships(state, workspace, monkeypatch, capsys, _no_machine_secrets):
@@ -2730,3 +2907,180 @@ def test_reports_do_not_cross_sessions(state, workspace, _no_machine_secrets):
     assert rows["trace-1"].reported is True
     assert rows["trace-2"].reported is False
     assert breport.reports_for_attempt("trace-2", ("trace-2",), state) == []
+
+
+# ── bug report upload (RAVEN_BUGREPORT_URL) ───────────────────────────
+
+
+@pytest.fixture
+def no_proxy_env(monkeypatch):
+    from tests.bug_report_receiver_stub import clear_proxy_env
+
+    clear_proxy_env(monkeypatch)
+
+
+@pytest.fixture
+def receiver_url(tmp_path, no_proxy_env):
+    from tests.bug_report_receiver_stub import receiver_thread
+
+    with receiver_thread(tmp_path / "inbox") as url:
+        yield url
+
+
+def _dead_url():
+    import socket
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return f"http://127.0.0.1:{port}"
+
+
+def _landed_report(state, workspace):
+    from raven.trajectory import bugreport as breport
+
+    prep = breport.prepare_trajectory("trace-1", workspace=workspace, state_dir=state)
+    prep = breport.freeze_export(prep, description="it broke")
+    return breport.confirm_and_package(prep, state_dir=state)
+
+
+def _one_report_screen(monkeypatch, workspace, *answers):
+    return _browse(
+        monkeypatch,
+        [
+            ("pick", "session"),
+            ("pick", "#1"),
+            ("pick", "Bug reports (1)"),
+            ("pick", "br-"),
+            *answers,
+            _BACK,
+            _BACK,
+            _CANCEL,
+        ],
+        workspace,
+    )
+
+
+def test_bug_report_uploads_when_configured(state, workspace, monkeypatch, capsys, _no_machine_secrets, receiver_url):
+    monkeypatch.setenv("RAVEN_BUGREPORT_URL", receiver_url)
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+
+    _bug_flow(monkeypatch, workspace, ["it broke", False, True, _CANCEL])
+
+    out = capsys.readouterr().out
+    assert f"Will upload to {receiver_url} after the package is created." in out
+    assert "Uploaded — receipt rc-" in out
+    assert "Not uploaded" not in out
+    _record_dir, record = _single_report(state)
+    assert record["upload"]["state"] == "uploaded"
+
+
+def test_bug_report_upload_failure_is_shown(state, workspace, monkeypatch, capsys, _no_machine_secrets, no_proxy_env):
+    monkeypatch.setenv("RAVEN_BUGREPORT_URL", _dead_url())
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+
+    _bug_flow(monkeypatch, workspace, ["it broke", False, True, _CANCEL])
+
+    out = capsys.readouterr().out
+    assert "✗ Upload failed:" in out
+    assert 'Retry from this attempt\'s "Bug reports" entry (Upload).' in out
+    _record_dir, record = _single_report(state)
+    assert record["status"] == "local_ready" and record["upload"]["state"] == "failed"
+
+
+@pytest.mark.parametrize("url", ["http://10.1.2.3", "https://[broken", "https://ops.example:notaport"])
+def test_bug_report_misconfigured_url_collects_nothing(state, workspace, monkeypatch, capsys, _no_machine_secrets, url):
+    from raven.trajectory import bugreport as breport
+
+    monkeypatch.setenv("RAVEN_BUGREPORT_URL", url)
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+
+    _browse(monkeypatch, [("pick", "session"), ("pick", "#1"), ("pick", "Report a bug"), _CANCEL], workspace)
+
+    out = capsys.readouterr().out
+    assert "misconfigured" in out
+    assert not breport.bugreports_root(state).exists()
+
+
+def test_bug_reports_screen_uploads(state, workspace, monkeypatch, capsys, _no_machine_secrets, receiver_url):
+    from raven.trajectory import bugreport as breport
+
+    monkeypatch.setenv("RAVEN_BUGREPORT_URL", receiver_url)
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+    record_dir, _record = _landed_report(state, workspace)
+
+    fake = _one_report_screen(monkeypatch, workspace, ("pick", "Upload"))
+
+    out = capsys.readouterr().out
+    assert out.count("Uploaded — receipt rc-") == 2
+    assert out.count("Not uploaded") == 1
+    assert breport.load_record(record_dir)["upload"]["state"] == "uploaded"
+    actions = next(titles for kind, msg, titles in fake.prompts if msg == "Action:" and "Upload" in titles)
+    assert "Retry packaging" not in actions
+
+
+@pytest.mark.parametrize("variant", ["no-url", "uploaded", "failed-record"])
+def test_upload_action_only_when_it_applies(
+    state, workspace, monkeypatch, capsys, _no_machine_secrets, receiver_url, variant
+):
+    import os as _os
+
+    from raven.trajectory import bugreport as breport
+
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+    if variant == "no-url":
+        monkeypatch.delenv("RAVEN_BUGREPORT_URL", raising=False)
+        _landed_report(state, workspace)
+    elif variant == "uploaded":
+        monkeypatch.setenv("RAVEN_BUGREPORT_URL", receiver_url)
+        record_dir, record = _landed_report(state, workspace)
+        record["upload"] = {"state": "uploaded", "issue_url": "", "receipt": "rc-0123456789ab"}
+        breport.save_record(record_dir, record)
+    else:
+        monkeypatch.setenv("RAVEN_BUGREPORT_URL", receiver_url)
+        prep = breport.prepare_trajectory("trace-1", workspace=workspace, state_dir=state)
+        prep = breport.freeze_export(prep, description="tool call crashed the session")
+        breport.save_record(prep.staging_dir, breport._new_record_payload(prep))
+        _os.replace(prep.staging_dir, breport.bugreports_root(state) / prep.report_id)
+
+    fake = _one_report_screen(monkeypatch, workspace)
+
+    out = capsys.readouterr().out
+    upload_menus = [titles for kind, msg, titles in fake.prompts if msg == "Action:" and "Upload" in titles]
+    assert upload_menus == []
+    if variant == "uploaded":
+        assert "Uploaded — receipt rc-0123456789ab" in out
+    elif variant == "failed-record":
+        assert any("Retry packaging" in titles for kind, msg, titles in fake.prompts if msg == "Action:")
+
+
+@pytest.mark.parametrize("damage", ["missing", "tampered", "missing-after-failure"])
+def test_upload_action_shows_a_failure_the_record_does_not_carry(
+    state, workspace, monkeypatch, capsys, _no_machine_secrets, receiver_url, damage
+):
+    from pathlib import Path as _Path
+
+    from raven.trajectory import bugreport as breport
+
+    monkeypatch.setenv("RAVEN_BUGREPORT_URL", receiver_url)
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+    record_dir, record = _landed_report(state, workspace)
+    package = _Path(record["package"]["path"])
+    if damage == "tampered":
+        package.write_bytes(package.read_bytes() + b"x")
+    else:
+        package.unlink()
+    if damage == "missing-after-failure":
+        record["upload"] = {"state": "failed", "issue_url": "", "receipt": "", "error": "old reason"}
+        breport.save_record(record_dir, record)
+
+    _one_report_screen(monkeypatch, workspace, ("pick", "Upload"))
+
+    out = capsys.readouterr().out
+    assert "✗ Upload failed:" in out and "changed since it was created" in out
+    upload = breport.load_record(record_dir)["upload"]
+    if damage == "missing-after-failure":
+        assert upload["state"] == "failed" and upload["error"] == "old reason"
+    else:
+        assert upload["state"] == ""

@@ -318,6 +318,11 @@ async def _run_rpc_server_until_done(
 
     set_surface(TERMINAL_SURFACE)
 
+    from raven.utils.heap import start_trimmer
+
+    # This host outlives every session it serves, so it trims like the gateway.
+    start_trimmer()
+
     # Lazy import: keeps tui_commands importable without pulling rpc on
     # users who never touch the TUI (e.g. CLI-only workflows).
     from raven.cli._console_feature import register_console_feature
@@ -589,11 +594,15 @@ async def _run_rpc_server_until_done(
 
                 _logger.exception("tui: plugin services stop failed; continuing shutdown")
         # ACP agents are launched with start_new_session, so they do not get the
-        # terminal's signals and outlive this process unless the pool is closed.
+        # terminal's signals and outlive this process unless the pool is closed;
+        # so does the ssh of a Raven node on a registered machine, whose pool is
+        # closed after the agents' so a closing agent still has its link.
         try:
             from raven.acp_client.pool import close_pool
+            from raven.node.client import close_node_pool
 
             await close_pool()
+            await close_node_pool()
         except Exception:
             from loguru import logger as _logger
 

@@ -1099,6 +1099,35 @@ class SkillForgeConfig(_Base):
 # Plugin / Memory backend / SkillForgeRouter
 # ---------------------------------------------------------------------------
 
+SHIPPED_DEFAULT_BACKEND = "everos"
+"""The value ``memory.backend`` carries when nobody has chosen one.
+
+Named rather than compared inline, because the places that test for it are not
+treating this backend as special -- they are answering "the default names
+something that is not here", which is the commonest way an install reaches
+those lines and the only one where the reader did not pick the name
+themselves.
+"""
+
+MEMORY_BACKEND_DISTRIBUTIONS: dict[str, str] = {
+    SHIPPED_DEFAULT_BACKEND: "everos-memory",
+    "everos-cloud": "everos-cloud-memory",
+}
+"""Which distribution contributes each memory backend raven ships a name for.
+
+The join between the two fields below: ``MemoryConfig.backend`` names a
+contribution, ``PluginsConfig.config`` is keyed by the distribution that
+provides it. The registry answers the same question by activating a manifest;
+this answers it for the readers that have no registry -- the launcher that
+renders an agent product's config, and anything reporting on a backend whose
+distribution is not installed. Here rather than beside the registry because
+``raven.core`` may import this package and not the other way round
+(``tests/test_import_cycle_budget.py``).
+"""
+
+EVEROS_PLUGIN_DISTRIBUTION = MEMORY_BACKEND_DISTRIBUTIONS[SHIPPED_DEFAULT_BACKEND]
+"""The distribution that contributes the ``everos`` memory backend."""
+
 
 class PluginsConfig(_Base):
     """Plugin-system top-level config.
@@ -1161,6 +1190,15 @@ class MemoryConfig(_Base):
     memory_top_k: int = 5
     """Top-K passed to ``backend.recall(user_id=user_id)`` per turn for
     the ``# Recalled memory`` block."""
+
+    annotate_every_turns: int = 0
+    """How many user turns accumulate before the unannotated tail is handed
+    to the annotator and written to ``episodes.md``. ``0``, the default,
+    turns the step off: it costs one provider call per cadence, and an
+    install that never reads the log should not pay for it. The tail always
+    starts and ends on a turn boundary because the step runs after a turn,
+    so this is a cadence, not a cut point. Read at boot; a change needs a
+    gateway reload."""
 
 
 class EmbeddingConfig(_Base):
@@ -1377,6 +1415,43 @@ class TranslateConfig(_Base):
     stated on every pin: an id alone does not name a credential."""
 
 
+class VisionConfig(_Base):
+    """The model that reads a picture, as a pair.
+
+    Raven could draw an image long before it could look at one: ``tools.media``
+    holds the painting tool, and nothing named the other direction. A knowledge
+    base is the first caller -- an uploaded screenshot and a figure inside a
+    document are both worth indexing, and neither has text until a model
+    describes it.
+
+    Unset is off, and deliberately not "follow the conversation's model": there
+    is no conversation behind an indexing run, and posting an image to a model
+    that cannot see one fails at the endpoint with a message about content
+    parts. Configuring this pin is the opt-in.
+    """
+
+    model: str | None = None
+    """Model for the describe call. It has to accept an image as input; the
+    settings picker offers only models whose catalogue entry says so."""
+
+    provider: str | None = None
+    """Which configured provider serves ``model``. Both halves, for the reason
+    stated on every pin: an id alone does not name a credential."""
+
+    timeout_seconds: float = 90.0
+    """Wall clock for one image. Generous next to the other pins because this
+    is an indexing call rather than a call somebody is waiting on, and a large
+    figure on a busy endpoint is slow rather than broken."""
+
+    max_figures: int = 64
+    """How many figures in one document get described.
+
+    A two-hundred-page report is hundreds of calls, and a reader who uploads
+    one should not discover that from their bill. Past the cap a figure keeps
+    whatever text it already had and the gateway logs which document hit it --
+    stopping quietly would look like a model that had nothing to say."""
+
+
 class KnowledgeConfig(_Base):
     """Knowledge-base settings that are not the embedding endpoint.
 
@@ -1582,6 +1657,7 @@ class RavenConfig(_Base):
     session_title: SessionTitleConfig = Field(default_factory=SessionTitleConfig)
     sessions: SessionsConfig = Field(default_factory=SessionsConfig)
     translate: TranslateConfig = Field(default_factory=TranslateConfig)
+    vision: VisionConfig = Field(default_factory=VisionConfig)
     knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
     subagent_dag: SubagentDagConfig = Field(default_factory=SubagentDagConfig)
     subagent_questions: SubagentQuestionsConfig = Field(default_factory=SubagentQuestionsConfig)

@@ -190,10 +190,83 @@ async def test_secrets_and_inert_settings_are_not_written(config_file):
     tool = RavenConfigTool()
     reply = await _run(tool, action="set", path="providers.openrouter.apiKey", value='"sk-new"')
     assert "never goes through a tool call" in reply
-    reply = await _run(tool, action="set", path="cron.defaultTimezone", value='"UTC"')
+    reply = await _run(tool, action="set", path="tools.web.search.maxResults", value="5")
     assert "nothing was changed" in reply
     data = json.loads(config_file.read_text())
-    assert data["providers"]["openrouter"]["apiKey"] == "sk-x" and "cron" not in data
+    assert data["providers"]["openrouter"]["apiKey"] == "sk-x" and "web" not in data["tools"]
+
+
+@pytest.mark.parametrize("spelling", ["defaultTimezone", "default_timezone"])
+async def test_cron_timezone_is_written_through_settings_and_used_by_new_jobs(config_file, spelling):
+    from raven.core.cron_stack import build_cron_service
+    from raven.proactive_engine.schedulers.cron.types import CronSchedule
+    from raven.rpc.methods import console as rpc_console
+
+    raw = json.loads(config_file.read_text())
+    raw["cron"] = {spelling: "UTC"}
+    config_file.write_text(json.dumps(raw), encoding="utf-8")
+    service = build_cron_service(allowed_channels=None)
+    before = service.add_job("before", CronSchedule(kind="cron", expr="0 9 * * *"), "before", to="before")
+    calls = []
+
+    async def writer(method, params):
+        calls.append((method, params))
+        assert method == "settings.set"
+        return await rpc_console.settings_set(params)
+
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(writer)
+    reply = await _run(tool, action="set", path="cron.defaultTimezone", value='"Europe/Paris"')
+    assert calls == [("settings.set", {"key": "cron.defaultTimezone", "value": "Europe/Paris"})]
+    assert "Europe/Paris" in reply and "next turn" in reply
+    assert json.loads(config_file.read_text())["cron"] == {spelling: "Europe/Paris"}
+    after = service.add_job("after", CronSchedule(kind="cron", expr="0 9 * * *"), "after", to="after")
+    assert before.schedule.tz == "UTC" and after.schedule.tz == "Europe/Paris"
+    assert _pending(await _run(tool, action="describe")) is None
+
+
+async def test_cron_timezone_set_to_null_returns_new_jobs_to_local_time(config_file):
+    from raven.core.cron_stack import build_cron_service
+    from raven.proactive_engine.schedulers.cron.types import CronSchedule
+    from raven.rpc.methods import console as rpc_console
+
+    raw = json.loads(config_file.read_text())
+    raw["cron"] = {"defaultTimezone": "UTC"}
+    config_file.write_text(json.dumps(raw), encoding="utf-8")
+
+    async def writer(method, params):
+        assert method == "settings.set"
+        return await rpc_console.settings_set(params)
+
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(writer)
+    reply = await _run(tool, action="set", path="cron.defaultTimezone", value="null")
+    assert not reply.startswith("Error:"), reply
+    job = build_cron_service(allowed_channels=None).add_job("daily", CronSchedule(kind="cron", expr="0 9 * * *"), "d")
+    assert job.schedule.tz is None
+
+
+@pytest.mark.parametrize("invalid", [7, "Not/AZone"])
+async def test_cron_timezone_rejects_invalid_tool_writes(config_file, invalid):
+    from raven.rpc.methods import console as rpc_console
+
+    async def writer(method, params):
+        assert method == "settings.set"
+        return await rpc_console.settings_set(params)
+
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(writer)
+    before = config_file.read_bytes()
+    reply = await _run(tool, action="set", path="cron.defaultTimezone", value=json.dumps(invalid))
+    assert reply.startswith("Error:"), reply
+    assert config_file.read_bytes() == before
+
+
+async def test_cron_timezone_without_a_settings_writer_is_refused(config_file):
+    before = config_file.read_bytes()
+    reply = await _run(RavenConfigTool(), action="set", path="cron.defaultTimezone", value='"UTC"')
+    assert reply.startswith("Error:") and "Settings" in reply
+    assert config_file.read_bytes() == before
 
 
 @pytest.mark.asyncio
@@ -1693,3 +1766,103 @@ async def test_a_write_refused_partway_names_what_already_took(config_file):
     batch = {"agents.defaults.temperature": 0.5, "subagents.codex.enabled": False}
     reply = await _run(tool, action="set", value=json.dumps(batch))
     assert reply.startswith("Error") and "applied before it" in reply and "agents.defaults.temperature" in reply
+
+
+# --- an agent on a registered machine ----------------------------------------
+
+
+_LAB_ROW: dict[str, Any] = {
+    "name": "claude_code@ravenx2",
+    "preset": "claude_code",
+    "kind": "acp",
+    "description": "Claude Code",
+    "enabled": True,
+    "configured": True,
+    "machine": "ravenx2",
+    "probe_status": "ready",
+    "probe_detail": "runs on machine 'RavenX 2' (ravenx2); it ran and replied",
+    "model_choices": [],
+}
+
+
+@pytest.mark.asyncio
+async def test_an_add_on_a_registered_machine_passes_the_machine_through_and_says_where_it_runs(config_file):
+    calls = Calls(
+        {"subagents.add": {"added": True, "name": "claude_code@ravenx2"}, "subagents.list": {"rows": [_LAB_ROW]}}
+    )
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+
+    reply = await _run(
+        tool,
+        action="add",
+        path="subagents",
+        value='{"preset": "claude_code", "machine": "ravenx2", "remote_cwd": "~/raven-work"}',
+    )
+
+    sent = next(p for m, p in calls.calls if m == "subagents.add")
+    assert sent == {"preset": "claude_code", "machine": "ravenx2", "remote_cwd": "~/raven-work"}
+    assert "Connected sub-agent claude_code@ravenx2" in reply
+    assert "runs on machine 'RavenX 2' (ravenx2)" in reply
+    assert "on machine ravenx2" in await _run(tool, action="describe", path="subagents")
+    assert '"machine": "ravenx2"' in await _run(tool, action="describe", path="subagents.claude_code@ravenx2")
+
+
+@pytest.mark.asyncio
+async def test_a_refused_add_on_a_machine_sends_the_user_to_that_machine_and_runs_nothing_here(config_file):
+    """A refusal from a machine names no command to run here: the agent, its install and its sign-in are there."""
+    refusal = _Refused(
+        "sub-agent 'claude_code@ravenx2' did not answer a test message, so it was not added: 'claude' is not on "
+        "the login shell PATH (on machine 'ravenx2': any fix is made there)",
+        {},
+    )
+    calls = Calls({"subagents.add": refusal, "subagents.list": {"rows": [_LAB_ROW | {"configured": False}]}})
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+
+    reply = await _run(tool, action="add", path="subagents", value='{"preset": "claude_code", "machine": "ravenx2"}')
+
+    assert reply.startswith("Not added:") and "on machine 'ravenx2': any fix is made there" in reply
+    assert "It runs on machine 'ravenx2', so the fix is made there by the user" in reply
+    # exec reaches the machine, so a look there is offered; a sign-in or an install is not.
+    assert "exec(machine='ravenx2') can look there first" in reply
+    assert "Install it with exec" not in reply and "Run it on its own with exec" not in reply
+
+
+@pytest.mark.asyncio
+async def test_describe_names_the_registered_machines_only_while_the_lane_is_on(config_file, tmp_path, monkeypatch):
+    from raven.ops import connections
+
+    registry = tmp_path / "connections.json"
+    registry.write_text(
+        json.dumps(
+            {
+                "connections": [
+                    {
+                        "id": "ravenx2",
+                        "display_name": "RavenX 2",
+                        "host": "203.0.113.8",
+                        "port": 22,
+                        "user": "root",
+                        "key": "/k",
+                    },
+                    {"id": "this-one", "transport": "local"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(connections, "store_path", lambda: registry)
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Calls({"subagents.list": {"rows": []}}))
+
+    monkeypatch.delenv("RAVEN_DEBUG_MACHINES", raising=False)
+    assert "machines a preset can be added on" not in await _run(tool, action="describe", path="subagents")
+
+    monkeypatch.setenv("RAVEN_DEBUG_MACHINES", "1")
+    said = await _run(tool, action="describe", path="subagents")
+    line = next(ln for ln in said.splitlines() if ln.strip().startswith("machines a preset can be added on"))
+    assert line.split("on:", 1)[1].split("--", 1)[0].strip() == "ravenx2 (RavenX 2)", "the local row is no machine"
+    assert '"machine": "<id>"' in line and "203.0.113" not in said
+    # Every kind, each its own way: a command runs there, an endpoint is reached from there.
+    assert "an acp or cli preset runs there" in line and "openai preset's endpoint is reached from there" in line

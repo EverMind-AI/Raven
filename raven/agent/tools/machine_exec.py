@@ -45,9 +45,10 @@ output, so a detach that was not refused is still not a detach.
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import shlex
-from pathlib import PurePosixPath
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
 
 # Long enough to tail a large log or hash a directory; far short of any solver
@@ -102,6 +103,31 @@ def machines_registered() -> bool:
 # does to the command. A separator ends it, so the words after one belong to the
 # next command and not to this ssh.
 _COMMAND_SEPARATORS = frozenset({";", "&", "&&", "|", "||", "|&", "(", ")"})
+#: On a Windows host the shell that runs a command reads a backslash as a path's
+#: own, not as an escape: the words are read that way too, so ``C:\...\ssh.exe``
+#: keeps its name.
+_WINDOWS = os.name == "nt"
+
+
+def _words(command: str) -> list[str]:
+    """The command's words as the shell that runs it reads them; none for a line it cannot read.
+
+    POSIX quoting here. On a Windows host the quotes come off the same way
+    -- around a word or inside it, a quoted piece and a bare one next to it
+    making one word, as that shell's argv has them (``"root@"host``,
+    ``"587"17``) -- but a backslash is a path's own and
+    is kept, never an escape. An unbalanced quote is not a line this can
+    read; the shell rejects it too, so nothing reaches a machine either way.
+    """
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        if _WINDOWS:
+            lexer.escape = ""
+        return list(lexer)
+    except ValueError:
+        return []
+
 
 # A redirection does not end the command: `ssh 2>/dev/null -p 58717 root@host`
 # is a single ssh. Reading one as a terminator -- or, worse, reading `&>` as a
@@ -155,6 +181,25 @@ def _read_option_group(word: str, tokens: list[str], index: int) -> tuple[int, s
     return index, None
 
 
+#: What Windows appends to an executable's name, which names the same program.
+_EXE_SUFFIXES = (".exe", ".cmd", ".bat")
+
+
+def _program(word: str) -> str:
+    """The program a command word runs, as the refusal names one: ``ssh``.
+
+    Written ``ssh``, ``/usr/bin/ssh`` or ``\\ssh`` (a backslash suppresses alias
+    lookup and still runs the client), and on Windows ``ssh.exe``, ``SSH.EXE``
+    or ``C:\\Windows\\System32\\OpenSSH\\ssh.exe``, all of which reach the far
+    side: the directory, the case and the suffix are taken off.
+    """
+    name = PureWindowsPath(PurePosixPath(word.strip("\"'").lstrip("\\")).name).name.lower()
+    for suffix in _EXE_SUFFIXES:
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return name
+
+
 def _ssh_destinations(command: str) -> list[tuple[str, int]]:
     """Every host and port an ``ssh`` word in a shell command would connect to.
 
@@ -183,19 +228,14 @@ def _ssh_destinations(command: str) -> list[tuple[str, int]]:
     not an option (``ssh root@h -p 58717 true`` is port 58717, ``ssh root@h
     true -p 58717`` is 22) or a ``--``.
     """
-    try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
-        lexer.whitespace_split = True
-        tokens = list(lexer)
-    except ValueError:
-        # An unbalanced quote is not a shell line this can read; the shell will
-        # reject it too, so nothing reaches a machine either way.
+    tokens = _words(command)
+    if not tokens:
         return []
 
     found: list[tuple[str, int]] = []
     index = 0
     while index < len(tokens):
-        if PurePosixPath(tokens[index].lstrip("\\")).name != "ssh":
+        if _program(tokens[index]) != "ssh":
             index += 1
             continue
         index += 1
@@ -206,7 +246,7 @@ def _ssh_destinations(command: str) -> list[tuple[str, int]]:
         options_ended = False
         while index < len(tokens):
             word = tokens[index]
-            if word in _COMMAND_SEPARATORS or PurePosixPath(word.lstrip("\\")).name == "ssh":
+            if word in _COMMAND_SEPARATORS or _program(word) == "ssh":
                 # The command ended, or the next one began; either way this
                 # ssh's arguments are over and the token is left for the outer
                 # loop to read.

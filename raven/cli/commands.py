@@ -167,6 +167,7 @@ from raven.cli import (
     gateway_commands,
     onboard_commands,
     plugin_commands,
+    resources_commands,
     serve_commands,
     status_commands,
     tracing_commands,
@@ -180,6 +181,7 @@ agents_commands.register(app)
 status_commands.register(app)
 doctor_commands.register(app)
 plugin_commands.register(app)
+resources_commands.register(app)
 serve_commands.register(app)
 tracing_commands.register(app)
 upgrade_commands.register(app)

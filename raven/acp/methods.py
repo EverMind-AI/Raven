@@ -334,7 +334,14 @@ class AcpMethods:
         # Offered at creation so a client can put a model picker in the session
         # menu without a second round trip. Absent rather than empty when there
         # is nothing to offer -- an empty list is a menu that opens onto nothing.
-        options = await self._config_options(session.session_key)
+        try:
+            options = await self._config_options(session.session_key)
+        except asyncio.CancelledError:
+            if not self._translator.closing:
+                raise
+            # The session exists; optional metadata must not suppress its EOF reply.
+            logger.debug("acp: returning {} without model options during shutdown", session.session_id)
+            options = []
         if options:
             result["configOptions"] = options
         return self._with_modes(result, session.session_id)

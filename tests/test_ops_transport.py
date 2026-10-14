@@ -33,6 +33,9 @@ def test_the_runner_sends_what_it_always_sent(monkeypatch):
 
     def run(argv, **kwargs):
         sent.append(argv)
+        # Its own stdin: under ``raven acp`` the caller's carries ACP frames,
+        # and a one-shot ssh that inherited it swallowed them.
+        assert kwargs["stdin"] is subprocess.DEVNULL
         return subprocess.CompletedProcess(argv, 0, "out", "")
 
     monkeypatch.setattr(transport.subprocess, "run", run)

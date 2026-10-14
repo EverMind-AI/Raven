@@ -116,6 +116,149 @@ class TestFrameLoop:
         assert stub.channel == "acp"
         assert server.ACP_CHANNEL == "acp"
 
+    async def test_session_creation_with_uncached_ollama_models_finishes_before_eof_cleanup(
+        self, stub, tmp_path, monkeypatch
+    ):
+        from litellm.llms.ollama.completion.transformation import OllamaConfig
+
+        from raven.providers.litellm_setup import import_litellm
+        from raven.rpc.methods.model import model_options
+
+        model = "ollama/raven-uncached-model"
+        config_path = tmp_path / "config.json"
+        config_path.write_text(
+            json.dumps(
+                {
+                    "agents": {"defaults": {"model": model, "provider": "ollama_chat"}},
+                    "providers": {"ollama_chat": {"apiBase": "http://127.0.0.1:11434", "models": [model]}},
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr("raven.home._current_config_path", config_path)
+        import_litellm()
+        asked = []
+
+        def info(self, model, api_base=None):
+            asked.append(model)
+            return {}
+
+        monkeypatch.setattr(OllamaConfig, "get_model_info", info)
+
+        async def subscribe(params):
+            return {"subscription_id": "sub-1"}
+
+        stub.dispatcher.register("turn.subscribe", subscribe)
+        stub.dispatcher.register("model.options", model_options)
+        payload = b"".join(
+            json.dumps(frame).encode() + b"\n"
+            for frame in (
+                {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": 1}},
+                {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "session/new",
+                    "params": {"cwd": str(tmp_path), "mcpServers": []},
+                },
+                {
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "session/prompt",
+                    "params": {"sessionId": "acp:missing", "prompt": []},
+                },
+            )
+        )
+        out = io.BytesIO()
+
+        await server.serve(_reader(payload), out)
+
+        answers = {frame["id"]: frame for frame in _frames(out) if "id" in frame}
+        assert sorted(answers) == [1, 2, 3]
+        assert answers[2]["result"]["sessionId"].startswith("acp:")
+        options = answers[2]["result"]["configOptions"]
+        model_option = next(option for option in options if option.get("category") == "model")
+        assert model_option["currentValue"] == f"ollama_chat/{model}"
+        assert any(
+            option["value"] == model_option["currentValue"]
+            for group in model_option["options"]
+            for option in group["options"]
+        )
+        assert answers[3]["error"]["code"] == -32002
+        assert asked == []
+        assert stub.torn_down == 1
+
+    @pytest.mark.parametrize("eof_before_catalogue", [True, False])
+    async def test_session_creation_answers_when_eof_cancels_the_catalogue(
+        self, stub, tmp_path, monkeypatch, eof_before_catalogue
+    ):
+        from tests.acp_schema import validate_def
+
+        entered = asyncio.Event()
+        cancelled = asyncio.Event()
+        unsubscribed = []
+        monkeypatch.setattr(server, "SHUTDOWN_GRACE_S", 0.01)
+
+        async def subscribe(params):
+            return {"subscription_id": "sub-1"}
+
+        async def unsubscribe(params):
+            unsubscribed.append(params["subscription_id"])
+            return {}
+
+        async def catalogue(params):
+            entered.set()
+            try:
+                await asyncio.Future()
+            finally:
+                cancelled.set()
+
+        stub.dispatcher.register("turn.subscribe", subscribe)
+        stub.dispatcher.register("turn.unsubscribe", unsubscribe)
+        stub.dispatcher.register("model.options", catalogue)
+        payload = b"".join(
+            json.dumps(frame).encode() + b"\n"
+            for frame in (
+                {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": 1}},
+                {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "session/new",
+                    "params": {"cwd": str(tmp_path), "mcpServers": []},
+                },
+                {
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "session/prompt",
+                    "params": {"sessionId": "acp:missing", "prompt": []},
+                },
+            )
+        )
+        reader = asyncio.StreamReader()
+        reader.feed_data(payload)
+        if eof_before_catalogue:
+            reader.feed_eof()
+        out = io.BytesIO()
+        serving = asyncio.create_task(server.serve(reader, out))
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=2)
+            if not eof_before_catalogue:
+                reader.feed_eof()
+            await asyncio.wait_for(serving, timeout=2)
+        finally:
+            if not serving.done():
+                serving.cancel()
+            await asyncio.gather(serving, return_exceptions=True)
+
+        answers = {frame["id"]: frame for frame in _frames(out) if "id" in frame}
+        assert sorted(answers) == [1, 2, 3]
+        assert answers[2]["result"]["sessionId"].startswith("acp:")
+        assert "configOptions" not in answers[2]["result"]
+        validate_def("NewSessionResponse", answers[2]["result"])
+        assert answers[3]["error"]["code"] == -32002
+        assert cancelled.is_set()
+        assert unsubscribed == ["sub-1"]
+        assert stub.torn_down == 1
+
 
 class TestConcurrency:
     async def test_a_cancel_reaches_a_session_whose_prompt_is_still_running(self, stub, monkeypatch):

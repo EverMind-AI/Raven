@@ -10,15 +10,67 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+
 from raven.proactive_engine.schedulers.cron.tool import CronTool
+from raven.proactive_engine.schedulers.cron.types import CronSchedule
 
 
-def _tool() -> tuple[CronTool, MagicMock]:
+def _tool(schedule: CronSchedule | None = None) -> tuple[CronTool, MagicMock]:
     cron = MagicMock()
-    cron.add_job.return_value = SimpleNamespace(id="j1", name="reminder")
+    cron.add_job.return_value = SimpleNamespace(
+        id="j1", name="reminder", schedule=schedule or CronSchedule(kind="cron", expr="0 9 * * *", tz=None)
+    )
     tool = CronTool(cron)
     tool.set_context("tui", "default")
     return tool, cron
+
+
+async def test_the_reply_names_the_zone_the_job_will_keep() -> None:
+    """The job's zone is decided at creation, and the agent's clock is the
+    machine's, so the reply is the only place either side learns that a
+    configured zone moved the reminder.
+
+    Driven through the real ``_zone_note`` rather than a mocked schedule: the
+    note is the change, and a stub would assert its own text back.
+    """
+    for schedule, expected in (
+        (CronSchedule(kind="cron", expr="0 9 * * *", tz="Asia/Tokyo"), ", fires on Asia/Tokyo"),
+        (CronSchedule(kind="cron", expr="0 9 * * *"), ", fires on this machine's local time"),
+        (CronSchedule(kind="at", at_ms=1_800_000_000_000), ""),
+        (CronSchedule(kind="every", every_ms=60_000), ""),
+    ):
+        tool, _ = _tool(schedule)
+        reply = await tool.execute(action="add", message="daily", cron_expr="0 9 * * *")
+        assert reply == f"Created job 'reminder' (id: j1){expected}", reply
+
+
+async def test_the_tz_description_states_what_an_omitted_zone_means() -> None:
+    """Seen in review: the schema named the parameter without saying which zone
+    an omitted one resolves to, which is the one thing the agent has to reason
+    about to answer "when will it fire".
+    """
+    tool, _ = _tool()
+    described = tool.parameters["properties"]["tz"]["description"]
+    assert "configured cron timezone" in described
+    assert "machine's local time" in described
+    assert "`at` stays on the machine's local time" in described
+
+
+@pytest.mark.parametrize("explicit", [None, "UTC"])
+async def test_tool_uses_the_runtime_default_timezone(tmp_path, monkeypatch, explicit):
+    from raven.core.cron_stack import build_cron_service
+
+    config = tmp_path / "config.json"
+    config.write_text('{"cron": {"defaultTimezone": "Asia/Tokyo"}}', encoding="utf-8")
+    monkeypatch.setattr("raven.home._current_config_path", config)
+    cron = build_cron_service(allowed_channels=None)
+    tool = CronTool(cron)
+    tool.set_context("tui", "default")
+    result = await tool.execute(action="add", message="daily", cron_expr="0 9 * * *", tz=explicit)
+    assert result.startswith("Created job"), result
+    assert result.endswith(f", fires on {explicit or 'Asia/Tokyo'}"), result
+    assert cron.list_jobs()[0].schedule.tz == (explicit or "Asia/Tokyo")
 
 
 async def test_add_every_with_tz_is_tolerated_and_dropped() -> None:

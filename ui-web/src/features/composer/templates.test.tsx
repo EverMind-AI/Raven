@@ -203,6 +203,26 @@ describe('the deck template picker', () => {
     expect(attachmentCache.get('uploads/amber_wave_quarterly_summary.pptx')).toBe(ROWS[0]!.cover)
   })
 
+  /* A pick lands under agent home's uploads as an upload does, and is named by
+     the file it wrote for the same reason: a conversation's own root can hold
+     an older `uploads/<name>.pptx`, which the short path would name instead. */
+  it('stages the picked template as the file the server wrote', async () => {
+    wire({
+      pick: async (name) => ({
+        path: `uploads/${name}.pptx`,
+        abs_path: `/home/me/.raven/workspace/uploads/${name}.pptx`,
+        size: 1234,
+      }),
+    })
+    await act(async () => { open(); await settle() })
+    await pickCard(0)
+    await act(async () => { await settle() })
+
+    const file = '/home/me/.raven/workspace/uploads/amber_wave_quarterly_summary.pptx'
+    expect(store.takeAtts()).toEqual([file])
+    expect(attachmentCache.get(file)).toBe(ROWS[0]!.cover)
+  })
+
   it('drops the chip and notes the failure when the server cannot place the template', async () => {
     wire({ pick: async () => { throw new Error('disk full') } })
     await act(async () => { open(); await settle() })

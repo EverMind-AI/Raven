@@ -1035,10 +1035,12 @@ class TestAutomaticSnapshotVerification:
         An agent that answers the handshake and then refuses to open a session
         without a credential has told us something durable about itself, and the
         agents page reads exactly that to say `Unauthorized` instead of offering
-        a Connect that spends a launch to be refused again. Every other failure
-        stays unrecorded, deliberately: a timeout or a crashed adapter is a fact
-        about this minute, and freezing it into a snapshot would label a working
-        agent broken until someone pressed Test.
+        a Connect that spends a launch to be refused again. Any other failure is
+        recorded only over a row whose last record had already failed, replacing
+        that verdict and keeping its capabilities. Over a row with no record, as
+        here, or a passing one, a timeout or a crashed adapter stays unrecorded:
+        it is a fact about this minute, and freezing it into a snapshot would
+        label a working agent broken until someone pressed Test.
         """
         from raven.agent.subagent.probe import schedule_snapshot_verification
 
@@ -1097,15 +1099,16 @@ class TestAutomaticSnapshotVerification:
         assert seen == ["configured", "a-preset"], "the configured rows first: they are the ones a run can dispatch to"
 
     async def test_a_recorded_credential_refusal_is_measured_again(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The one recorded verdict a restart must not take on trust.
+        """A recorded refusal is a verdict a restart must not take on trust.
 
-        Every other snapshot is skipped while it is fresh, and rightly: a `ready`
-        agent that has not been relaunched is still ready, and re-proving it
-        would spend a process per row per boot. A credential refusal is the
-        opposite kind of fact -- it is a state the user is expected to go and
-        fix, and nothing about fixing it touches the launch config, so the
-        snapshot never goes stale and the row would keep saying "Unauthorized"
-        across every restart after the sign-in that cured it.
+        A fresh `ready` snapshot is skipped, barring the two model-menu cases
+        tested below, and rightly: a `ready` agent that has not been relaunched is
+        still ready, and re-proving it would spend a process per row per boot. A
+        fresh failure is measured again, and a credential refusal is the failure
+        that most needs it -- it is a state the user is expected to go and fix,
+        and nothing about fixing it touches the launch config, so the snapshot
+        never goes stale and the row would keep saying "Unauthorized" across
+        every restart after the sign-in that cured it.
         """
         from dataclasses import dataclass
 
@@ -1661,3 +1664,251 @@ def _fake_executable(tmp_path: Path, name: str) -> Path:
     exe.write_text("#!/bin/sh\nexit 0\n")
     exe.chmod(0o755)
     return exe
+
+
+def test_a_machine_failure_says_where_the_fix_is_made_unless_the_fix_is_the_node_installed_from_here():
+    from raven.agent.subagent import probe
+
+    there = probe._on_machine("'claude' is not on the login shell PATH", "ravenx2")
+    assert there.endswith("(on machine 'ravenx2': any fix is made there)")
+
+    here = probe._on_machine(
+        "Raven node 0.2.4-abc is not installed on machine 'RavenX 2' (ravenx2); install it with "
+        "`raven ops connection install-node ravenx2`",
+        "ravenx2",
+    )
+    assert "any fix is made there" not in here and here.endswith("install-node ravenx2`")
+
+
+@pytest.mark.parametrize(
+    "status,detail",
+    [
+        ("unknown", "unsupported session configuration"),
+        ("attention", "session/new timed out"),
+        ("missing", "transport disconnected"),
+    ],
+)
+async def test_boot_replaces_an_auth_verdict_and_retries_until_ready(tmp_path, monkeypatch, status, detail):
+    from dataclasses import replace
+    from unittest.mock import AsyncMock
+
+    import raven.acp_client.capabilities as caps
+
+    cfg = ThirdPartyAcpSubagentConfig(name="measured", command="measured --acp")
+    monkeypatch.setattr(caps, "default_snapshot_path", lambda: tmp_path / "caps.json")
+    monkeypatch.setattr(probe_mod, "_launch_kw", lambda cfg: {})
+    old = caps.CapabilitySnapshot(
+        agent=cfg.name,
+        fingerprint=caps.snapshot_fingerprint(cfg),
+        status="attention",
+        detail="sign in",
+        measured_at_ms=1,
+        needs_auth=True,
+        can_load=True,
+        model_choices=(caps.AcpModelChoice(value="a", name="A"),),
+    )
+    store = caps.SnapshotStore()
+    store.record(old)
+    failed = caps.CapabilitySnapshot(
+        agent=cfg.name,
+        fingerprint=old.fingerprint,
+        status=status,
+        detail=detail,
+        measured_at_ms=2,
+        needs_auth=False,
+    )
+    verified = AsyncMock(side_effect=[failed, replace(old, status="ready", needs_auth=False, measured_at_ms=3)])
+    monkeypatch.setattr(caps, "verify_agent", verified)
+    rows = [_FakeRow(cfg.name, config=cfg)]
+    manager = _FakeManager(rows, with_refresh=True)
+    await probe_mod._verify_missing_snapshots(manager, rows)
+    saved = store.load([cfg])[cfg.name]
+    assert not saved.needs_auth
+    assert not saved.usable
+    assert (saved.status, saved.detail) == (status, detail)
+    assert saved.can_load and saved.model_choices == old.model_choices
+    await probe_mod._verify_missing_snapshots(manager, rows)
+    assert store.load([cfg])[cfg.name].usable
+    await probe_mod._verify_missing_snapshots(manager, rows)
+    assert verified.await_count == 2
+    assert manager.refresh_calls == 2
+
+
+@pytest.mark.parametrize(
+    "tested_status,late",
+    [
+        ("ready", {"status": "attention", "detail": "session/new timed out"}),
+        ("ready", {"status": "attention", "detail": "Authentication required", "needs_auth": True}),
+        ("attention", {"status": "ready", "detail": "connected"}),
+    ],
+    ids=[
+        "a-late-timeout-loses-to-a-test-pass",
+        "a-late-refusal-loses-to-a-test-pass",
+        "a-late-pass-loses-to-a-test-failure",
+    ],
+)
+async def test_a_record_written_while_the_boot_verify_ran_outranks_its_late_verdict(
+    tmp_path, monkeypatch, tested_status, late
+):
+    """The newest evidence wins: a Test recorded while the boot's handshake was in
+    flight stands, whatever that handshake returns afterwards.
+
+    The boot reads the row before it launches anything, and the handshake can
+    then hold that read for the whole ready timeout. A write built from it took
+    the Test's verdict and the menu the Test measured both -- a late timeout
+    included, which the boot records over any row whose last record failed.
+    """
+    from dataclasses import replace
+
+    import raven.acp_client.capabilities as caps
+
+    cfg = ThirdPartyAcpSubagentConfig(name="measured", command="measured --acp")
+    monkeypatch.setattr(caps, "default_snapshot_path", lambda: tmp_path / "caps.json")
+    monkeypatch.setattr(probe_mod, "_launch_kw", lambda cfg: {})
+    old = caps.CapabilitySnapshot(
+        agent=cfg.name,
+        fingerprint=caps.snapshot_fingerprint(cfg),
+        status="attention",
+        detail="sign in",
+        measured_at_ms=1,
+        needs_auth=True,
+        can_load=True,
+        model_choices=(caps.AcpModelChoice(value="a", name="A"),),
+    )
+    store = caps.SnapshotStore()
+    store.record(old)
+    if tested_status == "ready":
+        tested = replace(
+            old,
+            status="ready",
+            detail="connected",
+            needs_auth=False,
+            measured_at_ms=3,
+            model_choices=(caps.AcpModelChoice(value="b", name="B"),),
+        )
+    else:
+        tested = replace(old, status="attention", detail="session/new timed out", needs_auth=False, measured_at_ms=3)
+    late_result = replace(
+        old, **{"needs_auth": False, "measured_at_ms": 4, "model_choices": (caps.AcpModelChoice(value="c"),), **late}
+    )
+    calls: list[str] = []
+    boot_parked, released = asyncio.Event(), asyncio.Event()
+
+    async def fake_verify(cfg, **kwargs):
+        if not calls:
+            calls.append("boot")
+            boot_parked.set()
+            await released.wait()
+            return late_result
+        calls.append("test")
+        return tested
+
+    monkeypatch.setattr(caps, "verify_agent", fake_verify)
+    rows = [_FakeRow(cfg.name, config=cfg)]
+    boot = asyncio.ensure_future(probe_mod._verify_missing_snapshots(_FakeManager(rows, with_refresh=True), rows))
+    await asyncio.wait_for(boot_parked.wait(), 2)
+    await probe_mod.record_capabilities(cfg)
+    after_test = store.load([cfg])[cfg.name]
+    assert not boot.done(), "the Test has to land while the boot's handshake is still open"
+    assert after_test == tested, "and record its own measurement there"
+    released.set()
+    await asyncio.wait_for(boot, 2)
+
+    assert calls == ["boot", "test"]
+    assert store.load([cfg])[cfg.name] == after_test, "the boot's late verdict must not replace the Test's"
+
+
+@pytest.mark.parametrize("late_status", ["ready", "attention"])
+async def test_a_modes_relearn_during_the_boot_verify_does_not_stop_its_write(tmp_path, monkeypatch, late_status):
+    """A dispatch that relearns the agent's modes mid-handshake measures nothing.
+
+    It keeps the record's measurement stamp, so the boot's verdict still lands:
+    otherwise a failed row that a dispatch merely touched would stay failed until
+    the next boot. A late failure is written over the re-read record, so the
+    relearned modes survive it; a late ``ready`` is a whole measurement, its own
+    menu included, and is written as measured.
+    """
+    from dataclasses import replace
+
+    import raven.acp_client.capabilities as caps
+
+    cfg = ThirdPartyAcpSubagentConfig(name="measured", command="measured --acp")
+    monkeypatch.setattr(caps, "default_snapshot_path", lambda: tmp_path / "caps.json")
+    monkeypatch.setattr(probe_mod, "_launch_kw", lambda cfg: {})
+    old = caps.CapabilitySnapshot(
+        agent=cfg.name,
+        fingerprint=caps.snapshot_fingerprint(cfg),
+        status="attention",
+        detail="session/new timed out",
+        measured_at_ms=1,
+        can_load=True,
+        available_modes=(caps.AcpMode(id="old", name="Old"),),
+    )
+    store = caps.SnapshotStore()
+    store.record(old)
+    late_result = replace(
+        old,
+        status=late_status,
+        detail="connected" if late_status == "ready" else "session/new timed out again",
+        measured_at_ms=4,
+        available_modes=(caps.AcpMode(id="measured", name="Measured"),),
+    )
+    boot_parked, released = asyncio.Event(), asyncio.Event()
+
+    async def fake_verify(cfg, **kwargs):
+        boot_parked.set()
+        await released.wait()
+        return late_result
+
+    monkeypatch.setattr(caps, "verify_agent", fake_verify)
+    rows = [_FakeRow(cfg.name, config=cfg)]
+    manager = _FakeManager(rows, with_refresh=True)
+    boot = asyncio.ensure_future(probe_mod._verify_missing_snapshots(manager, rows))
+    await asyncio.wait_for(boot_parked.wait(), 2)
+    relearned = caps.relearn_session_modes(
+        store.load([cfg])[cfg.name],
+        {"sessionId": "s1", "modes": {"availableModes": [{"id": "fast", "name": "Fast"}], "currentModeId": "fast"}},
+        store=store,
+    )
+    assert relearned is not None and relearned.measured_at_ms == 1, "a relearn keeps the stamp it found"
+    assert not boot.done(), "the relearn has to land while the boot's handshake is still open"
+    released.set()
+    await asyncio.wait_for(boot, 2)
+
+    stored = store.load([cfg])[cfg.name]
+    assert (stored.status, stored.measured_at_ms) == (late_status, 4), "the boot's verdict must still land"
+    expected_modes = ("measured",) if late_status == "ready" else ("fast",)
+    assert tuple(m.id for m in stored.available_modes) == expected_modes
+    assert manager.refresh_calls == 1
+
+
+@pytest.mark.parametrize("needs_auth,unfetched", [(True, False), (False, True), (False, False)])
+@pytest.mark.parametrize("previous_status", ["ready", "attention"])
+def test_manual_test_merges_current_failure_flags_with_old_capabilities(needs_auth, unfetched, previous_status):
+    from dataclasses import replace
+
+    from raven.acp_client.capabilities import CapabilitySnapshot
+
+    old = CapabilitySnapshot(
+        agent="agent",
+        fingerprint="old",
+        status=previous_status,
+        detail="old refusal",
+        measured_at_ms=1,
+        needs_auth=previous_status == "attention",
+        can_load=True,
+    )
+    measured = replace(
+        old,
+        status="attention",
+        fingerprint="new",
+        measured_at_ms=2,
+        detail="current refusal",
+        can_load=False,
+        needs_auth=needs_auth,
+        unfetched=unfetched,
+    )
+    saved = probe_mod._test_record(measured, old)
+    assert saved.can_load
+    assert saved.fingerprint == "new"
+    assert (saved.needs_auth, saved.unfetched) == (needs_auth, unfetched)

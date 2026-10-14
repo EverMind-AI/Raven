@@ -147,6 +147,13 @@ async function harness(
         },
       }),
       'src/features/workspace/source': { wsSetRoot: (root: string) => calls.push(['wsSetRoot', root]) },
+      /* The picker's own store: what a reopened conversation hands it is the
+         whole of what is under test here. */
+      'src/state/mentions': {
+        adopt: (ids: readonly string[]) => calls.push(['adoptBases', [...ids].join(',')]),
+        clearStaged: () => calls.push(['clearStagedBases', '']),
+        staged: () => [],
+      },
       /* The streaming buffer the turn state resets through. */
       'src/features/transcript/mount': {
         nudge: () => {},
@@ -286,6 +293,27 @@ describe('the live session switch', () => {
     expect(h.title()).toBe('Alpha')
     expect(h.env.live.subId).toBe('sub:a')
     expect(h.calls).toContainEqual(['viewResume', 'a'])
+  })
+
+  it('takes up the bases a reopened conversation was pointed at', async () => {
+    /* Without this the picker draws a conversation with bases attached as
+       attached to none, and the reader's next tick writes that emptiness
+       back -- a selection lost by opening it. */
+    const h = await harness()
+    h.click({ id: 'a', title: 'A' })
+    await h.settle('a', { session_id: 'a', messages: [], info: { knowledge_bases: ['kb-b', 'kb-a'] } })
+
+    expect(h.calls).toContainEqual(['adoptBases', 'kb-b,kb-a'])
+  })
+
+  it('takes up nothing for a conversation pointed at nothing', async () => {
+    const h = await harness()
+    h.click({ id: 'a', title: 'A' })
+    await h.settle('a', { session_id: 'a', messages: [], info: {} })
+
+    /* Said as emptiness rather than left unsaid: a conversation pointed at
+       nothing has to clear what the last one was pointed at. */
+    expect(h.calls).toContainEqual(['adoptBases', ''])
   })
 
   it('puts the stop button back on a conversation whose turn is still running', async () => {

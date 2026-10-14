@@ -122,11 +122,11 @@ describe('groupSteps', () => {
 
 describe('verb labels', () => {
   it.each([
-    ['write_file', JSON.stringify({ path: '/a.py', content: 'x' }), 'wrote', 'writing'],
-    ['edit_file', JSON.stringify({ path: '/a.py', old_text: 'a', new_text: 'b' }), 'edited', 'editing'],
-    ['exec', JSON.stringify({ command: 'ls' }), 'ran command', 'running command'],
-    ['read_file', JSON.stringify({ path: '/a.py' }), 'read', 'reading'],
-    ['web_fetch', JSON.stringify({ url: 'https://a.com' }), 'read page', 'reading page'],
+    ['write_file', JSON.stringify({ path: '/a.py', content: 'x' }), 'Wrote', 'Writing'],
+    ['edit_file', JSON.stringify({ path: '/a.py', old_text: 'a', new_text: 'b' }), 'Edited', 'Editing'],
+    ['exec', JSON.stringify({ command: 'ls' }), 'Ran command', 'Running command'],
+    ['read_file', JSON.stringify({ path: '/a.py' }), 'Read', 'Reading'],
+    ['web_fetch', JSON.stringify({ url: 'https://a.com' }), 'Read page', 'Reading page'],
   ])('shows %s\'s catalogue verb, done and in flight', (name, args, doneWord, ingWord) => {
     const { container, unmount } = render(
       <StepList steps={[tool({ name, args, result: 'ok', ok: true })]} running={false} />,
@@ -167,7 +167,7 @@ describe('the multi-call summary', () => {
     )
     const sum = container.querySelector('.tkwrow.tksum')
     expect(sum).not.toBeNull()
-    expect(sum?.querySelector('.tkar')?.textContent).toBe('read 2 files')
+    expect(sum?.querySelector('.tkar')?.textContent).toBe('Read 2 files')
     expect(container.querySelector('.tkwkin')).toHaveProperty('hidden', true)
   })
 
@@ -228,7 +228,7 @@ describe('detail cards', () => {
     expect(container.querySelector('.tkdtlnm')?.textContent).toBe('ls -la')
     expect(container.querySelector('.tkcmd')?.textContent).toBe('ls -la')
     expect(container.querySelector('.tkdtlbd pre')?.textContent).toBe('file1\nfile2')
-    expect(container.querySelector('.tkexit')?.textContent).toBe('exit code 0')
+    expect(container.querySelector('.tkexit')?.textContent).toBe('Exit code 0')
     expect(container.querySelector('.tkexit')?.className).toContain('ok')
   })
 
@@ -273,7 +273,7 @@ describe('detail cards', () => {
     expect(keys).toEqual(['Task', 'Agent', 'State'])
     expect(values[0]).toBe('cross-check quotes')
     expect(values[1]).toBe('coder')
-    expect(values[2]).toBe('running')
+    expect(values[2]).toBe('Running')
   })
 
   it('shows a run_subagent_dag card as a scale / state grid, with no task/run-id/elapsed row when the receipt cannot be parsed', () => {
@@ -320,10 +320,10 @@ describe('detail cards', () => {
     openRow(container)
     const keys = [...container.querySelectorAll('.tkdgk')].map((k) => k.textContent)
     const values = [...container.querySelectorAll('.tkdgv')].map((v) => v.textContent)
-    expect(keys).toEqual(['Task', 'Scale', 'State', 'Elapsed', 'Run id'])
+    expect(keys).toEqual(['Task', 'Scale', 'State', 'Elapsed', 'Run ID'])
     expect(values[0]).toBe('nightly audit')
     expect(values[1]).toBe('2 nodes · 2 agents · coder · reviewer')
-    expect(values[2]).toBe('running')
+    expect(values[2]).toBe('Running')
     expect(values[3]).toBe('1m05s')
     expect(values[4]).toBe('r1')
     fireEvent.click(container.querySelector('.tkdgv.tkgov') as HTMLElement)
@@ -358,7 +358,7 @@ describe('detail cards', () => {
     const keys = [...container.querySelectorAll('.tkdgk')].map((k) => k.textContent)
     const values = [...container.querySelectorAll('.tkdgv')].map((v) => v.textContent)
     expect(keys).toEqual(['Task', 'Agent', 'State', 'Elapsed'])
-    expect(values[2]).toBe('completed')
+    expect(values[2]).toBe('Completed')
     expect(values[3]).toBe('1m05s')
     fireEvent.click(container.querySelector('.tkdgv.tkgov') as HTMLElement)
     expect(opened).toEqual(['n42'])
@@ -378,7 +378,7 @@ describe('detail cards', () => {
     openRow(container)
     const keys = [...container.querySelectorAll('.tkdgk')].map((k) => k.textContent)
     const values = [...container.querySelectorAll('.tkdgv')].map((v) => v.textContent)
-    expect(keys).toEqual(['Scale', 'Playbook', 'State', 'Run id'])
+    expect(keys).toEqual(['Scale', 'Playbook', 'State', 'Run ID'])
     expect(values[1]).toBe('nightly-checks')
     expect(values[3]).toBe('r9')
     expect(container.querySelector('.tkdgv.tkgov')).toBeNull()
@@ -548,7 +548,7 @@ describe('the folded summary row', () => {
     const cls = container.querySelector('.tkwrow')?.className.split(' ') ?? []
     expect(cls).toContain('tknoresult')
     expect(cls).not.toContain('tkbusy')
-    expect(container.querySelector('.tknoresultchip')?.textContent).toBe('no result')
+    expect(container.querySelector('.tknoresultchip')?.textContent).toBe('No result')
   })
 
   it('still breathes for the same call while the node runs', () => {

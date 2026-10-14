@@ -171,6 +171,9 @@ const UNSENT = new Set([
   'browser.watch.can_back', 'browser.watch.can_forward', 'browser.watch.error', 'browser.watch.headful', 'browser.watch.loading', 'browser.watch.title', 'browser.watch.url', 'browser.watch.vh', 'browser.watch.vw', 'browser.watch.watching',
   // channels.qr: 2
   'channels.qr.qr', 'channels.qr.qr_text',
+  // subagents.list / subagents.probe: 1 each -- the machine an acp row runs on; the
+  // library's rows all run on this computer, where the server sends null.
+  'subagents.list.rows[].machine', 'subagents.probe.rows[].machine',
   // config.set: 5 -- the model-switch group, which the offline library does not
   // model: its gateway always has a loop, so there is no restart to report.
   'config.set.applies_to_session', 'config.set.needs_restart', 'config.set.scope', 'config.set.session_id', 'config.set.value',
@@ -195,6 +198,11 @@ const UNSENT = new Set([
   'fs.open.app',
   // import.status: 4
   'import.status.current', 'import.status.phase', 'import.status.phases', 'import.status.tier',
+  // knowledge.chunks.create: 2 -- and knowledge.chunks.update: 2. Both answer
+  // with a piece a person wrote, and a written piece has no page: the pages
+  // are what a parser found on the way in, and nobody parsed this one.
+  'knowledge.chunks.create.chunk.page_end', 'knowledge.chunks.create.chunk.page_number',
+  'knowledge.chunks.update.chunk.page_end', 'knowledge.chunks.update.chunk.page_number',
   // knowledge.search: 2
   'knowledge.search.embed_ms', 'knowledge.search.search_ms',
   // knowledge.status: 1
@@ -233,8 +241,10 @@ const UNSENT = new Set([
   'session.create.info.config_notices', 'session.create.info.harness', 'session.create.info.endpoint', 'session.create.info.running_ms', 'session.create.info.update_available', 'session.create.info.update_command', 'session.create.info.usage.context_estimated',
   // session.resume: 13
   'session.resume.info.config_notices', 'session.resume.info.harness', 'session.resume.info.endpoint', 'session.resume.info.running_ms', 'session.resume.info.update_available', 'session.resume.info.update_command', 'session.resume.info.usage.context_estimated', 'session.resume.messages[].context', 'session.resume.messages[].dag_run_id', 'session.resume.messages[].diff', 'session.resume.messages[].notice', 'session.resume.messages[].reasoning_ms', 'session.resume.messages[].spawn_task_id', 'session.resume.messages[].turn_ended',
-  // settings.everos: 1
-  'settings.everos.note',
+  // settings.everos: 2 -- reason is set only when another backend holds long-term memory; this library runs on EverOS
+  'settings.everos.note', 'settings.everos.reason',
+  // settings.everosCloud: 3 -- the cloud backend is not the selected one here, so no key is on file and nothing is probed
+  'settings.everosCloud.hint', 'settings.everosCloud.key_source', 'settings.everosCloud.status',
   // settings.everosSet: 1 -- the gateway's re-index warning, which only a real embedding move raises
   'settings.everosSet.warning',
   // settings.set: 1 -- the gateway's reload-only warning, which the key the gate writes (a live one) never raises

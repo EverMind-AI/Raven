@@ -54,6 +54,7 @@ from typing import Any
 
 from raven.config.self_surface import carries_secret_value
 from raven.contracts.permissions import Tier
+from raven.ops import remote_path
 from raven.permissions.shell_policy import (
     _COMMAND_RUNNERS,
     _MAX_EMBEDDED_SHELL_DEPTH,
@@ -95,6 +96,14 @@ DEFAULT_ALLOW_TOOLS: frozenset[str] = frozenset(
         "tool_call",
         "web_search",
         "web_fetch",
+        # Narrower than the two above it: those reach the whole internet, and
+        # this reaches only the bases the reader attached to this conversation
+        # by hand. Asking for each search is asking a reader to re-approve the
+        # choice they just made -- and on a turn with nobody to ask (a cron
+        # job, the heartbeat, a channel with no approver) the registry refuses
+        # the call and tells the model it needs approval, so the attached
+        # bases are never searched at all.
+        "knowledge_search",
         "deliver_files",
         "message",
         "ask_user",
@@ -673,6 +682,16 @@ DEFAULT_ALLOW_ACTIONS: dict[str, frozenset[str]] = {"plugin": frozenset({"find",
 
 
 def default_tier(tool_name: str, params: dict[str, Any] | None = None) -> Tier:
+    if (reach := remote_path.reading(tool_name, params)) is not None:
+        # A registered machine's disk is not this computer's: its login is
+        # often root and its disks shared. The directories this Raven's agents
+        # work in there and the row's own paths read freely; anywhere else
+        # asks, once per machine and directory (``builtin.session_keys``).
+        return Tier.ALLOW if reach.inside else Tier.ASK
+    if remote_path.writing(tool_name, params) is not None:
+        # A write there asks wherever it falls, as a write here does: the
+        # roots free a look, not a change, and a grant is for the one file.
+        return Tier.ASK
     if tool_name in DEFAULT_ALLOW_TOOLS:
         return Tier.ALLOW
     if (params or {}).get("action") in DEFAULT_ALLOW_ACTIONS.get(tool_name, ()):

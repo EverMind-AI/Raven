@@ -127,6 +127,50 @@ _OPENROUTER_CACHE_TTL = 3600
 _OPENROUTER_CACHE: dict[str, dict] = {}
 _OPENROUTER_CACHE_TIME: float = 0.0
 
+# What a model's own server said its window is, keyed by the id the request
+# goes out under. The server is asked once and its answer is a fact about the
+# model, so the later readers that are not allowed to ask -- ``ModelBinding``
+# resolves inside a running turn, on the event loop -- read it instead of
+# falling back to a default that is wrong by an order of magnitude for a local
+# model. Only a real figure is kept: a server that is down answers a row of
+# nulls, and remembering that would answer the fallback for the life of the
+# process, which is the one state a server that comes up later cannot correct.
+_ENDPOINT_WINDOWS: dict[str, tuple[int, int | None]] = {}
+
+
+def _endpoint_key(name: str) -> str:
+    """The id ``name`` is sent under, so every stored spelling answers as one."""
+    from raven.providers.wire import wire_model
+
+    try:
+        return wire_model(name)
+    except Exception:
+        return name
+
+
+def _endpoint_memo(model: str) -> tuple[int, int | None] | None:
+    """What the model's own server reported, if it was ever asked."""
+    if not _names_endpoint_vendor(model):
+        return None
+    for candidate in _candidates(model):
+        found = _ENDPOINT_WINDOWS.get(_endpoint_key(candidate))
+        if found is not None:
+            return found
+    return None
+
+
+def _remember_endpoint(name: str, *, window: int, ceiling: int | None) -> None:
+    """Keep what the server reported, under the id the request goes out under.
+
+    ``window`` is required rather than optional, and that is the guard: the one
+    caller has a window in hand before it calls, so a signature that accepts
+    ``None`` would only invite a later caller to store the zeroed row a down
+    server answers with -- which reads back as a real figure and pins the
+    fallback for the life of the process.
+    """
+    _ENDPOINT_WINDOWS[_endpoint_key(name)] = (int(window), int(ceiling) if ceiling else None)
+
+
 # An offline context (a trajectory replay feeding recorded responses, say) must
 # not gate on the network or leak that it ran: no rate lookup, no catalog warm,
 # no fetch. A ContextVar, not a process global — real turns running
@@ -218,10 +262,9 @@ def may_prompt(model: str) -> bool:
     return any((drivers / part / "authenticator.py").exists() for part in model.split("/") if part)
 
 
-# LiteLLM answers a huggingface id's context window by fetching the repo's
-# `config.json` over the network -- `utils.py::_get_max_position_embeddings`,
-# on every call, cached nowhere. `allow_fetch=False` does not reach it: that
-# flag governs this module's own OpenRouter fetch, not LiteLLM's.
+# LiteLLM fetches a huggingface id's config.json for its context window.
+# Skip this driver even when SDK lookups are allowed: the routing prefix
+# becomes part of the repository name, so the request returns 404.
 _NETWORK_METADATA_VENDORS = frozenset({"huggingface"})
 
 
@@ -252,6 +295,69 @@ def may_fetch(model: str) -> bool:
     branch.
     """
     return any(part in _NETWORK_METADATA_VENDORS for part in model.split("/") if part)
+
+
+# Ollama's driver answers a table miss by POSTing `{api_base}/api/show` to the
+# daemon serving the model. That is a request, not a read: worth making when the
+# caller allows a fetch, and what held `session/new` past its EOF grace when not.
+_ENDPOINT_METADATA_VENDORS = frozenset({"ollama", "ollama_chat"})
+
+
+def _names_endpoint_vendor(model: str) -> bool:
+    """Compare endpoint provider segments in the registry's normalized spelling."""
+    from raven.providers.registry import normalize_provider_name
+
+    return any(normalize_provider_name(part) in _ENDPOINT_METADATA_VENDORS for part in model.split("/") if part)
+
+
+def _endpoint_metadata_model(model: str) -> str:
+    """Use LiteLLM's provider spelling for an endpoint metadata lookup.
+
+    Keep ``ollama/`` distinct from ``ollama_chat/``: LiteLLM's static table
+    files the completion route under ``ollama/``, while ``wire_model`` would
+    send both through ``ollama_chat/`` and lose those offline rows.
+    """
+    from raven.providers.registry import litellm_spelling, normalize_provider_name
+
+    provider, separator, name = model.partition("/")
+    if separator and normalize_provider_name(provider) in _ENDPOINT_METADATA_VENDORS:
+        return f"{litellm_spelling(provider)}/{name}"
+    return model
+
+
+def _may_query_endpoint(model: str) -> bool:
+    """Would ``get_model_info`` ask this model's own server rather than a table?
+
+    Every other driver answers offline: it strips the routing prefix and reads
+    the table, which files most direct vendors under the bare name
+    (``openai/gpt-4o-mini`` is keyed ``gpt-4o-mini``). That normalization is
+    what a cache-only lookup still needs.
+
+    Ollama's driver is asked only when the id routes to Ollama and no name
+    LiteLLM derives from it is in the table, compared without case
+    (``_get_model_info_helper``, utils.py:5698 in 1.85.0). So ``ollama/Llama3``
+    reads the ``ollama/llama3`` row, and ``litellm_proxy/ollama/llama3`` never
+    reaches the driver at all. The check is LiteLLM's own, put to it rather
+    than copied. A release that does not ship it gets the cautious answer for
+    an id with an Ollama segment, and only for one: LiteLLM reads Ollama off
+    the first segment, or off an ``api_base`` this module never passes, so an
+    id without one is answered here without the check -- which also spares it
+    a provider parse.
+
+    Asked of the id the caller passed, so the ``openrouter/`` alias of a model
+    the daemon would be asked about is skipped too: its row, if the table has
+    one, is read before the ask.
+    """
+    if not _names_endpoint_vendor(model):
+        return False
+    try:
+        from litellm.utils import _get_potential_model_names, _is_potential_model_name_in_model_cost
+
+        names = _get_potential_model_names(model=model, custom_llm_provider=None)
+        routed_to_ollama = names["custom_llm_provider"] in _ENDPOINT_METADATA_VENDORS
+        return routed_to_ollama and not _is_potential_model_name_in_model_cost(names)
+    except Exception:
+        return True
 
 
 def _numeric(entry: dict | None, *fields: str) -> float | None:
@@ -794,7 +900,7 @@ def _litellm_ready() -> bool:
     return not getattr(getattr(module, "__spec__", None), "_initializing", False)
 
 
-def _try_litellm_max_output(model: str, *, allow_import: bool = True) -> int | None:
+def _try_litellm_max_output(model: str, *, allow_import: bool = True, allow_fetch: bool = True) -> int | None:
     """The model's own output ceiling, from the same metadata as the window.
 
     ``max_tokens`` is a legitimate fallback here in a way it is not on the
@@ -804,6 +910,9 @@ def _try_litellm_max_output(model: str, *, allow_import: bool = True) -> int | N
     Both tiers are filtered through ``_trustworthy_ceiling``: the rows that get
     this wrong answer the table and ``get_model_info`` alike, so guarding one
     would hand back exactly what the other just rejected.
+
+    ``allow_fetch=False`` skips ``get_model_info`` for a model LiteLLM would
+    answer by asking the model's own server (see ``_may_query_endpoint``).
     """
     if not allow_import and not _litellm_ready():
         return None
@@ -814,11 +923,16 @@ def _try_litellm_max_output(model: str, *, allow_import: bool = True) -> int | N
     except Exception:
         return None
 
+    model = _endpoint_metadata_model(model)
     for candidate in _candidates(model):
         ceiling = _trustworthy_ceiling(_table_entry(candidate))
         if ceiling:
             return ceiling
-        if may_prompt(candidate) or may_fetch(candidate):
+        # After the table, like the window lookup: a shipped row outranks what a
+        # previous ask answered.
+        if not allow_fetch and (memo := _endpoint_memo(model)) is not None:
+            return memo[1]
+        if may_prompt(candidate) or may_fetch(candidate) or (not allow_fetch and _may_query_endpoint(model)):
             continue
         try:
             info = litellm.get_model_info(candidate)
@@ -880,9 +994,9 @@ def declared_max_output_tokens(model: str | None, *, allow_fetch: bool = True) -
     """
     if not model:
         return None
-    return _try_litellm_max_output(model, allow_import=allow_fetch) or _try_openrouter_max_output(
-        model, allow_fetch=allow_fetch
-    )
+    return _try_litellm_max_output(
+        model, allow_import=allow_fetch, allow_fetch=allow_fetch
+    ) or _try_openrouter_max_output(model, allow_fetch=allow_fetch)
 
 
 def resolve_max_output_tokens(model: str | None, *, window: int | None = None, allow_fetch: bool = True) -> int:
@@ -941,8 +1055,8 @@ def resolve_max_output_tokens(model: str | None, *, window: int | None = None, a
     return max(1, min(ceiling, room, MAX_OUTPUT_TOKENS_PER_ITERATION))
 
 
-def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int | None:
-    """LiteLLM's static model metadata -- offline, covers most mapped providers.
+def _try_litellm_context_window(model: str, *, allow_import: bool = True, allow_fetch: bool = True) -> int | None:
+    """LiteLLM's model metadata, covering most mapped providers.
 
     Falls back to ``max_tokens`` (the output ceiling) for the handful of rows
     that carry no ``max_input_tokens``. Not because the two mean the same
@@ -958,6 +1072,9 @@ def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int
     only, not to wait out the import it is trying to defer. Once LiteLLM is in
     hand the check is free and the lookup proceeds exactly as with
     ``allow_import=True``.
+
+    ``allow_fetch=False`` skips ``get_model_info`` for a model LiteLLM would
+    answer by asking the model's own server (see ``_may_query_endpoint``).
     """
     if not allow_import and not _litellm_ready():
         return None
@@ -968,13 +1085,20 @@ def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int
     except Exception:
         return None
 
+    model = _endpoint_metadata_model(model)
     for candidate in _candidates(model):
         # The table before the ask: it holds every model the interactive-login
         # drivers are asked about in practice, and reading it cannot prompt.
         window = _numeric(_table_entry(candidate), "max_input_tokens", "max_tokens")
         if window:
             return int(window)
-        if may_prompt(candidate) or may_fetch(candidate):
+        # The table before the memo too, and for the same reason: a row LiteLLM
+        # ships is this module's first source for this id, and the memo holds
+        # what a previous ask answered -- which is authoritative for the daemon
+        # but ranks below a table the caller could have read offline.
+        if not allow_fetch and (memo := _endpoint_memo(model)) is not None:
+            return memo[0]
+        if may_prompt(candidate) or may_fetch(candidate) or (not allow_fetch and _may_query_endpoint(model)):
             continue
         try:
             info = litellm.get_model_info(candidate)
@@ -982,6 +1106,8 @@ def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int
             continue
         window = _numeric(info, "max_input_tokens", "max_tokens")
         if window:
+            if _may_query_endpoint(model):
+                _remember_endpoint(candidate, window=window, ceiling=_trustworthy_ceiling(info))
             return int(window)
     return None
 
@@ -1003,11 +1129,11 @@ def resolve_context_window(model: str, *, allow_fetch: bool = True) -> int | Non
 
     ``allow_fetch=False`` means "answer from what is already on hand": it
     passes through to the OpenRouter tier (see ``_fetch_openrouter_models``)
-    and also tells the LiteLLM tier not to import LiteLLM on this caller's
-    behalf (see ``_try_litellm_context_window``) -- a caller cheap enough to
-    pass this is cheap enough not to pay a fresh import either.
+    and keeps the LiteLLM tier to lookups that read: no fresh import, and no
+    metadata request to the model's own server, runs on this caller's behalf
+    (see ``_try_litellm_context_window``).
     """
-    window = _try_litellm_context_window(model, allow_import=allow_fetch)
+    window = _try_litellm_context_window(model, allow_import=allow_fetch, allow_fetch=allow_fetch)
     if window:
         return window
 
@@ -1071,9 +1197,12 @@ def reset_openrouter_cache() -> None:
     The tests' reset: pair it with the ``model_catalog_cache._CACHE_PATH`` seam
     to exercise the disk tiers without touching the real ~/.raven/cache/.
     """
-    global _OPENROUTER_CACHE, _OPENROUTER_CACHE_TIME, _WARM_AT
+    global _OPENROUTER_CACHE, _OPENROUTER_CACHE_TIME, _WARM_AT, _ENDPOINT_WINDOWS
     _OPENROUTER_CACHE = {}
     _OPENROUTER_CACHE_TIME = 0.0
     # Reset too, or a warm attempt from an earlier test leaves this one on a
     # cooldown it never asked for.
     _WARM_AT = 0.0
+    # And the windows a stand-in server reported: those are this process's
+    # answer for a model the next test may point somewhere else entirely.
+    _ENDPOINT_WINDOWS = {}

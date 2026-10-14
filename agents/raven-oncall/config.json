@@ -71,8 +71,6 @@
   "plugins": {
     "config": {
       "everos-memory": {
-        "mode": "http",
-        "base_url": "http://localhost:18791",
         "user_id": "raven-oncall",
         "agent_id": "raven-oncall",
         "timeout_s": 360

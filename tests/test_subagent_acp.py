@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import shlex
 import sys
 import time
@@ -753,9 +754,10 @@ async def test_a_failed_test_after_a_config_edit_keeps_the_capabilities_the_rost
 
 async def test_the_connect_records_what_a_test_would(tmp_path: Path, monkeypatch) -> None:
     """``record_capabilities`` is the writer the manual test and the connect
-    share, and ``capabilities_wanted`` is the boot backfill's own three cases:
-    no record, a record for a launch config that changed, a record from before
-    the menu was measured. A complete record is not re-measured."""
+    share, and ``capabilities_wanted`` decides when a connect measures: no
+    record, a record for a launch config that changed, a record from before the
+    menu was measured, among the cases its docstring lists. A complete record is
+    not re-measured."""
     path = tmp_path / "caps.json"
     monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: path)
     cfg = stub_config("a")
@@ -2518,16 +2520,24 @@ def test_the_launch_key_covers_every_launch_parameter() -> None:
     # handler does not make the running process the wrong one. `ready_timeout_s`
     # is how long this caller waits for the handshake, not what was launched: two
     # entries differing only in patience share the connection they both wanted.
-    outside = {"self", "name", "on_request", "ready_timeout_s"}
+    # `launcher` is how a process on a `machine` is started, derived from the
+    # launch arguments the key already covers.
+    outside = {"self", "name", "on_request", "ready_timeout_s", "launcher"}
     params = {p for p in inspect.signature(AcpConnectionPool.acquire).parameters} - outside
     assert params == set(LAUNCH_PARAMS)
 
     base = {"command": "agent acp", "cwd": "/w", "env": {"A": "1"}}
-    for field, other in (("command", "agent acp --url x"), ("cwd", "/other"), ("env", {"A": "2"})):
+    for field, other in (
+        ("command", "agent acp --url x"),
+        ("cwd", "/other"),
+        ("env", {"A": "2"}),
+        ("machine", "box"),
+    ):
         assert launch_key(**base) != launch_key(**{**base, field: other}), field
     assert launch_key(**base) == launch_key(**base)
-    # An absent env and an empty one are the same launch.
+    # An absent env and an empty one are the same launch, and so is a machine that is this computer.
     assert launch_key(command="a", cwd=None, env=None) == launch_key(command="a", cwd=None, env={})
+    assert launch_key(command="a", cwd=None, env=None) == launch_key(command="a", cwd=None, env=None, machine=None)
 
 
 async def test_two_bindings_of_one_agent_hold_their_own_connections(tmp_path: Path) -> None:
@@ -3172,6 +3182,126 @@ async def test_a_request_after_the_child_died_still_names_the_exit_and_the_reaso
         await client.close()
     with pytest.raises(AcpConnectionError, match="connection is not open"):
         await client.request("initialize", acp_protocol.initialize_params(), timeout=10)
+
+
+def _without_killpg(monkeypatch: pytest.MonkeyPatch) -> list[tuple[list[str], int]]:
+    """Windows as ``close`` sees it: no ``os.killpg``, and a ``taskkill`` on PATH.
+
+    Record real ``taskkill`` runs on Windows and simulate them on POSIX.
+    """
+    import shutil
+    import subprocess
+
+    real_which = shutil.which
+    real_run = subprocess.run
+    native = not hasattr(os, "killpg")
+    taskkill = real_which("taskkill") if native else r"C:\Windows\System32\taskkill.exe"
+    if taskkill is None:
+        pytest.skip("taskkill is unavailable")
+    ran: list[tuple[list[str], int]] = []
+
+    def run(argv: list[str], **kw: Any) -> subprocess.CompletedProcess:
+        if argv[0] != taskkill:
+            return real_run(argv, **kw)
+        result = real_run(argv, **kw) if native else subprocess.CompletedProcess(argv, 0)
+        ran.append((list(argv[1:]), result.returncode))
+        return result
+
+    monkeypatch.delattr(os, "killpg", raising=False)
+    monkeypatch.setattr(shutil, "which", lambda name: taskkill if name == "taskkill" else real_which(name))
+    monkeypatch.setattr(subprocess, "run", run)
+    return ran
+
+
+async def test_close_without_killpg_ends_the_tree_through_taskkill(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows has no ``os.killpg``, and calling it raised before any teardown ran.
+
+    The connection was left marked closed with its process, its read loops and
+    its transport all still there. ``taskkill /T`` reaches what the launcher
+    started, which a bare ``Process.kill`` does not.
+    """
+    from raven.acp_client import protocol
+    from raven.acp_client.client import AcpClient
+
+    cfg = stub_config("windows-close")
+    client = await AcpClient.launch(name="windows-close", command=cfg.command, env=dict(cfg.env))
+    try:
+        await client.request("initialize", protocol.initialize_params(), timeout=15)
+        proc = client._proc
+        ran = _without_killpg(monkeypatch)
+
+        await client.close()
+
+        assert ran == [(["/T", "/F", "/PID", str(proc.pid)], 0)]
+        assert proc.returncode is not None, "close must stop the launcher"
+        assert client.closed and not client.alive
+    finally:
+        await client.close()
+
+
+async def test_close_without_killpg_kills_nothing_by_the_pid_of_an_exited_launcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Once the launcher has exited, its pid may already name another process."""
+    from raven.acp_client.client import AcpClient
+
+    cfg = stub_config("abort", mode="abort")
+    client = await AcpClient.launch(name="abort", command=cfg.command, env=dict(cfg.env))
+    try:
+        for _ in range(200):
+            if client._proc.returncode is not None:
+                break
+            await asyncio.sleep(0.025)
+        assert client._proc.returncode is not None, "the stub must be gone before the close, or this tests nothing"
+        ran = _without_killpg(monkeypatch)
+
+        await client.close()
+
+        assert ran == []
+        assert client.closed
+    finally:
+        await client.close()
+
+
+@pytest.mark.skipif(not hasattr(os, "killpg"), reason="process groups are POSIX")
+async def test_close_kills_a_worker_the_launcher_started(tmp_path: Path) -> None:
+    """``close`` ends the launcher's whole process group, not only the launcher.
+
+    An ACP server that hands its work to a child would otherwise leave that
+    child running once the connection is gone: ``Process.kill`` reaches the
+    launcher alone.
+    """
+    from raven.acp_client.client import AcpClient
+
+    pid_file = tmp_path / "worker.pid"
+    script = tmp_path / "launch.sh"
+    script.write_text(
+        f"#!/bin/sh\nsleep 100 &\necho $! > {shlex.quote(str(pid_file))}\n"
+        f"exec {shlex.quote(sys.executable)} {shlex.quote(str(_STUB))}\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    client = await AcpClient.launch(name="group", command=f"sh {shlex.quote(str(script))}", env={"ACP_STUB_MODE": "ok"})
+    try:
+        for _ in range(100):
+            if pid_file.exists() and pid_file.read_text().strip():
+                break
+            await asyncio.sleep(0.05)
+        else:
+            raise AssertionError("the worker never started")
+        worker = int(pid_file.read_text().strip())
+        os.kill(worker, 0)
+    finally:
+        await client.close()
+
+    for _ in range(40):
+        try:
+            os.kill(worker, 0)
+        except ProcessLookupError:
+            break
+        await asyncio.sleep(0.05)
+    else:
+        raise AssertionError("the worker outlived close")
 
 
 async def test_an_unanswered_request_does_not_stall_the_read_loop() -> None:

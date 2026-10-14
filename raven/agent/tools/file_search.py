@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from raven.agent.tools import tree_walk
+from raven.agent.tools import remote_files, tree_walk
 from raven.agent.tools.filesystem import _FsTool
 
 # Pseudo / system filesystem roots that must never be tree-walked. A model that
@@ -133,6 +133,16 @@ class GrepTool(_FsTool):
         limit: int | None = None,
         **kwargs: Any,
     ) -> str:
+        params = {
+            "pattern": pattern,
+            "glob": glob,
+            "output_mode": output_mode,
+            "case_insensitive": case_insensitive,
+            "context": context,
+            "limit": limit,
+        }
+        if (remote := await remote_files.answer("grep", path, params)) is not None:
+            return str(remote)
         cap = limit or self._DEFAULT_LIMIT
         try:
             re.compile(pattern)
@@ -523,6 +533,8 @@ class FindTool(_FsTool):
         limit: int | None = None,
         **kwargs: Any,
     ) -> str:
+        if (remote := await remote_files.answer("find", path, {"pattern": pattern, "limit": limit})) is not None:
+            return str(remote)
         cap = limit or self._DEFAULT_LIMIT
         try:
             base = self._resolve(path)

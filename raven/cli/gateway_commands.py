@@ -33,6 +33,7 @@ from raven.core.provider_stack import build_model_routing
 from raven.providers.factory import make_resolving_provider
 from raven.providers.litellm_setup import warm_up_in_background
 from raven.utils import asyncio_runner as bounded_asyncio
+from raven.utils.heap import start_trimmer
 from raven.utils.workspace import sync_workspace_templates
 
 if TYPE_CHECKING:
@@ -689,6 +690,7 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
             # what it schedules is pinned by source in
             # tests/test_cli_gateway_commands.py instead.
             warm_up_in_background()  # pragma: no cover
+            start_trimmer()  # pragma: no cover
             health_server = None
             gw_teardown = None
             gw_scheduler = None
@@ -879,6 +881,14 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     deck_templates.warm_covers_in_background(  # pragma: no cover
                         language=config.language
                     )
+                    # Anything a restart or a cancelled upload left queued is
+                    # finished here, for the same reason: the reader asked for
+                    # it to be indexed and nothing else was ever going to pick
+                    # it up. After a delay, so the first page and the first
+                    # turn are answered before this starts embedding.
+                    from raven.knowledge._library import drain_pending_in_background
+
+                    drain_pending_in_background()  # pragma: no cover
                     # One shared loop, two question surfaces. build_rpc_stack
                     # bound the page's broker over the channel broker wired
                     # above (AskUserTool._broker is process-wide, last write
@@ -1301,6 +1311,7 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     await control.stop()
                 from raven.acp_client.client import begin_drain
                 from raven.acp_client.pool import close_pool
+                from raven.node.client import close_node_pool
 
                 # Before anything tears a transport down: an ACP connection
                 # closed first fails every pending turn with a connection error,
@@ -1322,8 +1333,12 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     await gw_teardown()
                 # ACP agents are launched with start_new_session, so they do not
                 # get this process's signals and outlive it unless the pool is
-                # closed.
+                # closed. The ssh of each Raven node on a registered machine is
+                # launched the same way, and the agents the node started end
+                # with it; the node pool is closed after the agents' so a
+                # closing agent still has its link to be ended through.
                 await close_pool()
+                await close_node_pool()
                 await agent.close_mcp()
                 agent.stop()
                 # Not folded into AgentLoop.stop: its other caller is the

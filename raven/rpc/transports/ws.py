@@ -22,9 +22,12 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from aiohttp import WSCloseCode, WSMsgType, web
 from loguru import logger
+
+from raven.security.hosts import is_loopback_ip
 
 DEFAULT_PORT = 18792
 _PORT_PROBE_SPAN = 20
@@ -33,23 +36,39 @@ _PORT_PROBE_SPAN = 20
 # the credential used after the one-time exchange.
 _NONCE_TTL_S = 30 * 60.0
 
+# The page shows whatever the exchange answered, so the gateway is what says
+# why a sign-in was refused; the two refusals below need different remedies.
 _AUTH_PAGE = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Raven</title></head>
 <body style="font-family:system-ui;display:grid;place-items:center;height:100vh;margin:0">
 <p id="s">Signing in to Raven...</p>
 <script>
 (async () => {
+  const s = document.getElementById('s');
   const nonce = location.hash.slice(1);
   history.replaceState(null, '', '/auth');
-  const r = await fetch('/auth/exchange', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({nonce}),
-  });
-  if (r.ok) { location.replace('/'); }
-  else { document.getElementById('s').textContent = 'Sign-in link expired. Re-run: raven serve --open'; }
+  let r;
+  try {
+    r = await fetch('/auth/exchange', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({nonce}),
+    });
+  } catch (e) {
+    s.textContent = 'Raven did not answer. If it has stopped, start it with: raven web';
+    return;
+  }
+  if (r.ok) { location.replace('/'); return; }
+  const why = (await r.text()).trim();
+  s.textContent = why || `Sign-in failed (HTTP ${r.status}). Run raven web for a new link.`;
 })();
 </script></body></html>"""
+
+_REFUSED_ADDRESS = (
+    "Raven signs in a page opened at 127.0.0.1 or localhost, and this page is somewhere else. "
+    "Open the sign-in link at one of those addresses; reaching this machine through a port forward is fine."
+)
+_SPENT_LINK = "This sign-in link was already used or has expired. Run raven web for a new one."
 
 _COOKIE_BASE = "raven_session"
 
@@ -71,6 +90,20 @@ def cookie_name(port: int) -> str:
     its own jar entry, and a browser can hold as many as the user is running.
     """
     return f"{_COOKIE_BASE}_{port}"
+
+
+def _loopback_origin(origin: str) -> bool:
+    """Whether a browser origin names this machine: ``localhost`` or a loopback IP.
+
+    Local aliases and trailing dots stay outside the browser sign-in policy,
+    even though URL policies may allow them. An unclosed IPv6 bracket is a
+    refusal too, rather than an error from ``urlsplit``.
+    """
+    try:
+        hostname = urlsplit(origin).hostname
+    except ValueError:
+        return False
+    return hostname is not None and (hostname == "localhost" or is_loopback_ip(hostname))
 
 
 _COOKIE_MAX_AGE_S = 30 * 24 * 60 * 60
@@ -176,20 +209,49 @@ class WsGateway:
         reachable here, but a credential check that short-circuits on the
         first wrong byte is not worth keeping when the fix is free.
         """
-        cookie = request.cookies.get(cookie_name(self.port))
+        cookie = request.cookies.get(self._cookie_name(request))
         if cookie is not None and secrets.compare_digest(cookie, self.session_cookie):
             return True
         header = request.headers.get("X-Raven-Token")
         return header is not None and secrets.compare_digest(header, self.session_token)
 
+    def _cookie_name(self, request: web.Request) -> str:
+        """The session cookie's name, for the port the browser reached.
+
+        That is the bound port unless a port forward picked another one, and two
+        machines whose gateways both bound 18792 must not share one jar entry when
+        one browser reaches them through different forwards. A Host with no port
+        -- the container's nginx forwards ``$host`` -- keeps the bound port, which
+        is the name that proxy's auto-login sets. So does a Host whose port does
+        not parse: this is read before any credential is checked, so a raise here
+        would answer an unauthenticated request with a 500 instead of a refusal.
+        """
+        try:
+            port = urlsplit(f"//{request.headers.get('Host', '')}").port
+        except ValueError:
+            port = None
+        return cookie_name(port or self.port)
+
     def _origin_ok(self, request: web.Request) -> bool:
+        """Whether a browser request comes from this gateway's own page.
+
+        Beyond the bound port's own origin (also what the container's nginx
+        restates), a page may sit behind a port forward, which picks another
+        local port whenever the remote one is taken; its origin then names a
+        port this process never bound. It passes when it asks its own origin
+        (Origin equals Host) on a loopback name. The first half refuses a page
+        another local server shows: cookies and SameSite ignore the port, so
+        that page's requests arrive carrying this session's cookie. The second
+        refuses DNS rebinding, where a name resolving to 127.0.0.1 asks its own
+        origin and the two agree.
+        """
         origin = request.headers.get("Origin")
         if origin is None:
             return True
-        return origin in (
-            f"http://127.0.0.1:{self.port}",
-            f"http://localhost:{self.port}",
-        )
+        if origin in (f"http://127.0.0.1:{self.port}", f"http://localhost:{self.port}"):
+            return True
+        host = request.headers.get("Host", "")
+        return origin.lower() == f"http://{host.lower()}" and _loopback_origin(origin)
 
     # ---- handlers ------------------------------------------------------------
 
@@ -214,7 +276,7 @@ class WsGateway:
 
     async def handle_auth_exchange(self, request: web.Request) -> web.Response:
         if not self._origin_ok(request):
-            raise web.HTTPForbidden(reason="bad origin")
+            raise web.HTTPForbidden(reason="bad origin", text=_REFUSED_ADDRESS)
         try:
             body = await request.json()
         except Exception:
@@ -226,10 +288,10 @@ class WsGateway:
         token_ok = isinstance(token, str) and secrets.compare_digest(token, self.session_token)
         nonce_ok = isinstance(nonce, str) and self.burn_nonce(nonce)
         if not (nonce_ok or token_ok):
-            raise web.HTTPForbidden(reason="invalid or used nonce")
+            raise web.HTTPForbidden(reason="invalid or used nonce", text=_SPENT_LINK)
         resp = web.json_response({"ok": True})
         resp.set_cookie(
-            cookie_name(self.port),
+            self._cookie_name(request),
             self.session_cookie,
             httponly=True,
             samesite="Strict",
@@ -290,6 +352,11 @@ class WsGateway:
                 rel = Path(raw)
                 workspace = viewer_root(workspace, rel)
                 raw = str(workspace / rel)
+            elif raw:
+                # An upload named absolutely is still an upload, and agent home
+                # is its root as it is for the relative spelling: the fence
+                # below then admits it however the session is rooted.
+                workspace = viewer_root(workspace, Path(raw).expanduser())
         try:
             path = resolve_readable(raw, workspace=workspace)
         except ValueError as exc:
@@ -450,6 +517,98 @@ class WsGateway:
             },
         )
 
+    async def handle_knowledge_crop(self, request: web.Request) -> web.StreamResponse:
+        """Serve the picture of where one chunk was cut from.
+
+        Two ids and nothing else, for the same reason the route beside this one
+        takes one: the crops sit under raven's state directory, and a request
+        that names no location cannot be pointed at the rest of it. The manager
+        validates the chunk id before it becomes a path segment and answers
+        ``None`` for anything that is not a file it wrote.
+
+        Cached, unlike the document route. A crop is immutable for the life of
+        its chunk id -- the id is derived from the chunk's text, so text that
+        changed is a different id and text that did not is the same picture --
+        and a panel of thirty thumbnails refetching on every scroll is the
+        whole cost of the feature paid again per glance.
+        """
+        from raven.rpc.methods.knowledge import knowledge_manager
+
+        if not self._origin_ok(request):
+            raise web.HTTPForbidden(reason="bad origin")
+        if not self._authorized(request):
+            raise web.HTTPUnauthorized(reason="missing or invalid session")
+
+        path = knowledge_manager().crop_path(request.query.get("document", ""), request.query.get("chunk", ""))
+        if path is None:
+            raise web.HTTPNotFound(reason="no crop for that chunk")
+        return web.FileResponse(
+            path,
+            headers={
+                "Content-Type": "image/webp",
+                "Content-Disposition": "inline",
+                # An image, and only ever an image: the sandbox is the strictest
+                # one there is, because nothing here should ever be a document.
+                "Content-Security-Policy": "sandbox; default-src 'none'; img-src data: blob:",
+                "X-Content-Type-Options": "nosniff",
+                "Cache-Control": "private, max-age=86400, immutable",
+            },
+        )
+
+    async def handle_knowledge_page(self, request: web.Request) -> web.StreamResponse:
+        """Serve one page of a document as a picture.
+
+        The panel beside a chunk list draws the file as a column of these and
+        lays a translucent box over the region a chunk was cut from. That is
+        what the browser's own PDF viewer cannot do: it is another document in
+        another frame, with its own painting and its own idea of where it is
+        scrolled to.
+
+        An id and a page number, for the reason the two routes beside this one
+        take ids: the renderings sit under raven's cache directory, and a
+        request that names no location cannot be pointed at the rest of it.
+
+        Cached like the crops and unlike the document: a page is immutable for
+        the life of its document id, because the bytes behind an id never
+        change -- re-uploading a file makes a new document.
+        """
+        from raven.rpc import knowledge_pages, knowledge_preview
+
+        if not self._origin_ok(request):
+            raise web.HTTPForbidden(reason="bad origin")
+        if not self._authorized(request):
+            raise web.HTTPUnauthorized(reason="missing or invalid session")
+
+        try:
+            page = int(request.query.get("page", ""))
+        except ValueError:
+            raise web.HTTPBadRequest(reason="page must be a number") from None
+        if page < 1:
+            raise web.HTTPBadRequest(reason="page must be 1 or more")
+        try:
+            record, blob = knowledge_preview.resolve(request.query.get("document", ""))
+        except knowledge_preview.DocumentMissingError as exc:
+            raise web.HTTPNotFound(reason=str(exc)) from exc
+        pdf = await knowledge_pages.pdf_of(record.id, blob, record.source)
+        if pdf is None:
+            raise web.HTTPNotFound(reason="this format has no pages")
+        try:
+            drawn = await knowledge_pages.image_for(record.id, pdf, page)
+        except knowledge_pages.PagesUnavailableError as exc:
+            raise web.HTTPNotFound(reason=str(exc)) from exc
+        return web.FileResponse(
+            drawn,
+            headers={
+                "Content-Type": "image/webp",
+                "Content-Disposition": "inline",
+                # An image, and only ever an image: the same strictest sandbox
+                # the crop route serves under.
+                "Content-Security-Policy": "sandbox; default-src 'none'; img-src data: blob:",
+                "X-Content-Type-Options": "nosniff",
+                "Cache-Control": "private, max-age=86400, immutable",
+            },
+        )
+
     async def _rendered_knowledge_pdf(self, record: object, blob: Path) -> Path:
         """The PDF for one document, or the HTTP error the page can show.
 
@@ -603,6 +762,8 @@ def build_app(
     app.router.add_post("/auth/nonce", gateway.handle_mint_nonce)
     app.router.add_get("/file", gateway.handle_file)
     app.router.add_get("/knowledge/file", gateway.handle_knowledge_file)
+    app.router.add_get("/knowledge/crop", gateway.handle_knowledge_crop)
+    app.router.add_get("/knowledge/page", gateway.handle_knowledge_page)
     app.router.add_get("/rpc", gateway.handle_ws)
     app.on_shutdown.append(gateway.close_all)
     app.router.add_get("/oauth/callback", handle_oauth_callback)

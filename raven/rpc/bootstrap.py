@@ -572,6 +572,10 @@ async def build_rpc_stack(
                 await agent_loop.stop_plugin_services()
             except Exception:
                 logger.exception("plugin services stop failed; continuing shutdown")
+            try:
+                agent_loop.context.skills.stop_file_watcher()
+            except Exception:
+                logger.exception("serve: skill watcher stop failed; continuing shutdown")
         if agent_loop is not None and agent_loop.backend is not None:
             try:
                 # Drain before stop, the same order the CLI hosts follow:
@@ -600,11 +604,15 @@ async def build_rpc_stack(
         except Exception:
             logger.exception("serve: browser close failed; continuing shutdown")
         # ACP agents are launched with start_new_session, so they do not get the
-        # terminal's signals and outlive this process unless the pool is closed.
+        # terminal's signals and outlive this process unless the pool is closed;
+        # so does the ssh of a Raven node on a registered machine, whose pool is
+        # closed after the agents' so a closing agent still has its link.
         try:
             from raven.acp_client.pool import close_pool
+            from raven.node.client import close_node_pool
 
             await close_pool()
+            await close_node_pool()
         except Exception:
             logger.exception("serve: acp pool close failed; continuing shutdown")
 

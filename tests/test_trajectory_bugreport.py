@@ -169,6 +169,75 @@ def test_parser_leaves_non_paths_alone(text):
     assert tsan.sanitize_text(text) == text
 
 
+def test_parser_stops_at_the_requested_number_of_spans():
+    text = "see /a and /b and /c"
+    assert len(tsan.find_absolute_paths(text)) == 3
+    assert tsan.find_absolute_paths(text, limit=2) == tsan.find_absolute_paths(text)[:2]
+    assert tsan.find_absolute_paths(text, limit=0) == []
+
+
+@pytest.mark.parametrize(
+    ("value", "text_level_hits"),
+    [
+        ("problem: \\n- step one \\n- step two", True),
+        ("problem:\n- step one", False),
+        ("matches \\d+ digits", True),
+        ("\\d+ at start", True),
+        ("a\\nb", False),
+    ],
+    ids=["literal-newline", "real-newline", "regex", "leading-backslash", "unbounded-backslash"],
+)
+def test_json_scan_ignores_escape_artifacts(value, text_level_hits):
+    document = {"problem": {"steps": value}}
+    assert tsan.find_absolute_paths_in_json(document) == []
+    assert bool(tsan.find_absolute_paths(json.dumps(document))) is text_level_hits
+    assert tsan.find_absolute_paths_in_json(json.loads(json.dumps(document))) == []
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/etc/raven/license.key", "C:\\Users\\alice\\key.txt", "\\\\server\\share\\key.txt"],
+    ids=["posix", "drive", "unc"],
+)
+def test_json_scan_reports_the_field_path(path):
+    value = {
+        "problem": {"steps": f"see {path} here"},
+        "contents": [{"path": "bugreport.json"}, {"path": path}],
+    }
+    hits = tsan.find_absolute_paths_in_json(value)
+    assert ("problem.steps", path) in hits
+    assert ("contents[1].path", path) in hits
+    assert all(where != "contents[0].path" for where, _ in hits)
+
+
+def test_json_scan_finds_a_known_root_glued_to_text():
+    value = "prefixC:\\Users\\alice\\file.txt"
+    roots = ["C:\\Users\\alice"]
+    assert tsan.find_absolute_paths(value) == []
+    assert tsan.find_absolute_paths_in_json({"problem": {"steps": value}}, roots) == [
+        ("problem.steps", "C:\\Users\\alice")
+    ]
+
+
+def test_json_scan_checks_object_keys():
+    hits = tsan.find_absolute_paths_in_json({"problem": {"/etc/shadow": "x"}})
+    assert hits == [("problem./etc/shadow (key)", "/etc/shadow")]
+
+
+def test_json_scan_walks_nesting_the_decoder_accepts():
+    """The decoder admits nesting close to the recursion limit; the walk must not overflow on it."""
+    depth = 900
+    document = json.loads("[" * depth + '"/etc/shadow"' + "]" * depth)
+    hits = tsan.find_absolute_paths_in_json({"problem": {"steps": document}})
+    assert hits == [("problem.steps" + "[0]" * depth, "/etc/shadow")]
+    assert tsan.find_absolute_paths_in_json({"problem": {"steps": document}}, limit=0) == []
+
+
+def test_json_scan_keeps_document_order():
+    value = {"a": {"k /x": "/one"}, "b": ["/two", {"c": "/three"}]}
+    assert [sample for _, sample in tsan.find_absolute_paths_in_json(value)] == ["/x", "/one", "/two", "/three"]
+
+
 def test_a_path_glued_to_a_url_does_not_ride_out_in_an_export(tmp_path):
     """The export's own no-local-paths assertion cannot catch this one.
 
@@ -463,6 +532,18 @@ def _damage(payload, spec):
                 "sources": [{"source": "the span log", "count": -1}],
             }
         ]
+    elif spec == "bad-upload-state":
+        payload["upload"]["state"] = "queued"
+    elif spec == "upload-error-type":
+        payload["upload"]["error"] = 1
+    elif spec == "upload-uploaded-no-receipt":
+        payload.update(_valid_payload(payload["report_id"], status="local_ready"))
+        payload["upload"] = {"state": "uploaded", "issue_url": "", "receipt": ""}
+    elif spec == "upload-failed-no-error":
+        payload.update(_valid_payload(payload["report_id"], status="local_ready"))
+        payload["upload"] = {"state": "failed", "issue_url": "", "receipt": ""}
+    elif spec == "upload-before-ready":
+        payload["upload"] = {"state": "uploaded", "issue_url": "", "receipt": "rc-000000000000"}
     return payload
 
 
@@ -498,6 +579,11 @@ _DAMAGE_SPECS = [
     "decision-missing-id",
     "decision-bad-masked-token",
     "decision-bad-source-count",
+    "bad-upload-state",
+    "upload-error-type",
+    "upload-uploaded-no-receipt",
+    "upload-failed-no-error",
+    "upload-before-ready",
 ]
 
 
@@ -507,6 +593,38 @@ def test_every_legal_status_loads(tmp_path, status):
     record_dir.mkdir()
     breport.save_record(record_dir, _valid_payload(status=status))
     assert breport.load_record(record_dir)["status"] == status
+
+
+@pytest.mark.parametrize(
+    "upload",
+    [
+        {"state": "uploaded", "issue_url": "", "receipt": "rc-5f3c2a9d1e70", "uploaded_at": "2026-10-12T06:40:11Z"},
+        {"state": "failed", "issue_url": "", "receipt": "", "error": "connection refused"},
+        {"state": "", "issue_url": "", "receipt": ""},
+    ],
+)
+def test_upload_fields_are_optional_and_validated(tmp_path, upload):
+    record_dir = tmp_path / "br-20260904-abcdef"
+    record_dir.mkdir()
+    payload = _valid_payload(status="local_ready")
+    payload["upload"] = upload
+    breport.save_record(record_dir, payload)
+    assert breport.load_record(record_dir)["upload"] == upload
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("br-20260904-abcdef", True),
+        ("br-20260904-ABCDEF", False),
+        ("br-20260904", False),
+        ("br-2026090-abcdef", False),
+        (None, False),
+        (b"br-20260904-abcdef", False),
+    ],
+)
+def test_is_report_id(value, expected):
+    assert breport.is_report_id(value) is expected
 
 
 @pytest.mark.parametrize("spec", _DAMAGE_SPECS)
@@ -707,6 +825,44 @@ def test_archive_headers_carry_no_local_identity(state, workspace, tmp_path):
         assert members
         for member in members:
             assert (member.uid, member.gid, member.uname, member.gname) == (0, 0, "", "")
+
+
+def test_backslashes_in_problem_fields_ship_verbatim(state, workspace):
+    fields = {
+        "description": "problem: \\n- step one \\n- step two",
+        "steps": "matches \\d+ digits",
+        "expected": "\\d+ at start",
+    }
+    _record_dir, record = _full_flow(state, workspace, **fields)
+    assert record["status"] == "local_ready"
+    with tarfile.open(record["package"]["path"]) as tar:
+        meta = json.loads(tar.extractfile(f"{record['report_id']}/bugreport.json").read().decode("utf-8"))
+    assert {name: meta["problem"][name] for name in fields} == fields
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/etc/raven/license.key", "C:\\Users\\alice\\key.txt", "\\\\server\\share\\key.txt"],
+    ids=["posix", "drive", "unc"],
+)
+def test_export_gate_reads_the_metadata_on_disk(state, workspace, monkeypatch, path):
+    """The gate must stop a path that reached the written file, not the dict."""
+    real_gate = breport._assert_export_ready
+
+    def tampered_gate(prep, metadata):
+        target = prep.export_dir / "bugreport.json"
+        on_disk = json.loads(target.read_text(encoding="utf-8"))
+        on_disk["problem"]["steps"] = path
+        target.write_text(json.dumps(on_disk, ensure_ascii=False, indent=2), encoding="utf-8")
+        real_gate(prep, metadata)
+
+    monkeypatch.setattr(breport, "_assert_export_ready", tampered_gate)
+    prep = _prepared(state, workspace)
+    with pytest.raises(breport.ExportLeakError, match=r"bugreport\.json problem\.steps"):
+        breport.freeze_export(prep, description="it broke", steps="harmless", decide=_decide_all())
+
+    assert not (breport.bugreports_root(state) / prep.report_id).exists()
+    assert not (prep.staging_dir / "record.json").exists()
 
 
 @pytest.mark.parametrize("damage", ["modify", "add", "symlink"], ids=["modified", "added-file", "symlink-injected"])
