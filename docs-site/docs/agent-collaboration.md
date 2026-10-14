@@ -29,6 +29,18 @@ available for that recovery.
 remote file access. It is no longer read; an old value of `0` does not disable
 these features or prevent task recovery.
 
+On hosts with Unix-socket support, remote ACP agents can use the MCP servers
+granted to their entry through the Raven node. Server definitions and credentials
+stay on the host, as do tool restrictions and sandbox rules. The host checks that
+each stream belongs to the agent task granted that endpoint; another task's
+token does not authorize it to select that grant by name.
+
+On Windows hosts, remote MCP lending is currently withheld because the host
+endpoint transport requires Unix sockets. The remote task still runs and its
+reply explains that MCP was not provided. CLI agents on machines also continue
+without lent MCP. A host restart recovers the task result but does not restore
+its previous MCP connections.
+
 ## Choose a collaboration shape
 
 | Need | Use | Completion evidence |

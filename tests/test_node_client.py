@@ -1340,6 +1340,8 @@ async def _endpoint(name: str = "pg") -> tuple[str, list[bytes], Any]:
     In a directory of its own under the system's temporary one, short enough
     for a socket's path, which pytest's is not on every system.
     """
+    if not callable(getattr(asyncio, "start_unix_server", None)):
+        pytest.skip("this endpoint fixture needs a Unix-socket host")
     base = Path(tempfile.mkdtemp(prefix="raven-ep-"))
     path = str(base / f"{name}.sock")
     got: list[bytes] = []
@@ -1372,8 +1374,8 @@ async def test_a_lent_server_s_stream_is_pumped_into_its_endpoint_and_the_endpoi
     node = pool._nodes["box"]
     path, got, endpoint = await _endpoint()
     try:
-        pool.lend("box", "d1", {"pg": path})
-        await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 1, "lend": "d1", "server": "pg"})
+        pool.lend("box", "d1", {"pg": path}, task="agent")
+        await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 1, "task": "agent", "lend": "d1", "server": "pg"})
         assert list(node.streams) == [1]
 
         # The machine's pieces make one line into the endpoint.
@@ -1413,23 +1415,23 @@ async def test_a_stream_the_host_cannot_serve_is_closed_with_the_reason_and_the_
     node = pool._nodes["box"]
     path, got, endpoint = await _endpoint()
     try:
-        await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 1, "lend": "d1", "server": "pg"})
+        await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 1, "task": "agent", "lend": "d1", "server": "pg"})
         assert _told(client, protocol.MCP_CLOSE) == [{"stream": 1, "reason": "server 'pg' is not lent to that run"}]
-        pool.lend("box", "d1", {"pg": str(endpoint.base / "gone.sock")})
-        await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 2, "lend": "d1", "server": "pg"})
+        pool.lend("box", "d1", {"pg": str(endpoint.base / "gone.sock")}, task="agent")
+        await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 2, "task": "agent", "lend": "d1", "server": "pg"})
         gone = _told(client, protocol.MCP_CLOSE)[-1]
         assert gone["stream"] == 2 and gone["reason"].startswith("the host's endpoint for 'pg' is gone: ")
         assert node.streams == {}
 
-        pool.lend("box", "d1", {"pg": path})
+        pool.lend("box", "d1", {"pg": path}, task="agent")
         monkeypatch.setattr(protocol, "MCP_MAX_FRAME", 8)
         # The machine's frame past the cap.
-        await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 3, "lend": "d1", "server": "pg"})
+        await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 3, "task": "agent", "lend": "d1", "server": "pg"})
         await pool._on_stream("box", protocol.MCP_FRAME, {"stream": 3, "text": "123456789", "end": False})
         assert 3 not in node.streams
         assert _told(client, protocol.MCP_CLOSE)[-1] == {"stream": 3, "reason": "a frame exceeds 8 bytes"}
         # The endpoint's frame past the cap.
-        await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 4, "lend": "d1", "server": "pg"})
+        await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 4, "task": "agent", "lend": "d1", "server": "pg"})
         await _until(lambda: len(endpoint.writers) == 2)
         endpoint.writers[-1].write(b"0123456789\n")
         await endpoint.writers[-1].drain()
@@ -1438,7 +1440,7 @@ async def test_a_stream_the_host_cannot_serve_is_closed_with_the_reason_and_the_
         monkeypatch.setattr(protocol, "MCP_MAX_FRAME", 32 * 1024 * 1024)
 
         # The endpoint closed under the host's write.
-        await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 5, "lend": "d1", "server": "pg"})
+        await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 5, "task": "agent", "lend": "d1", "server": "pg"})
         stream = node.streams[5]
         real, stream.writer = (
             stream.writer,
@@ -1452,7 +1454,7 @@ async def test_a_stream_the_host_cannot_serve_is_closed_with_the_reason_and_the_
         assert _told(client, protocol.MCP_CLOSE)[-1] == {"stream": 5, "reason": "the host's endpoint closed"}
 
         # The link is gone while the endpoint speaks: the stream goes, and nothing can be told.
-        await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 6, "lend": "d1", "server": "pg"})
+        await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 6, "task": "agent", "lend": "d1", "server": "pg"})
         told_before = len(client.said)
 
         async def dead(method: str, params: dict[str, Any]) -> None:
@@ -1467,9 +1469,9 @@ async def test_a_stream_the_host_cannot_serve_is_closed_with_the_reason_and_the_
         client.notify = _Client.notify.__get__(client)  # type: ignore[method-assign]
 
         # The dispatch ends: its streams are told; another dispatch's stay. A machine with no link is nothing to unlend.
-        await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 7, "lend": "d1", "server": "pg"})
-        pool.lend("box", "d2", {"pg": path})
-        await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 8, "lend": "d2", "server": "pg"})
+        await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 7, "task": "agent", "lend": "d1", "server": "pg"})
+        pool.lend("box", "d2", {"pg": path}, task="agent")
+        await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 8, "task": "agent", "lend": "d2", "server": "pg"})
         await pool.unlend("box", "d1")
         assert list(node.streams) == [8]
         assert _told(client, protocol.MCP_CLOSE)[-1] == {"stream": 7, "reason": "the dispatch ended"}
@@ -1490,3 +1492,96 @@ async def test_the_bridge_argv_is_the_node_s_own_and_a_node_without_a_daemon_nam
     pool._nodes["box"].hello["bridge"] = ["/opt/node/bin/python", "-I", "-m", "raven.node", "--mcp", "--dir", "/n"]
 
     assert await pool.bridge_argv("box") == ["/opt/node/bin/python", "-I", "-m", "raven.node", "--mcp", "--dir", "/n"]
+
+
+async def test_an_mcp_stream_cannot_claim_another_tasks_lend(tmp_path):
+    pool = NodePool()
+    client = _live(pool, tmp_path)
+    node = pool._nodes["box"]
+    path, got, endpoint = await _endpoint()
+    try:
+        pool.lend("box", "victim-dispatch", {"pg": path}, task="victim")
+        pool.lend("box", "own-dispatch", {"pg": path}, task="attacker")
+        await pool._on_stream(
+            "box", protocol.MCP_OPEN, {"stream": 1, "task": "attacker", "lend": "victim-dispatch", "server": "pg"}
+        )
+        assert 1 not in node.streams, "a valid task must not select a different task's host endpoint"
+        assert not endpoint.writers and not got, "authorization precedes the host connection"
+        await pool._on_stream(
+            "box", protocol.MCP_OPEN, {"stream": 2, "task": "attacker", "lend": "own-dispatch", "server": "pg"}
+        )
+        assert 2 in node.streams, "the same authenticated task may open its own grant"
+        await pool.unlend("box", "own-dispatch")
+    finally:
+        await pool._drop("box")
+        endpoint.close()
+
+
+async def test_an_mcp_stream_without_a_task_is_refused_before_connecting(tmp_path, monkeypatch):
+    pool = NodePool()
+    client = _live(pool, tmp_path)
+    pool.lend("box", "d1", {"pg": "/unused"}, task="agent")
+
+    async def connected(*args, **kwargs):
+        pytest.fail("a missing task reached the connection")
+
+    monkeypatch.setattr(asyncio, "open_unix_connection", connected, raising=False)
+    await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 1, "lend": "d1", "server": "pg"})
+    assert _told(client, protocol.MCP_CLOSE)
+
+
+@pytest.mark.parametrize("change", ["unlend", "replace", "link"])
+async def test_an_mcp_connection_opening_after_its_authorization_ended_is_discarded(tmp_path, monkeypatch, change):
+    pool = NodePool()
+    client = _live(pool, tmp_path)
+    node = pool._nodes["box"]
+    pool.lend("box", "d1", {"pg": "/endpoint"}, task="agent")
+    entered, resume = asyncio.Event(), asyncio.Event()
+    closed = []
+
+    async def waited():
+        pass
+
+    writer = SimpleNamespace(close=lambda: closed.append(True), wait_closed=waited)
+
+    async def opening(path):
+        assert path == "/endpoint"
+        entered.set()
+        await resume.wait()
+        return asyncio.StreamReader(), writer
+
+    monkeypatch.setattr(asyncio, "open_unix_connection", opening, raising=False)
+    monkeypatch.setattr(node_client, "unix_sockets_available", lambda: True)
+    waiting = asyncio.create_task(
+        pool._on_stream("box", protocol.MCP_OPEN, {"stream": 1, "task": "agent", "lend": "d1", "server": "pg"})
+    )
+    await asyncio.wait_for(entered.wait(), 2)
+    if change == "unlend":
+        await pool.unlend("box", "d1")
+    elif change == "replace":
+        pool.lend("box", "d1", {"pg": "/other"}, task="other-agent")
+    else:
+        _live(pool, tmp_path)
+    resume.set()
+    await waiting
+    assert closed and node.streams == {}
+    assert _told(client, protocol.MCP_CLOSE)[-1]["reason"] == "the dispatch or link ended"
+
+
+async def test_a_host_without_unix_sockets_refuses_a_stream_in_one_sentence(tmp_path, monkeypatch):
+    pool = NodePool()
+    client = _live(pool, tmp_path)
+    pool.lend("box", "d1", {"pg": "/unused"}, task="agent")
+    monkeypatch.delattr(asyncio, "open_unix_connection", raising=False)
+    await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 1, "task": "agent", "lend": "d1", "server": "pg"})
+    assert _told(client, protocol.MCP_CLOSE) == [
+        {"stream": 1, "reason": "the host does not support Unix-socket MCP endpoints"}
+    ]
+    assert not pool._nodes["box"].streams
+
+
+def test_lending_requires_a_nonempty_task():
+    pool = NodePool()
+    with pytest.raises(ValueError, match="agent task"):
+        pool.lend("box", "d1", {"pg": "/unused"}, task="")
+    assert pool._lent == {}

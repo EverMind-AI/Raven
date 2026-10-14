@@ -629,3 +629,29 @@ async def test_dispatch_keeps_usage_ownership_out_of_process_binding(tmp_path, m
     with pytest.raises(RuntimeError, match="stop before launch"):
         await backend.run("draw", task_id="node", workspace=tmp_path, executor=None, session_key="task-a", mcps=[])
     assert acquire.call_args.kwargs["binding"] is None
+
+
+@pytest.mark.parametrize("missing", ["start_unix_server", "open_unix_connection"])
+async def test_remote_mcp_is_withheld_before_endpoint_setup_without_host_socket_support(monkeypatch, missing):
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.backends import session_mcp_effective
+    from raven.agent.subagent.mcp_grant import GrantedServer, McpGrant
+    from raven.agent.subagent.registry import _row_for
+
+    monkeypatch.delattr(asyncio, missing, raising=False)
+    cfg = ThirdPartyAcpSubagentConfig(name="remote", command="agent", machine="box", session_mcp=True)
+    backend = build_third_party_backend(cfg)
+    grant = McpGrant(granted=(GrantedServer("private", "stdio", _idle_config()),))
+    launched = SimpleNamespace(target=SimpleNamespace(id="box"))
+
+    async def opened(*args, **kwargs):
+        pytest.fail("unsupported host must withhold before opening endpoints")
+
+    monkeypatch.setattr(McpEndpoints, "open", opened)
+    async with backend._mcp_endpoints("d1", grant, launched) as endpoints:
+        assert endpoints == []
+    assert "host does not support Unix-socket MCP endpoints" in backend._mcp_note(grant)
+    assert not session_mcp_effective(cfg)
+    assert not _row_for(cfg).injectable.mcps
+    assert session_mcp_effective(cfg.model_copy(update={"machine": None})), "local behavior is unchanged"

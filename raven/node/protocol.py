@@ -29,8 +29,9 @@ The agent spawns the install's bridge (``python -I -m raven.node --mcp``) as a
 stdio MCP server; the bridge connects to the daemon's socket and opens a
 *stream* for its task (``mcp/open``, with the token the daemon left beside the
 task's record at launch), and from then on the frames travel as ``mcp/frame``
-notifications between the bridge and the host, which pumps them into the socket
-of the endpoint it opened on its own side (:func:`pieces` says how a frame is
+notifications between the bridge and the host. The host checks the authenticated
+task against the dispatch's endpoint grant before connecting to that endpoint
+(:func:`pieces` says how a frame is
 cut to fit a line). Nothing of a server's definition reaches the machine; the
 daemon relays and keeps nothing.
 """

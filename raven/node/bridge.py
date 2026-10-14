@@ -9,6 +9,8 @@ pieces, what comes back as such pieces is put together and written to stdout.
 It parses no MCP and holds no credential, and it ends when either side does.
 ``S`` and ``L`` name the server and the host's dispatch, for the host to pair
 the stream with the endpoint it opened on its own side; neither is a secret.
+The host authorizes that pair against the daemon-authenticated task, not the
+names alone. Frames use UTF-8 JSON so a Unicode piece fits the daemon's byte limit.
 """
 
 from __future__ import annotations
@@ -28,7 +30,9 @@ _LINE_LIMIT = 2 * 1024 * 1024
 
 
 def _line(method: str, params: dict[str, Any]) -> bytes:
-    return json.dumps({"jsonrpc": "2.0", "method": method, "params": params}).encode("utf-8") + b"\n"
+    return (
+        json.dumps({"jsonrpc": "2.0", "method": method, "params": params}, ensure_ascii=False).encode("utf-8") + b"\n"
+    )
 
 
 async def run_mcp_async(

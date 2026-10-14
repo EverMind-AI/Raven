@@ -22,9 +22,9 @@ the machine no longer knows ends an endpoint with the sentence that says so.
 
 An MCP server the host lends an agent on the machine is carried on the link
 too: the agent runs the node's bridge as a stdio server, the daemon tells this
-side a stream opened (``mcp/open``, named by the dispatch the server was lent
-to, :meth:`NodePool.lend`), this side connects to the endpoint it opened for
-that dispatch here and pumps the frames both ways in pieces (``mcp/frame``),
+side a stream opened (``mcp/open``). This side checks the authenticated task
+against the task bound to the dispatch's grant (:meth:`NodePool.lend`), then
+connects to its endpoint here and pumps the frames both ways in pieces (``mcp/frame``),
 and the stream ends with the dispatch, the link or either end.
 
 Before a node is used, ``node/hello`` has to show the same protocol and the
@@ -54,7 +54,7 @@ from loguru import logger
 from raven.acp_client import remote
 from raven.acp_client.client import AcpClient
 from raven.acp_client.protocol import AcpConnectionError, AcpError, AcpRemoteError, AcpTimeoutError
-from raven.mcp.bridge import iter_raw_frames
+from raven.mcp.bridge import iter_raw_frames, unix_sockets_available
 from raven.node import bundle, protocol
 from raven.ops import remote_path
 
@@ -387,6 +387,14 @@ class _HostStream:
 
 
 @dataclass
+class _LentServers:
+    """Host endpoints granted by one dispatch to one daemon-authenticated agent task."""
+
+    task: str
+    paths: dict[str, str]
+
+
+@dataclass
 class _Node:
     client: AcpClient
     target: remote.Machine
@@ -422,8 +430,8 @@ class NodePool:
         self._nodes: dict[str, _Node] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._errors: dict[str, str] = {}
-        self._lent: dict[str, dict[str, dict[str, str]]] = {}
-        """Per machine, per dispatch: the host's MCP endpoints by server name, for the streams a bridge there opens."""
+        self._lent: dict[str, dict[str, _LentServers]] = {}
+        """Per machine and dispatch, endpoints bound to the agent task the host actually launched."""
         self._reconnects: dict[str, asyncio.Task[None]] = {}
         self._parked: dict[str, list[ChannelEndpoint]] = {}
         """The endpoints waiting for a machine's link to come back, by machine."""
@@ -662,14 +670,17 @@ class NodePool:
 
     # --- MCP lent across the link -----------------------------------------------------
 
-    def lend(self, machine_id: str, lend: str, paths: Mapping[str, str]) -> None:
+    def lend(self, machine_id: str, lend: str, paths: Mapping[str, str], *, task: str) -> None:
         """The host's endpoints for dispatch ``lend`` on the machine: by server name, the socket a stream of it pumps into.
 
         Said before the agent is handed the bridge stanzas, so a bridge that
         opens at once finds its server. The endpoints themselves are the
-        caller's (``raven.mcp.endpoint``); this is the pairing table.
+        caller's (``raven.mcp.endpoint``); this is the pairing table. ``task``
+        is taken from the acquired agent's endpoint, never from its bridge.
         """
-        self._lent.setdefault(machine_id, {})[lend] = dict(paths)
+        if not isinstance(task, str) or not task:
+            raise ValueError("an MCP grant must name its agent task")
+        self._lent.setdefault(machine_id, {})[lend] = _LentServers(task, dict(paths))
 
     async def unlend(self, machine_id: str, lend: str) -> None:
         """The dispatch is over: its pairing is forgotten, and the streams on it ended, the bridges told."""
@@ -720,11 +731,21 @@ class NodePool:
             await self._end_stream(node, stream, "the host's endpoint closed", tell=True)
 
     async def _open_stream(self, node: _Node, stream_id: int, params: dict[str, Any]) -> None:
-        lend, server = params.get("lend"), params.get("server")
-        path = self._lent.get(node.target.id, {}).get(str(lend), {}).get(str(server))
+        lend, server, task = params.get("lend"), params.get("server"), params.get("task")
+        granted = self._lent.get(node.target.id, {}).get(str(lend))
+        # The daemon authenticates the task; the bridge chooses lend/server.
+        # Those names cannot authorize access to another task's host endpoint.
+        path = granted.paths.get(str(server)) if granted is not None and granted.task == task else None
         if path is None:
             await self._tell(
                 node, protocol.MCP_CLOSE, {"stream": stream_id, "reason": f"server {server!r} is not lent to that run"}
+            )
+            return
+        if not unix_sockets_available():
+            await self._tell(
+                node,
+                protocol.MCP_CLOSE,
+                {"stream": stream_id, "reason": "the host does not support Unix-socket MCP endpoints"},
             )
             return
         try:
@@ -735,6 +756,18 @@ class NodePool:
                 protocol.MCP_CLOSE,
                 {"stream": stream_id, "reason": f"the host's endpoint for {server!r} is gone: {exc}"},
             )
+            return
+        # An unlend or a replaced link can run while the socket is opening.
+        # Never register a stream under an authorization that ended meanwhile.
+        if (
+            self._lent.get(node.target.id, {}).get(str(lend)) is not granted
+            or self._nodes.get(node.target.id) is not node
+            or not node.client.alive
+        ):
+            writer.close()
+            with contextlib.suppress(ConnectionError, OSError):
+                await writer.wait_closed()
+            await self._tell(node, protocol.MCP_CLOSE, {"stream": stream_id, "reason": "the dispatch or link ended"})
             return
         stream = _HostStream(stream_id, str(lend), str(server), writer)
         node.streams[stream_id] = stream

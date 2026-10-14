@@ -1079,3 +1079,14 @@ async def test_the_update_door_refuses_lending_keys_to_a_machine_row(box, config
 
 
 # ---- two machines on one disk ---------------------------------------------------------------
+
+
+async def test_a_remote_turn_runs_without_lent_mcp_when_the_host_has_no_unix_socket_api(box, tmp_path, monkeypatch):
+    monkeypatch.delattr(asyncio, "start_unix_server", raising=False)
+    monkeypatch.delattr(asyncio, "open_unix_connection", raising=False)
+    backend = build_third_party_backend(remote_config())
+    grant = McpGrant(granted=(GrantedServer("pg", "stdio", MCPServerConfig(command="must-not-start")),))
+    reply = await backend.run("hi", task_id="no-host-socket", workspace=tmp_path, executor=None, mcp_grant=grant)
+    assert reply.split("\n\n[raven]")[0] == "pong"
+    assert "host does not support Unix-socket MCP endpoints" in reply
+    assert not box.nodes._lent

@@ -2113,7 +2113,10 @@ class ThirdPartyAcpSubagentConfig(Base):
     there. MCP servers the entry is granted are lent to it through the
     machine's Raven node: the agent runs the node's bridge as a stdio server
     and the node carries its frames over the link to the server here, which
-    stays here with its definition and keys. Files are not handed to it, and
+    stays here with its definition and keys. The host authorizes each dispatch's
+    endpoints against the acquired agent task. Hosts without Unix-socket support
+    withhold MCP and explain that limitation without refusing the task.
+    Files are not handed to it, and
     what it writes stays on that machine. See :mod:`raven.node.client` and
     :mod:`raven.acp_client.remote`."""
     remote_cwd: str | None = None

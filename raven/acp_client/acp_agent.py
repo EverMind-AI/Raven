@@ -76,6 +76,7 @@ from raven.agent.tools.snapshot import take as take_snapshot
 from raven.contracts.subagent_backend import SubagentActionAbortedError
 from raven.contracts.tool import FileChange
 from raven.home import subagent_role_env
+from raven.mcp.bridge import unix_sockets_available
 from raven.mcp.endpoint import McpEndpoints, bridge_command
 from raven.ops import remote_path
 from raven.spine.message import Media
@@ -1394,7 +1395,13 @@ class AcpAgentBackend:
         node carries no streams.
         """
         notes = []
-        if lent is not None and grant.granted and self.machine:
+        unsupported_host = bool(self.machine) and not unix_sockets_available()
+        if unsupported_host and grant.granted:
+            notes.append(
+                f"MCP servers were not lent to acp agent {self.name!r} on machine {self.machine!r}: "
+                "this host does not support Unix-socket MCP endpoints; the task ran without those servers"
+            )
+        elif lent is not None and grant.granted and self.machine:
             names = ", ".join(repr(server.name) for server in grant.granted)
             if lent:
                 notes.append(
@@ -1406,7 +1413,7 @@ class AcpAgentBackend:
                     f"MCP servers {names} were not lent to acp agent {self.name!r}: the Raven node on machine "
                     f"{self.machine!r} carries no MCP streams (it serves without a daemon)"
                 )
-        if self._session_mcp_refused and grant.granted:
+        if self._session_mcp_refused and grant.granted and not unsupported_host:
             names = ", ".join(repr(server.name) for server in grant.granted)
             if not self.session_mcp:
                 notes.append(
@@ -1450,11 +1457,9 @@ class AcpAgentBackend:
         """The bridge stanzas for one dispatch, live for exactly as long as it runs; on a machine, the endpoints to pair.
 
         ``launched`` is the dispatch's place on its machine, when it has one:
-        the endpoints are opened here all the same, paired on the link to that
-        machine under this dispatch's id (``NodePool.lend``), and what is
-        yielded is :class:`_Lent` -- the stanzas name the machine's own bridge
-        and the agent's task there, which only the launch knows
-        (``_lent_stanzas``).
+        the endpoints are opened here on hosts supporting Unix sockets.
+        What is yielded is :class:`_Lent`; ``_lent_stanzas`` binds the endpoints
+        to the acquired agent's task before handing its bridge to the session.
 
         ``node_id`` is this dispatch's identity -- a DAG node's id, a spawn's
         task id -- because reaping is per node and not per run: a graph of a
@@ -1471,6 +1476,9 @@ class AcpAgentBackend:
         PATH at all, and the ask itself is a thread hop: :meth:`_adapter_path`
         can run the login shell, and this runs inside the dispatch's own turn.
         """
+        if launched is not None and not unix_sockets_available():
+            yield []
+            return
         # Both of these come off the host's MCP source: the executor so a bridged
         # stdio server is spawned inside the sandbox the host configured rather
         # than on the host, and the deny set so a tool the host switched off is
@@ -1519,9 +1527,6 @@ class AcpAgentBackend:
             if launched is None:
                 yield grant.with_endpoints(paths).for_acp(argv or [])
                 return
-            # Paired before the agent is handed the stanzas: a bridge that
-            # opens as soon as the session does must find its server.
-            launched.link.lend(launched.target.id, node_id, paths)
             try:
                 yield _Lent(paths)
             finally:
@@ -1551,8 +1556,9 @@ class AcpAgentBackend:
             return [], ()
         argv = await launched.link.bridge_argv(launched.target.id)
         task = getattr(getattr(client, "endpoint", None), "task", None)
-        if argv is None or not isinstance(task, str):
+        if argv is None or not isinstance(task, str) or not task:
             return [], ()
+        launched.link.lend(launched.target.id, node_id, endpoints.paths, task=task)
         return [
             {
                 "name": name,

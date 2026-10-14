@@ -728,9 +728,9 @@ class _Task:
         self.streams: dict[int, _Stream] = {}
         # The token a bridge of this task presents to open a stream: made
         # here, kept beside the record where only this user reads, and read
-        # by the bridge from there -- never on a command line. Two hosts'
-        # tasks on one machine run as one user, so the socket's mode alone
-        # would let either's agent reach the other's servers.
+        # by the bridge from there -- never on a command line. The host must
+        # still bind lend/server to this authenticated task; the token does
+        # not authorize arbitrary endpoint names supplied by the bridge.
         self.token = secrets.token_hex(32)
         with own_file(record / TOKEN_FILE, "w") as handle:
             handle.write(self.token)

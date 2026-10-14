@@ -380,3 +380,12 @@ def test_run_mcp_takes_the_agent_s_stdin_as_a_pipe_and_keeps_its_stdout_for_fram
 
     assert rc == 1 and "no token for task a@box-1" in capsys.readouterr().err
     assert frames.getvalue() == b"", "nothing but frames goes to the agent"
+
+
+async def test_a_full_astral_piece_fits_the_daemons_byte_limited_reader():
+    text = chr(0x1F600) * protocol.MCP_CHUNK
+    wire = bridge._line(protocol.MCP_FRAME, {"stream": 1, "text": text, "end": True})
+    reader = asyncio.StreamReader(limit=server._LINE_LIMIT)
+    reader.feed_data(wire)
+    reader.feed_eof()
+    assert json.loads(await reader.readline())["params"]["text"] == text

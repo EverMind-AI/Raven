@@ -22,6 +22,13 @@ BRIDGE_MAX_FRAME_BYTES = 32 * 1024 * 1024
 _READ_CHUNK = 64 * 1024
 
 
+def unix_sockets_available() -> bool:
+    """Whether this host can both listen on and connect to the MCP endpoint transport."""
+    return callable(getattr(asyncio, "start_unix_server", None)) and callable(
+        getattr(asyncio, "open_unix_connection", None)
+    )
+
+
 async def iter_raw_frames(
     reader: asyncio.StreamReader, *, max_frame_bytes: int = BRIDGE_MAX_FRAME_BYTES
 ) -> AsyncIterator[bytes]:
