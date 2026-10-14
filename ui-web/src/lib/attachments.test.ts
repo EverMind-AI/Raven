@@ -192,6 +192,27 @@ describe('reading a sent message back', () => {
     expect(splitAttachments(stored, NOTES).atts).toEqual(['C:\\Users\\me\\.raven\\workspace\\uploads\\shot.png'])
   })
 
+  it('gives each engine path one note entry, so a suffix pair reads back twice', () => {
+    /* Two entries can name suffixes of one engine path: `out/chart.png` and
+       `chart.png` both match `/proj/out/chart.png` by suffix, and reading the
+       first line for both drew that file twice and lost `/proj/chart.png`. */
+    const stored = '[image] compare\n\n[attachments, saved in the workspace]\n- out/chart.png\n- chart.png\n\n'
+      + '[Image: chart.png (path: /proj/out/chart.png) | 4x4px]\n'
+      + '[Image: chart.png (path: /proj/chart.png) | 4x4px]'
+    expect(splitAttachments(stored, NOTES).atts).toEqual(['/proj/out/chart.png', '/proj/chart.png'])
+  })
+
+  it('gives each engine path one note entry whatever the order the entries came in', () => {
+    const reversed = '[image] compare\n\n[attachments, saved in the workspace]\n- chart.png\n- out/chart.png\n\n'
+      + '[Image: chart.png (path: /proj/chart.png) | 4x4px]\n'
+      + '[Image: chart.png (path: /proj/out/chart.png) | 4x4px]'
+    expect(splitAttachments(reversed, NOTES).atts).toEqual(['/proj/chart.png', '/proj/out/chart.png'])
+    /* Two plain uploads keep their own lines rather than both reading the first. */
+    const uploads = '[image] two\n\n[attachments, saved in the workspace]\n- uploads/a.png\n- uploads/b.png\n\n'
+      + '[Image: a.png (path: /w/uploads/a.png) | 1x1px]\n[Image: b.png (path: /w/uploads/b.png) | 2x2px]'
+    expect(splitAttachments(uploads, NOTES).atts).toEqual(['/w/uploads/a.png', '/w/uploads/b.png'])
+  })
+
   it('leaves a message that carried nothing alone, marker-shaped or not', () => {
     /* The stripping is for a replay that carried pictures. A person who opens a
        sentence with the word in brackets meant to write it, and this helper

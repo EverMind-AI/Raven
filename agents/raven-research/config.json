@@ -24,8 +24,6 @@
   "plugins": {
     "config": {
       "everos-memory": {
-        "mode": "http",
-        "base_url": "http://localhost:18791",
         "user_id": "raven-research-ng",
         "agent_id": "raven-research-ng",
         "timeout_s": 360

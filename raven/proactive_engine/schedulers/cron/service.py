@@ -5,6 +5,7 @@ import json
 import os
 import time
 import uuid
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Coroutine
@@ -109,6 +110,7 @@ class CronService:
         *,
         allowed_channels: set[str] | None = None,
         now_fn: Callable[[], datetime] | None = None,
+        default_timezone: Callable[[], str | None] | None = None,
     ):
         """``allowed_channels`` restricts which jobs this service will claim.
 
@@ -119,6 +121,11 @@ class CronService:
 
         Jobs with empty/None ``payload.channel`` are always claimable —
         they predate the channel attribution field.
+
+        ``default_timezone`` resolves a new cron job's omitted timezone at
+        creation. The resolved zone is stored on the job, so a later default
+        change cannot move an existing reminder. Without a resolver, or when it
+        answers None, new jobs use local time.
         """
         self.store_path = store_path
         # Sibling file for advisory locking (survives atomic rename of
@@ -126,6 +133,7 @@ class CronService:
         self.lock_path = store_path.with_suffix(store_path.suffix + ".lock")
         self.on_job = on_job
         self.allowed_channels = allowed_channels
+        self._default_timezone = default_timezone
         # Missed-reminder observer (gateway wires this): called with the
         # past-due foreign one-shots on start and once per wake-loop pass.
         # Read-only towards the store — the callback must not mutate jobs.
@@ -756,13 +764,35 @@ class CronService:
         # One ``now`` snapshot for both validation and storage: the validate
         # predicate and the stored next_run must agree on "now", or a boundary
         # ``at`` (at ~ now) could pass validation yet store next_run=None. Taken
-        # before the lock so an invalid schedule fails fast without contending it.
+        # before reading the default, so its resolution cannot move the boundary.
         now = self._now_ms()
-        _validate_schedule_for_add(schedule, now)
         with self._locked():
             # Reload under lock so we don't clobber a concurrent writer's add.
             self._store = None
             store = self._load_store()
+
+            if schedule.kind == "cron" and not schedule.tz:
+                previous = next((j for j in store.jobs if job_id and j.id == job_id), None)
+                if previous is None and topic_tag:
+                    previous = next(
+                        (
+                            j
+                            for j in store.jobs
+                            if j.enabled
+                            and j.payload.topic_tag == topic_tag
+                            and j.payload.channel == channel
+                            and j.payload.to == to
+                        ),
+                        None,
+                    )
+                # Edits keep even a legacy local-time schedule; only a new
+                # cron schedule captures the current default.
+                if previous is not None and previous.schedule.kind == "cron":
+                    tz = previous.schedule.tz
+                else:
+                    tz = self._default_timezone() if self._default_timezone is not None else None
+                schedule = replace(schedule, tz=tz)
+            _validate_schedule_for_add(schedule, now)
 
             if job_id:
                 for j in store.jobs:

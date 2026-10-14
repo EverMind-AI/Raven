@@ -36,9 +36,11 @@ import re
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from raven.config.raven import MEMORY_BACKEND_DISTRIBUTIONS, SHIPPED_DEFAULT_BACKEND
 from raven.contracts.path_policy import CONFIG_FILENAME, WORKSPACE_DEFAULT_SENTINEL
 from raven.home import raven_home
 from raven.utils.paths import safe_path_segment
+from raven.utils.pid import pid_alive
 
 
 def env_value(name: str, *, env_file: Path | None = None) -> str | None:
@@ -348,6 +350,86 @@ def inherit_plugin_opt_outs(config: dict, host: dict, *, own: Iterable[str] = ()
     return carried
 
 
+#: Per distribution: the slice keys the host's value replaces, then the keys
+#: the host only fills in when the product carries none of its own. Identity is
+#: deliberately absent from both -- see :func:`inherit_memory_backend`.
+_MEMORY_SLICE_INHERITED: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "everos-memory": (("base_url",), ()),
+    "everos-cloud-memory": (("base_url",), ("api_key",)),
+}
+
+
+def inherit_memory_backend(config: dict, host: dict) -> str | None:
+    """Point the product's long-term memory where the host's points.
+
+    Which store memories live in is a property of the installation, not of the
+    product: the host reads a sub-agent's memories back through *its own*
+    backend (``SubagentManager._memory_backend``), so a product writing
+    anywhere else leaves that record empty with nothing reporting it. The
+    address is the same question one level down -- a product config used to
+    carry the stock EverOS port, and a host whose own server moved (every
+    second instance on one machine does) would be addressed at whatever
+    answered on the stock one.
+
+    What never travels is identity. ``memory.userId`` / ``agentId`` and the
+    local slice's ``user_id`` / ``agent_id`` are the product's own, and they
+    are what keeps five products' memories apart inside one store. A
+    credential the product holds itself is kept for the same reason the secret
+    slots keep one; an address is not a credential, so the host's wins.
+
+    ``owned`` is forced off whenever the local backend is the one in force,
+    recorded on the host or not: that EverOS process belongs to the host,
+    which starts and stops it with its own backend. A product infers ownership
+    from a slice naming no root -- the shape every product ships -- so without
+    this it answers a host that is merely not serving by starting a second
+    server against a root of its own, stranding everything written so far.
+
+    Returns the backend in force, or ``None`` when it is off or neither side
+    names one.
+    """
+    host_memory = host.get("memory") if isinstance(host.get("memory"), dict) else {}
+    if "backend" in host_memory:
+        # Present and null is the host's off switch, not an absent answer, and
+        # it travels like any other value: an operator who turned long-term
+        # memory off would otherwise find the products still writing, through
+        # a backend their own raven no longer builds.
+        named = host_memory["backend"]
+        backend = named if isinstance(named, str) and named else None
+        config.setdefault("memory", {})["backend"] = backend
+    else:
+        own_memory = config.get("memory") if isinstance(config.get("memory"), dict) else {}
+        backend = own_memory.get("backend")
+    if not isinstance(backend, str) or not backend:
+        return None
+    distribution = MEMORY_BACKEND_DISTRIBUTIONS.get(backend)
+    if distribution is None:
+        return backend
+    replaces, fills = _MEMORY_SLICE_INHERITED.get(distribution, ((), ()))
+    host_slice = _plugin_slice(host, distribution)
+    own_slice = _plugin_slice(config, distribution)
+    carried = {key: host_slice[key] for key in replaces if str(host_slice.get(key) or "").strip()}
+    carried.update(
+        {
+            key: host_slice[key]
+            for key in fills
+            if str(host_slice.get(key) or "").strip() and not str(own_slice.get(key) or "").strip()
+        }
+    )
+    if backend == SHIPPED_DEFAULT_BACKEND:
+        carried["owned"] = False
+    if carried:
+        config.setdefault("plugins", {}).setdefault("config", {}).setdefault(distribution, {}).update(carried)
+    return backend
+
+
+def _plugin_slice(data: dict, distribution: str) -> dict:
+    """``plugins.config[distribution]`` of a raw config, or an empty dict."""
+    plugins = data.get("plugins")
+    block = plugins.get("config") if isinstance(plugins, dict) else None
+    found = block.get(distribution) if isinstance(block, dict) else None
+    return found if isinstance(found, dict) else {}
+
+
 def inherit_media_image(config: dict, host: dict) -> dict:
     """Take the host raven's image-generation section, and keep following it.
 
@@ -552,7 +634,7 @@ def seed_once(target: Path, render: Callable[[], str]) -> bool:
     if target.exists():
         return False
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(render(), encoding="utf-8")
+    target.write_text(render(), encoding="utf-8", newline="")
     return True
 
 
@@ -623,23 +705,25 @@ def sweep_stale_renders(root: Path) -> None:
     for stale in root.glob(".config.rendered.*.json"):
         try:
             pid = int(stale.name.split(".")[3])
-            os.kill(pid, 0)
-        except (IndexError, ValueError, ProcessLookupError):
+        except (IndexError, ValueError):
             stale.unlink(missing_ok=True)
-        except PermissionError:
             continue
+        if not pid_alive(pid):
+            stale.unlink(missing_ok=True)
 
 
 def write_rendered(config: dict, root: Path, *, own_plugins: Iterable[str] = ()) -> Path:
-    """Write the rendered config under ``root``, owner-only, named by pid.
+    """Write the rendered config under ``root``, owner-only on POSIX, named by pid.
 
     The location is the mechanism: raven derives its data dir from the
     config file's own parent, so wherever this file goes, sessions and cache
-    go too. Owner-only because the render is where the secrets landed; the
-    pid in the name is what :func:`sweep_stale_renders` reads back.
+    go too. POSIX permissions are owner-only because the render is where the
+    secrets landed; Windows uses the containing directory's inherited ACLs.
+    The pid in the name is what :func:`sweep_stale_renders` reads back.
 
-    The host's refusals (:func:`inherit_host_denials`) and plugin opt-outs
-    (:func:`inherit_plugin_opt_outs`) are merged in here rather than by each
+    The host's refusals (:func:`inherit_host_denials`), plugin opt-outs
+    (:func:`inherit_plugin_opt_outs`) and memory address
+    (:func:`inherit_memory_backend`) are merged in here rather than by each
     launcher: every product render ends in this call, so a launcher cannot
     write a config that forgot them. ``own_plugins`` is the product's engine,
     which the opt-outs leave alone; a launcher that names none inherits them
@@ -648,9 +732,11 @@ def write_rendered(config: dict, root: Path, *, own_plugins: Iterable[str] = ())
     host = host_config()
     inherit_host_denials(config, host)
     inherit_plugin_opt_outs(config, host, own=own_plugins)
+    inherit_memory_backend(config, host)
     rendered = root / f".config.rendered.{os.getpid()}.json"
     fd = os.open(rendered, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    os.fchmod(fd, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        if hasattr(os, "fchmod"):
+            os.fchmod(stream.fileno(), 0o600)
         json.dump(config, stream, indent=2, ensure_ascii=False)
     return rendered

@@ -99,6 +99,7 @@ from raven.spine.events import bound_failure_text
 from raven.spine.turn import AnswerlessTurnError
 from raven.token_wise import usage_context
 from raven.token_wise.turn_spend import TurnSpend
+from raven.utils.tokens import estimate_message_tokens
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -165,6 +166,64 @@ def _marker_failure(reason: str | None) -> str:
         category, provider, _detail = parsed
         return llm_error_summary(category, provider)
     return reason or "unknown error"
+
+
+def _first_turns_within(messages: list[dict[str, Any]], budget: int) -> tuple[list[dict[str, Any]], bool]:
+    """The leading whole turns of ``messages`` that fit in ``budget`` tokens.
+
+    The path this step replaces bounded its input by a token budget; without
+    one a declined annotation is retried next turn with the tail one turn
+    longer, so a tail that was refused for its size is refused larger every
+    time and the log stops being written for that session. A tool result is
+    kept at up to 16k characters, so a handful of tool-heavy turns reaches
+    that point.
+
+    Cuts only where a turn ends -- the next ``role == "user"`` -- so the
+    annotator still sees whole exchanges. A first turn that alone exceeds the
+    budget is still returned whole, because sending nothing would stall the
+    cursor on it forever; the second return value says so, and the caller
+    needs it. Nothing else records that such a turn was sent, so a refusal
+    would otherwise rebuild the same tail and send the same oversized prompt
+    on every qualifying turn after it.
+    """
+    if budget <= 0 or not messages:
+        return messages, False
+    spent = 0
+    cut = 0
+    for i, m in enumerate(messages):
+        if i and m.get("role") == "user":
+            if spent > budget:
+                return (messages[:cut], False) if cut else (messages[:i], True)
+            cut = i
+        spent += estimate_message_tokens(m)
+    if spent <= budget:
+        return messages, False
+    return (messages[:cut], False) if cut else (messages, True)
+
+
+def _turns_a_person_opened(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """``messages`` without the turns the runtime opened for itself.
+
+    The origin mark rides on the one message that opens a turn -- the user
+    entry (``initial_messages[-1]`` at the stamp site) -- and nothing else in
+    that turn carries it: the reply the model writes, its tool calls and their
+    results are all saved unmarked. Deciding message by message would drop a
+    Sentinel turn's question and keep its answer, which is the half that ends
+    up in ``episodes.md``, which two Sentinel producers read.
+
+    So the turn decides. A ``role == "user"`` entry opens one and its mark
+    rules until the next opens; anything before the first user entry is the
+    tail of a turn this slice does not contain, and is kept, because the slice
+    starts where the last annotation stopped.
+    """
+    out: list[dict[str, Any]] = []
+    keep = True
+    for m in messages:
+        if m.get("role") == "user":
+            keep = not m.get("origin")
+        if keep:
+            out.append(m)
+    return out
 
 
 def _stamp_turn_observers(messages: list[dict[str, Any]], metadata: dict[str, Any] | None, turn_base: int) -> None:
@@ -2723,6 +2782,9 @@ class TurnPathMixin:
             _t4.add_done_callback(self._consolidation_tasks.discard)
         # ── End Step 4 ──────────────────────────────────────────────────────
 
+        if origin is Origin.USER:
+            self._maybe_annotate_tail(session, prev_len)
+
         if (mt := self.tools.get("message")) and isinstance(mt, MessageTool) and mt.sent_in_turn:
             # Defensive fingerprint. A silent return None would leave no
             # trace when the agent replied via the message tool, making
@@ -2848,6 +2910,114 @@ class TurnPathMixin:
         if mark := _runtime_origin(origin):
             entry["origin"] = mark
         session.record(entry)
+
+    def _maybe_annotate_tail(self, session: Session, prev_len: int) -> None:
+        """Hand the unannotated tail to the consolidator once enough user turns piled up.
+
+        Detached from the turn, under the consolidator's per-session lock so it
+        cannot interleave with the ``/new`` path. The tail is sliced inside the
+        lock: a task that waited re-reads the cursor the holder wrote and finds
+        nothing left to do. Its cursor is ``annotated_through`` in the session's
+        metadata, patched rather than saved so a task that lands mid-turn cannot
+        drop keys the turn wrote in between. A session seen for the first time is
+        seeded at ``prev_len``, the message count before the turn that just
+        ended: history is never back-filled, so an upgraded install or a fork
+        does not hand its past to one call, while a new session counts from its
+        first turn. Truncation (``clear``, ``undo_last_turn``) moves the cursor
+        itself; the clamp here only covers a file edited by hand.
+        """
+        every = self.memory_config.annotate_every_turns
+        if every <= 0:
+            return
+        # Read here, not in the task: this is the end of a turn, so it is a turn
+        # boundary. A task that waited for the lock would otherwise slice to a
+        # length the next turn has already grown, ending the tail on a user
+        # message whose answer has not arrived.
+        end = len(session.messages)
+        # Both read here, for the same reason: a task can sit queued behind
+        # another annotation on the same session, and a truncation that lands
+        # while it waits has already moved the counter by the time it takes
+        # the lock. Read together, they describe one moment -- the end of this
+        # turn -- and disagree with the session if anything cut it since.
+        before = session.truncations
+
+        async def _run() -> None:
+            try:
+                async with self.memory_consolidator.get_lock(session.key):
+                    stored = session.metadata.get("annotated_through")
+                    if stored is None:
+                        stored = prev_len
+                        self._set_annotated_through(session, min(prev_len, len(session.messages)))
+                    start = min(int(stored), end, len(session.messages))
+                    if start >= end or session.truncations != before:
+                        return
+                    tail = _turns_a_person_opened(session.messages[start:end])
+                    if sum(1 for m in tail if m.get("role") == "user") < every:
+                        return
+                    # Half the window, the share the token path consolidated
+                    # down to. What is left over rides the next qualifying
+                    # turn, so the cursor keeps moving and a tail refused for
+                    # its size is not retried larger.
+                    capped, oversized = _first_turns_within(tail, self.memory_consolidator.context_window_tokens // 2)
+                    if len(capped) != len(tail):
+                        # Located by identity, not equality: two messages in
+                        # one slice can be equal down to the timestamp, and a
+                        # search by value would answer with the earlier one,
+                        # leaving the cursor short of what was sent.
+                        sent = session.messages[start:end]
+                        last = next(i for i, m in enumerate(sent) if m is capped[-1]) + 1
+                        end_for_this_pass = start + last
+                        logger.info(
+                            "episodic annotate for {}: tail trimmed to {} of {} messages for this pass",
+                            session.key,
+                            len(capped),
+                            len(tail),
+                        )
+                    else:
+                        end_for_this_pass = end
+                    tail = capped
+                    wrote = await self.memory_consolidator.consolidate_messages(tail)
+                    if not wrote and not oversized:
+                        logger.warning("episodic annotate for {} declined; cursor kept at {}", session.key, start)
+                        return
+                    # The reader may undo or clear while the annotator runs,
+                    # and both leave the indices this task sliced against
+                    # pointing at other messages. The cursor's value cannot
+                    # carry that: a cut below it leaves it alone, and turns
+                    # arriving after the cut take the length back past where it
+                    # was. The counter moves on every truncation, so it can.
+                    if session.truncations != before:
+                        logger.info(
+                            "episodic annotate for {}: truncated while it ran; cursor left at {}",
+                            session.key,
+                            session.metadata.get("annotated_through"),
+                        )
+                        return
+                    self._set_annotated_through(session, min(end_for_this_pass, len(session.messages)))
+                    if not wrote:
+                        # The one refusal the cursor has to absorb: this turn
+                        # is larger than the whole budget, so every later pass
+                        # would build the same tail and send the same prompt
+                        # again. Keeping the cursor here repeats the call
+                        # rather than retrying it.
+                        logger.warning(
+                            "episodic annotate for {} declined a turn larger than the bound; cursor moved past it to {}",
+                            session.key,
+                            end_for_this_pass,
+                        )
+                        return
+                    await self.memory_consolidator.maybe_refresh_hot_tags()
+            except Exception:
+                logger.exception("episodic annotate for {} failed", session.key)
+
+        task = asyncio.create_task(_run())
+        self._consolidation_tasks.add(task)
+        task.add_done_callback(self._consolidation_tasks.discard)
+
+    def _set_annotated_through(self, session: Session, n: int) -> None:
+        session.metadata["annotated_through"] = n
+        if not self.sessions.append_metadata_patch(session.key, {"annotated_through": n}):
+            logger.debug("episodic cursor for {} not persisted: no session file yet", session.key)
 
     def _save_turn(
         self,

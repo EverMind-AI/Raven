@@ -8,7 +8,9 @@ pretending to be a model.
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import threading
 from dataclasses import replace
 
 import pytest
@@ -231,6 +233,169 @@ async def _ready_base(manager, content: bytes = MARKDOWN, filename: str = "handb
     doc = manager.add_document(base.id, filename=filename, content=content)
     indexed = await manager.index_document(doc.id)
     return base, indexed
+
+
+async def test_an_interrupted_index_goes_back_in_the_queue(manager) -> None:
+    """The whole index is awaited inside the RPC that asked for it, so the
+    reader reloading the page or losing the socket cancels it mid-flight.
+
+    Left to propagate, that stranded the document: `CancelledError` is a
+    `BaseException`, so neither the failure clause in `index_document` nor the
+    `except Exception` in the RPC method saw it, and the row read `indexing`
+    with nothing indexing it, no error beside it and nothing to retry it.
+    """
+    base = await manager.create_base(name="handbook")
+    doc = manager.add_document(base.id, filename="handbook.md", content=MARKDOWN)
+
+    started = asyncio.Event()
+
+    async def embed_forever(texts):
+        started.set()
+        await asyncio.sleep(3600)
+
+    manager.stub.embed = embed_forever
+
+    task = asyncio.create_task(manager.index_document(doc.id))
+    await asyncio.wait_for(started.wait(), timeout=5)
+    assert manager._records.get_document(doc.id).status == "indexing", "it had got that far"
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    record = manager._records.get_document(doc.id)
+    assert record.status == "pending", "queued again, because nothing about the document is wrong"
+    assert record.error == "", "and not reported as a fault the reader has to act on"
+
+
+async def test_a_document_deleted_while_it_indexed_leaves_no_pieces_behind(manager) -> None:
+    """Reachable from the page now that indexing no longer holds its lock: a
+    reader can delete a document while it is being embedded.
+
+    The vectors were already taken by the delete, so inserting the ones this
+    run computed would put pieces of the file back with no row to own them --
+    unreachable from the page, and answering searches out of a file the reader
+    deleted.
+    """
+    base = await manager.create_base(name="handbook")
+    doc = manager.add_document(base.id, filename="handbook.md", content=MARKDOWN)
+
+    embedding = asyncio.Event()
+    carry_on = asyncio.Event()
+    real = manager.stub.embed
+
+    async def embed_then_wait(texts):
+        embedding.set()
+        await carry_on.wait()
+        return await real(texts)
+
+    manager.stub.embed = embed_then_wait
+
+    task = asyncio.create_task(manager.index_document(doc.id))
+    await asyncio.wait_for(embedding.wait(), timeout=5)
+    await manager.delete_document(doc.id)
+    carry_on.set()
+
+    assert await task is None, "there is no record left to answer with"
+    assert (await manager.search([base.id], "alpha", top_k=5)).hits == [], "and nothing of it in the index"
+
+
+async def test_a_delete_landing_mid_write_still_leaves_nothing_searchable(manager) -> None:
+    """The window the existence check alone cannot close.
+
+    That check and the insert are separated by an await, so a delete starting
+    just after it can take the record and the rows and still be overtaken: the
+    indexer resumes, runs its own delete over nothing, and inserts the vectors
+    it had already computed. The document is gone from the page and its pieces
+    answer searches.
+
+    Driven at exactly that point rather than earlier -- the delete is started
+    once the indexer is already inside its store write, which is past every
+    check it makes.
+    """
+    base = await manager.create_base(name="handbook")
+    doc = manager.add_document(base.id, filename="handbook.md", content=MARKDOWN)
+
+    inside = asyncio.Event()
+    carry_on = asyncio.Event()
+    real_delete = manager._store.delete
+    seen: list[str] = []
+
+    async def delete_and_pause(base_id, document_id):
+        seen.append(document_id)
+        if len(seen) == 1:
+            # The indexer is past its record check and inside the write.
+            inside.set()
+            await carry_on.wait()
+        return await real_delete(base_id, document_id)
+
+    manager._store.delete = delete_and_pause
+
+    indexing = asyncio.create_task(manager.index_document(doc.id))
+    await asyncio.wait_for(inside.wait(), timeout=5)
+
+    deleting = asyncio.create_task(manager.delete_document(doc.id))
+    await asyncio.sleep(0)
+    carry_on.set()
+
+    await indexing
+    assert await deleting is True
+
+    assert manager._records.get_document(doc.id) is None, "the reader deleted it"
+    hits = (await manager.search([base.id], "alpha", top_k=10)).hits
+    assert [hit for hit in hits if hit.document_id == doc.id] == [], "and nothing of it is searchable"
+
+
+async def test_the_write_locks_are_dropped_when_nobody_holds_them(manager) -> None:
+    """One per document in flight, not one per document ever written.
+
+    A table keyed by document id that is only ever added to is a leak the
+    length of the install's history, and a gateway is a process that runs for
+    weeks.
+    """
+    base = await manager.create_base(name="handbook")
+    doc = manager.add_document(base.id, filename="handbook.md", content=MARKDOWN)
+
+    await manager.index_document(doc.id)
+    assert manager._writes == {}, "nothing in flight, nothing held"
+
+    await manager.delete_document(doc.id)
+    assert manager._writes == {}
+
+
+async def test_a_delete_mid_render_leaves_no_crops_behind(manager, tmp_path) -> None:
+    """The crops are cut in a worker thread before the write lock is taken --
+    holding it across a render would block a delete for the seconds that takes
+    -- so a delete landing in that window clears the directory and the thread
+    then writes into it. The files are for a document nothing can reach.
+    """
+    base = await manager.create_base(name="handbook")
+    doc = manager.add_document(base.id, filename="handbook.md", content=MARKDOWN)
+    crops = manager._crops_dir(doc.id)
+
+    # Threading events, not asyncio ones: this half runs in a worker thread,
+    # where `asyncio.Event.wait()` returns a coroutine nobody awaits and the
+    # render would sail straight past the delete it is meant to overlap.
+    rendering = threading.Event()
+    carry_on = threading.Event()
+
+    def render_then_wait(record, chunks, ids):
+        # The order that makes this the race: the render is still going when
+        # the delete clears the directory, and writes after it.
+        rendering.set()
+        carry_on.wait(timeout=5)
+        crops.mkdir(parents=True, exist_ok=True)
+        (crops / "1.webp").write_bytes(b"RIFFfake")
+
+    manager._write_crops = render_then_wait
+
+    indexing = asyncio.create_task(manager.index_document(doc.id))
+    assert await asyncio.to_thread(rendering.wait, 5), "the render started"
+    assert await manager.delete_document(doc.id) is True
+    carry_on.set()
+    await indexing
+
+    assert not list(crops.glob("*.webp")), "the pictures went with the document"
 
 
 # ── the whole path ────────────────────────────────────────────────

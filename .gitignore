@@ -133,6 +133,7 @@ demos/skill_retrieval/agent_memory/
 
 # Playwright MCP session artifacts (console logs, page snapshots, screenshots)
 .playwright-mcp/
+.playwright-cli/
 demos/oncall_heat2d/.raven-demo-home/
 
 # Generated benchmark reports (written by the real_llm integration tests).

@@ -139,7 +139,12 @@ class CronTool(Tool):
                 },
                 "tz": {
                     "type": "string",
-                    "description": "IANA timezone for cron expressions (e.g. 'America/Vancouver')",
+                    "description": (
+                        "IANA timezone (e.g. 'America/Vancouver') for a cron expression, or for an "
+                        "`at` datetime without an offset. Omitted, a cron job takes the configured "
+                        "cron timezone, else the machine's local time (the reply names which); an "
+                        "`at` stays on the machine's local time, the clock of current_time."
+                    ),
                 },
                 "at": {
                     "type": "string",
@@ -268,7 +273,22 @@ class CronTool(Tool):
             # invalid cron expr) is rejected by the service rather than stored as
             # a job that silently never fires — surface it so the agent retries.
             return f"Error: {exc}"
-        return f"Created job '{job.name}' (id: {job.id})"
+        return f"Created job '{job.name}' (id: {job.id}){self._zone_note(job.schedule)}"
+
+    @staticmethod
+    def _zone_note(schedule: CronSchedule) -> str:
+        """Name the zone a new cron job will keep.
+
+        A cron expression without a zone of its own captures the configured
+        default at creation, and that zone can differ from the machine clock the
+        agent and the user reason in; nothing else in the exchange says which
+        one the reminder follows. An ``at`` is an instant and an ``every`` an
+        interval, so neither has a zone to name.
+        """
+        if schedule.kind != "cron":
+            return ""
+        zone = schedule.tz or "this machine's local time"
+        return f", fires on {zone}"
 
     def _list_jobs(self) -> str:
         jobs = self._cron.list_jobs()

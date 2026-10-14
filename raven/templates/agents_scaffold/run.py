@@ -14,6 +14,7 @@ import argparse
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -133,8 +134,11 @@ def main() -> int:
         )
 
     rendered = render_config(Path(args.config).resolve())
-    log(f"[run] exec {sys.executable} -m raven acp (config {rendered})")
-    os.execv(sys.executable, [sys.executable, "-m", "raven", "acp", "--config", str(rendered)])
+    log(f"[run] serve {sys.executable} -m raven acp (config {rendered})")
+    argv = [sys.executable, "-m", "raven", "acp", "--config", str(rendered)]
+    if sys.platform == "win32":
+        raise SystemExit(subprocess.call(argv))
+    os.execv(sys.executable, argv)
     raise AssertionError("unreachable: execv does not return")
 
 

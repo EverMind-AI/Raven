@@ -380,6 +380,30 @@ jobs:
         # buy nothing -- the plugin only has to exist.
         run: uvx --python 3.12 --from "pytest>=8,<10" --with pytest-asyncio --with pytest-xdist pytest --noconftest tests/integration/test_cli_upgrade_real_uv.py -q
 
+  windows-acp:
+    name: Windows ACP stdio
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+
+      - name: Install the test environment
+        run: uv sync --frozen --python 3.13 --extra dev
+
+      - name: Test ACP handshakes and bundled launchers
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/integration/test_acp_stdio_smoke.py -m integration -q -n 0 --tb=short
+
+      - name: Test the registered launcher command
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/test_cli_agents_commands.py::test_register_pins_the_resolved_row_into_the_host_roster -q -n 0 --tb=short
+
+      - name: Test Windows ACP teardown
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/test_subagent_acp.py -k close_without_killpg -q -n 0 --tb=short
+
   core-wheel:
     name: kernel wheel smoke
     runs-on: ubuntu-latest

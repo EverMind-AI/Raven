@@ -51,9 +51,11 @@ def update_cron_config(
     def _apply(_text: str | None) -> tuple[str, Any]:
         data = read_raw_or_raise(path)
         cron_section = data.setdefault("cron", {})
-        camel_key = to_camel(key)
-        prev = cron_section.get(camel_key)
-        cron_section[camel_key] = value
+        written = to_camel(key)
+        if written not in cron_section and key in cron_section:
+            written = key
+        prev = cron_section.get(written)
+        cron_section[written] = value
         return json.dumps(data, indent=2, ensure_ascii=False), prev
 
     prev = atomic_update(path, _apply)
@@ -112,9 +114,9 @@ def remove_exec_pattern(pattern: str, *, config_path: Path | None = None) -> boo
 def reset_cron_config(*, config_path: Path | None = None) -> None:
     """Remove the entire ``cron`` section from on-disk config.
 
-    Schema defaults (``default_timezone="Asia/Shanghai"``) take effect on
-    next load. Stays consistent with the file's "never bake defaults to
-    disk" principle.
+    Schema defaults take effect on next load: with no ``default_timezone``,
+    new jobs use the host's local time. Stays consistent with the file's
+    "never bake defaults to disk" principle.
     """
     path = config_path or get_config_path()
 

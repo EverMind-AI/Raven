@@ -10,6 +10,7 @@ the launcher renders, trunk raven's own loader loads.
 
 import importlib.util
 import json
+import os
 import stat
 from pathlib import Path
 
@@ -218,6 +219,7 @@ def test_optional_keys_fall_back_per_slot_to_the_host_config(grounded, tmp_path)
     assert data["tools"]["web"]["search"]["apiKey"] == "host-serper"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not available on Windows")
 def test_the_rendered_file_is_owner_only(grounded):
     rendered = grounded.render_config(RUN_PY.parent / "config.json")
     assert stat.S_IMODE(rendered.stat().st_mode) == 0o600

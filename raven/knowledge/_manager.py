@@ -13,6 +13,8 @@ import mimetypes
 import os
 import re
 import shutil
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from hashlib import sha256
 from pathlib import Path
@@ -276,6 +278,9 @@ class KnowledgeManager:
         # Built once rather than per search: a client is a config and a
         # connection pool, and a mixed-model search rebuilds the same few.
         self._clients: dict[tuple[str, str], EmbeddingClient] = {}
+        # document id -> the lock its store writes take, and how many callers
+        # want it. See `_writing`.
+        self._writes: dict[str, tuple[asyncio.Lock, int]] = {}
         if store is None:
             from raven.knowledge._lancedb import LanceDBVectorStore
 
@@ -843,14 +848,54 @@ class KnowledgeManager:
         path = self._blob_path(document_id)
         return path if path.is_file() else None
 
+    @asynccontextmanager
+    async def _writing(self, document_id: str) -> "AsyncIterator[None]":
+        """Hold one document's place in the store while its rows are rewritten.
+
+        Indexing and deleting both rewrite the same document's rows, both do it
+        across several awaits, and since the page stopped locking itself while
+        a document indexes a reader can start the second during the first. The
+        two orders have to be orders rather than an interleaving:
+
+        * delete first, and indexing finds no record and inserts nothing;
+        * indexing first, and the delete that follows takes what it wrote.
+
+        Interleaved they are neither. Indexing reads the record, the delete
+        removes it and its rows, indexing resumes and inserts the vectors it
+        had already computed -- rows for a document with nothing to own them,
+        unreachable from the page and answering searches out of a file the
+        reader deleted. Checking the record is not enough on its own: the
+        check and the insert are separated by an await, which is the whole of
+        the window.
+
+        Per document rather than one lock over the store, because two
+        documents being written at once is not a race -- it is the ordinary
+        case, and a single lock would serialise a base's worth of indexing
+        behind whichever one is slowest. Dropped when the last caller leaves,
+        so the table holds locks in use rather than one per document ever
+        written.
+        """
+        lock, waiting = self._writes.get(document_id, (asyncio.Lock(), 0))
+        self._writes[document_id] = (lock, waiting + 1)
+        try:
+            async with lock:
+                yield
+        finally:
+            held, waiting = self._writes[document_id]
+            if waiting <= 1:
+                del self._writes[document_id]
+            else:
+                self._writes[document_id] = (held, waiting - 1)
+
     async def delete_document(self, document_id: str) -> bool:
-        record = self._records.get_document(document_id)
-        if record is None:
-            return False
-        await self._store.delete(record.base_id, document_id)
-        self._blob_path(document_id).unlink(missing_ok=True)
-        _clear(self._crops_dir(document_id))
-        return self._records.delete_document(document_id)
+        async with self._writing(document_id):
+            record = self._records.get_document(document_id)
+            if record is None:
+                return False
+            await self._store.delete(record.base_id, document_id)
+            self._blob_path(document_id).unlink(missing_ok=True)
+            _clear(self._crops_dir(document_id))
+            return self._records.delete_document(document_id)
 
     # ── indexing ──────────────────────────────────────────────────
 
@@ -902,14 +947,52 @@ class KnowledgeManager:
             # document held goes, including pieces a person wrote by hand and
             # pieces they had turned off -- a reindex is the document being
             # cut again, and there is nothing for those to be attached to.
-            await self._store.delete(base.id, document_id)
-            await self._store.insert(
-                base.id,
-                [
-                    VectorRecord(vector=v, document_id=document_id, chunk=c, chunk_id=i)
-                    for v, c, i in zip(vectors, chunks, ids, strict=True)
-                ],
-            )
+            async with self._writing(document_id):
+                if self._records.get_document(document_id) is None:
+                    # Deleted while this was parsing and embedding, which a
+                    # reader can now do: the page stopped locking itself while
+                    # a document indexes. The delete took this document's rows
+                    # on its way past, and it took them under the same lock
+                    # this holds -- so there is nothing left to replace, and
+                    # inserting what was computed would put pieces of the file
+                    # back with no row to own them, unreachable from the page
+                    # and answering searches out of a file the reader deleted.
+                    # The crops as well. They are cut in a worker thread
+                    # before this lock is taken -- holding it across a render
+                    # would block the delete for the seconds that takes -- so
+                    # a delete landing mid-render clears the directory and the
+                    # thread then writes into it. Cleared again here, where
+                    # the record is already known to be gone, rather than left
+                    # on disk for a document nothing can reach.
+                    _clear(self._crops_dir(document_id))
+                    logger.info("knowledge: {} was deleted while it indexed; its pieces are dropped", record.source)
+                    return None
+                await self._store.delete(base.id, document_id)
+                await self._store.insert(
+                    base.id,
+                    [
+                        VectorRecord(vector=v, document_id=document_id, chunk=c, chunk_id=i)
+                        for v, c, i in zip(vectors, chunks, ids, strict=True)
+                    ],
+                )
+        except asyncio.CancelledError:
+            # Put it back in the queue on the way out. This whole call is
+            # awaited inside the RPC that asked for it, so the reader closing
+            # the tab, reloading the page or losing the socket cancels it --
+            # and a document is seconds to tens of seconds of work, which is
+            # long enough for that to be ordinary rather than unlucky.
+            #
+            # Caught by name because `CancelledError` is a `BaseException`:
+            # the clause below does not see it, and neither does the
+            # `except Exception` in the RPC method above. Uncaught, the record
+            # was left reading `indexing` with nothing indexing it, no error
+            # beside it and nothing to retry it -- until a restart, where
+            # `_requeue_interrupted` does exactly what this does.
+            #
+            # `pending`, not `failed`: nothing about the document is wrong.
+            logger.info("knowledge: indexing {} was interrupted; requeued", record.source)
+            self._records.set_status(document_id, "pending")
+            raise
         except (KnowledgeError, EmbeddingError, VisionError, ValueError, OSError) as exc:
             logger.warning("knowledge: indexing {} failed: {}", record.source, exc)
             return self._records.set_status(document_id, "failed", error=str(exc))

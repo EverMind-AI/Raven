@@ -43,6 +43,7 @@ _NEXT_TURN_READERS: dict[str, tuple[str, str]] = {
     "permissions.judgeModel": ("raven.config.live", "permissions_config"),
     "language": ("raven.i18n", "set_language"),
     "session.model": ("raven.agent.loop.wiring", "set_session_binding"),
+    "cron.defaultTimezone": ("raven.config.live", "cron_default_timezone"),
 }
 
 
