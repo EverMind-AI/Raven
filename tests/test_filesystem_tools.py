@@ -8,7 +8,14 @@ from pathlib import Path
 
 import pytest
 
-from raven.agent.tools.filesystem import EditFileTool, ReadFileTool, WriteFileTool
+from raven.agent.tools import filesystem
+from raven.agent.tools.filesystem import (
+    EditFileTool,
+    ReadFileTool,
+    WriteFileTool,
+    _is_reserved_windows_component,
+    resolve_path,
+)
 from raven.agent.tools.registry import ToolRegistry
 from raven.contracts.tool import ToolOutput, ToolResult
 
@@ -231,3 +238,218 @@ def test_a_file_too_large_to_preview_is_not_read_at_all(tmp_path: Path):
     view = WriteFileTool(workspace=tmp_path).approval_evidence({"path": "big.log", "content": "small"})
 
     assert view == {"path": str(target.resolve()), "created": False}
+
+
+# ---------------------------------------------------------------------------
+# The Windows reserved-name fence
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "segment",
+    [
+        "nul",
+        "NUL",
+        "nul.md",
+        "Nul.Md",
+        "nul.tar.gz",
+        "con",
+        "con.txt",
+        "aux",
+        "prn",
+        "com1",
+        "com9",
+        "lpt1",
+        "lpt9",
+        "com¹",
+        "COM¹.txt",
+        "LPT²",
+        "lpt³.md",
+        "com1.md",
+        "conin$",
+        "conout$",
+        "NUL:",
+        "nul:stream",
+        "notes.md:",
+        "nul ",
+        "nul.",
+        "nul .md",
+        "notes.md.",
+        "notes.md ",
+        "...",
+    ],
+)
+def test_a_reserved_segment_is_one_in_any_spelling(segment):
+    assert _is_reserved_windows_component(segment)
+
+
+@pytest.mark.parametrize(
+    "segment",
+    [
+        "report.md",
+        "null",
+        "nulx",
+        "nulx.md",
+        "com0",
+        "lpt0",
+        "com0.txt",
+        "lpt0.txt",
+        "com10",
+        "com19",
+        "COM⁴",
+        "config.json",
+        "auxiliary.md",
+        "con an.md",
+        "",
+        ".",
+        "..",
+    ],
+)
+def test_an_ordinary_segment_is_not_reserved(segment):
+    assert not _is_reserved_windows_component(segment)
+
+
+def test_a_reserved_name_is_refused_the_way_an_out_of_fence_path_is(monkeypatch, tmp_path: Path):
+    """On Windows ``nul`` names the NUL device in every directory (CPython 95486).
+
+    ``Path.resolve()`` cannot see it coming: ``ntpath.realpath`` maps only a
+    path that is exactly ``nul`` to ``\\\\.\\NUL`` and hands
+    ``<workspace>\\nul`` back unchanged, so the allowed-dir check accepts it
+    and a write answers success for content no file received. The fence has to
+    catch the name itself, in any component, because Windows applies its
+    naming rules to directories too, and in the other shapes that lose bytes
+    the same way: a trailing dot or space lands them in the trimmed name while
+    the receipt reports the given one, and a colon lands them in an NTFS
+    stream no directory listing shows.
+    """
+    monkeypatch.setattr(filesystem, "_WINDOWS", True)
+    for name in (
+        "nul",
+        "nul.md",
+        "con.md",
+        "subdir/nul",
+        "nul/report.md",
+        "subdir/nul.md/report.md",
+        "COM¹.txt",
+        "LPT²/log.txt",
+        "notes.md.",
+        "notes.md ",
+        "notes.md:hidden",
+        "NUL:",
+    ):
+        with pytest.raises(PermissionError, match="reserved name on Windows"):
+            resolve_path(name, workspace=tmp_path, allowed_dirs=(tmp_path,))
+
+
+def test_a_reserved_name_is_refused_when_the_path_is_absolute(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(filesystem, "_WINDOWS", True)
+
+    with pytest.raises(PermissionError, match="reserved name on Windows"):
+        resolve_path(str(tmp_path / "subdir" / "nul"), workspace=tmp_path, allowed_dirs=(tmp_path,))
+
+
+def test_an_ordinary_name_resolves_with_the_gate_on(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(filesystem, "_WINDOWS", True)
+
+    assert resolve_path("report.md", workspace=tmp_path, allowed_dirs=(tmp_path,)) == tmp_path / "report.md"
+
+
+def test_a_zero_numbered_com_name_is_an_ordinary_file_with_the_gate_on(monkeypatch, tmp_path: Path):
+    """Microsoft's naming rules reserve COM/LPT 1-9; 0 never named a device."""
+    monkeypatch.setattr(filesystem, "_WINDOWS", True)
+
+    for name in ("com0.txt", "lpt0.txt"):
+        assert resolve_path(name, workspace=tmp_path, allowed_dirs=(tmp_path,)) == tmp_path / name
+
+
+def test_a_url_argument_is_left_to_the_tools_url_hint_with_the_gate_on(monkeypatch, tmp_path: Path):
+    """The URL's scheme colon is one of the reserved shapes; the hint must win.
+
+    ``_missing`` answers a URL with the tool that can serve it, so the fence
+    must not refuse a URL argument first -- the argument never reaches Windows
+    path resolution.
+    """
+    monkeypatch.setattr(filesystem, "_WINDOWS", True)
+
+    resolved = resolve_path("https://example.com/a.md", workspace=tmp_path, allowed_dirs=(tmp_path,))
+
+    assert resolved == tmp_path / "https:" / "example.com" / "a.md"
+
+
+def test_a_device_like_name_stays_legal_off_windows(monkeypatch, tmp_path: Path):
+    """POSIX puts no devices in names: a workspace file called ``nul`` is a file."""
+    monkeypatch.setattr(filesystem, "_WINDOWS", False)
+
+    assert resolve_path("nul", workspace=tmp_path, allowed_dirs=(tmp_path,)) == tmp_path / "nul"
+
+
+@pytest.mark.asyncio
+async def test_a_write_to_a_device_name_answers_an_error_and_writes_nothing(monkeypatch, tmp_path: Path):
+    """The defect was a success receipt for content no file received."""
+    monkeypatch.setattr(filesystem, "_WINDOWS", True)
+
+    answer = await WriteFileTool(workspace=tmp_path).execute(path="nul", content="hello\n")
+
+    assert isinstance(answer, str)
+    assert "reserved name on Windows" in answer
+    # On Windows the device itself answers ``exists()``, so the directory
+    # entries are what can prove no file was created.
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_a_write_to_a_colon_device_spelling_answers_an_error_and_writes_nothing(monkeypatch, tmp_path: Path):
+    """``NUL:`` is the device itself; its receipt must not claim a save either."""
+    monkeypatch.setattr(filesystem, "_WINDOWS", True)
+
+    answer = await WriteFileTool(workspace=tmp_path).execute(path="NUL:", content="hello\n")
+
+    assert isinstance(answer, str)
+    assert "reserved name on Windows" in answer
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_a_write_to_a_trailing_dot_name_answers_an_error_and_writes_nothing(monkeypatch, tmp_path: Path):
+    """Windows trims the dot before creating: the bytes land in ``notes.md``."""
+    monkeypatch.setattr(filesystem, "_WINDOWS", True)
+
+    answer = await WriteFileTool(workspace=tmp_path).execute(path="notes.md.", content="hello\n")
+
+    assert isinstance(answer, str)
+    assert "reserved name on Windows" in answer
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_a_write_to_a_zero_numbered_com_name_writes_a_real_file(monkeypatch, tmp_path: Path):
+    """The control side of the 1-9 rule: ``com0.txt`` is a file Windows creates."""
+    monkeypatch.setattr(filesystem, "_WINDOWS", True)
+
+    answer = await WriteFileTool(workspace=tmp_path).execute(path="com0.txt", content="hello\n")
+
+    assert isinstance(answer, ToolResult)
+    assert answer.model_text.startswith("Successfully wrote ")
+    assert [p.name for p in tmp_path.iterdir()] == ["com0.txt"]
+
+
+@pytest.mark.asyncio
+async def test_a_read_of_a_device_name_answers_an_error_not_a_missing_file(monkeypatch, tmp_path: Path):
+    """ "File not found" reads as a misspelling; the name is the problem itself."""
+    monkeypatch.setattr(filesystem, "_WINDOWS", True)
+
+    answer = await ReadFileTool(workspace=tmp_path).execute(path="nul.md")
+
+    assert isinstance(answer, str)
+    assert "reserved name on Windows" in answer
+
+
+@pytest.mark.asyncio
+async def test_a_read_of_a_url_still_answers_the_fetch_hint_with_the_gate_on(monkeypatch, tmp_path: Path):
+    """The gate must not swallow the URL answer: its colon is not a stream."""
+    monkeypatch.setattr(filesystem, "_WINDOWS", True)
+
+    answer = await ReadFileTool(workspace=tmp_path).execute(path="https://example.com/a.md")
+
+    assert isinstance(answer, str)
+    assert "web_fetch" in answer
