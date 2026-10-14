@@ -50,6 +50,7 @@ def state(tmp_path: Path, monkeypatch) -> Iterator[Path]:
     monkeypatch.setattr(rpc_export, "_answering", lambda _key: False)
     monkeypatch.setattr(export_jobs, "JOBS", export_jobs.ExportJobs(lambda: tmp_path / "exports"))
     yield root
+    assert export_jobs.JOBS.shutdown(timeout=30), "an export worker outlived its test"
     tpol._reset_for_tests()
 
 
@@ -245,16 +246,19 @@ async def test_a_cancelled_export_leaves_no_package(state, world, tmp_path, monk
 
     monkeypatch.setattr(export_jobs, "write_export", held_write)
     dispatcher = _dispatcher()
-    started = await _call(
-        dispatcher, "trajectory.export", {"session_key": SESSION, "trace_ids": ["trace-1"], "file_name": "x.tar.gz"}
-    )
-    assert await asyncio.to_thread(entered.wait, 10)
-    await _call(dispatcher, "trajectory.export_cancel", {"job_id": started["job_id"]})
-    release.set()
-    status = await _settled(dispatcher, started["job_id"])
-    assert status["state"] == "cancelled" and status["download_url"] is None
-    deadline = time.monotonic() + 10
+    try:
+        started = await _call(
+            dispatcher, "trajectory.export", {"session_key": SESSION, "trace_ids": ["trace-1"], "file_name": "x.tar.gz"}
+        )
+        assert await asyncio.to_thread(entered.wait, 10)
+        await _call(dispatcher, "trajectory.export_cancel", {"job_id": started["job_id"]})
+        status = await _call(dispatcher, "trajectory.export_status", {"job_id": started["job_id"]})
+        assert status["state"] == "cancelled" and status["download_url"] is None
+    finally:
+        release.set()
+    # The status says cancelled at once; the worker still writes, sees the
+    # cancel and removes what it wrote. Only once the registry has no worker
+    # and no cleaner left is an empty directory a result rather than a moment.
+    assert await asyncio.to_thread(export_jobs.JOBS.shutdown, timeout=30)
     exports = tmp_path / "exports"
-    while exports.is_dir() and any(exports.rglob("*")):
-        assert time.monotonic() < deadline, sorted(exports.rglob("*"))
-        await asyncio.sleep(0.05)
+    assert not exports.is_dir() or not any(exports.rglob("*")), sorted(exports.rglob("*"))
