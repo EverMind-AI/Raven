@@ -10902,6 +10902,218 @@
           }
         }
       }
+    },
+    {
+      "name": "trajectory.turns",
+      "summary": "A session's main-line turns, in start order, for picking which to export or report.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "The session whose turns to read."
+        }
+      ],
+      "result": {
+        "name": "TrajectoryTurnsResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "title",
+            "turns"
+          ],
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "The session's title; empty when it has none."
+            },
+            "turns": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/TrajectoryTurn"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "trajectory.export",
+      "summary": "Validate a selection of turns and start exporting them; an invalid selection is refused with invalid_params naming each turn.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "The session the turns belong to."
+        },
+        {
+          "name": "trace_ids",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "description": "The trace ids of the main-line turns to export."
+        },
+        {
+          "name": "file_name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "The download name; cleaned to a basename ending in .tar.gz."
+        }
+      ],
+      "result": {
+        "name": "TrajectoryExportResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "job_id"
+          ],
+          "properties": {
+            "job_id": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "trajectory.export_status",
+      "summary": "Where an export job stands; a finished one carries its download URL.",
+      "params": [
+        {
+          "name": "job_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "The id trajectory.export returned."
+        }
+      ],
+      "result": {
+        "name": "TrajectoryExportStatusResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "job_id",
+            "state",
+            "phase",
+            "file_name"
+          ],
+          "properties": {
+            "job_id": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "running",
+                "done",
+                "failed",
+                "cancelled"
+              ]
+            },
+            "phase": {
+              "type": "string",
+              "enum": [
+                "collecting",
+                "writing",
+                "done"
+              ]
+            },
+            "file_name": {
+              "type": "string"
+            },
+            "download_url": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Same-origin path that downloads the package; set once done."
+            },
+            "size_bytes": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "counts": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": false,
+              "required": [
+                "spans",
+                "artifacts",
+                "messages"
+              ],
+              "properties": {
+                "spans": {
+                  "type": "integer"
+                },
+                "artifacts": {
+                  "type": "integer"
+                },
+                "messages": {
+                  "type": "integer"
+                }
+              },
+              "description": "How many span records, artifacts and message blobs the package holds; set once done."
+            },
+            "error": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Why the job failed; set only when it did."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "trajectory.export_cancel",
+      "summary": "Stop a running export, or discard a finished package and its download token.",
+      "params": [
+        {
+          "name": "job_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "The id trajectory.export returned."
+        }
+      ],
+      "result": {
+        "name": "TrajectoryExportCancelResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok"
+          ],
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
     }
   ],
   "components": {
@@ -16863,6 +17075,36 @@
             ]
           }
         }
+      },
+      "TrajectoryTurn": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "trace_id",
+          "number",
+          "start",
+          "input_preview",
+          "in_progress"
+        ],
+        "properties": {
+          "trace_id": {
+            "type": "string"
+          },
+          "number": {
+            "type": "integer",
+            "description": "1-based position among the session's main-line turns."
+          },
+          "start": {
+            "type": "string"
+          },
+          "input_preview": {
+            "type": "string"
+          },
+          "in_progress": {
+            "type": "boolean",
+            "description": "The latest turn, still running; it cannot be selected."
+          }
+        }
       }
     },
     "errors": {
@@ -16949,6 +17191,14 @@
       "RevisionChanged": {
         "code": -32023,
         "message": "revision_changed"
+      },
+      "TrajectoryTaskNotFound": {
+        "code": -32024,
+        "message": "trajectory_task_not_found"
+      },
+      "TrajectoryTaskLimit": {
+        "code": -32025,
+        "message": "trajectory_task_limit"
       }
     }
   }

@@ -189,6 +189,16 @@ class RevisionChangedRpcError(RpcError):
     MESSAGE = "revision_changed"
 
 
+class TrajectoryTaskNotFoundError(RpcError):
+    CODE = -32024
+    MESSAGE = "trajectory_task_not_found"
+
+
+class TrajectoryTaskLimitError(RpcError):
+    CODE = -32025
+    MESSAGE = "trajectory_task_limit"
+
+
 # JSON-RPC pre-defined ``invalid_params`` (-32602). Class added for the same
 # reason as the one below: a handler that validates its own params answers the
 # caller with the code for a bad request, instead of letting the pydantic
@@ -242,6 +252,8 @@ JSONRPC_ERROR_REGISTRY: dict[int, type[RpcError]] = {
         EntryNotFoundError,
         CursorExpiredRpcError,
         RevisionChangedRpcError,
+        TrajectoryTaskNotFoundError,
+        TrajectoryTaskLimitError,
         InvalidParamsError,
         InternalError,
     )
@@ -272,6 +284,8 @@ __all__ = [
     "EntryNotFoundError",
     "CursorExpiredRpcError",
     "RevisionChangedRpcError",
+    "TrajectoryTaskNotFoundError",
+    "TrajectoryTaskLimitError",
     "InvalidParamsError",
     "InternalError",
     "JSONRPC_ERROR_REGISTRY",

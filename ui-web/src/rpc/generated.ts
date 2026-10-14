@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 228 methods, 131 component schemas.
+// 232 methods, 132 component schemas.
 
 /* eslint-disable */
 /**
@@ -2489,6 +2489,19 @@ export interface TrajectoryBlockDescriptor {
   total_items?: number | null;
   related_operation?: string | null;
   reason?: string | null;
+}
+export interface TrajectoryTurn {
+  trace_id: string;
+  /**
+   * 1-based position among the session's main-line turns.
+   */
+  number: number;
+  start: string;
+  input_preview: string;
+  /**
+   * The latest turn, still running; it cannot be selected.
+   */
+  in_progress: boolean;
 }
 export interface SessionListParams {
   /**
@@ -5814,6 +5827,56 @@ export interface TrajectoryBlockResult {
   integrity: string[];
   truncated: boolean;
 }
+export interface TrajectoryTurnsParams {
+  session_key: string;
+}
+export interface TrajectoryTurnsResult {
+  /**
+   * The session's title; empty when it has none.
+   */
+  title: string;
+  turns: TrajectoryTurn[];
+}
+export interface TrajectoryExportParams {
+  session_key: string;
+  trace_ids: string[];
+  file_name: string;
+}
+export interface TrajectoryExportResult {
+  job_id: string;
+}
+export interface TrajectoryExportStatusParams {
+  job_id: string;
+}
+export interface TrajectoryExportStatusResult {
+  job_id: string;
+  state: 'running' | 'done' | 'failed' | 'cancelled';
+  phase: 'collecting' | 'writing' | 'done';
+  file_name: string;
+  /**
+   * Same-origin path that downloads the package; set once done.
+   */
+  download_url?: string | null;
+  size_bytes?: number | null;
+  /**
+   * How many span records, artifacts and message blobs the package holds; set once done.
+   */
+  counts?: {
+    spans: number;
+    artifacts: number;
+    messages: number;
+  } | null;
+  /**
+   * Why the job failed; set only when it did.
+   */
+  error?: string | null;
+}
+export interface TrajectoryExportCancelParams {
+  job_id: string;
+}
+export interface TrajectoryExportCancelResult {
+  ok: boolean;
+}
 
 // ---------------------------------------------------------------------------
 // Method map -- generated from the contract's method list.
@@ -6049,6 +6112,10 @@ export interface RpcMethods {
   'trajectory.changes': { params: TrajectoryChangesParams; result: TrajectoryChangesResult };
   'trajectory.detail': { params: TrajectoryDetailParams; result: TrajectoryDetailResult };
   'trajectory.block': { params: TrajectoryBlockParams; result: TrajectoryBlockResult };
+  'trajectory.turns': { params: TrajectoryTurnsParams; result: TrajectoryTurnsResult };
+  'trajectory.export': { params: TrajectoryExportParams; result: TrajectoryExportResult };
+  'trajectory.export_status': { params: TrajectoryExportStatusParams; result: TrajectoryExportStatusResult };
+  'trajectory.export_cancel': { params: TrajectoryExportCancelParams; result: TrajectoryExportCancelResult };
 }
 
 /** The literal union of callable method names. */
@@ -6279,8 +6346,12 @@ export const RPC_METHODS = [
   "trajectory.block",
   "trajectory.changes",
   "trajectory.detail",
+  "trajectory.export",
+  "trajectory.export_cancel",
+  "trajectory.export_status",
   "trajectory.list",
   "trajectory.state",
+  "trajectory.turns",
   "turn.cancel",
   "turn.send",
   "turn.subscribe",

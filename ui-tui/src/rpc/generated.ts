@@ -3031,6 +3031,23 @@ export interface TrajectoryBlockDescriptor {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TrajectoryTurn".
+ */
+export interface TrajectoryTurn {
+  trace_id: string;
+  /**
+   * 1-based position among the session's main-line turns.
+   */
+  number: number;
+  start: string;
+  input_preview: string;
+  /**
+   * The latest turn, still running; it cannot be selected.
+   */
+  in_progress: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "SessionListParams".
  */
 export interface SessionListParams {
@@ -7727,6 +7744,88 @@ export interface TrajectoryBlockResult {
   total_items?: number | null;
   integrity: string[];
   truncated: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TrajectoryTurnsParams".
+ */
+export interface TrajectoryTurnsParams {
+  session_key: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TrajectoryTurnsResult".
+ */
+export interface TrajectoryTurnsResult {
+  /**
+   * The session's title; empty when it has none.
+   */
+  title: string;
+  turns: TrajectoryTurn[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TrajectoryExportParams".
+ */
+export interface TrajectoryExportParams {
+  session_key: string;
+  trace_ids: string[];
+  file_name: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TrajectoryExportResult".
+ */
+export interface TrajectoryExportResult {
+  job_id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TrajectoryExportStatusParams".
+ */
+export interface TrajectoryExportStatusParams {
+  job_id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TrajectoryExportStatusResult".
+ */
+export interface TrajectoryExportStatusResult {
+  job_id: string;
+  state: 'running' | 'done' | 'failed' | 'cancelled';
+  phase: 'collecting' | 'writing' | 'done';
+  file_name: string;
+  /**
+   * Same-origin path that downloads the package; set once done.
+   */
+  download_url?: string | null;
+  size_bytes?: number | null;
+  /**
+   * How many span records, artifacts and message blobs the package holds; set once done.
+   */
+  counts?: {
+    spans: number;
+    artifacts: number;
+    messages: number;
+  } | null;
+  /**
+   * Why the job failed; set only when it did.
+   */
+  error?: string | null;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TrajectoryExportCancelParams".
+ */
+export interface TrajectoryExportCancelParams {
+  job_id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TrajectoryExportCancelResult".
+ */
+export interface TrajectoryExportCancelResult {
+  ok: boolean;
 }
 
 // ---- Schema-name aliases for structurally-deduplicated types ----

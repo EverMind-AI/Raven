@@ -6111,6 +6111,64 @@ class TrajectoryBlockResult(_Strict):
     truncated: bool
 
 
+
+class TrajectoryTurnsParams(_StrictParams):
+    session_key: str
+
+
+class TrajectoryTurn(_Strict):
+    """One main-line turn of a session; see raven/trajectory/selection.py."""
+
+    trace_id: str
+    number: int
+    start: str
+    input_preview: str
+    in_progress: bool
+
+
+class TrajectoryTurnsResult(_Strict):
+    title: str
+    turns: list[TrajectoryTurn]
+
+
+class TrajectoryExportParams(_StrictParams):
+    session_key: str
+    trace_ids: list[str]
+    file_name: str
+
+
+class TrajectoryExportResult(_Strict):
+    job_id: str
+
+
+class TrajectoryExportStatusParams(_StrictParams):
+    job_id: str
+
+
+class TrajectoryExportCounts(_Strict):
+    spans: int
+    artifacts: int
+    messages: int
+
+
+class TrajectoryExportStatusResult(_Strict):
+    job_id: str
+    state: Literal["running", "done", "failed", "cancelled"]
+    phase: Literal["collecting", "writing", "done"]
+    file_name: str
+    download_url: str | None = None
+    size_bytes: int | None = None
+    counts: TrajectoryExportCounts | None = None
+    error: str | None = None
+
+
+class TrajectoryExportCancelParams(_StrictParams):
+    job_id: str
+
+
+class TrajectoryExportCancelResult(_Strict):
+    ok: bool
+
 METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     # knowledge.* -- bases and their documents, served by the in-process engine
     "knowledge.status": (KnowledgeStatusParams, KnowledgeStatusResult),
@@ -6251,6 +6309,10 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "trajectory.changes": (TrajectoryChangesParams, TrajectoryChangesResult),
     "trajectory.detail": (TrajectoryDetailParams, TrajectoryDetailResult),
     "trajectory.block": (TrajectoryBlockParams, TrajectoryBlockResult),
+    "trajectory.turns": (TrajectoryTurnsParams, TrajectoryTurnsResult),
+    "trajectory.export": (TrajectoryExportParams, TrajectoryExportResult),
+    "trajectory.export_status": (TrajectoryExportStatusParams, TrajectoryExportStatusResult),
+    "trajectory.export_cancel": (TrajectoryExportCancelParams, TrajectoryExportCancelResult),
     # the round-trip answer sinks
     "approval.respond": (ApprovalRespondParams, ApprovalRespondResult),
     "approval.revoke": (ApprovalRevokeParams, ApprovalRevokeResult),
