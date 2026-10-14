@@ -16,7 +16,6 @@ the request; concurrent-turn conflicts are already guarded by -32003.
 from __future__ import annotations
 
 import asyncio
-import ipaddress
 import json
 import secrets
 import time
@@ -27,6 +26,8 @@ from urllib.parse import urlsplit
 
 from aiohttp import WSCloseCode, WSMsgType, web
 from loguru import logger
+
+from raven.security.hosts import is_loopback_ip
 
 DEFAULT_PORT = 18792
 _PORT_PROBE_SPAN = 20
@@ -94,20 +95,15 @@ def cookie_name(port: int) -> str:
 def _loopback_origin(origin: str) -> bool:
     """Whether a browser origin names this machine: ``localhost`` or a loopback IP.
 
-    Both parses raise on input a client other than a browser can send:
-    ``urlsplit`` on an IPv6 bracket left open, ``ip_address`` on any name, which
-    is how the rebinding case lands here. Either one is a refusal, not an error.
+    Local aliases and trailing dots stay outside the browser sign-in policy,
+    even though URL policies may allow them. An unclosed IPv6 bracket is a
+    refusal too, rather than an error from ``urlsplit``.
     """
     try:
         hostname = urlsplit(origin).hostname
     except ValueError:
         return False
-    if hostname == "localhost":
-        return True
-    try:
-        return hostname is not None and ipaddress.ip_address(hostname).is_loopback
-    except ValueError:
-        return False
+    return hostname is not None and (hostname == "localhost" or is_loopback_ip(hostname))
 
 
 _COOKIE_MAX_AGE_S = 30 * 24 * 60 * 60
