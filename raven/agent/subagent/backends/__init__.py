@@ -98,13 +98,14 @@ class AgentMeta(NamedTuple):
     """The registered machine this agent runs on, by id, or ``""`` for this computer.
 
     Rendered as a tag so the model can send work to a named machine and knows
-    the files it gets back are there, not here. The id only, which is all the
-    roster says of the machine: the way onto it -- the address, port, account
-    and key the registry holds -- stays out of anything a model reads, while a
-    path on it is written to a model the way scp writes it, address included,
-    because that is how a file there is named (``remote.shown``). Read off
-    every kind: whichever kind runs there, the tag is the same. Appended last,
-    for the reason ``model_choices`` gives."""
+    the files it gets back are there, not here. The tag carries the id only.
+    A file on the machine is named to a model the way scp writes it, with the
+    registry's user, address and port -- ``user@host:/abs``, or
+    ``scp://user@host:port//abs`` off port 22 (``remote.shown``) -- and never
+    by the id; what a model, a reply, a record and an RPC result never carry
+    is the key and the assembled ssh line. Read off every kind: whichever kind
+    runs there, the tag is the same. Appended last, for the reason
+    ``model_choices`` gives."""
 
 
 def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:

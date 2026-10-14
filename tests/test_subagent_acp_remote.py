@@ -187,6 +187,8 @@ async def test_a_dispatch_runs_on_the_machine_in_a_directory_made_there_and_says
     assert "[raven] Ran on machine 'Lab box' (box), in " in reply
     # Shown the way scp writes it, which the file tools read back as it is.
     assert f"in scp://worker@{HOST}:{PORT}//{str(there.resolve()).lstrip('/')};" in reply
+    where = reply.split("in scp://", 1)[1].split(";", 1)[0]
+    assert where.split("@", 1)[1].split(":", 1)[0] == HOST, "the address a model reads is the registry's, never the id"
     assert "not on this computer" in reply
     assert "the files it wrote are there, not on this computer" in reply
     assert "read_file, list_dir, find, grep, write_file and edit_file take that path as it is" in reply

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -545,6 +546,23 @@ def test_a_path_on_the_machine_is_shown_the_way_scp_writes_it():
     assert (
         remote.shown(_box(), "/home/worker/raven-work/t1") == f"scp://worker@{HOST}:{PORT}//home/worker/raven-work/t1"
     )
+
+
+_SCP_ADDRESS = re.compile(r"^(?:scp://[^@/\s]+@[^:/\s]+:\d+//\S+|[^@/\s]+@[^:/\s]+:/\S+)$")
+
+
+def test_an_address_a_model_reads_is_scp_shaped_by_address_and_never_by_id():
+    """The positive half of the rule: where an address appears it is scp-shaped and the registry's, never the id."""
+    far = _box()
+    near = Machine(id="box", display_name="Lab box", _row={**far._row, "port": 22})
+    for target, want in (
+        (far, f"scp://worker@{HOST}:{PORT}//home/worker/raven-work/t1"),
+        (near, f"worker@{HOST}:/home/worker/raven-work/t1"),
+    ):
+        shown = remote.shown(target, "/home/worker/raven-work/t1")
+        assert shown == want and _SCP_ADDRESS.match(shown)
+        assert shown.split("@", 1)[1].split(":", 1)[0] == HOST, "the registry's address, not the machine's id"
+        assert KEY not in shown and "ssh" not in shown
 
 
 def test_the_files_note_names_what_came_with_the_task_by_address_and_nothing_else():

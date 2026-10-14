@@ -2310,8 +2310,8 @@ class BuiltinAgentConfig(Base):
     A built-in agent is Raven's own loop in this process, where its model keys
     and tools are, so it has no process to start on another machine; a value
     here is dropped on load with a warning and the row runs on this computer,
-    reaching a machine the way the main loop does (``exec`` with a ``machine``,
-    paths written by address). Undeclared, the key would be dropped without a
+    reaching a machine the way the main loop does (``exec`` with a
+    ``machine``). Undeclared, the key would be dropped without a
     word, which is how a row ends up running here while its author believes
     it runs there."""
 
@@ -2322,7 +2322,7 @@ class BuiltinAgentConfig(Base):
             logger.warning(
                 "built-in sub-agent {!r} names machine {!r}, which it cannot run on: Raven's own loop runs in "
                 "this process, where its model keys and tools are. The entry runs on this computer and reaches "
-                "the machine as the main loop does (exec with a machine, paths by address); remove `machine` "
+                "the machine as the main loop does (exec with a machine); remove `machine` "
                 "from it",
                 self.name,
                 machine,

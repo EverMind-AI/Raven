@@ -79,7 +79,10 @@ SSH_FAILED_RC = 255
 #: What a POSIX shell exits with when it cannot find the command it was given.
 NOT_FOUND_RC = 127
 
-# The fields of a registry row that are the way onto the machine, never shown.
+# The fields of a registry row that are the way onto the machine: read to open
+# the ssh, and kept off the launch line a model, a log or a record could see.
+# The user, address and port do name a path there, written the way scp writes
+# it (:func:`shown`); the key never shows anywhere.
 _WAY_IN = frozenset({"host", "port", "user", "key"})
 _LEAF_UNSAFE = re.compile(r"[^A-Za-z0-9._-]")
 _LEAF_MAX = 64
@@ -96,7 +99,12 @@ class RemoteMachineError(RuntimeError):
 
 @dataclass(frozen=True)
 class Machine:
-    """A registered ssh machine. The row, with the address in it, never prints."""
+    """A registered ssh machine.
+
+    The row never prints whole: the key and the ssh line built from the row
+    reach no model, log or record, while its user, address and port name a
+    path on the machine the way scp writes it (:func:`shown`).
+    """
 
     id: str
     display_name: str
@@ -114,8 +122,9 @@ class Machine:
 
         For what a caller needs to know about the machine itself -- where a
         Raven node is kept on it (``node_dir``), the directories its owner
-        listed (``paths``). The address, port, account and key stay behind
-        :func:`ssh_command`, :func:`run` and :func:`push`.
+        listed (``paths``). The address, port, account and key open the way
+        there behind :func:`ssh_command`, :func:`run` and :func:`push`; the
+        first three also name a path there (:func:`shown`), the key never shows.
         """
         if name in _WAY_IN:
             raise KeyError(f"{name!r} is how raven reaches the machine, not a fact about it")

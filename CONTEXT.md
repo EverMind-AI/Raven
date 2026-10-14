@@ -388,15 +388,18 @@ machine's **Raven node**, reached over the one ssh link the host keeps to the ma
 an `openai` entry's endpoint is reached from that machine through an ssh tunnel the
 host opens for the turn and closes after it (`remote.tunnel`); a `builtin` entry cannot
 name one -- Raven's own loop runs here -- and is loaded with a warning and runs here.
-The row's address, port, key and user are read for that link or tunnel alone
-(`raven/acp_client/remote.py`).
+The row's key opens that link or tunnel and goes nowhere else, and the ssh line built
+from the row stays in memory; the row's user, address and port open it too and also name
+every path on the machine that a model, a reply, a record or an RPC result carries, written
+the way scp writes one -- `user@host:/abs`, or `scp://user@host:port//abs` off port 22
+(`remote.shown`, `raven/acp_client/remote.py`) -- and never by the machine's id.
 Its dispatch reads the registry once (`remote.machine`), and the run fails before
 anything starts when the id is not registered, is listed twice, cannot be used, or
 is this computer; the `spawn` itself has already answered that it started. No other
 dispatch reads the registry, so no graph and no spawn is ever refused over the state
-of it. The address stays in the ssh line, in memory; the entry names only the
-machine's id, and the entry's `env` reaches the agent on the link, never on a
-command line. Such an entry is added the way any preset is, with `machine` (and
+of it. The entry names only the machine's id, and the entry's `env` reaches the
+agent on the link, never on a command line. Such an entry is added the way any
+preset is, with `machine` (and
 `remote_cwd`, for an `acp` or `cli` one) on `subagents.add` — from a chat through
 `raven_config`, which lists the registered machines while the lane is on; the page's
 add passes no machine yet — refused before anything is spent when the lane is off,
