@@ -1157,14 +1157,44 @@ and injects into the main agent's system prompt so evicted facts stay present.
 **EverOS** (`plugins-dist/everos-memory/raven_everos/`):
 Raven's default memory-backend plugin (`everos-memory`; ships enabled, works out of
 the box). Its own distribution rather than part of the raven wheel, found through the
-`raven.plugins` entry-point group. (`plugins-dist/ppt-engine/` and
-`plugins-dist/design-engine/` ship the same way -- the group's other two
-distributed members, contributing a deck-building toolchain and a visual-design
-engine rather than memory.) Provides dual-track semantic recall — the user track (episodes/profiles,
+`raven.plugins` entry-point group. (`plugins-dist/ppt-engine/`,
+`plugins-dist/design-engine/` and `plugins-dist/everos-cloud-memory/` ship the same way --
+the group's other distributed members: a deck-building toolchain, a visual-design
+engine, and the hosted memory backend below.) Provides dual-track semantic recall — the user track (episodes/profiles,
 injected into the `# Memory` segment) and the agent track (skills/cases, one of
 SkillForge's three sources at RRF weight 0.9). The name refers to the external package
 [EverMind-AI/EverOS](https://github.com/EverMind-AI/EverOS); the in-tree code is only an
 adapter. The same plugin also contributes the `understand_media` multimodal-parsing tool.
+
+**EverOS Cloud** (`plugins-dist/everos-cloud-memory/raven_everos_cloud/`):
+The hosted EverOS at `https://api.evermind.ai`, reached with a Bearer key from
+`https://everos.evermind.ai`, and the second memory-backend plugin (distribution
+`everos-cloud-memory`, backend name `everos-cloud`). Speaks the same
+`/api/v2/memory/{add,flush,get,search}` as the local server; the plugin depends on
+`raven` and `httpx` only and never imports the `everos` package. Flushes only on an
+**explicit end** and at `stop()`; every add is `mode: "agent"`.
+
+**cloud slice**:
+`plugins.config["everos-cloud-memory"]`: `api_key` and an optional `base_url`. Holds no
+identity -- the **owner id** is the host's.
+
+**owner id**:
+`memory.userId` / `memory.agentId` from the host's `memory` block, handed to every
+backend through `ServiceLocator`. On the wire it is the `user_id` or `agent_id` of a
+search and the `sender_id` of a stored user message. The same two values on two
+machines sharing one cloud key name one memory.
+_Avoid_: owner identity (the older wording in `raven/contracts/plugin_surface.py`).
+
+**memory backend chooser** (`cli/onboard_commands.py:_choose_memory_backend`):
+The `raven onboard` question asked only when more than one memory plugin is
+installed: which backend's screen to run. Off writes `memory.backend = null`; a
+dismissed question exits the wizard and writes nothing.
+
+**explicit end**:
+A `store` call whose caller says the conversation is over: `metadata["flush"]` (the
+sub-agent **Memory record** handoff; a convention of the `MemoryBackend` contract) or
+`metadata["is_final"]` (the importer's last batch). The only two store-time reasons the
+cloud backend calls `/flush`.
 
 **EverOS role**:
 One of the four models EverOS talks to: `llm` (reads each conversation and extracts
@@ -1407,6 +1437,26 @@ dropped directory itself, so each of its files arrives as `file`.
 One parsed region of a source document, before chunking — a heading and the text
 under it, a page, a slide. A parser produces Sections and never splits them.
 
+**Reading Order**:
+A Section's 0-based place in the file it was parsed from, recorded by every
+parser in `Section.metadata`. The only record of a document's order that
+survives indexing: search returns hits by score, and a Section's text does not
+say where it came from.
+
+**Layout Type**:
+What a parsed region is, as the source file marks it -- `title`, `heading`,
+`text`, `list_item`, `table`, `figure`, `caption`, `quote`, `code`, `toc`,
+`header`, `footer`, `footnote`. Read off the format's own markup (a Word style,
+a PDF layout model), never guessed from the text.
+_Avoid_: inferring one from shape -- a short line is not therefore a heading.
+
+**Element Span**:
+One paragraph, table or figure inside a Section, recorded with the character
+range it occupies in the Section text plus its page and box. What lets a hit in
+the middle of a long Section resolve to the place in the file it came from,
+without making every paragraph its own Section (which would make every
+paragraph its own Chunk).
+
 **Chunk**:
 One embeddable piece of a Section, carrying its place in its own document
 (`chunk_index` / `total_chunks`) and the Section it came from. A Chunk never spans
@@ -1501,7 +1551,8 @@ pass-through. Failures name the owner and the key at the door, not deep inside a
 
 **Config-with-cargo** (`channels/contract.py:ChannelSpec.config_schema`, `raven-plugin.toml [plugin.config_schema]`):
 A cargo declares the config keys only it consumes -- types, defaults, secrecy,
-requiredness, choices, nested `fields` -- next to the code that consumes them. The
+requiredness, choices, nested `fields`, and `settable = true` on the few fields
+the settings page may write over RPC (a key, never an endpoint) -- next to the code that consumes them. The
 declaration is the only truth: the door
 dispenses from it, the writer (`config/update_channels.py`) validates through the same
 door, and the declaration guard (`tests/test_channels_config_declaration.py`) pins the
@@ -1549,7 +1600,8 @@ The module is the roster -- every key this lane serves has a named reader there 
 spellings), and machinery on this lane asks the reader, never the file by key: `disabled_tool_names`,
 `disabled_playbook_names`, `exec_extra_deny_patterns`, `web_search_key`,
 `media_tool_config`, `mcp_server_configs` (feeding the turn-boundary reconcile),
-`routing_profile`, `default_model`. The boundary is the module docstring's rule: anything
+`routing_profile`, `default_model`, `cron_default_timezone` (captured by each new
+cron-expression job, local time when unset; existing jobs retain their stored zone). The boundary is the module docstring's rule: anything
 whose change implies WORK rather than a different answer (constructing a provider,
 an MCP handshake, moving a workspace) keeps its apply path -- a door, the pool's
 fingerprint cache, or the generation swap. Timing is asymmetric by design: a revocation
@@ -2084,6 +2136,50 @@ sample, action) so the recipient can see what a human kept, replaced, or
 acknowledged. `apply_review_decisions` guarantees the array matches the
 delivered bytes: replaced values are verified gone in every spelling variant
 and kept values verified untouched before the export freezes.
+
+**Redaction History** (`raven/trajectory/redaction_history.py`):
+The machine-local record of the user's Review Item decisions (`kept` or
+`redacted`), kept in `<raven home>/redaction_history.json` (mode 0600) and
+keyed by the sha256 of the token value: only the hash and a masked sample are
+stored, never the plaintext. `resolve` decides a suspected item -- or a whole
+linked group -- from it only when every member has a recorded, agreeing
+decision; confirmed-sensitive items are never decided from history. Each human
+decision gets a fresh revision, and a replay is counted only against the
+revision it read, so a stale replay never overrides a newer human answer or
+revives a forgotten record. An unreadable file reads as empty and is backed
+up, never overwritten in place, before the next save. The bug report review
+(`report-bug` and the browser's "Report a bug") replays it before asking and
+records the human decisions once the decision set is valid; decisions made by
+the blanket `--keep-findings` / `--redact-findings` flags are neither replayed
+over nor recorded, `--review-all` asks again, and
+`RAVEN_BUGREPORT_REDACTION_HISTORY=off` disables it.
+_Avoid_: "memory" (the agent memory engine), "cache" (it is an authoritative
+record, never evicted automatically).
+
+**Bug Report Receiver** (`raven/trajectory/receiver.py`):
+The standalone HTTP service that takes Bug Report Packages in: it validates each
+upload with `package_check.inspect_package` (streaming, never extracting), lands
+the original bytes under `<save_dir>/<UTC date>/<report-id>.tar.gz` beside an
+Upload Receipt sidecar, and answers idempotently by report id — the same bytes
+again return the stored receipt, different bytes are refused. It authenticates
+nobody and serves no listing or download; who can reach it is the network's
+job. The sidecar is written before the package is moved into place, so a
+package in a date directory is always a committed one.
+_Avoid_: "upload server" or "uploader backend" — it is not an `Uploader`
+implementation for Trajectory Reports; it is the far end a Bug Report Package
+is sent to.
+
+**Upload Receipt** (`raven/trajectory/receiver.py`):
+The Receiver's confirmation that one Bug Report Package was received:
+`receipt_id`, `report_id`, `sha256`, `size_bytes`, `received_at`, plus
+`duplicate` in the HTTP response. The server keeps it — with the remote address
+and a triage digest of `bugreport.json` — as the `<report-id>.json` sidecar
+next to the package, and the client records `receipt_id` in
+`record.json.upload.receipt`. A sidecar that is missing or fails its contract
+is rebuilt from the package: the package is the source of truth, the receipt
+is derived from it.
+_Avoid_: "receipt" for the sidecar file — the sidecar carries the receipt plus
+server-side context; the receipt is what the client gets back.
 
 **Trajectory Replay** (`raven/trajectory/replay.py`):
 Mock re-run of the harness against a Trajectory Bundle (`raven trajectory replay`):
@@ -2635,6 +2731,39 @@ like a connection that went quiet. Mode `0600`, because the frames carry the who
 and every tool result.
 _Avoid_: calling it a transcript - a reader drawing a delegated run wants the Instance Log
 or `transcript.jsonl`, not this.
+
+**Leftover agent** (`raven/acp_client/leftovers.py`):
+An ACP agent process group whose launching host is no longer running. An ACP agent runs in a
+session of its own, so it gets none of the signals sent to its host's process group or
+terminal, and while the host lives only `AcpClient.close` ends it; a host that dies before its
+teardown can leave its agents' groups running with nobody on the other end of their pipes. On
+Linux the agent starts through an exec wrapper (`_WRAPPER`) that arms `PR_SET_PDEATHSIG`, so
+where the signal is armed and survives the exec (a set-id or file-capability binary clears it)
+its direct process ends when the thread that launched it does, which for an agent launched
+from the host's event loop is when the host dies. Every host records the ACP agent groups it
+launched in a file of its own under `acp-launches/` in the config file's directory
+(`<raven home>` unless `--config` moves it), and the first launch in any process ends the
+groups recorded by hosts that have since died, in the same boot and PID namespace, and only
+where a surviving member still carries the dead host's mark and, while the leader still runs,
+its start time matches the record - the group number alone can have been handed out again. Not
+covered: anything but Linux, a group whose record was never written (its host died first, the
+write failed, or its leader had already exited when the record was taken), and agents started
+by a Raven older than the records.
+_Avoid_: "orphaned" - in POSIX terms every agent group is an orphaned process group from the
+moment it starts, since its session does not hold the host; and the DAG vocabulary rules the
+word out for a released run.
+
+**Launch mark** (`raven/acp_client/leftovers.py`):
+`RAVEN_ACP_HOST` in a launched agent's environment, naming the host that launched it as
+`<host pid>-<host start ticks>`, the stem of that host's launch record. Every process the
+agent starts inherits it unless it is started with a fresh environment, so after the host dies
+a sweep can tell a group made of that host's agents and what they started from an unrelated
+group that happens to hold the same number. A process whose environment this user cannot read
+counts as carrying none (any other read error keeps the record for a later sweep), and a group
+none of whose surviving processes carries the mark is left running - which is what remains
+when the agent exits after starting its children without it.
+_Avoid_: a security token - it is an identifier, not a secret; its parts are world-readable in
+`/proc/<pid>/stat`.
 
 **Instance Log** (`raven/agent/subagent/instance_log.py`):
 One sub-agent instance's own conversation, for the whole conversation that owns it, at

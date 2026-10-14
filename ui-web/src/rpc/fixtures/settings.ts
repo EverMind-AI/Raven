@@ -210,9 +210,18 @@ export function createSettings(env: FixtureEnv, ext: ExtFixture): SettingsFixtur
       },
       'settings.everos': () => ({
         sections: {}, config_path: '~/.raven/config.json', available: false, owned: true, supports: {},
-        required: ['llm', 'embedding'],
+        required: ['llm', 'embedding'], note: null, reason: null,
       }),
       'settings.everosSet': () => ({ applied: true, warning: null }),
+      /* What the conversation may search, echoed back. There is no session
+         behind an offline page, so the answer is what was sent -- which is
+         what the panel draws either way. */
+      'session.set_knowledge': (p) => ({
+        knowledge_bases: ((p as { knowledge_bases?: string[] }).knowledge_bases ?? []).slice(),
+      }),
+      'settings.everosCloud': () => ({
+        available: true, selected: false, api_key_set: false, key_source: null, base_url: '', status: null, hint: null,
+      }),
       'session.set_mode': (p) => {
         const mode = (p as { mode?: string }).mode
         if (mode) tier = mode

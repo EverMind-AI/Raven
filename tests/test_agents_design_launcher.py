@@ -452,6 +452,7 @@ def test_no_image_key_anywhere_withholds_the_tool(grounded, tmp_path, monkeypatc
 # --- the render: placement (state root, agent home, w109 containment) ----------
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not available on Windows")
 def test_the_rendered_file_is_owner_only_under_the_state_root(grounded, tmp_path):
     rendered = grounded.render_config(RUN_PY.parent / "config.json")
     assert stat.S_IMODE(rendered.stat().st_mode) == 0o600
@@ -578,6 +579,7 @@ def test_the_exec_lane_is_installed_ravens_acp_with_no_chdir(grounded, tmp_path,
     fork engine resolved its corpus from its checkout, the wheel resolves it
     from its own package -- execv replaces the image, so the pid sweep is
     the only cleaner."""
+    monkeypatch.setattr(sys, "platform", "linux")
     calls = {}
 
     def fake_chdir(path):
@@ -602,18 +604,20 @@ def test_the_exec_lane_is_installed_ravens_acp_with_no_chdir(grounded, tmp_path,
 
 
 def test_the_memory_address_follows_the_hosts_everos_server(grounded, tmp_path):
-    """The product config names the stock EverOS port; a host running its own server
-    elsewhere is followed, and a host naming none leaves the stock address alone."""
+    """A host running its own EverOS elsewhere is followed; a host naming none
+    leaves the product with no address of its own, which is what lets the
+    plugin's own default answer. Either way the product disclaims ownership of
+    the server, and its identity is untouched."""
     _host_config(
         tmp_path, {"plugins": {"config": {"everos-memory": {"base_url": "http://localhost:18962", "port": 18962}}}}
     )
     data = _render(grounded)
-    assert data["plugins"]["config"]["everos-memory"]["base_url"] == "http://localhost:18962"
+    assert data["plugins"]["config"]["everos-memory"] == {"base_url": "http://localhost:18962", "owned": False}
     assert data["memory"] == {"backend": "everos", "userId": "raven-design", "agentId": "raven-design", "memoryTopK": 5}
 
     _host_config(tmp_path, {})
     data = _render(grounded)
-    assert data["plugins"]["config"]["everos-memory"]["base_url"] == "http://localhost:18791"
+    assert data["plugins"]["config"]["everos-memory"] == {"owned": False}
 
 
 def test_the_build_interpreter_is_a_shim_on_the_exec_path(grounded, tmp_path):
@@ -632,13 +636,17 @@ def test_the_build_interpreter_is_a_shim_on_the_exec_path(grounded, tmp_path):
 
     shim = bin_dir / grounded.INTERPRETER_SHIM
     assert shim.read_text().splitlines() == ["#!/bin/sh", f'exec {shlex.quote(sys.executable)} "$@"']
-    assert shim.stat().st_mode & stat.S_IXUSR
-    probe = subprocess.run([str(shim), "-c", "import sys; print(sys.executable)"], capture_output=True, text=True)
-    assert probe.returncode == 0 and probe.stdout.strip() == sys.executable
     # cmd.exe cannot run a shell script, so the same command resolves to a .cmd
     # twin there through PATHEXT; it quotes the interpreter and passes the arguments on.
     twin = bin_dir / grounded.INTERPRETER_SHIM_CMD
     assert twin.read_bytes() == f'@echo off\r\n"{sys.executable}" %*\r\n'.encode()
+    if os.name == "nt":
+        command = ["cmd.exe", "/d", "/c", str(twin), "-c", "import sys; print(sys.executable)"]
+    else:
+        assert shim.stat().st_mode & stat.S_IXUSR
+        command = [str(shim), "-c", "import sys; print(sys.executable)"]
+    probe = subprocess.run(command, capture_output=True, text=True)
+    assert probe.returncode == 0 and probe.stdout.strip() == sys.executable
 
 
 def test_an_operators_own_path_append_stays_ahead_of_the_shim(grounded, tmp_path):

@@ -14,7 +14,7 @@ Raven is a harness of harnesses, two layers deep:
   permission gate, the built-in tools, memory, and the roster of agents it
   can dispatch to.
 - **Your agent** is a second harness riding that loop: a folder with a
-  launcher that renders a config and execs the installed raven's own
+  launcher that renders a config and serves the installed raven's own
   `raven acp`. Your identity, your tools, and your hooks enter through the
   plugin seam; the core never imports your code and never learns your name.
 
@@ -73,7 +73,7 @@ Each file, its one job, and the mistake most often made in it:
 | File | Job | Common mistake |
 |---|---|---|
 | `subagent.json` | The roster row: the only file written for someone else (the dispatching model). `name` is the dispatch identity; `description` and `owns` are prompts -- the model decides from them alone when to pick you; `everos` ids are the machine identity (never change them after first use); `command` keeps `{PYTHON}` / `{SUBAGENT_DIR}` verbatim -- discovery resolves them in memory | Leaving the TODO prompts in place: the agent then never gets picked, and nothing errors |
-| `run.py` | The launcher: renders the config (secret slots, host LLM inheritance, state root, plugin roots) and execs `python -m raven acp` -- it is not in the room during the session | Writing state into the agent folder; everything the agent persists belongs under the state root |
+| `run.py` | The launcher: renders the config (secret slots, host LLM inheritance, state root, plugin roots) and serves `python -m raven acp`; POSIX replaces the launcher, while Windows keeps it alive until the server exits | Writing state into the agent folder; everything the agent persists belongs under the state root |
 | `config.json` | The birth certificate: the diff between your agent and stock raven, in the host's own config schema. Ships as the minimal plugin slice | Adding `plugins.dirs` here -- the launcher injects it absolute at render time, and overwrites whatever this file says |
 | `install.py` | The optional pinning ceremony: registers the row through `raven.config.update_subagents`. Needed only for a folder outside the discovery tree, an edited row, or a deliberately pinned one | Running it and expecting a live raven to notice -- the roster is read at startup; restart the gateway |
 | `.env.example` | The secret slots, documented: the API key (own-key mode), the state root override, the ACP home override. Copy to `.env`, which stays in the folder and out of every wheel | Setting the key but no `providers` block in `config.json`: own-key mode renders a key with no provider/model to route on -- handshake green, first real turn dead |
@@ -157,7 +157,15 @@ Every phase returns a `HookDecision`. Its vocabulary, by field:
   never in the folder.
 - **Your plugin's slice** is `plugins.config["<id>"]` inside that file --
   yours alone, delivered verbatim as `ctx.config` to every factory. This is
-  where your tools' and hooks' own knobs live; the host never interprets it.
+  where your tools' and hooks' own knobs live; the host never interprets it,
+  with one exception below.
+- **Long-term memory is not yours to point.** `memory.backend` and the memory
+  distribution's address arrive from the host at render time, because the host
+  reads a sub-agent's memories back through its own backend -- a product
+  writing anywhere else leaves that record empty with nothing reporting it. Do
+  not name a server in your config; name only your identity (`memory.userId` /
+  `agentId`, and `user_id` / `agent_id` in the slice), which is what keeps your
+  memories apart from every other product's inside one store.
 
 Secrets never sit in `config.json` (it is publishable): they ride `.env` or
 the environment, merged in at render time. With no key of your own, the

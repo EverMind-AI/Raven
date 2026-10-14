@@ -139,6 +139,24 @@ describe('transcript island, history', () => {
     expect($('.turn.me .achip')).toBeNull()
   })
 
+  /* A drag carries an <img> by its src, and the cached copy's src is the upload's
+     own data URL: dropped on the composer, it named no file. */
+  it('carries the file, not the cached bytes, when a sent picture is dragged', () => {
+    attachmentCache.set('uploads/shot.png', 'data:image/png;base64,eA==')
+    act(() => {
+      mount.history([{ role: 'user', text: `look\n\n${ATT_NOTE}\n- uploads/shot.png` }])
+    })
+    const dt = new DataTransfer()
+    /* happy-dom builds a drag event as a plain Event, so the transfer goes on by hand. */
+    const ev = new Event('dragstart', { bubbles: true, cancelable: true })
+    Object.defineProperty(ev, 'dataTransfer', { value: dt })
+    act(() => { $('.turn.me .shot')!.dispatchEvent(ev) })
+    const url = new URL(dt.getData('text/uri-list') || 'about:blank')
+    expect(url.origin).toBe(location.origin)
+    expect(url.pathname).toBe('/file')
+    expect(url.searchParams.get('path')).toBe('uploads/shot.png')
+  })
+
   it('renders an attached picture from the workspace once the cache is gone', () => {
     /* The cache holds the bytes only for the page that uploaded them, so after
        a reload every picture in the scrollback turned into a file name -- which
@@ -1958,6 +1976,43 @@ describe("the turn's delivered files", () => {
     const src = img?.getAttribute('src') || ''
     expect(src).toContain('/file?path=' + encodeURIComponent('/w/report.pdf'))
     expect(src).toContain('render=thumb')
+  })
+
+  /* A tile is a picture, and a document that drew one URL draws it again from
+     memory without asking, whatever Cache-Control says. The registry hands a
+     path delivered again in one conversation the same token, and a thumb is
+     named by its path, so the second card's tile could come back as the first
+     card's picture while the file on disk held the new one. Each delivery's own
+     stamp keeps the two URLs apart. */
+  it.each([
+    ['shot.png', '/files/download?token=shot.png'],
+    ['report.pdf', '/file?path=%2Fw%2Freport.pdf'],
+  ])('draws %s, delivered twice, under a URL per delivery', async (name, route) => {
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true }))
+    const stamped = (at: number): Record<string, unknown> => ({
+      raven_delivery: { ...(manifest([name]).raven_delivery as Record<string, unknown>), delivered_at: at },
+    })
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'draw it', timestamp: iso(Date.now() - 9000) },
+        { role: 'tool', name: 'deliver_files', text: 'ok', metadata: stamped(1000) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now() - 8000) },
+        { role: 'user', text: 'make it blue', timestamp: iso(Date.now() - 5000) },
+        { role: 'tool', name: 'deliver_files', text: 'ok', metadata: stamped(2000) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    await act(async () => { await Promise.resolve() })
+    await act(async () => { await Promise.resolve() })
+    const srcs = $$('.atile .pic.shot img').map((img) => img.getAttribute('src') || '')
+    expect(srcs).toHaveLength(2)
+    expect(srcs.every((src) => src.includes(route))).toBe(true)
+    expect(srcs[0]).not.toBe(srcs[1])
+    /* By the delivery's stamp rather than its turn: a delegated stream numbers
+       its turns from one as well, so one turn number can name two deliveries
+       of the same path. */
+    expect(srcs[0]).toContain('&v=1000')
+    expect(srcs[1]).toContain('&v=2000')
   })
 
   it('falls back to the type mark when the deck cannot be rendered', async () => {

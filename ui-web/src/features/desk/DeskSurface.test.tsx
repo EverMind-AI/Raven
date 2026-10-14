@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, cleanup, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'
@@ -199,6 +199,182 @@ describe('the pane of a delivered file', () => {
 
     expect(deliveries.byPath('/w/gone.md')?.missing).toBe(true)
     expect(deliveries.byPath('/w/denied.md')?.missing).toBe(false)
+  })
+
+  /* A document that drew a picture from one URL draws it again from memory for
+     the same URL without asking -- the HTML list of available images, which no
+     Cache-Control reaches -- so a picture the agent rewrote under the same path
+     came back as the one it replaced, whichever door re-opened it. Only a
+     browser shows the pixels; pinned here is the mechanism: each open asks
+     under a URL of its own, and a repaint of the same open does not. */
+  it.each([
+    ['/w/out/shot.png', '/file?path=%2Fw%2Fout%2Fshot.png'],
+    ['/w/out/logo.svg', '/file?path=%2Fw%2Fout%2Flogo.svg'],
+  ])('asks for %s under a URL of its own on every open', async (path, route) => {
+    const view = render(<DeskSurface />)
+    const src = (): string => document.querySelector('.desk-pane .fview .shot img')?.getAttribute('src') || ''
+    await act(async () => { desk.openDeskFile(path) })
+    const first = src()
+    view.rerender(<DeskSurface />)
+    expect(src()).toBe(first)
+
+    await act(async () => { desk.openDeskFile(path) })
+
+    expect(first).toContain(route)
+    expect(src()).toContain(route)
+    expect(src()).not.toBe(first)
+  })
+
+  it.each([false, true])('refreshes every deck page on reopening with a prior delivery: %s', async (delivered) => {
+    const path = '/w/out/deck.pptx'
+    if (delivered) {
+      deliveries.record(deliveries.SESSION, 1, {
+        raven_delivery: { files: [{ path, name: 'deck.pptx' }], delivered_at: 1000 },
+      })
+    }
+    const fetch = vi.fn(async () => ({
+      ok: true, status: 200, body: { cancel: vi.fn() }, headers: { get: () => '2' },
+    }))
+    vi.stubGlobal('fetch', fetch)
+    const view = render(<DeskSurface />)
+    const sources = () => [...document.querySelectorAll('img.workspace-page')].map((img) => img.getAttribute('src'))
+    await act(async () => { desk.openDeskFile(path) })
+    const first = sources()
+    expect(first).toHaveLength(2)
+    expect(first[0]).toContain('render=page&p=1')
+    expect(first[1]).toContain('render=page&p=2')
+    view.rerender(<DeskSurface />)
+    expect(sources()).toEqual(first)
+    expect(fetch).toHaveBeenCalledTimes(1)
+
+    await act(async () => { desk.openDeskFile(path) })
+
+    expect(sources()).toHaveLength(2)
+    sources().forEach((src, index) => { expect(src).not.toBe(first[index]) })
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it.each(['png', 'svg'])('refreshes an open %s on redelivery without reopening or unrelated refreshes', async (ext) => {
+    const path = `/w/out/picture.${ext}`
+    const deliver = (at: number, deliveredPath = path) => deliveries.record(deliveries.SESSION, at, {
+      raven_delivery: { files: [{ path: deliveredPath }], delivered_at: at },
+    })
+    deliver(1000)
+    render(<DeskSurface />)
+    const src = () => document.querySelector('.desk-pane .shot img')?.getAttribute('src')
+    await act(async () => { desk.openDeskFile(path) })
+    const first = src()
+
+    await act(async () => { deliver(2000) })
+    const second = src()
+    expect(second).toBeTruthy()
+    expect(second).not.toBe(first)
+
+    await act(async () => { deliver(2000) })
+    expect(src()).toBe(second)
+    await act(async () => { deliver(3000, '/w/out/unrelated.png') })
+    expect(src()).toBe(second)
+  })
+
+  it('retries a failed picture when a fresh delivery arrives', async () => {
+    const path = '/w/out/recovered.png'
+    render(<DeskSurface />)
+    vi.stubGlobal('fetch', async () => ({ ok: false, status: 404 }))
+    await act(async () => { desk.openDeskFile(path) })
+    const first = document.querySelector('.desk-pane .shot img')!
+    await act(async () => { fireEvent.error(first) })
+    expect(document.querySelector('.desk-pane .shot img')).toBeNull()
+    expect(document.querySelector('.desk-pane .verr')?.textContent).toBe('gui.ws.file_gone')
+
+    await act(async () => {
+      deliveries.record(deliveries.SESSION, 2, {
+        raven_delivery: { files: [{ path }], delivered_at: 2000 },
+      })
+    })
+
+    const fresh = document.querySelector('.desk-pane .shot img')
+    expect(fresh).toBeTruthy()
+    expect(fresh?.getAttribute('src')).not.toBe(first.getAttribute('src'))
+    expect(document.querySelector('.desk-pane .verr')).toBeNull()
+  })
+
+  it.each([false, true])('ignores a late picture failure with an existing delivery: %s', async (existing) => {
+    const path = '/w/out/replaced.png'
+    if (existing) {
+      deliveries.record(deliveries.SESSION, 1, {
+        raven_delivery: { files: [{ path }], delivered_at: 1000 },
+      })
+    }
+    let refuse: (value: { ok: boolean; status: number }) => void = () => {}
+    vi.stubGlobal('fetch', () => new Promise((resolve) => { refuse = resolve }))
+    render(<DeskSurface />)
+    await act(async () => { desk.openDeskFile(path) })
+    const first = document.querySelector('.desk-pane .shot img')!
+    await act(async () => { fireEvent.error(first) })
+    await act(async () => {
+      deliveries.record(deliveries.SESSION, 2, {
+        raven_delivery: { files: [{ path }], delivered_at: 2000 },
+      })
+    })
+    await act(async () => { refuse({ ok: false, status: 404 }) })
+
+    const fresh = document.querySelector('.desk-pane .shot img')
+    expect(fresh).toBeTruthy()
+    expect(fresh?.getAttribute('src')).not.toBe(first.getAttribute('src'))
+    expect(document.querySelector('.desk-pane .verr')).toBeNull()
+    expect(deliveries.byPath(path)?.missing).toBe(false)
+  })
+
+  it.each(['text', 'sniff'])('keeps a replacement delivery present after an earlier %s read returns 404', async (kind) => {
+    const path = kind === 'text' ? '/w/out/notes.md' : '/w/out/content.bin'
+    const deliver = (at: number) => deliveries.record(deliveries.SESSION, at, {
+      raven_delivery: { files: [{ path }], delivered_at: at },
+    })
+    let answer: (value: { ok: boolean; status: number }) => void = () => {}
+    vi.stubGlobal('fetch', () => new Promise((resolve) => { answer = resolve }))
+    deliver(1000)
+    const file = workspace.makeFile(path)
+    const pending = kind === 'text' ? workspace.loadFileText(file) : workspace.sniffFile(file)
+    deliver(2000)
+    answer({ ok: false, status: 404 })
+    await pending
+    expect(deliveries.byPath(path)?.when).toBe(2000)
+    expect(deliveries.byPath(path)?.missing).toBe(false)
+  })
+
+  it.each(['text', 'sniff'])('marks the original %s delivery missing after an unrelated delivery', async (kind) => {
+    const path = kind === 'text' ? '/w/out/notes.md' : '/w/out/content.bin'
+    deliveries.record(deliveries.SESSION, 1, {
+      raven_delivery: { files: [{ path }], delivered_at: 1000 },
+    })
+    let answer: (value: { ok: boolean; status: number }) => void = () => {}
+    vi.stubGlobal('fetch', () => new Promise((resolve) => { answer = resolve }))
+    const file = workspace.makeFile(path)
+    const pending = kind === 'text' ? workspace.loadFileText(file) : workspace.sniffFile(file)
+    deliveries.record(deliveries.SESSION, 2, {
+      raven_delivery: { files: [{ path: '/w/out/unrelated.png' }], delivered_at: 2000 },
+    })
+    answer({ ok: false, status: 404 })
+    await pending
+    expect(deliveries.byPath(path)?.missing).toBe(true)
+    expect(deliveries.byPath('/w/out/unrelated.png')?.missing).toBe(false)
+  })
+
+  it('still marks a probed file missing when only another path was delivered', async () => {
+    const path = '/w/out/missing.png'
+    deliveries.record(deliveries.SESSION, 1, {
+      raven_delivery: { files: [{ path }], delivered_at: 1000 },
+    })
+    let refuse: (value: { ok: boolean; status: number }) => void = () => {}
+    vi.stubGlobal('fetch', () => new Promise((resolve) => { refuse = resolve }))
+    const pending = workspace.probeDeliveryMissing(path)
+    deliveries.record(deliveries.SESSION, 2, {
+      raven_delivery: { files: [{ path: '/w/out/other.png' }], delivered_at: 2000 },
+    })
+    refuse({ ok: false, status: 404 })
+    await pending
+    expect(deliveries.byPath(path)?.missing).toBe(true)
+    expect(deliveries.byPath('/w/out/other.png')?.missing).toBe(false)
   })
 })
 

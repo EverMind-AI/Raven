@@ -7,8 +7,9 @@ lives here; deciding when to have one lives in the pool.
 
 Process discipline is copied deliberately from
 :class:`raven.agent.subagent.backends.cli_agent.CliAgentBackend`: own session, pgid
-captured at spawn, ``killpg`` on teardown. An ACP server that reparents a worker
-would otherwise survive ``proc.kill()`` exactly as a ``codex``-style CLI does.
+captured at spawn, ``killpg`` on teardown (``taskkill /T`` by pid where there is
+no ``killpg``). An ACP server that reparents a worker would otherwise survive
+``proc.kill()`` exactly as a ``codex``-style CLI does.
 
 What a connection runs over is an :class:`Endpoint`: the child's pipes and
 process group for an agent on this computer (:class:`_ProcessEndpoint`), or one
@@ -22,7 +23,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import signal
+import subprocess
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable, Sequence
@@ -31,7 +34,7 @@ from typing import Any, Protocol
 
 from loguru import logger
 
-from raven.acp_client import protocol
+from raven.acp_client import leftovers, protocol
 from raven.acp_client.journal import FrameJournal, redact_acp_frame
 from raven.acp_client.protocol import (
     CANCEL_REQUEST_METHOD,
@@ -76,28 +79,47 @@ exiting hands any child it did not collect to init regardless. Measured: an
 moments later anyway.
 """
 
-#: Whether this platform has process groups ``killpg`` can reach. Windows has
-#: neither them nor SIGKILL, and a teardown that reached for either there
-#: raised before any of the cleanup below it ran, leaving the child alive.
-_POSIX = hasattr(os, "killpg")
+_TEARDOWN_TASKKILL_S = 5.0
+"""How long ``close`` waits for ``taskkill`` where there is no ``killpg``.
+
+A bound rather than an estimate: the walk returns well inside a second, and
+``close`` has to finish whatever ``taskkill`` does.
+"""
 
 
-def _end(pgid: int, proc: Any) -> None:
-    """End the server and what it started: the process group on POSIX, the process itself elsewhere.
+async def _end(pgid: int, proc: Any) -> None:
+    """End the server and what it started: the process group where there is one, else the tree by pid.
 
-    On Windows the child is terminated by handle, which ends what it started
-    only insofar as the child ends it; there is no group to sweep. A process
-    already gone is not an error on either path.
+    Windows ignores ``start_new_session`` and has no ``os.killpg``, which
+    raised here before any of the teardown ran. ``taskkill /T /F`` walks the
+    launcher's children, which a bare ``Process.kill`` does not reach (the
+    same split as ``raven.ops.transport._kill_process_tree``). It runs only
+    while the launcher is alive: once it has exited, its pid may already
+    name another process. A process already gone is not an error on either
+    path.
     """
-    if _POSIX:
+    if hasattr(os, "killpg"):
         try:
             os.killpg(pgid, signal.SIGKILL)
         except (ProcessLookupError, PermissionError):
             pass
         return
+    taskkill = shutil.which("taskkill")
+    if taskkill and proc.returncode is None:
+        try:
+            await asyncio.to_thread(
+                subprocess.run,
+                [taskkill, "/T", "/F", "/PID", str(proc.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=_TEARDOWN_TASKKILL_S,
+                check=False,
+            )
+        except (OSError, RuntimeError, subprocess.SubprocessError):
+            pass
     try:
         proc.kill()
-    except ProcessLookupError:
+    except OSError:
         pass
 
 
@@ -171,7 +193,7 @@ class _ProcessEndpoint:
         return await self.proc.stderr.readline()
 
     async def end(self) -> None:
-        _end(self._pgid, self.proc)
+        await _end(self._pgid, self.proc)
 
     async def wait(self) -> int | None:
         return await self.proc.wait()
@@ -189,12 +211,13 @@ class _ProcessEndpoint:
         here is the only point at which that is still a no-op.
         """
         transport = getattr(self.proc, "_transport", None)
-        if transport is None:
-            return
-        try:
-            transport.close()
-        except Exception as exc:  # noqa: BLE001 - teardown must not raise
-            logger.debug("acp endpoint pid {}: releasing the transport failed: {}", self.proc.pid, exc)
+        if transport is not None:
+            try:
+                transport.close()
+            except Exception as exc:  # noqa: BLE001 - teardown must not raise
+                logger.debug("acp endpoint pid {}: releasing the transport failed: {}", self.proc.pid, exc)
+        # The group was ended first; its launch record (``leftovers``) goes with it.
+        leftovers.forget(self._pgid)
 
 
 _CANCEL_SETTLE_S = 5.0
@@ -377,17 +400,26 @@ class AcpClient:
         if not argv:
             raise AcpConnectionError(f"acp agent {name!r}: command is empty")
 
+        # Before this launch starts its agent: a dead host's leftover of the same kind
+        # may still hold what the new one needs, such as a lock or a port.
+        await leftovers.sweep_before_first_launch()
+
         # The capture shells out and can block for real seconds on a slow
         # profile (nvm/conda init); to_thread keeps that off the event loop.
         # These agents need the login shell's PATH, not raven's -- the same
         # reason the cli transport does it.
         base_env = await asyncio.to_thread(login_shell_env)
         # The role goes on before the caller's own map, so a config ``env`` entry
-        # is the way to hand one agent back its full registry.
-        child_env = {**base_env, **host_identity_env(), **subagent_role_env(), **(env or {})}
+        # is the way to hand one agent back its full registry. The mark goes on
+        # last, so no entry can make an agent pass for another host's.
+        child_env = {**base_env, **host_identity_env(), **subagent_role_env(), **(env or {}), **leftovers.launch_env()}
         # An acp server's argv is its configuration -- its turns travel over
         # stdio -- so a batch file may stand in for the program here.
         argv = resolve_program(argv, child_env, batch_files=True)
+        # The agent's own argv, for what this logs and reports: the spawned one
+        # may lead with the parent-death wrapper.
+        program_argv = argv
+        argv = leftovers.bind_to_host(argv, child_env, cwd)
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv,
@@ -400,7 +432,8 @@ class AcpClient:
                 limit=_READER_LIMIT,
             )
         except (OSError, ValueError) as exc:
-            raise AcpConnectionError(f"acp agent {name!r}: cannot start {argv[0]!r}: {exc}") from exc
+            raise AcpConnectionError(f"acp agent {name!r}: cannot start {program_argv[0]!r}: {exc}") from exc
+        leftovers.record(proc.pid, name)
 
         client = cls(
             name=name,
@@ -410,7 +443,7 @@ class AcpClient:
             journal=journal,
         )
         client._start_loops()
-        logger.info("acp agent {!r}: started {} (pid {})", name, argv[:1], proc.pid)
+        logger.info("acp agent {!r}: started {} (pid {})", name, program_argv[:1], proc.pid)
         return client
 
     @classmethod
@@ -472,6 +505,10 @@ class AcpClient:
         ``RuntimeError: Event loop is closed`` over whatever the user is looking
         at. So both waits below give up on their own and the teardown always
         runs to its end.
+
+        A close that is cancelled part-way leaves its launch record on disk, which
+        is harmless: the group it names was killed first, and the first sweep after
+        this host exits drops the file.
         """
         if self._closed:
             return

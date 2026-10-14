@@ -51,16 +51,21 @@ from __future__ import annotations
 
 import ntpath
 import os
-import re
 import shutil
 import subprocess
 import sys
+import threading
 from collections.abc import Mapping
 
 from loguru import logger
 
+# Held for the length of every capture, so they run one at a time and the one
+# that lands last is the one that read the shell last.
+_CAPTURE_LOCK = threading.Lock()
 _LOGIN_ENV: dict[str, str] | None = None
 _LOGIN_ENV_FAILED = False
+_MAX_EXPANDED_ENV_CHARS = 32767
+_MAX_ENV_REFERENCE_DEPTH = 16
 
 # bash -lic is given a deliberately minimal base rather than raven's environment:
 # inheriting it would only overlay the profile on top, leaving the very variables
@@ -140,18 +145,25 @@ def login_shell_env() -> dict[str, str]:
 
     Once per process is what makes it cheap, and also what makes it go stale;
     `refresh_login_shell_env` is the way to take it again without a restart.
+    Readers that arrive while the first capture runs wait for it rather than
+    each running the shell.
     """
     global _LOGIN_ENV, _LOGIN_ENV_FAILED
     if _LOGIN_ENV is not None:
         return dict(_LOGIN_ENV)
     if _LOGIN_ENV_FAILED:
         return dict(os.environ)
-    captured = _capture_now(consequence="subagents inherit raven's environment")
-    if captured is None:
-        _LOGIN_ENV_FAILED = True
-        return dict(os.environ)
-    _LOGIN_ENV = captured
-    return dict(captured)
+    with _CAPTURE_LOCK:
+        if _LOGIN_ENV is not None:
+            return dict(_LOGIN_ENV)
+        if _LOGIN_ENV_FAILED:
+            return dict(os.environ)
+        captured = _capture_now(consequence="subagents inherit raven's environment")
+        if captured is None:
+            _LOGIN_ENV_FAILED = True
+            return dict(os.environ)
+        _LOGIN_ENV = captured
+        return dict(captured)
 
 
 def refresh_login_shell_env() -> bool:
@@ -172,13 +184,18 @@ def refresh_login_shell_env() -> bool:
     and a process whose earlier capture failed gets another try: the memo is
     read before the failure flag, so a landed capture is what every later read
     returns. Returns whether a capture landed.
+
+    Refreshes run one at a time. ``settings.set`` refreshes after writing a key
+    to ``~/.raven/env``, and a refresh still reading the shell from before that
+    write would otherwise land after it and put back the key it replaced.
     """
     global _LOGIN_ENV
-    captured = _capture_now(consequence="keeping the environment captured earlier")
-    if captured is None:
-        return False
-    _LOGIN_ENV = captured
-    return True
+    with _CAPTURE_LOCK:
+        captured = _capture_now(consequence="keeping the environment captured earlier")
+        if captured is None:
+            return False
+        _LOGIN_ENV = captured
+        return True
 
 
 def _capture_now(*, consequence: str) -> dict[str, str] | None:
@@ -193,7 +210,7 @@ def _capture_now(*, consequence: str) -> dict[str, str] | None:
 
 
 def _capture_windows(*, consequence: str) -> dict[str, str] | None:
-    r"""Raven's own environment, with the PATH a freshly opened Windows terminal would start with.
+    r"""Raven's environment with persisted PATH entries prepended to its launch PATH.
 
     Windows has no login shell to ask: explorer.exe holds the interactive
     environment, and installers refresh a terminal opened afterwards by
@@ -251,7 +268,11 @@ def _capture_windows(*, consequence: str) -> dict[str, str] | None:
     # where the user's shadows the machine's, the order Windows layers them in.
     context = {**machine, **user, **{name.upper(): value for name, value in captured.items()}}
     context.pop("PATH", None)
-    stored = [path for entries in (machine, user) if (path := _expand_windows(entries.get("PATH", ""), context))]
+    try:
+        stored = [path for entries in (machine, user) if (path := _expand_windows(entries.get("PATH", ""), context))]
+    except ValueError as exc:
+        logger.warning("Windows PATH expansion failed ({}); {}", exc, consequence)
+        return None
     if stored:
         # Union rather than replace: the machine+user stores are the PATH a
         # *new* terminal gets, but raven's own launcher's bin (MinGit/usr/bin,
@@ -262,20 +283,51 @@ def _capture_windows(*, consequence: str) -> dict[str, str] | None:
     return captured
 
 
-def _expand_windows(value: str, context: dict[str, str], _depth: int = 0) -> str:
+def _expand_windows(value: str, context: dict[str, str]) -> str:
     r"""``%VAR%`` references in a stored value, resolved against ``context`` whatever their case.
 
     Stored Path entries hold unexpanded references, and passed on raw they hand
     the child a PATH whose entries never existed (the gateway's own measured log
     shows a launcher script dying on `%USERPROFILE%/go/bin`). A reference whose
-    value holds another is resolved again; one with no value stays as written,
-    which is what Windows does with it.
+    value holds another is resolved again; an unknown name stays as written.
+    Cycles, excessive nesting and oversized results fail the capture rather
+    than publishing a truncated PATH. Resolved names are reused so a branching
+    reference graph cannot multiply the work on every level.
     """
-    if not value or "%" not in value or _depth > 16:
-        return value
+    resolved: dict[str, str] = {}
 
-    expanded = re.sub(r"%([^%]+)%", lambda m: context.get(m.group(1).upper(), m.group(0)), value)
-    return value if expanded == value else _expand_windows(expanded, context, _depth + 1)
+    def expand(text: str, active: frozenset[str]) -> str:
+        if len(text) > _MAX_EXPANDED_ENV_CHARS:
+            raise ValueError("stored value exceeds the expansion limit")
+        parts: list[str] = []
+        size = 0
+        pos = 0
+        while pos < len(text):
+            start = text.find("%", pos)
+            end = text.find("%", start + 1) if start >= 0 else -1
+            name = text[start + 1 : end].upper() if end >= 0 else ""
+            if name and name in context:
+                if name in active or len(active) >= _MAX_ENV_REFERENCE_DEPTH:
+                    raise ValueError("cyclic or too deeply nested environment reference")
+                if name not in resolved:
+                    resolved[name] = expand(context[name], active | {name})
+                literal, replacement = text[pos:start], resolved[name]
+                pos = end + 1
+            elif start >= 0:
+                # An unknown or literal percent must not consume the opening
+                # percent of the next valid reference (for example, after ;).
+                literal, replacement = text[pos : start + 1], ""
+                pos = start + 1
+            else:
+                literal, replacement = text[pos:], ""
+                pos = len(text)
+            size += len(literal) + len(replacement)
+            if size > _MAX_EXPANDED_ENV_CHARS:
+                raise ValueError("expanded value exceeds the expansion limit")
+            parts.extend((literal, replacement))
+        return "".join(parts)
+
+    return expand(value, frozenset())
 
 
 def _capture(*, consequence: str) -> dict[str, str] | None:

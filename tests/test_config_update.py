@@ -176,6 +176,13 @@ def test_update_cron_config_unknown_key_raises(cfg_path: Path) -> None:
         update_cron_config("nonexistent_key", "x", config_path=cfg_path)
 
 
+@pytest.mark.parametrize("spelling", ["defaultTimezone", "default_timezone"])
+def test_update_cron_config_keeps_the_written_key(cfg_path: Path, spelling: str) -> None:
+    cfg_path.write_text(json.dumps({"cron": {spelling: "UTC"}}), encoding="utf-8")
+    assert update_cron_config("default_timezone", "Asia/Tokyo", config_path=cfg_path) == "UTC"
+    assert _read(cfg_path)["cron"] == {spelling: "Asia/Tokyo"}
+
+
 def test_update_cron_config_retired_forward_channels_raises(cfg_path: Path) -> None:
     with pytest.raises(KeyError, match="Unknown cron config key"):
         update_cron_config("forward_channels", ["telegram"], config_path=cfg_path)
@@ -546,6 +553,29 @@ def test_a2a_toggle_leaves_a_mode_the_operator_chose(cfg_path: Path) -> None:
 def test_skill_block_writes_camel_into_empty_config(cfg_path: Path) -> None:
     assert set_skill_blocked("alpha", True, config_path=cfg_path) == ["alpha"]
     assert _read(cfg_path)["skillForge"] == {"blocklist": ["alpha"]}
+
+
+@pytest.mark.parametrize("spelling", ["skillForge", "skill_forge"])
+@pytest.mark.parametrize("invalid", [[], 0, 1, "invalid", False])
+@pytest.mark.parametrize("blocked", [True, False])
+def test_skill_block_preserves_an_invalid_section(cfg_path, spelling, invalid, blocked):
+    cfg_path.write_text(json.dumps({spelling: invalid}), encoding="utf-8")
+    before = cfg_path.read_bytes()
+    with pytest.raises(ValueError, match="object or null"):
+        set_skill_blocked("alpha", blocked, config_path=cfg_path)
+    assert cfg_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("invalid", [[], 0, False, "invalid"])
+@pytest.mark.parametrize("blocked", [True, False])
+def test_skill_block_refuses_an_invalid_alias_beside_null(cfg_path, invalid, blocked):
+    cfg_path.write_text(json.dumps({"skillForge": None, "skill_forge": invalid}), encoding="utf-8")
+    before = cfg_path.read_bytes()
+
+    with pytest.raises(ValueError, match="object or null"):
+        set_skill_blocked("alpha", blocked, config_path=cfg_path)
+
+    assert cfg_path.read_bytes() == before
 
 
 def test_skill_block_respects_existing_snake_casing(cfg_path: Path) -> None:

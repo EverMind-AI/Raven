@@ -3,6 +3,8 @@
 import copy
 import json
 import uuid
+import weakref
+from collections import OrderedDict
 from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -24,6 +26,13 @@ from raven.utils.paths import ensure_dir, safe_filename, safe_path_segment
 # before anything knows to exclude them puts machine-generated transcripts in
 # front of every human-facing picker.
 SUBAGENT_CHANNEL = "sub"
+
+# How many sessions a manager keeps loaded once nothing else holds them. Soft:
+# a session with unsaved state is never dropped from the cache, and one a caller
+# still holds stays reachable through ``SessionManager._held`` whatever this says.
+# A change made through a reference to a session that has already left the cache,
+# then released unsaved, is lost, as it would be in a fresh process.
+_CACHE_LIMIT = 64
 
 
 def _message_text(content: Any, cap: int = 120) -> str:
@@ -173,6 +182,12 @@ class Session:
     updated_at: datetime = field(default_factory=datetime.now)
     metadata: dict[str, Any] = field(default_factory=dict)
     last_consolidated: int = 0  # Number of messages already consolidated to files
+    # Bumped by every truncation. A background reader that sliced this list and
+    # then awaited cannot tell from the indices alone that they now point at
+    # other messages: a cut below a cursor leaves that cursor's value alone,
+    # and messages arriving afterwards can take the length back past where it
+    # was. In process only -- a task does not outlive the process it ran in.
+    truncations: int = field(default=0, repr=False)
     # ── Personalization state ─────────────────────────────────────────────────
     # Set when the agent asked a clarifying question and is waiting for the answer.
     # Structure: {"original_message": str, "question": str, "domain": str}
@@ -189,6 +204,10 @@ class Session:
     # only that may outrank a record written since -- the snapshot itself is
     # every key the file held at load, most of which this copy never meant.
     _persisted_metadata: dict[str, Any] = field(default_factory=dict, repr=False)
+    # ``_fingerprint`` of this session as last read, written or minted. While it
+    # and the message count still match, nothing is unsaved and the session may
+    # leave the cache. None where one could not be made, which never matches.
+    _clean_fingerprint: str | None = field(default=None, repr=False)
 
     def add_message(self, role: str, content: str, **kwargs: Any) -> None:
         """Add a message to the session."""
@@ -277,6 +296,13 @@ class Session:
         """Clear all messages and reset session to initial state."""
         self.messages = []
         self.last_consolidated = 0
+        # The episodic cursor indexes into ``messages``; left at its old value
+        # it would swallow every turn written after the clear until the count
+        # climbed past it. Stated as zero rather than dropped, per the removal
+        # rule in ``SessionManager._metadata_to_write``: a key this copy merely
+        # omits comes back on the next save.
+        self.metadata["annotated_through"] = 0
+        self.truncations += 1
         self.updated_at = datetime.now()
 
     def undo_last_turn(self, n: int = 1) -> int:
@@ -298,8 +324,69 @@ class Session:
         cut_index = user_starts[-n] if n <= len(user_starts) else user_starts[0]
         removed = len(self.messages) - cut_index
         self.messages = self.messages[:cut_index]
+        cursor = self.metadata.get("annotated_through")
+        if isinstance(cursor, int) and cursor > cut_index:
+            self.metadata["annotated_through"] = cut_index
+        self.truncations += 1
         self.updated_at = datetime.now()
         return removed
+
+
+def _canonical(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, default=str, ensure_ascii=False)
+
+
+def _fingerprint(session: Session, *, leaving: Collection[str] = ()) -> str | None:
+    """What a save writes besides the messages, as one comparable string; None where it cannot be made.
+
+    A string rather than a copy: ``_persisted_metadata`` is a shallow copy, so a
+    nested value changed in place would read the same on both sides of it. A dict
+    whose keys mix types is something a save writes but ``sort_keys`` cannot order,
+    and such a session reads as unsaved here rather than failing a save or the eviction
+    loop. ``leaving`` names metadata keys to leave out.
+    """
+    try:
+        metadata = {k: v for k, v in session.metadata.items() if k not in leaving} if leaving else session.metadata
+        return _canonical([metadata, session.last_consolidated, session.pending_clarification])
+    except (TypeError, ValueError, RecursionError):
+        return None
+
+
+def _saved_time(value: Any) -> datetime | None:
+    """A timestamp a save wrote, as the naive local time ``datetime.now()`` gives.
+
+    None where it is missing or unreadable. Unreadable is not fatal: a hand-edited
+    stamp must not make the whole session fail to load.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+        # Converting can fail too: a stamp near either end of the calendar leaves
+        # it once moved to local time.
+        return parsed.astimezone().replace(tzinfo=None) if parsed.tzinfo is not None else parsed
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def _is_clean(session: Session) -> bool:
+    if len(session.messages) != session._persisted_count:
+        return False
+    current = _fingerprint(session)
+    # None is "could not tell", never "unchanged": two failures must not read as a match.
+    return current is not None and session._clean_fingerprint == current
+
+
+def _unchanged_but_for(session: Session, keys: Collection[str]) -> bool:
+    """Whether what a save writes besides the messages is as last read or written.
+
+    The metadata under ``keys`` is left out on both sides.
+    """
+    if session._clean_fingerprint is None:
+        return False
+    metadata, *rest = json.loads(session._clean_fingerprint)
+    current = _fingerprint(session, leaving=keys)
+    return current is not None and current == _canonical([{k: v for k, v in metadata.items() if k not in keys}, *rest])
 
 
 class SessionManager:
@@ -328,7 +415,11 @@ class SessionManager:
         self.project_slug = project_slug
         self.project_dir = project_dir
         self.sessions_dir = ensure_dir(self.workspace / "sessions")
-        self._cache: dict[str, Session] = {}
+        self._cache: OrderedDict[str, Session] = OrderedDict()
+        # Every session handed out and still referenced somewhere, so one that
+        # left ``_cache`` while a turn held it comes back as that same object
+        # rather than as a second copy loaded from disk.
+        self._held: weakref.WeakValueDictionary[str, Session] = weakref.WeakValueDictionary()
         self._delete_observers: tuple = ()
 
     def set_delete_observers(self, observers: tuple) -> None:
@@ -611,22 +702,44 @@ class SessionManager:
         Returns:
             The session.
         """
-        if key in self._cache:
-            return self._cache[key]
-
-        session = self._load(key)
+        session = self._live(key)
         if session is None:
-            session = Session(key=key)
-        # The group directory is a lossy label -- two projects whose paths
-        # differ only in punctuation slug the same way. Record the real
-        # directory so anything that needs the project's identity reads it from
-        # here rather than from the directory name. Set once, on the session
-        # that introduced it; a later run elsewhere must not rewrite history.
-        if self.project_dir is not None and not session.metadata.get("project_dir"):
-            session.metadata["project_dir"] = str(self.project_dir)
-
-        self._cache[key] = session
+            session = self._load(key)
+            if session is None:
+                session = Session(key=key)
+            # The group directory is a lossy label -- two projects whose paths
+            # differ only in punctuation slug the same way. Record the real
+            # directory so anything that needs the project's identity reads it from
+            # here rather than from the directory name. Set once, on the session
+            # that introduced it; a later run elsewhere must not rewrite history.
+            if self.project_dir is not None and not session.metadata.get("project_dir"):
+                session.metadata["project_dir"] = str(self.project_dir)
+            # After the stamp, which this manager derives: a session dropped with
+            # it unsaved gets the same stamp back when it is loaded again.
+            session._clean_fingerprint = _fingerprint(session)
+        self._remember(session)
         return session
+
+    def _live(self, key: str) -> Session | None:
+        """The session already in memory under ``key``, cached or still held elsewhere."""
+        session = self._cache.get(key)
+        if session is None:
+            session = self._held.get(key)
+        return session
+
+    def _remember(self, session: Session) -> None:
+        """Make ``session`` the most recently used, and drop clean ones past the limit."""
+        self._cache[session.key] = session
+        self._cache.move_to_end(session.key)
+        self._held[session.key] = session
+        if len(self._cache) <= _CACHE_LIMIT:
+            return
+        for key in list(self._cache)[:-1]:
+            cached = self._cache.get(key)
+            if cached is not None and _is_clean(cached):
+                self._cache.pop(key, None)
+                if len(self._cache) <= _CACHE_LIMIT:
+                    return
 
     def _load(self, key: str) -> Session | None:
         """Load a session from disk."""
@@ -638,6 +751,7 @@ class SessionManager:
             messages = []
             metadata = {}
             created_at = None
+            updated_at = None
             last_consolidated = 0
             pending_clarification = None
 
@@ -658,6 +772,7 @@ class SessionManager:
                     if data.get("_type") == "metadata":
                         metadata = data.get("metadata", {})
                         created_at = datetime.fromisoformat(data["created_at"]) if data.get("created_at") else None
+                        updated_at = data.get("updated_at")
                         last_consolidated = data.get("last_consolidated", 0)
                         pending_clarification = data.get("pending_clarification")
                     else:
@@ -667,6 +782,7 @@ class SessionManager:
                 key=key,
                 messages=messages,
                 created_at=created_at or datetime.now(),
+                updated_at=_saved_time(updated_at) or datetime.now(),
                 metadata=metadata,
                 last_consolidated=last_consolidated,
                 pending_clarification=pending_clarification,
@@ -701,8 +817,11 @@ class SessionManager:
             return False
         merged = {**(last.get("metadata") or {}), **patch}
         locked_append(path, [json.dumps({**last, "metadata": merged}, ensure_ascii=False)])
-        cached = self._cache.get(key)
+        cached = self._live(key)
         if cached is not None:
+            # Blind to the patched keys: a caller often sets them on its own copy
+            # first, and the patch has just put them on disk.
+            unchanged = _unchanged_but_for(cached, patch.keys())
             cached.metadata.update(patch)
             # These keys are on disk now, so they are no longer this copy's
             # unsaved opinion: left out of the baseline the patch reads as a
@@ -711,6 +830,9 @@ class SessionManager:
             # stays stale -- the file also carries the record this merged into,
             # and a stale stamp is what makes the next save re-read it.
             cached._persisted_metadata.update(patch)
+            # Clean stays clean; a copy with changes of its own keeps them unsaved.
+            if unchanged:
+                cached._clean_fingerprint = _fingerprint(cached)
         return True
 
     def save(self, session: Session) -> None:
@@ -778,7 +900,8 @@ class SessionManager:
             session._persisted_metadata = dict(session.metadata)
 
         session._persisted_count = len(session.messages)
-        self._cache[session.key] = session
+        session._clean_fingerprint = _fingerprint(session)
+        self._remember(session)
 
     def _metadata_to_write(self, session: "Session", path: Path) -> dict[str, Any]:
         """What this copy changed, over the record on disk, over what it loaded.
@@ -820,11 +943,12 @@ class SessionManager:
         return {**base, **(last.get("metadata") or {}), **changed}
 
     def invalidate(self, key: str) -> None:
-        """Remove a session from the in-memory cache."""
+        """Remove a session from the in-memory cache, and from the held map behind it."""
         self._cache.pop(key, None)
+        self._held.pop(key, None)
 
     def delete(self, key: str) -> bool:
-        """Remove the session file and invalidate the cache entry.
+        """Remove the session file and invalidate the cache and held-map entries.
 
         Returns True only if a file was actually removed; False if no file
         existed or the removal failed. Deleting an unknown key is a safe no-op.
@@ -853,12 +977,12 @@ class SessionManager:
         return self.session_path(key).exists()
 
     def peek(self, key: str) -> "Session | None":
-        """Return the cached session if present; else load from disk without caching.
+        """Return the session in memory if present, cached or held elsewhere; else load it from disk without caching.
 
         Callers that need read-only access to a session should use this instead
         of get_or_create, which would cache a fresh empty session for unknown keys.
         """
-        cached = self._cache.get(key)
+        cached = self._live(key)
         if cached is not None:
             return cached
         return self._load(key)
@@ -870,7 +994,8 @@ class SessionManager:
         source's channel, a deep copy of the source's messages, and
         ``parent_session_id`` set to the source key (the reserved lineage slot).
         The child inherits ``last_consolidated`` (so its active-context window
-        matches the source at the fork point) and resets ``pending_clarification``
+        matches the source at the fork point), starts annotated through its
+        inherited history (see below), and resets ``pending_clarification``
         (interaction wait-state is not history). The child is persisted eagerly.
 
         Whatever the source is called, the child is called ``<title> (fork)``
@@ -914,6 +1039,13 @@ class SessionManager:
             if parent_title:
                 child.set_title(_fork_title(parent_title))
         child.metadata["parent_session_id"] = source_key
+        # The fork starts annotated. Its inherited history is the parent's and
+        # is already in the workspace log if the parent annotated it, and a
+        # session's past is never back-filled -- the after-turn step seeds the
+        # same way, at the length before the first turn it sees. Without this
+        # the cursor reads 0, and ``/new`` as a fresh fork's first action hands
+        # every inherited message to the annotator a second time.
+        child.metadata["annotated_through"] = len(child.messages)
         # A fork continues its parent's conversation, so it continues on its
         # parent's model. The caller re-points the live binding, but that lives
         # in memory only -- without carrying the record too, the fork drops to
@@ -926,13 +1058,13 @@ class SessionManager:
         return child
 
     def flush(self, key: str) -> bool:
-        """Save the cached session iff it has unpersisted messages.
+        """Save the session in memory, cached or held elsewhere, iff it has unpersisted messages.
 
         Uses the _persisted_count dirty check. Returns False only when a save
         was attempted and failed (the failure is swallowed); True otherwise,
-        including the no-op cases (key not cached / no new messages).
+        including the no-op cases (key not in memory / no new messages).
         """
-        cached = self._cache.get(key)
+        cached = self._live(key)
         if cached is None:
             return True
         if len(cached.messages) > cached._persisted_count:

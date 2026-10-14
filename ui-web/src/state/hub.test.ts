@@ -5,12 +5,15 @@ import * as hub from './hub'
 import * as page from './page'
 
 /* The two pages the hub switches between, and the drawer a page switch closes,
-   so page.show runs against the markup it writes on. */
+   so page.show runs against the markup it writes on. Knowledge is not one the
+   hub reaches, but `page.show` writes the flag on every page in the table, so
+   its section has to be here for the write to land on something. */
 beforeEach(() => {
   document.body.innerHTML =
     '<div class="app"></div>' +
     '<section class="page" id="extAgentsPage" data-open="false"><div class="work"></div></section>' +
     '<section class="page" id="connectionsPage" data-open="false"><div class="work"></div></section>' +
+    '<section class="page" id="knowledgePage" data-open="false"><div class="work"></div></section>' +
     '<aside class="detail" id="detail" data-open="false"></aside>'
   hub._resetForTests()
 })

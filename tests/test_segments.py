@@ -118,7 +118,7 @@ class TestIdentityBootstrap:
         assert f"{tmp_path}/user_memory/profile/user.md" in seg.text
         assert f"{tmp_path}/user_memory/episodic/episodes.md" in seg.text
 
-    async def test_identity_with_a_backend_names_no_memory_file(self, tmp_path: Path) -> None:
+    async def test_identity_with_a_backend_names_no_profile_file(self, tmp_path: Path) -> None:
         """A wired backend owns memory, so agent home holds no file for it.
 
         Told otherwise, the agent treats ``user.md`` as the place a
@@ -133,8 +133,21 @@ class TestIdentityBootstrap:
         into memory next turn as if it were an observation of the system.
         """
         seg = await IdentitySegmentBuilder(tmp_path, has_memory_backend=True).build(_ctx(tmp_path))
-        assert "user_memory" not in seg.text
+        assert "profile/user.md" not in seg.text
         assert "# Memory" in seg.text
+        assert "never report it to the user as done or as failed" in seg.text
+
+    async def test_identity_with_a_backend_names_the_log_read_only(self, tmp_path: Path) -> None:
+        """The log is written by the host and worth a grep, so the agent is told it exists.
+
+        Read-only, in those words: the profile path stays out, because a
+        path under "your own memory" is what sent the agent to edit_file.
+        """
+        seg = await IdentitySegmentBuilder(tmp_path, has_memory_backend=True).build(_ctx(tmp_path))
+        assert seg.text.count(f"{tmp_path}/user_memory/episodic/episodes.md") == 1
+        log_line = next(line for line in seg.text.splitlines() if "episodes.md" in line)
+        assert "read-only" in log_line
+        assert "profile/user.md" not in seg.text
         assert "never report it to the user as done or as failed" in seg.text
 
     async def test_identity_with_a_backend_matches_the_estimation_prompt(self, tmp_path: Path) -> None:

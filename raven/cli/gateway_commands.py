@@ -33,6 +33,7 @@ from raven.core.provider_stack import build_model_routing
 from raven.providers.factory import make_resolving_provider
 from raven.providers.litellm_setup import warm_up_in_background
 from raven.utils import asyncio_runner as bounded_asyncio
+from raven.utils.heap import start_trimmer
 from raven.utils.workspace import sync_workspace_templates
 
 if TYPE_CHECKING:
@@ -689,6 +690,7 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
             # what it schedules is pinned by source in
             # tests/test_cli_gateway_commands.py instead.
             warm_up_in_background()  # pragma: no cover
+            start_trimmer()  # pragma: no cover
             health_server = None
             gw_teardown = None
             gw_scheduler = None
@@ -879,6 +881,14 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     deck_templates.warm_covers_in_background(  # pragma: no cover
                         language=config.language
                     )
+                    # Anything a restart or a cancelled upload left queued is
+                    # finished here, for the same reason: the reader asked for
+                    # it to be indexed and nothing else was ever going to pick
+                    # it up. After a delay, so the first page and the first
+                    # turn are answered before this starts embedding.
+                    from raven.knowledge._library import drain_pending_in_background
+
+                    drain_pending_in_background()  # pragma: no cover
                     # One shared loop, two question surfaces. build_rpc_stack
                     # bound the page's broker over the channel broker wired
                     # above (AskUserTool._broker is process-wide, last write

@@ -1,4 +1,4 @@
-"""Path policy for the front end's file viewer.
+"""Path policy for the front end's file viewer and attachment deposits.
 
 The viewer may render exactly what the agent may read: the resolver below is the
 same one the filesystem tools use, given the same workspace and the same
@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import mimetypes
 from pathlib import Path
+
+from loguru import logger
 
 from raven.agent.tools.filesystem import resolve_path
 from raven.agent.workdir import default_channel_root
@@ -275,3 +277,94 @@ def content_type_for(path: Path) -> str:
     if guessed.startswith("text/"):
         return f"{guessed}; charset=utf-8"
     return guessed
+
+
+UPLOAD_DIR = "uploads"
+"""Where ``fs.upload`` deposits under agent home, and the prefix an upload's path carries."""
+
+
+def upload_target(uploads: Path, name: str, shadow_dirs: tuple[Path, ...] = ()) -> Path:
+    """Choose a free path for a sanitized filename across attachment directories."""
+    target = uploads / name
+    stem, suffix = target.stem, target.suffix
+    n = 1
+    readable = list(shadow_dirs)
+    while True:
+        occupied = target.exists()
+        for shadow_dir in tuple(readable):
+            if occupied:
+                break
+            try:
+                occupied = (shadow_dir / target.name).exists()
+            except OSError as exc:
+                logger.warning("uploads: cannot read {} ({}); skipping this name check", shadow_dir, exc)
+                readable.remove(shadow_dir)
+        if not occupied:
+            return target
+        target = uploads / f"{stem}-{n}{suffix}"
+        n += 1
+
+
+def workspace_root(loop, session_key: str = "") -> Path:
+    """The directory the web UI's workspace pane is rooted at.
+
+    The working directory the session's turns run in, not agent home: home is
+    ``~/.raven/workspace`` by default, which holds the agent's own memory and
+    is not where a launch-directory turn reads or writes anything. Resolved
+    per session because a session can be pinned to its own directory (the
+    persisted ``workdir`` override); an empty key falls through to the
+    resolver's policy default: the launch directory under ``raven serve``,
+    ``<session root>/_`` under ``raven gateway``.
+
+    Here rather than beside the console handlers so ``turn.send`` can ask the
+    same question without importing them: ``rpc.methods.console`` reaches
+    ``rpc.methods.turn`` through ``rpc.methods.session``, and the edge back
+    would draw the console into an import cycle (``tests/test_import_cycle_budget.py``).
+    """
+    if loop is not None:
+        peek = getattr(loop, "peek_session_workdir", None)
+        if peek is not None:
+            try:
+                return Path(peek(session_key)).resolve()
+            except ValueError:
+                pass
+    ws = getattr(loop, "workspace", None) if loop is not None else None
+    if ws:
+        return Path(ws).resolve()
+    from raven.config.loader import load_config
+
+    return Path(load_config().workspace_path).resolve()
+
+
+def viewer_root(workspace: Path, rel: Path, home: Path) -> Path:
+    """Which root a relative path handed to the viewer is relative to.
+
+    Two roots, each deliberate, and one kind of path belongs to the other one.
+    ``fs.upload`` deposits into agent home (``home``) whichever session asked --
+    it is the root always writable -- and answers with a path relative to it.
+    Everything else the viewer is handed is relative to the session's own
+    working directory (``workspace``), which is what the workspace pane browses.
+    The two are the same directory for a session that runs where the agent
+    lives, and part company for one pinned elsewhere: there a picture the
+    reader attached came back 404 from ``/file`` and its bubble fell back to a
+    file name.
+
+    The session's own root is tried first, so a session that keeps an
+    ``uploads`` directory of its own still serves its own file; agent home
+    answers only for a path that is an upload and is actually there.
+    ``turn.send`` resolves an attachment by this same rule, so a picture the
+    viewer drew is the file the turn receives.
+
+    An upload is told by where the path lands, not by how it starts:
+    ``uploads/../notes/x.md`` and a link left under ``uploads/`` both lead out
+    of it. And it can be named absolutely -- the composer stages the file
+    ``fs.upload`` wrote -- in which case it is still agent home's.
+    """
+    uploads = (home / UPLOAD_DIR).resolve()
+    if rel.is_absolute():
+        return home if rel.resolve().is_relative_to(uploads) else workspace
+    if (workspace / rel).exists():
+        return workspace
+    if (home / rel).exists() and (home / rel).resolve().is_relative_to(uploads):
+        return home
+    return workspace

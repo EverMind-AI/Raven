@@ -24,6 +24,8 @@ import * as extAgentsStore from '../features/extAgents/store'
 import { importSyncSource } from '../features/importSync/source'
 import * as importSyncStore from '../features/importSync/store'
 import { capabilitiesSource, loadExt } from '../features/installed/source'
+import { knowledgeSource } from '../features/knowledge/source'
+import { reveal as revealDocument } from '../features/knowledge/store'
 import { memorySource } from '../features/memory/source'
 import { modelSource, openModelsForMissingProvider, tierSource } from '../features/model/source'
 import { onboardSource } from '../features/onboard/source'
@@ -59,6 +61,7 @@ import { forget as forgetAbsent, servesTrajectory } from '../rpc/capabilities'
 import { gateway } from '../rpc/gateway'
 import { setFault as setMemFault } from '../state/banner'
 import * as page from '../state/page'
+import { onDocument } from '../state/reveal'
 import {
   clarifyRequest, dispatch, installPipeline, registerCredentialCard, replayPendingApprovals, replayPendingCredentials,
 } from '../state/session/pipeline'
@@ -68,6 +71,7 @@ import * as settingsDialog from '../state/settings'
 import { ds, sources } from '../state/sources'
 import { show as toast } from '../state/toast'
 import * as visibility from '../state/visibility'
+import { staged as stagedWorkdir } from '../state/workdir'
 import { onReset as onWsReset } from '../state/ws'
 import { installConnectionUI, onReconnect, surface } from './connection'
 import { showUpNote } from './updates'
@@ -241,6 +245,12 @@ export function installSources(): void {
     onRunStarted, onNodeUpdated, onRunCompleted, onRunReplanned, onSubagentStatus,
   }
   sources.extAgents = extAgentsSource
+  sources.knowledge = knowledgeSource
+  /* How a citation in the transcript is followed. Registered by the island
+     that can do it rather than imported by the one that wants it: two domains
+     reaching for each other is what puts every island in every island's
+     closure (scripts/gates/import-direction.test.mjs). */
+  onDocument((at) => void revealDocument(at.baseId, at.documentId, at.chunkIndex))
 
   /* The workspace panel's chrome is still the page's, so the two things its
      source cannot work out for itself are handed over here. */
@@ -248,6 +258,12 @@ export function installSources(): void {
   setShortener((p) => ds('workspace').shortPath(p))
   sources.prose = proseSource
   sources.workspace = workspaceSource
+
+  const attachmentContext = () => {
+    const session = sessionCurrent()
+    const workdir = session ? null : stagedWorkdir()
+    return { session: session || 'tui:', ...(workdir ? { workdir } : {}) }
+  }
 
   /* Files are uploaded into <workspace>/uploads and handed to the agent as
      paths: every file tool is already workspace-scoped, so a path is all it
@@ -263,7 +279,7 @@ export function installSources(): void {
       content_b64: p.content_b64,
       /* Read per call, not captured: a file can be staged in a draft that
          becomes a session between the pick and the upload. */
-      session: sessionCurrent() || '',
+      ...attachmentContext(),
     })
   }
 
@@ -272,7 +288,7 @@ export function installSources(): void {
      on it. */
   composer.templates = {
     list: () => gateway().call('deck.templates.list', { covers: true }),
-    pick: (name) => gateway().call('deck.templates.pick', { name }),
+    pick: (name) => gateway().call('deck.templates.pick', { name, ...attachmentContext() }),
     pages: (name) => gateway().call('deck.templates.pages', { name }),
   }
 }

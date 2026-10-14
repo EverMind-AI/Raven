@@ -792,6 +792,11 @@ class UpdateTranslator:
 
     # -- turn lifecycle ---------------------------------------------------
 
+    @property
+    def closing(self) -> bool:
+        """Whether the connection has begun draining its pending handlers."""
+        return self._closing
+
     def begin_turn(self, session_id: str) -> asyncio.Future[str]:
         """Open a turn and return the future its stop reason arrives on.
 

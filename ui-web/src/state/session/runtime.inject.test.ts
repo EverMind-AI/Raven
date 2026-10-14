@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { fakeGateway, loadPart, looseQuery } from '../../../scripts/module-harness.mjs'
 import * as turn from '../../features/composer/turn'
+import { readMessage } from '../../lib/attachments'
 
 import type { Sources } from '../sources'
 
@@ -37,7 +38,9 @@ async function harness({ reject = null as { code?: number; message?: string } | 
         noteRow: (labelText: string, detail: string, opts?: Record<string, unknown>) =>
           log.push(['noteRow', labelText, detail, opts ? Object.keys(opts).sort() : null]),
         pitch: () => {},
-        splitAtts: (t: string) => ({ text: t, atts: [] }),
+        /* The real reader, which is what the production stub delegates to: a
+           message's note is where the send recovers its files from. */
+        splitAtts: (t: string) => readMessage(t),
         unpitch: () => {},
       },
       'src/features/rail/store': { markNew: () => {}, draw: () => {}, endRename: () => {} },
@@ -118,6 +121,22 @@ async function harness({ reject = null as { code?: number; message?: string } | 
 }
 
 afterEach(() => { turn._resetForTests() })
+
+describe('the files a message hands to the turn', () => {
+  /* The note is the record of what was handed over, and the turn receives its
+     paths as it names them: an upload as the file it wrote, a file attached
+     where it already was by the path it was dragged with -- here a session
+     root's own file that shares the upload's name. */
+  it('hands the turn the paths the note names, as it names them', async () => {
+    const h = await harness()
+
+    h.runtime.send('look\n\n[attachments, saved in the workspace]\n'
+      + '- /home/me/.raven/workspace/uploads/shot.png\n- uploads/shot.png')
+    await h.tick()
+
+    expect(h.sends()[0]?.media).toEqual(['/home/me/.raven/workspace/uploads/shot.png', 'uploads/shot.png'])
+  })
+})
 
 describe('a message typed while the turn is running', () => {
   it('goes to that turn instead of the queue', async () => {

@@ -22,12 +22,16 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, get_args
 
 from loguru import logger
-from pydantic.alias_generators import to_camel, to_snake
+from pydantic.alias_generators import to_snake
 
 from raven.config.env_file import MIRRORED_KEYS, refresh_env_file
+from raven.config.keys import key_as_written as _as_written
 from raven.config.schema import WEB_VENDOR_ENV_VARS, WebFetchProvider, WebSearchProvider
 from raven.rpc import LOCAL_CHANNEL
 from raven.rpc.errors import ConfigValidationError
+from raven.rpc.files import UPLOAD_DIR as _UPLOAD_DIR
+from raven.rpc.files import viewer_root as _viewer_root_from
+from raven.rpc.files import workspace_root as _workspace_root
 from raven.utils.atomic_io import atomic_update
 
 if TYPE_CHECKING:
@@ -656,14 +660,15 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
     if key == "cron.defaultTimezone":
         from raven.config.update import update_cron_config
 
-        if not isinstance(value, str) or not value:
-            raise ConfigValidationError("defaultTimezone must be a non-empty string")
-        from zoneinfo import ZoneInfo
+        if value is not None:
+            if not isinstance(value, str) or not value:
+                raise ConfigValidationError("defaultTimezone must be a non-empty string or null")
+            from zoneinfo import ZoneInfo
 
-        try:
-            ZoneInfo(value)
-        except Exception:
-            raise ConfigValidationError(f"unknown timezone: {value}") from None
+            try:
+                ZoneInfo(value)
+            except Exception:
+                raise ConfigValidationError(f"unknown timezone: {value}") from None
         # The page names the key the way the config file spells it; the writer
         # validates against ``CronConfig.model_fields``, which holds the Python
         # field names. Nothing else in this endpoint crosses the two, so the
@@ -715,14 +720,64 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
     if checker is not None:
         written = _write_raw_key(key, checker(value), merge=key in _MERGED_KEYS)
         if key in MIRRORED_KEYS:
-            # cli/acp sub-agents read every web credential from the
-            # environment, not from the config, so the ~/.raven/env mirror has
-            # to follow the write or they keep running on the key this call
-            # just replaced.
+            # POSIX cli/acp sub-agents read every web credential from the
+            # environment their login shell builds, not from the config, so the
+            # ~/.raven/env mirror has to follow the write or they keep running
+            # on the key this call just replaced (see ``raven.config.env_file``).
             refresh_env_file()
+            # They read the mirror only through the login-shell capture, and
+            # this process keeps the one it took, so it is taken again before
+            # the reply: the next spawn then starts on the key just written.
+            from raven.agent.subagent.backends.env import refresh_login_shell_env
+
+            await asyncio.to_thread(refresh_login_shell_env)
         return written
 
+    if key.startswith("plugins.config."):
+        return _set_plugin_config_field(key, value)
+
     raise ConfigValidationError(f"key not writable via settings.set: {key}")
+
+
+def _plugin_config_declaration(plugin_id: str) -> dict[str, Any] | None:
+    """An activated plugin's ``config_schema``, or ``None`` for anything else."""
+    from raven.config.raven import load_raven_config
+    from raven.core.plugin_stack import build_plugin_registry
+
+    registry = build_plugin_registry(load_raven_config())
+    if plugin_id not in registry.activated_ids():
+        return None
+    manifest = registry.manifest_for(plugin_id)
+    return dict(manifest.config_schema) if manifest is not None and manifest.config_schema else None
+
+
+def _set_plugin_config_field(key: str, value: Any) -> dict[str, Any]:
+    """``plugins.config.<plugin_id>.<field>``, admitted against the plugin's own declaration.
+
+    Only a field the manifest marks ``settable = true`` is writable here. This
+    door is reachable from any RPC client with no confirmation step, so, like
+    ``tools.web.proxy`` above, it must not reach a field that decides where a
+    stored credential is sent: a plugin's ``base_url`` is declared but not
+    settable, its ``api_key`` is both. The type is checked as admission checks
+    it, and the write goes through ``set_plugin_config_fields``, which can only
+    touch that plugin's slice -- so no dotted path rides a credential write into
+    the rest of the config.
+    """
+    plugin_id, _, field = key[len("plugins.config.") :].partition(".")
+    declared = _plugin_config_declaration(plugin_id) if plugin_id and field and "." not in field else None
+    spec = declared.get(field) if declared else None
+    if not isinstance(spec, dict) or spec.get("settable") is not True:
+        raise ConfigValidationError(f"key not writable via settings.set: {key}")
+    from raven.config.admission import PluginConfigError, admit_slice
+
+    try:
+        admit_slice({field: declared[field]}, {field: value}, plugin_id=plugin_id)
+    except PluginConfigError as exc:
+        raise ConfigValidationError(f"{key}: {exc}") from exc
+    from raven.config.update import set_plugin_config_fields
+
+    set_plugin_config_fields(plugin_id, {field: value})
+    return {"applied": True, "previous": None}
 
 
 #: Keys whose value is an object covering only part of the block it names, so
@@ -743,31 +798,15 @@ _MERGED_KEYS = frozenset(
 )
 
 
-def _as_written(node: dict, name: str) -> str:
-    """The spelling this object already uses for ``name``, or ``name`` itself.
-
-    The config models set ``alias_generator=to_camel`` with
-    ``populate_by_name=True``, so every block and field is accepted under two
-    spellings and a hand-written config may hold either. A write that always
-    used the camelCase one did not update the file, it grew a second key beside
-    the first -- and since the models forbid extras, the block that was there
-    before became an extra input and the whole config stopped loading. The
-    write has to follow the file rather than the writer's spelling.
-    """
-    if name in node:
-        return name
-    for alias in (to_camel(name), to_snake(name)):
-        if alias != name and alias in node:
-            return alias
-    return name
-
-
 def _write_raw_key(key: str, value: Any, *, merge: bool = False) -> dict:
     """Dotted-path read-modify-write into config.json, under the config lock.
 
     The same ``atomic_update`` transaction the ``update.py`` writers run, so a
     console save cannot interleave with a CLI save on the same file, and a
     config held at 0600 keeps its mode across the replace.
+
+    Null intermediate sections are initialized like absent sections, retaining
+    their existing spelling. Other non-object values remain invalid.
     """
     from raven.config.loader import get_config_path, read_raw_or_raise
 
@@ -781,9 +820,13 @@ def _write_raw_key(key: str, value: Any, *, merge: bool = False) -> dict:
         node = raw
         parts = key.split(".")
         for p in parts[:-1]:
-            node = node.setdefault(_as_written(node, p), {})
-            if not isinstance(node, dict):
+            name = _as_written(node, p)
+            child = node.get(name)
+            if child is None:
+                child = node[name] = {}
+            elif not isinstance(child, dict):
                 raise ConfigValidationError(f"config path {key} blocked by non-object")
+            node = child
         leaf = _as_written(node, parts[-1])
         prev = node.get(leaf)
         if merge:
@@ -1018,11 +1061,14 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "translate.provider": _chk_pin_provider("translate.provider"),
     "embedding.model": _chk_pin_model("embedding.model"),
     "embedding.provider": _chk_pin_provider("embedding.provider"),
+    "vision.model": _chk_pin_model("vision.model"),
+    "vision.provider": _chk_pin_provider("vision.provider"),
     # The pair keys. A surface offering a pin writes one of these, not the two
     # leaves in sequence.
     "sessionTitle": _chk_pin_pair("sessionTitle", "model", "provider"),
     "translate": _chk_pin_pair("translate", "model", "provider"),
     "embedding": _chk_pin_pair("embedding", "model", "provider"),
+    "vision": _chk_pin_pair("vision", "model", "provider"),
     "agents.defaults.enablePersonalization": _chk_bool("agents.defaults.enablePersonalization"),
     "agents.defaults.reasoningEffort": _chk_enum("agents.defaults.reasoningEffort", "minimal", "low", "medium", "high"),
     "permissions.mode": _chk_enum("permissions.mode", "ask", "smart", "full"),
@@ -1281,16 +1327,108 @@ async def settings_everos(params: dict, *, agent_loop_factory=None) -> dict:
     del params
     from raven.core.plugin_stack import everos_plugin_installed, everos_plugin_missing_note
 
-    if not everos_plugin_installed():
-        return {
-            "available": False,
-            "note": everos_plugin_missing_note(),
-            "sections": {},
-            "config_path": "",
-        }
-    from raven_everos.config import describe_roles
+    installed = everos_plugin_installed()
+    roles: dict[str, Any] = {
+        "available": False,
+        "note": everos_plugin_missing_note(),
+        "sections": {},
+        "config_path": "",
+    }
+    if installed:
+        from raven_everos.config import describe_roles
 
-    return describe_roles()
+        roles = describe_roles()
+    other = _other_memory_backend()
+    if other is None:
+        return roles
+    # llm, rerank and multimodal are EverOS's own extraction models, which no
+    # other backend reads; ``reason`` tells the page to draw none of them --
+    # whether or not the local plugin is installed, since a cloud-only install
+    # is the common one and a bare ``available: false`` would put "plugin not
+    # installed" on every row. The page draws an EverOS row only when it is in
+    # ``sections``: embedding stays when the local plugin can describe it (its
+    # pin is raven's top-level block, and a knowledge base embeds with it
+    # whatever the memory backend is).
+    sections = roles.get("sections") or {}
+    return {
+        **roles,
+        "reason": "other_backend",
+        "note": f"Long-term memory runs on {other!r}; the EverOS model roles are not in use.",
+        "sections": {k: v for k, v in sections.items() if k == "embedding"},
+        "required": [r for r in roles.get("required", []) if r == "embedding"],
+    }
+
+
+def _other_memory_backend() -> str | None:
+    """The configured backend when it is neither EverOS nor off; ``None`` otherwise.
+
+    ``None`` (memory off) keeps the role slots live, because setting ``llm``
+    on that page is how memory is turned on; an unreadable config answers as
+    "not another backend" so the page falls back to what it did before.
+    """
+    try:
+        from raven.config.raven import load_raven_config
+
+        backend = load_raven_config().memory.backend
+    except Exception:  # noqa: BLE001 - an unreadable config is not this page's to report
+        return None
+    return backend if backend not in (None, "everos") else None
+
+
+async def settings_everos_cloud(params: dict, *, agent_loop_factory=None) -> dict:
+    """The EverOS Cloud card: whether it answers, which key it uses, where it points.
+
+    Built from the cloud slice alone, the way ``raven doctor`` builds a backend
+    to ask ``health()``: the running gateway's backend keeps the key it was
+    built with, so the probe here is about what is on disk now.
+    """
+    del params
+    from importlib.util import find_spec
+
+    from raven.config.raven import MEMORY_BACKEND_DISTRIBUTIONS, load_raven_config
+
+    cfg = load_raven_config()
+    # The distribution name is the pairing's to give; the import package is not
+    # in it, and the local backend keeps its own (plugin_stack).
+    distribution = MEMORY_BACKEND_DISTRIBUTIONS["everos-cloud"]
+    installed = find_spec("raven_everos_cloud") is not None
+    answer: dict[str, Any] = {
+        "available": installed,
+        "selected": cfg.memory.backend == "everos-cloud",
+        "api_key_set": False,
+        "key_source": None,
+        "base_url": "",
+        "status": None,
+        "hint": None,
+    }
+    if not installed:
+        answer["hint"] = f"the {distribution} distribution is not installed"
+        return answer
+    from raven_everos_cloud.backend import DEFAULT_BASE_URL, resolve_api_key
+
+    slice_ = dict((cfg.plugins.config or {}).get(distribution) or {})
+    key, source = resolve_api_key(slice_)
+    answer["api_key_set"] = bool(key)
+    answer["key_source"] = source
+    answer["base_url"] = str(slice_.get("base_url") or DEFAULT_BASE_URL).rstrip("/")
+    if not answer["selected"]:
+        return answer
+    from raven.config.loader import load_config
+    from raven.core.plugin_stack import maybe_build_memory_backend
+
+    backend = maybe_build_memory_backend(load_config().workspace_path, cfg)
+    if backend is None:
+        answer["status"] = "missing"
+        answer["hint"] = "the everos-cloud memory backend did not build; see the gateway log"
+        return answer
+    try:
+        health = await backend.health()
+    finally:
+        await backend.stop()
+    check = health.checks[0] if health.checks else None
+    answer["status"] = check.status if check else ("ok" if health.ready else "missing")
+    answer["hint"] = check.hint if check else None
+    return answer
 
 
 # One restart at a time, and one more run queued at most. Two saves in quick
@@ -1413,6 +1551,16 @@ def everos_follows_provider(slug: str, agent_loop_factory: Any) -> None:
     except ImportError:
         return
     try:
+        from raven.config.raven import load_raven_config
+
+        # Only while EverOS is the memory backend: a key saved by someone on
+        # the cloud backend, or with memory off, must not start a local server
+        # nobody uses.
+        if load_raven_config().memory.backend != "everos":
+            return
+    except Exception:  # noqa: BLE001 - a save must not fail over this question
+        return
+    try:
         for section in ROLES:
             pin = role_pin(section)
             if pin is None and section in FOLLOWS_MAIN_ROLES:
@@ -1486,6 +1634,11 @@ async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
     section = str(params.get("section", ""))
     if section not in ROLES:
         raise ConfigValidationError(f"unknown everos role: {section}")
+    other = _other_memory_backend()
+    if other is not None and section != "embedding":
+        # Embedding is the one role another backend still lives with: its pin is
+        # raven's own block and knowledge bases size themselves to it.
+        raise ConfigValidationError(f"long-term memory runs on {other!r}; EverOS roles are not in use")
 
     if params.get("clear") is True:
         # The rule is `clear_role`'s now, so this door translates rather than
@@ -1793,31 +1946,6 @@ _FS_MAX_ENTRIES = 500
 _FS_DEFAULT_MAX_BYTES = 200_000
 
 
-def _workspace_root(loop, session_key: str = "") -> Path:
-    """The directory the page's file panel is rooted at.
-
-    The working directory the session's turns run in, not agent home: home is
-    ``~/.raven/workspace`` by default, which holds the agent's own memory and
-    is not where a launch-directory turn reads or writes anything. Resolved
-    per session because a session can be pinned to its own directory (the
-    persisted ``workdir`` override); an empty key falls through to the
-    resolver's policy default, which for the gateway is the launch directory.
-    """
-    if loop is not None:
-        peek = getattr(loop, "peek_session_workdir", None)
-        if peek is not None:
-            try:
-                return Path(peek(session_key)).resolve()
-            except ValueError:
-                pass
-    ws = getattr(loop, "workspace", None) if loop is not None else None
-    if ws:
-        return Path(ws).resolve()
-    from raven.config.loader import load_config
-
-    return Path(load_config().workspace_path).resolve()
-
-
 def _resolve_inside(root: Path, rel: str) -> Path:
     """Resolve ``rel`` under ``root``, refusing anything outside it -- or inside
     raven's own state directory.
@@ -2047,9 +2175,6 @@ async def fs_pick_dir(params: dict, *, agent_loop_factory=None) -> dict:
     return {"path": str(target), "ok": ok}
 
 
-_UPLOAD_DIR = "uploads"
-
-
 def _safe_name(name: str) -> str:
     """Strip directory parts and anything that could escape or confuse a shell."""
     base = Path(str(name or "file")).name
@@ -2060,36 +2185,24 @@ def _safe_name(name: str) -> str:
 def viewer_root(workspace: Path, rel: Path) -> Path:
     """Which root a relative path handed to the viewer is relative to.
 
-    Two roots, each deliberate, and one kind of path belongs to the other one.
-    ``fs.upload`` deposits into agent home whichever session asked -- it is the
-    root always writable, and ``turn.send`` fences an attachment there -- and
-    answers with a path relative to it. Everything else the viewer is handed is
-    relative to the session's own working directory, which is what the file
-    panel browses. The two are the same directory for a session that runs where
-    the agent lives, and part company for one pinned elsewhere: there a picture
-    the reader attached came back 404 from ``/file`` and its bubble fell back to
-    a file name.
-
-    The session's own root is tried first, so a session that keeps an
-    ``uploads`` directory of its own still serves its own file; agent home
-    answers only for a path that is an upload and is actually there.
+    :func:`raven.rpc.files.viewer_root`'s rule, with agent home read where
+    ``fs.upload`` reads it.
     """
-    if (workspace / rel).exists():
-        return workspace
-    if rel.parts[:1] == (_UPLOAD_DIR,) and (_upload_root() / rel).exists():
-        return _upload_root()
-    return workspace
+    return _viewer_root_from(workspace, rel, _upload_root())
 
 
 def _upload_root() -> Path:
     """Where an uploaded file is deposited: agent home, not the session workdir.
 
-    The relative path this handler returns rides back to ``turn.send``, which
-    resolves an attachment against agent home and fences it there, so a file
-    parked anywhere else is dropped from the turn without an error. Agent home
-    is also the one root always writable: a session's working directory is
-    wherever the engine was launched from, and an engine started by the desktop
-    shell inherits ``/``, where creating the directory cannot succeed.
+    The path this handler returns rides back to ``turn.send`` -- the web UI's
+    composer sends ``abs_path``, the file itself, and a caller that keeps the
+    relative ``path`` has it found here by :func:`viewer_root`'s rule -- which,
+    with ``tools.restrict_to_workspace`` on, admits agent home and the session's
+    own working directory alone, so a file parked anywhere else is dropped from
+    the turn without an error. Agent home is also the one root always writable:
+    a session's working directory is wherever the engine was launched from, and
+    an engine started by the desktop shell inherits ``/``, where creating the
+    directory cannot succeed.
 
     Browsing is the other way round on purpose -- ``fs.list`` / ``fs.read`` /
     ``fs.reveal`` stay rooted at the session's working directory, because the
@@ -2100,19 +2213,47 @@ def _upload_root() -> Path:
     return Path(load_config().workspace_path).expanduser().resolve()
 
 
+def _upload_shadow_dirs(params: dict, home: Path, agent_loop_factory) -> tuple[Path, ...]:
+    """Check the draft's selection and the runtime root, which a process override can pin."""
+    roots: list[Path] = []
+    workdir = params.get("workdir")
+    if workdir:
+        from raven.agent.workdir import validate_override
+
+        try:
+            roots.append(validate_override(workdir, home) / _UPLOAD_DIR)
+        except ValueError as exc:
+            raise ConfigValidationError(str(exc), data={"field": "workdir"}) from exc
+    try:
+        resolved = _workspace_root(_safe_loop(agent_loop_factory), str(params.get("session") or "")) / _UPLOAD_DIR
+        if resolved not in roots and resolved != home / _UPLOAD_DIR:
+            roots.append(resolved)
+    except Exception as exc:
+        logger.warning("uploads: cannot read the session's working directory ({}); skipping this name check", exc)
+    return tuple(roots)
+
+
 async def fs_upload(params: dict, *, agent_loop_factory=None) -> dict:
     """Store an uploaded file under ``<agent home>/uploads`` and return its path.
 
     The caller hands the agent a path, not bytes: every tool that reads files is
     already workspace-scoped, so an upload is just a file appearing in the
-    workspace. Collisions get a numeric suffix rather than overwriting.
+    workspace. Collisions get a numeric suffix rather than overwriting -- and
+    the name is kept free under the session's own ``uploads/`` too, as it
+    stands at the upload, because :func:`raven.rpc.files.viewer_root` reads a
+    relative path there before agent home: a caller that hands ``turn.send``
+    the relative ``path`` would otherwise send that session's file. Only
+    ``abs_path`` names the upload whatever appears there later, or under
+    another session's root, which is why the web UI's composer sends that
+    one.
 
-    ``session`` is still accepted (the page sends it) but does not select the
-    root -- see :func:`_upload_root`.
+    ``session`` selects the collision check's root. A draft supplies its
+    channel prefix and optional ``workdir`` before it has a session key;
+    neither changes where the upload is written.
     """
     import base64
 
-    from raven.rpc.files import MAX_UPLOAD_BYTES
+    from raven.rpc.files import MAX_UPLOAD_BYTES, upload_target
 
     root = _upload_root()
     raw = params.get("content_b64") or ""
@@ -2125,6 +2266,7 @@ async def fs_upload(params: dict, *, agent_loop_factory=None) -> dict:
     if len(data) > MAX_UPLOAD_BYTES:
         raise ConfigValidationError(f"file exceeds {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit")
 
+    shadow_dirs = _upload_shadow_dirs(params, root, agent_loop_factory)
     target_dir = root / _UPLOAD_DIR
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -2133,12 +2275,7 @@ async def fs_upload(params: dict, *, agent_loop_factory=None) -> dict:
         # the page as a bare -32603 ``internal_error`` with no reason in it.
         raise ConfigValidationError(f"cannot create {target_dir}: {e}") from None
     name = _safe_name(params.get("name", ""))
-    target = target_dir / name
-    stem, suffix = target.stem, target.suffix
-    n = 1
-    while target.exists():
-        target = target_dir / f"{stem}-{n}{suffix}"
-        n += 1
+    target = upload_target(target_dir, name, shadow_dirs)
     try:
         target.write_bytes(data)
     except OSError as e:
@@ -2214,8 +2351,10 @@ async def deck_templates_pick(params: dict, *, agent_loop_factory=None) -> dict:
     template = deck_templates.find(name)
     if template is None:
         raise ConfigValidationError(f"no bundled deck template named {name!r}")
+    home = _upload_root()
+    shadow_dirs = _upload_shadow_dirs(params, home, agent_loop_factory)
     try:
-        target = deck_templates.deposit(template, _upload_root() / _UPLOAD_DIR, _reader_language())
+        target = deck_templates.deposit(template, home / _UPLOAD_DIR, _reader_language(), shadow_dirs=shadow_dirs)
     except OSError as e:
         raise ConfigValidationError(f"cannot place the template under uploads: {e}") from None
     return {"path": f"{_UPLOAD_DIR}/{target.name}", "abs_path": str(target), "size": target.stat().st_size}
@@ -2247,7 +2386,7 @@ async def fs_reveal(params: dict, *, agent_loop_factory=None) -> dict:
         # panel lists; agent home second, by handing the relative path to
         # ``resolve_readable``, which roots it there. Both are needed because
         # the page sends one string to two surfaces: the panel's own rows are
-        # relative to the workdir, while an uploaded attachment's chip carries
+        # relative to the workdir, while an uploaded attachment's chip can carry
         # ``uploads/<name>``, and only agent home holds that.
         listed = _workspace_root(_safe_loop(agent_loop_factory), str(params.get("session") or "")) / raw
         p = listed if listed.exists() else Path(raw)
@@ -2338,7 +2477,7 @@ async def fs_open(params: dict, *, agent_loop_factory=None) -> dict:
     if not p.is_absolute():
         # Same two roots as fs.reveal, for the same reason: the panel's rows are
         # relative to the session's working directory, an uploaded attachment's
-        # chip carries `uploads/<name>` and only agent home holds that.
+        # chip can carry `uploads/<name>` and only agent home holds that.
         listed = _workspace_root(_safe_loop(agent_loop_factory), str(params.get("session") or "")) / raw
         p = listed if listed.exists() else Path(raw)
     try:
@@ -2466,6 +2605,7 @@ def register_console_methods(dispatcher, *, agent_loop_factory=None) -> None:
     dispatcher.register("settings.usage", bind(settings_usage))
     dispatcher.register("settings.everos", bind(settings_everos))
     dispatcher.register("settings.everosSet", bind(settings_everos_set))
+    dispatcher.register("settings.everosCloud", bind(settings_everos_cloud))
     # The camelCase spelling is what the shipped TUI calls; the snake_case name is
     # the method's, double-registered until the TUI reads it.
     dispatcher.register("settings.everos_set", bind(settings_everos_set))

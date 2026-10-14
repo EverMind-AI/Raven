@@ -190,10 +190,83 @@ async def test_secrets_and_inert_settings_are_not_written(config_file):
     tool = RavenConfigTool()
     reply = await _run(tool, action="set", path="providers.openrouter.apiKey", value='"sk-new"')
     assert "never goes through a tool call" in reply
-    reply = await _run(tool, action="set", path="cron.defaultTimezone", value='"UTC"')
+    reply = await _run(tool, action="set", path="tools.web.search.maxResults", value="5")
     assert "nothing was changed" in reply
     data = json.loads(config_file.read_text())
-    assert data["providers"]["openrouter"]["apiKey"] == "sk-x" and "cron" not in data
+    assert data["providers"]["openrouter"]["apiKey"] == "sk-x" and "web" not in data["tools"]
+
+
+@pytest.mark.parametrize("spelling", ["defaultTimezone", "default_timezone"])
+async def test_cron_timezone_is_written_through_settings_and_used_by_new_jobs(config_file, spelling):
+    from raven.core.cron_stack import build_cron_service
+    from raven.proactive_engine.schedulers.cron.types import CronSchedule
+    from raven.rpc.methods import console as rpc_console
+
+    raw = json.loads(config_file.read_text())
+    raw["cron"] = {spelling: "UTC"}
+    config_file.write_text(json.dumps(raw), encoding="utf-8")
+    service = build_cron_service(allowed_channels=None)
+    before = service.add_job("before", CronSchedule(kind="cron", expr="0 9 * * *"), "before", to="before")
+    calls = []
+
+    async def writer(method, params):
+        calls.append((method, params))
+        assert method == "settings.set"
+        return await rpc_console.settings_set(params)
+
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(writer)
+    reply = await _run(tool, action="set", path="cron.defaultTimezone", value='"Europe/Paris"')
+    assert calls == [("settings.set", {"key": "cron.defaultTimezone", "value": "Europe/Paris"})]
+    assert "Europe/Paris" in reply and "next turn" in reply
+    assert json.loads(config_file.read_text())["cron"] == {spelling: "Europe/Paris"}
+    after = service.add_job("after", CronSchedule(kind="cron", expr="0 9 * * *"), "after", to="after")
+    assert before.schedule.tz == "UTC" and after.schedule.tz == "Europe/Paris"
+    assert _pending(await _run(tool, action="describe")) is None
+
+
+async def test_cron_timezone_set_to_null_returns_new_jobs_to_local_time(config_file):
+    from raven.core.cron_stack import build_cron_service
+    from raven.proactive_engine.schedulers.cron.types import CronSchedule
+    from raven.rpc.methods import console as rpc_console
+
+    raw = json.loads(config_file.read_text())
+    raw["cron"] = {"defaultTimezone": "UTC"}
+    config_file.write_text(json.dumps(raw), encoding="utf-8")
+
+    async def writer(method, params):
+        assert method == "settings.set"
+        return await rpc_console.settings_set(params)
+
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(writer)
+    reply = await _run(tool, action="set", path="cron.defaultTimezone", value="null")
+    assert not reply.startswith("Error:"), reply
+    job = build_cron_service(allowed_channels=None).add_job("daily", CronSchedule(kind="cron", expr="0 9 * * *"), "d")
+    assert job.schedule.tz is None
+
+
+@pytest.mark.parametrize("invalid", [7, "Not/AZone"])
+async def test_cron_timezone_rejects_invalid_tool_writes(config_file, invalid):
+    from raven.rpc.methods import console as rpc_console
+
+    async def writer(method, params):
+        assert method == "settings.set"
+        return await rpc_console.settings_set(params)
+
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(writer)
+    before = config_file.read_bytes()
+    reply = await _run(tool, action="set", path="cron.defaultTimezone", value=json.dumps(invalid))
+    assert reply.startswith("Error:"), reply
+    assert config_file.read_bytes() == before
+
+
+async def test_cron_timezone_without_a_settings_writer_is_refused(config_file):
+    before = config_file.read_bytes()
+    reply = await _run(RavenConfigTool(), action="set", path="cron.defaultTimezone", value='"UTC"')
+    assert reply.startswith("Error:") and "Settings" in reply
+    assert config_file.read_bytes() == before
 
 
 @pytest.mark.asyncio

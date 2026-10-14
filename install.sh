@@ -6,7 +6,7 @@
 #
 # A piped run always installs the published release wheel, even from inside a
 # clone. Set RAVEN_LOCAL_SRC=<dir> to force an editable install of a checkout.
-# Set RAVEN_MINIMAL=1 to skip the chromium download and the LibreOffice offer;
+# Set RAVEN_MINIMAL=1 to skip the resource download, chromium and the LibreOffice offer;
 # the wheel install itself is unchanged. Set RAVEN_NO_LAUNCH=1 to skip the
 # closing `raven web` (CI, Dockerfiles), so the script returns.
 #
@@ -497,10 +497,10 @@ install_raven() {
   ok "raven installed"
 }
 
-# --- 4. optional capabilities: browser + LibreOffice -------------------------
-# Both installs are best-effort: raven itself is already installed by the time
-# they run, so a failed download or a declined offer must never abort a
-# completed install. RAVEN_MINIMAL skips both.
+# --- 4. optional capabilities: resources + browser + LibreOffice -------------
+# Every install here is best-effort: raven itself is already installed by the
+# time they run, so a failed download or a declined offer must never abort a
+# completed install. RAVEN_MINIMAL skips them all.
 
 install_browser() {
   # The browser tool drives chromium through the playwright library inside the
@@ -522,6 +522,35 @@ install_browser() {
   # the exact sudo command for them (--with-deps). We never run sudo ourselves.
   "$py" -m playwright install chromium \
     || warn "Chromium download failed; the browser tool stays off. Retry later with: $py -m playwright install chromium"
+}
+
+# The word dictionary and the deepdoc vision models: ~110 MB that cannot live
+# in git (AGENTS.md section 7 caps a file at 1 MiB) and so arrive here. The
+# Makefile and the Dockerfile fetch them for the two installs that have a
+# checkout or a build context; this is the third, and without it a one-line
+# install segments Chinese per character and cannot parse a PDF at all.
+#
+# Through the tool venv's python, like install_browser above: the fetcher is
+# part of the installed package now, so this one call works whether the install
+# was a wheel or an editable checkout. The system python knows neither.
+#
+# `--optional` is the whole contract: every step reports its own failure and
+# exits 0, so an unreachable host or a proxy leaves a working raven that says
+# what is absent when asked rather than an install that stopped halfway.
+#
+# Both halves do run here. The deepdoc fetch needs huggingface-hub, which is
+# not a declared dependency but arrives under litellm, which is -- so it is
+# there on every install. If litellm ever drops it the fetch does not break the
+# install, it reports itself missing and the models stay unfetched.
+install_resources() {
+  py="$(uv tool dir 2>/dev/null || true)/raven/bin/python"
+  if [ ! -x "$py" ]; then
+    warn "raven tool venv python not found; skipping the resource download."
+    return 0
+  fi
+  info "Downloading the word dictionary and parser models..."
+  "$py" -m raven.resources --optional \
+    || warn "Resource download failed; raven still runs. Retry later with: raven resources"
 }
 
 # macOS without Homebrew: the release dmg, pinned the way the cask pins it --
@@ -762,6 +791,7 @@ main() {
   ensure_node
   install_raven
 
+  [ -n "${RAVEN_MINIMAL:-}" ] || install_resources
   [ -n "${RAVEN_MINIMAL:-}" ] || install_browser
   [ -n "${RAVEN_MINIMAL:-}" ] || install_office
   [ -n "${RAVEN_MINIMAL:-}" ] || install_cjk_fonts

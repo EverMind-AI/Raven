@@ -176,6 +176,7 @@ def test_running_uv_tool_replaces_itself_in_custom_directories(tmp_path: Path, s
             "PATH": str(external_tools) + os.pathsep + env["PATH"],
             "UV_TOOL_DIR": str(tool_dir),
             "UV_TOOL_BIN_DIR": str(bin_dir),
+            "RAVEN_HOME": str(tmp_path / "raven home"),
             "RAVEN_UPGRADE_SOURCE": str(Path(__file__).parents[2]),
             "RAVEN_UPGRADE_WHEEL": new_wheel.resolve().as_uri(),
         }
@@ -207,6 +208,7 @@ def test_running_uv_tool_replaces_itself_in_custom_directories(tmp_path: Path, s
         env=env,
         capture_output=True,
         text=True,
+        errors="replace",
         timeout=180,
     )
 
@@ -215,7 +217,7 @@ def test_running_uv_tool_replaces_itself_in_custom_directories(tmp_path: Path, s
     assert "system certificate store" not in completed.stderr, completed.stderr
     # From uv 0.11.9 to 0.12.15 the older name draws a deprecation warning even beside the new one.
     assert "UV_NATIVE_TLS" not in completed.stderr, completed.stderr
-    assert "Raven upgraded: 1.0.0 -> 2.0.0" in completed.stdout
+    assert "Raven upgraded: 1.0.0 -> 2.0.0" in completed.stdout, completed.stderr
     version = subprocess.run(
         [str(executable), "--version"],
         check=True,

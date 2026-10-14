@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+import raven.agent.subagent.backends.env as backend_env
 from raven import home as raven_home
 from raven.rpc.errors import ConfigValidationError
 from raven.rpc.methods import console as rpc_console
@@ -264,7 +265,9 @@ async def test_default_permission_mode_is_a_settings_key(cfg):
         await rpc_console.settings_set({"key": "permissions.mode", "value": "yolo"})
 
 
-async def test_secret_key_writes_string(cfg):
+async def test_secret_key_writes_string(cfg, monkeypatch):
+    # A mirrored key's write takes the login-shell capture again, in the host's own shell.
+    monkeypatch.setattr(backend_env, "refresh_login_shell_env", lambda: True)
     r = await rpc_console.settings_set({"key": "tools.web.search.apiKey", "value": "sk-x"})
     assert r["applied"] is True
     assert _read(cfg)["tools"]["web"]["search"]["apiKey"] == "sk-x"
@@ -762,13 +765,33 @@ class TestTheCronTimezoneControl:
 
         assert r["applied"] is True
         assert _read(cfg)["cron"]["defaultTimezone"] == "Asia/Tokyo"
-        # Landing in the file is half of it: the writer spells the key one way
-        # and the loader has to read that same spelling back. Deliberately not a
-        # claim about scheduling -- ``CronConfig.default_timezone`` has exactly
-        # one consumer today, the ``raven cron config get`` display path, and
-        # ``_compute_next_run`` falls back to the machine's local zone rather
-        # than to this field.
         assert load_config(cfg).cron.default_timezone == "Asia/Tokyo"
+
+    @pytest.mark.parametrize("spelling", ["defaultTimezone", "default_timezone"])
+    async def test_the_saved_default_reaches_new_jobs_on_the_running_service(self, cfg, spelling):
+        from datetime import datetime, timezone
+        from types import SimpleNamespace
+
+        from raven.core.cron_stack import build_cron_service
+
+        cfg.write_text(json.dumps({"cron": {spelling: "UTC"}}), encoding="utf-8")
+        service = build_cron_service(allowed_channels=None)
+        service._now_fn = lambda: datetime(2026, 1, 1, tzinfo=timezone.utc)
+        loop = SimpleNamespace(cron_service=service)
+        params = {"kind": "cron", "expr": "0 9 * * *", "name": "first", "message": "first"}
+        first = (await rpc_console.cron_save(params, agent_loop_factory=lambda: loop))["job"]
+        result = await rpc_console.settings_set({"key": "cron.defaultTimezone", "value": "Asia/Tokyo"})
+        assert result["previous"] == "UTC"
+        assert _read(cfg)["cron"] == {spelling: "Asia/Tokyo"}
+        second = (
+            await rpc_console.cron_save(
+                {**params, "name": "second", "message": "second"}, agent_loop_factory=lambda: loop
+            )
+        )["job"]
+        assert first["tz"] == "UTC"
+        assert second["tz"] == "Asia/Tokyo"
+        assert first["next_run_at_ms"] == int(datetime(2026, 1, 1, 9, tzinfo=timezone.utc).timestamp() * 1000)
+        assert second["next_run_at_ms"] == int(datetime(2026, 1, 2, tzinfo=timezone.utc).timestamp() * 1000)
 
     async def test_the_previous_timezone_comes_back(self, cfg):
         await rpc_console.settings_set({"key": "cron.defaultTimezone", "value": "Asia/Tokyo"})
@@ -783,6 +806,19 @@ class TestTheCronTimezoneControl:
     async def test_an_empty_timezone_is_refused(self, cfg):
         with pytest.raises(ConfigValidationError):
             await rpc_console.settings_set({"key": "cron.defaultTimezone", "value": ""})
+
+    async def test_null_returns_new_jobs_to_local_time(self, cfg):
+        from raven.core.cron_stack import build_cron_service
+        from raven.proactive_engine.schedulers.cron.types import CronSchedule
+
+        await rpc_console.settings_set({"key": "cron.defaultTimezone", "value": "Asia/Tokyo"})
+        r = await rpc_console.settings_set({"key": "cron.defaultTimezone", "value": None})
+
+        assert r["previous"] == "Asia/Tokyo"
+        job = build_cron_service(allowed_channels=None).add_job(
+            "daily", CronSchedule(kind="cron", expr="0 9 * * *"), "daily"
+        )
+        assert job.schedule.tz is None
 
 
 async def test_the_retired_forward_channels_key_is_not_writable(cfg):
@@ -1219,6 +1255,115 @@ async def test_settings_set_blocklist_is_a_raw_list(cfg):
         await rpc_console.settings_set({"key": "skillForge.blocklist", "value": "codeword"})
 
 
+@pytest.mark.parametrize("spelling", ["skillForge", "skill_forge"])
+@pytest.mark.parametrize("section", [None, {"autoInstall": "off"}])
+async def test_settings_set_blocklist_preserves_the_section_spelling(cfg, spelling, section):
+    from raven.config.raven import load_raven_config
+
+    cfg.write_text(json.dumps({spelling: section}), encoding="utf-8")
+    result = await rpc_console.settings_set({"key": "skillForge.blocklist", "value": ["codeword"]})
+
+    assert result == {"applied": True, "previous": None}
+    assert _read(cfg) == {spelling: {**(section or {}), "blocklist": ["codeword"]}}
+    assert load_raven_config(config_path=cfg).skill_forge.blocklist == ["codeword"]
+
+
+@pytest.mark.parametrize("spelling", ["skillForge", "skill_forge"])
+@pytest.mark.parametrize("invalid", [[], 0, 1, "invalid", False])
+async def test_settings_set_blocklist_preserves_invalid_sections(cfg, spelling, invalid):
+    cfg.write_text(json.dumps({spelling: invalid}), encoding="utf-8")
+    before = cfg.read_bytes()
+
+    with pytest.raises(ConfigValidationError, match="non-object"):
+        await rpc_console.settings_set({"key": "skillForge.blocklist", "value": ["codeword"]})
+
+    assert cfg.read_bytes() == before
+
+
+@pytest.mark.parametrize("snake_active", [False, True])
+@pytest.mark.parametrize(
+    "camel,snake,field,previous,value",
+    [
+        ("skillForge", "skill_forge", "blocklist", ["a"], ["zed"]),
+        ("sessionTitle", "session_title", "model", "old/model", "openai/new"),
+        ("skillForge", "skill_forge", "llmGateModel", "old/model", "openai/new"),
+    ],
+)
+async def test_settings_leaf_write_follows_the_non_null_alias(cfg, snake_active, camel, snake, field, previous, value):
+    from raven.config.raven import load_raven_config
+
+    active, empty = (snake, camel) if snake_active else (camel, snake)
+    cfg.write_text(json.dumps({empty: None, active: {field: previous}}), encoding="utf-8")
+    load_raven_config(config_path=cfg)
+
+    result = await rpc_console.settings_set({"key": f"{camel}.{field}", "value": value})
+
+    assert result == {"applied": True, "previous": previous}
+    assert _read(cfg) == {empty: None, active: {field: value}}
+    load_raven_config(config_path=cfg)
+
+
+@pytest.mark.parametrize("snake_active", [False, True])
+@pytest.mark.parametrize(
+    "camel,snake,model_field,provider_field,keep",
+    [
+        ("sessionTitle", "session_title", "model", "provider", {"enabled": False}),
+        ("skillForge", "skill_forge", "llmGateModel", "llmGateProvider", {"llmGateEnabled": True}),
+    ],
+)
+async def test_settings_pin_merge_follows_the_non_null_alias(
+    cfg, snake_active, camel, snake, model_field, provider_field, keep
+):
+    from raven.config.raven import load_raven_config
+
+    active, empty = (snake, camel) if snake_active else (camel, snake)
+    previous = {model_field: "old/model", provider_field: "openai"}
+    value = {model_field: "openai/new", provider_field: "openai"}
+    cfg.write_text(json.dumps({empty: None, active: {**keep, **previous}}), encoding="utf-8")
+    load_raven_config(config_path=cfg)
+
+    result = await rpc_console.settings_set({"key": camel, "value": value})
+
+    assert result == {"applied": True, "previous": previous}
+    assert _read(cfg) == {empty: None, active: {**keep, **value}}
+    load_raven_config(config_path=cfg)
+
+
+async def test_settings_write_initializes_one_of_two_null_aliases(cfg):
+    from raven.config.raven import load_raven_config
+
+    cfg.write_text(json.dumps({"skillForge": None, "skill_forge": None}), encoding="utf-8")
+
+    result = await rpc_console.settings_set({"key": "skillForge.blocklist", "value": ["zed"]})
+
+    assert result == {"applied": True, "previous": None}
+    assert _read(cfg) == {"skillForge": {"blocklist": ["zed"]}, "skill_forge": None}
+    assert load_raven_config(config_path=cfg).skill_forge.blocklist == ["zed"]
+
+
+@pytest.mark.parametrize("invalid", [[], 0, False, "invalid"])
+async def test_settings_write_refuses_an_invalid_alias_beside_null(cfg, invalid):
+    cfg.write_text(json.dumps({"skillForge": None, "skill_forge": invalid}), encoding="utf-8")
+    before = cfg.read_bytes()
+
+    with pytest.raises(ConfigValidationError, match="non-object"):
+        await rpc_console.settings_set({"key": "skillForge.blocklist", "value": ["zed"]})
+
+    assert cfg.read_bytes() == before
+
+
+@pytest.mark.parametrize("raw", [{"tools": None}, {"tools": {"media": None}}])
+async def test_settings_set_initializes_null_parents_of_a_merged_object(cfg, raw):
+    cfg.write_text(json.dumps(raw), encoding="utf-8")
+
+    result = await rpc_console.settings_set(
+        {"key": "tools.media.speech", "value": {"model": "tts-1", "quality": "high"}}
+    )
+
+    assert result == {"applied": True, "previous": {"model": None, "quality": None}}
+    assert _read(cfg) == {"tools": {"media": {"speech": {"model": "tts-1", "quality": "high"}}}}
+
+
 async def test_settings_set_media_speech_selection_merges(cfg):
     await rpc_console.settings_set({"key": "tools.media.speech", "value": {"model": "tts-1", "quality": "high"}})
     await rpc_console.settings_set({"key": "tools.media.speech", "value": {"model": "tts-2", "quality": ""}})
@@ -1403,3 +1548,155 @@ async def test_usage_from_to_win_over_days(telemetry):
     r = await rpc_console.settings_usage({"days": 30})
     assert r["llm"]["total"]["calls"] == 1
     assert r["from"] == _iso(29)
+
+
+# ── a second memory backend behind the same page ─────────────────────────
+
+
+@pytest.fixture
+def memory_cfg(tmp_path):
+    """raven's config with a chosen ``memory.backend`` and plugin slices."""
+    import json
+
+    def build(backend, *, cloud=None, everos=None, providers=None):
+        cfg = tmp_path / "config.json"
+        raw: dict = {"memory": {"backend": backend}, "providers": providers or {}, "plugins": {"config": {}}}
+        if cloud is not None:
+            raw["plugins"]["config"]["everos-cloud-memory"] = dict(cloud)
+        if everos is not None:
+            raw["plugins"]["config"]["everos-memory"] = dict(everos)
+        cfg.write_text(json.dumps(raw), encoding="utf-8")
+        raven_home.set_config_path(cfg)
+        return cfg
+
+    yield build
+    raven_home.set_config_path(None)
+
+
+async def test_everos_roles_answer_other_backend_for_the_cloud_and_for_a_stale_name(memory_cfg):
+    for backend in ("everos-cloud", "mem0"):
+        memory_cfg(backend, cloud={"api_key": "k"})
+        out = await rpc_console.settings_everos({})
+        assert out["reason"] == "other_backend" and backend in out["note"]
+        assert set(out["sections"]) == {"embedding"} and set(out["required"]) <= {"embedding"}
+
+
+async def test_everos_roles_hide_every_everos_row_on_a_cloud_only_install(memory_cfg, monkeypatch):
+    """The local plugin absent: still reason other_backend, so the page draws no EverOS row and
+    not the 'plugin isn't installed' pill on each of them; sections is empty because nothing can
+    describe the embedding pin there."""
+    memory_cfg("everos-cloud", cloud={"api_key": "k"})
+    monkeypatch.setattr("raven.core.plugin_stack.everos_plugin_installed", lambda: False)
+    out = await rpc_console.settings_everos({})
+    assert out["available"] is False and out["reason"] == "other_backend" and "everos-cloud" in out["note"]
+    assert out["sections"] == {} and out.get("required", []) == []
+
+
+async def test_everos_roles_unchanged_for_everos_and_none(memory_cfg):
+    for backend in ("everos", None):
+        memory_cfg(backend)
+        out = await rpc_console.settings_everos({})
+        assert out["available"] is True and out.get("reason") is None
+        assert set(out["sections"]) == {"llm", "embedding", "rerank", "multimodal"}
+
+
+@pytest.mark.everos_cloud
+async def test_settings_set_writes_a_declared_plugin_field(memory_cfg):
+    import json
+
+    cfg = memory_cfg("everos-cloud", cloud={"base_url": "http://fake"})
+    out = await rpc_console.settings_set({"key": "plugins.config.everos-cloud-memory.api_key", "value": "ecm-key-rot8"})
+    assert out == {"applied": True, "previous": None}
+    slice_ = json.loads(cfg.read_text())["plugins"]["config"]["everos-cloud-memory"]
+    assert slice_ == {"base_url": "http://fake", "api_key": "ecm-key-rot8"}
+
+
+@pytest.mark.everos_cloud
+async def test_settings_set_refuses_undeclared_wrong_type_and_unknown_plugin(memory_cfg):
+    cfg = memory_cfg("everos-cloud", cloud={"api_key": "k"})
+    before = cfg.read_text()
+    for key, value in (
+        ("plugins.config.everos-cloud-memory.nope", "x"),
+        ("plugins.config.everos-cloud-memory.api_key", 42),
+        ("plugins.config.not-a-plugin.api_key", "x"),
+        ("plugins.config.everos-cloud-memory", {"api_key": "x"}),
+        # Declared, but not settable: the endpoint decides where the stored key goes.
+        ("plugins.config.everos-cloud-memory.base_url", "http://attacker.test"),
+        # A dotted field and an empty plugin id never reach the slice.
+        ("plugins.config.everos-cloud-memory.api_key.x", "x"),
+        ("plugins.config..api_key", "x"),
+    ):
+        with pytest.raises(ConfigValidationError) as exc:
+            await rpc_console.settings_set({"key": key, "value": value})
+        assert key in str(exc.value)
+    assert cfg.read_text() == before
+
+
+@pytest.mark.everos_cloud
+@pytest.mark.parametrize(
+    ("mode", "status", "fragment"),
+    [("ok", "ok", "http://cloud.test"), ("401", "missing", "rejected (401)")],
+)
+async def test_everos_cloud_status_reports_key_source_and_health(memory_cfg, monkeypatch, mode, status, fragment):
+    import httpx
+
+    from tests._everos_cloud_fake import FakeCloud
+
+    memory_cfg("everos-cloud", cloud={"api_key": "ecm-key-7f3a", "base_url": "http://cloud.test"})
+    fake = FakeCloud(mode=mode)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real_client(transport=fake.transport(), **kw))
+    out = await rpc_console.settings_everos_cloud({})
+    assert out["available"] is True and out["selected"] is True
+    assert out["api_key_set"] is True and out["key_source"] == "file"
+    assert out["base_url"] == "http://cloud.test" and out["status"] == status and fragment in out["hint"]
+    assert fake.ledger[0]["headers"]["authorization"] == "Bearer ecm-key-7f3a"
+
+
+@pytest.mark.everos_cloud
+async def test_everos_cloud_status_without_a_key_or_selection(memory_cfg, monkeypatch):
+    monkeypatch.delenv("EVEROS_CLOUD_API_KEY", raising=False)
+    memory_cfg("everos", cloud={})
+    out = await rpc_console.settings_everos_cloud({})
+    assert out["selected"] is False and out["api_key_set"] is False and out["status"] is None
+    memory_cfg("everos-cloud", cloud={})
+    out = await rpc_console.settings_everos_cloud({})
+    assert out["selected"] is True and out["status"] == "missing" and "no API key" in out["hint"]
+
+
+async def test_provider_save_does_not_restart_everos_for_the_cloud_backend(memory_cfg, monkeypatch):
+    applied: list = []
+    monkeypatch.setattr(rpc_console, "_everos_applied", lambda factory, cost="": applied.append(factory))
+    providers = {"openrouter": {"apiKey": "sk-x", "models": ["anthropic/claude-sonnet-4.5"]}}
+    memory_cfg(
+        "everos-cloud",
+        everos={"llm": {"model": "anthropic/claude-sonnet-4.5", "provider": "openrouter"}},
+        providers=providers,
+    )
+    rpc_console.everos_follows_provider("openrouter", object())
+    assert applied == []
+    # Memory off: nothing runs on EverOS, so a provider save restarts nothing (spec C9's one exception, H15).
+    memory_cfg(
+        None, everos={"llm": {"model": "anthropic/claude-sonnet-4.5", "provider": "openrouter"}}, providers=providers
+    )
+    rpc_console.everos_follows_provider("openrouter", object())
+    assert applied == []
+    memory_cfg(
+        "everos",
+        everos={"llm": {"model": "anthropic/claude-sonnet-4.5", "provider": "openrouter"}},
+        providers=providers,
+    )
+    rpc_console.everos_follows_provider("openrouter", object())
+    assert len(applied) == 1
+
+
+async def test_role_write_is_refused_for_the_cloud_backend(memory_cfg):
+    memory_cfg("everos-cloud", cloud={"api_key": "k"})
+    for section in ("llm", "rerank", "multimodal"):
+        with pytest.raises(ConfigValidationError) as exc:
+            await rpc_console.settings_everos_set({"section": section, "model": "m", "provider": "p"})
+        assert "everos-cloud" in str(exc.value)
+    # Embedding stays writable: knowledge bases size themselves to that pin.
+    with pytest.raises(ConfigValidationError) as exc:
+        await rpc_console.settings_everos_set({"section": "embedding", "model": "m", "provider": "p"})
+    assert "everos-cloud" not in str(exc.value)  # refused for its own reason (no such provider), not the backend's

@@ -415,7 +415,9 @@ def identity_text(
             " — your own skills, not a place for user artifacts.\n"
             "  - Memory is not yours to write: what is relevant is recalled into the `# Memory`\n"
             "    section each turn, and the host persists the conversation after it ends. You\n"
-            "    cannot observe that write, so never report it to the user as done or as failed."
+            "    cannot observe that write, so never report it to the user as done or as failed.\n"
+            f"  - Episodic log, read-only: {home_path}/user_memory/episodic/episodes.md "
+            "(grep-searchable; the host appends to it, you do not)."
         )
     else:
         home_memory = (

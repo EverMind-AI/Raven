@@ -1109,7 +1109,7 @@ describe('subagents island, an instance detail', () => {
     setSources({ composer: {
       upload: async (req: { name: string; content_b64: string }) => {
         uploaded.push(`${req.name}:${req.content_b64}`)
-        return { path: `uploads/${req.name}`, size: 3 }
+        return { path: `uploads/${req.name}`, abs_path: `/home/me/.raven/workspace/uploads/${req.name}`, size: 3 }
       },
     } as unknown as ComposerSource })
     await mount()
@@ -1142,8 +1142,9 @@ describe('subagents island, an instance detail', () => {
     await act(async () => {
       await Promise.resolve()
     })
-    /* The fake shell's T returns the key: the note is `gui.att.note` itself. */
-    expect(said).toEqual(['have a look\n\ngui.att.note\n- uploads/a.txt'])
+    /* The fake shell's T returns the key: the note is `gui.att.note` itself. The
+       upload is named by the file it wrote, as the main composer names one. */
+    expect(said).toEqual(['have a look\n\ngui.att.note\n- /home/me/.raven/workspace/uploads/a.txt'])
     expect(box.value).toBe('')
     expect(document.querySelector('.sasend .att')).toBeNull()
   })

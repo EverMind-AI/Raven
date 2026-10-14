@@ -8,12 +8,15 @@ those, so the property it pins is one somebody already proved was unguarded.
 from __future__ import annotations
 
 import asyncio
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+import raven.agent.subagent.backends.env as backend_env
 import raven.home as raven_home_module
 from raven.config import update_tools
 from raven.config.env_file import MIRRORED_KEYS
@@ -81,6 +84,8 @@ def test_the_settings_whitelist_is_exactly_this_set() -> None:
         "translate.provider",
         "embedding.model",
         "embedding.provider",
+        "vision.model",
+        "vision.provider",
         # The pair keys. No new reach over the six leaves above: each delegates
         # to their validators and writes the same two fields. What it adds is
         # that both land in one transaction, which is what a settings surface
@@ -88,6 +93,7 @@ def test_the_settings_whitelist_is_exactly_this_set() -> None:
         "sessionTitle",
         "translate",
         "embedding",
+        "vision",
         # No new reach: the same key has been writable through config.set (the
         # chip and /perm) since the gate landed; this lets the settings panel
         # write the default a new conversation starts on.
@@ -828,10 +834,11 @@ def _agent_home(monkeypatch, home: Path):
 
 
 async def test_fs_upload_lands_in_agent_home_not_the_session_workdir(tmp_path: Path, monkeypatch) -> None:
-    """The relative path this returns rides back to ``turn.send``, which resolves
-    an attachment against agent home and fences it there. Deposited in the
-    session's working directory instead, the file exists and the turn still drops
-    it, so the reader hands over an attachment the model never sees."""
+    """Agent home is the one root always writable: a session's working
+    directory is wherever the engine was launched from, and an engine the
+    desktop shell started inherits ``/``, where ``uploads/`` cannot be created.
+    ``turn.send`` admits agent home whatever the session's root, with
+    ``tools.restrict_to_workspace`` on as well."""
     import base64
 
     home = tmp_path / "home"
@@ -874,6 +881,42 @@ async def test_fs_upload_survives_a_session_workdir_that_takes_no_files(tmp_path
     assert r["path"] == "uploads/image.png"
 
 
+async def test_fs_upload_survives_a_session_root_it_may_not_read(tmp_path: Path, monkeypatch) -> None:
+    """The name check reads the session's own ``uploads/`` as well, and a pinned
+    folder the engine may not read -- one macOS keeps from it, another user's
+    directory -- answers with EACCES, which ``Path.exists`` raises instead of
+    answering False. Agent home can still name the upload, so the check gives
+    way rather than failing it as -32603. Denied by a stub: root reads through
+    any mode, so a chmod would prove nothing on the box that runs this."""
+    import base64
+
+    home = tmp_path / "home"
+    home.mkdir()
+    project = tmp_path / "project"
+    (project / "uploads").mkdir(parents=True)
+    _agent_home(monkeypatch, home)
+    denied = project.resolve()
+    refused: list[str] = []
+    real_exists = Path.exists
+
+    def exists(self: Path, *args, **kwargs) -> bool:
+        if Path(self).is_relative_to(denied):
+            refused.append(Path(self).name)
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_exists(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "exists", exists)
+
+    r = await console_module.fs_upload(
+        {"name": "image.png", "content_b64": base64.b64encode(b"bytes").decode(), "session": "web:1"},
+        agent_loop_factory=_loop_factory(_WorkdirLoop({}, project)),
+    )
+
+    assert refused == ["image.png"], "the session's folder was asked, and refused"
+    assert r["path"] == "uploads/image.png"
+    assert (home / "uploads" / "image.png").read_bytes() == b"bytes"
+
+
 async def test_fs_upload_names_the_directory_it_could_not_create(tmp_path: Path, monkeypatch) -> None:
     """An unwritable agent home is a real configuration, and the page can only
     report what the error carries: unguarded, ``mkdir`` escaped as -32603 with
@@ -893,6 +936,105 @@ async def test_fs_upload_names_the_directory_it_could_not_create(tmp_path: Path,
         )
 
     assert "uploads" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("method", ["fs_upload", "deck_templates_pick"])
+@pytest.mark.parametrize("context", ["draft_launch", "draft_gateway", "draft_pinned", "draft_process", "session"])
+async def test_attachment_deposits_keep_relative_paths_unambiguous(
+    tmp_path: Path, monkeypatch, method, context
+) -> None:
+    import base64
+
+    from raven.agent.workdir import WorkdirPolicy, WorkdirResolver
+    from raven.rpc.files import viewer_root
+
+    home = tmp_path / "home"
+    launch = tmp_path / "launch"
+    channels = tmp_path / "channels"
+    pinned = tmp_path / "pinned"
+    policy = WorkdirPolicy.LAUNCH_DIR if context == "draft_launch" else WorkdirPolicy.PER_CHANNEL
+    resolver = WorkdirResolver(
+        policy,
+        agent_home=home,
+        launch_dir=launch,
+        session_root=channels,
+        explicit_workdir=launch if context == "draft_process" else None,
+    )
+    session = "tui:existing" if context == "session" else "tui:"
+    project = pinned if context in {"draft_pinned", "session"} else resolver.resolve(session, create=False)
+    loop = SimpleNamespace(peek_session_workdir=lambda key: resolver.resolve(key, create=False))
+    if context == "session":
+        loop = _WorkdirLoop({session: project}, resolver.resolve("", create=False))
+    _agent_home(monkeypatch, home)
+    (home / "uploads").mkdir(parents=True)
+    (project / "uploads").mkdir(parents=True)
+    (project / "uploads" / "amber.pptx").write_bytes(b"project original")
+    (home / "uploads" / "amber-1.pptx").write_bytes(b"previous upload")
+    (project / "uploads" / "amber-2.pptx").write_bytes(b"project second")
+    params = {"name": "amber.pptx", "session": session}
+    if context in {"draft_pinned", "draft_process"}:
+        params["workdir"] = str(pinned)
+    if context == "draft_pinned":
+        loop = _WorkdirLoop({}, channels / "tui")
+    if method == "fs_upload":
+        params["content_b64"] = base64.b64encode(b"new attachment").decode()
+        expected = b"new attachment"
+    else:
+        _bundled_templates(monkeypatch, tmp_path / "templates", ("amber",))
+        expected = b"PKamber"
+
+    handler = getattr(console_module, method)
+    for suffix in (3, 4):
+        result = await handler(params, agent_loop_factory=_loop_factory(loop))
+        assert result["path"] == f"uploads/amber-{suffix}.pptx"
+        relative = Path(result["path"])
+        resolved = viewer_root(project, relative, home) / relative
+        assert resolved == Path(result["abs_path"])
+        assert resolved.read_bytes() == expected
+    assert (project / "uploads" / "amber.pptx").read_bytes() == b"project original"
+    assert (project / "uploads" / "amber-2.pptx").read_bytes() == b"project second"
+    assert (home / "uploads" / "amber-1.pptx").read_bytes() == b"previous upload"
+
+
+@pytest.mark.parametrize("method", ["fs_upload", "deck_templates_pick"])
+@pytest.mark.parametrize("workdir", ["relative", "home", "parent", "memory"])
+async def test_attachment_deposits_validate_draft_workdirs(tmp_path: Path, monkeypatch, method, workdir) -> None:
+    import base64
+
+    home = tmp_path / "home"
+    _agent_home(monkeypatch, home)
+    _bundled_templates(monkeypatch, tmp_path / "templates", ("amber",))
+    paths = {"relative": "project", "home": str(home), "parent": str(tmp_path), "memory": str(home / "user_memory")}
+    params = {"name": "amber.pptx", "session": "tui:", "workdir": paths[workdir]}
+    if method == "fs_upload":
+        params["content_b64"] = base64.b64encode(b"attachment").decode()
+
+    with pytest.raises(ConfigValidationError, match="working directory"):
+        await getattr(console_module, method)(params, agent_loop_factory=_loop_factory(None))
+    assert not (home / "uploads" / "amber.pptx").exists()
+
+
+async def test_deck_templates_pick_survives_an_unreadable_session_root(tmp_path: Path, monkeypatch) -> None:
+    home = tmp_path / "home"
+    project = tmp_path / "project"
+    _agent_home(monkeypatch, home)
+    _bundled_templates(monkeypatch, tmp_path / "templates", ("amber",))
+    real_exists = Path.exists
+    refused = []
+
+    def exists(path: Path, *args, **kwargs) -> bool:
+        if path.is_relative_to(project):
+            refused.append(path)
+            raise PermissionError("session directory is unreadable")
+        return real_exists(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "exists", exists)
+    result = await console_module.deck_templates_pick(
+        {"name": "amber", "session": "tui:pinned"},
+        agent_loop_factory=_loop_factory(_WorkdirLoop({"tui:pinned": project}, tmp_path / "default")),
+    )
+    assert refused == [project / "uploads" / "amber.pptx"]
+    assert Path(result["abs_path"]).read_bytes() == b"PKamber"
 
 
 async def test_fs_root_survives_a_loop_without_the_resolver(tmp_path: Path) -> None:
@@ -934,7 +1076,7 @@ async def test_fs_reveal_selects_the_file_in_the_host_file_manager(
 
 async def test_fs_reveal_finds_an_uploaded_attachment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The page sends one string to two surfaces. A panel row is relative to the
-    session's working directory; an attachment chip carries ``uploads/<name>``,
+    session's working directory; an attachment chip can carry ``uploads/<name>``,
     which only agent home holds -- so rooting at the workdir alone made Reveal
     fail on the very file the viewer had just rendered from that same string."""
     home = tmp_path / "raven-home"
@@ -1622,6 +1764,23 @@ def test_the_mirror_cases_cover_every_mirrored_key() -> None:
     assert [key for key, _ in _MIRRORED_KEY_ENV_VARS] == list(MIRRORED_KEYS)
 
 
+@pytest.fixture
+def retaken(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
+    """Each time a write takes the login-shell capture again, recorded rather than run.
+
+    The real one runs the login shell of whoever started pytest.
+    """
+    calls: list[bool] = []
+
+    def refresh() -> bool:
+        calls.append(True)
+        return True
+
+    monkeypatch.setattr(backend_env, "refresh_login_shell_env", refresh)
+    return calls
+
+
+@pytest.mark.usefixtures("retaken")
 @pytest.mark.parametrize(("key", "env_var"), _MIRRORED_KEY_ENV_VARS)
 async def test_settings_set_refreshes_the_shell_env_mirror(
     settings_cfg: Path, tmp_path: Path, key: str, env_var: str
@@ -1648,6 +1807,58 @@ async def test_settings_set_of_an_unrelated_key_does_not_create_the_mirror(setti
     await console_module.settings_set({"key": "tools.exec.timeout", "value": 42})
 
     assert not (tmp_path / ".raven" / "env").exists()
+
+
+@pytest.mark.parametrize("key", MIRRORED_KEYS)
+async def test_a_mirrored_key_write_takes_the_login_shell_capture_again(
+    settings_cfg: Path, retaken: list[bool], key: str
+) -> None:
+    """A sub-agent reads the mirror through that capture, and a running raven keeps the one it took."""
+    await console_module.settings_set({"key": key, "value": "rotated"})
+
+    assert retaken == [True]
+
+
+async def test_an_unrelated_key_write_leaves_the_login_shell_capture_alone(
+    settings_cfg: Path, retaken: list[bool]
+) -> None:
+    await console_module.settings_set({"key": "tools.exec.timeout", "value": 42})
+
+    assert retaken == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the mirror is a POSIX shell file")
+async def test_a_rotated_key_reaches_the_capture_the_next_spawn_reads(
+    settings_cfg: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rewriting the mirror alone left every later spawn on the key it replaced until a restart.
+
+    The login shell is a real bash that sources the mirror and nothing else, so
+    the test reads neither the host's profile nor its login shell.
+    """
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("needs bash to source the mirror")
+    mirror = tmp_path / ".raven" / "env"
+    real_run = subprocess.run
+
+    def run(argv, *args, **kwargs):
+        if list(argv[1:]) == ["-lic", "env -0"]:
+            argv = [bash, "--noprofile", "--norc", "-c", f'. "{mirror}"; env -0']
+        return real_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(backend_env, "_LOGIN_ENV", None)
+    monkeypatch.setattr(backend_env, "_LOGIN_ENV_FAILED", False)
+    monkeypatch.setattr(backend_env, "_on_windows", lambda: False)
+    monkeypatch.setenv("SHELL", "/bin/bash")
+    monkeypatch.setattr(subprocess, "run", run)
+    key = "tools.web.providers.tavily.apiKey"
+
+    await console_module.settings_set({"key": key, "value": "tvly-first"})
+    assert backend_env.login_shell_env()["TAVILY_API_KEY"] == "tvly-first"
+
+    await console_module.settings_set({"key": key, "value": "tvly-second"})
+    assert backend_env.login_shell_env()["TAVILY_API_KEY"] == "tvly-second"
 
 
 async def test_settings_set_writes_the_config_in_the_shared_formatting(settings_cfg: Path) -> None:
@@ -2610,7 +2821,7 @@ async def test_deck_templates_pick_says_why_when_the_copy_cannot_land(tmp_path: 
     _agent_home(monkeypatch, home)
     _bundled_templates(monkeypatch, tmp_path / "tpl", ("mint_memphis_thesis_defense",))
 
-    def full_disk(template, uploads, *_):
+    def full_disk(template, uploads, *_, **kwargs):
         raise OSError(28, "No space left on device")
 
     monkeypatch.setattr(deck_templates, "deposit", full_disk)
@@ -2731,3 +2942,49 @@ def test_viewer_root_leaves_every_other_path_with_the_session(tmp_path: Path, mo
 
     assert console_module.viewer_root(session, Path("notes/secret.md")) == session
     assert console_module.viewer_root(session, Path("uploads/absent.png")) == session
+
+
+def test_viewer_root_tells_an_upload_by_where_its_path_lands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An upload is a path that lands in agent home's ``uploads/``, in either spelling.
+
+    The first segment is not the test: ``uploads/../notes/secret.md`` starts like
+    an upload and lands beside it, and a link left under ``uploads/`` can point
+    anywhere, so read by its spelling either reached past the one ambiguity this
+    is for. The absolute spelling of a real upload is an upload too, and it is
+    what the composer stages.
+    """
+    session = tmp_path / "project"
+    session.mkdir()
+    home = tmp_path / "agent-home"
+    (home / "notes").mkdir(parents=True)
+    secret = home / "notes" / "secret.md"
+    secret.write_text("not this session's")
+    (home / "uploads").mkdir()
+    shot = home / "uploads" / "shot.png"
+    shot.write_bytes(b"the picture")
+    (home / "uploads" / "link.md").symlink_to(secret)
+    monkeypatch.setattr(console_module, "_upload_root", lambda: home)
+
+    assert console_module.viewer_root(session, Path("uploads/../notes/secret.md")) == session
+    assert console_module.viewer_root(session, Path("uploads/link.md")) == session
+    assert console_module.viewer_root(session, home / "uploads" / "link.md") == session
+    assert console_module.viewer_root(session, secret) == session
+    assert console_module.viewer_root(session, shot) == home
+
+
+def test_viewer_root_follows_a_linked_agent_home(tmp_path: Path) -> None:
+    """``workspace_path`` is agent home as configured, not resolved, so it can be
+    reached through a link (``turn.send`` hands it over as is): an upload under
+    it is still an upload, in either spelling."""
+    from raven.rpc.files import viewer_root
+
+    session = tmp_path / "project"
+    session.mkdir()
+    real = tmp_path / "agent-home"
+    (real / "uploads").mkdir(parents=True)
+    (real / "uploads" / "shot.png").write_bytes(b"the picture")
+    linked = tmp_path / "linked-home"
+    linked.symlink_to(real)
+
+    assert viewer_root(session, Path("uploads/shot.png"), linked) == linked
+    assert viewer_root(session, real / "uploads" / "shot.png", linked) == linked

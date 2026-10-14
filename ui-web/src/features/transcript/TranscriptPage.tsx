@@ -12,12 +12,14 @@ import { copy } from '../../lib/clipboard'
 import { useTick } from '../../lib/tick'
 import * as lightbox from '../../state/lightbox'
 import { open as openChip } from '../../state/proseChips'
+import * as reveal from '../../state/reveal'
 import { ds } from '../../state/sources'
 import * as dag from '../dag/graph'
 import { getVersion as deliveriesVersion, humanSize, subscribe as deliveriesSubscribe } from '../workspace/deliveries'
 import {
-  fileKind, fileURL, openDelivery as wsOpenDelivery, openPath as wsOpenPath, thumbURL,
+  fileKind, fileURL, openDelivery as wsOpenDelivery, openPath as wsOpenPath, thumbURL, versioned,
 } from '../workspace/store'
+import * as citations from './citations'
 import * as store from './store'
 import * as tail from './tail'
 
@@ -423,6 +425,37 @@ function Dtl({ c, open }: { c: CallData; open: boolean }): ReactElement | null {
     /* Below the pictures, not instead of them: a batch where one entry failed
        has both, and the reader needs both. */
     if (made.saysMore) body.push(dtlPre(c.res, 'out'))
+  } else if (c.name === 'knowledge_search') {
+    /* The query as the head, and the passages under it -- each one pressable,
+       because a citation a reader cannot follow is a claim they have to take
+       on trust. The prose the model got is still below: what the tool said is
+       what the answer was written from, and a card that showed only the
+       document names would hide the words that were actually read. */
+    const query = String(c.args.query || '')
+    head = <DtlHead name={query || t('gui.dtl.plain')} copyText={query || c.res} />
+    const found = citations.of(c.callId)
+    if (found.length && reveal.canOpenDocument()) {
+      body.push(
+        <div key="cites" className="transcript-cites">
+          {found.map((cite, at) => (
+            <button
+              key={`${cite.documentId}-${cite.chunkIndex}-${at}`}
+              className="transcript-cite"
+              onClick={() => reveal.document({
+                baseId: cite.baseId,
+                documentId: cite.documentId,
+                chunkIndex: cite.chunkIndex,
+              })}
+            >
+              <span className="transcript-citen">{at + 1}</span>
+              <span className="transcript-cited">{cite.source}</span>
+              {cite.page !== null && <span className="transcript-citep">{t('gui.dtl.cite_page', { n: cite.page })}</span>}
+            </button>
+          ))}
+        </div>,
+      )
+    }
+    body.push(dtlPre(c.res, 'out'))
   } else if (c.name === 'web_fetch') {
     const url = String(c.args.url || '')
     head = <DtlHead name={url || t('gui.dtl.plain')} copyText={url || c.res} />
@@ -930,7 +963,8 @@ const StepView = memo(function StepView({ lane, seg }: { lane: Lane; seg: StepDa
  *
  * The bytes are in `attachmentCache` for as long as the page that uploaded
  * them is open, and after that the file is where it was put: the composer
- * uploads into the workspace and the message keeps the path. So the cache is
+ * uploads into agent home, or attaches a file where it already is, and the
+ * message keeps the path. So the cache is
  * the fast path and `/file` is the standing one -- without it, every picture
  * in the scrollback turned into a file name the moment the page was reloaded,
  * which is not what the reader sent.
@@ -938,6 +972,10 @@ const StepView = memo(function StepView({ lane, seg }: { lane: Lane; seg: StepDa
  * A file that cannot be fetched falls back to its name rather than to a broken
  * image, the same way a generated shot does: an attachment can outlive the
  * file, and the name is still true when the bytes are gone.
+ *
+ * A drag carries an <img> by its src, and the cached copy's src is the upload's
+ * own data URL, so a dragged picture hands over its file's address instead: the
+ * composer attaches the file it names rather than a second copy of its bytes.
  */
 function AskShot({ path, live }: { path: string; live: boolean }): ReactElement {
   const [gone, setGone] = useState(false)
@@ -954,6 +992,7 @@ function AskShot({ path, live }: { path: string; live: boolean }): ReactElement 
     <img
       className="shot" src={src} alt={name}
       onError={() => setGone(true)}
+      onDragStart={(e) => e.dataTransfer.setData('text/uri-list', new URL(fileURL(String(path)), location.href).href)}
       {...(live ? { title: t('gui.img.open', { name }), onClick: () => lightbox.open(src, name) } : {})}
     />
   )
@@ -1308,9 +1347,12 @@ const DeliveryShot = memo(function DeliveryShot({ row, broken, src }: {
   row: DeliveryRow; broken: () => void; src?: string
 }): ReactElement {
   const [ready, setReady] = useState(false)
+  /* Versioned by the delivery: a path delivered again keeps its token and a
+     thumb is named by its path, so without the stamp the new card's picture
+     is the URL the old card already drew. */
   return (
     <span className={'pic shot' + (ready ? '' : ' skel')}>
-      <img src={src || row.downloadPath} alt="" loading="lazy" decoding="async"
+      <img src={versioned(src || row.downloadPath, row.when)} alt="" loading="lazy" decoding="async"
         onLoad={() => setReady(true)} onError={broken} />
       {ready ? null : <span className="sk" />}
     </span>

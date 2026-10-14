@@ -472,6 +472,7 @@ def test_the_contract_is_seeded_beside_the_identity_once(grounded, tmp_path):
     assert contract.read_text() == "operator tuned"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not available on Windows")
 def test_the_rendered_file_is_owner_only(grounded):
     rendered = grounded.render_config(RUN_PY.parent / "config.json")
     assert stat.S_IMODE(rendered.stat().st_mode) == 0o600
@@ -587,6 +588,7 @@ def test_the_search_env_var_is_the_plugin_tools_own(launcher):
 
 
 def test_the_exec_targets_installed_raven(grounded, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
     calls = []
     monkeypatch.setattr(os, "execv", lambda *a: calls.append(a))
     monkeypatch.setattr(sys, "argv", ["run.py"])

@@ -72,9 +72,7 @@
     "config": {
       "everos-memory": {
         "user_id": "raven-code",
-        "agent_id": "raven-code",
-        "mode": "http",
-        "base_url": "http://localhost:18791"
+        "agent_id": "raven-code"
       },
       "code-flow": {
         "enabled": true,
