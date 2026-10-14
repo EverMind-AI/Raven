@@ -1004,7 +1004,9 @@ def _seed_catalog(monkeypatch, table: dict) -> None:
     monkeypatch.setattr(rates, "_OPENROUTER_CACHE_TIME", 0.0, raising=False)
 
 
-@pytest.mark.parametrize("model", ["ollama/raven-uncached-model", "ollama_chat/raven-uncached-model"])
+@pytest.mark.parametrize(
+    "model", ["ollama/raven-uncached-model", "ollama_chat/raven-uncached-model", "ollama-chat/raven-uncached-model"]
+)
 @pytest.mark.parametrize("lookup", [rates.resolve_context_window, rates.declared_max_output_tokens])
 def test_no_fetch_metadata_does_not_ask_the_ollama_driver_on_a_table_miss(monkeypatch, model, lookup):
     asked = []
@@ -1077,6 +1079,7 @@ def test_no_fetch_metadata_falls_back_to_the_ollama_segment_without_litellms_own
 
     monkeypatch.delattr(litellm_utils, "_is_potential_model_name_in_model_cost")
 
+    assert rates._may_query_endpoint("litellm_proxy/ollama-chat/llama3")
     assert rates._try_litellm_context_window("litellm_proxy/ollama/llama3", allow_fetch=False) is None
     assert rates._try_litellm_context_window("openai/gpt-4o-mini", allow_fetch=False)
 
@@ -1100,10 +1103,14 @@ def test_no_fetch_metadata_answers_a_direct_vendor_the_way_a_fetch_does(model):
     assert rates._try_litellm_max_output(model, allow_fetch=False)
 
 
-@pytest.mark.parametrize("model", ["ollama/raven-uncached-model", "ollama_chat/raven-uncached-model"])
+@pytest.mark.parametrize(
+    "model", ["ollama/raven-uncached-model", "ollama_chat/raven-uncached-model", "ollama-chat/raven-uncached-model"]
+)
 def test_no_fetch_metadata_does_not_reach_the_ollama_daemon(monkeypatch, model):
     from litellm.llms.ollama.completion.transformation import OllamaConfig
 
+    # Route aliases can share LiteLLM's id-keyed cache across parameter cases.
+    import_litellm().get_model_info.cache_clear()
     asked = []
 
     def info(self, model, api_base=None):
@@ -1725,15 +1732,16 @@ def test_a_window_the_endpoint_reported_answers_a_later_cache_only_read(monkeypa
     fallback for a model the daemon had just reported as 8192, on every
     iteration, for the life of the process.
 
-    Keyed by wire spelling: ``ollama/``, ``ollama_chat/`` and ``ollama-chat/``
-    all route to the daemon, and the driver strips the prefix before asking, so
-    one answer is the same answer for all three.
+    Keyed by wire spelling: a window learned through ``ollama_chat/`` is also
+    available through ``ollama/`` and the stored ``ollama-chat/`` spelling.
     """
     hits = _serve_ollama(monkeypatch, 8192)
 
     assert rates.resolve_context_window("ollama_chat/qwen2.5", allow_fetch=True) == 8192
     assert hits == ["/api/show"]
 
+    assert rates._endpoint_memo("ollama-chat/qwen2.5") == (8192, None)
+    assert rates.resolve_context_window("ollama-chat/qwen2.5", allow_fetch=False) == 8192
     assert rates.resolve_context_window("ollama/qwen2.5", allow_fetch=False) == 8192
     assert hits == ["/api/show"], "the later reads were answered without another request"
 
@@ -1744,6 +1752,34 @@ def test_a_window_the_endpoint_reported_answers_a_later_cache_only_read(monkeypa
     # caller bound its own fallback by it, which is where the real number is.
     assert rates.declared_max_output_tokens("ollama/qwen2.5", allow_fetch=False) is None
     assert rates.resolve_max_output_tokens("ollama/qwen2.5", allow_fetch=False) == rates_expected_ceiling(8192)
+
+
+def test_a_configured_ollama_model_learns_its_window_and_reuses_it_without_fetching(monkeypatch):
+    """Follow the stored id through the daemon, cache-only reads and a binding."""
+    from unittest.mock import Mock
+
+    from raven.providers.base import LLMProvider
+    from raven.providers.binding import ModelBinding
+    from raven.providers.wire import stored_model_id
+
+    model = stored_model_id("ollama_chat", "qwen2.5")
+    assert model == "ollama-chat/qwen2.5"
+    hits = _serve_ollama(monkeypatch, 8192)
+    binding = ModelBinding(provider=Mock(spec=LLMProvider), model=model)
+
+    assert rates.resolve_context_window(model, allow_fetch=False) is None
+    assert rates.declared_max_output_tokens(model, allow_fetch=False) is None
+    assert binding.context_window == rates.DEFAULT_CONTEXT_WINDOW_TOKENS
+    assert hits == []
+
+    assert rates.resolve_context_window(model, allow_fetch=True) == 8192
+    assert hits == ["/api/show"]
+
+    assert rates.resolve_context_window(model, allow_fetch=False) == 8192
+    assert rates.declared_max_output_tokens(model, allow_fetch=False) is None
+    assert binding.context_window == 8192
+    assert rates.resolve_max_output_tokens(model, allow_fetch=False) == 4096
+    assert hits == ["/api/show"], "the binding and cache-only lookups must reuse the first answer"
 
 
 def test_a_daemon_that_did_not_answer_teaches_nothing(monkeypatch):

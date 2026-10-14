@@ -150,7 +150,7 @@ def _endpoint_key(name: str) -> str:
 
 def _endpoint_memo(model: str) -> tuple[int, int | None] | None:
     """What the model's own server reported, if it was ever asked."""
-    if not any(part in _ENDPOINT_METADATA_VENDORS for part in model.split("/") if part):
+    if not _names_endpoint_vendor(model):
         return None
     for candidate in _candidates(model):
         found = _ENDPOINT_WINDOWS.get(_endpoint_key(candidate))
@@ -303,6 +303,28 @@ def may_fetch(model: str) -> bool:
 _ENDPOINT_METADATA_VENDORS = frozenset({"ollama", "ollama_chat"})
 
 
+def _names_endpoint_vendor(model: str) -> bool:
+    """Compare endpoint provider segments in the registry's normalized spelling."""
+    from raven.providers.registry import normalize_provider_name
+
+    return any(normalize_provider_name(part) in _ENDPOINT_METADATA_VENDORS for part in model.split("/") if part)
+
+
+def _endpoint_metadata_model(model: str) -> str:
+    """Use LiteLLM's provider spelling for an endpoint metadata lookup.
+
+    Keep ``ollama/`` distinct from ``ollama_chat/``: LiteLLM's static table
+    files the completion route under ``ollama/``, while ``wire_model`` would
+    send both through ``ollama_chat/`` and lose those offline rows.
+    """
+    from raven.providers.registry import litellm_spelling, normalize_provider_name
+
+    provider, separator, name = model.partition("/")
+    if separator and normalize_provider_name(provider) in _ENDPOINT_METADATA_VENDORS:
+        return f"{litellm_spelling(provider)}/{name}"
+    return model
+
+
 def _may_query_endpoint(model: str) -> bool:
     """Would ``get_model_info`` ask this model's own server rather than a table?
 
@@ -326,7 +348,7 @@ def _may_query_endpoint(model: str) -> bool:
     the daemon would be asked about is skipped too: its row, if the table has
     one, is read before the ask.
     """
-    if not any(part in _ENDPOINT_METADATA_VENDORS for part in model.split("/") if part):
+    if not _names_endpoint_vendor(model):
         return False
     try:
         from litellm.utils import _get_potential_model_names, _is_potential_model_name_in_model_cost
@@ -901,6 +923,7 @@ def _try_litellm_max_output(model: str, *, allow_import: bool = True, allow_fetc
     except Exception:
         return None
 
+    model = _endpoint_metadata_model(model)
     for candidate in _candidates(model):
         ceiling = _trustworthy_ceiling(_table_entry(candidate))
         if ceiling:
@@ -1062,6 +1085,7 @@ def _try_litellm_context_window(model: str, *, allow_import: bool = True, allow_
     except Exception:
         return None
 
+    model = _endpoint_metadata_model(model)
     for candidate in _candidates(model):
         # The table before the ask: it holds every model the interactive-login
         # drivers are asked about in practice, and reading it cannot prompt.
