@@ -1625,3 +1625,40 @@ async def test_a_stream_ends_with_either_end_or_the_agent_and_the_other_end_is_t
         {"stream": fifth, "task": "agent@box-1", "reason": "the agent ended"}
     ]
     assert daemon.streams == {}
+
+
+async def test_a_stream_is_refused_when_its_opening_is_malformed_or_the_host_cannot_be_told(tmp_path, daemon):
+    host = _Peer(daemon)
+    token = await _launched(daemon, host, tmp_path)
+    bridge = _Peer(daemon)
+
+    bare = await bridge.ask(protocol.MCP_OPEN, {"task": "agent@box-1", "token": token, "server": "", "lend": "d1"})
+    assert bare["error"]["code"] == -32602 and "non-empty strings" in bare["error"]["message"]
+
+    host.out.close()  # the host's way out is gone, and nobody has noticed yet
+    untold = await bridge.ask(protocol.MCP_OPEN, _opening(token), request_id=2)
+
+    assert untold["error"]["code"] == protocol.STREAM_REFUSED and "could not be told" in untold["error"]["message"]
+    assert daemon.streams == {} and bridge.node.stream is None and daemon.tasks["agent@box-1"].streams == {}
+
+
+async def test_a_frame_for_an_end_that_is_gone_closes_the_stream_while_a_stranger_s_close_or_an_odd_frame_does_nothing(
+    tmp_path, daemon
+):
+    host = _Peer(daemon)
+    token = await _launched(daemon, host, tmp_path)
+    bridge = _Peer(daemon)
+    stream = (await bridge.ask(protocol.MCP_OPEN, _opening(token)))["result"]["stream"]
+
+    await bridge.tell(protocol.MCP_FRAME, {"stream": stream, "text": 5, "end": True})
+    await bridge.tell(protocol.MCP_FRAME, {"stream": True, "text": "x", "end": True})
+    await _Peer(daemon).tell(protocol.MCP_CLOSE, {"stream": stream, "reason": "not mine to close"})
+    assert host.notified(protocol.MCP_FRAME) == [] and stream in daemon.streams
+
+    host.out.close()
+    await bridge.tell(protocol.MCP_FRAME, {"stream": stream, "text": "x", "end": True})
+
+    assert stream not in daemon.streams
+    assert bridge.notified(protocol.MCP_CLOSE) == [
+        {"stream": stream, "task": "agent@box-1", "reason": "the other end of the stream is gone"}
+    ]

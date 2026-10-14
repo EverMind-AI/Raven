@@ -10,11 +10,14 @@ either side does -- with the daemon's refusal on stderr when it never began.
 from __future__ import annotations
 
 import asyncio
+import io
 import json
+import os
 import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -22,7 +25,7 @@ import pytest
 if sys.platform == "win32":
     pytest.skip("the daemon is POSIX: it locks with fcntl and listens on a unix socket", allow_module_level=True)
 
-from raven.node import protocol, server
+from raven.node import bridge, protocol, server
 
 pytestmark = pytest.mark.slow
 
@@ -199,3 +202,181 @@ async def test_a_stream_the_host_closes_ends_the_bridge_and_one_the_daemon_refus
         assert nowhere.returncode == 1 and b"no token for task" in err
     finally:
         await _wind_down(host, running)
+
+
+# ---- the bridge run in this process, on the daemon's socket ----------------------------------------
+
+
+class _Out:
+    """What the bridge writes to the agent, as its stdout would take it."""
+
+    def __init__(self) -> None:
+        self.data = b""
+
+    def write(self, data: bytes) -> None:
+        self.data += data
+
+    def flush(self) -> None:
+        pass
+
+    def lines(self) -> list[bytes]:
+        return self.data.splitlines()
+
+
+def _carry(root: Path, stdin: asyncio.StreamReader, out: _Out, **kw: Any) -> asyncio.Task[int]:
+    opts = {"task": "a@box-1", "lend": "d1", "server_name": "pg", **kw}
+    return asyncio.create_task(bridge.run_mcp_async(root, stdin=stdin, out=out, **opts))
+
+
+async def test_run_in_this_process_the_bridge_carries_frames_both_ways_and_leaves_when_the_agent_closes_its_stdin(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "n"
+    running, host = await _daemon(root, monkeypatch)
+    await host.ask(
+        2, protocol.AGENT_LAUNCH, {"channel": 1, "task": "a@box-1", "command": "sleep 30", "cwd": str(tmp_path)}
+    )
+    stdin, out = asyncio.StreamReader(), _Out()
+    carrying = _carry(root, stdin, out)
+    try:
+        stdin.feed_data(b'{"jsonrpc":"2.0","id":1,"method":"initialize"}\n')
+        await host.until(lambda: host.notified(protocol.MCP_FRAME))
+        assert host.notified(protocol.MCP_OPEN) == [{"task": "a@box-1", "stream": 1, "server": "pg", "lend": "d1"}]
+        assert host.notified(protocol.MCP_FRAME) == [
+            {"stream": 1, "text": '{"jsonrpc":"2.0","id":1,"method":"initialize"}', "end": True}
+        ]
+
+        await host.tell(protocol.MCP_FRAME, {"stream": 1, "text": '{"jsonrpc":"2.0","id":1,"result":{}}', "end": True})
+        big = '{"jsonrpc":"2.0","id":2,"result":"' + "x" * (protocol.MCP_CHUNK + 10) + '"}'
+        for text, end in protocol.pieces(big.encode()):
+            await host.tell(protocol.MCP_FRAME, {"stream": 1, "text": text, "end": end})
+        await host.until(lambda: len(out.lines()) == 2)
+        assert out.lines() == [b'{"jsonrpc":"2.0","id":1,"result":{}}', big.encode()], "whole lines, however they came"
+
+        long = '{"jsonrpc":"2.0","id":3,"params":"' + "y" * (protocol.MCP_CHUNK + 5) + '"}'
+        stdin.feed_data(long.encode() + b"\n")
+        await host.until(
+            lambda: len(host.notified(protocol.MCP_FRAME)) >= 3 and host.notified(protocol.MCP_FRAME)[-1]["end"]
+        )
+        assert "".join(p["text"] for p in host.notified(protocol.MCP_FRAME)[1:]) == long
+
+        stdin.feed_eof()
+        assert await asyncio.wait_for(carrying, timeout=15) == 0
+        await host.until(lambda: host.notified(protocol.MCP_CLOSE))
+        assert host.notified(protocol.MCP_CLOSE) == [
+            {"stream": 1, "task": "a@box-1", "reason": "the agent closed the server"}
+        ]
+    finally:
+        if not carrying.done():
+            carrying.cancel()
+        await _wind_down(host, running)
+
+
+async def test_the_bridge_says_why_it_never_began_and_why_it_stopped(tmp_path, monkeypatch, capsys):
+    root = tmp_path / "n"
+    running, host = await _daemon(root, monkeypatch)
+    await host.ask(
+        2, protocol.AGENT_LAUNCH, {"channel": 1, "task": "a@box-1", "command": "sleep 30", "cwd": str(tmp_path)}
+    )
+    try:
+        # No token: no node directory of that task's.
+        assert await _carry(tmp_path / "no-such-node", asyncio.StreamReader(), _Out()) == 1
+        assert "no token for task a@box-1" in capsys.readouterr().err
+
+        # A token but no daemon to reach.
+        elsewhere = tmp_path / "elsewhere"
+        server.task_record_dir(elsewhere, "a@box-1").mkdir(parents=True)
+        (server.task_record_dir(elsewhere, "a@box-1") / server.TOKEN_FILE).write_text("tok", encoding="utf-8")
+        assert await _carry(elsewhere, asyncio.StreamReader(), _Out()) == 1
+        assert "cannot reach the daemon under" in capsys.readouterr().err
+
+        # The daemon refuses: the token is not the task's.
+        token = server.task_record_dir(root, "a@box-1") / server.TOKEN_FILE
+        minted = token.read_text(encoding="utf-8")
+        token.write_text("0" * 64, encoding="utf-8")
+        assert await _carry(root, asyncio.StreamReader(), _Out()) == 1
+        assert "the daemon refused the stream: the token is not task" in capsys.readouterr().err
+        token.write_text(minted, encoding="utf-8")
+
+        # A frame of the agent's past the cap ends the bridge, and says so; the host hears the stream end.
+        monkeypatch.setattr(protocol, "MCP_MAX_FRAME", 64)
+        stdin = asyncio.StreamReader()
+        carrying = _carry(root, stdin, _Out())
+        await host.until(lambda: host.notified(protocol.MCP_OPEN))
+        stdin.feed_data(b'{"jsonrpc":"2.0","id":1,"params":"' + b"z" * 100 + b'"}\n')
+        assert await asyncio.wait_for(carrying, timeout=15) == 1
+        assert "ValueError: frame exceeds 64 bytes" in capsys.readouterr().err
+        await host.until(lambda: host.notified(protocol.MCP_CLOSE))
+        assert host.notified(protocol.MCP_CLOSE)[-1]["reason"] == "the bridge ended"
+    finally:
+        await _wind_down(host, running)
+
+
+async def test_the_bridge_reads_only_its_stream_s_frames_off_the_daemon_and_leaves_when_told_the_stream_is_over(
+    tmp_path,
+):
+    """A stand-in daemon on the socket: what the bridge makes of lines that are not its stream's, and of a close."""
+    openings: list[dict[str, Any]] = []
+
+    async def answering(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        openings.append(json.loads(await reader.readline()))
+        for line in (
+            b'{"jsonrpc":"2.0","id":1,"result":{"stream":7}}\n',
+            b"not json\n",
+            b'["not an object"]\n',
+            b'{"jsonrpc":"2.0","method":"mcp/frame","params":{"stream":2,"text":"other","end":true}}\n',
+            b'{"jsonrpc":"2.0","method":"mcp/frame","params":{"stream":7,"text":5,"end":false}}\n',
+            b'{"jsonrpc":"2.0","method":"something/else","params":{"stream":7}}\n',
+            b'{"jsonrpc":"2.0","method":"mcp/frame","params":{"stream":7,"text":"a","end":false}}\n',
+            b'{"jsonrpc":"2.0","method":"mcp/frame","params":{"stream":7,"text":"b","end":true}}\n',
+            b'{"jsonrpc":"2.0","method":"mcp/close","params":{"stream":7,"reason":"the dispatch ended"}}\n',
+        ):
+            writer.write(line)
+        await writer.drain()
+        await reader.read()
+        writer.close()
+
+    async def silent(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await reader.readline()
+        writer.close()
+
+    async def refusing(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await reader.readline()
+        writer.write(b'{"jsonrpc":"2.0","id":1,"error":{"code":-32015,"message":"no host holds task"}}\n')
+        await writer.drain()
+        writer.close()
+
+    out = _Out()
+    for name, handler, want in (("a", answering, 0), ("b", silent, 1), ("c", refusing, 1)):
+        root = tmp_path / name
+        server.task_record_dir(root, "a@box-1").mkdir(parents=True)
+        (server.task_record_dir(root, "a@box-1") / server.TOKEN_FILE).write_text("tok", encoding="utf-8")
+        daemon = await asyncio.start_unix_server(handler, path=str(server.socket_path(root)))
+        try:
+            assert await asyncio.wait_for(_carry(root, asyncio.StreamReader(), out), timeout=15) == want
+        finally:
+            daemon.close()
+            await daemon.wait_closed()
+
+    assert openings == [
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "mcp/open",
+            "params": {"task": "a@box-1", "lend": "d1", "server": "pg", "token": "tok"},
+        }
+    ]
+    assert out.lines() == [b"ab"], "its own stream's frame, put together; nothing of the rest"
+
+
+def test_run_mcp_takes_the_agent_s_stdin_as_a_pipe_and_keeps_its_stdout_for_frames(tmp_path, monkeypatch, capsys):
+    read_end, write_end = os.pipe()
+    frames = io.BytesIO()
+    with os.fdopen(read_end, "rb") as stdin:
+        monkeypatch.setattr(sys, "stdin", stdin)
+        monkeypatch.setattr(sys, "stdout", SimpleNamespace(buffer=frames))
+        rc = bridge.run_mcp(tmp_path / "no-such-node", task="a@box-1", lend="d1", server_name="pg")
+    os.close(write_end)
+
+    assert rc == 1 and "no token for task a@box-1" in capsys.readouterr().err
+    assert frames.getvalue() == b"", "nothing but frames goes to the agent"
