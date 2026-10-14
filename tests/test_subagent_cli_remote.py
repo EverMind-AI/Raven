@@ -173,6 +173,8 @@ async def test_a_cli_dispatch_runs_on_the_machine_in_a_directory_made_there_and_
     assert Path(head.strip()).resolve() == there.resolve(), "the command ran in it"
     assert note.startswith("Ran on machine 'Lab box' (box), in ")
     assert f"in scp://worker@{HOST}:{PORT}//{str(there.resolve()).lstrip('/')};" in note
+    where = note.split("in scp://", 1)[1].split(";", 1)[0]
+    assert where.split("@", 1)[1].split(":", 1)[0] == HOST, "the address a model reads is the registry's, never the id"
     assert "the files it wrote are there, not on this computer" in note
     assert not local.exists(), "the caller's workspace is never touched"
     for argv in box.calls():
