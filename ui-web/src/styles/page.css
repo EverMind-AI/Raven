@@ -5389,7 +5389,7 @@ body:has(#onb:not([hidden])) .mpick { z-index: calc(var(--z-onboarding) + 1); }
   .backpill { transition: bottom .18s ease; }
 }
 
-#deskHost { --desk-anchor-width: 0px; --desk-launcher-size: 30px; --desk-launcher-edge: 12px;
+#deskHost { --desk-anchor-width: 0px; --desk-launcher-size: 30px; --desk-launcher-edge: 50px;
   --desk-palette-gap: 12px; --desk-launcher-center: 27px;
   position: fixed; inset: 0; z-index: var(--z-desk); pointer-events: none; }
 /* The desk hangs off the workspace's left edge while the workspace is a column

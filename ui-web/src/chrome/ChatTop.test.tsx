@@ -17,10 +17,12 @@ import { readFileSync } from 'node:fs'
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import * as exportWizard from '../features/export/store'
 import * as rail from '../features/rail/store'
 import * as trajectory from '../features/trajectory/store'
 import { absorb, resetCapabilities } from '../rpc/capabilities'
 import * as lang from '../state/lang'
+import * as menu from '../state/menu'
 import { _resetFreshForTests, pitch, unpitch } from '../state/session/conversation'
 import { resetSources, setSources } from '../state/sources'
 import { mountPageRoot } from '../test/pageRoot'
@@ -80,6 +82,7 @@ describe('the chat column chrome', () => {
       'wdTag',
       'spacer',
       'wsBtn',
+      'moreBtn',
     ])
     expect(Array.from(el('scroll').children).map((child) => child.id)).toEqual([
       'bannerHost',
@@ -184,16 +187,26 @@ describe('the chat column chrome and the trajectory view', () => {
     detail: () => Promise.reject(new Error('not scripted')),
     block: () => Promise.reject(new Error('not scripted')),
   }
+  /* The wizard the menu opens lists the turns; its answer never lands here,
+     because this file answers for the button, not for the wizard. */
+  const exportSource = {
+    turns: () => new Promise<never>(() => undefined),
+    start: () => Promise.reject(new Error('not scripted')),
+    status: () => Promise.reject(new Error('not scripted')),
+    cancel: async () => ({ ok: true }),
+  }
 
   beforeEach(() => {
     trajectory._resetForTests()
     resetCapabilities()
     _resetFreshForTests()
-    setSources({ trajectory: trajectorySource })
+    setSources({ trajectory: trajectorySource, export: exportSource })
   })
 
   afterEach(() => {
     trajectory._resetForTests()
+    exportWizard._resetForTests()
+    menu._resetForTests()
     resetSources()
     resetCapabilities()
   })
@@ -239,7 +252,7 @@ describe('the chat column chrome and the trajectory view', () => {
     const btn = el('trajBtn')
     expect(btn.getAttribute('aria-pressed')).toBe('false')
     expect(Array.from(top().children).map((child) => child.id || child.className)).toEqual([
-      'title', 'wdTag', 'spacer', 'trajBtn', 'wsBtn',
+      'title', 'wdTag', 'spacer', 'trajBtn', 'wsBtn', 'moreBtn',
     ])
     const ta = document.getElementById('ta') as HTMLTextAreaElement
     ta.value = 'half a thought'
@@ -271,6 +284,41 @@ describe('the chat column chrome and the trajectory view', () => {
     expect(el('scroll').hasAttribute('data-parked')).toBe(false)
     expect(el('trajHost').hidden).toBe(true)
     expect(trajectory.get().view).toBe('chat')
+  })
+
+  /* The conversation menu sits in the corner whatever the conversation is, so
+     the launcher beside it never moves; what changes is whether it acts. */
+  it('keeps the menu button in the corner and enables it exactly when the view is offered', async () => {
+    render()
+    const more = (): HTMLButtonElement => el('moreBtn') as HTMLButtonElement
+    expect(more().disabled).toBe(true)
+    expect(more().getAttribute('aria-haspopup')).toBe('menu')
+    absorb(['trajectory-v1'])
+    trajectory.install()
+    await act(async () => { await trajectory.refreshState() })
+    act(() => { trajectory.sessionChanged('gui:a') })
+    expect(more().disabled).toBe(true)
+    act(() => { unpitch() })
+    expect(more().disabled).toBe(false)
+    act(() => { pitch() })
+    expect(more().disabled).toBe(true)
+    act(() => { more().click() })
+    expect(menu.get().items).toEqual([])
+  })
+
+  it('raises one Export row under the button, and the row opens the wizard on this conversation', async () => {
+    render()
+    await offer()
+    act(() => { el('moreBtn').click() })
+    const items = menu.get().items
+    expect(items).toHaveLength(1)
+    const [row] = items as menu.MenuItem[]
+    expect(row!.label).toBe('Export')
+    expect(el('menu').dataset.open).toBe('true')
+    act(() => { menu.pick(row!) })
+    expect(el('menu').dataset.open).toBe('false')
+    expect(exportWizard.get().open).toBe(true)
+    expect(exportWizard.get().sessionKey).toBe('gui:a')
   })
 
   it('reaches for no element of its own: the toggle is drawn from the store alone', () => {

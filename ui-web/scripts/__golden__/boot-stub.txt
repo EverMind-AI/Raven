@@ -88,6 +88,9 @@ div.app[data-rail=on]
               rect
               path
             span#wsBdg.bdg
+          button#moreBtn.ghost-ic.tipdn[data-tip]
+            svg
+              path
         div#scroll.scroll
           div#bannerHost
           div#flash.flash

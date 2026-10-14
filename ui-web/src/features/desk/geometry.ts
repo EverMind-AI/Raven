@@ -32,8 +32,12 @@ export const DESK_DEFAULT_HEIGHT = 340
 /* The launcher's own inset from the chat's right edge, and the gap left between
    the panel and the text so the two do not touch. The first MUST agree with
    `--desk-launcher-edge` in the stylesheet, which is what actually places the
-   panel -- the same pairing `anchoredGeometry` keeps with `[data-anchored]`. */
-export const DESK_LAUNCHER_EDGE = 12
+   panel -- the same pairing `anchoredGeometry` keeps with `[data-anchored]`.
+   50 is the old 12 plus one header slot (a 28px button and the header's 10px
+   gap): the corner slot is the conversation menu's (#moreBtn), and the
+   launcher stands over the panel toggle one slot in, with the panel hanging
+   under it. */
+export const DESK_LAUNCHER_EDGE = 50
 export const DESK_TEXT_GAP = 12
 /* The narrowest transcript the reserve will leave behind. Below it the reserve
    is not taken at all -- see `deskReserve`, where measuring showed that taking

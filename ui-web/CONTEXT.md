@@ -410,7 +410,9 @@ layer is open.
 
 **Export Wizard**:
 The dialog `#exportVeil` holds (`src/App.tsx` renders the veil, the box and the
-empty `#exportBody`), drawn by `features/export/`. A flow is a sequence of
+empty `#exportBody`), drawn by `features/export/` and opened from the header's
+conversation menu (`#moreBtn` in `src/chrome/ChatTop.tsx`, the corner slot,
+with the desk launcher one slot in over `#wsBtn`). A flow is a sequence of
 pages -- the export is the turn picker, then the export page -- and the picker drops out when the conversation has a single
 finished turn. The export runs as a gateway job (`trajectory.export`) the page
 follows through `trajectory.export_status` and downloads with the job's link.
@@ -419,7 +421,7 @@ or running; every answer is checked against the wizard's `epoch`, so a job
 whose start lands after its wizard closed is cancelled on arrival, and a status
 query that fails keeps the same job and asks again rather than starting
 another. `exportable` is the one place that says whether the conversation on
-screen may be exported.
+screen may be exported, and the menu button is disabled exactly when it says no.
 
 **Menu**:
 `src/state/menu.ts` plus `<ContextMenu/>` (`src/App.tsx`) -- the one context
