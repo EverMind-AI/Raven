@@ -233,8 +233,9 @@ def _capture_windows(*, consequence: str) -> dict[str, str] | None:
     upper-case names ``os.environ`` gives them on Windows, which is the spelling
     every reader of this capture asks for.
 
-    ``None`` when neither store can be read, which is the "capture failed"
-    signal the caller falls back on.
+    ``None`` when neither store can be read, or when a stored Path cannot be
+    expanded (a cyclic, too deeply nested or oversized reference): either is
+    the "capture failed" signal the caller falls back on.
     """
     import winreg
 
