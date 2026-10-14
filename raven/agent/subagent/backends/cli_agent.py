@@ -1270,29 +1270,30 @@ class CliAgentBackend:
         rest over as it comes -- a cli run's reply is the whole of its
         output, read from the start -- and the exit code ends it, as a run
         here ends (``_exec_there``). Raises
-        :class:`raven.acp_client.remote_resume.UnreachableError` when the
+        :class:`raven.acp_client.remote_pickup.UnreachableError` when the
         machine cannot be asked, or this computer stops under the pick-up,
         so the record stays for a later start; every other outcome is a
         ``PickedUp``, and the record is the caller's to remove.
         """
-        from raven.acp_client import remote, remote_resume
+        from raven.acp_client import remote
+        from raven.acp_client.remote_pickup import PICKED_UP_NOTE, PickedUp, UnreachableError
         from raven.ops import remote_path
 
         link = pool if pool is not None else remote_path.nodes()
         if link is None:
-            raise remote_resume.UnreachableError(
+            raise UnreachableError(
                 f"this process does not reach registered machines, so the run on machine {run.machine} waits"
             )
         try:
             target = remote.machine(run.machine)
         except remote.RemoteMachineError as exc:
-            return remote_resume.PickedUp("error", f"the run of {run.agent!r} cannot be picked up: {exc}")
+            return PickedUp("error", f"the run of {run.agent!r} cannot be picked up: {exc}")
         try:
             rows = await link.tasks(run.machine)
         except remote_path.NodeCallError as exc:
-            raise remote_resume.UnreachableError(str(exc)) from None
+            raise UnreachableError(str(exc)) from None
         if not any(row.get("task") == run.task for row in rows):
-            return remote_resume.PickedUp(
+            return PickedUp(
                 "error",
                 f"machine {target.label} no longer has the run of {run.agent!r} (task {run.task}); "
                 "its record there was removed, or the machine's node directory was",
@@ -1301,8 +1302,8 @@ class CliAgentBackend:
             endpoint, _attached = await link.attach(run.machine, run.task, name=run.agent, after=0)
         except remote_path.NodeCallError as exc:
             if exc.reason in ("unknown_task", None) and "no longer runs" in str(exc):
-                return remote_resume.PickedUp("error", str(exc))
-            raise remote_resume.UnreachableError(str(exc)) from None
+                return PickedUp("error", str(exc))
+            raise UnreachableError(str(exc)) from None
         out_lines: list[str] = []
         err_lines: list[str] = []
 
@@ -1322,29 +1323,27 @@ class CliAgentBackend:
             raise
         if (why := endpoint.ended()) is not None:
             if remote.leaving():
-                raise remote_resume.UnreachableError(
+                raise UnreachableError(
                     f"this computer stopped while the run of {run.agent!r} on machine {target.label} was being "
                     "picked up; it waits for the next start"
                 )
-            return remote_resume.PickedUp(
+            return PickedUp(
                 "error", f"the run of {run.agent!r} on machine {target.label} ended while this computer was away: {why}"
             )
         stdout = "".join(f"{line}\n" for line in out_lines)
         stderr = "".join(f"{line}\n" for line in err_lines)
         if rc != 0:
             said = _human_failure(stdout, stderr)
-            return remote_resume.PickedUp(
-                "error", f"CLI agent {run.agent!r} exited {rc}" + (f": {said}" if said else "")
-            )
+            return PickedUp("error", f"CLI agent {run.agent!r} exited {rc}" + (f": {said}" if said else ""))
         try:
             _jsonl_id, parsed = self._transcript(stdout)
         except CliAgentReportedError as exc:
-            return remote_resume.PickedUp("error", str(exc))
+            return PickedUp("error", str(exc))
         output = await clamp_output(self._reply_from(stdout, stderr, parsed), self.max_output_chars, agent=self.name)
-        return remote_resume.PickedUp(
+        return PickedUp(
             "ok",
             output + f"\n\n[raven] Ran on machine {target.label}, in {remote.shown(target, run.session_cwd)}, "
-            f"{remote_resume.PICKED_UP_NOTE}; the files it wrote are there, not on this computer.",
+            f"{PICKED_UP_NOTE}; the files it wrote are there, not on this computer.",
         )
 
     async def _attempt(

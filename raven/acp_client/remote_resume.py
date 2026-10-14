@@ -14,7 +14,6 @@ and a cli entry's run is read by the entry itself (``CliAgentBackend.pick_up``).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
 from loguru import logger
@@ -24,23 +23,9 @@ from raven.acp_client.acp_agent import AcpAgentBackend, _prompt_deadline, _TurnC
 from raven.acp_client.acp_dialects import dialect_for
 from raven.acp_client.pool import get_pool
 from raven.acp_client.protocol import AcpConnectionError, AcpTimeoutError
+from raven.acp_client.remote_pickup import PICKED_UP_NOTE, PickedUp, UnreachableError
 from raven.acp_client.remote_runs import RemoteRun
 from raven.ops import remote_path
-
-#: What the reply of a picked-up turn ends with: the reader learns it crossed a restart.
-PICKED_UP_NOTE = "picked up after this computer restarted"
-
-
-class UnreachableError(RuntimeError):
-    """The machine could not be asked: the record stays, for a later start."""
-
-
-@dataclass(frozen=True)
-class PickedUp:
-    status: str
-    """``ok`` with the reply, or ``error`` with the sentence that says why there is none."""
-    reply: str
-    stop_reason: Any = None
 
 
 class _Span:
