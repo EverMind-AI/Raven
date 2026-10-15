@@ -15,6 +15,9 @@ Proactive Engine 包含 Sentinel，以及按时间触发的 Cron 和 Heartbeat �
 | Cron | 明确安排一个定时任务或提醒 | 用户创建的计划 |
 | Heartbeat | 在 `HEARTBEAT.md` 中维护周期性任务 | 独立计时器或提前唤醒请求 |
 
+在网页设置中编辑已有 Cron 任务时，任务会保留原来的消息渠道与收件人。修改名称、指令或
+执行时间不会将投递目标改成本地应用。在网页设置中新建的任务使用本地应用作为目标。
+
 Sentinel 默认关闭（`sentinel.enabled=false`）。启用它不会自动开启任务发现；关闭它也不会
 关闭 Cron 或 Heartbeat。各自的命令见[命令参考](commands.md)。
 
