@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 from raven.agent.tools import snapshot
 
@@ -145,3 +146,12 @@ def test_a_tool_whose_files_land_on_another_machine_gets_no_listing(tmp_path: Pa
 def test_a_tool_that_cannot_say_runs_where_the_lane_does(tmp_path: Path) -> None:
     assert snapshot.root_for(object(), {"command": "make"}, tmp_path) == tmp_path
     assert snapshot.root_for(None, {"command": "make"}, str(tmp_path)) == tmp_path
+
+
+def test_snapshot_deadline_discards_partial_results(tmp_path, monkeypatch):
+    (tmp_path / "a.py").touch()
+    (tmp_path / "b.py").touch()
+    ticks = iter([0, 0, 2])
+    monkeypatch.setattr(snapshot, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
+    assert snapshot.take(tmp_path, deadline=1) is None
+    assert len(snapshot.take(tmp_path)) == 2

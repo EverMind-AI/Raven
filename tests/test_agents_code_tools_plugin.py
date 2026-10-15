@@ -223,6 +223,207 @@ def test_the_verdict_is_python_only_and_a_switch(tmp_path):
     assert "syntax" not in _text(_run(quiet.execute(file_path=str(tmp_path / "h.py"), content="def f(:\n")))
 
 
+def test_undefined_name_feedback_identifies_the_binding_and_keeps_the_edit(registry, tmp_path):
+    target = tmp_path / "undefined.py"
+    source = "def double():\n    return missing_value * 2\n"
+    result = _text(_run(registry.execute("write_file", {"file_path": str(target), "content": source})))
+    assert "F821" in result and "missing_value" in result and "line 2" in result
+    assert "spelling, scope, import, or assignment order" in result
+    assert target.read_text() == source
+
+
+def test_existing_name_errors_do_not_reappear_when_unrelated_lines_move(registry, tmp_path):
+    target = tmp_path / "existing.py"
+    target.write_text("old_result = preexisting_missing\nvalue = 1\n")
+    _run(registry.execute("read_file", {"file_path": str(target)}))
+    result = _text(
+        _run(
+            registry.execute(
+                "edit_file",
+                {
+                    "file_path": str(target),
+                    "old_string": "old_result =",
+                    "new_string": "\nold_result =",
+                },
+            )
+        )
+    )
+    assert "F821" not in result
+    result = _text(
+        _run(
+            registry.execute(
+                "edit_file",
+                {
+                    "file_path": str(target),
+                    "old_string": "value = 1",
+                    "new_string": "value = newly_missing",
+                },
+            )
+        )
+    )
+    assert "F821" in result and "newly_missing" in result
+    assert "preexisting_missing" not in result
+
+
+def test_import_notices_are_optional_and_explain_side_effects(tmp_path):
+    source = "import os\n"
+    quiet = factories.make_write_file(_ctx(tmp_path, {"enabled": True}))
+    result = _text(_run(quiet.execute(file_path=str(tmp_path / "quiet_import.py"), content=source)))
+    assert "F401" not in result
+    enabled = factories.make_write_file(_ctx(tmp_path, {"enabled": True, "pythonUnusedImports": True}))
+    target = tmp_path / "notice_import.py"
+    result = _text(_run(enabled.execute(file_path=str(target), content=source)))
+    assert "NOTICE" in result and "F401" in result and "side effects" in result
+    assert target.read_text() == source
+
+
+def test_name_checks_handle_nested_scopes_and_public_exports(registry, tmp_path):
+    source = (
+        "from os import path\n__all__ = ['path']\n"
+        "def outer(value):\n    def inner():\n        return value + len([])\n    return inner\n"
+    )
+    result = _text(
+        _run(
+            registry.execute(
+                "write_file",
+                {
+                    "file_path": str(tmp_path / "scopes.py"),
+                    "content": source,
+                },
+            )
+        )
+    )
+    assert "Python diagnostics" not in result
+
+
+def test_name_checks_can_be_disabled_without_disabling_syntax_feedback(tmp_path):
+    tool = factories.make_write_file(_ctx(tmp_path, {"enabled": True, "pythonLint": False}))
+    target = tmp_path / "syntax_only.py"
+    assert "F821" not in _text(_run(tool.execute(file_path=str(target), content="result = missing\n")))
+    assert "syntax error" in _text(_run(tool.execute(file_path=str(target), content="def f(:\n")))
+
+
+def test_append_checks_the_complete_file_and_suppresses_preexisting_errors(registry, tmp_path):
+    target = tmp_path / "append.py"
+    target.write_text("old = existing_missing\n")
+    result = _text(
+        _run(
+            registry.execute(
+                "write_file",
+                {
+                    "file_path": str(target),
+                    "content": "new = added_missing\n",
+                    "mode": "append",
+                },
+            )
+        )
+    )
+    assert "added_missing" in result and "existing_missing" not in result
+
+
+@pytest.mark.parametrize(
+    ("source", "code"),
+    [
+        ("__all__ = ['missing_export']\n", "F822"),
+        ("value = 1\ndef f():\n    print(value)\n    value = 2\n", "F823"),
+    ],
+)
+def test_name_feedback_covers_exports_and_use_before_local_assignment(registry, tmp_path, source, code):
+    target = tmp_path / "binding.py"
+    out = _text(_run(registry.execute("write_file", {"file_path": str(target), "content": source})))
+    assert code in out
+    assert target.read_text() == source
+
+
+@pytest.mark.parametrize(
+    ("source", "warns"),
+    [
+        ("value = injected_name  # noqa\n", False),
+        ("value = injected_name  # noqa: F821, F401\n", False),
+        ("value = injected_name  # noqa: F401\n", True),
+        ("# ruff: noqa: F821\nvalue = injected_name\n", False),
+        ("# flake8: noqa\nvalue = injected_name\n", False),
+        ("label = '# noqa'; value = injected_name\n", True),
+        ("label = '# ruff: noqa'\nvalue = injected_name\n", True),
+    ],
+)
+def test_explicit_noqa_comments_suppress_only_the_requested_checks(registry, tmp_path, source, warns):
+    target = tmp_path / "ignored.py"
+    out = _text(_run(registry.execute("write_file", {"file_path": str(target), "content": source})))
+    assert ("WARNING" in out) is warns
+
+
+def test_syntax_errors_are_not_hidden_by_noqa(registry, tmp_path):
+    source = "# ruff: noqa\ndef f(:\n"
+    out = _text(_run(registry.execute("write_file", {"file_path": str(tmp_path / "syntax.py"), "content": source})))
+    assert "Python syntax error" in out and "project's Python version" in out
+
+
+def test_checker_failure_does_not_turn_a_successful_write_into_a_failure(registry, tmp_path, monkeypatch):
+    from pyflakes import checker
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("checker broke")
+
+    monkeypatch.setattr(checker, "Checker", broken)
+    target = tmp_path / "kept.py"
+    result = _run(registry.execute("write_file", {"file_path": str(target), "content": "value = 1\n"}))
+    assert "diagnostics unavailable (RuntimeError)" in _text(result)
+    assert result.file_change.after == target.read_text() == "value = 1\n"
+    assert "Successfully wrote" in _text(result)
+
+
+def test_identical_rewrite_does_not_repeat_diagnostics(registry, tmp_path):
+    target = tmp_path / "same.py"
+    args = {"file_path": str(target), "content": "value = missing\n"}
+    assert "F821" in _text(_run(registry.execute("write_file", args)))
+    assert "Python diagnostics" not in _text(_run(registry.execute("write_file", args)))
+
+
+def test_diagnostics_bound_source_and_findings_without_executing_code(tmp_path):
+    from code_flow.tools.diagnostics import MAX_FINDINGS, MAX_SOURCE_BYTES, PythonDiagnostics
+
+    target = tmp_path / "source.py"
+    sentinel = tmp_path / "must_not_exist"
+    text = f"open({str(sentinel)!r}, 'w').close()\n"
+    diagnostics = PythonDiagnostics()
+    assert diagnostics.note(target, text, before=None) == ""
+    assert not sentinel.exists()
+    assert diagnostics.note(target, "#" * (MAX_SOURCE_BYTES + 1), before=None) == ""
+    note = diagnostics.note(target, "\n".join(f"value_{i} = missing_{i}" for i in range(20)), before=None)
+    assert note.count("WARNING:") == MAX_FINDINGS
+    assert "12 more findings omitted" in note
+
+
+def test_python_source_read_is_bounded_and_respects_its_encoding(tmp_path):
+    from code_flow.tools.diagnostics import MAX_SOURCE_BYTES, UNKNOWN, read_python
+
+    target = tmp_path / "encoded.py"
+    assert read_python(target) is None
+    target.write_bytes(b"# coding: latin-1\nname = 'caf\xe9'\n")
+    assert "caf\N{LATIN SMALL LETTER E WITH ACUTE}" in read_python(target)
+    target.write_bytes(b"x" * (MAX_SOURCE_BYTES + 1))
+    assert read_python(target) is UNKNOWN
+    assert read_python(tmp_path) is UNKNOWN
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_wait_is_bounded_and_cancellation_is_preserved(tmp_path, monkeypatch):
+    from code_flow.tools import diagnostics
+
+    async def stalled(*args, **kwargs):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(diagnostics, "CHECK_WAIT_SECONDS", 0.01)
+    monkeypatch.setattr(diagnostics.asyncio, "to_thread", stalled)
+    note = await diagnostics.PythonDiagnostics().check(tmp_path / "slow.py", text="value = 1\n")
+    assert "diagnostics unavailable (TimeoutError)" in note
+    task = asyncio.create_task(diagnostics.PythonDiagnostics().check(tmp_path / "cancelled.py", text="value = 1\n"))
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
 # --- occurrence -----------------------------------------------------------------------
 
 
