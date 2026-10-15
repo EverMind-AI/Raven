@@ -22,6 +22,7 @@ from raven.config import update_tools
 from raven.config.env_file import MIRRORED_KEYS
 from raven.config.schema import WEB_VENDOR_ENV_VARS
 from raven.contracts.tool import Tool
+from raven.rpc import folder_dialog
 from raven.rpc.errors import ConfigValidationError
 from raven.rpc.methods import console as console_module
 from raven.rpc.methods.console import _SETTINGS_SIMPLE_KEYS, _hub_marker_name
@@ -2283,7 +2284,7 @@ def _dialog_answers(monkeypatch, answer: str | None) -> list[list[str]]:
 
     The command itself is stood in for as well, because which one a host has is
     not what these cases are about: a headless runner has neither zenity nor
-    kdialog, and without this they failed at `_pick_dir_argv` before reaching
+    kdialog, and without this they failed at `pick_dir_argv` before reaching
     the answer they were written to pin.
     """
     asked: list[list[str]] = []
@@ -2292,7 +2293,7 @@ def _dialog_answers(monkeypatch, answer: str | None) -> list[list[str]]:
         asked.append(argv)
         return answer
 
-    monkeypatch.setattr(console_module, "_pick_dir_argv", lambda: ["dialog"])
+    monkeypatch.setattr(console_module, "pick_dir_argv", lambda: ["dialog"])
     monkeypatch.setattr(console_module, "_run_pick_dir", run)
     return asked
 
@@ -2329,7 +2330,7 @@ async def test_fs_pick_dir_reads_a_dismissed_dialog_as_no_folder(monkeypatch) ->
 
 
 async def test_fs_pick_dir_refuses_a_host_with_no_dialog(monkeypatch) -> None:
-    monkeypatch.setattr(console_module, "_pick_dir_argv", lambda: None)
+    monkeypatch.setattr(console_module, "pick_dir_argv", lambda: None)
     with pytest.raises(ConfigValidationError, match="no folder dialog"):
         await console_module.fs_pick_dir({})
 
@@ -2362,23 +2363,41 @@ async def test_fs_pick_dir_reports_a_dialog_that_would_not_start(monkeypatch) ->
     async def boom(argv: list[str]) -> str | None:
         raise OSError("dialog: not executable")
 
-    monkeypatch.setattr(console_module, "_pick_dir_argv", lambda: ["dialog"])
+    monkeypatch.setattr(console_module, "pick_dir_argv", lambda: ["dialog"])
     monkeypatch.setattr(console_module, "_run_pick_dir", boom)
     with pytest.raises(ConfigValidationError, match="folder dialog failed"):
         await console_module.fs_pick_dir({})
 
 
 def test_fs_pick_dir_knows_a_dialog_for_each_desktop(monkeypatch) -> None:
-    """One command per platform, the Linux one only where a tool is on PATH."""
-    monkeypatch.setattr(console_module.sys, "platform", "darwin")
-    assert console_module._pick_dir_argv()[0] == "osascript"
-    monkeypatch.setattr(console_module.sys, "platform", "win32")
-    assert console_module._pick_dir_argv()[0] == "powershell"
-    monkeypatch.setattr(console_module.sys, "platform", "linux")
-    monkeypatch.setattr(console_module.shutil, "which", lambda name: name == "kdialog")
-    assert console_module._pick_dir_argv()[0] == "kdialog"
-    monkeypatch.setattr(console_module.shutil, "which", lambda name: False)
-    assert console_module._pick_dir_argv() is None
+    """One command per platform, the Linux one only where a tool is on PATH and
+    there is a display to show it on (see the next case)."""
+    monkeypatch.setattr(folder_dialog.sys, "platform", "darwin")
+    assert folder_dialog.pick_dir_argv()[0] == "osascript"
+    monkeypatch.setattr(folder_dialog.sys, "platform", "win32")
+    assert folder_dialog.pick_dir_argv()[0] == "powershell"
+    monkeypatch.setattr(folder_dialog.sys, "platform", "linux")
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setattr(folder_dialog.shutil, "which", lambda name: name == "kdialog")
+    assert folder_dialog.pick_dir_argv()[0] == "kdialog"
+    monkeypatch.setattr(folder_dialog.shutil, "which", lambda name: False)
+    assert folder_dialog.pick_dir_argv() is None
+
+
+def test_fs_pick_dir_finds_no_dialog_on_a_linux_host_with_no_display(monkeypatch) -> None:
+    """A tool on PATH is no dialog without a display to put it on: neither one
+    can start without, and a dialog that exits having printed nothing reads as
+    a dismissal, so the page's click would do nothing at all. Wayland alone is
+    a display."""
+    monkeypatch.setattr(folder_dialog.sys, "platform", "linux")
+    monkeypatch.setattr(folder_dialog.shutil, "which", lambda name: True)
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    assert folder_dialog.pick_dir_argv() is None
+    assert folder_dialog.folder_dialog_available() is False
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    assert folder_dialog.pick_dir_argv()[0] == "zenity"
+    assert folder_dialog.folder_dialog_available() is True
 
 
 async def test_fs_dirs_refuses_a_relative_path_and_a_file(tmp_path: Path, monkeypatch) -> None:

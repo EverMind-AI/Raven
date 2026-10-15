@@ -513,6 +513,20 @@ async def test_hello_leaves_the_trajectory_surface_out_once_the_policy_is_off(tr
     assert "trajectory-v1" not in result["server_capabilities"]
 
 
+async def test_hello_announces_a_folder_dialog_only_where_the_host_has_one(monkeypatch) -> None:
+    """The page offers the host's own folder dialog on this announcement alone:
+    a gateway in a container, or on a headless box reached through a forwarded
+    port, is served at a loopback address all the same and has none to open."""
+    from raven.rpc import folder_dialog
+
+    monkeypatch.setattr(folder_dialog, "pick_dir_argv", lambda: ["dialog"])
+    result = await system_hello({"client_version": "0.1.0"})
+    assert "folder-dialog-v1" in result["server_capabilities"]
+    monkeypatch.setattr(folder_dialog, "pick_dir_argv", lambda: None)
+    result = await system_hello({"client_version": "0.1.0"})
+    assert "folder-dialog-v1" not in result["server_capabilities"]
+
+
 async def test_hello_defaults_to_the_shared_local_channel() -> None:
     """The terminal and the served page share one session pool, so they share
     one channel: a browser that opened `raven serve` finds the conversations it

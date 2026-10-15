@@ -139,7 +139,7 @@ export const workspaceSource: WorkspaceSource = {
      directory, which is where the picker starts (state/workdir.ts). */
   dirs: (path) => gateway().call('fs.dirs', path ? { path } : {}),
   /* The host's own folder dialog, which the picker offers instead of the walk
-     while the host is this desktop (state/workdir.ts). */
+     while the host is this desktop and has one (state/workdir.ts). */
   pickDir: () => gateway().call('fs.pick_dir', {}),
 }
 

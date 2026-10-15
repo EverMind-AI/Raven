@@ -19,6 +19,7 @@ import {
   serves,
   servesBugReport,
   servesChannels,
+  servesFolderDialog,
 } from './capabilities'
 
 beforeEach(() => {
@@ -91,6 +92,12 @@ describe("the handshake's own list", () => {
     expect(servesBugReport()).toBe(false)
     absorb(['jsonrpc-2.0', 'trajectory-v1', 'bugreport-v1'])
     expect(servesBugReport()).toBe(true)
+  })
+  it('offers the host\'s folder dialog only where the gateway announced one', () => {
+    absorb(['jsonrpc-2.0', 'trajectory-v1'])
+    expect(servesFolderDialog()).toBe(false)
+    absorb(['jsonrpc-2.0', 'trajectory-v1', 'folder-dialog-v1'])
+    expect(servesFolderDialog()).toBe(true)
   })
 })
 
