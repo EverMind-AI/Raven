@@ -8,7 +8,10 @@ change to any writer that the reader does not follow fails the reader's tests.
 The source store holds two main-line turns of one session: the first calls the
 model with a v2 shell (optionally over a conversation whose messages together
 are longer than the per-artifact read cap, each one under it), calls a tool and
-dispatches a sub-agent; the second calls the model once more.
+dispatches a sub-agent; the second calls the model once more. An optional
+``secret`` rides in the tool output and in the last reply, where the bug report
+pipeline's pattern scan finds it, so a reader can be shown the placeholder that
+replaced it.
 """
 
 from __future__ import annotations
@@ -98,7 +101,11 @@ def _span(trace: str, span: str, name: str, minute: int, *, parent: str | None =
     return record
 
 
-def write_source(base: Path, *, long_input: bool = False) -> Source:
+def _with(secret: str | None, text: str) -> str:
+    return f"{text} {secret}" if secret else text
+
+
+def write_source(base: Path, *, long_input: bool = False, secret: str | None = None) -> Source:
     """A trace store and a session record under ``base`` holding the two-turn conversation."""
     state = base / "traces"
     workspace = base / "workspace"
@@ -117,7 +124,7 @@ def write_source(base: Path, *, long_input: bool = False) -> Source:
     ]
     first_shell = _shell(state, "a-llm.json", first_call)
     second_shell = _shell(state, "b-llm.json", second_call)
-    tool_out = _artifact(state, "tool.output", "a-tool.txt", "weather: sunny")
+    tool_out = _artifact(state, "tool.output", "a-tool.json", {"result": _with(secret, "weather: sunny")})
     outside = base / "outside-the-store.json"
     outside.write_text("{}", encoding="utf-8")
     sub_out = _artifact(state, "turn.output", "sub-out.json", {"content": "found 3 hotels"})
@@ -168,15 +175,15 @@ def write_source(base: Path, *, long_input: bool = False) -> Source:
     session.add_message("user", FIRST_INPUT, trace_id="trace-a")
     session.add_message("assistant", "found three hotels")
     session.add_message("user", SECOND_INPUT, trace_id="trace-b")
-    session.add_message("assistant", "booked")
+    session.add_message("assistant", _with(secret, "booked"))
     session.set_title(TITLE)
     manager.save(session)
     session_file = manager.session_path(SESSION)
     return Source(state, workspace, session_file, list(session.messages), first_call)
 
 
-def build_export(base: Path, *, long_input: bool = False) -> tuple[Path, Source]:
-    source = write_source(base, long_input=long_input)
+def build_export(base: Path, *, long_input: bool = False, secret: str | None = None) -> tuple[Path, Source]:
+    source = write_source(base, long_input=long_input, secret=secret)
     plan = sel.plan_selection(SESSION, ["trace-a", "trace-b"], answering=False, state_dir=source.state)
     selection = sel.collect_selection(plan, state_dir=source.state)
     cut = sel.cut_session_record(source.session_file, plan, state_dir=source.state)
@@ -186,8 +193,8 @@ def build_export(base: Path, *, long_input: bool = False) -> tuple[Path, Source]
     return out, source
 
 
-def build_report(base: Path, *, long_input: bool = False) -> tuple[Path, Source]:
-    source = write_source(base, long_input=long_input)
+def build_report(base: Path, *, long_input: bool = False, secret: str | None = None) -> tuple[Path, Source]:
+    source = write_source(base, long_input=long_input, secret=secret)
     bundle = collect_bundle("trace-a", base / "bundles", source.state, workspace=source.workspace)
     redacted = base / "redacted" / bundle.name
     redact_bundle(bundle, redacted, secrets=[])
@@ -207,9 +214,13 @@ def _decide_all(items: list[treview.ReviewItem], _reasons: list[str]) -> list[tr
 
 
 def build_bug_report(
-    base: Path, *, description: str = "The hotel was never booked\nsteps follow", long_input: bool = False
+    base: Path,
+    *,
+    description: str = "The hotel was never booked\nsteps follow",
+    long_input: bool = False,
+    secret: str | None = None,
 ) -> tuple[Path, Source]:
-    source = write_source(base, long_input=long_input)
+    source = write_source(base, long_input=long_input, secret=secret)
     with mock.patch.object(breport, "collect_known_secrets", lambda _p: ([], True)):
         prep = breport.prepare_trajectory("trace-a", workspace=source.workspace, state_dir=source.state)
         prep = breport.freeze_export(prep, description=description, severity="high", decide=_decide_all)

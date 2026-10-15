@@ -177,7 +177,7 @@ def test_export_pointer_to_an_unexported_file_becomes_null(tmp_path):
     lines = (staging / "state" / "logs" / "audit-spans.log").read_text(encoding="utf-8").splitlines()
     tool = next(json.loads(line) for line in lines if json.loads(line)["spanId"] == "span-a2")
     assert tool["attributes"]["tool.input.artifact_path"] is None
-    assert tool["attributes"]["tool.output.artifact_path"] == "logs/audit-artifacts/tool.output/2026-10-01/a-tool.txt"
+    assert tool["attributes"]["tool.output.artifact_path"] == "logs/audit-artifacts/tool.output/2026-10-01/a-tool.json"
 
 
 @pytest.mark.parametrize("build", [builders.build_report, builders.build_bug_report])
