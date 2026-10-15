@@ -321,7 +321,10 @@ def _build_meta(
         created_at = _text(metadata.get("created_at"))
         raven_version = _text(metadata.get("raven_version"))
         turns = len(listed)
-        unmatched = [item for item in metadata.get("transcript_unmatched") or [] if isinstance(item, str)]
+        listed_unmatched = metadata.get("transcript_unmatched")
+        unmatched = (
+            [item for item in listed_unmatched if isinstance(item, str)] if isinstance(listed_unmatched, list) else []
+        )
         missing = {
             "artifacts": _count(metadata.get("missing_artifacts")),
             "messages": _count(metadata.get("missing_messages")),
@@ -462,6 +465,10 @@ class ImportRunner:
         self, content_b64: str, source_name: str, *, force: bool = False
     ) -> concurrent.futures.Future[ImportOutcome]:
         future: concurrent.futures.Future[ImportOutcome] = concurrent.futures.Future()
+        # Running before anyone can see it: a running future refuses cancel(),
+        # so a caller that stops waiting -- even before the thread is scheduled
+        # -- cannot call off an import it was granted. Only shutdown stops one.
+        future.set_running_or_notify_cancel()
         with self._lock:
             if self._closed or self._active is not None:
                 raise ImportBusyError("an import is already running")
@@ -469,7 +476,11 @@ class ImportRunner:
                 target=self._run, args=(future, content_b64, source_name, force), name="raven-import", daemon=True
             )
             self._active = (thread, future)
-            thread.start()
+            try:
+                thread.start()
+            except BaseException:
+                self._active = None
+                raise
         return future
 
     def _run(
@@ -480,8 +491,6 @@ class ImportRunner:
         force: bool,
     ) -> None:
         try:
-            if not future.set_running_or_notify_cancel():
-                return
             try:
                 data = base64.b64decode(content_b64, validate=True)
             except (binascii.Error, ValueError) as exc:

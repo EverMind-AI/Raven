@@ -69,7 +69,7 @@ STATE_DIR = "state"
 SPAN_LOG = "logs/audit-spans.log"
 ARTIFACT_ROOT = "logs/audit-artifacts"
 
-_RESERVED_ARTIFACT_DIRS = (artifact_v2.MESSAGES_DIR_NAME, "_blobs")
+_RESERVED_ARTIFACT_DIRS = frozenset(name.casefold() for name in (artifact_v2.MESSAGES_DIR_NAME, "_blobs"))
 _BLOB_NAME = re.compile(r"^([0-9a-f]{2})/([0-9a-f]{40})\.json$")
 _LLM_INPUT_POINTER = "llm.input.artifact_path"
 _POINTER_SUFFIX = ".artifact_path"
@@ -311,18 +311,54 @@ def _artifact_rel(value: Any, artifacts: Path) -> str | None:
     if not isinstance(value, str) or not value.startswith(f"{ARTIFACTS_DIR}/"):
         return None
     rel = value[len(ARTIFACTS_DIR) + 1 :]
-    if not pcheck._safe_relative(rel) or rel.split("/", 1)[0] in _RESERVED_ARTIFACT_DIRS:
+    if not pcheck._safe_relative(rel) or _reserved(rel):
         return None
     candidate = artifacts.joinpath(*rel.split("/"))
     return rel if candidate.is_file() and not candidate.is_symlink() else None
 
 
+def _reserved(rel: str) -> bool:
+    """Whether ``rel`` would land in the message store or the blob store.
+
+    Folded, because a case-insensitive file system makes ``_Messages`` the
+    same directory as ``_messages``.
+    """
+    return rel.split("/", 1)[0].casefold() in _RESERVED_ARTIFACT_DIRS
+
+
+def _collision(dst: Path) -> PackageError:
+    return PackageError(pcheck.CODE_DUPLICATE_MEMBER, f"two package files land on one store path: {dst.name!r}")
+
+
 def _place(src: Path, dst: Path) -> None:
+    """Link ``src`` to ``dst``, or copy it where a link cannot be made; never onto a file already there.
+
+    The link shares its inode with the unpacked original, so writing over an
+    existing target -- which a case-insensitive file system can make of two
+    differently spelled names -- would rewrite the package itself.
+    """
     dst.parent.mkdir(parents=True, exist_ok=True)
     try:
         os.link(src, dst)
+        return
+    except FileExistsError:
+        raise _collision(dst) from None
     except OSError:
-        shutil.copyfile(src, dst)
+        pass
+    try:
+        with src.open("rb") as source, dst.open("xb") as target:
+            shutil.copyfileobj(source, target)
+    except FileExistsError:
+        raise _collision(dst) from None
+
+
+def _write_new(dst: Path, text: str) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with dst.open("x", encoding="utf-8") as out:
+            out.write(text)
+    except FileExistsError:
+        raise _collision(dst) from None
 
 
 def shell_from_v1(payload: Any, store: TraceStore) -> dict[str, Any] | None:
@@ -432,7 +468,7 @@ def _place_artifacts(
         for name in sorted(filenames):
             src = Path(dirpath) / name
             rel = src.relative_to(artifacts).as_posix()
-            if rel.split("/", 1)[0] in _RESERVED_ARTIFACT_DIRS:
+            if _reserved(rel):
                 raise PackageError(pcheck.CODE_BAD_MEMBER_NAME, f"artifact collides with the message store: {rel!r}")
             dst = store_root.joinpath(*rel.split("/"))
             if rel in convert:
@@ -445,8 +481,7 @@ def _place_artifacts(
                         payload = None
                     shell = shell_from_v1(payload, store)
                     if shell is not None:
-                        dst.parent.mkdir(parents=True, exist_ok=True)
-                        dst.write_text(json.dumps(shell, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+                        _write_new(dst, json.dumps(shell, ensure_ascii=False, indent=2, default=str))
                         converted += 1
                         _check_stop(should_stop)
                         continue

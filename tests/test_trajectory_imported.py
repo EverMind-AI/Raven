@@ -224,6 +224,22 @@ def test_odd_metadata_values_fall_back_instead_of_failing(root):
 
 
 @pytest.mark.parametrize(
+    "value,expected",
+    [
+        (7, []),
+        (True, []),
+        ("abc", []),
+        ({"x": 1}, []),
+        (None, []),
+        (["trace-a", 1, None, {"x": 1}, "trace-b"], ["trace-a", "trace-b"]),
+    ],
+)
+def test_transcript_unmatched_of_an_odd_type_falls_back(root, value, expected):
+    meta = imp.import_bytes(_export_bytes(transcript_unmatched=value), "x.tar.gz", root=root).conversation.meta
+    assert meta["transcript_unmatched"] == expected
+
+
+@pytest.mark.parametrize(
     "name,expected",
     [
         ("pkg.tar.gz", "pkg.tar.gz"),
@@ -527,3 +543,51 @@ def test_shutdown_stops_a_running_import(root, monkeypatch):
 def test_shutdown_without_an_import(root):
     runner = imp.ImportRunner(root=lambda: root)
     assert runner.shutdown(timeout=1) is True
+
+
+def test_an_import_granted_before_its_thread_runs_survives_its_caller_leaving(root, monkeypatch):
+    import asyncio
+
+    runner = imp.ImportRunner(root=lambda: root)
+    started = threading.Event()
+    release = threading.Event()
+    real_run = imp.ImportRunner._run
+
+    def late_run(self: imp.ImportRunner, *args: Any) -> None:
+        started.set()
+        assert release.wait(10)
+        real_run(self, *args)
+
+    monkeypatch.setattr(imp.ImportRunner, "_run", late_run)
+    future = runner.try_submit(_b64(_export_bytes()), "x.tar.gz")
+
+    async def caller_leaves() -> None:
+        waiting = asyncio.ensure_future(asyncio.wrap_future(future))
+        await asyncio.sleep(0)
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+
+    asyncio.run(caller_leaves())
+    assert started.wait(5)
+    assert not future.cancelled()
+    release.set()
+    assert future.result(10).status == imp.STATUS_IMPORTED
+    assert len(imp.list_conversations(root)) == 1
+    assert runner.shutdown(timeout=10)
+
+
+def test_a_thread_that_cannot_start_gives_the_slot_back(root, monkeypatch):
+    runner = imp.ImportRunner(root=lambda: root)
+    real_start = threading.Thread.start
+
+    def refuse(self: threading.Thread) -> None:
+        raise RuntimeError("cannot start new thread")
+
+    monkeypatch.setattr(threading.Thread, "start", refuse)
+    with pytest.raises(RuntimeError):
+        runner.try_submit(_b64(_export_bytes()), "x.tar.gz")
+    assert not runner.busy
+    monkeypatch.setattr(threading.Thread, "start", real_start)
+    assert runner.try_submit(_b64(_export_bytes()), "x.tar.gz").result(10).status == imp.STATUS_IMPORTED
+    assert runner.shutdown(timeout=10) is True

@@ -5,6 +5,7 @@ from __future__ import annotations
 import gzip
 import io
 import json
+import os
 import tarfile
 from pathlib import Path
 from typing import Any
@@ -319,7 +320,10 @@ def test_a_package_without_a_session_record_says_so(tmp_path):
         [(f"{EXP}/messages/{'b' * 40}.json", REG, b"{}")],
         [(f"{EXP}/messages/bb/{'B' * 40}.json", REG, b"{}")],
         [(f"{EXP}/artifacts/_messages/aa/x.json", REG, b"{}")],
+        [(f"{EXP}/artifacts/_Messages/aa/x.json", REG, b"{}")],
+        [(f"{EXP}/artifacts/_MESSAGES/aa/x.json", REG, b"{}")],
         [(f"{EXP}/artifacts/_blobs/x", REG, b"{}")],
+        [(f"{EXP}/artifacts/_Blobs/x", REG, b"{}")],
     ],
 )
 def test_names_that_collide_with_the_message_store_are_refused(tmp_path, extra):
@@ -604,3 +608,94 @@ def test_the_package_limit_matches_the_upload_channel():
     from raven.rpc.files import MAX_UPLOAD_BYTES
 
     assert ipkg.MAX_PACKAGE_BYTES == MAX_UPLOAD_BYTES == ImportLimits().max_package_bytes
+
+
+def test_a_case_variant_of_the_message_store_cannot_rewrite_the_package(tmp_path):
+    """The artifact a case-insensitive file system would fold onto a blob is refused before either lands."""
+    message = {"role": "user", "content": "blob"}
+    sha1 = artifact_v2.message_sha1(message)
+    extra = [
+        (f"{EXP}/artifacts/_Messages/{sha1[:2]}/{sha1}.json", REG, b'{"content":"artifact"}'),
+        (f"{EXP}/messages/{sha1[:2]}/{sha1}.json", REG, artifact_v2.message_text(message).encode()),
+    ]
+    path = _write(tmp_path, _raw(_export_entries(extra=extra)))
+    unpacked = _unpack(tmp_path, path)
+    original = unpacked.root / "artifacts" / "_Messages" / sha1[:2] / f"{sha1}.json"
+    with pytest.raises(PackageError) as caught:
+        ipkg.normalize(unpacked, tmp_path / "staging")
+    assert caught.value.code == pcheck.CODE_BAD_MEMBER_NAME
+    assert original.read_bytes() == b'{"content":"artifact"}'
+
+
+@pytest.mark.parametrize(
+    "pointer", ["artifacts/_Messages/aa/x.json", "artifacts/_MESSAGES/aa/x.json", "artifacts/_BLOBS/x"]
+)
+def test_a_pointer_into_a_case_variant_of_a_store_maps_to_nothing(tmp_path, pointer):
+    artifacts = tmp_path / "artifacts"
+    target = artifacts.joinpath(*pointer.split("/")[1:])
+    target.parent.mkdir(parents=True)
+    target.write_text("{}", encoding="utf-8")
+    assert ipkg._artifact_rel(pointer, artifacts) is None
+    assert ipkg._artifact_rel("artifacts/kind/ok.json", artifacts) is None
+    (artifacts / "kind").mkdir()
+    (artifacts / "kind" / "ok.json").write_text("{}", encoding="utf-8")
+    assert ipkg._artifact_rel("artifacts/kind/ok.json", artifacts) == "kind/ok.json"
+
+
+def _source_and_target(tmp_path: Path) -> tuple[Path, Path]:
+    src = tmp_path / "package" / "a.json"
+    src.parent.mkdir(parents=True)
+    src.write_text("original", encoding="utf-8")
+    return src, tmp_path / "state" / "kind" / "a.json"
+
+
+def test_placing_onto_an_existing_file_is_refused_and_changes_nothing(tmp_path):
+    src, dst = _source_and_target(tmp_path)
+    dst.parent.mkdir(parents=True)
+    dst.write_text("already here", encoding="utf-8")
+    with pytest.raises(PackageError) as caught:
+        ipkg._place(src, dst)
+    assert caught.value.code == pcheck.CODE_DUPLICATE_MEMBER
+    assert (src.read_text(encoding="utf-8"), dst.read_text(encoding="utf-8")) == ("original", "already here")
+
+
+def test_placing_copies_where_a_link_cannot_be_made_and_never_over_a_file(tmp_path, monkeypatch):
+    def no_link(*_args: Any) -> None:
+        raise OSError(18, "Invalid cross-device link")
+
+    monkeypatch.setattr(ipkg.os, "link", no_link)
+    src, dst = _source_and_target(tmp_path)
+    ipkg._place(src, dst)
+    assert dst.read_text(encoding="utf-8") == "original"
+    assert os.stat(src).st_ino != os.stat(dst).st_ino
+    src.write_text("changed", encoding="utf-8")
+    with pytest.raises(PackageError) as caught:
+        ipkg._place(src, dst)
+    assert caught.value.code == pcheck.CODE_DUPLICATE_MEMBER
+    assert dst.read_text(encoding="utf-8") == "original"
+
+
+def test_a_converted_shell_is_never_written_over_a_file(tmp_path):
+    dst = tmp_path / "state" / "a.json"
+    dst.parent.mkdir(parents=True)
+    dst.write_text("there", encoding="utf-8")
+    with pytest.raises(PackageError) as caught:
+        ipkg._write_new(dst, "{}")
+    assert caught.value.code == pcheck.CODE_DUPLICATE_MEMBER
+    assert dst.read_text(encoding="utf-8") == "there"
+
+
+def _case_insensitive(directory: Path) -> bool:
+    probe = directory / "CaseProbe"
+    probe.write_text("x", encoding="utf-8")
+    try:
+        return (directory / "caseprobe").exists()
+    finally:
+        probe.unlink()
+
+
+def test_case_folded_names_collide_where_the_file_system_folds_them(tmp_path):
+    if not _case_insensitive(tmp_path):
+        pytest.skip("this file system tells names apart by case")
+    extra = [(f"{EXP}/artifacts/Kind/a", REG, b"1"), (f"{EXP}/artifacts/kind/a", REG, b"2")]
+    _refused(tmp_path, _write(tmp_path, _raw(_export_entries(extra=extra))), pcheck.CODE_DUPLICATE_MEMBER)
