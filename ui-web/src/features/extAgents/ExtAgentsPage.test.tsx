@@ -295,6 +295,19 @@ describe('a card', () => {
     expect(lineOf('moved')).toBe('gui.agent.kind_acp · gui.agent.tag_stale')
   })
 
+  it('says which registered machine a card runs on, ahead of the line about it, and nothing on one that runs here', async () => {
+    install([row({ name: 'claude_code' }), row({ name: 'claude_code@ravenx2', machine: 'ravenx2' })])
+    await mount()
+    expect(rowNamed('claude_code').querySelector('.extAgents-mc')).toBeNull()
+    const chip = rowNamed('claude_code@ravenx2').querySelector('.extAgents-one .extAgents-mc')!
+    expect(chip.textContent).toBe('ravenx2')
+    expect(chip.getAttribute('title')).toBe('gui.agent.on_machine {"id":"ravenx2"}')
+    /* The id leads the line about the agent, not the name row: a card is too
+       narrow to carry both the name and the machine whole up there. */
+    expect(rowNamed('claude_code@ravenx2').querySelector('.extAgents-nm .extAgents-mc')).toBeNull()
+    expect(lineOf('claude_code@ravenx2')).toMatch(/gui\.agent\.short_claude_code$/)
+  })
+
   it('carries a corner control only for connect and install, none once connected', async () => {
     install([
       row({ name: 'Raven', preset: undefined, kind: 'builtin', builtin: true, configured: false, probe_status: 'unknown' }),

@@ -125,6 +125,12 @@ describe('one agent row', () => {
   })
 
   /* A field this mapper does not name is a field the island never sees. */
+  it('carries the registered machine a row runs on, and null for one that runs here or a server that predates the field', () => {
+    expect(extAgentRowOf(wire({ machine: 'ravenx2' })).machine).toBe('ravenx2')
+    expect(extAgentRowOf(wire({})).machine).toBeNull()
+    expect(extAgentRowOf(wire({ machine: '' })).machine).toBeNull()
+  })
+
   it('is a whitelist, so an unnamed field does not reach the page', () => {
     const row = extAgentRowOf(wire({ command: ['codex', '--json'] } as Partial<ExtAgentRowWire>))
     expect(row).not.toHaveProperty('command')

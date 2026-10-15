@@ -149,6 +149,14 @@ describe('the onboarding wizard\'s agents step', () => {
     expect(lede.compareDocumentPosition(document.querySelector('.extAgents-sec')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
+  it('says which registered machine a row runs on, after its name, and nothing on a row that runs here', async () => {
+    await mounted([row({ name: 'claude_code' }), row({ name: 'claude_code@ravenx2', machine: 'ravenx2' })])
+    expect(rowNamed('claude_code').querySelector('.extAgents-mc')).toBeNull()
+    const chip = rowNamed('claude_code@ravenx2').querySelector('.extAgents-nm .extAgents-mc')!
+    expect(chip.textContent).toBe('ravenx2')
+    expect(chip.getAttribute('title')).toBe('gui.agent.on_machine {"id":"ravenx2"}')
+  })
+
   it('says so when this machine has no agent of its own to connect', async () => {
     await mounted([row({ name: 'raven_coder', vendored: true, configured: true, enabled: true })])
     expect(sectionNamed('gui.agent.g_avail')!.querySelector('.extAgents-empty')!.textContent).toBe('gui.agent.setup_none')

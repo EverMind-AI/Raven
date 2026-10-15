@@ -64,6 +64,7 @@ export function extAgentRowOf(r: ExtAgentRowWire): ExtAgentRow {
       .filter((c) => c && c.value)
       .map((c) => ({ value: c.value, name: c.name || '', group: c.group || '' })),
     model_source: r.model_source,
+    machine: r.machine || null,
   }
 }
 

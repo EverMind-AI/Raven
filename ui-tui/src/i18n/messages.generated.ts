@@ -1475,6 +1475,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.agent.migrate_do': 'Switch transport',
     'gui.agent.migrate_body':
       'The preset for {name} now reaches it over {to}. The entry is removed and added back from that preset, so handles from runs already in flight stop resolving.',
+    'gui.agent.on_machine': 'On the registered machine {id}',
     'gui.agent.tag_stale': 'Moved',
     'gui.agent.g_avail': 'Available',
     'gui.agent.g_missing': 'Not installed',
@@ -4669,6 +4670,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.conn.retry': '重试',
     'gui.agent.migrate_do': '换到新方式',
     'gui.agent.migrate_body': '{name} 的预设改成走 {to} 了 · 会先移除再按新预设装回来，已经在跑的会话句柄会失效',
+    'gui.agent.on_machine': '在登记机器 {id} 上',
     'gui.agent.tag_stale': '需迁移',
     'gui.agent.g_avail': '可以接入',
     'gui.agent.g_missing': '本机未安装',

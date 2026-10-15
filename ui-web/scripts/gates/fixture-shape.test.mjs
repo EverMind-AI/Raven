@@ -171,9 +171,6 @@ const UNSENT = new Set([
   'browser.watch.can_back', 'browser.watch.can_forward', 'browser.watch.error', 'browser.watch.headful', 'browser.watch.loading', 'browser.watch.title', 'browser.watch.url', 'browser.watch.vh', 'browser.watch.vw', 'browser.watch.watching',
   // channels.qr: 2
   'channels.qr.qr', 'channels.qr.qr_text',
-  // subagents.list / subagents.probe: 1 each -- the machine an acp row runs on; the
-  // library's rows all run on this computer, where the server sends null.
-  'subagents.list.rows[].machine', 'subagents.probe.rows[].machine',
   // config.set: 5 -- the model-switch group, which the offline library does not
   // model: its gateway always has a loop, so there is no restart to report.
   'config.set.applies_to_session', 'config.set.needs_restart', 'config.set.scope', 'config.set.session_id', 'config.set.value',
