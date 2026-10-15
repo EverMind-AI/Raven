@@ -126,12 +126,17 @@ class ReadFileTool(_Aliased, trunk.ReadFileTool):
         try:
             fp = self._resolve(file_path)
         except Exception:  # noqa: BLE001 - the read itself reported the path problem
-            return _cut_long_lines(result, self._MAX_LINE_CHARS)
-        if (ledger := self._ledger) is not None:
+            fp = None
+        if fp is not None and (ledger := self._ledger) is not None:
             ledger.note(fp)
-        # A page read here was cut line by line on trunk's hook; one read on a
-        # registered machine was not, since its node runs trunk's tool.
-        return _cut_long_lines(result, self._MAX_LINE_CHARS)
+        if trunk._machine_of(file_path) is not None:
+            # Answered by a registered machine's node, which runs trunk's tool
+            # without this fork's hook: cut after the read. Decided by where
+            # the read ran, never by a line's text -- a line whose own text
+            # ends like the mark was taken for a cut one and came back whole.
+            return _cut_long_lines(result, self._MAX_LINE_CHARS)
+        # Read here: every line was cut on the hook before the page's budget counted it.
+        return result
 
     def _cut_line(self, line: str) -> str:
         """Trunk's hook: the line cut to the fork's budget before it is numbered and the page's budget counts it."""
@@ -224,19 +229,15 @@ def _respell(result: str | ToolResult) -> str | ToolResult:
     return respelled(str(result))
 
 
-def _mark(budget: int) -> str:
-    return f"... (line truncated to {budget} chars)"
-
-
 def _cut(line: str, budget: int) -> str:
-    """``line`` cut to ``budget`` characters and marked, or as it is when it fits or was cut already."""
-    if len(line) <= budget or line.endswith(_mark(budget)):
+    """``line`` cut to ``budget`` characters and marked, or as it is when it fits."""
+    if len(line) <= budget:
         return line
-    return line[:budget] + _mark(budget)
+    return line[:budget] + f"... (line truncated to {budget} chars)"
 
 
 def _cut_long_lines(result: str | ToolResult, budget: int) -> str | ToolResult:
-    """Cut any line of a result past ``budget`` characters, marking the cut; a line cut already is left alone."""
+    """Cut any line of a result past ``budget`` characters, marking the cut: a page cut nowhere else."""
 
     def cut(text: str) -> str:
         if not any(len(line) > budget for line in text.split("\n")):
