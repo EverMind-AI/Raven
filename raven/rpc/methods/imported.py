@@ -14,36 +14,25 @@ conversation from its own directory, the trajectory reads, and the handful of
 lookups the page makes on opening any conversation, none of which create or
 change a session. A method added later is refused until it is listed here.
 
-The functions below ``imported_upload`` are what ``session.*`` answers for an
-imported key: the rows of the rail, the resumed conversation, its title and its
-removal.
+What ``session.*`` answers for an imported key -- the rail's rows, the
+resumed conversation, its title and its removal -- lives beside the session
+handlers in :mod:`raven.rpc.methods.session`.
 """
 
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from raven.rpc.errors import (
-    ImportedBusyError,
-    ImportedPackageError,
-    ImportedReadOnlyError,
-    InvalidParamsError,
-    SessionNotFoundError,
-    SessionTitleTooLongError,
-)
+from raven.rpc.errors import ImportedBusyError, ImportedPackageError, ImportedReadOnlyError
 from raven.rpc.files import MAX_UPLOAD_BYTES
-from raven.rpc.methods.session import _default_session_info, _fill_resumed_context, _map_to_wire
 from raven.rpc.methods.trajectory import _params
 from raven.rpc.models import ImportedUploadParams
-from raven.session.title import TITLE_STORAGE_MAX, collapse_to_line
-from raven.trajectory import imported, index
+from raven.trajectory import imported
 from raven.trajectory.imported_package import ImportCancelledError
 from raven.trajectory.package_check import CODE_TOO_LARGE, PackageError
 
 if TYPE_CHECKING:
-    from raven.config.schema import Config
     from raven.rpc.dispatcher import Dispatcher
 
 SESSION_PARAMS = ("session_id", "session_key", "session", "conversation_id")
@@ -120,88 +109,6 @@ async def imported_upload(params: dict) -> dict:
     }
 
 
-# ── what session.* answers for an imported key ─────────────────────────
-
-
-def _epoch(value: str) -> float:
-    try:
-        return datetime.fromisoformat(value).timestamp()
-    except ValueError:
-        return 0.0
-
-
-def _row(conversation: imported.ImportedConversation) -> dict[str, Any]:
-    at = _epoch(conversation.imported_at)
-    return {
-        "id": conversation.key,
-        "message_count": conversation.message_count,
-        "preview": conversation.title,
-        "last_message_preview": "",
-        "source": imported.CHANNEL,
-        "started_at": at,
-        "updated_at": at,
-        "title": conversation.title,
-        "pinned": False,
-        "running": False,
-        "workdir": None,
-        "imported": {"kind": conversation.kind, "source_name": conversation.source_name},
-    }
-
-
-async def list_rows() -> list[dict[str, Any]]:
-    conversations = await asyncio.to_thread(imported.list_conversations)
-    return [_row(conversation) for conversation in conversations]
-
-
-async def resume(key: str, config: Config) -> dict[str, Any]:
-    conversation = await asyncio.to_thread(imported.get, key)
-    if conversation is None:
-        raise SessionNotFoundError(f"no imported conversation {key!r}")
-    session = await asyncio.to_thread(imported.read_session, key)
-    info = await _default_session_info(None, config, None)
-    info["title"] = conversation.title
-    info["read_only"] = True
-    info["running"] = False
-    messages: list[dict[str, Any]] = []
-    if session is not None:
-        _fill_resumed_context(info["usage"], session)
-        messages = _map_to_wire(session.messages, key, deliveries_on_disk=False)
-    return {"session_id": key, "info": info, "messages": messages}
-
-
-async def title(key: str, new_title: Any) -> dict[str, Any]:
-    if new_title is None:
-        conversation = await asyncio.to_thread(imported.get, key)
-        if conversation is None:
-            raise SessionNotFoundError(f"no imported conversation {key!r}")
-        return {"title": conversation.title, "session_key": key, "pending": False}
-    if not isinstance(new_title, str):
-        raise InvalidParamsError("title: must be a string")
-    cleaned = collapse_to_line(new_title)
-    if not cleaned:
-        raise InvalidParamsError("title: an imported conversation keeps a name; it cannot be emptied")
-    if len(cleaned) > TITLE_STORAGE_MAX:
-        raise SessionTitleTooLongError(
-            f"session title is {len(cleaned)} characters; the maximum is {TITLE_STORAGE_MAX}",
-            data={"limit": TITLE_STORAGE_MAX},
-        )
-    try:
-        renamed = await asyncio.to_thread(imported.rename, key, cleaned)
-    except LookupError:
-        raise SessionNotFoundError(f"no imported conversation {key!r}") from None
-    return {"title": renamed.title, "session_key": key, "pending": False}
-
-
-async def delete(key: str) -> dict[str, Any]:
-    target = await asyncio.to_thread(imported.trajectory_target, key)
-    if target is None:
-        return {"deleted": None, "still_on_disk": False}
-    removed = await asyncio.to_thread(imported.delete, key)
-    # Back on the event loop, which is the only place the indexer registry is touched.
-    index.drop_indexer(target[0])
-    return {"deleted": key if removed else None, "still_on_disk": False}
-
-
 def register_imported_methods(dispatcher: "Dispatcher") -> None:
     dispatcher.add_guard(guard)
     dispatcher.register("imported.upload", imported_upload)
@@ -211,11 +118,7 @@ __all__ = [
     "ALLOWED",
     "SESSION_PARAMS",
     "addresses_imported",
-    "delete",
     "guard",
     "imported_upload",
-    "list_rows",
     "register_imported_methods",
-    "resume",
-    "title",
 ]
