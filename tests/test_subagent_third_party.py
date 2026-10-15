@@ -1195,6 +1195,10 @@ def test_the_registered_dag_tool_is_wired_to_the_subagent_lifecycle(
     assert tool._charge == mgr.charge_dag_run
     assert tool._adopt == mgr.adopt_background_run
     assert tool._announce == mgr.announce_dag_result
+    # The manager's own sandbox builder: a construction site that drops it
+    # returns its nodes' exec to the host silently -- the shape of the defect
+    # the builder seam was added for, and invisible to every behavior test.
+    assert tool._sandbox_for == mgr.sandbox_executor_for
     # A lambda reading through to the manager's flag, so this asserts the read
     # rather than the identity a comparison could not see.
     mgr.set_paused(True)
