@@ -34,7 +34,13 @@ interface Fixture {
       default puts it -- which is what the rail groups by and what the tag
       beside the title says. */
   workdir?: string
+  /** The package an Imported Conversation came from; such a row is listed
+      only when the imported channel is asked for, as the gateway does. */
+  imported?: { kind: string; source_name: string }
 }
+
+/** The Imported Conversation this canvas starts with: a bug report someone sent. */
+export const IMPORTED_DEMO = 'imported:3fa9c1d2e8b74a6f9c0d5e1b2a3c4d5e'
 
 const MIN = 60000
 const HOUR = 3600000
@@ -68,7 +74,9 @@ const SESSION_FIXTURES: Fixture[] = [
   { id:'k2', ago: D1, title:'竞品动态', last:'网页搜索未配置，只抓到 1 家',
     run:null, from:'cron' },
   { id:'k3', ago: D1E, title:'昨日错误日志汇总', last:'2 类错误',
-    run:null, from:'cron' }
+    run:null, from:'cron' },
+  { id: IMPORTED_DEMO, ago: D4, title: '支付回调在凌晨超时', last: '', run: null,
+    imported: { kind: 'bugreport', source_name: 'br-20261010-3fa9c1.tar.gz' } },
 ];
 
 /* The one stored conversation that is not a script: a turn that failed, kept
@@ -83,6 +91,12 @@ const STORED: Record<string, ResultOf<'session.resume'>['messages']> = {
        the turn rather than as a question of its own. */
     { role: 'user', text: '先别碰测试，只拆 handler', mid_turn: true },
     { role: 'assistant', text: '找不到模块 stripe（internal/pay/callback.go:12）\n\n装上依赖或改用内置 http 客户端后重试。' },
+  ],
+  [IMPORTED_DEMO]: [
+    { role: 'user', text: '查一下昨晚支付回调为什么超时' },
+    { role: 'assistant', text: '回调在 02:10-02:40 之间超时 412 次，都卡在 [REDACTED:path]/callback.go 的数据库连接上。' },
+    { role: 'user', text: '连接池现在是多大' },
+    { role: 'assistant', text: '最大 10 个连接，高峰时全部被占满。' },
   ],
 }
 
@@ -168,6 +182,8 @@ export interface SessionsFixture {
   setRun(id: string, key: string): void
   /** The preview a finished turn leaves on the row. */
   setPreview(id: string, preview: string): void
+  /** A package just imported: its row, newest first, and a short conversation to open. */
+  addImported(id: string, title: string, imported: { kind: string; source_name: string }): void
 }
 
 export function createSessions(env: FixtureEnv, turn: () => TurnFixture): SessionsFixture {
@@ -188,6 +204,7 @@ export function createSessions(env: FixtureEnv, turn: () => TurnFixture): Sessio
     started_at: Math.floor((env.now() - s.ago - HOUR) / 1000),
     updated_at: Math.floor((env.now() - s.ago) / 1000),
     ...(s.from ? { source: s.from } : {}),
+    ...(s.imported ? { source: 'imported', imported: s.imported } : {}),
     ...(s.workdir ? { workdir: s.workdir } : {}),
     pinned: !!s.pin,
     /* A scripted turn plays out from the send that starts it, so nothing is
@@ -206,8 +223,16 @@ export function createSessions(env: FixtureEnv, turn: () => TurnFixture): Sessio
     runOf: (id) => find(id)?.run ?? null,
     setRun: (id, key) => { const s = find(id); if (s) s.run = key },
     setPreview: (id, preview) => { const s = find(id); if (s) s.last = preview },
+    addImported: (id, title, imported) => {
+      rows.unshift({ id, ago: 0, title, last: '', run: null, imported })
+      stored[id] = stored[IMPORTED_DEMO] ?? []
+    },
     fixtures: {
-      'session.list': (p) => ({ sessions: (p.archived ? archived : rows).map(wire) }),
+      'session.list': (p) => {
+        const withImported = !p.archived && (p.channels ?? []).includes('imported')
+        const listed = p.archived ? archived : rows.filter((s) => !s.imported || withImported)
+        return { sessions: listed.map(wire) }
+      },
       'session.create': () => {
         minted += 1
         const s: Fixture = { id: `n${minted}`, ago: 0, title: '', last: '', run: null }
@@ -219,7 +244,7 @@ export function createSessions(env: FixtureEnv, turn: () => TurnFixture): Sessio
         const s = find(id)
         return {
           session_id: id,
-          info: info((s && s.title) || ''),
+          info: s?.imported ? { ...info(s.title), read_only: true } : info((s && s.title) || ''),
           messages: s && s.run ? turn().history(id) : stored[id] || [],
         }
       },

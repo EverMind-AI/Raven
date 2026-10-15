@@ -51,6 +51,11 @@ div.app[data-rail=on]
             path
             path
         span
+      button#importedBtn.navi
+        svg
+          path
+          path
+        span
     div#findBox.find
       span.ic
         svg

@@ -854,6 +854,9 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    rows looking selected at once. */
 .app[data-page="on"] .sess[aria-current="true"] { background: none; font-weight: 400; }
 .navi svg, .sess svg { flex: none; }
+/* The import row names the file it is sending, and a file name can be any length. */
+#importedBtn span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#importedBtn:disabled { cursor: progress; }
 /* generic: it also rides on the workspace chip in the top bar */
 .bdg {
   font-family: var(--mono); font-size: 10px; font-weight: 600;

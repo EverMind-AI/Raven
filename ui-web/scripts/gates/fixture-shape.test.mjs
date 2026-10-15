@@ -265,9 +265,8 @@ const UNSENT = new Set([
   'subagents.test.cancelled', 'subagents.test.reply',
   // system.hello: 1
   'system.hello.platform',
-  // Imported Conversation fields: only resuming one sets read_only, so create and compress never send it,
-  // and no row or open conversation in this library is an imported one yet
-  'session.compress.info.read_only', 'session.create.info.read_only', 'session.list.sessions[].imported', 'session.resume.info.read_only',
+  // session.compress / session.create: 1 each -- only resuming an Imported Conversation sets read_only
+  'session.compress.info.read_only', 'session.create.info.read_only',
 ])
 
 describe('the offline fixture library', () => {
@@ -305,8 +304,10 @@ describe('the offline fixture library', () => {
     /* The rows one call answers differently per argument, so a field sent for
        the second conversation counts as sent. The three `k` rows are the
        scheduled ones, and the only place the library sends `origin` and
-       `delegated` -- the two entries a reader never types. */
-    for (const session_id of ['a', 'b', 'g', 'k1', 'k2', 'k3']) await walk('session.resume', { session_id })
+       `delegated` -- the two entries a reader never types; the imported one is
+       the only place it sends `read_only`. */
+    const { IMPORTED_DEMO } = await import('../../src/rpc/fixtures/sessions.ts')
+    for (const session_id of ['a', 'b', 'g', 'k1', 'k2', 'k3', IMPORTED_DEMO]) await walk('session.resume', { session_id })
     const unsent = [...declared].filter((at) => !sent.has(at)).sort()
     expect(unsent.filter((at) => !UNSENT.has(at)), 'send the field, or add it to UNSENT under its method')
       .toEqual([])

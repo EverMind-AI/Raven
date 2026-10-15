@@ -73,6 +73,7 @@ interface ListedSession {
   pinned?: boolean
   running?: boolean
   workdir?: string | null
+  imported?: { kind: string; source_name: string } | null
 }
 
 export function rowFrom(it: ListedSession): SessRow {
@@ -97,7 +98,8 @@ export function rowFrom(it: ListedSession): SessRow {
     last: (it.last_message_preview || it.preview)
       ? (it.last_message_preview || it.preview)!.slice(0, 60)
       : t('gui.sess.n_messages', { n: it.message_count }),
-    when, at, run: null, live: true, from: cron ? 'cron' : undefined,
+    when, at, run: null, live: true, from: cron ? 'cron' : it.source === 'imported' ? 'imported' : undefined,
+    ...(it.imported ? { sourceName: it.imported.source_name } : {}),
     pin: !!it.pinned, persisted: true,
     /* The server's answer to "is this one answering right now", which is the
        only source a page that has just loaded has: the turn's own frames went
@@ -123,7 +125,10 @@ export function touchSession(id: string | null, preview?: string): void {
   sessionDraw()
 }
 
-export const SESS_CHANNELS = ['tui', 'cron']
+/* `imported` brings the Imported Conversations, which the gateway lists only
+   beside live sessions: a current imported row that a refresh did not return
+   would read as deleted under the reader (state/session/registry.ts). */
+export const SESS_CHANNELS = ['tui', 'cron', 'imported']
 
 export async function loadSessions(): Promise<void> {
   await loadCronNames()

@@ -2395,6 +2395,54 @@
       "en": "Retry what failed",
       "zh": "重试失败项"
     },
+    "gui.imported.done": {
+      "en": "Imported \"{title}\"",
+      "zh": "已导入《{title}》"
+    },
+    "gui.imported.dup_title": {
+      "en": "Already imported",
+      "zh": "已经导入过"
+    },
+    "gui.imported.dup_body": {
+      "en": "This package was already imported as \"{title}\".",
+      "zh": "该包已导入为《{title}》。"
+    },
+    "gui.imported.dup_open": {
+      "en": "Open existing",
+      "zh": "打开已有"
+    },
+    "gui.imported.dup_again": {
+      "en": "Import anyway",
+      "zh": "仍然导入一份"
+    },
+    "gui.imported.err_busy": {
+      "en": "Another import is in progress; try again when it finishes",
+      "zh": "另一个导入正在进行，请稍后再试"
+    },
+    "gui.imported.err_too_large": {
+      "en": "{name} is larger than this connection can carry",
+      "zh": "{name} 超出了上传上限"
+    },
+    "gui.imported.err_not_importable": {
+      "en": "{name} is not a package Raven can import (an export, a bug report or a trajectory report)",
+      "zh": "{name} 不是可导入的包（导出包、问题报告包或轨迹报告）"
+    },
+    "gui.imported.err_version": {
+      "en": "{name} was made by a newer Raven; update Raven to import it",
+      "zh": "{name} 由更新版本的 Raven 生成，请升级后再导入"
+    },
+    "gui.imported.err_invalid": {
+      "en": "{name} is damaged or unsafe and was not imported: {detail}",
+      "zh": "{name} 已损坏或不安全，未导入：{detail}"
+    },
+    "gui.imported.err_failed": {
+      "en": "Could not import {name}: {detail}",
+      "zh": "无法导入 {name}：{detail}"
+    },
+    "gui.imported.not_listed": {
+      "en": "it did not appear in the conversation list",
+      "zh": "它没有出现在会话列表里"
+    },
     "gui.turn_died": {
       "en": "Turn failed - {e}",
       "zh": "回合中断 · {e}"
@@ -4002,6 +4050,10 @@
     "gui.rail.recent": {
       "en": "Recent",
       "zh": "最近"
+    },
+    "gui.rail.imported": {
+      "en": "Imported",
+      "zh": "导入"
     },
     "gui.rail.search_hits": {
       "en": "Results - {n}",
@@ -10866,6 +10918,14 @@
     "gui.nav.knowledge": {
       "en": "Knowledge",
       "zh": "知识库"
+    },
+    "gui.nav.import": {
+      "en": "Import conversation",
+      "zh": "导入会话"
+    },
+    "gui.nav.importing": {
+      "en": "Importing {name}…",
+      "zh": "正在导入 {name}…"
     },
     "gui.page.knowledge": {
       "en": "Knowledge",

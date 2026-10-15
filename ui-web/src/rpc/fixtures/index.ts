@@ -31,6 +31,7 @@ import { createDeck } from './deck'
 import { createExt } from './ext'
 import { createFs } from './fs'
 import { createImport } from './import'
+import { createImported } from './imported'
 import { createKnowledge } from './knowledge'
 import { createMemory } from './memory'
 import { createModel } from './model'
@@ -80,6 +81,7 @@ export function demoFixtures(env: FixtureEnv): Fixtures {
     ...createFs(env).fixtures,
     ...createDeck(env).fixtures,
     ...createImport(env).fixtures,
+    ...createImported(env, sessions).fixtures,
     ...createBrowser(env).fixtures,
     ...createKnowledge(env).fixtures,
     ...createTrajectory(env).fixtures,

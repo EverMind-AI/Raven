@@ -410,6 +410,81 @@ describe('rail island', () => {
     expect(screen.getByText('GTM research')).toBeTruthy()
   })
 
+  it('lists Imported Conversations in their own group after recent, and only while there is one', () => {
+    install({ rows: [row(), row({ id: 'b', title: 'second task' })] })
+    const host = mount()
+    expect([...host.querySelectorAll('.grp .lab')].map((n) => n.textContent)).not.toContain('gui.rail.imported')
+    cleanup()
+    install({
+      rows: [
+        row(),
+        row({ id: 'imported:1', title: 'a bug report', from: 'imported', sourceName: 'br-1.tar.gz' }),
+        row({ id: 'imported:2', title: 'an export', from: 'imported', sourceName: 'trip.tar.gz' }),
+      ]
+    })
+    const again = mount()
+    const groups = [...again.querySelectorAll('.grp .lab')].map((n) => n.textContent)
+    expect(groups).toEqual(['gui.rail.from_cron', 'gui.rail.recent', 'gui.rail.imported'])
+    const labels = [...again.querySelectorAll('.grp .lab, .sess .t')].map((n) => n.textContent)
+    expect(labels.slice(labels.indexOf('gui.rail.recent'))).toEqual([
+      'gui.rail.recent', 'GTM research', 'gui.rail.imported', 'a bug report', 'an export',
+    ])
+  })
+
+  it('offers an imported row rename and delete only, on its buttons and in both menus', () => {
+    install({ rows: [row(), row({ id: 'imported:1', title: 'a bug report', from: 'imported', sourceName: 'br-1.tar.gz' })] })
+    const host = mount()
+    const imported = rowByTitle(host, 'a bug report')
+    const buttons = [...imported.querySelectorAll<HTMLButtonElement>('.quick button')].map((b) => b.getAttribute('aria-label'))
+    expect(buttons).toEqual(['gui.sess.rename', 'gui.sess.delete'])
+    expect(imported.querySelector('.quick-pin')).toBeNull()
+    const items = rowItems(host, 'a bug report').map((x) => (x === '-' ? '-' : x.label))
+    expect(items).toEqual(['gui.sess.rename', '-', 'gui.sess.delete'])
+    /* An ordinary row keeps its whole menu. */
+    expect(rowItems(host, 'GTM research').map((x) => (x === '-' ? '-' : x.label))).toContain('gui.sess.archive')
+    expect(imported.getAttribute('title')).toBe('a bug report\nbr-1.tar.gz')
+    expect(rowByTitle(host, 'GTM research').getAttribute('title')).toBeNull()
+  })
+
+  it('renames an imported row on the row itself, from its menu, without opening it', () => {
+    const h = install({ rows: [row(), row({ id: 'imported:1', title: 'a bug report', from: 'imported', sourceName: 'br-1.tar.gz' })] })
+    const renamed: Array<[string, string]> = []
+    src().renamed = (id, title) => renamed.push([id, title])
+    const header = vi.spyOn(store, 'rename')
+    const host = mount()
+    act(() => (rowItems(host, 'a bug report')[0] as MenuItem).fn())
+    const input = host.querySelector<HTMLInputElement>('input.ren')!
+    expect(input).toBeTruthy()
+    fireEvent.change(input, { target: { value: 'payment timeouts' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(renamed).toEqual([['imported:1', 'payment timeouts']])
+    expect(header).not.toHaveBeenCalled()
+    expect(h.calls.filter(([what]) => what === 'openSession')).toEqual([])
+    expect(sessionCurrent()).toBe('a')
+  })
+
+  it('renames and deletes an imported row from its hover buttons', () => {
+    install({ rows: [row(), row({ id: 'imported:1', title: 'a bug report', from: 'imported', sourceName: 'br-1.tar.gz' })] })
+    const gone: string[] = []
+    src().remove = (s: SessRow) => gone.push(s.id)
+    const host = mount()
+    const [rename, del] = rowByTitle(host, 'a bug report').querySelectorAll<HTMLButtonElement>('.quick button')
+    act(() => rename!.click())
+    expect(host.querySelector('input.ren')).toBeTruthy()
+    fireEvent.keyDown(host.querySelector('input.ren')!, { key: 'Escape' })
+    act(() => del!.click())
+    expect(gone).toEqual(['imported:1'])
+  })
+
+  it('keeps an imported row to its two actions in a search', () => {
+    install({ rows: [row(), row({ id: 'imported:1', title: 'a bug report', from: 'imported', sourceName: 'br-1.tar.gz' })] })
+    found.term = 'bug'
+    const host = mount()
+    expect(host.querySelectorAll('.sess').length).toBe(1)
+    const buttons = [...host.querySelectorAll<HTMLButtonElement>('.sess .quick button')].map((b) => b.getAttribute('aria-label'))
+    expect(buttons).toEqual(['gui.sess.rename', 'gui.sess.delete'])
+  })
+
   it('answers a search with hits and with the empty note', () => {
     install({ rows: [row(), row({ id: 'b', title: 'second task' })] })
     found.term = 'gtm'

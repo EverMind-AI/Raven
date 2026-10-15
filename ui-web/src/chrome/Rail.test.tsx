@@ -13,6 +13,7 @@ import { readFileSync } from 'node:fs'
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import * as imported from '../features/imported/store'
 import * as settings from '../features/settings/store'
 import * as hub from '../state/hub'
 import * as lang from '../state/lang'
@@ -75,7 +76,7 @@ describe('the rail', () => {
     render()
     for (const id of [
       'railBtn', 'findBtn',
-      'newBtn', 'agentsBtn',
+      'newBtn', 'agentsBtn', 'importedBtn',
       'findBox', 'sfind', 'sclr', 'list',
       'upnote', 'importRow', 'meBtn', 'railGrip',
     ]) {
@@ -111,6 +112,28 @@ describe('the rail', () => {
     for (const id of ['newBtn', 'agentsBtn']) {
       expect(el(id).getAttribute('aria-current'), id).toBe(null)
     }
+  })
+
+  it('imports a conversation from its own row under the module rows, and says which file is on its way', () => {
+    const pick = vi.spyOn(imported, 'pick').mockImplementation(() => {})
+    render()
+    const nav = document.querySelector('nav.rail-nav') as HTMLElement
+    expect(Array.from(nav.children).map((b) => b.id)).toEqual(['newBtn', 'agentsBtn', 'knowledgeBtn', 'importedBtn'])
+    const button = el('importedBtn') as HTMLButtonElement
+    const idle = button.textContent
+    expect(idle).not.toBe('')
+    expect(button.disabled).toBe(false)
+    button.click()
+    expect(pick).toHaveBeenCalledTimes(1)
+    act(() => imported.set({ busy: 'trip.tar.gz' }))
+    expect(button.disabled).toBe(true)
+    expect(button.getAttribute('aria-busy')).toBe('true')
+    expect(button.textContent).toContain('trip.tar.gz')
+    act(() => imported.set({ busy: null }))
+    expect(button.disabled).toBe(false)
+    expect(button.getAttribute('aria-busy')).toBe(null)
+    expect(button.textContent).toBe(idle)
+    pick.mockRestore()
   })
 
   it('renders a literal in every element that carried one', () => {
