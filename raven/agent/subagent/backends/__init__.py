@@ -229,12 +229,15 @@ def session_mcp_delivered(*, session_mcp: bool, snapshot: Any, machine: str | No
     :func:`~raven.agent.subagent.presets.session_mcp_for`; ``snapshot`` carries
     the transitional half. Both are spelled out in
     ``AcpAgentBackend._session_mcp_refused``, which is the reader for why each
-    exists and why only one of them is temporary. On a ``machine`` the node
-    carries the frames to the host's endpoint, so the host must support both
-    Unix-socket creation and connection. Without that transport, the remote
-    turn continues without MCP and its reply explains the limitation.
+    exists and why only one of them is temporary. The servers reach the agent
+    over unix sockets on this computer whichever side it runs on -- a row here
+    connects its bridge to the endpoint's socket, a row on a ``machine`` has
+    the node carry its frames to that same socket -- so a host without that
+    transport (Windows) delivers none, and this says so for both: the turn
+    goes on without MCP and its reply explains the limitation, and the roster
+    does not advertise what a dispatch would withhold.
     """
-    if machine and not unix_sockets_available():
+    if not unix_sockets_available():
         return False
     if not session_mcp:
         return False

@@ -631,8 +631,13 @@ async def test_dispatch_keeps_usage_ownership_out_of_process_binding(tmp_path, m
     assert acquire.call_args.kwargs["binding"] is None
 
 
+@pytest.mark.parametrize("machine", ["box", None], ids=["on a machine", "on this computer"])
 @pytest.mark.parametrize("missing", ["start_unix_server", "open_unix_connection"])
-async def test_remote_mcp_is_withheld_before_endpoint_setup_without_host_socket_support(monkeypatch, missing):
+async def test_mcp_is_withheld_before_any_endpoint_opens_on_a_computer_without_unix_sockets(
+    monkeypatch, missing, machine
+):
+    """A Windows host has neither asyncio call: no endpoint is opened for a row here or on a machine, the reply
+    says why, and the roster does not advertise what the dispatch would withhold."""
     from types import SimpleNamespace
 
     from raven.agent.subagent.backends import session_mcp_effective
@@ -640,18 +645,21 @@ async def test_remote_mcp_is_withheld_before_endpoint_setup_without_host_socket_
     from raven.agent.subagent.registry import _row_for
 
     monkeypatch.delattr(asyncio, missing, raising=False)
-    cfg = ThirdPartyAcpSubagentConfig(name="remote", command="agent", machine="box", session_mcp=True)
+    cfg = ThirdPartyAcpSubagentConfig(name="remote", command="agent", machine=machine, session_mcp=True)
     backend = build_third_party_backend(cfg)
     grant = McpGrant(granted=(GrantedServer("private", "stdio", _idle_config()),))
-    launched = SimpleNamespace(target=SimpleNamespace(id="box"))
+    launched = SimpleNamespace(target=SimpleNamespace(id="box")) if machine else None
 
     async def opened(*args, **kwargs):
-        pytest.fail("unsupported host must withhold before opening endpoints")
+        pytest.fail("a computer without unix sockets must withhold before opening endpoints")
 
     monkeypatch.setattr(McpEndpoints, "open", opened)
+    monkeypatch.setattr(backend, "_adapter_path", lambda: pytest.fail("nothing of the adapter's PATH is asked"))
     async with backend._mcp_endpoints("d1", grant, launched) as endpoints:
         assert endpoints == []
-    assert "host does not support Unix-socket MCP endpoints" in backend._mcp_note(grant)
+    note = backend._mcp_note(grant)
+    assert "MCP servers 'private' were not delivered to acp agent 'remote'" in note
+    assert "this computer does not support Unix-socket MCP endpoints" in note
+    assert ("on machine 'box'" in note) is bool(machine)
     assert not session_mcp_effective(cfg)
     assert not _row_for(cfg).injectable.mcps
-    assert session_mcp_effective(cfg.model_copy(update={"machine": None})), "local behavior is unchanged"

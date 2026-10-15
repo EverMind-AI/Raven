@@ -27,8 +27,8 @@ resolve its own symlinks.
 An MCP server the host holds for an agent is lent across the same connection.
 The agent spawns the install's bridge (``python -I -m raven.node --mcp``) as a
 stdio MCP server; the bridge connects to the daemon's socket and opens a
-*stream* for its task (``mcp/open``, with the token the daemon left beside the
-task's record at launch), and from then on the frames travel as ``mcp/frame``
+*stream* for its task (``mcp/open``; which task, the daemon tells by the
+process that connected, which that task's agent spawned), and from then on the frames travel as ``mcp/frame``
 notifications between the bridge and the host. The host checks the authenticated
 task against the dispatch's endpoint grant before connecting to that endpoint
 (:func:`pieces` says how a frame is
@@ -87,7 +87,8 @@ CHANGED = -32012
 UNKNOWN_TASK = -32014
 """``agent/attach``: no task of that id is running or recorded on the machine."""
 STREAM_REFUSED = -32015
-"""``mcp/open``: the task is not running here, the token is not its, no host holds it, or its streams are all taken."""
+"""``mcp/open``: the task is not running here, the connection is not a process of it (or of any task, or the system
+cannot say), no host holds it, or its streams are all taken."""
 
 #: The most bytes one ``fs/pull`` returns per chunk, before base64. A line of
 #: the protocol holds one chunk and little else.

@@ -24,10 +24,12 @@ of its own included. Only ``--stdio`` ties the agents to the connection.
 An MCP server the host lends an agent here is reached through this daemon:
 the agent runs the install's bridge (``python -I -m raven.node --mcp``) as a
 stdio server, the bridge connects to the socket and opens a *stream* for its
-task with the token left beside the task's record at launch, and the daemon
-relays the pieces of each frame between the bridge and the host holding the
-task (``mcp/open``, ``mcp/frame``, ``mcp/close``), keeping nothing. A stream
-ends with either end, or with the task.
+task, and the daemon relays the pieces of each frame between the bridge and
+the host holding the task (``mcp/open``, ``mcp/frame``, ``mcp/close``),
+keeping nothing. Which task a bridge is, the daemon tells by the process that
+connected: its parent chain reaches the agent the daemon started, and every
+task here runs as this one user, so nothing a bridge says or holds could tell
+them apart. A stream ends with either end, or with the task.
 
 Deliberately small. It imports the file tools and nothing that talks to a
 model, reads a config or opens a network port, so a machine needs Python
@@ -46,16 +48,16 @@ import base64
 import contextlib
 import fcntl
 import hashlib
-import hmac
 import json
 import os
 import platform
 import re
-import secrets
 import shlex
 import shutil
 import signal
+import socket
 import stat as filemode
+import struct
 import subprocess
 import sys
 import tempfile
@@ -486,18 +488,26 @@ def capture_login_env() -> dict[str, str]:
     return captured
 
 
-def _descendants(pid: int) -> list[int]:
-    """Every process under ``pid`` by parent chain, as ``ps`` sees them now."""
+def _process_table() -> dict[int, int]:
+    """Every process on this machine by its parent, as ``ps`` sees them now; empty when ``ps`` cannot be asked."""
     ps = shutil.which("ps") or "/bin/ps"
     try:
         done = subprocess.run([ps, "-A", "-o", "pid=,ppid="], capture_output=True, text=True, timeout=5)
     except (OSError, subprocess.SubprocessError):
-        return []
-    children: dict[int, list[int]] = {}
+        return {}
+    table: dict[int, int] = {}
     for line in done.stdout.splitlines():
         parts = line.split()
         if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
-            children.setdefault(int(parts[1]), []).append(int(parts[0]))
+            table[int(parts[0])] = int(parts[1])
+    return table
+
+
+def _descendants(pid: int) -> list[int]:
+    """Every process under ``pid`` by parent chain, as ``ps`` sees them now."""
+    children: dict[int, list[int]] = {}
+    for child, parent in _process_table().items():
+        children.setdefault(parent, []).append(child)
     out: list[int] = []
     stack = [pid]
     while stack:
@@ -541,13 +551,33 @@ def _end_tree(pid: int) -> None:
 #: lock of each install under ``run/``, the task records under ``tasks/``, the
 #: daemon's own log under ``log/``.
 RUN_DIR, TASKS_DIR, LOG_DIR = "run", "tasks", "log"
-#: Beside a task's record: the token a bridge of that task presents to open an MCP stream (``mcp/open``).
-TOKEN_FILE = "mcp.token"  # noqa: S105 - a file name, not a secret
 
 
 def task_record_dir(root: Path, task_id: str) -> Path:
-    """Where the daemon under ``root`` keeps the record of ``task_id``: what a bridge reads its token from."""
+    """Where the daemon under ``root`` keeps the record of ``task_id``: its frames, its stderr, its state."""
     return root / TASKS_DIR / task_id
+
+
+def _peer_pid(sock: Any) -> int | None:
+    """The pid of the process at the other end of a unix socket, as the system reports it; ``None`` where it does not.
+
+    What tells one task's bridge from another's. Not anything the bridge
+    says or holds: every task here runs as this one user, so any of them
+    could say a name or read a file. The process that connected is the
+    system's word, and its parent chain leads to the agent the daemon
+    started (:meth:`Daemon.task_of`). macOS answers ``LOCAL_PEERPID``, Linux
+    ``SO_PEERCRED``; a system that answers neither opens no stream.
+    """
+    try:
+        if sys.platform == "darwin":
+            (pid,) = struct.unpack("i", sock.getsockopt(0, 0x002, 4))  # SOL_LOCAL, LOCAL_PEERPID
+        elif hasattr(socket, "SO_PEERCRED"):
+            pid, _uid, _gid = struct.unpack("3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+        else:
+            return None
+    except (OSError, ValueError, AttributeError, struct.error):
+        return None
+    return pid if pid > 0 else None
 
 
 #: How long a daemon with no connection and no running task waits before it
@@ -726,14 +756,6 @@ class _Task:
         self.frames = 0
         self.subscriber: tuple[Node, int] | None = None
         self.streams: dict[int, _Stream] = {}
-        # The token a bridge of this task presents to open a stream: made
-        # here, kept beside the record where only this user reads, and read
-        # by the bridge from there -- never on a command line. The host must
-        # still bind lend/server to this authenticated task; the token does
-        # not authorize arbitrary endpoint names supplied by the bridge.
-        self.token = secrets.token_hex(32)
-        with own_file(record / TOKEN_FILE, "w") as handle:
-            handle.write(self.token)
         self._send_lock = asyncio.Lock()
         self._frames_file = own_file(record / "frames.jsonl")
         self._stderr_file = own_file(record / "stderr.log")
@@ -954,17 +976,51 @@ class Daemon:
     def record_dir(self, task_id: str) -> Path:
         return task_record_dir(self.root, task_id)
 
+    def task_of(self, pid: int) -> _Task | None:
+        """The running task whose agent ``pid`` is, or is under, by the parent chain the system shows now; else ``None``.
+
+        A task's agent is the process the daemon started, in a session of
+        its own, and what the agent starts -- its bridges among it -- is
+        under it. Followed up from ``pid`` to the top: above the daemon no
+        task is found, and a daemon run in the process that asks (the tests)
+        is a step on the way.
+        """
+        running = {task.proc.pid: task for task in self.running()}
+        table = _process_table()
+        seen: set[int] = set()
+        current: int | None = pid
+        while current is not None and current > 1 and current not in seen:
+            if (task := running.get(current)) is not None:
+                return task
+            seen.add(current)
+            current = table.get(current)
+        return None
+
     def open_stream(self, bridge: Node, params: dict[str, Any]) -> _Stream:
-        """A stream for ``bridge``, on the task its token names, to the host holding that task; refused by code otherwise."""
+        """A stream for ``bridge``, on the task it is a process of, to the host holding that task; refused by code otherwise.
+
+        Which task that is, the daemon tells by the process that connected
+        (:func:`_peer_pid`, :meth:`task_of`) and by nothing the bridge says
+        or holds; the task the bridge names has to be that one.
+        """
         task_id = _task_id(params)
-        token, server, lend = params.get("token"), params.get("server"), params.get("lend")
-        if not all(isinstance(v, str) and v for v in (token, server, lend)):
-            raise _RefusedError(_INVALID_PARAMS, "token, server and lend must be non-empty strings")
+        server, lend = params.get("server"), params.get("lend")
+        if not all(isinstance(v, str) and v for v in (server, lend)):
+            raise _RefusedError(_INVALID_PARAMS, "server and lend must be non-empty strings")
         task = self.tasks.get(task_id)
         if task is None or task.rc is not None:
             raise _RefusedError(protocol.STREAM_REFUSED, f"task {task_id!r} is not running on this machine")
-        if not hmac.compare_digest(str(token), task.token):
-            raise _RefusedError(protocol.STREAM_REFUSED, f"the token is not task {task_id!r}'s")
+        if bridge.peer is None:
+            raise _RefusedError(
+                protocol.STREAM_REFUSED, "this system does not say which process a bridge is, so no stream is opened"
+            )
+        owner = self.task_of(bridge.peer)
+        if owner is None:
+            raise _RefusedError(protocol.STREAM_REFUSED, "the connection is not a process of any task on this machine")
+        if owner is not task:
+            raise _RefusedError(
+                protocol.STREAM_REFUSED, f"the connection is a process of task {owner.id!r}, not {task_id!r}"
+            )
         if task.subscriber is None:
             raise _RefusedError(protocol.STREAM_REFUSED, f"no host holds task {task_id!r} right now")
         if len(task.streams) >= protocol.MAX_STREAMS:
@@ -1128,10 +1184,15 @@ class Node:
     an ephemeral daemon in a temporary directory, whose agents end with it.
     """
 
-    def __init__(self, out: BinaryIO | asyncio.StreamWriter, daemon: Daemon | None = None) -> None:
+    def __init__(
+        self, out: BinaryIO | asyncio.StreamWriter, daemon: Daemon | None = None, *, peer: int | None = None
+    ) -> None:
         self._out = _StreamOut(out)
         self.daemon = daemon or Daemon(Path(tempfile.mkdtemp(prefix="raven-node-")), ephemeral=True)
         self.channels: dict[int, _Task] = {}
+        self.peer = peer
+        """The pid of the process at the other end, as the system reported it at the socket (:func:`_peer_pid`): what
+        says which task a bridge is. ``None`` over stdio, and where the system does not say."""
         self.stream: _Stream | None = None
         """The one stream this connection carries, when it is a bridge's rather than a host's."""
         self.stopping = False
@@ -1471,10 +1532,14 @@ async def _serve_one(node: Node, text: bytes) -> None:
 
 
 async def serve(
-    reader: asyncio.StreamReader, out: BinaryIO | asyncio.StreamWriter, daemon: Daemon | None = None
+    reader: asyncio.StreamReader,
+    out: BinaryIO | asyncio.StreamWriter,
+    daemon: Daemon | None = None,
+    *,
+    peer: int | None = None,
 ) -> None:
     """Answer one host until it hangs up or says shutdown; then its tasks are left running, or ended (stdio)."""
-    node = Node(out, daemon)
+    node = Node(out, daemon, peer=peer)
     answering: set[asyncio.Task[None]] = set()
     stopped = asyncio.ensure_future(node.stopped.wait())
     try:
@@ -1532,7 +1597,7 @@ def run_stdio() -> int:
 
 async def _connection(daemon: Daemon, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
     try:
-        await serve(reader, writer, daemon)
+        await serve(reader, writer, daemon, peer=_peer_pid(writer.get_extra_info("socket")))
     finally:
         with contextlib.suppress(OSError, ConnectionError):
             writer.close()

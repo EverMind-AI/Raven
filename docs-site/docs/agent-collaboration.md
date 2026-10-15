@@ -31,9 +31,9 @@ these features or prevent task recovery.
 
 On hosts with Unix-socket support, remote ACP agents can use the MCP servers
 granted to their entry through the Raven node. Server definitions and credentials
-stay on the host, as do tool restrictions and sandbox rules. The host checks that
-each stream belongs to the agent task granted that endpoint; another task's
-token does not authorize it to select that grant by name.
+stay on the host, as do tool restrictions and sandbox rules. The node tells which
+task a bridge belongs to by the process that opened it, and the host checks that
+task against the grant; another task cannot select a grant by name.
 
 On Windows hosts, remote MCP lending is currently withheld because the host
 endpoint transport requires Unix sockets. The remote task still runs and its

@@ -1,10 +1,15 @@
 """raven.node.bridge: the stdio MCP server an agent on a machine spawns, carrying one stream to a host endpoint.
 
-The bridge is run as the agent would run it, a process on the same machine
-as a real daemon; the host's end is this test, on the daemon's socket. What
-is checked is the carrying: the agent's frames reach the host in pieces and
-whole, the host's reach the agent's stdout whole, and the stream ends when
-either side does -- with the daemon's refusal on stderr when it never began.
+The bridge is run the way an agent runs it: spawned by a process the daemon
+started as a task (``node_bridge_agent.py`` stands in for the agent, relaying
+its stdin and stdout), on the same machine as a real daemon; the host's end is
+this test, on the daemon's socket. What is checked is the carrying -- the
+agent's frames reach the host in pieces and whole, the host's reach the
+agent's stdout whole, the stream ends when either side does -- and whose a
+bridge is: the daemon knows it by the process that connected, so one spawned
+by this test, or by another task's agent, never begins. The bridge's code is
+also driven in this process, with the daemon told the test is a process of
+the task, for the lines the subprocess cannot show.
 """
 
 from __future__ import annotations
@@ -13,6 +18,7 @@ import asyncio
 import io
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -28,6 +34,8 @@ if sys.platform == "win32":
 from raven.node import bridge, protocol, server
 
 pytestmark = pytest.mark.slow
+
+_AGENT = Path(__file__).with_name("node_bridge_agent.py")
 
 
 def test_a_frame_is_cut_into_the_pieces_a_line_holds_and_the_last_is_marked(monkeypatch):
@@ -66,6 +74,14 @@ class _Host:
     def notified(self, method: str) -> list[dict[str, Any]]:
         return [f["params"] for f in self.frames if f.get("method") == method]
 
+    def lines(self, channel: int = 1) -> list[str]:
+        """What the agent on ``channel`` wrote: the bridge's stdout as the agent relays it, and its last word."""
+        return [p["line"] for p in self.notified(protocol.AGENT_FRAME) if p.get("channel") == channel]
+
+    async def say(self, text: str, *, channel: int = 1, eof: bool = False) -> None:
+        """A line to the agent's stdin, which the agent hands to its bridge; ``eof`` ends both."""
+        await self.tell(protocol.AGENT_STDIN, {"channel": channel, "data": text, "eof": eof})
+
     async def until(self, check: Any, *, timeout: float = 15.0) -> None:
         deadline = time.monotonic() + timeout
         while not check():
@@ -93,10 +109,11 @@ async def _daemon(root: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[asyncio.
     return running, host
 
 
-async def _wind_down(host: _Host, running: asyncio.Task[int]) -> None:
-    """End the agent, hang up, and see the daemon leave idle; a daemon that does not is cancelled rather than waited on."""
+async def _wind_down(host: _Host, running: asyncio.Task[int], *, channels: tuple[int, ...] = (1,)) -> None:
+    """End the agents, hang up, and see the daemon leave idle; a daemon that does not is cancelled rather than waited on."""
     try:
-        await host.ask(9, protocol.AGENT_CANCEL, {"channel": 1})
+        for n, channel in enumerate(channels):
+            await host.ask(90 + n, protocol.AGENT_CANCEL, {"channel": channel})
     finally:
         await host.close()
         try:
@@ -106,35 +123,39 @@ async def _wind_down(host: _Host, running: asyncio.Task[int]) -> None:
             raise
 
 
-def _bridge(root: Path, *, task: str = "a@box-1", lend: str = "d1", server_name: str = "pg") -> subprocess.Popen[bytes]:
+def _bridge_argv(root: Path, *, task: str = "a@box-1", lend: str = "d1", server_name: str = "pg") -> list[str]:
     argv = [sys.executable, "-I", "-m", "raven.node", "--mcp", "--dir", str(root)]
-    argv += ["--task", task, "--lend", lend, "--server", server_name]
-    return subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)  # noqa: S603
+    return [*argv, "--task", task, "--lend", lend, "--server", server_name]
 
 
-def _write(proc: subprocess.Popen[bytes], data: bytes) -> None:
-    assert proc.stdin is not None
-    proc.stdin.write(data)
-    proc.stdin.flush()
+def _bridge(root: Path, **kw: Any) -> subprocess.Popen[bytes]:
+    """A bridge this test spawns itself: a process of no task's, as the daemon sees it."""
+    return subprocess.Popen(
+        _bridge_argv(root, **kw), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )  # noqa: S603
 
 
-async def _line(proc: subprocess.Popen[bytes]) -> bytes:
-    assert proc.stdout is not None
-    return await asyncio.wait_for(asyncio.to_thread(proc.stdout.readline), timeout=15)
+async def _agent(host: _Host, root: Path, tmp_path: Path, *, task: str, channel: int = 1, **kw: Any) -> int:
+    """An agent of ``task`` on the daemon, spawning the bridge with ``kw``'s names; its pid."""
+    command = shlex.join([sys.executable, str(_AGENT), *_bridge_argv(root, **kw)])
+    started = await host.ask(
+        10 + channel,
+        protocol.AGENT_LAUNCH,
+        {"channel": channel, "task": task, "command": command, "cwd": str(tmp_path)},
+    )
+    assert started["result"]["task"] == task
+    return started["result"]["pid"]
 
 
-async def test_the_bridge_carries_the_agent_s_frames_to_the_host_and_the_host_s_back_whole(tmp_path, monkeypatch):
+async def test_the_bridge_an_agent_spawns_carries_its_frames_to_the_host_and_the_host_s_back_whole(
+    tmp_path, monkeypatch
+):
     root = tmp_path / "n"
     running, host = await _daemon(root, monkeypatch)
-    await host.ask(
-        2, protocol.AGENT_LAUNCH, {"channel": 1, "task": "a@box-1", "command": "sleep 30", "cwd": str(tmp_path)}
-    )
-    bridge = _bridge(root)
-    assert bridge.stdin is not None
+    await _agent(host, root, tmp_path, task="a@box-1")
     try:
         # What the agent writes reaches the host as a stream of its task, in pieces that make the frame.
-        bridge.stdin.write(b'{"jsonrpc":"2.0","id":1,"method":"initialize"}\n')
-        bridge.stdin.flush()
+        await host.say('{"jsonrpc":"2.0","id":1,"method":"initialize"}\n')
         await host.until(lambda: host.notified(protocol.MCP_FRAME))
         assert host.notified(protocol.MCP_OPEN) == [{"task": "a@box-1", "stream": 1, "server": "pg", "lend": "d1"}]
         assert host.notified(protocol.MCP_FRAME) == [
@@ -143,17 +164,15 @@ async def test_the_bridge_carries_the_agent_s_frames_to_the_host_and_the_host_s_
 
         # What the host sends, whole or in pieces, is one line on the agent's side.
         await host.tell(protocol.MCP_FRAME, {"stream": 1, "text": '{"jsonrpc":"2.0","id":1,"result":{}}', "end": True})
-        assert await _line(bridge) == b'{"jsonrpc":"2.0","id":1,"result":{}}\n'
         big = '{"jsonrpc":"2.0","id":2,"result":"' + "x" * (protocol.MCP_CHUNK + 10) + '"}'
         for text, end in protocol.pieces(big.encode()):
             await host.tell(protocol.MCP_FRAME, {"stream": 1, "text": text, "end": end})
-        assert await _line(bridge) == big.encode() + b"\n"
+        await host.until(lambda: len(host.lines()) == 2)
+        assert host.lines() == ['{"jsonrpc":"2.0","id":1,"result":{}}', big]
 
         # A frame of the agent's longer than a line crosses in pieces too.
-        # Written off the loop: the daemon runs on this loop, and a write
-        # that blocks here would stop it reading what the bridge forwards.
         long = '{"jsonrpc":"2.0","id":3,"params":"' + "y" * (protocol.MCP_CHUNK + 5) + '"}'
-        await asyncio.to_thread(_write, bridge, long.encode() + b"\n")
+        await host.say(long + "\n")
         await host.until(
             lambda: len(host.notified(protocol.MCP_FRAME)) >= 3 and host.notified(protocol.MCP_FRAME)[-1]["end"]
         )
@@ -161,47 +180,58 @@ async def test_the_bridge_carries_the_agent_s_frames_to_the_host_and_the_host_s_
         assert crossed == long and [p["end"] for p in host.notified(protocol.MCP_FRAME)[1:]] == [False, True]
 
         # The agent closes the server's stdin: the stream is over, the host is told, the bridge leaves clean.
-        bridge.stdin.close()
+        await host.say("", eof=True)
         await host.until(lambda: host.notified(protocol.MCP_CLOSE))
         assert host.notified(protocol.MCP_CLOSE) == [
             {"stream": 1, "task": "a@box-1", "reason": "the agent closed the server"}
         ]
-        assert await asyncio.to_thread(bridge.wait, 10) == 0
+        await host.until(lambda: host.lines()[-1:] == ["BRIDGE_EXIT 0 "])
+        await host.until(lambda: host.notified(protocol.AGENT_EXIT))
     finally:
-        if bridge.poll() is None:
-            bridge.kill()
         await _wind_down(host, running)
 
 
-async def test_a_stream_the_host_closes_ends_the_bridge_and_one_the_daemon_refuses_never_begins(tmp_path, monkeypatch):
+async def test_a_stream_the_host_closes_ends_the_bridge_and_a_bridge_of_no_task_or_of_another_s_never_begins(
+    tmp_path, monkeypatch
+):
     root = tmp_path / "n"
     running, host = await _daemon(root, monkeypatch)
-    await host.ask(
-        2, protocol.AGENT_LAUNCH, {"channel": 1, "task": "a@box-1", "command": "sleep 30", "cwd": str(tmp_path)}
-    )
     try:
-        bridge = _bridge(root)
-        assert bridge.stdin is not None
-        bridge.stdin.write(b'{"jsonrpc":"2.0","id":1,"method":"initialize"}\n')
-        bridge.stdin.flush()
+        await _agent(host, root, tmp_path, task="a@box-1")
+        await host.say('{"jsonrpc":"2.0","id":1,"method":"initialize"}\n')
         await host.until(lambda: host.notified(protocol.MCP_OPEN))
         await host.tell(protocol.MCP_CLOSE, {"stream": 1, "reason": "the dispatch ended"})
-        assert await asyncio.to_thread(bridge.wait, 10) == 0, "told the stream is over, it leaves"
-        assert await _line(bridge) == b"", "and wrote nothing of its own to the agent"
+        await host.until(lambda: host.lines())
+        assert host.lines() == ["BRIDGE_EXIT 0 "], (
+            "told the stream is over, it leaves, having written nothing of its own"
+        )
 
-        token = server.task_record_dir(root, "a@box-1") / server.TOKEN_FILE
-        token.write_text("0" * 64, encoding="utf-8")
-        refused = _bridge(root)
-        assert refused.stdin is not None
-        # Off the loop, which the daemon answering the bridge runs on.
-        _out, err = await asyncio.to_thread(refused.communicate, b"", 15)
-        assert refused.returncode == 1 and b"the daemon refused the stream: the token is not task" in err
+        # Another task's agent spawns a bridge that names this task, this dispatch and this server: the daemon
+        # knows whose process it is, and refuses it as that task's.
+        await _agent(host, root, tmp_path, task="b@box-1", channel=2)
+        await host.say('{"jsonrpc":"2.0","id":1,"method":"initialize"}\n', channel=2)
+        await host.until(lambda: host.lines(2))
+        (said,) = host.lines(2)
+        assert said == (
+            "BRIDGE_EXIT 1 raven node mcp bridge: the daemon refused the stream: "
+            "the connection is a process of task 'b@box-1', not 'a@box-1'"
+        )
+        assert host.notified(protocol.MCP_OPEN) == [{"task": "a@box-1", "stream": 1, "server": "pg", "lend": "d1"}]
+
+        # A bridge spawned by nobody's agent -- this test's own process -- is no task's.
+        stranger = _bridge(root)
+        _out, err = await asyncio.to_thread(stranger.communicate, b'{"jsonrpc":"2.0","id":1}\n', 15)
+        assert stranger.returncode == 1
+        assert err.strip() == (
+            b"raven node mcp bridge: the daemon refused the stream: "
+            b"the connection is not a process of any task on this machine"
+        )
 
         nowhere = _bridge(tmp_path / "no-such-node")
         _out, err = await asyncio.to_thread(nowhere.communicate, b"", 15)
-        assert nowhere.returncode == 1 and b"no token for task" in err
+        assert nowhere.returncode == 1 and b"cannot reach the daemon under" in err
     finally:
-        await _wind_down(host, running)
+        await _wind_down(host, running, channels=(1, 2))
 
 
 # ---- the bridge run in this process, on the daemon's socket ----------------------------------------
@@ -228,14 +258,33 @@ def _carry(root: Path, stdin: asyncio.StreamReader, out: _Out, **kw: Any) -> asy
     return asyncio.create_task(bridge.run_mcp_async(root, stdin=stdin, out=out, **opts))
 
 
+def _of_task(monkeypatch: pytest.MonkeyPatch, task: str | None) -> None:
+    """Make the daemon place this process (the in-process bridge's) as ``task``'s, or, with ``None``, as no task's.
+
+    Only the identity read is made up, not the process table: ``_end_tree``
+    reads the real one to end the agent's group at teardown, and a made-up
+    table that put this process under the agent would have the cancel kill
+    the test itself.
+    """
+    real = server.Daemon.task_of
+
+    def placed(self: server.Daemon, pid: int) -> Any:
+        if pid == os.getpid():
+            return self.tasks.get(task) if task is not None else None
+        return real(self, pid)
+
+    monkeypatch.setattr(server.Daemon, "task_of", placed)
+
+
 async def test_run_in_this_process_the_bridge_carries_frames_both_ways_and_leaves_when_the_agent_closes_its_stdin(
     tmp_path, monkeypatch
 ):
     root = tmp_path / "n"
     running, host = await _daemon(root, monkeypatch)
-    await host.ask(
+    started = await host.ask(
         2, protocol.AGENT_LAUNCH, {"channel": 1, "task": "a@box-1", "command": "sleep 30", "cwd": str(tmp_path)}
     )
+    _of_task(monkeypatch, "a@box-1")
     stdin, out = asyncio.StreamReader(), _Out()
     carrying = _carry(root, stdin, out)
     try:
@@ -275,30 +324,34 @@ async def test_run_in_this_process_the_bridge_carries_frames_both_ways_and_leave
 async def test_the_bridge_says_why_it_never_began_and_why_it_stopped(tmp_path, monkeypatch, capsys):
     root = tmp_path / "n"
     running, host = await _daemon(root, monkeypatch)
-    await host.ask(
+    started = await host.ask(
         2, protocol.AGENT_LAUNCH, {"channel": 1, "task": "a@box-1", "command": "sleep 30", "cwd": str(tmp_path)}
     )
+    agent = started["result"]["pid"]
     try:
-        # No token: no node directory of that task's.
+        # No daemon to reach under that directory.
         assert await _carry(tmp_path / "no-such-node", asyncio.StreamReader(), _Out()) == 1
-        assert "no token for task a@box-1" in capsys.readouterr().err
-
-        # A token but no daemon to reach.
-        elsewhere = tmp_path / "elsewhere"
-        server.task_record_dir(elsewhere, "a@box-1").mkdir(parents=True)
-        (server.task_record_dir(elsewhere, "a@box-1") / server.TOKEN_FILE).write_text("tok", encoding="utf-8")
-        assert await _carry(elsewhere, asyncio.StreamReader(), _Out()) == 1
         assert "cannot reach the daemon under" in capsys.readouterr().err
 
-        # The daemon refuses: the token is not the task's.
-        token = server.task_record_dir(root, "a@box-1") / server.TOKEN_FILE
-        minted = token.read_text(encoding="utf-8")
-        token.write_text("0" * 64, encoding="utf-8")
+        # The daemon refuses: this process is no task's, as the real process table has it.
         assert await _carry(root, asyncio.StreamReader(), _Out()) == 1
-        assert "the daemon refused the stream: the token is not task" in capsys.readouterr().err
-        token.write_text(minted, encoding="utf-8")
+        assert (
+            "the daemon refused the stream: the connection is not a process of any task on this machine"
+            in capsys.readouterr().err
+        )
+
+        # The daemon refuses: this process is another task's.
+        other = await host.ask(
+            3, protocol.AGENT_LAUNCH, {"channel": 2, "task": "b@box-1", "command": "sleep 30", "cwd": str(tmp_path)}
+        )
+        _of_task(monkeypatch, "b@box-1")
+        assert await _carry(root, asyncio.StreamReader(), _Out()) == 1
+        assert "the daemon refused the stream: the connection is a process of task 'b@box-1', not 'a@box-1'" in (
+            capsys.readouterr().err
+        )
 
         # A frame of the agent's past the cap ends the bridge, and says so; the host hears the stream end.
+        _of_task(monkeypatch, "a@box-1")
         monkeypatch.setattr(protocol, "MCP_MAX_FRAME", 64)
         stdin = asyncio.StreamReader()
         carrying = _carry(root, stdin, _Out())
@@ -309,7 +362,7 @@ async def test_the_bridge_says_why_it_never_began_and_why_it_stopped(tmp_path, m
         await host.until(lambda: host.notified(protocol.MCP_CLOSE))
         assert host.notified(protocol.MCP_CLOSE)[-1]["reason"] == "the bridge ended"
     finally:
-        await _wind_down(host, running)
+        await _wind_down(host, running, channels=(1, 2))
 
 
 async def test_the_bridge_reads_only_its_stream_s_frames_off_the_daemon_and_leaves_when_told_the_stream_is_over(
@@ -349,8 +402,7 @@ async def test_the_bridge_reads_only_its_stream_s_frames_off_the_daemon_and_leav
     out = _Out()
     for name, handler, want in (("a", answering, 0), ("b", silent, 1), ("c", refusing, 1)):
         root = tmp_path / name
-        server.task_record_dir(root, "a@box-1").mkdir(parents=True)
-        (server.task_record_dir(root, "a@box-1") / server.TOKEN_FILE).write_text("tok", encoding="utf-8")
+        server.own_dir(root / server.RUN_DIR)
         daemon = await asyncio.start_unix_server(handler, path=str(server.socket_path(root)))
         try:
             assert await asyncio.wait_for(_carry(root, asyncio.StreamReader(), out), timeout=15) == want
@@ -359,12 +411,7 @@ async def test_the_bridge_reads_only_its_stream_s_frames_off_the_daemon_and_leav
             await daemon.wait_closed()
 
     assert openings == [
-        {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "mcp/open",
-            "params": {"task": "a@box-1", "lend": "d1", "server": "pg", "token": "tok"},
-        }
+        {"jsonrpc": "2.0", "id": 1, "method": "mcp/open", "params": {"task": "a@box-1", "lend": "d1", "server": "pg"}}
     ]
     assert out.lines() == [b"ab"], "its own stream's frame, put together; nothing of the rest"
 
@@ -378,7 +425,7 @@ def test_run_mcp_takes_the_agent_s_stdin_as_a_pipe_and_keeps_its_stdout_for_fram
         rc = bridge.run_mcp(tmp_path / "no-such-node", task="a@box-1", lend="d1", server_name="pg")
     os.close(write_end)
 
-    assert rc == 1 and "no token for task a@box-1" in capsys.readouterr().err
+    assert rc == 1 and "cannot reach the daemon under" in capsys.readouterr().err
     assert frames.getvalue() == b"", "nothing but frames goes to the agent"
 
 

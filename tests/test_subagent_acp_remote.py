@@ -42,6 +42,7 @@ from raven.agent.subagent.probe_state import fingerprint
 from raven.agent.subagent.registry import _row_for
 from raven.config.schema import MCPServerConfig, ThirdPartyAcpSubagentConfig
 from raven.config.update_subagents import reject_unsupported_acp_fields
+from raven.mcp.bridge import unix_sockets_available
 from raven.node import bundle
 from raven.node.client import NodePool
 from raven.ops import remote_path
@@ -444,6 +445,9 @@ async def test_an_mcp_server_the_host_holds_is_reached_from_the_machine_through_
 # ---- what it is given, and how ----------------------------------------------------
 
 
+@pytest.mark.skipif(
+    not unix_sockets_available(), reason="MCP lending rides on unix sockets, which this computer has not"
+)
 def test_mcp_is_lent_to_an_agent_on_a_machine_through_its_node_and_the_reply_says_so():
     cfg = remote_config()
     backend = build_third_party_backend(cfg)
@@ -1037,7 +1041,10 @@ def test_the_machine_note_is_kept_whole_inside_the_cap():
 # ---- one owner for "session MCP on a machine" ---------------------------------------------
 
 
-def test_the_one_mcp_predicate_answers_for_a_machine_row_too():
+@pytest.mark.skipif(
+    not unix_sockets_available(), reason="MCP lending rides on unix sockets, which this computer has not"
+)
+def test_the_one_mcp_predicate_answers_for_a_machine_row_too(monkeypatch):
     from raven.agent.subagent.backends import session_mcp_delivered
 
     assert session_mcp_delivered(session_mcp=True, snapshot=None, machine="box") is True, "lent through the node"
@@ -1046,6 +1053,11 @@ def test_the_one_mcp_predicate_answers_for_a_machine_row_too():
     )
     assert session_mcp_delivered(session_mcp=True, snapshot=None, machine="") is True
     assert session_mcp_delivered(session_mcp=True, snapshot=None) is True
+
+    # Without the transport (a Windows host), neither side is promised what the dispatch would withhold.
+    monkeypatch.delattr(asyncio, "start_unix_server", raising=False)
+    assert session_mcp_delivered(session_mcp=True, snapshot=None, machine="box") is False
+    assert session_mcp_delivered(session_mcp=True, snapshot=None) is False
 
 
 # ---- the write doors ------------------------------------------------------------------------
@@ -1088,5 +1100,5 @@ async def test_a_remote_turn_runs_without_lent_mcp_when_the_host_has_no_unix_soc
     grant = McpGrant(granted=(GrantedServer("pg", "stdio", MCPServerConfig(command="must-not-start")),))
     reply = await backend.run("hi", task_id="no-host-socket", workspace=tmp_path, executor=None, mcp_grant=grant)
     assert reply.split("\n\n[raven]")[0] == "pong"
-    assert "host does not support Unix-socket MCP endpoints" in reply
+    assert "this computer does not support Unix-socket MCP endpoints" in reply
     assert not box.nodes._lent

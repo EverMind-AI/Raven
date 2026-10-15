@@ -15,6 +15,7 @@ import io
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -1158,7 +1159,6 @@ async def test_a_task_s_records_are_its_owner_s_alone(tmp_path, agent):
             "task.json": 0o600,
             "frames.jsonl": 0o600,
             "stderr.log": 0o600,
-            server.TOKEN_FILE: 0o600,
         }, "the frames hold the agent's output as it was, and the token opens its MCP streams"
     finally:
         daemon.tasks["t-own"].end()
@@ -1442,11 +1442,15 @@ async def test_a_launch_in_progress_counts_toward_the_limit(tmp_path, agent, mon
 
 
 class _Peer:
-    """One connection to a shared daemon, as the host's or a bridge's: every line the daemon wrote to it, decoded."""
+    """One connection to a shared daemon, as the host's or a bridge's: every line the daemon wrote to it, decoded.
 
-    def __init__(self, daemon: server.Daemon) -> None:
+    ``peer`` is what the system says at the socket: the pid of the process
+    that connected, which is how the daemon tells whose bridge it is.
+    """
+
+    def __init__(self, daemon: server.Daemon, *, peer: int | None = None) -> None:
         self.out = io.BytesIO()
-        self.node = server.Node(self.out, daemon)
+        self.node = server.Node(self.out, daemon, peer=peer)
 
     def frames(self) -> list[dict[str, Any]]:
         return [json.loads(line) for line in self.out.getvalue().splitlines() if line.strip()]
@@ -1471,17 +1475,34 @@ class _Peer:
             await asyncio.sleep(0.02)
 
 
-async def _launched(daemon: server.Daemon, host: _Peer, tmp_path: Path, task: str = "agent@box-1") -> str:
-    """An agent of the host's on the daemon, under ``task``, whose token the test reads as a bridge would."""
+@pytest.fixture
+def lineage(monkeypatch):
+    """The process table as the daemon reads it, made up: which pid is under which, by parent."""
+    table: dict[int, int] = {}
+    monkeypatch.setattr(server, "_process_table", lambda: dict(table))
+    return table
+
+
+async def _launched(
+    daemon: server.Daemon, host: _Peer, tmp_path: Path, task: str = "agent@box-1", *, channel: int = 1
+) -> int:
+    """An agent of the host's on the daemon, under ``task``: its pid, which every bridge of the task is under."""
     started = await host.ask(
-        protocol.AGENT_LAUNCH, {"channel": 1, "task": task, "command": "sleep 30", "cwd": str(tmp_path)}
+        protocol.AGENT_LAUNCH, {"channel": channel, "task": task, "command": "sleep 30", "cwd": str(tmp_path)}
     )
     assert started["result"]["task"] == task
-    return (daemon.record_dir(task) / server.TOKEN_FILE).read_text(encoding="utf-8")
+    return started["result"]["pid"]
 
 
-def _opening(token: str, *, task: str = "agent@box-1", server_name: str = "pg", lend: str = "d1") -> dict[str, Any]:
-    return {"task": task, "token": token, "server": server_name, "lend": lend}
+def _bridge(daemon: server.Daemon, lineage: dict[int, int], *, under: int) -> _Peer:
+    """A bridge's connection, from a process the daemon's process table puts under ``under``."""
+    pid = 900_000 + len(lineage)
+    lineage[pid] = under
+    return _Peer(daemon, peer=pid)
+
+
+def _opening(*, task: str = "agent@box-1", server_name: str = "pg", lend: str = "d1") -> dict[str, Any]:
+    return {"task": task, "server": server_name, "lend": lend}
 
 
 @pytest.fixture
@@ -1499,48 +1520,115 @@ async def test_hello_names_the_bridge_an_agent_runs_to_reach_a_lent_server_and_a
 
 
 @pytest.mark.slow
-async def test_a_launch_leaves_the_task_s_token_beside_its_record_for_this_user_alone(tmp_path, daemon):
+async def test_a_stream_is_opened_for_a_process_under_the_task_s_agent_as_the_system_shows_it(tmp_path, daemon):
+    """The real process table: a child of the agent the daemon started may open the task's stream; this test may not."""
     host = _Peer(daemon)
+    started = await host.ask(
+        protocol.AGENT_LAUNCH,
+        {"channel": 1, "task": "agent@box-1", "command": "sh -c 'sleep 30; true'", "cwd": str(tmp_path)},
+    )
+    agent = started["result"]["pid"]
+    await host.until(lambda: server._descendants(agent))
+    (child,) = server._descendants(agent)
 
-    token = await _launched(daemon, host, tmp_path)
-
-    path = daemon.record_dir("agent@box-1") / server.TOKEN_FILE
-    assert len(token) == 64 and path.stat().st_mode & 0o077 == 0
-    assert daemon.tasks["agent@box-1"].token == token
+    assert daemon.task_of(child) is daemon.tasks["agent@box-1"] and daemon.task_of(agent) is daemon.tasks["agent@box-1"]
+    assert daemon.task_of(os.getpid()) is None, "the daemon's own process, and everything above it, is no task's"
+    opened = await _Peer(daemon, peer=child).ask(protocol.MCP_OPEN, _opening())
+    assert opened["result"] == {"stream": 1}
+    stranger = await _Peer(daemon, peer=os.getpid()).ask(protocol.MCP_OPEN, _opening())
+    assert stranger["error"]["code"] == protocol.STREAM_REFUSED
+    assert stranger["error"]["message"] == "the connection is not a process of any task on this machine"
 
 
 @pytest.mark.slow
-async def test_a_stream_is_opened_with_the_task_s_token_and_refused_without_it(tmp_path, daemon):
-    host = _Peer(daemon)
-    token = await _launched(daemon, host, tmp_path)
-    bridge = _Peer(daemon)
+def test_the_peer_of_a_socket_is_the_process_that_connected_and_nothing_where_the_system_does_not_say(monkeypatch):
+    left, right = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        assert server._peer_pid(left) == os.getpid() == server._peer_pid(right)
+    finally:
+        left.close()
+        right.close()
 
-    wrong = await bridge.ask(protocol.MCP_OPEN, _opening("0" * 64))
-    assert wrong["error"]["code"] == protocol.STREAM_REFUSED and "token" in wrong["error"]["message"]
-    unknown = await bridge.ask(protocol.MCP_OPEN, _opening(token, task="nobody@box-9"))
+    class _Mute:
+        def getsockopt(self, *args: Any) -> bytes:
+            raise OSError("not a socket")
+
+    assert server._peer_pid(_Mute()) is None
+    monkeypatch.setattr(server.sys, "platform", "sunos5")
+    monkeypatch.delattr(server.socket, "SO_PEERCRED", raising=False)
+    assert server._peer_pid(left) is None, "a system that answers neither question places no bridge"
+
+
+@pytest.mark.slow
+async def test_a_task_is_found_up_the_parent_chain_only_and_a_chain_that_loops_or_ends_finds_none(
+    tmp_path, daemon, lineage
+):
+    host = _Peer(daemon)
+    agent = await _launched(daemon, host, tmp_path)
+    task = daemon.tasks["agent@box-1"]
+    lineage.update({agent: 1, 7001: agent, 7002: 7001, 7003: 7004, 7004: 7003, 7005: 1})
+
+    assert daemon.task_of(agent) is task, "the agent itself"
+    assert daemon.task_of(7002) is task, "two steps under it"
+    assert daemon.task_of(7003) is None and daemon.task_of(7005) is None and daemon.task_of(0) is None
+    assert daemon.task_of(1) is None, "init is nobody's agent"
+    lineage.clear()
+    assert daemon.task_of(agent) is task, "with no table to read, the agent's own process still is"
+    assert daemon.task_of(7001) is None, "and nothing under it can be placed"
+    await host.ask(protocol.AGENT_CANCEL, {"channel": 1}, request_id=2)
+    await host.until(lambda: host.notified(protocol.AGENT_EXIT))
+    assert daemon.task_of(agent) is None, "a task that ended is no task"
+
+
+@pytest.mark.slow
+async def test_a_stream_is_refused_for_a_process_of_another_task_of_no_task_or_one_the_system_cannot_place(
+    tmp_path, daemon, lineage
+):
+    host = _Peer(daemon)
+    mine = await _launched(daemon, host, tmp_path)
+    theirs = await _launched(daemon, host, tmp_path, "agent@box-2", channel=2)
+
+    other = await _bridge(daemon, lineage, under=theirs).ask(protocol.MCP_OPEN, _opening())
+    assert other["error"]["code"] == protocol.STREAM_REFUSED
+    assert other["error"]["message"] == "the connection is a process of task 'agent@box-2', not 'agent@box-1'"
+    nobody = await _Peer(daemon, peer=424242).ask(protocol.MCP_OPEN, _opening())
+    assert (
+        nobody["error"]["code"] == protocol.STREAM_REFUSED and "not a process of any task" in nobody["error"]["message"]
+    )
+    unplaced = await _Peer(daemon, peer=None).ask(protocol.MCP_OPEN, _opening())
+    assert unplaced["error"]["code"] == protocol.STREAM_REFUSED
+    assert unplaced["error"]["message"] == "this system does not say which process a bridge is, so no stream is opened"
+    unknown = await _bridge(daemon, lineage, under=mine).ask(protocol.MCP_OPEN, _opening(task="nobody@box-9"))
     assert unknown["error"]["code"] == protocol.STREAM_REFUSED and "not running" in unknown["error"]["message"]
     assert host.notified(protocol.MCP_OPEN) == [], "a refused stream is not told to the host"
 
-    opened = await bridge.ask(protocol.MCP_OPEN, _opening(token))
+    bridge = _bridge(daemon, lineage, under=mine)
+    opened = await bridge.ask(protocol.MCP_OPEN, _opening())
 
     assert opened["result"] == {"stream": 1}
     assert host.notified(protocol.MCP_OPEN) == [{"task": "agent@box-1", "stream": 1, "server": "pg", "lend": "d1"}]
-    again = await bridge.ask(protocol.MCP_OPEN, _opening(token), request_id=2)
+    again = await bridge.ask(protocol.MCP_OPEN, _opening(), request_id=2)
     assert again["error"]["code"] == -32602 and "already" in again["error"]["message"], "one stream per bridge"
+
+    # The other task's own bridge opens its own stream beside it, told to the host as that task's.
+    own = await _bridge(daemon, lineage, under=theirs).ask(protocol.MCP_OPEN, _opening(task="agent@box-2"))
+    assert own["result"] == {"stream": 2}
+    assert host.notified(protocol.MCP_OPEN)[-1] == {"task": "agent@box-2", "stream": 2, "server": "pg", "lend": "d1"}
+    assert [s.task.id for s in daemon.streams.values()] == ["agent@box-1", "agent@box-2"]
 
 
 @pytest.mark.slow
-async def test_a_stream_needs_a_host_holding_the_task_and_a_task_holds_a_bounded_number(tmp_path, daemon):
+async def test_a_stream_needs_a_host_holding_the_task_and_a_task_holds_a_bounded_number(tmp_path, daemon, lineage):
     host = _Peer(daemon)
-    token = await _launched(daemon, host, tmp_path)
+    agent = await _launched(daemon, host, tmp_path)
     await host.node.detach_all()
-    refused = await _Peer(daemon).ask(protocol.MCP_OPEN, _opening(token))
+    refused = await _bridge(daemon, lineage, under=agent).ask(protocol.MCP_OPEN, _opening())
     assert refused["error"]["code"] == protocol.STREAM_REFUSED and "no host holds" in refused["error"]["message"]
 
     back = _Peer(daemon)
     await back.ask(protocol.AGENT_ATTACH, {"channel": 1, "task": "agent@box-1", "after": 0})
-    bridges = [_Peer(daemon) for _ in range(protocol.MAX_STREAMS + 1)]
-    answers = [await b.ask(protocol.MCP_OPEN, _opening(token, server_name=f"s{i}")) for i, b in enumerate(bridges)]
+    bridges = [_bridge(daemon, lineage, under=agent) for _ in range(protocol.MAX_STREAMS + 1)]
+    answers = [await b.ask(protocol.MCP_OPEN, _opening(server_name=f"s{i}")) for i, b in enumerate(bridges)]
 
     assert all("result" in a for a in answers[: protocol.MAX_STREAMS])
     assert answers[-1]["error"]["code"] == protocol.STREAM_REFUSED and "open already" in answers[-1]["error"]["message"]
@@ -1548,11 +1636,11 @@ async def test_a_stream_needs_a_host_holding_the_task_and_a_task_holds_a_bounded
 
 
 @pytest.mark.slow
-async def test_the_pieces_of_a_frame_cross_the_daemon_both_ways_as_they_are(tmp_path, daemon):
+async def test_the_pieces_of_a_frame_cross_the_daemon_both_ways_as_they_are(tmp_path, daemon, lineage):
     host = _Peer(daemon)
-    token = await _launched(daemon, host, tmp_path)
-    bridge = _Peer(daemon)
-    stream = (await bridge.ask(protocol.MCP_OPEN, _opening(token)))["result"]["stream"]
+    agent = await _launched(daemon, host, tmp_path)
+    bridge = _bridge(daemon, lineage, under=agent)
+    stream = (await bridge.ask(protocol.MCP_OPEN, _opening()))["result"]["stream"]
 
     await bridge.tell(protocol.MCP_FRAME, {"stream": stream, "text": '{"jsonrpc":"2.0","id":1,', "end": False})
     await bridge.tell(protocol.MCP_FRAME, {"stream": stream, "text": '"method":"tools/list"}', "end": True})
@@ -1573,13 +1661,13 @@ async def test_the_pieces_of_a_frame_cross_the_daemon_both_ways_as_they_are(tmp_
 
 
 @pytest.mark.slow
-async def test_a_stream_ends_with_either_end_or_the_agent_and_the_other_end_is_told(tmp_path, daemon):
+async def test_a_stream_ends_with_either_end_or_the_agent_and_the_other_end_is_told(tmp_path, daemon, lineage):
     host = _Peer(daemon)
-    token = await _launched(daemon, host, tmp_path)
+    agent = await _launched(daemon, host, tmp_path)
 
     # The bridge closes: the host hears it, the stream is gone.
-    bridge = _Peer(daemon)
-    first = (await bridge.ask(protocol.MCP_OPEN, _opening(token)))["result"]["stream"]
+    bridge = _bridge(daemon, lineage, under=agent)
+    first = (await bridge.ask(protocol.MCP_OPEN, _opening()))["result"]["stream"]
     await bridge.tell(protocol.MCP_CLOSE, {"stream": first, "reason": "the agent closed the server"})
     assert host.notified(protocol.MCP_CLOSE) == [
         {"stream": first, "task": "agent@box-1", "reason": "the agent closed the server"}
@@ -1587,16 +1675,16 @@ async def test_a_stream_ends_with_either_end_or_the_agent_and_the_other_end_is_t
     assert first not in daemon.streams and daemon.tasks["agent@box-1"].streams == {}
 
     # The host closes: the bridge hears it.
-    bridge = _Peer(daemon)
-    second = (await bridge.ask(protocol.MCP_OPEN, _opening(token)))["result"]["stream"]
+    bridge = _bridge(daemon, lineage, under=agent)
+    second = (await bridge.ask(protocol.MCP_OPEN, _opening()))["result"]["stream"]
     await host.tell(protocol.MCP_CLOSE, {"stream": second, "reason": "the dispatch ended"})
     assert bridge.notified(protocol.MCP_CLOSE) == [
         {"stream": second, "task": "agent@box-1", "reason": "the dispatch ended"}
     ]
 
     # The bridge's connection ends without a word: the host is told.
-    bridge = _Peer(daemon)
-    third = (await bridge.ask(protocol.MCP_OPEN, _opening(token)))["result"]["stream"]
+    bridge = _bridge(daemon, lineage, under=agent)
+    third = (await bridge.ask(protocol.MCP_OPEN, _opening()))["result"]["stream"]
     await bridge.node.detach_all()
     assert host.notified(protocol.MCP_CLOSE)[-1] == {
         "stream": third,
@@ -1605,8 +1693,8 @@ async def test_a_stream_ends_with_either_end_or_the_agent_and_the_other_end_is_t
     }
 
     # The host's link ends: its streams go, the bridges are told.
-    bridge = _Peer(daemon)
-    fourth = (await bridge.ask(protocol.MCP_OPEN, _opening(token)))["result"]["stream"]
+    bridge = _bridge(daemon, lineage, under=agent)
+    fourth = (await bridge.ask(protocol.MCP_OPEN, _opening()))["result"]["stream"]
     await host.node.detach_all()
     assert bridge.notified(protocol.MCP_CLOSE) == [
         {"stream": fourth, "task": "agent@box-1", "reason": "the host's link ended"}
@@ -1616,8 +1704,8 @@ async def test_a_stream_ends_with_either_end_or_the_agent_and_the_other_end_is_t
     # The agent ends: the streams of its task end with it.
     back = _Peer(daemon)
     await back.ask(protocol.AGENT_ATTACH, {"channel": 1, "task": "agent@box-1", "after": 0})
-    bridge = _Peer(daemon)
-    fifth = (await bridge.ask(protocol.MCP_OPEN, _opening(token)))["result"]["stream"]
+    bridge = _bridge(daemon, lineage, under=agent)
+    fifth = (await bridge.ask(protocol.MCP_OPEN, _opening()))["result"]["stream"]
     await back.ask(protocol.AGENT_CANCEL, {"channel": 1}, request_id=2)
     await back.until(lambda: back.notified(protocol.AGENT_EXIT))
     await back.until(lambda: bridge.notified(protocol.MCP_CLOSE))
@@ -1627,28 +1715,28 @@ async def test_a_stream_ends_with_either_end_or_the_agent_and_the_other_end_is_t
     assert daemon.streams == {}
 
 
-async def test_a_stream_is_refused_when_its_opening_is_malformed_or_the_host_cannot_be_told(tmp_path, daemon):
+async def test_a_stream_is_refused_when_its_opening_is_malformed_or_the_host_cannot_be_told(tmp_path, daemon, lineage):
     host = _Peer(daemon)
-    token = await _launched(daemon, host, tmp_path)
-    bridge = _Peer(daemon)
+    agent = await _launched(daemon, host, tmp_path)
+    bridge = _bridge(daemon, lineage, under=agent)
 
-    bare = await bridge.ask(protocol.MCP_OPEN, {"task": "agent@box-1", "token": token, "server": "", "lend": "d1"})
+    bare = await bridge.ask(protocol.MCP_OPEN, {"task": "agent@box-1", "server": "", "lend": "d1"})
     assert bare["error"]["code"] == -32602 and "non-empty strings" in bare["error"]["message"]
 
     host.out.close()  # the host's way out is gone, and nobody has noticed yet
-    untold = await bridge.ask(protocol.MCP_OPEN, _opening(token), request_id=2)
+    untold = await bridge.ask(protocol.MCP_OPEN, _opening(), request_id=2)
 
     assert untold["error"]["code"] == protocol.STREAM_REFUSED and "could not be told" in untold["error"]["message"]
     assert daemon.streams == {} and bridge.node.stream is None and daemon.tasks["agent@box-1"].streams == {}
 
 
 async def test_a_frame_for_an_end_that_is_gone_closes_the_stream_while_a_stranger_s_close_or_an_odd_frame_does_nothing(
-    tmp_path, daemon
+    tmp_path, daemon, lineage
 ):
     host = _Peer(daemon)
-    token = await _launched(daemon, host, tmp_path)
-    bridge = _Peer(daemon)
-    stream = (await bridge.ask(protocol.MCP_OPEN, _opening(token)))["result"]["stream"]
+    agent = await _launched(daemon, host, tmp_path)
+    bridge = _bridge(daemon, lineage, under=agent)
+    stream = (await bridge.ask(protocol.MCP_OPEN, _opening()))["result"]["stream"]
 
     await bridge.tell(protocol.MCP_FRAME, {"stream": stream, "text": 5, "end": True})
     await bridge.tell(protocol.MCP_FRAME, {"stream": True, "text": "x", "end": True})

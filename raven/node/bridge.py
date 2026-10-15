@@ -2,11 +2,12 @@
 
 ``python -I -m raven.node --mcp --dir D --task T --lend L --server S`` is one
 stdio MCP server as the agent sees it. It connects to the daemon's socket under
-``D``, opens a stream for task ``T`` with the token the daemon left beside the
-task's record (:data:`raven.node.server.TOKEN_FILE`), and from then on carries
-frames both ways: what the agent writes goes to the daemon as ``mcp/frame``
-pieces, what comes back as such pieces is put together and written to stdout.
-It parses no MCP and holds no credential, and it ends when either side does.
+``D``, opens a stream for task ``T`` -- the daemon tells it is ``T``'s by the
+process that connected, which the agent of ``T`` spawned -- and from then on
+carries frames both ways: what the agent writes goes to the daemon as
+``mcp/frame`` pieces, what comes back as such pieces is put together and
+written to stdout. It parses no MCP and holds no credential, and it ends when
+either side does.
 ``S`` and ``L`` name the server and the host's dispatch, for the host to pair
 the stream with the endpoint it opened on its own side; neither is a secret.
 The host authorizes that pair against the daemon-authenticated task, not the
@@ -39,11 +40,6 @@ async def run_mcp_async(
     root: Path, *, task: str, lend: str, server_name: str, stdin: asyncio.StreamReader, out: BinaryIO
 ) -> int:
     """Carry one stream between ``stdin``/``out`` and the daemon under ``root``; 0 when it ended as streams end."""
-    try:
-        token = (server.task_record_dir(root, task) / server.TOKEN_FILE).read_text(encoding="utf-8").strip()
-    except OSError as exc:
-        print(f"raven node mcp bridge: no token for task {task}: {exc}", file=sys.stderr, flush=True)
-        return 1
     sock = server.socket_path(root)
     try:
         reader, writer = await asyncio.open_unix_connection(str(sock), limit=_LINE_LIMIT)
@@ -51,7 +47,7 @@ async def run_mcp_async(
         print(f"raven node mcp bridge: cannot reach the daemon under {root}: {exc}", file=sys.stderr, flush=True)
         return 1
     try:
-        opening = {"task": task, "lend": lend, "server": server_name, "token": token}
+        opening = {"task": task, "lend": lend, "server": server_name}
         writer.write(
             json.dumps({"jsonrpc": "2.0", "id": 1, "method": protocol.MCP_OPEN, "params": opening}).encode("utf-8")
             + b"\n"

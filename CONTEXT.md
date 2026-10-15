@@ -455,7 +455,8 @@ the manager's announce of the reply was taken (`remote_runs.forget_dispatch`), s
 that stops between the two reads the reply again. An MCP server the
 host lends an agent there is carried on the same link: the agent runs the install's bridge
 (`python -I -m raven.node --mcp`) as a stdio server, the daemon relays its frames as a stream
-(`mcp/open`, `mcp/frame`, `mcp/close`, under a token the daemon leaves beside the task's record),
+(`mcp/open`, `mcp/frame`, `mcp/close`; which task a bridge is, the daemon tells by the process
+that connected, whose parent chain reaches the agent it started, so no task can claim another's),
 and the host pumps them into the endpoint it opened on its own side (`raven/node/bridge.py`,
 `NodePool.lend`). The host binds each dispatch's endpoints to the acquired agent's task
 and checks that binding against the daemon-authenticated task before connecting, and again

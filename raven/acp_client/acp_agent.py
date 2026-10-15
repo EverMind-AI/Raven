@@ -1395,11 +1395,13 @@ class AcpAgentBackend:
         node carries no streams.
         """
         notes = []
-        unsupported_host = bool(self.machine) and not unix_sockets_available()
+        unsupported_host = not unix_sockets_available()
         if unsupported_host and grant.granted:
+            names = ", ".join(repr(server.name) for server in grant.granted)
+            where = f" on machine {self.machine!r}" if self.machine else ""
             notes.append(
-                f"MCP servers were not lent to acp agent {self.name!r} on machine {self.machine!r}: "
-                "this host does not support Unix-socket MCP endpoints; the task ran without those servers"
+                f"MCP servers {names} were not delivered to acp agent {self.name!r}{where}: this computer does "
+                "not support Unix-socket MCP endpoints; the task ran without those servers"
             )
         elif lent is not None and grant.granted and self.machine:
             names = ", ".join(repr(server.name) for server in grant.granted)
@@ -1457,9 +1459,11 @@ class AcpAgentBackend:
         """The bridge stanzas for one dispatch, live for exactly as long as it runs; on a machine, the endpoints to pair.
 
         ``launched`` is the dispatch's place on its machine, when it has one:
-        the endpoints are opened here on hosts supporting Unix sockets.
-        What is yielded is :class:`_Lent`; ``_lent_stanzas`` binds the endpoints
-        to the acquired agent's task before handing its bridge to the session.
+        the endpoints are opened here all the same, and what is yielded is
+        :class:`_Lent`; ``_lent_stanzas`` binds the endpoints to the acquired
+        agent's task before handing its bridge to the session. On a computer
+        without unix sockets (Windows) nothing is opened for either side, the
+        agent runs without the servers, and :meth:`_mcp_note` says so.
 
         ``node_id`` is this dispatch's identity -- a DAG node's id, a spawn's
         task id -- because reaping is per node and not per run: a graph of a
@@ -1476,7 +1480,7 @@ class AcpAgentBackend:
         PATH at all, and the ask itself is a thread hop: :meth:`_adapter_path`
         can run the login shell, and this runs inside the dispatch's own turn.
         """
-        if launched is not None and not unix_sockets_available():
+        if not unix_sockets_available():
             yield []
             return
         # Both of these come off the host's MCP source: the executor so a bridged
