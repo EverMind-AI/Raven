@@ -569,6 +569,54 @@ class _FakeBackend:
         return path in self.files
 
 
+async def test_a_submitted_graph_runs_its_nodes_in_the_configured_sandbox(tmp_path: Path) -> None:
+    """``run_subagent_dag`` used to be the one dispatch route that never asked
+    for an executor: every node's exec ran on the host however ``tools.sandbox``
+    was set, silently -- exactly what the sandbox docs promise never happens.
+    The tool now builds each node's executor from the same sandbox the spawn
+    paths read."""
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+    from raven.agent.subagent.registry import AgentRegistry
+
+    built: list[Path] = []
+    ran: list[tuple[Path, object]] = []
+    exited: list[bool] = []
+
+    class _Vm:
+        def __init__(self, workspace: Path) -> None:
+            self.workspace = workspace
+
+        async def __aenter__(self) -> "_Vm":
+            return self
+
+        async def __aexit__(self, *exc: object) -> None:
+            exited.append(True)
+
+    class _Node:
+        async def run(self, task: str, *, task_id: str, workspace, executor, **kwargs) -> str:
+            ran.append((Path(workspace), executor))
+            return f"OUT[{task_id}]"
+
+    def sandbox_for(workspace: Path) -> _Vm:
+        built.append(workspace)
+        return _Vm(workspace)
+
+    registry = AgentRegistry(build_builtin=lambda row, narrowed: _Node())
+    registry.apply([])
+    tool = SubAgentDagTool(workspace=tmp_path, registry=registry, sandbox_for=sandbox_for)
+    tool.set_context("cli", "direct", None)
+    out = await tool.execute(
+        [{"id": "a", "subagent": "Raven", "node_summary": "one", "prompt_template": "hello"}],
+        task_summary="run the graph under test",
+        background=False,
+    )
+    assert "completed" in str(out)
+    assert len(built) == 1 and len(ran) == 1, "one node, one executor built for it"
+    assert built[0] == ran[0][0], "the executor is built for the workdir its node runs in"
+    assert isinstance(ran[0][1], _Vm), f"the node received the factory's executor, got {ran[0][1]!r}"
+    assert exited == [True], "the node's executor is torn down when the node ends"
+
+
 async def test_render_output_and_inputs() -> None:
     be = _FakeBackend()
     out_path = "/hist/nodes/a.out.md"

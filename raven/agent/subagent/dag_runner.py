@@ -11,6 +11,7 @@ through a plain ``ProgressPublisher`` callback (no spine, no scheduler).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 from collections.abc import Awaitable, Callable, Iterable
@@ -259,7 +260,7 @@ async def run_dag(
     nodes_root: str,
     history_root: str,
     subagents_root: str | None = None,
-    sandbox: Any = None,
+    sandbox_factory: "Callable[[str], Any] | None" = None,
     max_concurrency: int = 5,
     semaphore: asyncio.Semaphore | None = None,
     progress_publisher: ProgressPublisher | None = None,
@@ -291,8 +292,9 @@ async def run_dag(
     node asks for (its ``skills``) is applied per node rather than per agent name;
     it returns ``None`` for a name the agent table does not hold. ``backend``
     is the duck-typed file backend (read_file/write_file/join_path/abspath/
-    file_exists). ``sandbox`` is an optional executor handed to each node backend
-    (third-party CLI/OpenAI backends ignore it; a raven-loop node backend uses it).
+    file_exists). ``sandbox_factory`` builds the executor a node runs its exec in,
+    called once per node with the graph's workdir (third-party CLI/OpenAI backends
+    ignore the executor; a raven-loop node backend uses it).
 
     ``workdir``, ``run_root`` and ``nodes_root`` are different places and must
     not be collapsed into one. ``workdir`` is the session's working directory:
@@ -612,7 +614,7 @@ async def run_dag(
                         backend=backend,
                         workdir=workdir,
                         roots=roots,
-                        sandbox=sandbox,
+                        sandbox_factory=sandbox_factory,
                         output_paths=output_paths,
                         status=status,
                         errors=errors,
@@ -1342,7 +1344,7 @@ async def _run_group(
     backend: Any,
     workdir: str,
     roots: tuple[str, ...],
-    sandbox: Any,
+    sandbox_factory: Any,
     output_paths: dict[str, str],
     status: dict[str, str],
     errors: dict[str, str],
@@ -1397,7 +1399,7 @@ async def _run_group(
                 backend=backend,
                 workdir=workdir,
                 roots=roots,
-                sandbox=sandbox,
+                sandbox_factory=sandbox_factory,
                 output_paths=output_paths,
                 status=status,
                 errors=errors,
@@ -1552,7 +1554,7 @@ async def _run_node(
     backend: Any,
     workdir: str,
     roots: tuple[str, ...],
-    sandbox: Any,
+    sandbox_factory: Any,
     output_paths: dict[str, str],
     status: dict[str, str],
     errors: dict[str, str],
@@ -1717,50 +1719,55 @@ async def _run_node(
                             progress_publisher=progress_publisher,
                         )
                     )
-                    try:
-                        result = await agent_backend.run(
-                            # The graph's own dispatch route: `spawn` goes
-                            # through the manager and never reaches here, so
-                            # the language has to be stated on both or an acp
-                            # node still narrates in English.
-                            dispatch_language_line(prompt),
-                            task_id=node.id,
-                            workspace=Path(workdir),
-                            executor=sandbox,
-                            session_key=session_key,
-                            instance=node.instance,
-                            mode=node_mode,
-                            # The template, not the rendering: a routing entry
-                            # reads the deliverable off the words the planner
-                            # wrote, not off whatever an upstream output inlined.
-                            **optional_keyword(agent_backend, "authored_task", node.prompt_template),
-                            # The invoking turn's binding, when the tool resolved one:
-                            # a pooled ACP worker otherwise keeps whatever model it
-                            # was first launched with. Only when set, because a node
-                            # backend built for a test may take no such keywords.
-                            **({"provider": provider} if provider is not None else {}),
-                            **({"model": model} if model else {}),
-                            # The row's own acp model choice, not the parent
-                            # binding above: this is what the session itself
-                            # answers with, pushed over `session/set_config_option`
-                            # the same way a spawn's does (`manager.row_default_model`).
-                            **optional_keyword(agent_backend, "session_model", node_session_model),
-                            **state_kwargs,
-                        )
-                        if (failure := llm_error_reply(result)) is not None:
-                            # The same rule as a spawn's (manager.py): a reply
-                            # that is nothing but the provider's error is not
-                            # this node's output, and a node that read it as
-                            # one fed the error to the step downstream.
-                            raise SubagentNoAnswerError(failure)
-                    finally:
-                        stall_watch.cancel()
-                        node_activity[node.id] = did.as_meta()
-                        # Set aside for the reader until the manifest carries
-                        # it: `collecting` drops the live entry as this block
-                        # exits, and the manifest is written once the whole
-                        # run is over.
-                        activity.record_settled(node_live_key(store.run_id, node.id), node_activity[node.id])
+                    # One VM per node, the way a spawn holds one per sub-agent
+                    # (manager.py): a sibling's crashed VM takes no neighbour
+                    # with it, and the graph's semaphore bounds how many boot.
+                    executor = sandbox_factory(workdir) if sandbox_factory is not None else None
+                    async with executor if executor is not None else contextlib.nullcontext():
+                        try:
+                            result = await agent_backend.run(
+                                # The graph's own dispatch route: `spawn` goes
+                                # through the manager and never reaches here, so
+                                # the language has to be stated on both or an acp
+                                # node still narrates in English.
+                                dispatch_language_line(prompt),
+                                task_id=node.id,
+                                workspace=Path(workdir),
+                                executor=executor,
+                                session_key=session_key,
+                                instance=node.instance,
+                                mode=node_mode,
+                                # The template, not the rendering: a routing entry
+                                # reads the deliverable off the words the planner
+                                # wrote, not off whatever an upstream output inlined.
+                                **optional_keyword(agent_backend, "authored_task", node.prompt_template),
+                                # The invoking turn's binding, when the tool resolved one:
+                                # a pooled ACP worker otherwise keeps whatever model it
+                                # was first launched with. Only when set, because a node
+                                # backend built for a test may take no such keywords.
+                                **({"provider": provider} if provider is not None else {}),
+                                **({"model": model} if model else {}),
+                                # The row's own acp model choice, not the parent
+                                # binding above: this is what the session itself
+                                # answers with, pushed over `session/set_config_option`
+                                # the same way a spawn's does (`manager.row_default_model`).
+                                **optional_keyword(agent_backend, "session_model", node_session_model),
+                                **state_kwargs,
+                            )
+                            if (failure := llm_error_reply(result)) is not None:
+                                # The same rule as a spawn's (manager.py): a reply
+                                # that is nothing but the provider's error is not
+                                # this node's output, and a node that read it as
+                                # one fed the error to the step downstream.
+                                raise SubagentNoAnswerError(failure)
+                        finally:
+                            stall_watch.cancel()
+                            node_activity[node.id] = did.as_meta()
+                            # Set aside for the reader until the manifest carries
+                            # it: `collecting` drops the live entry as this block
+                            # exits, and the manifest is written once the whole
+                            # run is over.
+                            activity.record_settled(node_live_key(store.run_id, node.id), node_activity[node.id])
             # The whole answer when the reply cap cut one: the in-context copy of
             # a terminal output is capped again on the way out (see
             # `_terminal_outputs`), and this file is what the reader, the next

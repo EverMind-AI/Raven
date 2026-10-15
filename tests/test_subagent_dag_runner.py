@@ -380,6 +380,91 @@ async def test_run_dag_hands_each_node_the_invoking_turn_binding() -> None:
     assert node.kwargs[0]["provider"] is provider and node.kwargs[0]["model"] == "claude-opus-5"
 
 
+class _LifecycleVm:
+    """An executor that logs its own lifetime, so a test can pin when a node's
+    VM is alive relative to that node running."""
+
+    def __init__(self, log: list[str], name: str) -> None:
+        self._log = log
+        self.name = name
+
+    async def __aenter__(self) -> "_LifecycleVm":
+        self._log.append(f"enter:{self.name}")
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        self._log.append(f"exit:{self.name}")
+
+
+class _ExecutorReceiver:
+    def __init__(self, log: list[str]) -> None:
+        self._log = log
+
+    async def run(self, task: str, *, task_id: str, workspace, executor, **kwargs) -> str:
+        self._log.append(f"run:{getattr(executor, 'name', 'none')}")
+        return f"OUT[{task_id}]"
+
+
+async def test_run_dag_gives_each_node_its_own_executor() -> None:
+    """A graph node execs in the sandbox its caller configured: the factory is
+    called once per node with the graph's workdir, and the node runs inside that
+    executor's lifetime, the way ``spawn`` runs each sub-agent in its own VM.
+    """
+    log: list[str] = []
+    workdirs: list[str] = []
+
+    def factory(workdir: str) -> _LifecycleVm:
+        workdirs.append(workdir)
+        return _LifecycleVm(log, f"vm{len(workdirs) - 1}")
+
+    spec = parse_dag_spec(
+        {
+            "task_summary": "run the graph under test",
+            "nodes": [
+                {"id": "a", "subagent": "x", "node_summary": "one", "prompt_template": "hello"},
+                {"id": "b", "subagent": "x", "node_summary": "two", "prompt_template": "hello"},
+            ],
+        }
+    )
+    result = await run_dag(
+        spec,
+        resolve=_by_name({"x": _ExecutorReceiver(log)}),
+        backend=_InMemBackend(),
+        workdir="/w",
+        run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
+        sandbox_factory=factory,
+    )
+    assert result.summary == {"total": 2, "completed": 2, "failed": 0, "skipped": 0, "cancelled": 0}
+    assert workdirs == ["/w", "/w"], "one executor per node, each built for the graph's shared workdir"
+    for vm in ("vm0", "vm1"):
+        entered, ran, exited = (log.index(f"enter:{vm}"), log.index(f"run:{vm}"), log.index(f"exit:{vm}"))
+        assert entered < ran < exited, f"{vm} must be alive exactly while its node runs (log: {log})"
+
+
+async def test_run_dag_without_a_factory_leaves_the_executor_unset() -> None:
+    """Nothing configured -> every node backend still receives ``None``, so a
+    graph run with no sandbox behaves exactly as this seam did before it."""
+    log: list[str] = []
+    spec = parse_dag_spec(
+        {
+            "task_summary": "run the graph under test",
+            "nodes": [{"id": "a", "subagent": "x", "node_summary": "one", "prompt_template": "hello"}],
+        }
+    )
+    await run_dag(
+        spec,
+        resolve=_by_name({"x": _ExecutorReceiver(log)}),
+        backend=_InMemBackend(),
+        workdir="/w",
+        run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
+    )
+    assert log == ["run:none"]
+
+
 async def test_the_graph_tool_resolves_the_turn_binding_per_dispatch(tmp_path: Path, monkeypatch) -> None:
     """Read at dispatch, not when the tool was built, for the reason the judge's
     provider is: a session that switched model must reach its nodes."""
