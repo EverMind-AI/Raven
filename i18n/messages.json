@@ -12030,7 +12030,7 @@
     },
     "gui.trajectory.kind.subagent_run": {
       "en": "Sub-agent",
-      "zh": "子代理"
+      "zh": "子智能体"
     },
     "gui.trajectory.kind.subagent_external": {
       "en": "External agent",
@@ -12294,7 +12294,7 @@
     },
     "gui.export.turns_hint": {
       "en": "Choose the turns to include. A turn brings the sub-agents it started with it.",
-      "zh": "选择要包含的轮次。一轮会连同它派发的子代理一起导出。"
+      "zh": "选择要包含的轮次。一轮会连同它派发的子智能体一起导出。"
     },
     "gui.export.select_all": {
       "en": "Select all",
@@ -12454,7 +12454,7 @@
     },
     "gui.export.description_hint": {
       "en": "The selected turns, their sub-agents and this description are collected and redacted before anything is sent.",
-      "zh": "所选轮次、它们派发的子代理和这段描述会先被收集并脱敏，然后才会发送。"
+      "zh": "所选轮次、它们派发的子智能体和这段描述会先被收集并脱敏，然后才会发送。"
     },
     "gui.export.severity": {
       "en": "Severity",
