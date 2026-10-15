@@ -262,6 +262,15 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- What an agent on a registered machine writes on stderr reaches Raven even
+  when no link held the agent at the time. The node kept those lines but, when
+  a link attached, replayed only the agent's output: a run picked up after a
+  restart was reported as `exited 3` without the reason after it, a CLI that
+  names its session only on stderr (hermes) could not be bound to it by the
+  pick-up, so its next turn opened a new session, and what was written while a
+  link was down was lost the same way. The node now numbers stderr lines as it
+  numbers output lines and replays the ones the link has not seen.
+
 - A task on a registered machine ends the way it ended, whatever happened on
   either side. A Raven node killed outright (`kill -9`) used to leave its
   agents running with nobody reading them and the host reading a bare

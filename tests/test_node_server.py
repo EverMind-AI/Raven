@@ -616,7 +616,7 @@ async def test_an_agent_starts_in_its_root_in_the_login_environment_plus_the_ent
     assert answer["result"]["login"] == "yes" and answer["result"]["entry"] == "1"
     assert Path(answer["result"]["cwd"]).resolve() == root.resolve()
     await host.until(lambda: host.notified(protocol.AGENT_STDERR))
-    assert host.notified(protocol.AGENT_STDERR) == [{"channel": 1, "text": "agent: started"}]
+    assert host.notified(protocol.AGENT_STDERR) == [{"channel": 1, "text": "agent: started", "n": 1}]
 
     closed = await host.ask(protocol.AGENT_CLOSE, {"channel": 1}, request_id=2)
 

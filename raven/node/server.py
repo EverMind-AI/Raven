@@ -850,9 +850,10 @@ class _Task:
 
     What the agent writes goes to the task's record on disk as it arrives
     (``frames.jsonl``, ``stderr.log``) and, while a connection holds the
-    task on a channel, to that connection. A connection that goes leaves the
-    agent running and the record growing; ``attach`` replays the record from
-    the frame the host last read and takes over from there.
+    task on a channel, to that connection, each line numbered. A connection
+    that goes leaves the agent running and the record growing; ``attach``
+    replays the record from the frame the host last read -- and its stderr
+    from the line it last read, when it asks -- and takes over from there.
     """
 
     def __init__(
@@ -870,6 +871,9 @@ class _Task:
         self.ended: float | None = None
         self.rc: int | None = None
         self.frames = 0
+        self.stderr_lines = 0
+        """How many lines the agent has written on stderr: numbered as frames are, so an attach goes on from the
+        last one a connection read (``stderr_after``)."""
         self.subscriber: tuple[Node, int] | None = None
         self.streams: dict[int, _Stream] = {}
         self._send_lock = asyncio.Lock()
@@ -945,6 +949,8 @@ class _Task:
                 handle.flush()
                 if frames:
                     self.frames += 1
+                else:
+                    self.stderr_lines += 1
                 if self.subscriber is not None:
                     node, channel = self.subscriber
                     if frames:
@@ -952,7 +958,9 @@ class _Task:
                             node, protocol.AGENT_FRAME, {"channel": channel, "line": text, "n": self.frames}
                         )
                     else:
-                        await self._tell(node, protocol.AGENT_STDERR, {"channel": channel, "text": text})
+                        await self._tell(
+                            node, protocol.AGENT_STDERR, {"channel": channel, "text": text, "n": self.stderr_lines}
+                        )
 
     async def _exit(self) -> None:
         rc = await self.proc.wait()
@@ -976,10 +984,17 @@ class _Task:
         await self.daemon.end_streams(self, "the agent ended")
         self.daemon.touch()
 
-    async def attach(self, node: Node, channel: int, after: int) -> dict[str, Any]:
-        """Hand the task to ``node``'s ``channel``: the frames past the ``after``-th first, then whatever comes."""
+    async def attach(self, node: Node, channel: int, after: int, stderr_after: int | None = None) -> dict[str, Any]:
+        """Hand the task to ``node``'s ``channel``: the frames past the ``after``-th first, then whatever comes.
+
+        With ``stderr_after``, the stderr lines past that one go too, after
+        the frames: under the lock that forwards a new line, so none is sent
+        twice or missed between the replay and the handover.
+        """
         async with self._send_lock:
             replayed = await _replay(self.record, node, channel, after)
+            if stderr_after is not None:
+                await _replay_stderr(self.record, node, channel, stderr_after)
             if self.rc is None:
                 old = self.subscriber
                 if old is not None and old[0] is not node:
@@ -1041,16 +1056,29 @@ def _write_json(path: Path, data: dict[str, Any]) -> None:
 
 async def _replay(record: Path, node: Node, channel: int, after: int) -> int:
     """Send ``node`` the frames of ``record`` past the ``after``-th, numbered; how many went."""
+    return await _replay_lines(record / "frames.jsonl", node, protocol.AGENT_FRAME, "line", channel, after)
+
+
+async def _replay_stderr(record: Path, node: Node, channel: int, after: int) -> int:
+    """Send ``node`` the agent's stderr lines of ``record`` past the ``after``-th, numbered as they went live; how many.
+
+    What a CLI agent says only there -- the session id hermes prints, the
+    reason a command failed -- reaches a connection that did not hold the
+    task when it was written: a pick-up, or an endpoint whose link went.
+    """
+    return await _replay_lines(record / "stderr.log", node, protocol.AGENT_STDERR, "text", channel, after)
+
+
+async def _replay_lines(path: Path, node: Node, method: str, key: str, channel: int, after: int) -> int:
     sent = 0
-    frames = record / "frames.jsonl"
-    if not frames.is_file():
+    if not path.is_file():
         return 0
-    with frames.open("rb") as handle:
+    with path.open("rb") as handle:
         for n, raw in enumerate(handle, 1):
             if n <= after:
                 continue
             text = raw.decode("utf-8", "replace").rstrip("\r\n")
-            await node.notify(protocol.AGENT_FRAME, {"channel": channel, "line": text, "n": n})
+            await node.notify(method, {"channel": channel, key: text, "n": n})
             sent += 1
     return sent
 
@@ -1220,11 +1248,17 @@ class Daemon:
         self.touch()
         return task
 
-    async def attach(self, node: Node, channel: int, task_id: str, after: int) -> dict[str, Any]:
-        """``task_id`` onto ``node``'s ``channel``: a running task is taken over, a finished one replayed."""
+    async def attach(
+        self, node: Node, channel: int, task_id: str, after: int, stderr_after: int | None = None
+    ) -> dict[str, Any]:
+        """``task_id`` onto ``node``'s ``channel``: a running task is taken over, a finished one replayed.
+
+        Its frames past the ``after``-th, and with ``stderr_after`` its stderr
+        lines past that one (:meth:`_Task.attach`).
+        """
         task = self.tasks.get(task_id)
         if task is not None:
-            return await task.attach(node, channel, after)
+            return await task.attach(node, channel, after, stderr_after)
         record = self.record_dir(task_id)
         info = _read_record(record)
         if info is None:
@@ -1235,6 +1269,8 @@ class Daemon:
             # now on, so no host reads a run that ended as one still going.
             info = _lose_record(record, info)
         replayed = await _replay(record, node, channel, after)
+        if stderr_after is not None:
+            await _replay_stderr(record, node, channel, stderr_after)
         rc = info.get("rc") if isinstance(info.get("rc"), int) else LOST_RC
         ended: dict[str, Any] = {"channel": channel, "rc": rc}
         answer: dict[str, Any] = {"pid": info.get("pid"), "frames": info.get("frames"), "replayed": replayed, "rc": rc}
@@ -1471,7 +1507,11 @@ class Node:
         after = _number(params, "after", 0) or 0
         if after < 0:
             raise _RefusedError(_INVALID_PARAMS, "after must be a whole number")
-        answer = await self.daemon.attach(self, channel, task_id, after)
+        # Absent: no stderr is replayed, as before the lines were numbered.
+        stderr_after = _number(params, "stderr_after")
+        if stderr_after is not None and stderr_after < 0:
+            raise _RefusedError(_INVALID_PARAMS, "stderr_after must be a whole number")
+        answer = await self.daemon.attach(self, channel, task_id, after, stderr_after)
         task = self.daemon.tasks.get(task_id)
         if task is not None and task.rc is None:
             self.channels[channel] = task

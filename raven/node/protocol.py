@@ -15,8 +15,9 @@ notifications (a CLI agent's output lines travel the same way, every one of
 them, a blank line included, since they are its answer; its prompt reaches
 its stdin as ``agent/stdin``) -- and a *task* id of the host's
 choosing, which outlives the connection: an agent keeps running when the ssh
-goes, its frames are kept on the machine, and a new connection picks them up
-from where the host stopped reading (``agent/attach``). Requests are answered
+goes, its frames and its stderr (``agent/stderr``) are kept on the machine,
+every line numbered, and a new connection picks them up from where the host
+stopped reading (``agent/attach``; the stderr when it asks). Requests are answered
 as they finish, not in the order they arrive: a search of a large tree does
 not hold a heartbeat behind it.
 
@@ -51,7 +52,7 @@ PROBE_AGENT = "probe/agent"
 SESSION_DIR = "session/dir"
 
 AGENT_LAUNCH = "agent/launch"
-AGENT_ATTACH = "agent/attach"
+AGENT_ATTACH = "agent/attach"  # ``channel``, ``task``, ``after``; ``stderr_after`` replays the stderr past that line
 AGENT_FRAME = "agent/frame"
 AGENT_STDIN = "agent/stdin"
 AGENT_STDERR = "agent/stderr"

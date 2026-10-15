@@ -304,19 +304,20 @@ address it by id thanks to the alias written at registration.
 Raven keeps one ssh link per machine and watches it with a heartbeat: a ping
 every 5 seconds, and 15 seconds without an answer means the link is gone. The
 agents are not: they run under the machine's daemon, which keeps every frame
-they write. Raven tries the link again on a backoff of 2, 4, 8, then 16
-seconds for as long as any agent is waiting, and a link that comes back
-attaches each agent by its task id, from the frame Raven last read. The turn
-goes on as if nothing had happened; a cancel sent while the link was down is
-delivered when it is back.
+they write and every line of their stderr. Raven tries the link again on a
+backoff of 2, 4, 8, then 16 seconds for as long as any agent is waiting, and a
+link that comes back attaches each agent by its task id, from the frame and
+the stderr line Raven last read. The turn goes on as if nothing had happened;
+a cancel sent while the link was down is delivered when it is back.
 
 Stopping Raven does the same on purpose. An agent running on a machine is left
 to the daemon; what Raven keeps is a record under
 `<raven home>/machines/runs/`. The next start reads those records, attaches
-each run from where it was, and announces the result into the conversation
-that asked, as a finished turn. Keep the machine's registration and the agent
-entry in place for that. `/restart` and a Raven that was killed are covered
-the same way.
+each run from where it was, reads all it wrote on stderr too (the reason a
+command failed, or the session id a CLI names only there), and announces the
+result into the conversation that asked, as a finished turn. Keep the
+machine's registration and the agent entry in place for that. `/restart` and a
+Raven that was killed are covered the same way.
 
 What is not recoverable: a machine that rebooted, or a daemon that was ended
 by hand, no longer knows the task. The turn is then announced as an error

@@ -13,12 +13,13 @@ asked for, and its ssh goes with it.
 The link is watched from here, not by ssh: a ``node/ping`` every
 :data:`HEARTBEAT_S` seconds, and one unanswered for :data:`HEARTBEAT_LOST_S`
 means the link is gone -- not the agents. They run on under the machine's
-daemon, which keeps their frames; each agent's endpoint here waits, holding
-what the host writes meanwhile, and the link is tried again on a backoff
-(:data:`RECONNECT_BACKOFF_S`) for as long as any agent is waiting. A link
-that comes back attaches each agent again by its task id, from the frame the
-host last read, and the turn goes on as if nothing had happened. Only a task
-the machine no longer knows ends an endpoint with the sentence that says so.
+daemon, which keeps their frames and their stderr; each agent's endpoint here
+waits, holding what the host writes meanwhile, and the link is tried again on
+a backoff (:data:`RECONNECT_BACKOFF_S`) for as long as any agent is waiting. A
+link that comes back attaches each agent again by its task id, from the frame
+and the stderr line the host last read, and the turn goes on as if nothing had
+happened. Only a task the machine no longer knows ends an endpoint with the
+sentence that says so.
 
 An MCP server the host lends an agent on the machine is carried on the link
 too: the agent runs the node's bridge as a stdio server, the daemon tells this
@@ -183,6 +184,9 @@ class ChannelEndpoint:
         self.pid: int | None = None
         self.received = 0
         """How many of the agent's frames reached here: where an attach goes on from."""
+        self.stderr_received = 0
+        """How many of the agent's stderr lines reached here: where an attach goes on from for those. What a CLI
+        agent says only there -- a session id, the reason it failed -- is replayed past it, not lost with a link."""
         self.watchers: list[Callable[[int], None]] = []
         """Told, after each frame the connection has dealt with, how many it has read: what a record of the
         run keeps until its prompt is out, so a process that comes after this one attaches from there and reads
@@ -324,8 +328,9 @@ class ChannelEndpoint:
             self.received = n if isinstance(n, int) and not isinstance(n, bool) else self.received + 1
             self._frames.put_nowait((self.received, line.encode("utf-8") + b"\n"))
 
-    def feed_stderr(self, text: Any) -> None:
+    def feed_stderr(self, text: Any, n: Any = None) -> None:
         if isinstance(text, str) and not self._done.is_set():
+            self.stderr_received = n if isinstance(n, int) and not isinstance(n, bool) else self.stderr_received + 1
             self._stderr.put_nowait(text.encode("utf-8") + b"\n")
 
     def exited(self, rc: Any, reason: Any = None) -> None:
@@ -615,9 +620,10 @@ class NodePool:
 
         What a process that comes after the one that started the agent uses
         to pick the run up: the daemon replays the frames past the record's
-        count -- the turn whole, from where its prompt went out -- and hands
-        the rest over as it comes, or, for a task that has ended, replays its
-        record and says so. The endpoint returned is what an
+        count -- the turn whole, from where its prompt went out -- and the
+        agent's stderr from its first line, which this process has not read
+        any of, and hands the rest over as it comes, or, for a task that has
+        ended, replays its record and says so. The endpoint returned is what an
         :class:`AcpClient` runs over; the answer says the pid, the frames
         and the exit code (``None`` while the agent runs).
         """
@@ -628,7 +634,7 @@ class NodePool:
         endpoint = ChannelEndpoint(node.client, channel, target=node.target, agent=name, task=task)
         endpoint.received = after
         node.channels[channel] = endpoint
-        params = {"channel": channel, "task": task, "after": after}
+        params = {"channel": channel, "task": task, "after": after, "stderr_after": 0}
         try:
             answer = await node.client.request(protocol.AGENT_ATTACH, params, timeout=_ATTACH_TIMEOUT_S)
         except AcpRemoteError as exc:
@@ -950,7 +956,7 @@ class NodePool:
         if method == protocol.AGENT_FRAME:
             endpoint.feed_frame(params.get("line"), params.get("n"))
         elif method == protocol.AGENT_STDERR:
-            endpoint.feed_stderr(params.get("text"))
+            endpoint.feed_stderr(params.get("text"), params.get("n"))
         elif method == protocol.AGENT_EXIT:
             channels.pop(channel, None)
             endpoint.exited(params.get("rc"), params.get("reason"))
@@ -1020,7 +1026,8 @@ class NodePool:
             self._reconnects.pop(machine_id, None)
 
     async def _reattach(self, machine_id: str) -> None:
-        """Every endpoint parked for the machine onto a channel of its new link, from the frame it last read.
+        """Every endpoint parked for the machine onto a channel of its new link, from the frame and the stderr line
+        it last read.
 
         A link that goes while this runs -- under the attach, or under the
         replay of what an endpoint held -- parks that endpoint and every one
@@ -1039,7 +1046,12 @@ class NodePool:
             channel = node.next_channel
             node.next_channel += 1
             node.channels[channel] = endpoint
-            params = {"channel": channel, "task": endpoint.task, "after": endpoint.received}
+            params = {
+                "channel": channel,
+                "task": endpoint.task,
+                "after": endpoint.received,
+                "stderr_after": endpoint.stderr_received,
+            }
             try:
                 await node.client.request(protocol.AGENT_ATTACH, params, timeout=_ATTACH_TIMEOUT_S)
                 if endpoint.returncode is None:

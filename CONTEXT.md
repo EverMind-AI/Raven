@@ -435,10 +435,12 @@ whose entries name the machine, each under a task id of the host's, in its own p
 group in the machine user's login environment, forwards what they write (an ACP agent's
 frames, a CLI agent's output lines) on numbered channels of the connection that holds them
 -- a CLI agent's prompt reaches its stdin the other way (`agent/stdin`), which also closes
-it -- and keeps those lines in the task's record
+it -- and keeps those lines and the agent's stderr, each line numbered, in the task's record
 (`node_dir/tasks/<task>/`, owner-only like the host's journal), so a connection that goes
 leaves the agent running and the next
-one takes it over from the frame the host last read (`agent/attach`); and answers probes of
+one takes it over from the frame and the stderr line the host last read (`agent/attach`; a
+pick-up, which read none of it, gets the stderr from its first line -- a session id or a
+failure a CLI agent says only there is not lost with a link); and answers probes of
 the machine and of an agent's command. It holds no conversation, calls no model and opens
 no network port. It runs exactly the host's code, checked by protocol and digest at every
 connection (`raven/node/bundle.py`); `raven ops connection install-node` puts it on a
