@@ -413,7 +413,7 @@ async def test_run_dag_gives_each_node_its_own_executor() -> None:
     log: list[str] = []
     workdirs: list[str] = []
 
-    def factory(workdir: str) -> _LifecycleVm:
+    def factory(workdir: Path) -> _LifecycleVm:
         workdirs.append(workdir)
         return _LifecycleVm(log, f"vm{len(workdirs) - 1}")
 
@@ -437,7 +437,7 @@ async def test_run_dag_gives_each_node_its_own_executor() -> None:
         sandbox_factory=factory,
     )
     assert result.summary == {"total": 2, "completed": 2, "failed": 0, "skipped": 0, "cancelled": 0}
-    assert workdirs == ["/w", "/w"], "one executor per node, each built for the graph's shared workdir"
+    assert workdirs == [Path("/w"), Path("/w")], "one executor per node, each built for the graph's shared workdir"
     for vm in ("vm0", "vm1"):
         entered, ran, exited = (log.index(f"enter:{vm}"), log.index(f"run:{vm}"), log.index(f"exit:{vm}"))
         assert entered < ran < exited, f"{vm} must be alive exactly while its node runs (log: {log})"

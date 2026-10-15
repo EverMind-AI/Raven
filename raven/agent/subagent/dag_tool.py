@@ -2419,9 +2419,7 @@ class SubAgentDagTool(Tool):
                 nodes_root=dirs.nodes_root,
                 history_root=dirs.subagents_root,
                 subagents_root=dirs.subagents_root,
-                sandbox_factory=(
-                    (lambda workdir: self._sandbox_for(Path(workdir))) if self._sandbox_for is not None else None
-                ),
+                sandbox_factory=self._sandbox_for,
                 progress_publisher=emit,
                 semaphore=self._gate if stint is None else _StintShare(self._gate, STINT_MAX_PARALLEL),
                 session_key=origin.conversation,

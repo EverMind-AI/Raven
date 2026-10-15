@@ -260,7 +260,7 @@ async def run_dag(
     nodes_root: str,
     history_root: str,
     subagents_root: str | None = None,
-    sandbox_factory: "Callable[[str], Any] | None" = None,
+    sandbox_factory: "Callable[[Path], Any] | None" = None,
     max_concurrency: int = 5,
     semaphore: asyncio.Semaphore | None = None,
     progress_publisher: ProgressPublisher | None = None,
@@ -293,7 +293,7 @@ async def run_dag(
     it returns ``None`` for a name the agent table does not hold. ``backend``
     is the duck-typed file backend (read_file/write_file/join_path/abspath/
     file_exists). ``sandbox_factory`` builds the executor a node runs its exec in,
-    called once per node with the graph's workdir (third-party CLI/OpenAI backends
+    called once per node with the graph's workdir as a Path (third-party CLI/OpenAI backends
     ignore the executor; a raven-loop node backend uses it).
 
     ``workdir``, ``run_root`` and ``nodes_root`` are different places and must
@@ -1726,7 +1726,7 @@ async def _run_node(
                     # boot is an expected operational failure, and a watcher
                     # left behind would report a stall that is not one.
                     try:
-                        executor = sandbox_factory(workdir) if sandbox_factory is not None else None
+                        executor = sandbox_factory(Path(workdir)) if sandbox_factory is not None else None
                         async with executor if executor is not None else contextlib.nullcontext():
                             result = await agent_backend.run(
                                 # The graph's own dispatch route: `spawn` goes
