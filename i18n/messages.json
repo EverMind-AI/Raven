@@ -5861,11 +5861,11 @@
       "zh": "—"
     },
     "gui.tier.title": {
-      "en": "Effort",
-      "zh": "力度"
+      "en": "Mode",
+      "zh": "模式"
     },
     "gui.tier.scope": {
-      "en": "Reasoning depth, sub-agent effort and the rest follow this setting. This conversation only.",
+      "en": "Reasoning depth, sub-agent mode and the rest follow this setting. This conversation only.",
       "zh": "模型思考深度、子智能体运行强度等都跟着这一档走。只作用于本会话。"
     },
     "gui.tier.failed": {
@@ -5877,8 +5877,8 @@
       "zh": "模式"
     },
     "gui.tier.mode_scope": {
-      "en": "This is a deployment's own mode, not a built-in effort level; the effort policy does not apply.",
-      "zh": "当前这档不是内置力度档，力度策略不生效。"
+      "en": "This is a deployment's own mode, not a built-in mode; the mode policy does not apply.",
+      "zh": "当前这档不是内置模式档，模式策略不生效。"
     },
     "gui.imodel.title": {
       "en": "Model",
@@ -5901,8 +5901,8 @@
       "zh": "改这个实例的模型没有成功"
     },
     "gui.imode.title": {
-      "en": "Effort",
-      "zh": "力度"
+      "en": "Mode",
+      "zh": "模式"
     },
     "gui.imode.auto": {
       "en": "Auto",
@@ -5913,16 +5913,16 @@
       "zh": "该子智能体自己的默认"
     },
     "gui.imode.auto_tip": {
-      "en": "Following the conversation. Click to give this instance its own effort.",
-      "zh": "跟随会话。点击可为这个实例单独设定力度。"
+      "en": "Following the conversation. Click to give this instance its own mode.",
+      "zh": "跟随会话。点击可为这个实例单独设定模式。"
     },
     "gui.imode.set_tip": {
-      "en": "This instance's own effort, set apart from the conversation.",
-      "zh": "这个实例自己的力度，与会话分开设定。"
+      "en": "This instance's own mode, set apart from the conversation.",
+      "zh": "这个实例自己的模式，与会话分开设定。"
     },
     "gui.imode.failed": {
-      "en": "Could not change this instance's effort",
-      "zh": "改这个实例的力度没有成功"
+      "en": "Could not change this instance's mode",
+      "zh": "改这个实例的模式没有成功"
     },
     "gui.confirm.deny_stop": {
       "en": "Deny and stop",
@@ -8938,15 +8938,15 @@
     },
     "gui.tier.medium": {
       "en": "Light",
-      "zh": "轻"
+      "zh": "快速"
     },
     "gui.tier.high": {
       "en": "Standard",
-      "zh": "标准"
+      "zh": "均衡"
     },
     "gui.tier.max": {
       "en": "Max",
-      "zh": "全力"
+      "zh": "极致"
     },
     "gui.picker.title": {
       "en": "Model",
