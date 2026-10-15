@@ -247,6 +247,22 @@ describe('the send button', () => {
     expect(calls.sent).toEqual([])
   })
 
+  it('sends nothing from an imported conversation, and never offers the model setup', async () => {
+    const { setCurrent, _resetForTests: resetSession } = await import('../../lib/session')
+    const beforeSend = vi.fn(() => false)
+    const { calls } = wire({ beforeSend })
+    setCurrent('imported:' + 'a'.repeat(32))
+    ta().value = 'can I add to it?'
+    store.fireSend()
+    expect(calls.sent).toEqual([])
+    expect(beforeSend).not.toHaveBeenCalled()
+    expect(ta().value).toBe('can I add to it?')
+    setCurrent('tui:a')
+    store.fireSend()
+    expect(calls.sent).toEqual(['can I add to it?'])
+    resetSession()
+  })
+
   it('preserves the draft when the page redirects an unavailable send', () => {
     const beforeSend = vi.fn(() => true)
     const { calls } = wire({ beforeSend })

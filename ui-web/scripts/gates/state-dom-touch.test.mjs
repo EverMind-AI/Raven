@@ -105,7 +105,7 @@ const PINNED = {
   'state/proseChips.ts': 1,
   'state/rail.ts': 2,
   'state/selection.ts': 1,
-  'state/session/conversation.ts': 2,
+  'state/session/conversation.ts': 1,
   'state/session/naming.ts': 3,
   'state/session/registry.ts': 6,
   'state/session/residency.ts': 3,

@@ -485,6 +485,14 @@ describe('rail island', () => {
     expect(buttons).toEqual(['gui.sess.rename', 'gui.sess.delete'])
   })
 
+  it('never opens the header editor on an imported conversation', () => {
+    install({ rows: [row({ id: 'imported:1', title: 'a bug report', from: 'imported' })], cur: 'imported:1' })
+    mount()
+    store.rename()
+    expect(document.getElementById('title')!.tagName).toBe('H1')
+    expect(document.querySelector('input.titin')).toBeNull()
+  })
+
   it('answers a search with hits and with the empty note', () => {
     install({ rows: [row(), row({ id: 'b', title: 'second task' })] })
     found.term = 'gtm'

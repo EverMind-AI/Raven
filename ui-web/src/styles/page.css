@@ -2692,6 +2692,15 @@ textarea:focus, textarea:focus-visible,
 .chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; flex: 1; }
 /* New-task state: no header title, the composer holds the centre line. */
 .chat[data-fresh] #title, .chat[data-fresh] #wdTag { visibility: hidden; }
+/* An imported conversation (state/session/conversation.ts's readOnly): nothing
+   to type into, no folder it runs in, a name changed only on its rail row, and
+   no conversation menu -- the menu's slot kept, so the desk launcher and the
+   trajectory toggle beside it stay where they are. */
+.chat[data-readonly] .dock { display: none; }
+.chat[data-readonly] #wdTag { display: none; }
+.chat[data-readonly] #moreBtn { visibility: hidden; }
+.chat[data-readonly] .top h1 { cursor: default; }
+.chat[data-readonly] .top h1:hover { background: none; }
 /* The trajectory view (features/trajectory/). The scroller is parked, not
    removed: out of the flow at the size it had, invisible and deaf to the
    pointer, so its scroll position survives and the transcript keeps streaming

@@ -449,6 +449,18 @@ another. The rows are the rail's: `session.list` returns them for the
 Recent and only while there is one, and each offers rename -- on the row, never
 in the conversation's header -- and delete, and nothing else. The settings
 page's delete-all leaves them alone.
+Opened, one is read-only. The session registry sets `.chat[data-readonly]`
+(`state/session/conversation.ts`'s `readOnly`) as a switch begins, before
+`session.resume` answers, from the key's own prefix (`lib/imported.ts`); the
+stylesheet then takes away the composer dock, the workdir tag and the
+conversation menu (its slot kept), and the name stops being a rename control.
+Sending, branching, the header editor and exporting refuse in their own code
+too. What the package does not carry degrades quietly instead of failing: a
+graph card reads no run record and shows no node count, an agent card asks
+for no roster, a task pane or a file does not open (a notice says why),
+pictures show their names without a request, delivered files are missing,
+and the desk puts back nothing. A package with no session record gets a quiet
+note instead of the empty state, so its trajectory toggle stays.
 _Avoid_: "import" alone -- the `importSync` domain and `#importRow` are the
 cold-start import of another tool's memory.
 

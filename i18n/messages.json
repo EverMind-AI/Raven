@@ -4259,6 +4259,18 @@
       "en": "Unpin",
       "zh": "取消固定"
     },
+    "gui.sess.imported_no_transcript": {
+      "en": "This package carries no conversation record; open the trajectory view to see what it holds",
+      "zh": "包内没有会话记录，可在轨迹视图中查看内容"
+    },
+    "gui.sess.imported_unavailable": {
+      "en": "Not available in an imported conversation",
+      "zh": "导入会话中不可用"
+    },
+    "gui.sess.imported_no_files": {
+      "en": "The files of an imported conversation are not on this machine",
+      "zh": "导入会话里的文件不在本机"
+    },
     "gui.session_commands": {
       "en": "Session commands",
       "zh": "会话命令"

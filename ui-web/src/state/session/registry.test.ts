@@ -84,6 +84,8 @@ async function harness(
       'src/state/session/conversation': {
         pitch: () => { state.fresh = '1'; calls.push(['pitch']) },
         unpitch: () => { state.fresh = null; calls.push(['unpitch']) },
+        readOnly: (on: boolean) => calls.push(['readOnly', on]),
+        noteRow: (label: string, _detail: string, opts?: { quiet?: boolean }) => calls.push(['noteRow', label, !!opts?.quiet]),
       },
       'src/features/rail/store': {
         markNew: () => {},
@@ -788,5 +790,47 @@ describe('the live session switch', () => {
     await h.settle('b')
 
     expect(h.asked('model.options').map((p) => (p as { session_id?: string }).session_id)).toEqual(['a', 'b'])
+  })
+})
+
+describe('an imported conversation', () => {
+  const KEY = 'imported:' + 'a'.repeat(32)
+
+  it('lays the column out read-only before it is asked for, and back for any other', async () => {
+    const h = await harness({ rows: [{ id: KEY }, { id: 'b' }] })
+    h.openLiveSession({ id: KEY, title: 'Imported' })
+    const resumeAt = h.calls.findIndex((c) => c[0] === 'rpc' && c[1] === 'session.resume')
+    const readOnlyAt = h.calls.findIndex((c) => c[0] === 'readOnly' && c[1] === true)
+    expect(readOnlyAt).toBeGreaterThanOrEqual(0)
+    expect(readOnlyAt).toBeLessThan(resumeAt)
+    await h.settle(KEY)
+    h.openLiveSession({ id: 'b', title: 'Beta' })
+    expect(h.calls.filter((c) => c[0] === 'readOnly').at(-1)).toEqual(['readOnly', false])
+    await h.settle('b')
+    h.startDraft()
+    expect(h.calls.filter((c) => c[0] === 'readOnly').at(-1)).toEqual(['readOnly', false])
+  })
+
+  it('says it carries no record instead of showing the empty state', async () => {
+    const h = await harness({ rows: [{ id: KEY }] })
+    h.openLiveSession({ id: KEY, title: 'Imported' })
+    const before = h.calls.length
+    await h.settle(KEY, { session_id: KEY, messages: [], info: { read_only: true } })
+    const after = h.calls.slice(before)
+    expect(after.filter((c) => c[0] === 'pitch')).toEqual([])
+    const notes = after.filter((c) => c[0] === 'noteRow')
+    expect(notes).toHaveLength(1)
+    expect(notes[0]![2]).toBe(true)
+    expect(h.state.fresh).toBeNull()
+  })
+
+  it('leaves an empty ordinary conversation in the empty state', async () => {
+    const h = await harness({ rows: [{ id: 'b' }] })
+    h.openLiveSession({ id: 'b', title: 'Beta' })
+    const before = h.calls.length
+    await h.settle('b', { session_id: 'b', messages: [], info: {} })
+    const after = h.calls.slice(before)
+    expect(after.filter((c) => c[0] === 'pitch')).toHaveLength(1)
+    expect(after.filter((c) => c[0] === 'noteRow')).toEqual([])
   })
 })
