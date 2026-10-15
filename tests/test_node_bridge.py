@@ -28,7 +28,9 @@ from typing import Any
 
 import pytest
 
-if sys.platform == "win32":
+from raven.mcp.bridge import unix_sockets_available
+
+if sys.platform == "win32" or not unix_sockets_available():
     pytest.skip("the daemon is POSIX: it locks with fcntl and listens on a unix socket", allow_module_level=True)
 
 from raven.node import bridge, protocol, server
@@ -205,6 +207,8 @@ async def test_a_stream_the_host_closes_ends_the_bridge_and_a_bridge_of_no_task_
         assert host.lines() == ["BRIDGE_EXIT 0 "], (
             "told the stream is over, it leaves, having written nothing of its own"
         )
+        # The agent outlives its server, so the task the bridges below name is still running.
+        assert [p for p in host.notified(protocol.AGENT_EXIT) if p.get("channel") == 1] == []
 
         # Another task's agent spawns a bridge that names this task, this dispatch and this server: the daemon
         # knows whose process it is, and refuses it as that task's.
@@ -414,6 +418,121 @@ async def test_the_bridge_reads_only_its_stream_s_frames_off_the_daemon_and_leav
         {"jsonrpc": "2.0", "id": 1, "method": "mcp/open", "params": {"task": "a@box-1", "lend": "d1", "server": "pg"}}
     ]
     assert out.lines() == [b"ab"], "its own stream's frame, put together; nothing of the rest"
+
+
+# ---- a daemon side that goes under the stream --------------------------------------------------
+
+
+class _GoneReader:
+    """The bridge's read side of a daemon connection: the lines given, then the error given, else nothing more."""
+
+    def __init__(self, lines: list[bytes], then: BaseException | None = None) -> None:
+        self.lines = list(lines)
+        self.then = then
+        self._never = asyncio.Event()
+
+    async def readline(self) -> bytes:
+        if self.lines:
+            return self.lines.pop(0)
+        if self.then is not None:
+            raise self.then
+        await self._never.wait()
+        return b""
+
+
+class _GoneWriter:
+    """The bridge's write side: every line kept, and a broken pipe from the ``breaks_at``-th line's drain on."""
+
+    def __init__(self, breaks_at: int | None = None) -> None:
+        self.sent: list[bytes] = []
+        self.breaks_at = breaks_at
+        self.closed = False
+
+    def write(self, data: bytes) -> None:
+        self.sent.append(data)
+
+    async def drain(self) -> None:
+        if self.breaks_at is not None and len(self.sent) >= self.breaks_at:
+            raise BrokenPipeError(32, "Broken pipe")
+
+    def close(self) -> None:
+        self.closed = True
+
+    async def wait_closed(self) -> None:
+        return None
+
+
+_OPENED = b'{"jsonrpc":"2.0","id":1,"result":{"stream":4}}\n'
+
+
+def _connected(monkeypatch: pytest.MonkeyPatch, reader: _GoneReader, writer: _GoneWriter) -> None:
+    async def connect(path: str, *, limit: int) -> tuple[_GoneReader, _GoneWriter]:
+        return reader, writer
+
+    monkeypatch.setattr(bridge.asyncio, "open_unix_connection", connect)
+
+
+def _pumps_left() -> list[str]:
+    """The bridge's own tasks still pending: none, once it has returned."""
+    return [
+        task.get_coro().__qualname__
+        for task in asyncio.all_tasks()
+        if not task.done() and task.get_coro().__qualname__.startswith("run_mcp_async.<locals>.")
+    ]
+
+
+@pytest.mark.parametrize(
+    ("then", "breaks_at", "agent_says"),
+    [
+        (None, 2, b'{"jsonrpc":"2.0","id":1,"method":"initialize"}\n'),
+        (ConnectionResetError(54, "Connection reset by peer"), None, b""),
+    ],
+    ids=["a broken pipe under the agent's frame", "a reset under the daemon's"],
+)
+async def test_a_stream_whose_daemon_side_goes_under_it_ends_as_streams_end(
+    tmp_path, monkeypatch, capsys, then, breaks_at, agent_says
+):
+    """How a stream the host closed can end when a frame of the agent's is on its way: the daemon writes mcp/close
+    and hangs up, and the frame meets the closed socket, or the read side is reset before mcp/close is read. Either
+    way the stream is over: the bridge leaves as a stream ends, says nothing, and leaves no pump behind."""
+    writer = _GoneWriter(breaks_at)
+    _connected(monkeypatch, _GoneReader([_OPENED], then), writer)
+    stdin = asyncio.StreamReader()
+    stdin.feed_data(agent_says)
+
+    rc = await asyncio.wait_for(_carry(tmp_path / "n", stdin, _Out()), timeout=15)
+
+    assert (rc, capsys.readouterr().err) == (0, "")
+    assert _pumps_left() == [] and writer.closed
+
+
+async def test_a_frame_past_the_cap_is_said_and_leaves_no_pump_behind(tmp_path, monkeypatch, capsys):
+    """A fault of the stream's own is still said, unlike the daemon side going: a frame past the cap ends the bridge
+    with its reason, and the pump reading the daemon is over before the socket closes."""
+    monkeypatch.setattr(protocol, "MCP_MAX_FRAME", 64)
+    _connected(monkeypatch, _GoneReader([_OPENED]), _GoneWriter())
+    stdin = asyncio.StreamReader()
+    stdin.feed_data(b'{"jsonrpc":"2.0","id":1,"params":"' + b"z" * 100 + b'"}\n')
+
+    assert await asyncio.wait_for(_carry(tmp_path / "n", stdin, _Out()), timeout=15) == 1
+    assert capsys.readouterr().err == "raven node mcp bridge: ValueError: frame exceeds 64 bytes\n"
+    assert _pumps_left() == []
+
+
+@pytest.mark.parametrize("breaks", ["on the opening", "before the answer"])
+async def test_a_daemon_that_goes_before_the_stream_opens_is_one_sentence(tmp_path, monkeypatch, capsys, breaks):
+    reset = ConnectionResetError(54, "Connection reset by peer")
+    if breaks == "on the opening":
+        _connected(monkeypatch, _GoneReader([]), _GoneWriter(breaks_at=1))
+        why = "[Errno 32] Broken pipe"
+    else:
+        _connected(monkeypatch, _GoneReader([], reset), _GoneWriter())
+        why = "[Errno 54] Connection reset by peer"
+
+    assert await asyncio.wait_for(_carry(tmp_path / "n", asyncio.StreamReader(), _Out()), timeout=15) == 1
+    assert capsys.readouterr().err == (
+        f"raven node mcp bridge: the daemon closed the connection before the stream opened: {why}\n"
+    )
 
 
 def test_run_mcp_takes_the_agent_s_stdin_as_a_pipe_and_keeps_its_stdout_for_frames(tmp_path, monkeypatch, capsys):

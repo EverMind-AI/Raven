@@ -397,6 +397,9 @@ async def test_a_connection_that_ends_mid_turn_is_reported_as_it_ended(box, tmp_
         await backend.run("hi", task_id="t1", workspace=tmp_path, executor=None)
 
 
+@pytest.mark.skipif(
+    not unix_sockets_available(), reason="MCP lending rides on unix sockets, which this computer has not"
+)
 async def test_granted_mcp_servers_are_lent_through_the_node_and_named_in_the_reply(box, tmp_path):
     backend = build_third_party_backend(remote_config(mode="echo_blocks"))
     grant = McpGrant(granted=(GrantedServer("pg", "stdio", MCPServerConfig(command="/bin/true")),))
@@ -411,6 +414,9 @@ _HANDOFF_AGENT = Path(__file__).with_name("mcp_handoff_acp_stub.py")
 _HANDOFF_SERVER = Path(__file__).with_name("mcp_handoff_stub_server.py")
 
 
+@pytest.mark.skipif(
+    not unix_sockets_available(), reason="MCP lending rides on unix sockets, which this computer has not"
+)
 async def test_an_mcp_server_the_host_holds_is_reached_from_the_machine_through_its_node(box, tmp_path):
     """The agent there runs the node's bridge as a stdio server; the call reaches the server here, and its answer goes back."""
     ledger, receipt = tmp_path / "ledger.jsonl", tmp_path / "receipt.jsonl"

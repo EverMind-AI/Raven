@@ -243,6 +243,7 @@ async def _dispatch(backend: AcpAgentBackend, monkeypatch, workspace: Path, node
     return seen[0], reply
 
 
+@pytest.mark.usefixtures("unix_socket_host")
 def test_an_unmeasured_peer_is_never_refused() -> None:
     """No snapshot is not evidence of a refusal.
 
@@ -256,6 +257,7 @@ def test_an_unmeasured_peer_is_never_refused() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("unix_socket_host")
 async def test_a_raven_peer_without_the_promise_is_told_why_it_got_nothing(
     tmp_path: Path, monkeypatch, raven_on_the_adapter_path: Path
 ) -> None:
@@ -288,6 +290,7 @@ async def test_a_raven_peer_that_declares_the_promise_is_handed_the_bridge(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("unix_socket_host")
 async def test_an_agent_declared_as_not_isolating_is_withheld_and_told_why(
     tmp_path: Path, monkeypatch, raven_on_the_adapter_path: Path
 ) -> None:
@@ -316,6 +319,7 @@ async def test_an_agent_declared_as_not_isolating_is_withheld_and_told_why(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("unix_socket_host")
 async def test_the_operator_log_names_which_refusal_it_was(
     tmp_path: Path, monkeypatch, raven_on_the_adapter_path: Path, caplog
 ) -> None:
@@ -348,6 +352,7 @@ async def test_the_operator_log_names_which_refusal_it_was(
     assert SESSION_MCP_CAPABILITY not in declared_line
 
 
+@pytest.mark.usefixtures("unix_socket_host")
 def test_the_two_refusals_are_independent(raven_on_the_adapter_path: Path) -> None:
     """One is the agent's own property, the other is a build that would error.
 
@@ -513,6 +518,7 @@ async def test_the_capture_a_bridged_dispatch_needs_runs_off_the_event_loop(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("unix_socket_host")
 async def test_the_endpoint_gets_the_hosts_sandbox_and_deny_set(
     tmp_path: Path, raven_on_the_adapter_path: Path, monkeypatch
 ) -> None:
@@ -549,6 +555,7 @@ async def test_the_endpoint_gets_the_hosts_sandbox_and_deny_set(
     assert seen["disabled_tools"] == frozenset({"mcp_echo_ping"})
 
 
+@pytest.mark.usefixtures("unix_socket_host")
 async def test_a_bridged_oauth_server_is_dialled_with_the_hosts_credential(
     tmp_path: Path, monkeypatch, raven_on_the_adapter_path: Path
 ) -> None:

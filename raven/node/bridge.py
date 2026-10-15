@@ -7,7 +7,9 @@ process that connected, which the agent of ``T`` spawned -- and from then on
 carries frames both ways: what the agent writes goes to the daemon as
 ``mcp/frame`` pieces, what comes back as such pieces is put together and
 written to stdout. It parses no MCP and holds no credential, and it ends when
-either side does.
+either side does -- told so, or finding the daemon's side gone -- with exit 0;
+a fault of the stream's own (a frame past the cap), or no stream at all, ends
+it with 1 and one sentence on stderr.
 ``S`` and ``L`` name the server and the host's dispatch, for the host to pair
 the stream with the endpoint it opened on its own side; neither is a secret.
 The host authorizes that pair against the daemon-authenticated task, not the
@@ -48,13 +50,22 @@ async def run_mcp_async(
         return 1
     try:
         opening = {"task": task, "lend": lend, "server": server_name}
-        writer.write(
-            json.dumps({"jsonrpc": "2.0", "id": 1, "method": protocol.MCP_OPEN, "params": opening}).encode("utf-8")
-            + b"\n"
-        )
-        await writer.drain()
         try:
-            answer = json.loads(await reader.readline() or b"null")
+            writer.write(
+                json.dumps({"jsonrpc": "2.0", "id": 1, "method": protocol.MCP_OPEN, "params": opening}).encode("utf-8")
+                + b"\n"
+            )
+            await writer.drain()
+            said_back = await reader.readline()
+        except ConnectionError as exc:
+            print(
+                f"raven node mcp bridge: the daemon closed the connection before the stream opened: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+            return 1
+        try:
+            answer = json.loads(said_back or b"null")
         except ValueError:
             answer = None
         result = answer.get("result") if isinstance(answer, dict) else None
@@ -97,11 +108,23 @@ async def run_mcp_async(
                     return
 
         pumps = [asyncio.create_task(inward()), asyncio.create_task(outward())]
-        done, pending = await asyncio.wait(pumps, return_when=asyncio.FIRST_COMPLETED)
-        for pump in pending:
-            pump.cancel()
+        try:
+            done, _ = await asyncio.wait(pumps, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for pump in pumps:
+                pump.cancel()
+            # Both pumps are over before the socket is closed: nothing is
+            # written to it after, and no exception is left unretrieved.
+            await asyncio.gather(*pumps, return_exceptions=True)
         for pump in done:
-            if (exc := pump.exception()) is not None:
+            exc = pump.exception()
+            # The daemon's side gone under a write or a read is how a stream
+            # ends when the host closes it while a frame of the agent's is on
+            # its way: the daemon writes mcp/close and hangs up, and the frame
+            # meets the closed socket. The stream is over, as when it is told
+            # so; only a fault of the stream's own (a frame past the cap) is
+            # said.
+            if exc is not None and not isinstance(exc, ConnectionError):
                 print(f"raven node mcp bridge: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
                 return 1
         return 0

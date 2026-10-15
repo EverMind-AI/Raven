@@ -2645,6 +2645,7 @@ def test_a_row_written_before_the_field_existed_still_gets_the_measured_answer()
     assert session_mcp_for(_cfg(name="mine", sessionMcp=False)) is False
 
 
+@pytest.mark.usefixtures("unix_socket_host")
 def test_the_roster_row_advertises_the_verdict_the_dispatch_will_reach() -> None:
     """The registry row, not just the backend, has to carry the effective answer.
 
