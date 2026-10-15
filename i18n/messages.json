@@ -5877,8 +5877,8 @@
       "zh": "模式"
     },
     "gui.tier.mode_scope": {
-      "en": "This is a deployment's own mode, not a built-in mode; the mode policy does not apply.",
-      "zh": "当前这档不是内置模式档，模式策略不生效。"
+      "en": "This is a deployment's own mode, not a built-in tier, so it is not passed on to sub-agents.",
+      "zh": "这是部署自带的模式，不是内置档位，因此不会下发给子智能体。"
     },
     "gui.imodel.title": {
       "en": "Model",
