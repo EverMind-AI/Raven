@@ -46,7 +46,7 @@ async def _sampling_cb(context, params):
     )
 
 
-def _bridge_params(socket_path: Path) -> StdioServerParameters:
+def _bridge_params(socket_path: Path | str) -> StdioServerParameters:
     """How a sub-agent is told to reach the endpoint.
 
     ``PATH`` is emptied rather than inherited to keep the check honest: the
@@ -74,9 +74,13 @@ def _reap(pid_file: Path) -> None:
     except (OSError, ValueError):
         return
     try:
-        os.kill(pid, signal.SIGKILL)
+        os.kill(pid, signal.SIGTERM if sys.platform == "win32" else signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
         pass
+    except OSError as exc:
+        # Windows reports an already-exited process as ERROR_INVALID_PARAMETER.
+        if getattr(exc, "winerror", None) != 87:
+            raise
 
 
 async def test_a_bridged_subagent_sees_the_real_server_and_its_reverse_requests_arrive():

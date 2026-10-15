@@ -19,7 +19,7 @@ mcp_app = typer.Typer(name="mcp", help="MCP plumbing for sub-agents.")
 
 
 @mcp_app.command("bridge")
-def bridge(socket_path: str = typer.Argument(..., help="Unix socket the host is listening on")) -> None:
+def bridge(socket_path: str = typer.Argument(..., help="Unix socket path or authenticated loopback endpoint")) -> None:
     """Relay MCP frames between this process's stdio and a host-held server."""
     with claim_stdout() as frames:
         code = asyncio.run(run_bridge(socket_path, frames))

@@ -220,7 +220,6 @@ def test_registry_late_binds_mcp_sources_across_hot_apply() -> None:
     assert second is not None and second is not first and second.mcp_source is source
 
 
-@pytest.mark.usefixtures("unix_socket_host")
 def test_registry_derives_mcp_injection_from_each_transport_contract() -> None:
     registry = AgentRegistry()
     registry.apply(

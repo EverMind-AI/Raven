@@ -1,4 +1,4 @@
-"""Unix socket endpoints that put a host-held MCP connection within a sub-agent's reach.
+"""Local endpoints that put a host-held MCP connection within a sub-agent's reach.
 
 One endpoint per (node, server). A downstream connection gets its own upstream
 transport, and frames are relayed at the JSON-RPC message level -- which is what
@@ -22,6 +22,7 @@ import asyncio
 import hashlib
 import itertools
 import os
+import secrets
 import shutil
 import sys
 import tempfile
@@ -37,6 +38,7 @@ from pydantic import ValidationError
 from raven.mcp.bridge import iter_raw_frames
 from raven.mcp.client import open_mcp_transport, resolve_transport
 from raven.mcp.naming import spellings
+from raven.mcp.transport import TOKEN_BYTES, authenticate, unix_sockets_available
 from raven.sandbox import SandboxInitError
 
 _SOCKET_SUBDIR = "raven-mcp"
@@ -73,7 +75,7 @@ def bridge_command(*, path: str | None = None) -> list[str] | None:
     The PATH lookup stays for the case this cannot serve: a raven installed
     where the adapter runs but not beside this interpreter.
     """
-    own = Path(sys.executable).with_name("raven")
+    own = Path(sys.executable).with_name("raven.exe" if sys.platform == "win32" else "raven")
     if own.is_file() and os.access(own, os.X_OK):
         return [str(own), "mcp", "bridge"]
     exe = shutil.which("raven", path=path)
@@ -318,7 +320,7 @@ _CLOSE_TIMEOUT_S = 10.0
 @dataclass
 class _Endpoint:
     listener: asyncio.AbstractServer
-    path: Path
+    path: Path | None
     relays: set[asyncio.Task]
     """In-flight relays for this endpoint. Tracked because ``close`` has to
     cancel them: ``Server.wait_closed`` returns only once every accepted
@@ -385,7 +387,7 @@ class McpEndpoints:
                 self._executor_memo.append(await provider())
             return self._executor_memo[0] if self._executor_memo else None
 
-    async def open(self, node_id: str, server: str, cfg, http_auth: httpx.Auth | None = None) -> Path:
+    async def open(self, node_id: str, server: str, cfg, http_auth: httpx.Auth | None = None) -> Path | str:
         # No None guard: resolve_transport returns None only for a config naming
         # neither a command nor a url, and resolve_grant already recorded that
         # one as invalid_transport rather than granting it.
@@ -398,19 +400,35 @@ class McpEndpoints:
             resolve_executor=self._resolve_executor if self._executor_provider is not None else None,
             disabled_tools=self._disabled_tools,
         )
-        path = self.path_for(node_id, server)
-        path.unlink(missing_ok=True)
+        path = self.path_for(node_id, server) if unix_sockets_available() else None
+        token = secrets.token_hex(TOKEN_BYTES) if path is None else None
         relays: set[asyncio.Task] = set()
 
+        async def _serve(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            try:
+                if token is None or await authenticate(reader, writer, token):
+                    await _relay(upstream, reader, writer)
+            finally:
+                writer.close()
+
         def _accept(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-            task = asyncio.create_task(_relay(upstream, reader, writer))
+            task = asyncio.create_task(_serve(reader, writer))
             relays.add(task)
             task.add_done_callback(relays.discard)
+            # Cancellation before the first step never enters _serve's finally.
+            task.add_done_callback(lambda _: writer.close())
 
-        listener = await asyncio.start_unix_server(_accept, path=str(path))
-        path.chmod(0o600)
+        if path is not None:
+            path.unlink(missing_ok=True)
+            listener = await asyncio.start_unix_server(_accept, path=str(path))
+            path.chmod(0o600)
+            address = path
+        else:
+            listener = await asyncio.start_server(_accept, "127.0.0.1", 0)
+            port = listener.sockets[0].getsockname()[1]
+            address = f"tcp://127.0.0.1:{port}/{token}"
         self._by_node.setdefault(node_id, []).append(_Endpoint(listener, path, relays))
-        return path
+        return address
 
     async def close(self, node_id: str) -> None:
         for endpoint in self._by_node.pop(node_id, []):
@@ -421,8 +439,9 @@ class McpEndpoints:
             try:
                 await asyncio.wait_for(_settle(endpoint, relays), timeout=_CLOSE_TIMEOUT_S)
             except asyncio.TimeoutError:
-                logger.warning("mcp endpoint: {} did not settle in {}s", endpoint.path.name, _CLOSE_TIMEOUT_S)
-            endpoint.path.unlink(missing_ok=True)
+                logger.warning("mcp endpoint: node {!r} did not settle in {}s", node_id, _CLOSE_TIMEOUT_S)
+            if endpoint.path is not None:
+                endpoint.path.unlink(missing_ok=True)
 
     async def aclose(self) -> None:
         for node_id in list(self._by_node):

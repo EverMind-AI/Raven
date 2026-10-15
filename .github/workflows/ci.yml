@@ -411,6 +411,12 @@ jobs:
       - name: Test the native command-line limit
         run: uv run --frozen --python 3.13 --no-sync pytest tests/integration/test_acp_mirasim_real_process.py -m integration -q -n 0 --tb=short
 
+      - name: Test Windows MCP lending and endpoint lifetimes
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/test_mcp_transport.py tests/test_mcp_bridge.py tests/test_mcp_endpoint.py tests/test_cli_mcp_commands.py tests/test_subagent_acp_mcp_lifecycle.py tests/test_node_client.py -q -n 0 --tb=short
+
+      - name: Test Windows MCP bridge against a real server
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/integration/test_mcp_bridge_e2e.py -m integration -q -n 0 --tb=short
+
   core-wheel:
     name: kernel wheel smoke
     runs-on: ubuntu-latest
