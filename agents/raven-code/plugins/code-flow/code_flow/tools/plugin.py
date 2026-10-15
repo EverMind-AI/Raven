@@ -63,6 +63,8 @@ def make_write_file(ctx: "PluginContext") -> WriteFileTool | None:
         workspace=ctx.services.workspace,
         allowed_dirs=_fence(ctx, cfg),
         syntax_note=cfg.python_syntax_note,
+        lint=cfg.python_lint,
+        unused_imports=cfg.python_unused_imports,
         read_owner=owner_for(ctx),
     )
 
@@ -75,6 +77,8 @@ def make_edit_file(ctx: "PluginContext") -> EditFileTool | None:
         workspace=ctx.services.workspace,
         allowed_dirs=_fence(ctx, cfg),
         syntax_note=cfg.python_syntax_note,
+        lint=cfg.python_lint,
+        unused_imports=cfg.python_unused_imports,
         read_owner=owner_for(ctx),
         require_read=cfg.require_read_before_edit,
     )
@@ -119,6 +123,9 @@ def make_exec(ctx: "PluginContext") -> CodeExecTool | None:
         executor=executor,
         extra_allowed_dirs=(home,),
         max_timeout=cfg.exec.max_timeout,
+        python_diagnostics=cfg.python_syntax_note and cfg.exec_python_diagnostics,
+        python_lint=cfg.python_lint,
+        python_unused_imports=cfg.python_unused_imports,
     )
 
 

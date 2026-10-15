@@ -116,6 +116,7 @@ dependencies = [
     # tells them apart -- and a reader can do something about a password and
     # nothing about a corrupt file.
     "pdfminer-six>=20250416",
+    "pyflakes>=3.2,<4",
 ]
 
 [project.optional-dependencies]

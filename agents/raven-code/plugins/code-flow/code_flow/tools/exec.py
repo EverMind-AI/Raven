@@ -56,6 +56,8 @@ from typing import Any
 
 from loguru import logger
 
+from code_flow.tools.diagnostics import UNKNOWN, PythonDiagnostics
+from raven.agent.tools import snapshot
 from raven.agent.tools.shell import ExecTool
 from raven.contracts.tool import ToolOutput, ToolResult
 from raven.sandbox.direct_executor import DirectExecutor
@@ -78,6 +80,10 @@ _SPILL_COUNTER = itertools.count(1)
 #: Variables the probe's own shell adds on top of the baseline; not part of it.
 _SHELL_ADDED = frozenset({"PWD", "OLDPWD", "SHLVL", "_"})
 _PROBE_TIMEOUT = 15
+_SCAN_WAIT_SECONDS = 0.25
+_DIAGNOSTIC_WAIT_SECONDS = 3.0
+_DIAGNOSTIC_FILES = 8
+_DIAGNOSTIC_CHARS = 6000
 
 
 def spill_output(text: str, spill_dir: Path | None) -> str | None:
@@ -249,11 +255,13 @@ class CodeExecutor(DirectExecutor):
         )
 
 
-def _prefixed(note: str, out: str | ToolResult) -> str | ToolResult:
+def _prefixed(note: str, out: str | ToolResult, *, append: bool = False) -> str | ToolResult:
     """``note`` in front of a tool's answer, whatever shape the answer took."""
+    text = out.model_text if isinstance(out, ToolResult) else str(out)
+    text = text + note if append else note + text
     if isinstance(out, ToolOutput):
         return ToolOutput(
-            note + str(out),
+            text,
             out.display_text,
             retryable=out.retryable,
             blocks_call=out.blocks_call,
@@ -262,10 +270,12 @@ def _prefixed(note: str, out: str | ToolResult) -> str | ToolResult:
             blocks=out.blocks,
             diff=out.diff,
             file_change=out.file_change,
+            removed=out.removed,
+            written=out.written,
         )
     if isinstance(out, ToolResult):
         return ToolResult(
-            model_text=note + out.model_text,
+            model_text=text,
             display_text=out.display_text,
             retryable=out.retryable,
             blocks_call=out.blocks_call,
@@ -274,8 +284,10 @@ def _prefixed(note: str, out: str | ToolResult) -> str | ToolResult:
             blocks=out.blocks,
             diff=out.diff,
             file_change=out.file_change,
+            removed=out.removed,
+            written=out.written,
         )
-    return note + str(out)
+    return text
 
 
 class CodeExecTool(ExecTool):
@@ -283,13 +295,70 @@ class CodeExecTool(ExecTool):
 
     _MAX_OUTPUT = MAX_OUTPUT
 
-    def __init__(self, *args: Any, max_timeout: int = DEFAULT_MAX_TIMEOUT, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *args: Any,
+        max_timeout: int = DEFAULT_MAX_TIMEOUT,
+        python_diagnostics: bool = True,
+        python_lint: bool = True,
+        python_unused_imports: bool = False,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
+        self._python_diagnostics = python_diagnostics
+        self._diagnostics = PythonDiagnostics(lint=python_lint, unused_imports=python_unused_imports)
         # The base ``execute`` clamps against ``self._MAX_TIMEOUT``; the
         # instance value replaces the class constant of 600.
         self._MAX_TIMEOUT = max_timeout
         # The loop's backstop above the executor's own timeout, as trunk sets it.
         self.timeout_seconds = float(max_timeout + 60)
+
+    async def _listing(self, root: Path) -> snapshot.Snapshot | None:
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(snapshot.take, root, deadline=time.monotonic() + _SCAN_WAIT_SECONDS),
+                timeout=_SCAN_WAIT_SECONDS,
+            )
+        except Exception:  # noqa: BLE001 - diagnostics must not prevent the command from running
+            return None
+
+    async def _diagnose_writes(self, root: Path, before: snapshot.Snapshot | None, out: str | ToolResult) -> str:
+        written = getattr(out, "written", ())
+        if self.record_writes:
+            candidates = [(Path(item.path), None if item.created else UNKNOWN) for item in written]
+        else:
+            if before is None:
+                return ""
+            after = await self._listing(root)
+            created, modified, _ = snapshot.diff(before, after)
+            candidates = [(Path(path), None) for path in created] + [(Path(path), UNKNOWN) for path in modified]
+        candidates = [
+            (path, old)
+            for path, old in candidates
+            if path.suffix == ".py" and not path.is_symlink() and path.resolve().is_relative_to(root.resolve())
+        ]
+        if not candidates:
+            return ""
+        selected = candidates[:_DIAGNOSTIC_FILES]
+        if self._shadow is not None and (shadow := self._shadow(root)) is not None:
+            shown = await shadow.trackable([str(path) for path, _ in selected])
+            selected = [(path, old) for path, old in selected if str(path) in shown]
+        notes = []
+        size = 0
+        for path, old in selected:
+            note = await self._diagnostics.check(path, before=old)
+            if note:
+                if size + len(note) > _DIAGNOSTIC_CHARS:
+                    notes.append("\nFurther Python diagnostics omitted to keep this tool result bounded.")
+                    break
+                notes.append(note)
+                size += len(note)
+        if len(candidates) > _DIAGNOSTIC_FILES:
+            notes.append(
+                f"\nPython diagnostics limited to {_DIAGNOSTIC_FILES} changed files; "
+                f"{len(candidates) - _DIAGNOSTIC_FILES} more were skipped."
+            )
+        return "\n".join(notes)
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -315,6 +384,13 @@ class CodeExecTool(ExecTool):
         **kwargs: Any,
     ) -> str | ToolResult:
         note = ""
+        inspect_writes = (
+            self._python_diagnostics and not machine and not run_in_background and not self._executor.is_sandboxed
+        )
+        root = Path(self._cwd_for(working_dir))
+        if inspect_writes and self._guard_command(command, str(root)):
+            inspect_writes = False
+        before = await self._listing(root) if inspect_writes and not self.record_writes else None
         if timeout is not None and not machine and not run_in_background and timeout > self._MAX_TIMEOUT:
             note = (
                 f"[note: timeout {timeout}s clamped to the {self._MAX_TIMEOUT}s ceiling; for longer "
@@ -329,6 +405,16 @@ class CodeExecTool(ExecTool):
             run_in_background=run_in_background,
             **kwargs,
         )
+        if inspect_writes and isinstance(out, (ToolOutput, ToolResult)) and not out.blocks_call:
+            try:
+                diagnostics = await asyncio.wait_for(
+                    self._diagnose_writes(root, before, out), timeout=_DIAGNOSTIC_WAIT_SECONDS
+                )
+            except Exception as exc:  # noqa: BLE001 - never replace a completed command's output with a checker error
+                logger.debug("code-flow: post-exec diagnostics unavailable: {}", exc)
+            else:
+                if diagnostics:
+                    out = _prefixed(diagnostics, out, append=True)
         return _prefixed(note, out) if note else out
 
 
