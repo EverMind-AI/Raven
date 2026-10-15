@@ -79,7 +79,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, BinaryIO
-from urllib.parse import unquote, urlparse
+from urllib.parse import urlparse
 from urllib.request import url2pathname
 
 from loguru import logger
@@ -835,7 +835,7 @@ def _local_file(uri: str) -> str | None:
     parsed = urlparse(uri)
     if parsed.scheme != "file":
         return None
-    path = Path(url2pathname(unquote(parsed.path)))
+    path = Path(url2pathname(parsed.path))
     return str(path) if path.is_file() else None
 
 

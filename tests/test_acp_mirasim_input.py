@@ -10,6 +10,18 @@ from types import SimpleNamespace
 import pytest
 
 from raven.acp.mirasim import uicli
+from raven.acp.mirasim.server import _prompt_input
+
+
+@pytest.mark.parametrize(
+    "name", ["ordinary space.txt", "caf\u00e9.txt", "literal%20name.txt", "literal%25name.txt", "literal%23name.txt"]
+)
+def test_a_file_uri_preserves_the_literal_filename(tmp_path: Path, name: str) -> None:
+    attachment = tmp_path / name
+    attachment.write_text("attachment", encoding="utf-8")
+    text, files = _prompt_input([{"type": "resource_link", "uri": attachment.as_uri(), "name": name}])
+    assert files == [str(attachment)]
+    assert text == "See the attached files."
 
 
 @pytest.fixture
