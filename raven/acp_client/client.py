@@ -799,6 +799,19 @@ class AcpClient:
             return
         if is_draining():
             return
+        if getattr(self._endpoint, "offline", False):
+            # The agent is on a machine whose link is down: the cancel waits
+            # with the endpoint for the next link, and no settlement can
+            # arrive before then. The budget would only hold the caller; the
+            # session is unsettled, as one that outlived the budget is.
+            self._unsettled_cancels.add(session_id)
+            logger.info(
+                "acp agent {!r}: session {!r} was cancelled while its machine's link is down; the cancel goes with "
+                "the next link",
+                self.name,
+                session_id,
+            )
+            return
         done, _ = await asyncio.wait({future}, timeout=_CANCEL_SETTLE_S)
         if done:
             # Retrieve the exception so a connection that died inside the settle window does

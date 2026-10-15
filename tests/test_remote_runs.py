@@ -76,8 +76,15 @@ def test_pending_lists_the_runs_oldest_first_and_names_what_it_cannot_read(_home
     (remote_runs.runs_dir() / "bare.json").write_text(json.dumps({"version": 1, "machine": "box"}), encoding="utf-8")
 
     assert [run.task for run in remote_runs.pending()] == ["earlier", "later"]
-    assert "broken.json could not be read" in "\n".join(logs)
+    assert "broken.json is not JSON" in "\n".join(logs) and "set aside as broken.json.unreadable-" in "\n".join(logs)
     assert "other-version.json is not one this version reads" in "\n".join(logs)
+    # Set aside once, under a name that says so, and the next start is not warned about it again.
+    assert not (remote_runs.runs_dir() / "broken.json").exists()
+    (aside,) = remote_runs.runs_dir().glob("broken.json.unreadable-*")
+    assert aside.read_text(encoding="utf-8") == "{not json"
+    logs.clear()
+    assert [run.task for run in remote_runs.pending()] == ["earlier", "later"]
+    assert "broken.json" not in "\n".join(logs)
 
 
 def test_forget_removes_the_record_and_is_quiet_about_one_already_gone() -> None:
@@ -282,3 +289,21 @@ def test_annotate_adds_the_manager_s_fields_to_the_record_of_a_dispatch_and_says
     (back,) = remote_runs.pending()
     assert back.origin == {"node_id": "n1", "workspace": "/w"} and back.task_summary == "say hi"
     assert remote_runs.annotate("nobody", task_summary="x") is False
+
+
+def test_a_record_that_cannot_be_opened_or_set_aside_is_named_and_left(_home: Path, logs, monkeypatch) -> None:
+    remote_runs.record(_run("fine"))
+    (remote_runs.runs_dir() / "dir.json").mkdir()  # a directory under a record's name: not readable as one
+    assert [run.task for run in remote_runs.pending()] == ["fine"]
+    assert "dir.json could not be read" in "\n".join(logs)
+
+    (remote_runs.runs_dir() / "stuck.json").write_text("{half", encoding="utf-8")
+
+    def cannot_move(*_a, **_k):
+        raise OSError("read-only")
+
+    monkeypatch.setattr(remote_runs.os, "replace", cannot_move)
+    logs.clear()
+    assert [run.task for run in remote_runs.pending()] == ["fine"]
+    assert "stuck.json is not JSON" in "\n".join(logs) and "could not be set aside" in "\n".join(logs)
+    assert (remote_runs.runs_dir() / "stuck.json").exists(), "left where it was when it cannot be moved"

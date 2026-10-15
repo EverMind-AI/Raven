@@ -250,6 +250,20 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- A task on a registered machine ends the way it ended, whatever happened on
+  either side. A Raven node killed outright (`kill -9`) used to leave its
+  agents running with nobody reading them and the host reading a bare
+  `exit -1`; the next daemon now ends what was left, records why, and the host
+  hands that sentence on (on Linux the agent also goes with the daemon). A
+  failed remote run whose announce the draining scheduler refused used to
+  vanish; its record now stays, like a reply's, for the next start to report.
+  A cli run picked up after a restart now binds its instance to the session
+  id in its output, so the next turn resumes it. A cancel while the machine's
+  link is down no longer waits out the settle budget. An openai row's tunnel
+  gives a local port that was taken in between up for another instead of
+  sending the request to whoever took it. A run record that is not JSON is set
+  aside once instead of being warned about at every start.
+
 - A backslash typed into a bug report's description or steps (a literal
   `\n` standing in for a line break, or a regular expression such as `\d+`)
   no longer stops `raven trajectory report-bug` and the browser's

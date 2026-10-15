@@ -319,11 +319,22 @@ class ChannelEndpoint:
         if isinstance(text, str) and not self._done.is_set():
             self._stderr.put_nowait(text.encode("utf-8") + b"\n")
 
-    def exited(self, rc: Any) -> None:
+    def exited(self, rc: Any, reason: Any = None) -> None:
         if self._done.is_set():
             return
         self._rc = rc if isinstance(rc, int) and not isinstance(rc, bool) else LOST_RC
+        if isinstance(reason, str) and reason:
+            # The node's own sentence for an end it did not watch -- a daemon
+            # restarted under the agent (``raven.node.server.Daemon.recover``)
+            # -- handed on in place of the bare exit code, as a lost link's is.
+            self._lost = reason
         self._settle()
+
+    @property
+    def offline(self) -> bool:
+        """Whether nothing sent now reaches the agent: its link is known to be gone, or this endpoint is parked
+        for the next one. What a caller that would wait for the agent's answer reads first."""
+        return self._detached is not None or not self._link.alive
 
     def lost(self, reason: str) -> None:
         if self._done.is_set():
@@ -761,7 +772,7 @@ class NodePool:
             endpoint.feed_stderr(params.get("text"))
         elif method == protocol.AGENT_EXIT:
             channels.pop(channel, None)
-            endpoint.exited(params.get("rc"))
+            endpoint.exited(params.get("rc"), params.get("reason"))
 
     async def _heartbeat(self, machine_id: str, node: _Node) -> None:
         """Ping the node until one ping goes unanswered; then the link is lost."""

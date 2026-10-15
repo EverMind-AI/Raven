@@ -1038,3 +1038,65 @@ async def test_the_update_door_refuses_lending_keys_to_a_machine_row(box, config
 
 
 # ---- two machines on one disk ---------------------------------------------------------------
+
+
+async def test_a_prompt_that_fails_after_it_went_out_keeps_its_record_for_the_caller_that_reports_the_failure(
+    box, tmp_path, monkeypatch
+):
+    """The failure is the caller's to announce, as a reply is: the record stays until it has, and the next start
+    reads how the task ended off the machine and reports that."""
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    backend = build_third_party_backend(remote_config(mode="dies_mid_turn"))
+
+    with pytest.raises(Exception, match="exit 5"):
+        await backend.run("hi", task_id="t0", workspace=tmp_path, executor=None, session_key="tui:s1")
+    assert remote_runs.pending() == [], "a caller that takes the failure as its own result leaves no record"
+
+    with pytest.raises(Exception, match="exit 5"):
+        await backend.run(
+            "hi", task_id="t1", workspace=tmp_path, executor=None, session_key="tui:s1", reported_by_caller=True
+        )
+    (run,) = remote_runs.pending()
+    assert run.task_id == "t1" and run.prompt_id > 0, "the prompt was out: the record outlives the failure"
+
+    # The next start reads the end off the machine and reports it as the error it is.
+    session_dir = tmp_path / "sessions" / "s1"
+    meta = {"call_id": "n1", "session_key": "tui:s1", "agent": backend.name, "handle": "t1", "task_summary": "say hi"}
+    SpawnRecord.open(session_dir, task_id="t1", task="hi", meta=meta, node_id="n1")
+    manager = _Manager(backend, session_dir)
+    monkeypatch.setattr(resume_remote, "get_registry", lambda: _Registry())
+
+    assert await asyncio.wait_for(resume_remote.resume_remote_runs(manager), timeout=30) == 1
+
+    (said,) = manager.announced
+    assert said["status"] == "error" and "exit 5" in said["result"]
+    assert remote_runs.pending() == []
+
+
+async def test_a_daemon_killed_outright_mid_turn_ends_the_turn_with_the_reason_and_leaves_no_agent(box, tmp_path):
+    """The next daemon brings the task down and says why; the host reads that sentence off the attach instead of a
+    bare exit code, and the agent the killed daemon left behind is gone."""
+    box.nodes._heartbeat_s = 0.1
+    box.nodes._lost_after_s = 1.0
+    box.nodes._backoff_s = (0.2,)
+    backend = build_third_party_backend(remote_config(env={"ACP_STUB_PROMPT_DELAY_S": "20"}))
+    turn = asyncio.ensure_future(backend.run("hi", task_id="t1", workspace=tmp_path, executor=None))
+    deadline = time.monotonic() + 20
+    while box.nodes.status("box").agents != 1:
+        assert time.monotonic() < deadline and not turn.done(), "the agent never started"
+        await asyncio.sleep(0.05)
+    await asyncio.sleep(0.5)
+    agent = _agent_pid()
+    daemon = box.nodes._nodes["box"].hello["pid"]
+    assert _alive(agent) and _alive(daemon)
+
+    os.kill(daemon, signal.SIGKILL)
+
+    with pytest.raises(Exception, match="restarted while the agent ran") as caught:
+        await asyncio.wait_for(turn, timeout=30)
+    assert "exit -1" not in str(caught.value), "the sentence, not the bare lost code"
+    assert box.nodes._nodes["box"].hello["pid"] != daemon, "a new daemon, started by the new ssh"
+    deadline = time.monotonic() + 5
+    while _alive(agent) and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+    assert not _alive(agent), "the agent the killed daemon left behind was ended by the new one"

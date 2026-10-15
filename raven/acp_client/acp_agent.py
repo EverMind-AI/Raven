@@ -1783,13 +1783,21 @@ class AcpAgentBackend:
                         raise
                     finally:
                         if tracker is not None:
-                            # The record goes with a turn that ended here with no
-                            # reply. It stays while this process leaves the turn
-                            # running, and with the reply for a caller that reports
-                            # it (`remote_runs.forget_dispatch`): a host that stops
-                            # between the answer and the announce has no other way
-                            # back to the run.
-                            self._untrack(client, tracker, keep=remote.leaving() or (answered and reported_by_caller))
+                            # The record goes with a turn that ended here before
+                            # its prompt was out. It stays while this process
+                            # leaves the turn running, and, for a caller that
+                            # reports the outcome and forgets the record then
+                            # (`remote_runs.forget_dispatch`), with the reply or
+                            # with the failure of a prompt that went out: a host
+                            # that stops between either and its announce has no
+                            # other way back to the run, and the machine's record
+                            # of the task says how it ended.
+                            self._untrack(
+                                client,
+                                tracker,
+                                keep=remote.leaving()
+                                or (reported_by_caller and (answered or tracker.run.prompt_id > 0)),
+                            )
                         activity.offer_steer(collector._run, None)
                         connection.router.detach(session_id, collector)
                         connection.elicitors.detach(session_id, elicitor)
