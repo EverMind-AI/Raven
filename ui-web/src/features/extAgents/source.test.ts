@@ -417,6 +417,14 @@ describe('the wizard step sections', () => {
     ['a preset mid-build on an older server', { configured: false, enabled: false, building: true, probe_status: 'ready' }, 'avail', null, false],
     ['a configured agent switched on', { configured: true, enabled: true, probe_status: 'ready' }, 'on', 'on', true],
     ['a configured agent switched off', { configured: true, enabled: false, probe_status: 'ready' }, 'avail', 'avail', true],
+    ["a config row of Raven's own", { configured: true, enabled: true, own: true, probe_status: 'ready' }, 'on', 'on', false],
+    [
+      'a shipped product registered as a config row, known by its name',
+      { name: 'Raven-Oncall', configured: true, enabled: false, probe_status: 'ready' },
+      'avail',
+      'avail',
+      false,
+    ],
     [
       'a configured agent off with its preset moved to another transport',
       { configured: true, enabled: false, probe_status: 'ready', upgrade_to: 'acp' },

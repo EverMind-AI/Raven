@@ -1813,9 +1813,23 @@ describe('the model pill', () => {
     const { acts } = install([row({ name: 'Raven-Code', preset: undefined, kind: 'acp', vendored: true, configured: false, own: true })])
     await mount()
     await openSheet('Raven-Code')
-    /* Part of Raven, so testable but never disconnected. */
-    expect(sheetActs()).toEqual(['gui.agent.test_label'])
-    await click(sheet()!.querySelectorAll('.extAgents-act button')[0])
+    expect(sheetActs()).toEqual(['gui.agent.disconnect', 'gui.agent.test_label'])
+    await click(sheet()!.querySelectorAll('.extAgents-act button')[1])
     expect(acts.map((a) => a.slice(0, 2))).toEqual([['test', 'Raven-Code']])
+  })
+
+  /* Part of Raven, and still the reader's to take off the roster: a shipped folder
+     is switched off by a row the server writes for it, and back on by removing
+     that row, exactly as any other agent is switched. Whether it was written
+     into config by an installer or found under `agents/` is storage, and the
+     verbs do not change with it. Only the built-in loop has no switch. */
+  it('disconnects a shipped product, and connects it back', async () => {
+    const { acts } = install([row({ name: 'Raven-Code', preset: undefined, kind: 'acp', vendored: true, configured: false, own: true })])
+    await mount()
+    await openSheet('Raven-Code')
+    await click([...sheet()!.querySelectorAll<HTMLElement>('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.disconnect'))
+    expect(acts).toEqual([['toggle', 'Raven-Code', { enabled: false }]])
+    await click([...sheet()!.querySelectorAll<HTMLElement>('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
+    expect(acts.at(-1)).toEqual(['toggle', 'Raven-Code', { enabled: true }])
   })
 })

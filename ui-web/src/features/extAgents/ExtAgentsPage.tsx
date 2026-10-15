@@ -610,13 +610,12 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
   } else if (shown === 'on') {
     actions = row.builtin ? null : (
       <>
-        {/* Raven's shipped specialists are part of Raven, not something the
-            reader connected, so there is nothing to disconnect. */}
-        {row.vendored ? null : (
-          <button className="mini danger" onClick={() => store.disconnectRow(row)}>
-            {t('gui.agent.disconnect')}
-          </button>
-        )}
+        {/* Every agent but the built-in loop can leave the roster, Raven's own
+            specialists included: a shipped folder is switched off by a row the
+            server writes for it, the way any other row is switched. */}
+        <button className="mini danger" onClick={() => store.disconnectRow(row)}>
+          {t('gui.agent.disconnect')}
+        </button>
         {canTest(row) && testing ? (
           <button className="mini danger" onClick={() => store.stopTest(row)}>
             <Spin />

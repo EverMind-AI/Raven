@@ -358,8 +358,12 @@ call can write is presentation or policy, and a row that is off is left to the s
 Every kind but `builtin` is pinged, that one being this process, with no backend to
 reach.
 Not deletable through config — removing one means removing its folder, or setting
-`"enabled": false` in its own `subagent.json`. On the RPC wire the row source is still
-spelled `vendored`; renaming that is a schema change.
+`"enabled": false` in its own `subagent.json`. Switched off it stays one: the row
+`subagents.toggle` writes carries only the switch, so it is neither a definition nor a
+config entry to delete. An edit stores the folder's entry with the change as an
+override, a switched-off one staying off, and removing an override that is off leaves
+the switch behind. On the RPC wire the row source is still spelled `vendored`;
+renaming that is a schema change.
 _Avoid_: "product" / "product agent" — the retired category word (the ruling keeps
 *agent* for the thing, *harness* for the mechanism it rides, *subagent* for the
 protocol seat); code-level `product_*` spellings stay as API surface, prose does not

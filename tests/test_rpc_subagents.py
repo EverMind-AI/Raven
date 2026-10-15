@@ -2664,6 +2664,163 @@ async def test_a_probe_miss_on_a_ready_discovered_row_reads_as_attention_not_mis
     assert "not on the login shell PATH" in row["probe_detail"]
 
 
+async def test_a_switched_off_product_still_lists_as_discovered(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The row the switch writes says "not this one" about a folder that still
+    defines the agent, so it does not make the product a config row. Listed as
+    one, the product offered a delete that drops the switch -- the agent back on
+    the roster past the enable gate -- and a test by `source: "config"` found the
+    switch row and ran its empty command."""
+    from raven.agent.subagent import vendored_agents as va
+
+    root = _product_tree(tmp_path)
+    monkeypatch.setattr(va, "agents_root", lambda: root)
+    await subagents_toggle({"name": "Raven-Probe", "enabled": False})
+
+    row = [r for r in (await subagents_list({"probe": False}))["rows"] if r["name"] == "Raven-Probe"][0]
+
+    assert (row["vendored"], row["configured"], row["own"], row["enabled"]) == (True, False, True, False)
+
+
+async def test_a_written_override_of_a_product_lists_as_config(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stored row that defines the agent its own way is somebody's override --
+    an `install.py` entry, a hand edit -- and keeps the config source and the
+    delete button that reads it."""
+    from raven.agent.subagent import vendored_agents as va
+
+    root = _product_tree(tmp_path)
+    monkeypatch.setattr(va, "agents_root", lambda: root)
+    stored = json.loads(config_path.read_text())
+    stored["subagents"]["agents"].append(
+        {"name": "Raven-Probe", "kind": "cli", "command": "raven-probe-custom {prompt}", "enabled": True}
+    )
+    config_path.write_text(json.dumps(stored), encoding="utf-8")
+
+    row = [r for r in (await subagents_list({"probe": False}))["rows"] if r["name"] == "Raven-Probe"][0]
+
+    assert (row["vendored"], row["configured"]) == (False, True)
+
+
+async def test_an_edit_to_a_switched_off_product_lands_and_keeps_it_off(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The switch's row carries the switch alone -- the table reads only its
+    flag -- so an edit written onto it reached nothing. The edit stores the
+    folder's entry instead, as it does for a folder with no row, and the "no"
+    goes with it."""
+    from raven.agent.subagent import vendored_agents as va
+
+    root = _product_tree(tmp_path)
+    monkeypatch.setattr(va, "agents_root", lambda: root)
+    await subagents_toggle({"name": "Raven-Probe", "enabled": False})
+
+    await subagents_update({"name": "Raven-Probe", "description": "edited while off"})
+
+    row = [r for r in (await subagents_list({"probe": False}))["rows"] if r["name"] == "Raven-Probe"][0]
+    assert (row["description"], row["enabled"]) == ("edited while off", False)
+
+
+async def test_a_switched_off_product_cannot_be_renamed(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Renamed, the switch's row moved off its folder: the agent came back on
+    the roster past the enable gate, and the row stayed behind switching
+    nothing."""
+    from raven.agent.subagent import vendored_agents as va
+
+    root = _product_tree(tmp_path)
+    monkeypatch.setattr(va, "agents_root", lambda: root)
+    await subagents_toggle({"name": "Raven-Probe", "enabled": False})
+    before = _stored(config_path)
+
+    with pytest.raises(ConfigFieldReadonlyError, match="cannot be renamed"):
+        await subagents_update({"name": "Raven-Probe", "new_name": "Renamed"})
+
+    assert _stored(config_path) == before
+
+
+async def test_an_edit_that_changes_nothing_stores_no_copy_of_a_product(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A form saves every field it shows, changed or not. A copy of the folder's
+    entry would outlive the manifest it was taken from, so a save that changes
+    nothing stores nothing, on or off."""
+    from raven.agent.subagent import vendored_agents as va
+
+    root = _product_tree(tmp_path)
+    monkeypatch.setattr(va, "agents_root", lambda: root)
+    before = _stored(config_path)
+
+    await subagents_update({"name": "Raven-Probe", "new_name": "Raven-Probe", "description": "d"})
+    assert _stored(config_path) == before
+
+    await subagents_toggle({"name": "Raven-Probe", "enabled": False})
+    switched = _stored(config_path)
+    await subagents_update({"name": "Raven-Probe", "new_name": "Raven-Probe", "description": "d"})
+    assert _stored(config_path) == switched
+
+
+async def test_removing_an_off_override_of_a_product_keeps_it_off(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without its row the folder defines the agent again, so dropping an off
+    row whole put the agent back on the roster past the enable gate. Its "no"
+    stays behind as the switch's own row."""
+    from raven.agent.subagent import vendored_agents as va
+
+    root = _product_tree(tmp_path)
+    monkeypatch.setattr(va, "agents_root", lambda: root)
+    stored = json.loads(config_path.read_text())
+    stored["subagents"]["agents"].append(
+        {"name": "Raven-Probe", "kind": "cli", "command": "raven-probe-custom {prompt}", "enabled": False}
+    )
+    config_path.write_text(json.dumps(stored), encoding="utf-8")
+
+    assert await subagents_remove({"name": "Raven-Probe"}) == {"removed": True}
+
+    row = [r for r in (await subagents_list({"probe": False}))["rows"] if r["name"] == "Raven-Probe"][0]
+    assert (row["vendored"], row["enabled"]) == (True, False)
+
+
+async def test_removing_an_override_of_a_product_that_is_on_drops_it_whole(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On, the folder that governs once the row is gone is on already."""
+    from raven.agent.subagent import vendored_agents as va
+
+    root = _product_tree(tmp_path)
+    monkeypatch.setattr(va, "agents_root", lambda: root)
+    stored = json.loads(config_path.read_text())
+    stored["subagents"]["agents"].append(
+        {"name": "Raven-Probe", "kind": "cli", "command": "raven-probe-custom {prompt}", "enabled": True}
+    )
+    config_path.write_text(json.dumps(stored), encoding="utf-8")
+
+    assert await subagents_remove({"name": "Raven-Probe"}) == {"removed": True}
+
+    assert [e for e in _stored(config_path) if e["name"] == "Raven-Probe"] == []
+
+
+async def test_removing_a_products_switch_removes_nothing(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The switch's row is no definition to delete, and removing it would be
+    the switch turned back on past its gate."""
+    from raven.agent.subagent import vendored_agents as va
+
+    root = _product_tree(tmp_path)
+    monkeypatch.setattr(va, "agents_root", lambda: root)
+    await subagents_toggle({"name": "Raven-Probe", "enabled": False})
+    before = _stored(config_path)
+
+    assert await subagents_remove({"name": "Raven-Probe"}) == {"removed": False}
+
+    assert _stored(config_path) == before
+
+
 async def test_build_answers_nothing_to_build_for_a_ready_product(
     config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
