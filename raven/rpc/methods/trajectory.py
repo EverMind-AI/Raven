@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import asdict
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
@@ -40,7 +41,7 @@ from raven.rpc.models import (
     TrajectoryStateParams,
 )
 from raven.tracing import config as tracing_config
-from raven.trajectory import details, index, policy
+from raven.trajectory import details, imported, index, policy
 
 if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
@@ -68,8 +69,20 @@ def _session_key(value: str) -> str:
     return value
 
 
-def _indexer() -> index.TrajectoryIndexer:
-    return index.indexer_for(tracing_config.state_dir())
+async def _target(session_key: str) -> tuple[index.TrajectoryIndexer, Path, str]:
+    """The indexer, trace store and span session key a session's trajectory is read through.
+
+    An Imported Conversation reads its own store, under the key its spans were
+    recorded with; one whose spans named no session reads as empty.
+    """
+    if not imported.is_imported_key(session_key):
+        state = tracing_config.state_dir()
+        return index.indexer_for(state), state, session_key
+    target = await asyncio.to_thread(imported.trajectory_target, session_key)
+    if target is None:
+        raise SessionNotFoundError(f"no imported conversation {session_key!r}")
+    state, original = target
+    return index.indexer_for(state), state, original or session_key
 
 
 def _state(index_state: index.IndexState) -> dict[str, Any]:
@@ -82,7 +95,7 @@ async def trajectory_state(params: dict) -> dict:
     if current.enabled():
         # An open page asks this every few seconds, whichever view is up: the
         # beat that lets go of the indexes nobody has read for a while.
-        _indexer().evict_idle()
+        index.evict_idle_all()
     return {
         "enabled": current.enabled(),
         "policy_revision": current.revision,
@@ -93,8 +106,8 @@ async def trajectory_state(params: dict) -> dict:
 async def trajectory_list(params: dict) -> dict:
     request = _params(TrajectoryListParams, params)
     _require_enabled()
-    session_key = _session_key(request.session_key)
-    session = await _indexer().refresh(session_key)
+    indexer, _, key = await _target(_session_key(request.session_key))
+    session = await indexer.refresh(key)
     try:
         page = session.list_page(request.cursor, request.limit)
     except index.CursorExpiredError as exc:
@@ -112,8 +125,8 @@ async def trajectory_list(params: dict) -> dict:
 async def trajectory_changes(params: dict) -> dict:
     request = _params(TrajectoryChangesParams, params)
     _require_enabled()
-    session_key = _session_key(request.session_key)
-    session = await _indexer().refresh(session_key)
+    indexer, _, key = await _target(_session_key(request.session_key))
+    session = await indexer.refresh(key)
     batch = session.changes(request.epoch, request.after_revision, request.limit)
     return {
         "epoch": batch.epoch,
@@ -130,16 +143,16 @@ async def trajectory_changes(params: dict) -> dict:
 async def trajectory_detail(params: dict) -> dict:
     request = _params(TrajectoryDetailParams, params)
     _require_enabled()
-    session_key = _session_key(request.session_key)
+    indexer, state, key = await _target(_session_key(request.session_key))
     # Refreshed like the list: after a restart or an idle eviction the index
     # is new, and an entry it has not scanned yet is not a gone one.
-    session = await _indexer().refresh(session_key)
+    session = await indexer.refresh(key)
     try:
         descriptor = await asyncio.to_thread(
             details.describe,
             session,
             request.entry_id,
-            state=tracing_config.state_dir(),
+            state=state,
             expected_revision=request.entry_revision,
         )
     except details.RevisionChangedError as exc:
@@ -154,17 +167,17 @@ async def trajectory_detail(params: dict) -> dict:
 async def trajectory_block(params: dict) -> dict:
     request = _params(TrajectoryBlockParams, params)
     _require_enabled()
-    session_key = _session_key(request.session_key)
+    indexer, state, key = await _target(_session_key(request.session_key))
     # Refreshed like the list: after a restart or an idle eviction the index
     # is new, and an entry it has not scanned yet is not a gone one.
-    session = await _indexer().refresh(session_key)
+    session = await indexer.refresh(key)
     try:
         body = await asyncio.to_thread(
             details.read_block,
             session,
             request.entry_id,
             request.block_id,
-            state=tracing_config.state_dir(),
+            state=state,
             entry_revision=request.entry_revision,
             epoch=request.epoch,
             cursor=request.cursor,

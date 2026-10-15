@@ -198,6 +198,10 @@ export interface SessionInitInfo {
    */
   running?: boolean;
   /**
+   * True for an Imported Conversation, which nothing can change; absent on every other session.
+   */
+  read_only?: boolean;
+  /**
    * How long the turn in flight has been running, in milliseconds, measured on the server; null when nothing is running or the question carries no readable stamp. The elapsed rather than the stamp it was measured from: that stamp is a server wall clock, and a client in another timezone reading it against its own clock gets the offset between the two back as the turn's age.
    */
   running_ms?: number | null;
@@ -890,6 +894,19 @@ export interface SessionListItem {
    * The directory this session was pinned to when it was created, absolute; absent for a session that runs where the policy default puts it. What the rail groups by.
    */
   workdir?: string;
+  /**
+   * Present only on an Imported Conversation's row (source 'imported').
+   */
+  imported?: {
+    /**
+     * 'export', 'bugreport' or 'report'.
+     */
+    kind: string;
+    /**
+     * The file name the package was imported from.
+     */
+    source_name: string;
+  };
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -3110,7 +3127,7 @@ export interface SessionListParams {
    */
   limit?: number;
   /**
-   * Session channels to include; defaults to tui.
+   * Session channels to include; defaults to tui. 'imported' adds the Imported Conversations to a list of live sessions (never to the archived one).
    */
   channels?: string[];
   /**
@@ -8043,6 +8060,39 @@ export interface BugreportCancelParams {
  */
 export interface BugreportCancelResult {
   ok: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ImportedUploadParams".
+ */
+export interface ImportedUploadParams {
+  name: string;
+  content_b64: string;
+  force?: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ImportedUploadResult".
+ */
+export interface ImportedUploadResult {
+  /**
+   * 'imported', or 'duplicate' when the same bytes were imported before; a duplicate writes nothing and every other field describes the copy already there.
+   */
+  status: string;
+  /**
+   * imported:<id>, the key session.* and trajectory.* take.
+   */
+  session_key: string;
+  title: string;
+  /**
+   * 'export', 'bugreport' or 'report'.
+   */
+  kind: string;
+  source_name: string;
+  /**
+   * When it was imported, ISO 8601 in UTC.
+   */
+  imported_at: string;
 }
 
 // ---- Schema-name aliases for structurally-deduplicated types ----

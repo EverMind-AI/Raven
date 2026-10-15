@@ -45,7 +45,7 @@ from typing import Any, Callable
 from loguru import logger
 
 from raven.home import raven_home
-from raven.session.manager import Session, read_session_file
+from raven.session.manager import IMPORTED_CHANNEL, Session, read_session_file
 from raven.session.title import TITLE_STORAGE_MAX, collapse_to_line
 from raven.trajectory import imported_package as ipkg
 from raven.trajectory.imported_package import ImportCancelledError, ImportLimits
@@ -53,7 +53,7 @@ from raven.trajectory.package_check import CODE_NOT_GZIP_TAR, CODE_TOO_LARGE, Pa
 
 SCHEMA = "raven_imported_conversation"
 FORMAT_VERSION = 1
-CHANNEL = "imported"
+CHANNEL = IMPORTED_CHANNEL
 KEY_PREFIX = f"{CHANNEL}:"
 IMPORTS_DIR = "imports"
 STAGING_DIR = ".staging"

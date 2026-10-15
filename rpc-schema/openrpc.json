@@ -30,7 +30,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Session channels to include; defaults to tui."
+            "description": "Session channels to include; defaults to tui. 'imported' adds the Imported Conversations to a list of live sessions (never to the archived one)."
           }
         },
         {
@@ -11572,6 +11572,83 @@
           }
         }
       }
+    },
+    {
+      "name": "imported.upload",
+      "summary": "Import a Trajectory Export, Bug Report Package or Trajectory Report as a read-only Imported Conversation; the same bytes imported before answer with that copy and write nothing, unless force asks for a second one.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "The file name the package was picked under; only its last segment is kept."
+        },
+        {
+          "name": "content_b64",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "The whole package, base64; at most the upload channel's limit decoded."
+        },
+        {
+          "name": "force",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          },
+          "description": "Import a second copy of a package already imported, instead of answering with that one."
+        }
+      ],
+      "result": {
+        "name": "ImportedUploadResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "session_key",
+            "title",
+            "kind",
+            "source_name",
+            "imported_at"
+          ],
+          "properties": {
+            "status": {
+              "type": "string",
+              "description": "'imported', or 'duplicate' when the same bytes were imported before; a duplicate writes nothing and every other field describes the copy already there."
+            },
+            "session_key": {
+              "type": "string",
+              "description": "imported:<id>, the key session.* and trajectory.* take."
+            },
+            "title": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "description": "'export', 'bugreport' or 'report'."
+            },
+            "source_name": {
+              "type": "string"
+            },
+            "imported_at": {
+              "type": "string",
+              "description": "When it was imported, ISO 8601 in UTC."
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/ImportedPackageInvalid"
+        },
+        {
+          "$ref": "#/components/errors/ImportedBusy"
+        }
+      ]
     }
   ],
   "components": {
@@ -11775,6 +11852,10 @@
           "running": {
             "type": "boolean",
             "description": "A turn is in flight on this session right now."
+          },
+          "read_only": {
+            "type": "boolean",
+            "description": "True for an Imported Conversation, which nothing can change; absent on every other session."
           },
           "running_ms": {
             "type": [
@@ -13106,6 +13187,25 @@
           "workdir": {
             "type": "string",
             "description": "The directory this session was pinned to when it was created, absolute; absent for a session that runs where the policy default puts it. What the rail groups by."
+          },
+          "imported": {
+            "type": "object",
+            "description": "Present only on an Imported Conversation's row (source 'imported').",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "source_name"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "description": "'export', 'bugreport' or 'report'."
+              },
+              "source_name": {
+                "type": "string",
+                "description": "The file name the package was imported from."
+              }
+            }
           }
         }
       },
@@ -17828,6 +17928,18 @@
       "BugReportState": {
         "code": -32028,
         "message": "bugreport_state"
+      },
+      "ImportedReadOnly": {
+        "code": -32029,
+        "message": "imported_read_only"
+      },
+      "ImportedPackageInvalid": {
+        "code": -32030,
+        "message": "imported_package_invalid"
+      },
+      "ImportedBusy": {
+        "code": -32031,
+        "message": "imported_busy"
       }
     }
   }

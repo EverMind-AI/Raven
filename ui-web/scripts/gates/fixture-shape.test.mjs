@@ -265,6 +265,9 @@ const UNSENT = new Set([
   'subagents.test.cancelled', 'subagents.test.reply',
   // system.hello: 1
   'system.hello.platform',
+  // Imported Conversation fields: only resuming one sets read_only, so create and compress never send it,
+  // and no row or open conversation in this library is an imported one yet
+  'session.compress.info.read_only', 'session.create.info.read_only', 'session.list.sessions[].imported', 'session.resume.info.read_only',
 ])
 
 describe('the offline fixture library', () => {

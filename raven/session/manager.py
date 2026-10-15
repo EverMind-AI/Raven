@@ -27,6 +27,18 @@ from raven.utils.paths import ensure_dir, safe_filename, safe_path_segment
 # front of every human-facing picker.
 SUBAGENT_CHANNEL = "sub"
 
+# Key prefix of an Imported Conversation (raven/trajectory/imported.py). Those
+# live under the raven home, never in this store: a save under this channel is
+# refused, so nothing that resolves a key to a file here can give an imported
+# conversation a writable twin that pickers, sweeps and delivery targets see.
+IMPORTED_CHANNEL = "imported"
+
+
+def _refuse_imported(key: str) -> None:
+    if key.partition(":")[0] == IMPORTED_CHANNEL:
+        raise ValueError(f"{key!r} is an imported conversation; the session store does not keep it")
+
+
 # How many sessions a manager keeps loaded once nothing else holds them. Soft:
 # a session with unsaved state is never dropped from the cache, and one a caller
 # still holds stays reachable through ``SessionManager._held`` whatever this says.
@@ -874,6 +886,7 @@ class SessionManager:
         name with ``(fork)`` after it, which is a name for the fork rather than
         for what it was forked from.
         """
+        _refuse_imported(session.key)
         path = self.session_path(session.key)
 
         if not session.metadata.get("title") and not session.metadata.get("parent_session_id"):
@@ -1046,6 +1059,7 @@ class SessionManager:
         Returns the persisted child, or None when the source does not exist or
         has zero messages (a fork of an empty session has no value).
         """
+        _refuse_imported(source_key)
         source = self.peek(source_key)
         if source is None or not source.messages:
             return None

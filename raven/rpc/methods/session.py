@@ -48,6 +48,7 @@ from raven.session.manager import new_chat_id
 from raven.session.resolve import manager_for
 from raven.session.title import TITLE_STORAGE_MAX
 from raven.token_wise.usage_tracker import read_usage_rows, row_root
+from raven.trajectory import imported
 from raven.updates.update_notice import update_notice
 from raven.utils.tokens import estimate_prompt_tokens
 
@@ -301,7 +302,25 @@ _DAG_RUN_ID_RE = re.compile(r"\bDAG run (\d{8}T\d+Z-[0-9a-f]+)")
 _SPAWN_TASK_ID_RE = re.compile(r"\bstarted \(id: ([0-9a-f]{8})\)")
 
 
-def _map_to_wire(messages: list[dict[str, Any]], session_key: str) -> list[dict[str, Any]]:
+def _delivered_file(item: dict[str, Any], on_disk: bool) -> dict[str, Any]:
+    """One delivered file as the transcript draws it: whether it is still there, and how to fetch it.
+
+    Off this machine's own conversations (``on_disk`` false) the record names a
+    file on whatever machine wrote it, and a path or download token that happens
+    to resolve here belongs to something else: such a file is always missing,
+    and no token travels with it.
+    """
+    if on_disk:
+        return {**item, "missing": not os.path.isfile(str(item.get("path") or ""))}
+    gone = {**item, "missing": True}
+    if "download_path" in gone:
+        gone["download_path"] = ""
+    return gone
+
+
+def _map_to_wire(
+    messages: list[dict[str, Any]], session_key: str, *, deliveries_on_disk: bool = True
+) -> list[dict[str, Any]]:
     """Map stored session messages to the GatewayTranscriptMessage wire shape.
 
     The TS side (``gatewayTypes.ts``) expects ``{role, text?, context?, name?}``.
@@ -344,6 +363,10 @@ def _map_to_wire(messages: list[dict[str, Any]], session_key: str) -> list[dict[
     * ``mid_turn`` — set on a user entry the runtime merged into a turn that was
       already running, so a reload draws it inside that turn rather than opening
       a new one around it.
+
+    ``deliveries_on_disk`` is false for a transcript recorded on another
+    machine (an Imported Conversation): its delivered files are drawn as
+    missing whatever this machine has at their paths (``_delivered_file``).
     """
     out = []
     for m in messages:
@@ -388,12 +411,7 @@ def _map_to_wire(messages: list[dict[str, Any]], session_key: str) -> list[dict[
                     "raven_delivery": {
                         **delivery,
                         "files": [
-                            {
-                                **item,
-                                "missing": not os.path.isfile(str(item.get("path") or "")),
-                            }
-                            if isinstance(item, dict)
-                            else item
+                            _delivered_file(item, deliveries_on_disk) if isinstance(item, dict) else item
                             for item in delivery["files"]
                         ],
                     },
@@ -601,6 +619,10 @@ async def session_resume(
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
     session_key = params.get("session_id")
+    if imported.is_imported_key(session_key):
+        from raven.rpc.methods import imported as imported_rpc
+
+        return await imported_rpc.resume(session_key, config)
     # No restore call here: ``_default_session_info`` asks the loop for this
     # session's model, and the loop reads the stored one on first ask. Restoring
     # from this handler covered only the surface that calls it -- a conversation
@@ -824,7 +846,12 @@ async def session_list(
     limit = params.get("limit")
     if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0:
         entries = entries[:limit]
-    return {"sessions": [_session_to_list_item(e) for e in entries]}
+    rows = [_session_to_list_item(e) for e in entries]
+    if imported.CHANNEL in channels and not want_archived:
+        from raven.rpc.methods import imported as imported_rpc
+
+        rows += await imported_rpc.list_rows()
+    return {"sessions": rows}
 
 
 async def session_delete(
@@ -841,6 +868,10 @@ async def session_delete(
     a client must keep listing.
     """
     session_key = params.get("session_id", "")
+    if imported.is_imported_key(session_key):
+        from raven.rpc.methods import imported as imported_rpc
+
+        return await imported_rpc.delete(session_key)
     removed = False
     still_on_disk = False
     if session_key:
@@ -915,6 +946,10 @@ async def session_title(
     session_key = params.get("session_id", "")
     if not session_key:
         return {"title": None, "session_key": "", "pending": False}
+    if imported.is_imported_key(session_key):
+        from raven.rpc.methods import imported as imported_rpc
+
+        return await imported_rpc.title(session_key, params.get("title"))
     title = params.get("title")
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()

@@ -1675,3 +1675,73 @@ def test_a_reply_hides_once_the_model_output_it_repeats_is_read(state, clock):
     _refresh_until(index, clock, lambda: reply().meta.get("hidden") == "redundant_reply")
     assert reply().revision > first_revision and reply().charged_ms == 10000
     assert "t:turn:turn.output" in {e.entry_id for e in index.changes(index.epoch, first_revision, 50).upserts}
+
+
+# ── the indexer registry ──────────────────────────────────────────────
+
+
+@pytest.fixture
+def registry(tmp_path, monkeypatch):
+    own = tmp_path / "own"
+    own.mkdir()
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(own))
+    tidx._reset_for_tests()
+    yield own
+    tidx._reset_for_tests()
+
+
+def test_foreign_indexers_are_bounded_and_the_own_one_stays(registry, tmp_path):
+    own = tidx.indexer_for()
+    foreign = []
+    for i in range(tidx.MAX_FOREIGN_INDEXERS + 2):
+        path = tmp_path / f"import-{i}"
+        path.mkdir()
+        foreign.append(path)
+        tidx.indexer_for(path)
+    kept = [p for p in tidx._INDEXERS if p != registry.resolve()]
+    assert kept == [p.resolve() for p in foreign[-tidx.MAX_FOREIGN_INDEXERS :]]
+    assert tidx.indexer_for() is own
+    assert tidx.indexer_for(registry) is own
+
+
+def test_reading_a_foreign_indexer_keeps_it(registry, tmp_path):
+    paths = []
+    for i in range(tidx.MAX_FOREIGN_INDEXERS):
+        path = tmp_path / f"import-{i}"
+        path.mkdir()
+        paths.append(path)
+        tidx.indexer_for(path)
+    oldest = tidx.indexer_for(paths[0])
+    extra = tmp_path / "extra"
+    extra.mkdir()
+    tidx.indexer_for(extra)
+    assert paths[0].resolve() in tidx._INDEXERS and tidx.indexer_for(paths[0]) is oldest
+    assert paths[1].resolve() not in tidx._INDEXERS
+
+
+def test_evict_idle_all_drops_foreign_indexers_left_empty(registry, tmp_path):
+    clock = [0.0]
+    own = tidx.indexer_for()
+    foreign_path = tmp_path / "import"
+    foreign_path.mkdir()
+    foreign = tidx.indexer_for(foreign_path)
+    for indexer in (own, foreign):
+        indexer._now = lambda: clock[0]
+        indexer.session("tui:x")
+    clock[0] = 10.0
+    tidx.evict_idle_all()
+    assert foreign_path.resolve() in tidx._INDEXERS
+    clock[0] = 10.0 + tidx.IDLE_SECONDS + 1
+    tidx.evict_idle_all()
+    assert foreign_path.resolve() not in tidx._INDEXERS
+    assert registry.resolve() in tidx._INDEXERS
+    assert not own._slots
+
+
+def test_drop_indexer(registry, tmp_path):
+    path = tmp_path / "import"
+    path.mkdir()
+    tidx.indexer_for(path)
+    tidx.drop_indexer(path)
+    assert path.resolve() not in tidx._INDEXERS
+    tidx.drop_indexer(tmp_path / "never-indexed")

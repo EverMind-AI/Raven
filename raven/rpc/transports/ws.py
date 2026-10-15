@@ -331,6 +331,7 @@ class WsGateway:
         that shows one picture of a delivered file; it takes the same road.
         """
         from raven.rpc.files import MAX_VIEW_BYTES, content_type_for, resolve_readable, sandbox_for
+        from raven.trajectory.imported import is_imported_key
 
         if not self._origin_ok(request):
             raise web.HTTPForbidden(reason="bad origin")
@@ -338,6 +339,10 @@ class WsGateway:
             raise web.HTTPUnauthorized(reason="missing or invalid session")
         raw = request.query.get("path", "")
         session_key = request.query.get("session", "")
+        if is_imported_key(session_key):
+            # A path an imported transcript names was written on another machine;
+            # whatever answers to it here is not that file.
+            raise web.HTTPNotFound()
         workspace = None
         if self.agent_loop_factory is not None and session_key:
             from raven.rpc.methods.console import _safe_loop, _workspace_root, viewer_root
@@ -789,6 +794,28 @@ def _mount_bug_report_sessions(app: web.Application) -> None:
     app.on_shutdown.append(release)
 
 
+def _mount_imported(app: web.Application) -> None:
+    """Sweep import staging an earlier process left, and stop the import in progress with the app.
+
+    Both touch the disk, so both run in a worker thread; a sweep that fails is
+    only logged.
+    """
+    from raven.trajectory import imported
+
+    async def sweep(_app: web.Application) -> None:
+        try:
+            await asyncio.to_thread(imported.sweep)
+        except Exception:  # noqa: BLE001 - see docstring
+            logger.opt(exception=True).warning("imported conversations: the stale staging sweep failed")
+
+    async def release(_app: web.Application) -> None:
+        if not await asyncio.to_thread(imported.RUNNER.shutdown, 30):
+            logger.warning("imported conversations: an import was still running at shutdown")
+
+    app.on_startup.append(sweep)
+    app.on_shutdown.append(release)
+
+
 def build_app(
     gateway: WsGateway,
     static_dir: Path | None,
@@ -830,6 +857,7 @@ def build_app(
     add_files_routes(app, deliverables, guard=guard_delivery)
     _mount_trajectory_exports(app, guard_delivery)
     _mount_bug_report_sessions(app)
+    _mount_imported(app)
 
     if static_dir is not None and (static_dir / "index.html").exists():
 
