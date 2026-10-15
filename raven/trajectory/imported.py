@@ -450,14 +450,14 @@ class _Job:
 
 
 class ImportRunner:
-    """Runs imports one at a time, each on a thread of its own that owns the slot until it ends.
+    """Runs imports one at a time, each on a thread of its own that owns the slot until its import ends.
 
     There is no closed state. The gateway's page is torn down and mounted again
     in the same process on a reload, and every generation of it shares this
     runner: :meth:`stop` calls off the import in progress and waits for it, and
-    the slot opens again only once that import's thread has ended -- so a new
-    generation is turned away while an old import is still finishing, and takes
-    imports again as soon as it has.
+    the slot opens again only once that import has ended -- so a new generation
+    is turned away while an old import is still finishing, and takes imports
+    again as soon as it has.
     """
 
     def __init__(
@@ -508,6 +508,8 @@ class ImportRunner:
         source_name: str,
         force: bool,
     ) -> None:
+        outcome: ImportOutcome | None = None
+        error: BaseException | None = None
         try:
             try:
                 data = base64.b64decode(content_b64, validate=True)
@@ -521,17 +523,23 @@ class ImportRunner:
                 limits=self._limits,
                 should_stop=stop.is_set,
             )
-            future.set_result(outcome)
         except (PackageError, ImportCancelledError) as exc:
             logger.info("import of {!r} refused or stopped: {}", source_name, exc)
-            future.set_exception(exc)
+            error = exc
         except BaseException as exc:  # noqa: BLE001 -- the caller may have gone; the failure must still be seen
             logger.exception("import of {!r} failed", source_name)
-            future.set_exception(exc)
+            error = exc
         finally:
+            # Opened before the caller hears the outcome, so one that imports
+            # again the moment it is told is not refused by the import it just
+            # finished; nothing past this point touches the imports directory.
             with self._lock:
                 if self._active is not None and self._active.future is future:
                     self._active = None
+        if error is not None:
+            future.set_exception(error)
+        else:
+            future.set_result(outcome)
 
     def stop(self, timeout: float) -> bool:
         """Call off the import in progress and wait for its thread; whether nothing is running after ``timeout``.

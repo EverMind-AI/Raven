@@ -465,9 +465,6 @@ def test_one_import_at_a_time(runner, root, monkeypatch):
         runner.try_submit(_b64(data), "a.tar.gz")
     gate.release.set()
     assert first.result(10).status == imp.STATUS_IMPORTED
-    deadline = time.monotonic() + 5
-    while runner.busy and time.monotonic() < deadline:
-        time.sleep(0.01)
     assert not runner.busy
     second = runner.try_submit(_b64(data), "a.tar.gz")
     assert second.result(10).status == imp.STATUS_DUPLICATE
@@ -502,11 +499,22 @@ def test_a_failed_import_releases_the_slot(runner, root, content, code):
         failed.result(10)
     assert caught.value.code == code
     assert _residue(root) == []
-    deadline = time.monotonic() + 5
-    while runner.busy and time.monotonic() < deadline:
-        time.sleep(0.01)
+    assert not runner.busy
     ok = runner.try_submit(_b64(_export_bytes()), "y.tar.gz")
     assert ok.result(10).status == imp.STATUS_IMPORTED
+
+
+@pytest.mark.parametrize("valid", [True, False], ids=["imported", "refused"])
+def test_the_slot_is_open_by_the_time_the_caller_hears(runner, monkeypatch, valid):
+    gate = _Gate(monkeypatch)
+    data = _export_bytes() if valid else b"not a package"
+    pending = runner.try_submit(_b64(data), "a.tar.gz")
+    assert gate.entered.wait(5)
+    heard: list[bool] = []
+    pending.add_done_callback(lambda _done: heard.append(runner.busy))
+    gate.release.set()
+    pending.exception(10)
+    assert heard == [False]
 
 
 def test_an_unexpected_failure_is_handed_to_the_caller(runner, monkeypatch):
