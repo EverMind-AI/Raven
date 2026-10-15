@@ -56,7 +56,7 @@ from raven.contracts.subagent_backend import SubagentNoAnswerError
 from raven.observability import semconv
 from raven.providers.binding import ModelBinding, resolve
 from raven.providers.pool import ProviderPool, live_pin_resolver
-from raven.sandbox import SandboxConfig, build_executor
+from raven.sandbox import SandboxConfig, SandboxExecutor, build_executor
 from raven.security.trust import wrap_untrusted
 from raven.spine.message import Media
 from raven.tracing import trace
@@ -893,10 +893,14 @@ class SubagentManager:
     def dispatch_gate(self) -> asyncio.Semaphore:
         """The one gate every sub-agent dispatch waits on, spawns and DAG nodes alike.
 
-        Each dispatch runs its own sandbox VM, so the host resource being
-        rationed is the same whichever tool asked for it. Handed to the DAG tool
-        rather than duplicated there, so ``max_concurrent_subagents`` means the
-        total in flight and not a per-tool allowance that silently multiplies.
+        The gate rations the resource both dispatch shapes spend, at the shape's
+        own granularity: a spawn builds and enters its own sandbox VM around its
+        dispatch, while a graph builds one VM for the whole run before its first
+        node takes a slot -- the nodes then queue here sharing the VM the run
+        arrived with, each bringing none of its own. One VM per graph, not per
+        node, is the intended shape. Handed to the DAG tool rather than
+        duplicated there, so ``max_concurrent_subagents`` means the total in
+        flight and not a per-tool allowance that silently multiplies.
         """
         return self._gate
 
@@ -1652,8 +1656,10 @@ class SubagentManager:
         # still queued behind the gate (or a booting sandbox) ended.
         dispatched = False
         try:
-            # Each subagent runs its own sandbox VM; gate the count so heavy
-            # fan-out can't exhaust host resources.
+            # Each spawn runs its own sandbox VM; gate the count so heavy
+            # fan-out can't exhaust host resources. (A dispatched graph is the
+            # other shape: one VM for its whole run, built by SubAgentDagTool
+            # before any node queues on this same gate.)
             async with self._gate:
                 executor = build_executor(
                     self._sandbox_config,
@@ -1679,6 +1685,29 @@ class SubagentManager:
             if not dispatched:
                 self._emit_status(origin, task_id, task_summary, "failed", ended_at=int(time.time() * 1000))
             await self._announce_result(task_id, task_summary, task, error_msg, origin, "error")
+
+    def sandbox_executor_for(self, workspace: Path) -> "SandboxExecutor | None":
+        """The executor a node of a dispatched graph runs under, or ``None``.
+
+        Each spawn builds its executor inside ``run``; a DAG node is dispatched
+        by ``SubAgentDagTool``, which owns no sandbox config -- so it asks here
+        with the directory the graph runs in and gets the same recipe a spawn
+        gets: this config, the owned-id set and the agent-home mount. ``None``
+        only when no sandbox config exists at all, which the tool reads as "run
+        as before"; a default install normally holds ``tools.sandbox`` with
+        ``backend="none"``, and that builds a ``DirectExecutor`` -- the run
+        stays on the host by configuration rather than by absence, with the
+        same entry, enter and exit a real VM backend goes through.
+        """
+        if self._sandbox_config is None:
+            return None
+        return build_executor(
+            self._sandbox_config,
+            workspace,
+            self._owned_ids,
+            self._home_volume(workspace),
+            sandbox_dir=get_sandbox_dir,
+        )
 
     def _home_volume(self, mount_root: Path) -> tuple[tuple[str, str, str], ...]:
         """Mount agent home into the sub-agent's VM unless the run's own mount covers it.

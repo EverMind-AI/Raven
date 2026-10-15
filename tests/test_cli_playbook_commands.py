@@ -510,6 +510,96 @@ def test_stint_driver_wires_subagent_manager_sandbox_and_workspace_restriction(t
     assert manager.provider_pool is not None
 
 
+def test_run_hands_the_graph_tool_the_sandbox_factory(library, monkeypatch):
+    """SubAgentDagTool in playbook run receives the manager's sandbox factory (#796).
+
+    The manager holding the config is half the story: the graph tool is the one
+    that must ask for the executor at dispatch, so the ``sandbox_factory=`` line
+    is what decides whether a node runs in the configured VM or on the host.
+    """
+    _write_dag_md(library["user"], "audit")
+    library["config"].write_text(
+        json.dumps(
+            {
+                "playbooks": {"dir": str(library["user"])},
+                "tools": {"sandbox": {"backend": "none", "allow_net": False}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("raven.providers.factory.make_provider", lambda config: _FakeProvider())
+    monkeypatch.setattr("raven.playbook.PlaybookRuntime", _FakeRuntime)
+
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+    from raven.agent.subagent.manager import SubagentManager
+
+    manager_box = {}
+    orig_manager_init = SubagentManager.__init__
+
+    def recording_manager_init(self, *args, **kwargs):
+        manager_box["manager"] = self
+        return orig_manager_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(SubagentManager, "__init__", recording_manager_init)
+
+    seen = []
+    orig_tool_init = SubAgentDagTool.__init__
+
+    def recording_tool_init(self, *args, **kwargs):
+        seen.append(dict(kwargs))
+        return orig_tool_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(SubAgentDagTool, "__init__", recording_tool_init)
+
+    r = runner.invoke(app, ["playbook", "run", "audit"])
+    assert r.exit_code == 0, r.stdout
+
+    factory = manager_box["manager"].sandbox_executor_for
+    assert any(kwargs.get("sandbox_factory") == factory for kwargs in seen), (
+        "the run verb's graph tool must ask the manager's recipe for its executor"
+    )
+
+
+def test_stint_driver_hands_the_graph_tool_the_sandbox_factory(tmp_path, monkeypatch):
+    """SubAgentDagTool in _stint_driver receives the manager's sandbox factory (#796)."""
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+    from raven.agent.subagent.manager import SubagentManager
+    from raven.cli.playbook_commands import _stint_driver
+    from raven.config.schema import Config, SandboxConfig, ToolsConfig
+
+    config = Config()
+    config.tools = ToolsConfig(sandbox=SandboxConfig(backend="none", allow_net=False))
+
+    monkeypatch.setattr("raven.providers.factory.make_provider", lambda cfg: _FakeProvider())
+    monkeypatch.setattr("raven.playbook.executor.PlaybookExecutor.rounds", property(lambda self: object()))
+
+    manager_box = {}
+    orig_manager_init = SubagentManager.__init__
+
+    def recording_manager_init(self, *args, **kwargs):
+        manager_box["manager"] = self
+        return orig_manager_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(SubagentManager, "__init__", recording_manager_init)
+
+    seen = []
+    orig_tool_init = SubAgentDagTool.__init__
+
+    def recording_tool_init(self, *args, **kwargs):
+        seen.append(dict(kwargs))
+        return orig_tool_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(SubAgentDagTool, "__init__", recording_tool_init)
+
+    driver = _stint_driver(config, tmp_path)
+    assert driver is not None
+
+    factory = manager_box["manager"].sandbox_executor_for
+    assert any(kwargs.get("sandbox_factory") == factory for kwargs in seen), (
+        "the stint driver's graph tool must ask the manager's recipe for its executor"
+    )
+
+
 def test_run_reports_a_server_waiting_on_authorization_and_does_not_wait_for_it(library, monkeypatch):
     """The pre-flight is the last moment a person is around to be told. It says
     so and moves on; it must not hold the run open on a browser click."""

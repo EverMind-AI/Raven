@@ -39,6 +39,7 @@ import inspect
 import json
 import time
 from collections.abc import Awaitable, Callable, Mapping
+from contextlib import nullcontext
 from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass, replace
@@ -561,6 +562,7 @@ class SubAgentDagTool(Tool):
         worker_table_for: "Callable[[], DelegateTable | None] | None" = None,
         verdict_config: "SubagentDagConfig | None" = None,
         stint_driver: StintDriver | None = None,
+        sandbox_factory: "Callable[[Path], Any] | None" = None,
     ) -> None:
         # Read through to SubagentManager's flag rather than mirroring it: this
         # tool dispatches to its own backends without ever calling ``spawn``, so
@@ -603,6 +605,14 @@ class SubAgentDagTool(Tool):
         # same reason as `state_for`: this tool is built from the same config as
         # the manager but does not own one.
         self._model_for = model_for
+        # The manager's sandbox recipe (``SubagentManager.sandbox_executor_for``),
+        # asked with the workdir each run dispatches into. Injected rather than
+        # imported for the same reason as ``state_for``: this tool is built from
+        # the same config as the manager but does not own one. ``None`` -- a host
+        # with no ``tools.sandbox``, or a test -- keeps the historical behavior:
+        # nodes are dispatched with no executor and a raven-loop node's ExecTool
+        # falls back to host execution.
+        self._sandbox_factory = sandbox_factory
         self._adopt = adopt
         self._charge = charge
         # A direct publisher (tests) and/or a late-bound conversation-keyed sink.
@@ -2403,45 +2413,58 @@ class SubAgentDagTool(Tool):
         # the role, and which role a node plays is the stint's answer, not the
         # graph's. An ordinary run has no charters and this rebinds nothing.
         dispatch_backends = _chartered(dispatch_backends, hooks.get("charters") or {})
+        # One executor for the whole graph, built per run and entered around it:
+        # the nodes share it, so each waits on the dispatch gate for its turn
+        # inside a VM the run holds before its first dispatch -- one VM per
+        # graph, not per node. Asked with the workdir the nodes will run in --
+        # the same workspace a spawn's executor is built over. Without a factory
+        # (no sandbox configured) nothing is built and the nodes are dispatched
+        # with ``sandbox=None``, exactly as they always were.
+        sandbox = self._sandbox_factory(Path(dirs.workdir)) if self._sandbox_factory is not None else None
         try:
             provider, model = self._binding_for() if self._binding_for is not None else (None, None)
-            result = await run_dag(
-                spec,
-                resolve=lambda node: dispatch_backends.get(node.id),
-                backend=self._backend,
-                workdir=dirs.workdir,
-                run_root=dirs.run_root,
-                nodes_root=dirs.nodes_root,
-                history_root=dirs.subagents_root,
-                subagents_root=dirs.subagents_root,
-                progress_publisher=emit,
-                semaphore=self._gate if stint is None else _StintShare(self._gate, STINT_MAX_PARALLEL),
-                session_key=origin.conversation,
-                state_for=self._state_for,
-                memory_for=self._memory_for,
-                mode_for=self._mode_for,
-                model_for=self._model_for,
-                capabilities=self._capability_map(),
-                run_id=run_id,
-                cancel=cancel,
-                auto_instances=auto_instances,
-                desk=desk,
-                judge_node=hooks.get("judge_node") or self._judge_node(),
-                on_node_start=hooks.get("on_node_start"),
-                announce_exception=announce_exception,
-                origin=origin.as_dict(),
-                max_continuations=(
-                    self._verdict_config.max_continuations
-                    if (declared := hooks.get("max_continuations")) is None
-                    else int(declared)
-                ),
-                adjudication_timeout_s=self._verdict_config.adjudication_timeout_seconds,
-                control_reachable=self._control_reachable,
-                control_advert=self._control_advert,
-                released=released,
-                provider=provider,
-                model=model,
-            )
+            # ``nullcontext`` stands in where no executor was built, so the two
+            # shapes read the same: every node runs inside the entered executor
+            # or nothing is entered at all.
+            async with sandbox if sandbox is not None else nullcontext():
+                result = await run_dag(
+                    spec,
+                    resolve=lambda node: dispatch_backends.get(node.id),
+                    backend=self._backend,
+                    workdir=dirs.workdir,
+                    run_root=dirs.run_root,
+                    nodes_root=dirs.nodes_root,
+                    history_root=dirs.subagents_root,
+                    subagents_root=dirs.subagents_root,
+                    sandbox=sandbox,
+                    progress_publisher=emit,
+                    semaphore=self._gate if stint is None else _StintShare(self._gate, STINT_MAX_PARALLEL),
+                    session_key=origin.conversation,
+                    state_for=self._state_for,
+                    memory_for=self._memory_for,
+                    mode_for=self._mode_for,
+                    model_for=self._model_for,
+                    capabilities=self._capability_map(),
+                    run_id=run_id,
+                    cancel=cancel,
+                    auto_instances=auto_instances,
+                    desk=desk,
+                    judge_node=hooks.get("judge_node") or self._judge_node(),
+                    on_node_start=hooks.get("on_node_start"),
+                    announce_exception=announce_exception,
+                    origin=origin.as_dict(),
+                    max_continuations=(
+                        self._verdict_config.max_continuations
+                        if (declared := hooks.get("max_continuations")) is None
+                        else int(declared)
+                    ),
+                    adjudication_timeout_s=self._verdict_config.adjudication_timeout_seconds,
+                    control_reachable=self._control_reachable,
+                    control_advert=self._control_advert,
+                    released=released,
+                    provider=provider,
+                    model=model,
+                )
         except DagValidationError as exc:
             return self._validation_error(exc)
         except Exception as exc:  # noqa: BLE001
