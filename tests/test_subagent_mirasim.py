@@ -1,8 +1,9 @@
-"""The mirasim presets end to end: Raven's own ACP client driving the adapter over a stand-in mirasim."""
+"""The Mirasim presets end to end: Raven's own ACP client driving the adapter over a stand-in Mirasim."""
 
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 import time
@@ -19,7 +20,7 @@ from raven.agent.subagent.presets import third_party_subagent_preset
 from raven.config.schema import ThirdPartyAcpSubagentConfig
 from tests.mirasim_stub_cli import install
 
-posix_only = pytest.mark.skipif(os.name == "nt", reason="the stand-in mirasim is a /bin/sh wrapper")
+posix_only = pytest.mark.skipif(os.name == "nt", reason="the stand-in Mirasim is a /bin/sh wrapper")
 
 
 @pytest.fixture(autouse=True)
@@ -29,7 +30,7 @@ async def _no_pooled_connections():
 
 
 def adapter_config(tmp_path: Path, mode: str = "ok") -> ThirdPartyAcpSubagentConfig:
-    """The shipped claude row, pointed at a stand-in mirasim and a home of its own."""
+    """The shipped claude row, pointed at a stand-in Mirasim and a home of its own."""
     exe = install(tmp_path, mode)
     row = third_party_subagent_preset("mirasim_claude")
     return ThirdPartyAcpSubagentConfig.model_validate(
@@ -57,8 +58,22 @@ async def test_verify_records_a_resumable_agent_with_mirasims_menus(tmp_path: Pa
     assert snapshot.status == "ready", snapshot.detail
     assert snapshot.can_load
     assert snapshot.agent_name == "mirasim-claude"
-    assert [choice.value for choice in snapshot.model_choices] == ["sonnet", "opus", "glm-5.3-flash", "profile:abc"]
+    # Claude Code's own models twice, on its own account and on the platform.
+    assert [(choice.group, choice.value) for choice in snapshot.model_choices] == [
+        ("Claude Code", "own:sonnet"),
+        ("Claude Code", "own:opus"),
+        ("Mirasim", "platform:sonnet"),
+        ("Mirasim", "platform:opus"),
+        ("Mirasim", "glm-5.3-flash"),
+        ("Own key", "profile:abc"),
+    ]
     assert [mode.id for mode in snapshot.available_modes] == ["low", "high", "max"]
+    # Every server the adapter starts runs in one directory of Raven's, whatever
+    # directory Raven was started in, so a route set by one is seen by the next.
+    workdir = f"--workdir={tmp_path / 'home' / 'subagent_sessions' / 'mirasim'}"
+    calls = [json.loads(line) for line in (tmp_path / "stub" / "calls.jsonl").read_text().splitlines()]
+    one_shot = [argv for argv in calls if argv[:1] == ["ui-cli"]]
+    assert one_shot and all(argv[1] == workdir for argv in one_shot)
 
 
 @posix_only

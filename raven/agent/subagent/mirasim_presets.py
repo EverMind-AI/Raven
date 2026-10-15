@@ -1,9 +1,9 @@
-"""Presets for the agents mirasim runs, one row per agent, each reached through Raven's own shim.
+"""Presets for the agents Mirasim runs, one row per agent, each reached through Raven's own shim.
 
-mirasim (https://mirasim.ai) launches third-party coding agents on the accounts
+Mirasim (https://mirasim.ai) launches third-party coding agents on the accounts
 and model routes its user configured, and drives them through ``mirasim
-ui-cli``. A row here is that agent as mirasim runs it -- its model menu is
-mirasim's for that agent, the platform's models and the user's own keys beside
+ui-cli``. A row here is that agent as Mirasim runs it -- its model menu is
+Mirasim's for that agent, the platform's models and the user's own keys beside
 the agent's own -- which is a different agent to delegate to than the same
 agent's own row in :mod:`raven.agent.subagent.presets`, launched on its own login.
 That is why the two coexist: not two transports for one install, which the preset
@@ -16,10 +16,10 @@ the launch directory -- the caller's working directory, which may itself be a
 checkout of this repository -- off ``sys.path``, so the adapter that answers is the
 installed one.
 
-Measured 2026-10-12 against mirasim 0.0.465, where ``mirasim ui-cli agents``
+Measured 2026-10-12 against Mirasim 0.0.465, where ``mirasim ui-cli agents``
 listed these nine as installed, beside ``echo``: a stub that answers with its
 prompt, which is not an agent to delegate to. The labels are the ones it
-reports, so a row reads the way the agent does in mirasim.
+reports, so a row reads the way the agent does in Mirasim.
 """
 
 from __future__ import annotations
@@ -37,12 +37,12 @@ MIRASIM_AGENTS: dict[str, tuple[str, str, str]] = {
     "mirasim_pi": ("pi", "Pi", "A coding agent CLI with read, bash, edit and write tools"),
     "mirasim_zcode": ("zcode", "ZCode CLI", "Z.ai's ZCode coding agent"),
 }
-"""Preset key -> (mirasim agent id, mirasim's label for it, what it is)."""
+"""Preset key -> (Mirasim agent id, Mirasim's label for it, what it is)."""
 
 MIRASIM_SHIM_PRESETS = frozenset(MIRASIM_AGENTS)
 
 MIRASIM_EXECUTABLE = "mirasim"
-MIRASIM_INSTALL_HINT = "the mirasim CLI from https://mirasim.ai/download"
+MIRASIM_INSTALL_HINT = "the Mirasim CLI from https://mirasim.ai/download"
 
 
 def _row(key: str, agent: str, label: str, what: str) -> dict[str, Any]:
@@ -50,12 +50,12 @@ def _row(key: str, agent: str, label: str, what: str) -> dict[str, Any]:
         "name": f"{label}-Mirasim",
         "preset": key,
         "kind": "acp",
-        "description": f"{what}, run through mirasim.",
+        "description": f"{what}, run through Mirasim.",
         "command": f"{{PYTHON}} -P -m raven.acp.mirasim --agent {agent}",
-        # The first session waits on two mirasim reads, each starting a server
+        # The first session waits on two Mirasim reads, each starting a server
         # of its own: 7 s for one adapter, 52 s for nine adapters at once.
         "readyTimeoutMs": 120000,
-        # mirasim's ui-cli takes no MCP servers for a session, so nothing
+        # Mirasim's ui-cli takes no MCP servers for a session, so nothing
         # handed over could reach the agent. False is the one declaration that
         # withholds them and also tells the roster none arrive, so a DAG node's
         # `mcps` is reported as ignored rather than assumed. The withheld note,

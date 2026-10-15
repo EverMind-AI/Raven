@@ -72,7 +72,7 @@ def _own_mark() -> str:
 
 
 def _group_mark() -> str:
-    """The mark for the card that stands in for the nine mirasim agents at once.
+    """The mark for the card that stands in for the nine Mirasim agents at once.
 
     Parsed separately for the same reason ``_own_mark`` is: it is one file for
     nine presets, so it cannot live in a table whose contract is one entry per

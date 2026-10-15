@@ -36,7 +36,7 @@ exists under :mod:`raven.acp_client` and is not this. The two share only the wir
 layer in :mod:`raven.acp_client.protocol`, which is imported rather than copied.
 
 :mod:`raven.acp.mirasim` is a second agent served over the same channel: not
-raven, but an agent mirasim runs, answered one ``mirasim ui-cli`` command at a
+raven, but an agent Mirasim runs, answered one ``mirasim ui-cli`` command at a
 time. It reuses :mod:`raven.acp.stdio` and :mod:`raven.acp.protocol` and none of
 the layers above them.
 """

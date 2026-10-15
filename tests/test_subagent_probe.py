@@ -1599,7 +1599,7 @@ def test_a_shim_preset_whose_agent_is_absent_is_not_offered_for_verification(
     """A shim's command resolves on any machine; the agent it drives may not.
 
     ``_probe_acp`` reads such a row as missing, so handshaking it at boot would
-    pay to learn what the free probe already said. Sharpest for a mirasim row,
+    pay to learn what the free probe already said. Sharpest for a Mirasim row,
     whose command is Raven's own interpreter.
     """
     presets = [

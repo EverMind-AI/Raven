@@ -1,18 +1,22 @@
-"""A stand-in ``mirasim`` executable, run as a real child process by the mirasim adapter tests.
+"""A stand-in ``mirasim`` executable, run as a real child process by the Mirasim adapter tests.
 
 Not a test module (pytest collects ``test_*``). It answers ``version`` and the
-``ui-cli`` commands the adapter runs, in the shapes measured against mirasim
+``ui-cli`` commands the adapter runs, in the shapes measured against Mirasim
 0.0.465: server log lines on stdout around the one JSON document, one of them
 carrying the server's token, and a failed turn that still exits 0. A turn
 announces its server's port the way a real one does, and the commands sent to
 that port (``raw`` frames, ``answer``) reach the turn through files, so a test
-can watch a turn stop on a question and be answered from outside.
+can watch a turn stop on a question and be answered from outside. A session's
+route is kept per ``--workdir``, the way Mirasim keeps it in an index per server
+directory: ``prompt --route`` sets it for a new session only, ``session route``
+sets or clears it for any key without checking the key, and a turn's reply says
+the route it ran on when it is not Mirasim's default.
 
 State lives in ``MIRASIM_STUB_DIR``: ``calls.jsonl`` records every argv, so a
-test can read what the adapter asked for, and ``sessions.json`` holds the
+test can read what the adapter asked for, ``sessions.json`` holds the
 conversations this stand-in minted, so a second process continues the first
-one's. ``agents.json``, ``catalog.json`` and ``questions.json`` there, when
-present, replace the built-in answers, so a test can change mirasim's menus
+one's, and ``routes.json`` the routes set, by server directory. ``agents.json``, ``catalog.json`` and ``questions.json`` there, when
+present, replace the built-in answers, so a test can change Mirasim's menus
 under a running adapter or what a turn asks. ``turns/<port>.json`` is a running
 turn as its server shows it, and ``answers/<promptId>.json`` an answer given to
 it. ``MIRASIM_STUB_MODE`` picks how the commands behave:
@@ -37,6 +41,8 @@ it. ``MIRASIM_STUB_MODE`` picks how the commands behave:
 - ``stubborn`` -- ``agents`` takes half a minute and ignores SIGTERM while it does.
 - ``unsettled`` -- a turn comes back neither settled nor asking anything.
 - ``garbage`` -- a turn prints only log lines and exits 3 with nothing on stderr.
+- ``noroute`` -- ``session route`` fails; everything else answers like ``ok``.
+- ``routehang`` -- ``session route`` never answers; everything else answers like ``ok``.
 """
 
 from __future__ import annotations
@@ -69,11 +75,13 @@ STATE = Path(os.environ.get("MIRASIM_STUB_DIR", "."))
 MODE = os.environ.get("MIRASIM_STUB_MODE", "ok")
 TOKEN_LINE = "[server 12:31:37] ui-cli server on http://127.0.0.1:4970/?token=stub-secret-token"
 ASK_DEADLINE_S = 120.0
+ROUTE_SHOWN = {"platform": "cloud", "own": "local", "default": "(global default)"}
 
 AGENTS = {
     "agents": [
         {"id": "claude", "label": "Claude Code", "installed": True, "capabilities": {}},
         {"id": "zcode", "label": "ZCode CLI", "installed": False, "capabilities": {}},
+        {"id": "qwen", "label": "Qwen Code", "installed": True, "capabilities": {}},
     ]
 }
 
@@ -139,6 +147,20 @@ def sessions() -> dict[str, int]:
     return json.loads(path.read_text()) if path.exists() else {}
 
 
+def routes() -> dict[str, dict[str, str]]:
+    path = STATE / "routes.json"
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
+def put_route(workdir: str, key: str, route: str) -> None:
+    held = routes()
+    if route == "default":
+        held.get(workdir, {}).pop(key, None)
+    else:
+        held.setdefault(workdir, {})[key] = route
+    (STATE / "routes.json").write_text(json.dumps(held))
+
+
 def turn_file(port: int) -> Path:
     return STATE / "turns" / f"{port}.json"
 
@@ -179,7 +201,7 @@ def ask_through(port: int, key: str) -> str | None:
     return " | ".join(got)
 
 
-def prompt(argv: list[str]) -> int:
+def prompt(argv: list[str], workdir: str) -> int:
     given = flags(argv)
     text = given.get("text", [""])[0]
     key = given.get("session", [None])[0]
@@ -207,7 +229,10 @@ def prompt(argv: list[str]) -> int:
     if key is None:
         key = f"sess-{len(known) + 1}"
         known[key] = 0
+        if given.get("route"):
+            put_route(workdir, key, given["route"][0])
     known[key] += 1
+    route = routes().get(workdir, {}).get(key, "default")
     (STATE / "sessions.json").write_text(json.dumps(known))
     base = {"sessionKey": key, "taskId": f"task-{known[key]}", "queued": False, "phase": "done"}
     if MODE == "fail":
@@ -244,8 +269,9 @@ def prompt(argv: list[str]) -> int:
         emit({**base, "text": f"turn {known[key]} of {key} got {answers}", "error": None, "settled": True})
         return 0
     files = [f"{Path(path).name}:{Path(path).stat().st_size}" for path in given.get("file", [])]
+    via = "" if route == "default" else f" via {route}"
     reply = (
-        f"turn {known[key]} of {key} on {given.get('model', ['-'])[0]} "
+        f"turn {known[key]} of {key} on {given.get('model', ['-'])[0]}{via} "
         f"effort {given.get('effort', ['-'])[0]} files {files}: {text}"
     )
     emit({**base, "text": reply, "error": None, "incomplete": False, "settled": True})
@@ -303,6 +329,10 @@ def main() -> int:
     rest = argv[1:] if argv[:1] == ["ui-cli"] else []
     if rest and rest[0].startswith("--port="):
         return on_port(int(rest[0].partition("=")[2]), rest[1:])
+    workdir = os.getcwd()
+    if rest and rest[0].startswith("--workdir="):
+        workdir = rest[0].partition("=")[2]
+        rest = rest[1:]
     command = rest[0] if rest else ""
     if (MODE == "broken" and command in ("agents", "catalog")) or (MODE == "nomenu" and command == "catalog"):
         print(TOKEN_LINE)
@@ -320,7 +350,20 @@ def main() -> int:
         emit(answer("catalog.json", CATALOG))
         return 0
     if command == "prompt":
-        return prompt(rest[1:])
+        return prompt(rest[1:], workdir)
+    if rest[:2] == ["session", "route"]:
+        given = flags(rest[2:])
+        if MODE == "noroute":
+            print(TOKEN_LINE)
+            print("ui-cli: the host did not answer session route", file=sys.stderr)
+            return 1
+        if MODE == "routehang":
+            print(TOKEN_LINE, flush=True)
+            time.sleep(600)
+        key, route = given["session"][0], given["to"][0]
+        put_route(workdir, key, route)
+        emit({"sessionKey": key, "route": ROUTE_SHOWN[route]})
+        return 0
     print(f"unknown command {argv}", file=sys.stderr)
     return 2
 

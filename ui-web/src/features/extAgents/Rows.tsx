@@ -65,8 +65,8 @@ function MachineTag({ row }: { row: ExtAgentRow }): JSX.Element | null {
   )
 }
 
-/* The plate a row wears. One of mirasim's agents is that agent run through
-   mirasim, so its mark is the route's with the agent's over it -- and the pair
+/* The plate a row wears. One of Mirasim's agents is that agent run through
+   Mirasim, so its mark is the route's with the agent's over it -- and the pair
    is drawn from the two files the table already carries rather than a
    per-agent composite asset. `plain` is the picker's own row, where the agent
    is what the reader is choosing and the route is already the drawer's title. */

@@ -50,7 +50,7 @@
 .extAgents-tile { flex: none; display: grid; place-items: center; }
 .extAgents-tile .agent-mark { width: 36px; height: 36px; border-radius: 10px; background: var(--mark-plate); border: 1px solid var(--mark-plate-line); }
 /* `>` on every size rule below: a slot sizes its OWN image, and the badge an
-   agent run through mirasim wears inside the slot sizes its own (page.css). A
+   agent run through Mirasim wears inside the slot sizes its own (page.css). A
    descendant selector here outranks the badge's rule and blows its image up to
    the slot's size, clipped at the plate's edge. */
 .extAgents-tile .agent-mark > img, .extAgents-tile .agent-mark > svg { width: 23px; height: 23px; }

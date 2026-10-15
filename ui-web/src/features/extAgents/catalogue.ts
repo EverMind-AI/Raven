@@ -32,14 +32,14 @@ interface CatalogueEntry {
 
 const OWN_BY = 'gui.agent.by_raven'
 
-/* A mirasim row is the agent of the same name run through mirasim: its maker is
-   that agent's, and what an absent one lacks is mirasim itself, which installs
-   from mirasim's own site rather than by one command. DSH names no maker it can
+/* A Mirasim row is the agent of the same name run through Mirasim: its maker is
+   that agent's, and what an absent one lacks is Mirasim itself, which installs
+   from Mirasim's own site rather than by one command. DSH names no maker it can
    be held to, so it gets none. */
 const MIRASIM_SHORT = 'gui.agent.short_mirasim'
 const MIRASIM_SITE = 'mirasim.ai/download'
 
-/* The nine presets that reach an agent through mirasim, named by the prefix
+/* The nine presets that reach an agent through Mirasim, named by the prefix
    they share. A family rather than a table of its own: the roster is the
    server's, and a family spelled here would be a second place for it to
    drift -- this one only has to answer which card a row folds into.

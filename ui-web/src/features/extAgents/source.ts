@@ -145,7 +145,7 @@ export type GridEntry =
 
 /* The rows folded into what the grid actually draws.
 
-   A mirasim preset folds into its family's card until it is CONNECTED; a
+   A Mirasim preset folds into its family's card until it is CONNECTED; a
    configured one never folds, because it is on the roster and its card is
    where it is disconnected from. So the fold lifts on the one event the design
    makes it wait for, and `configured` -- the fact that the add wrote a config

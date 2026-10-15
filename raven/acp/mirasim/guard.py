@@ -3,7 +3,7 @@
 Raven tears an ACP connection down with ``SIGKILL`` to the adapter's process
 group (``AcpClient.close`` in ``raven/acp_client/client.py``), which no handler
 in the adapter can see. A ``ui-cli`` in that group would die with it and leave
-the agent mirasim started -- in a session of its own -- running a turn nobody
+the agent Mirasim started -- in a session of its own -- running a turn nobody
 will read, in the caller's working directory. So the adapter starts each command under
 this guard, in a session of the guard's own, and holds the guard's stdin open.
 The kernel closes that pipe when the adapter goes, however it goes; the guard

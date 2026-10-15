@@ -1,4 +1,4 @@
-"""What a mirasim turn stops to ask, put to an ACP client and read back as an answer."""
+"""What a Mirasim turn stops to ask, put to an ACP client and read back as an answer."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from tests.acp_schema import validate_def
 
 
 def ask(**question: Any) -> dict[str, Any]:
-    """An interaction in the shape mirasim 0.0.465 builds for Claude Code's ``AskUserQuestion``."""
+    """An interaction in the shape Mirasim 0.0.465 builds for Claude Code's ``AskUserQuestion``."""
     base = {
         "id": "q0",
         "header": "Colour",
@@ -44,7 +44,7 @@ def ask(**question: Any) -> dict[str, Any]:
 
 
 def approval() -> dict[str, Any]:
-    """A tool approval, which mirasim marks with its own ``kind``."""
+    """A tool approval, which Mirasim marks with its own ``kind``."""
     return {
         "promptId": "claude-control-2",
         "kind": "permission",

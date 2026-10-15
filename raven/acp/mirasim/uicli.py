@@ -1,12 +1,12 @@
 """One ``mirasim ui-cli`` command: its argv, its environment, the JSON it answers with.
 
-mirasim drives its agents through ``ui-cli``, one command per request, so every
+Mirasim drives its agents through ``ui-cli``, one command per request, so every
 ACP method this package serves ends in one of these. Each rule below was
-measured against mirasim 0.0.465:
+measured against Mirasim 0.0.465:
 
 - Without ``--port`` a command starts a private server of its own, bound to
   loopback and gone when the command exits. Nothing here keeps one running, so
-  this adds no standing server to a machine that may already run mirasim's.
+  this adds no standing server to a machine that may already run Mirasim's.
 - stdout carries that server's log lines ahead of the one JSON document the
   command answers with (``[server 12:31:37] ...``, ``[model-inject ...]``), and
   one of them is the server's own URL with its access token in the query. The
@@ -34,9 +34,16 @@ measured against mirasim 0.0.465:
 - A turn's private server announces itself on stdout as it boots
   (``mirasim server v0.0.465: http://localhost:<port>/?token=...``), and other
   commands reach it for as long as the turn runs with ``--port <port>``, which
-  reads the token from mirasim's own run directory. That is how a running
+  reads the token from Mirasim's own run directory. That is how a running
   turn is watched, answered and stopped from outside it (:func:`server_port`);
   nothing here reads or keeps the token.
+- A server keeps a session's route -- and its other per-session settings -- in
+  an index named after the directory it runs in, ``--workdir`` or else the
+  command's own working directory, and a server started in another directory
+  does not see them: measured, a route set from one directory was absent from
+  the next server's index in another. So :class:`UiCli` can be given one
+  directory for every server it starts, which then holds whatever directory
+  Raven itself was started in.
 """
 
 from __future__ import annotations
@@ -64,7 +71,7 @@ QUERY_TIMEOUT_S = 90.0
 """How long a read-only command (``agents``, ``catalog``) may take. Measured at 7 s
 alone; eighteen at once, which is nine adapters starting together, took 42 s.
 It stays inside the presets' 120 s ``readyTimeoutMs``, which a first
-``session/new`` spends waiting on these, so a mirasim that hangs is reported in
+``session/new`` spends waiting on these, so a Mirasim that hangs is reported in
 its own words rather than as an agent that never became ready."""
 
 INLINE_TEXT_LIMIT = 100_000
@@ -137,7 +144,7 @@ def last_document(stdout: str) -> Any:
 
 
 def session_gone(failure: str) -> bool:
-    """Whether a refused ``--session`` says mirasim no longer has that conversation."""
+    """Whether a refused ``--session`` says Mirasim no longer has that conversation."""
     return _SESSION_GONE in failure
 
 
@@ -157,15 +164,15 @@ def server_port(text: str) -> int | None:
 def child_env(env: Mapping[str, str]) -> dict[str, str]:
     """The environment a ``ui-cli`` command runs under: ``env``, less a borrowed ``CODEX_HOME``.
 
-    A ``CODEX_HOME`` inside mirasim's own state directory is the home mirasim
+    A ``CODEX_HOME`` inside Mirasim's own state directory is the home Mirasim
     built for a Codex it launched, inherited by whatever that Codex started --
-    a Raven run from inside it, for instance. Handed back to mirasim it fails
-    every Codex turn, because mirasim builds that home itself for each launch:
+    a Raven run from inside it, for instance. Handed back to Mirasim it fails
+    every Codex turn, because Mirasim builds that home itself for each launch:
     measured, ``failed to initialize sqlite state runtime under
     ~/.mirasim/agent-homes/codex-relay``, on an exit status of 0. One the user
     pointed anywhere else is theirs and is kept, and so is everything else:
     Claude Code's own session markers (``CLAUDECODE``, ``CLAUDE_CODE_ENTRYPOINT``)
-    were measured to change nothing about the Claude Code mirasim starts.
+    were measured to change nothing about the Claude Code Mirasim starts.
     """
     out = dict(env)
     codex_home = out.get("CODEX_HOME", "").strip()
@@ -188,6 +195,7 @@ def prompt_args(
     session_key: str | None = None,
     model: str | None = None,
     effort: str | None = None,
+    route: str | None = None,
     files: Sequence[str] = (),
 ) -> list[str]:
     """The ``ui-cli`` arguments of one turn.
@@ -197,18 +205,34 @@ def prompt_args(
     every turn the caller has one for, because a resumed session keeps the model
     it last ran on -- measured: resumed without the flag, a session last run on
     a platform model stayed on it rather than returning to the agent's default.
+
+    ``route`` (``platform`` or ``own``) goes with a new conversation only: the
+    flag is read on a new session's first turn, so a continued one is put on its
+    route by :func:`route_args` before the turn instead.
     """
     args = ["prompt", f"--text={text}", f"--timeout={TURN_TIMEOUT_MS}"]
     if session_key:
         args.append(f"--session={session_key}")
     else:
         args += [f"--agent={agent}", f"--cwd={cwd}"]
+        if route:
+            args.append(f"--route={route}")
     if model:
         args.append(f"--model={model}")
     if effort:
         args.append(f"--effort={effort}")
     args += [f"--file={path}" for path in files]
     return args
+
+
+def route_args(session_key: str, route: str) -> list[str]:
+    """Put a session on ``route``: ``platform``, ``own``, or ``default`` for Mirasim's own setting.
+
+    Measured: it answers ``{sessionKey, route}`` for any key, one Mirasim has no
+    conversation under included, so a forgotten conversation shows only on the
+    turn that follows.
+    """
+    return ["session", "route", f"--session={session_key}", f"--to={route}"]
 
 
 def sessions_args(seconds: int) -> list[str]:
@@ -237,7 +261,7 @@ def answer_args(prompt_id: str, action: str, value: str | None = None) -> list[s
 def live_session(doc: Any) -> str | None:
     """The one session a server is running, from its ``listSessions`` answer, or ``None``.
 
-    The rows come from mirasim's shared store, so they include every
+    The rows come from Mirasim's shared store, so they include every
     conversation in it, another server's running ones as well. ``transport``
     is the one field a server sets only on a session whose agent it started
     itself -- measured: a fresh server listed sixty rows and none had it -- so
@@ -397,15 +421,29 @@ class Invocation:
 
 
 class UiCli:
-    """Runs ``mirasim`` commands under one environment."""
+    """Runs ``mirasim`` commands under one environment, their servers in one directory when given one."""
 
-    def __init__(self, *, executable: str = EXECUTABLE, env: Mapping[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        executable: str = EXECUTABLE,
+        env: Mapping[str, str] | None = None,
+        workdir: str | os.PathLike[str] | None = None,
+    ) -> None:
         self.env = child_env(os.environ if env is None else env)
         self.executable = shutil.which(executable, path=self.env.get("PATH")) or executable
+        self.workdir = os.fspath(workdir) if workdir else None
 
     def start(self, args: Sequence[str], *, cwd: str | None = None, port: int | None = None) -> Invocation:
-        """An unstarted ``mirasim ui-cli <args>``, sent to the server on ``port`` when one is named."""
-        head = [self.executable, "ui-cli", *([f"--port={port}"] if port is not None else [])]
+        """An unstarted ``mirasim ui-cli <args>``, sent to the server on ``port`` when one is named.
+
+        Without a port the command starts a server of its own, which is told
+        :attr:`workdir`; one sent to a running server starts none.
+        """
+        if port is not None:
+            head = [self.executable, "ui-cli", f"--port={port}"]
+        else:
+            head = [self.executable, "ui-cli", *([f"--workdir={self.workdir}"] if self.workdir else [])]
         return Invocation([*head, *args], env=self.env, cwd=cwd)
 
     async def query(self, args: Sequence[str], *, timeout_s: float = QUERY_TIMEOUT_S, port: int | None = None) -> Any:
@@ -464,7 +502,7 @@ async def end_tree(proc: asyncio.subprocess.Process, *, grace_s: float = TREE_GR
 
     The tree is read before the first signal, because the moment ``ui-cli``
     dies its children are reparented and nothing links them to it any more.
-    Each descendant's process group is signalled as a whole -- mirasim gives an
+    Each descendant's process group is signalled as a whole -- Mirasim gives an
     agent a session of its own, and the agent gives each tool call another -- so
     a grandchild the snapshot missed still goes with its group. ``proc`` itself
     shares this adapter's group and is signalled by pid, which is also why that
@@ -618,6 +656,7 @@ __all__ = [
     "live_session",
     "prompt_args",
     "redact",
+    "route_args",
     "server_port",
     "session_gone",
     "sessions_args",

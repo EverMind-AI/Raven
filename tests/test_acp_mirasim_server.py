@@ -1,4 +1,4 @@
-"""The mirasim adapter's ACP methods, against a stand-in ``mirasim`` run as a real process."""
+"""The Mirasim adapter's ACP methods, against a stand-in ``mirasim`` run as a real process."""
 
 from __future__ import annotations
 
@@ -19,11 +19,11 @@ from raven.acp.protocol import INTERNAL_ERROR, INVALID_PARAMS, RESOURCE_NOT_FOUN
 from tests.acp_schema import validate_def
 from tests.mirasim_stub_cli import install
 
-pytestmark = pytest.mark.skipif(os.name == "nt", reason="the stand-in mirasim is a /bin/sh wrapper")
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="the stand-in Mirasim is a /bin/sh wrapper")
 
 
 class Harness:
-    """One adapter over a stand-in mirasim, and what it has said so far."""
+    """One adapter over a stand-in Mirasim, and what it has said so far."""
 
     def __init__(self, tmp_path: Path, *, agent: str = "claude", mode: str = "ok") -> None:
         self.tmp_path = tmp_path
@@ -34,11 +34,10 @@ class Harness:
         self.use(mode, agent=agent)
 
     def use(self, mode: str, *, agent: str = "claude") -> None:
-        """A fresh adapter process's worth of state, sharing the store and mirasim's conversations."""
+        """A fresh adapter process's worth of state, sharing the store and Mirasim's conversations."""
         exe = install(self.tmp_path, mode)
-        self.agent = MirasimAgent(
-            agent=agent, cli=UiCli(executable=str(exe)), store=self.store, emit=self.updates.append
-        )
+        cli = UiCli(executable=str(exe), workdir=str(self.tmp_path / "workdir"))
+        self.agent = MirasimAgent(agent=agent, cli=cli, store=self.store, emit=self.updates.append)
 
     async def call(self, method: str, **params: Any) -> dict[str, Any]:
         self.ids += 1
@@ -64,7 +63,20 @@ class Harness:
         ]
 
     def prompts(self) -> list[list[str]]:
-        return [argv[2:] for argv in self.calls() if argv[:2] == ["ui-cli", "prompt"]]
+        return [command[1:] for command in self.commands() if command[:1] == ["prompt"]]
+
+    def routes(self) -> list[list[str]]:
+        """The arguments of each ``session route`` the adapter ran, in order."""
+        return [command[2:] for command in self.commands() if command[:2] == ["session", "route"]]
+
+    def commands(self) -> list[list[str]]:
+        """Each one-shot ``ui-cli`` command, verb first, past the flag naming its server's directory."""
+        out = []
+        for argv in self.calls():
+            rest = argv[1:] if argv[:1] == ["ui-cli"] else []
+            if rest[:1] and rest[0].startswith("--workdir="):
+                out.append(rest[1:])
+        return out
 
     def calls(self) -> list[list[str]]:
         return [json.loads(line) for line in (self.tmp_path / "stub" / "calls.jsonl").read_text().splitlines()]
@@ -99,12 +111,12 @@ async def test_initialize_answers_at_once_and_reads_the_menus_behind_it(harness:
     validate_def("InitializeResponse", result)
     assert result["agentCapabilities"]["loadSession"] is True
     assert result["agentCapabilities"]["sessionCapabilities"] == {"delete": {}}
-    assert result["agentInfo"] == {"name": "mirasim-claude", "title": "claude (mirasim)", "version": "0.0.465"}
+    assert result["agentInfo"] == {"name": "mirasim-claude", "title": "claude (Mirasim)", "version": "0.0.465"}
     await harness.agent._prefetch
     # The pool's liveness probe is a repeat initialize with five seconds: it must
     # answer from what is in hand, not start another read.
     again = await harness.ok("initialize", protocolVersion=1)
-    assert again["agentInfo"]["title"] == "Claude Code (mirasim)"
+    assert again["agentInfo"]["title"] == "Claude Code (Mirasim)"
     calls = (harness.tmp_path / "stub" / "calls.jsonl").read_text()
     assert calls.count('"agents"') == 1 and calls.count('"version"') == 1
 
@@ -139,6 +151,9 @@ async def test_each_turn_names_its_model_and_effort_and_the_next_continues_the_c
     first_args, second_args = harness.prompts()
     assert "--agent=claude" in first_args and f"--cwd={harness.tmp_path}" in first_args
     assert "--session=sess-1" in second_args and not any(arg.startswith("--agent=") for arg in second_args)
+    # A bare model id is the model on Mirasim's own route, which no flag names.
+    assert not any(arg.startswith("--route") for args in (first_args, second_args) for arg in args)
+    assert harness.routes() == []
 
 
 async def test_a_model_without_rungs_is_sent_no_effort(harness: Harness) -> None:
@@ -189,7 +204,7 @@ async def test_a_failed_turn_is_an_error_even_though_mirasim_exits_0(harness: Ha
     error = await harness.refused("session/prompt", sessionId=sid, prompt=text("hi"))
     assert error["code"] == INTERNAL_ERROR
     assert "failed to initialize sqlite state runtime" in error["message"]
-    # The conversation exists in mirasim whatever the turn did, so it is kept.
+    # The conversation exists in Mirasim whatever the turn did, so it is kept.
     assert harness.store.get(sid).mirasim_key == "sess-1"
 
 
@@ -201,7 +216,7 @@ async def test_a_conversation_mirasim_forgot_starts_again_once_and_says_so(harne
     await harness.ok("session/prompt", sessionId=sid, prompt=text("second"))
     reply = harness.replies()[-1]
     assert reply.startswith("turn 1 of sess-2 ")
-    assert "[mirasim] The mirasim conversation this session continued no longer exists" in reply
+    assert "[Mirasim] The Mirasim conversation this session continued no longer exists" in reply
     assert harness.store.get(sid).mirasim_key == "sess-2"
 
 
@@ -283,7 +298,7 @@ async def test_a_client_that_takes_no_forms_has_the_question_skipped_and_named(h
     await harness.ok("session/prompt", sessionId=sid, prompt=text("paint it"))
     reply = harness.replies()[-1]
     assert reply.startswith("turn 1 of sess-1 got skip=None")
-    assert "[mirasim] The agent asked: Claude asks: Which colour? (Red / Blue)" in reply
+    assert "[Mirasim] The agent asked: Claude asks: Which colour? (Red / Blue)" in reply
     assert "takes no forms" in reply
     assert not [frame for frame in harness.updates if frame.get("method") == "elicitation/create"]
 
@@ -441,7 +456,7 @@ async def test_a_cancel_ends_the_turn_and_everything_it_started(harness: Harness
 
 
 async def test_a_model_mirasim_added_since_the_menus_were_read_is_accepted(harness: Harness) -> None:
-    """The adapter reads mirasim's menus again before refusing a model it does not know."""
+    """The adapter reads Mirasim's menus again before refusing a model it does not know."""
     sid = (await harness.ok("session/new", cwd=str(harness.tmp_path), mcpServers=[]))["sessionId"]
     from tests.mirasim_stub_cli import CATALOG
 
@@ -494,7 +509,7 @@ def test_the_entry_refuses_an_agent_id_that_is_not_one(capsys: pytest.CaptureFix
     with pytest.raises(SystemExit) as stopped:
         server_mod.main(["--agent", "Not An Id"])
     assert stopped.value.code == 2
-    assert "is not a mirasim agent id" in capsys.readouterr().err
+    assert "is not a Mirasim agent id" in capsys.readouterr().err
 
 
 def test_python_dash_m_runs_the_server_entry(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -507,7 +522,7 @@ def test_python_dash_m_runs_the_server_entry(monkeypatch: pytest.MonkeyPatch) ->
 
 
 async def test_a_load_in_the_same_process_drops_the_model_the_session_was_put_on(harness: Harness) -> None:
-    """Raven re-asserts its choice on every route in, so a load answers on mirasim's default."""
+    """Raven re-asserts its choice on every route in, so a load answers on Mirasim's default."""
     sid = (await harness.ok("session/new", cwd=str(harness.tmp_path), mcpServers=[]))["sessionId"]
     await harness.ok("session/set_config_option", sessionId=sid, configId="model", value="opus")
     await harness.ok("session/set_mode", sessionId=sid, modeId="max")
@@ -628,7 +643,7 @@ async def test_a_turn_that_ends_neither_settled_nor_asking_is_a_failure_that_say
     unsettled = Harness(tmp_path, mode="unsettled")
     sid = (await unsettled.ok("session/new", cwd=str(tmp_path), mcpServers=[]))["sessionId"]
     error = await unsettled.refused("session/prompt", sessionId=sid, prompt=text("hi"))
-    assert "mirasim reported the turn unsettled (phase 'running')" in error["message"]
+    assert "Mirasim reported the turn unsettled (phase 'running')" in error["message"]
     install(tmp_path, "garbage")
     error = await unsettled.refused("session/prompt", sessionId=sid, prompt=text("hi"))
     assert "`mirasim ui-cli prompt` exited 3 with no result" in error["message"]
@@ -913,3 +928,203 @@ async def test_what_the_agent_asks_reaches_the_client_with_credentials_cut(tmp_p
         assert secret not in json.dumps(request) and "s3cr3t" not in json.dumps(request)
         agent.outbound.resolve({"jsonrpc": "2.0", "id": request["id"], "result": answer})
         assert await asyncio.wait_for(relay, 5) in (Reply("skip"), Reply("cancel"))
+
+
+async def opened(harness: Harness, model: str | None = None) -> str:
+    """A new session, put on ``model`` when one is named."""
+    sid = (await harness.ok("session/new", cwd=str(harness.tmp_path), mcpServers=[]))["sessionId"]
+    if model is not None:
+        await harness.ok("session/set_config_option", sessionId=sid, configId="model", value=model)
+    return sid
+
+
+async def test_an_own_model_chosen_on_the_platform_starts_its_conversation_there(harness: Harness) -> None:
+    sid = await opened(harness, "platform:opus")
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("hi"))
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("again"))
+    assert harness.replies() == [
+        "turn 1 of sess-1 on opus via platform effort high files []: hi",
+        "turn 2 of sess-1 on opus via platform effort high files []: again",
+    ]
+    first, second = harness.prompts()
+    assert "--model=opus" in first and "--route=platform" in first
+    # The conversation keeps its route, so the next turn neither names nor switches it.
+    assert not any(arg.startswith("--route") for arg in second)
+    assert harness.routes() == []
+
+
+async def test_choosing_the_other_route_switches_the_conversation_before_its_next_turn(harness: Harness) -> None:
+    sid = await opened(harness, "platform:opus")
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("hi"))
+    await harness.ok("session/set_config_option", sessionId=sid, configId="model", value="own:opus")
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("again"))
+    assert harness.replies()[-1] == "turn 2 of sess-1 on opus via own effort high files []: again"
+    assert harness.routes() == [["--session=sess-1", "--to=own"]]
+    verbs = [command[0] for command in harness.commands() if command[0] in ("prompt", "session")]
+    assert verbs == ["prompt", "session", "prompt"]
+
+
+async def test_undoing_a_choice_hands_the_route_back_to_mirasim(harness: Harness) -> None:
+    opened_session = await harness.ok("session/new", cwd=str(harness.tmp_path), mcpServers=[])
+    sid = opened_session["sessionId"]
+    # Raven undoes a choice by sending back the value the session first reported.
+    baseline = opened_session["configOptions"][0]["currentValue"]
+    await harness.ok("session/set_config_option", sessionId=sid, configId="model", value="platform:opus")
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("hi"))
+    await harness.ok("session/set_config_option", sessionId=sid, configId="model", value=baseline)
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("again"))
+    assert harness.replies()[-1] == "turn 2 of sess-1 on sonnet effort high files []: again"
+    assert harness.routes() == [["--session=sess-1", "--to=default"]]
+
+
+async def test_a_model_only_the_platform_runs_leaves_the_route_to_mirasim(harness: Harness) -> None:
+    sid = await opened(harness, "own:opus")
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("hi"))
+    await harness.ok("session/set_config_option", sessionId=sid, configId="model", value="glm-5.3-flash")
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("again"))
+    assert harness.replies() == [
+        "turn 1 of sess-1 on opus via own effort high files []: hi",
+        "turn 2 of sess-1 on glm-5.3-flash effort - files []: again",
+    ]
+    assert harness.routes() == [["--session=sess-1", "--to=default"]]
+
+
+@pytest.mark.slow
+async def test_another_process_continues_on_the_route_the_conversation_is_on(harness: Harness) -> None:
+    sid = await opened(harness, "platform:opus")
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("hi"))
+    harness.use("ok")
+    await harness.ok("session/load", sessionId=sid, cwd=str(harness.tmp_path), mcpServers=[])
+    await harness.ok("session/set_config_option", sessionId=sid, configId="model", value="platform:opus")
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("again"))
+    assert harness.replies()[-1] == "turn 2 of sess-1 on opus via platform effort high files []: again"
+    assert harness.routes() == []
+
+
+@pytest.mark.slow
+async def test_a_conversation_with_no_recorded_route_is_put_on_one(harness: Harness) -> None:
+    sid = await opened(harness, "platform:opus")
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("hi"))
+    # A record written before routes were kept says nothing about the one the conversation is on.
+    doc = json.loads(harness.store.path.read_text())
+    del doc["sessions"][sid]["route"]
+    harness.store.path.write_text(json.dumps(doc))
+    harness.use("ok")
+    await harness.ok("session/load", sessionId=sid, cwd=str(harness.tmp_path), mcpServers=[])
+    await harness.ok("session/set_config_option", sessionId=sid, configId="model", value="platform:opus")
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("again"))
+    assert harness.routes() == [["--session=sess-1", "--to=platform"]]
+
+
+@pytest.mark.slow
+async def test_an_agent_the_platform_does_not_run_is_never_given_a_route(tmp_path: Path) -> None:
+    harness = Harness(tmp_path, agent="qwen")
+    sid = await opened(harness, "opus")
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("hi"))
+    await harness.ok("session/set_config_option", sessionId=sid, configId="model", value="glm-5.3-flash")
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("again"))
+    harness.use("ok", agent="qwen")
+    await harness.ok("session/load", sessionId=sid, cwd=str(tmp_path), mcpServers=[])
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("once more"))
+    assert not any(arg.startswith("--route") for args in harness.prompts() for arg in args)
+    assert harness.routes() == []
+    assert (await harness.refused("session/set_config_option", sessionId=sid, configId="model", value="platform:opus"))[
+        "code"
+    ] == INVALID_PARAMS
+
+
+@pytest.mark.slow
+async def test_a_route_mirasim_did_not_switch_refuses_the_turn_and_is_switched_next_time(harness: Harness) -> None:
+    sid = await opened(harness, "platform:opus")
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("hi"))
+    harness.use("noroute")
+    await harness.ok("session/load", sessionId=sid, cwd=str(harness.tmp_path), mcpServers=[])
+    await harness.ok("session/set_config_option", sessionId=sid, configId="model", value="own:opus")
+    error = await harness.refused("session/prompt", sessionId=sid, prompt=text("again"))
+    assert error["code"] == INTERNAL_ERROR and "own" in error["message"]
+    assert len(harness.prompts()) == 1
+    # Not known to be on either route any more, so the next turn switches it whatever it asks for.
+    stored = harness.store.get(sid)
+    assert stored is not None and stored.route is None
+    harness.use("ok")
+    await harness.ok("session/load", sessionId=sid, cwd=str(harness.tmp_path), mcpServers=[])
+    await harness.ok("session/set_config_option", sessionId=sid, configId="model", value="platform:opus")
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("again"))
+    assert harness.routes()[-1] == ["--session=sess-1", "--to=platform"]
+    assert harness.replies()[-1] == "turn 2 of sess-1 on opus via platform effort high files []: again"
+
+
+@pytest.mark.slow
+async def test_a_forgotten_conversation_is_begun_again_on_the_route_chosen(harness: Harness) -> None:
+    sid = await opened(harness, "platform:opus")
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("hi"))
+    harness.use("forget")
+    await harness.ok("session/load", sessionId=sid, cwd=str(harness.tmp_path), mcpServers=[])
+    await harness.ok("session/set_config_option", sessionId=sid, configId="model", value="platform:opus")
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("again"))
+    assert harness.replies()[-1].startswith("turn 1 of sess-2 on opus via platform effort high files []: again")
+    assert "--route=platform" in harness.prompts()[-1]
+    stored = harness.store.get(sid)
+    assert stored is not None and (stored.mirasim_key, stored.route) == ("sess-2", "platform")
+
+
+@pytest.mark.slow
+async def test_a_route_another_process_switched_is_read_before_the_turn(harness: Harness) -> None:
+    sid = await opened(harness, "platform:opus")
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("hi"))
+    held = harness.agent
+    # A second adapter process continues the same conversation on the other route.
+    harness.use("ok")
+    await harness.ok("session/load", sessionId=sid, cwd=str(harness.tmp_path), mcpServers=[])
+    await harness.ok("session/set_config_option", sessionId=sid, configId="model", value="own:opus")
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("again"))
+    # The first, still holding the session from before, is asked for the platform again.
+    harness.agent = held
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("and again"))
+    assert harness.routes() == [["--session=sess-1", "--to=own"], ["--session=sess-1", "--to=platform"]]
+    assert harness.replies()[-1] == "turn 3 of sess-1 on opus via platform effort high files []: and again"
+
+
+@pytest.mark.slow
+async def test_a_cancel_while_the_route_is_switched_ends_the_switch_and_runs_no_turn(harness: Harness) -> None:
+    sid = await opened(harness, "platform:opus")
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("hi"))
+    harness.use("routehang")
+    await harness.ok("session/load", sessionId=sid, cwd=str(harness.tmp_path), mcpServers=[])
+    await harness.ok("session/set_config_option", sessionId=sid, configId="model", value="own:opus")
+    turn = asyncio.create_task(harness.call("session/prompt", sessionId=sid, prompt=text("again")))
+    deadline = time.monotonic() + 20
+    while not harness.routes() and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+    assert harness.routes(), "the switch never started"
+    started = time.monotonic()
+    await harness.agent.handle({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": sid}})
+    response = await asyncio.wait_for(turn, 10)
+    assert response["result"] == {"stopReason": "cancelled"}
+    assert time.monotonic() - started < 5
+    assert len(harness.prompts()) == 1
+    stored = harness.store.get(sid)
+    assert stored is not None and stored.route is None
+
+
+@pytest.mark.slow
+async def test_a_switch_that_never_answers_refuses_the_turn(harness: Harness, monkeypatch) -> None:
+    sid = await opened(harness, "platform:opus")
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("hi"))
+    harness.use("routehang")
+    monkeypatch.setattr(server_mod, "QUERY_TIMEOUT_S", 1.0)
+    await harness.ok("session/load", sessionId=sid, cwd=str(harness.tmp_path), mcpServers=[])
+    await harness.ok("session/set_config_option", sessionId=sid, configId="model", value="own:opus")
+    error = await harness.refused("session/prompt", sessionId=sid, prompt=text("again"))
+    assert error["code"] == INTERNAL_ERROR and "did not answer within 1s" in error["message"]
+    assert len(harness.prompts()) == 1
+
+
+async def test_a_switch_that_cannot_start_refuses_the_turn(harness: Harness, tmp_path: Path) -> None:
+    sid = await opened(harness, "platform:opus")
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("hi"))
+    await harness.ok("session/set_config_option", sessionId=sid, configId="model", value="own:opus")
+    harness.agent.cli = UiCli(executable=str(tmp_path / "no-such-mirasim"))
+    error = await harness.refused("session/prompt", sessionId=sid, prompt=text("again"))
+    assert error["code"] == INTERNAL_ERROR and "the own route" in error["message"]
+    assert len(harness.prompts()) == 1

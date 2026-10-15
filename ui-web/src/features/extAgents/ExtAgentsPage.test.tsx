@@ -278,7 +278,7 @@ describe('the tabs', () => {
   })
 })
 
-describe('the mirasim family card', () => {
+describe('the Mirasim family card', () => {
   const family = (): HTMLElement | undefined => rowsOf().find((r) => r.querySelector('.extAgents-t')!.textContent === 'gui.agent.fam_mirasim')
   const picks = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('.extAgents-pickrow')]
   const pickNamed = (name: string): HTMLElement => picks().find((p) => p.querySelector('.extAgents-picknm')!.textContent === name)!
@@ -545,9 +545,9 @@ describe('the mirasim family card', () => {
     expect(pm.textContent).toBe('gui.agent.model_managed')
   })
 
-  /* The mark of an agent run through mirasim is mirasim's, with the agent's
+  /* The mark of an agent run through Mirasim is Mirasim's, with the agent's
      over it -- on its card, not in the picker, where the drawer is already
-     mirasim's and the agent is what is being chosen. */
+     Mirasim's and the agent is what is being chosen. */
   it('draws a connected member s mark as the route with the agent over it', async () => {
     install(members().map((m) => (m.name === 'codex-Mirasim' ? { ...m, configured: true, enabled: true } : m)))
     await mount()
@@ -782,7 +782,7 @@ describe('connecting', () => {
       },
     })
     await mount()
-    /* Nineteen and not the catalogue's twenty-seven: the nine mirasim presets
+    /* Nineteen and not the catalogue's twenty-seven: the nine Mirasim presets
        are one card while none of them has been opened out, so the skeleton has
        to draw one cell for them or the grid jumps by eight when the roster
        lands -- which is the whole reason this count is pinned. */

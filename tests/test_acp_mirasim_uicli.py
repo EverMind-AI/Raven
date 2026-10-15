@@ -24,6 +24,7 @@ from raven.acp.mirasim.uicli import (
     last_document,
     prompt_args,
     redact,
+    route_args,
     session_gone,
 )
 from tests.mirasim_stub_cli import TOKEN_LINE
@@ -115,6 +116,13 @@ def test_each_command_sent_to_a_server_names_the_port_before_the_verb() -> None:
     assert cli.start(["agents"], port=4970).argv == ["/usr/bin/true", "ui-cli", "--port=4970", "agents"]
 
 
+def test_a_command_that_starts_a_server_names_the_directory_it_runs_in() -> None:
+    cli = UiCli(executable="/usr/bin/true", workdir="/srv/mirasim")
+    assert cli.start(["agents"]).argv == ["/usr/bin/true", "ui-cli", "--workdir=/srv/mirasim", "agents"]
+    # Sent to a server that is running, it starts none, so there is no directory to name.
+    assert cli.start(["agents"], port=4970).argv == ["/usr/bin/true", "ui-cli", "--port=4970", "agents"]
+
+
 def test_the_frames_of_a_long_turn_are_asked_for_one_at_a_time() -> None:
     assert uicli.sessions_args(5) == ["raw", '{"type": "listSessions"}', "--await=sessions", "--seconds=5"]
     assert uicli.snapshot_args("k1", 5) == [
@@ -176,6 +184,16 @@ def test_a_new_conversation_names_the_agent_and_a_continued_one_only_its_key() -
     assert continued == ["prompt", "--text=go on", f"--timeout={TURN_TIMEOUT_MS}", "--session=k1", "--file=/tmp/a.md"]
 
 
+def test_a_route_is_named_by_a_new_conversation_and_switched_for_a_continued_one() -> None:
+    fresh = prompt_args(text="hi", agent="claude", cwd="/w", route="platform")
+    assert fresh[-1] == "--route=platform"
+    # Mirasim reads --route on a new session's first turn only, so a continued
+    # one is put on its route with a command of its own before the turn.
+    continued = prompt_args(text="hi", agent="claude", cwd="/w", session_key="k1", route="platform")
+    assert not any(arg.startswith("--route") for arg in continued)
+    assert route_args("k1", "own") == ["session", "route", "--session=k1", "--to=own"]
+
+
 def test_a_codex_home_inside_mirasims_state_is_dropped_and_any_other_kept(tmp_path: Path) -> None:
     state = tmp_path / "mirasim-home"
     borrowed = child_env({"MIRASIM_HOME": str(state), "CODEX_HOME": str(state / "agent-homes" / "codex-relay")})
@@ -195,7 +213,7 @@ def test_a_failure_is_the_last_non_log_stderr_line_redacted() -> None:
 async def test_query_reads_the_document_and_names_a_failure(tmp_path: Path) -> None:
     cli = UiCli(executable=str(stub_executable(tmp_path)))
     agents = await cli.query(["agents"])
-    assert [row["id"] for row in agents["agents"]] == ["claude", "zcode"]
+    assert [row["id"] for row in agents["agents"]] == ["claude", "zcode", "qwen"]
     with pytest.raises(UiCliError, match="unknown command"):
         await cli.query(["nonsense"])
     assert await cli.version() == "0.0.465"
@@ -221,7 +239,7 @@ async def test_a_cancel_before_the_command_starts_runs_nothing() -> None:
 async def test_a_cancel_ends_the_command_and_the_grandchild_in_its_own_session(tmp_path: Path) -> None:
     """The measured hole: an agent in a session of its own outlived a killed ``ui-cli``.
 
-    The stand-in starts its grandchild with ``start_new_session``, as mirasim
+    The stand-in starts its grandchild with ``start_new_session``, as Mirasim
     starts its agent, so only a tree read before the first signal can reach it.
     """
     cli = UiCli(executable=str(stub_executable(tmp_path, mode="hang")))

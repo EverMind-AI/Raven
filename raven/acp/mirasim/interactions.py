@@ -1,11 +1,11 @@
-"""What a mirasim turn stops to ask, put to an ACP client, and the reply read back as an answer.
+"""What a Mirasim turn stops to ask, put to an ACP client, and the reply read back as an answer.
 
 A turn that needs a person -- a question the agent asks, or a tool it wants
 approved -- shows up in the turn's snapshot as an *interaction* and waits there
 until ``ui-cli answer`` resolves it. This module is the pure half of relaying
 one: reading the interaction, building the request that puts it in front of
 the client, and reading the client's reply back into an answer. The shapes
-were read from mirasim 0.0.465's host code and seen live:
+were read from Mirasim 0.0.465's host code and seen live:
 
 - an interaction is ``{promptId, kind, title, hint, questions, currentIndex,
   step}``; ``kind`` is ``"permission"`` for a tool approval and
@@ -106,7 +106,7 @@ def elicitation_request(session_id: str, interaction: dict[str, Any]) -> dict[st
 def read_elicitation(interaction: dict[str, Any], result: Any) -> Reply:
     """The answer a client's ``elicitation/create`` reply stands for.
 
-    ``decline`` is a person choosing not to answer, which mirasim calls a skip,
+    ``decline`` is a person choosing not to answer, which Mirasim calls a skip,
     and so is a form accepted with nothing in it. ``cancel`` -- and a reply in
     no shape at all -- dismisses the question.
     """

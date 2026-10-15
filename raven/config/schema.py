@@ -2069,7 +2069,7 @@ class ThirdPartyAcpSubagentConfig(Base):
 
     Three-valued. ``None`` is "not declared", and it resolves to the measured
     answer for the preset this row was created from -- ``False`` for opencode,
-    and for the agents mirasim runs, whose ``ui-cli`` takes no MCP servers at
+    and for the agents Mirasim runs, whose ``ui-cli`` takes no MCP servers at
     all; ``True`` for everything else. Not a plain ``True`` default, because the field
     arrived after rows were already on disk: an ``opencode`` row written before it
     existed carries no key, and a permissive default would leave exactly the agent

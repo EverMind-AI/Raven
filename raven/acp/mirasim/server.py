@@ -1,6 +1,6 @@
-"""One mirasim agent served over ACP: its sessions, their turns, and the frame loop.
+"""One Mirasim agent served over ACP: its sessions, their turns, and the frame loop.
 
-mirasim has no ACP surface of its own. Its scriptable surface is ``ui-cli``,
+Mirasim has no ACP surface of its own. Its scriptable surface is ``ui-cli``,
 which runs one turn per command and blocks until the turn settles, so each ACP
 method below maps onto at most one such command:
 
@@ -9,13 +9,14 @@ method below maps onto at most one such command:
                                  in the background, and a repeated initialize
                                  answers from what is in hand
 ``session/new``                  nothing is run -- the ACP id is minted here,
-                                 the mirasim conversation starts with the first
+                                 the Mirasim conversation starts with the first
                                  turn
 ``session/load``                 the record :mod:`.store` kept; no replay
 ``session/prompt``               ``ui-cli prompt``, continuing the record's
-                                 conversation; what the turn stops to ask is
-                                 put to the client and answered with
-                                 ``ui-cli answer``
+                                 conversation, after ``ui-cli session route``
+                                 when the turn asks for another route; what
+                                 the turn stops to ask is put to the client
+                                 and answered with ``ui-cli answer``
 ``session/set_config_option``    the model the next turn asks for
 ``session/set_mode``             the effort the next turn asks for
 ``session/cancel``               the running turn's process tree, ended
@@ -28,13 +29,21 @@ whether anyone is home, with a five-second budget (``_PROBE_TIMEOUT_S`` in
 is why only the first initialize starts the read and none waits for it.
 
 ``session/load`` replays nothing: the spec has the agent stream the history
-back, and doing that from mirasim's ``history`` would start a server on every
+back, and doing that from Mirasim's ``history`` would start a server on every
 load -- Raven loads its instance's session before every dispatch, and discards
 the replay it gets. It also drops the model and effort the session was put on:
 Raven re-asserts its own choice on every route in, and a session it puts on no
-model runs on mirasim's default for the agent. Every turn therefore names its
-model and effort, because a resumed mirasim session otherwise keeps the ones it
+model runs on Mirasim's default for the agent. Every turn therefore names its
+model and effort, because a resumed Mirasim session otherwise keeps the ones it
 last ran on.
+
+A conversation's route -- the platform's quota or the user's own account --
+is Mirasim's, set once rather than per turn (see :mod:`.catalog`). A new
+conversation is started on the route its model choice names; one that continues
+is switched with ``ui-cli session route`` only before a turn whose choice names
+another, which the record in :mod:`.store` is what tells. Every server this
+starts runs in one directory of Raven's (:func:`.store.server_workdir`), because
+Mirasim keeps those routes in an index per server directory.
 
 A reply arrives whole, as one message, because ``ui-cli`` reports a turn only
 once it settles; there is no partial text to stream.
@@ -76,7 +85,14 @@ from urllib.request import url2pathname
 from loguru import logger
 
 from raven.acp.capabilities import ClientCapabilities
-from raven.acp.mirasim.catalog import MODEL_OPTION, AgentCatalog, agent_entry, read_catalog
+from raven.acp.mirasim.catalog import (
+    MODEL_OPTION,
+    OWN_ROUTE,
+    PLATFORM_ROUTE,
+    AgentCatalog,
+    agent_entry,
+    read_catalog,
+)
 from raven.acp.mirasim.interactions import (
     ANSWER_FIELD,
     PERMISSION,
@@ -88,10 +104,11 @@ from raven.acp.mirasim.interactions import (
     read_elicitation,
     read_permission,
 )
-from raven.acp.mirasim.store import Binding, BindingStore, store_path
+from raven.acp.mirasim.store import Binding, BindingStore, server_workdir, store_path
 from raven.acp.mirasim.uicli import (
     EXECUTABLE,
     INLINE_TEXT_LIMIT,
+    QUERY_TIMEOUT_S,
     Invocation,
     Outcome,
     UiCli,
@@ -100,6 +117,7 @@ from raven.acp.mirasim.uicli import (
     live_session,
     prompt_args,
     redact,
+    route_args,
     session_gone,
     sessions_args,
     snapshot_args,
@@ -176,15 +194,17 @@ class RefusalError(Exception):
 
 @dataclass(eq=False)
 class Session:
-    """One ACP session and what its next turn will ask mirasim for."""
+    """One ACP session and what its next turn will ask Mirasim for."""
 
     id: str
     cwd: str
     mirasim_key: str | None = None
+    route: str | None = None
+    """The route the conversation was last put on, as the record says; ``None`` when not known."""
     model: str | None = None
-    """The model the client put this session on, or ``None`` for mirasim's default."""
+    """The model the client put this session on, or ``None`` for Mirasim's default."""
     mode: str | None = None
-    """The effort rung the client put this session on, or ``None`` for mirasim's default."""
+    """The effort rung the client put this session on, or ``None`` for Mirasim's default."""
     mcp_names: tuple[str, ...] = ()
     mcp_noted: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -194,11 +214,11 @@ class Session:
     running: Invocation | None = None
 
     def binding(self) -> Binding:
-        return Binding(session_id=self.id, cwd=self.cwd, mirasim_key=self.mirasim_key)
+        return Binding(session_id=self.id, cwd=self.cwd, mirasim_key=self.mirasim_key, route=self.route)
 
 
 class MirasimAgent:
-    """The ACP methods for one mirasim agent, over one ``ui-cli``."""
+    """The ACP methods for one Mirasim agent, over one ``ui-cli``."""
 
     def __init__(
         self,
@@ -242,7 +262,7 @@ class MirasimAgent:
         except RefusalError as exc:
             return error_response(request_id, exc.code, exc.message) if is_request else None
         except Exception as exc:  # noqa: BLE001 - one failed request must not end the connection
-            logger.opt(exception=True).error("mirasim adapter: {} failed", method)
+            logger.opt(exception=True).error("Mirasim adapter: {} failed", method)
             if not is_request:
                 return None
             return error_response(request_id, INTERNAL_ERROR, redact(str(exc)) or type(exc).__name__)
@@ -279,7 +299,7 @@ class MirasimAgent:
             try:
                 self._version = await self.cli.version()
             except UiCliError as exc:
-                logger.warning("mirasim adapter: {}", exc)
+                logger.warning("Mirasim adapter: {}", exc)
                 self._version = ""
         label = self._catalog.label if self._catalog is not None else self.agent
         return {
@@ -292,7 +312,7 @@ class MirasimAgent:
             },
             "agentInfo": {
                 "name": f"mirasim-{self.agent}",
-                "title": f"{label} (mirasim)",
+                "title": f"{label} (Mirasim)",
                 "version": self._version or "unknown",
             },
             "authMethods": [],
@@ -316,16 +336,16 @@ class MirasimAgent:
             if isinstance(agents_doc, BaseException):
                 if self._catalog is not None:
                     logger.warning(
-                        "mirasim adapter: re-reading the agent list failed ({}); keeping the last", agents_doc
+                        "Mirasim adapter: re-reading the agent list failed ({}); keeping the last", agents_doc
                     )
                     return self._catalog
-                raise RefusalError(INTERNAL_ERROR, f"mirasim could not list its agents: {agents_doc}")
+                raise RefusalError(INTERNAL_ERROR, f"Mirasim could not list its agents: {agents_doc}")
             if agent_entry(agents_doc, self.agent) is None:
                 rows = agents_doc.get("agents") if isinstance(agents_doc, dict) else None
                 offered = [row.get("id") for row in rows or () if isinstance(row, dict)]
-                raise RefusalError(INVALID_PARAMS, f"mirasim has no agent {self.agent!r}; it offers {offered}")
+                raise RefusalError(INVALID_PARAMS, f"Mirasim has no agent {self.agent!r}; it offers {offered}")
             if isinstance(catalog_doc, BaseException):
-                logger.warning("mirasim adapter: no model menu for {} ({})", self.agent, catalog_doc)
+                logger.warning("Mirasim adapter: no model menu for {} ({})", self.agent, catalog_doc)
                 catalog_doc = None
             self._catalog = read_catalog(self.agent, agents_doc, catalog_doc)
             self._catalog_at = time.monotonic()
@@ -339,8 +359,8 @@ class MirasimAgent:
         if not catalog.installed:
             raise RefusalError(
                 INTERNAL_ERROR,
-                f"mirasim reports its {catalog.label} agent as not installed on the PATH Raven starts it with; "
-                f"install it from mirasim's Settings -> Agents, or with `mirasim ui-cli cli install --agent "
+                f"Mirasim reports its {catalog.label} agent as not installed on the PATH Raven starts it with; "
+                f"install it from Mirasim's Settings -> Agents, or with `mirasim ui-cli cli install --agent "
                 f"{self.agent}`",
             )
         session = Session(id=str(uuid.uuid4()), cwd=cwd, mcp_names=_mcp_names(params))
@@ -354,16 +374,18 @@ class MirasimAgent:
         if session is None:
             binding = await asyncio.to_thread(self.store.get, session_id)
             if binding is None:
-                raise RefusalError(RESOURCE_NOT_FOUND, f"no mirasim session {session_id!r} is recorded here")
-            session = Session(id=binding.session_id, cwd=binding.cwd, mirasim_key=binding.mirasim_key)
+                raise RefusalError(RESOURCE_NOT_FOUND, f"no Mirasim session {session_id!r} is recorded here")
+            session = Session(
+                id=binding.session_id, cwd=binding.cwd, mirasim_key=binding.mirasim_key, route=binding.route
+            )
         if not _same_dir(session.cwd, cwd):
             if session.mirasim_key is not None:
-                # mirasim keeps a conversation in the directory it began in, and
+                # Mirasim keeps a conversation in the directory it began in, and
                 # an agent continuing it there would edit a tree the caller has
                 # left. Refused, so the caller opens a session where it now is.
                 raise RefusalError(
                     RESOURCE_NOT_FOUND,
-                    f"mirasim session {session_id!r} works in {session.cwd}, not {cwd}; open a new session there",
+                    f"Mirasim session {session_id!r} works in {session.cwd}, not {cwd}; open a new session there",
                 )
             session.cwd = cwd
         session.model = None
@@ -383,12 +405,12 @@ class MirasimAgent:
             raise RefusalError(INVALID_PARAMS, "the model is a non-empty string")
         catalog = await self.catalog(allow_stale=True)
         if not _offers(catalog, value):
-            # Read again before refusing: a model added in mirasim after these
+            # Read again before refusing: a model added in Mirasim after these
             # menus were read is one a fresh probe has already offered Raven.
             catalog = await self.catalog(refresh=True)
         if not _offers(catalog, value):
             offered = [entry.id for entry in catalog.models]
-            raise RefusalError(INVALID_PARAMS, f"mirasim's {catalog.label} has no model {value!r}; it offers {offered}")
+            raise RefusalError(INVALID_PARAMS, f"Mirasim's {catalog.label} has no model {value!r}; it offers {offered}")
         session.model = value
         return {"configOptions": catalog.config_options(session.model)}
 
@@ -440,14 +462,23 @@ class MirasimAgent:
                 if session.turn_cancelled:
                     return {"stopReason": "cancelled"}
                 model = session.model or catalog.default_model
+                route = catalog.route_for(session.model)
+                if route is not None and session.mirasim_key is not None:
+                    if not await self._put_on_route(session, session.mirasim_key, route):
+                        return {"stopReason": "cancelled"}
+                elif route is not None:
+                    # A new conversation starts on it, and is on Mirasim's
+                    # default when the flag names none.
+                    session.route = route
                 invocation = self.cli.start(
                     prompt_args(
                         text=prompt_text,
                         agent=self.agent,
                         cwd=session.cwd,
                         session_key=session.mirasim_key,
-                        model=model,
+                        model=catalog.mirasim_model(model),
                         effort=self._effort(session, catalog, model),
+                        route=route if route in (OWN_ROUTE, PLATFORM_ROUTE) else None,
                         files=[*files, *staged],
                     )
                 )
@@ -464,31 +495,71 @@ class MirasimAgent:
                     return result
                 failure = _failure(outcome)
                 if not retried and session.mirasim_key and session_gone(failure):
-                    # The record outlived the conversation (deleted in mirasim, or
+                    # The record outlived the conversation (deleted in Mirasim, or
                     # another home). Re-dispatching cannot help -- the next load
                     # finds the same record -- so the turn starts a new one here
                     # and says so, rather than failing every turn after it.
                     logger.warning(
-                        "mirasim adapter: {} no longer has {}; starting a new conversation",
+                        "Mirasim adapter: {} no longer has {}; starting a new conversation",
                         self.agent,
                         session.mirasim_key,
                     )
                     session.mirasim_key = None
                     notes.append(
-                        "The mirasim conversation this session continued no longer exists, so this turn ran in a "
+                        "The Mirasim conversation this session continued no longer exists, so this turn ran in a "
                         "new one without the earlier context."
                     )
                     retried = True
                     continue
                 await self._persist(session)
-                raise RefusalError(INTERNAL_ERROR, f"mirasim {self.agent} turn failed: {failure}")
+                raise RefusalError(INTERNAL_ERROR, f"Mirasim {self.agent} turn failed: {failure}")
+
+    async def _put_on_route(self, session: Session, key: str, route: str) -> bool:
+        """Switch conversation ``key`` to ``route`` unless its record has it there; ``False`` when cancelled.
+
+        The record is read again first, because any adapter process may have
+        switched the conversation since this one last ran a turn on it. It is
+        marked unknown before the switch and set after, so a switch that did not
+        finish -- refused, cancelled, or this process gone part-way -- is made
+        again on the next turn rather than taken as done. A refused switch
+        refuses the turn: run anyway, it would bill a route nobody chose.
+        """
+        stored = await asyncio.to_thread(self.store.get, session.id)
+        if stored is not None and stored.mirasim_key == key:
+            session.route = stored.route
+        if session.route == route:
+            return True
+        session.route = None
+        await self._persist(session)
+        invocation = self.cli.start(route_args(key, route))
+        session.running = invocation
+        try:
+            outcome = await asyncio.wait_for(invocation.run(), QUERY_TIMEOUT_S)
+        except TimeoutError:
+            said = f"`mirasim ui-cli session route` did not answer within {QUERY_TIMEOUT_S:.0f}s"
+            raise RefusalError(INTERNAL_ERROR, self._route_refused(key, route, said)) from None
+        except UiCliError as exc:
+            raise RefusalError(INTERNAL_ERROR, self._route_refused(key, route, str(exc))) from exc
+        finally:
+            session.running = None
+        if outcome.cancelled or session.turn_cancelled:
+            return False
+        if outcome.exit_code != 0 or not isinstance(outcome.document, dict):
+            said = outcome.failure or f"`mirasim ui-cli session route` exited {outcome.exit_code}"
+            raise RefusalError(INTERNAL_ERROR, self._route_refused(key, route, said))
+        session.route = route
+        await self._persist(session)
+        return True
+
+    def _route_refused(self, key: str, route: str, said: str) -> str:
+        return f"Mirasim could not put {self.agent} session {key} on the {route} route, so the turn did not run: {said}"
 
     async def _settle(self, session: Session, outcome: Outcome, notes: list[str]) -> dict[str, Any] | None:
         """The prompt response for a turn that ended or was cancelled; ``None`` for a failure."""
         doc = outcome.document if isinstance(outcome.document, dict) else None
         key = doc.get("sessionKey") if doc is not None else None
         if isinstance(key, str) and key:
-            # Bound on a failed turn too: the conversation exists in mirasim
+            # Bound on a failed turn too: the conversation exists in Mirasim
             # whatever the turn did, and the next prompt should continue it.
             session.mirasim_key = key
         if doc is not None and doc.get("settled") is True and not doc.get("error") and not doc.get("incomplete"):
@@ -512,7 +583,7 @@ class MirasimAgent:
         answer if it was asked already: one whose answer did not arrive -- a
         failed command -- would otherwise hold the turn with nothing left to
         retry it, and one answered already is gone from the next look's
-        snapshot, mirasim dropping it as it resolves.
+        snapshot, Mirasim dropping it as it resolves.
         """
         try:
             port = await self._port_of(invocation)
@@ -539,13 +610,13 @@ class MirasimAgent:
                         looks = 0
                     await self._look(port, answer_args(prompt_id, reply.action, reply.value))
         except Exception:  # noqa: BLE001 - a watcher that fails must not take the turn down with it
-            logger.opt(exception=True).warning("mirasim adapter: watching a {} turn failed", self.agent)
+            logger.opt(exception=True).warning("Mirasim adapter: watching a {} turn failed", self.agent)
 
     async def _port_of(self, invocation: Invocation) -> int | None:
         """The port the turn's server announces, saying so in the log if it is slow to.
 
         A turn whose server never says its port is one whose questions nothing
-        here can see -- a mirasim that stopped printing the line, say -- and the
+        here can see -- a Mirasim that stopped printing the line, say -- and the
         warning is what tells that apart from a turn that is merely long.
         """
         announced = asyncio.ensure_future(invocation.announced())
@@ -554,7 +625,7 @@ class MirasimAgent:
                 return await asyncio.wait_for(asyncio.shield(announced), ANNOUNCE_WARN_S)
             except TimeoutError:
                 logger.warning(
-                    "mirasim adapter: a {} turn's server has not said its port after {:.0f}s; "
+                    "Mirasim adapter: a {} turn's server has not said its port after {:.0f}s; "
                     "anything the turn asks cannot be answered until it does",
                     self.agent,
                     ANNOUNCE_WARN_S,
@@ -568,7 +639,7 @@ class MirasimAgent:
         try:
             return await self.cli.query(args, port=port, timeout_s=LOOK_TIMEOUT_S)
         except UiCliError as exc:
-            logger.debug("mirasim adapter: `{}` on a turn's server failed: {}", args[0], exc)
+            logger.debug("Mirasim adapter: `{}` on a turn's server failed: {}", args[0], exc)
             return None
 
     async def _relay(self, session: Session, interaction: dict[str, Any], notes: list[str]) -> Reply:
@@ -588,7 +659,7 @@ class MirasimAgent:
                 result = await self.outbound.call(ELICITATION_METHOD, params, timeout=HUMAN_ANSWER_TIMEOUT_S)
                 return read_elicitation(interaction, result)
         except (RequestFailedError, ConnectionClosedError, TimeoutError) as exc:
-            logger.warning("mirasim adapter: a question could not be put to the client ({}); dismissing it", exc)
+            logger.warning("Mirasim adapter: a question could not be put to the client ({}); dismissing it", exc)
             notes.append(f"The agent asked: {asked}\nIt could not be put to you ({exc}), so it was dismissed.")
             return Reply("cancel")
         notes.append(
@@ -601,10 +672,10 @@ class MirasimAgent:
         if session.mcp_names and not session.mcp_noted:
             session.mcp_noted = True
             notes.append(
-                f"MCP servers {', '.join(session.mcp_names)} were not handed to the agent: mirasim's ui-cli "
+                f"MCP servers {', '.join(session.mcp_names)} were not handed to the agent: Mirasim's ui-cli "
                 "takes no servers per session."
             )
-        reply = text + "".join(f"\n\n[mirasim] {note}" for note in notes)
+        reply = text + "".join(f"\n\n[Mirasim] {note}" for note in notes)
         for start in range(0, len(reply), REPLY_CHUNK_CHARS):
             self.emit(
                 notification(
@@ -620,9 +691,9 @@ class MirasimAgent:
             )
 
     def _effort(self, session: Session, catalog: AgentCatalog, model: str | None) -> str | None:
-        """The rung this turn asks for: the session's own, else mirasim's default, if ``model`` takes it.
+        """The rung this turn asks for: the session's own, else Mirasim's default, if ``model`` takes it.
 
-        mirasim drops a rung the model lacks without a word -- measured, ``--effort
+        Mirasim drops a rung the model lacks without a word -- measured, ``--effort
         bogus`` ran the turn with no effort at all -- so a choice that cannot apply
         is left off here and said once, rather than sent and silently ignored.
         """
@@ -634,7 +705,7 @@ class MirasimAgent:
         if (model, session.mode) not in self._effort_skipped:
             self._effort_skipped.add((model, session.mode))
             logger.warning(
-                "mirasim adapter: {} model {} takes no effort {!r}; it runs on its own", self.agent, model, session.mode
+                "Mirasim adapter: {} model {} takes no effort {!r}; it runs on its own", self.agent, model, session.mode
             )
         return None
 
@@ -644,7 +715,7 @@ class MirasimAgent:
         try:
             await asyncio.to_thread(self.store.put, session.binding())
         except Exception as exc:  # noqa: BLE001 - a turn that ran is not undone by a failed save
-            logger.warning("mirasim adapter: could not record session {}: {}", session.id, exc)
+            logger.warning("Mirasim adapter: could not record session {}: {}", session.id, exc)
 
     def _state(self, session: Session, catalog: AgentCatalog) -> dict[str, Any]:
         state: dict[str, Any] = {}
@@ -696,7 +767,7 @@ class MirasimAgent:
 def _note_prefetch(task: asyncio.Task[AgentCatalog]) -> None:
     """Retrieve a failed background read, which a session that never opens would leave unread."""
     if not task.cancelled() and (exc := task.exception()) is not None:
-        logger.warning("mirasim adapter: reading the agent's menus failed: {}", exc)
+        logger.warning("Mirasim adapter: reading the agent's menus failed: {}", exc)
 
 
 def _offers(catalog: AgentCatalog, model: str) -> bool:
@@ -728,8 +799,8 @@ def _mcp_names(params: dict[str, Any]) -> tuple[str, ...]:
 def _prompt_input(blocks: Any) -> tuple[str, list[str]]:
     """The prompt text and the local files a ``session/prompt`` carries.
 
-    A ``resource_link`` to a local file is handed to mirasim as an attachment,
-    which is how mirasim's own composer attaches one; a link to anything else
+    A ``resource_link`` to a local file is handed to Mirasim as an attachment,
+    which is how Mirasim's own composer attaches one; a link to anything else
     stays in the text as its address.
     """
     if not isinstance(blocks, list) or not blocks:
@@ -794,7 +865,7 @@ def _render_interactions(doc: dict[str, Any]) -> str:
 
 
 def _scrub(text: str) -> str:
-    """``text`` with mirasim's server tokens and anything shaped like a credential cut out.
+    """``text`` with Mirasim's server tokens and anything shaped like a credential cut out.
 
     For what the agent wrote into a question, which goes to the client and into
     the reply as it stands: a tool approval quotes the command it would run.
@@ -811,7 +882,7 @@ def _failure(outcome: Outcome) -> str:
         return outcome.failure
     if doc is not None:
         state = "incomplete" if doc.get("incomplete") else "unsettled"
-        return f"mirasim reported the turn {state} (phase {doc.get('phase')!r})"
+        return f"Mirasim reported the turn {state} (phase {doc.get('phase')!r})"
     return f"`mirasim ui-cli prompt` exited {outcome.exit_code} with no result"
 
 
@@ -822,7 +893,7 @@ async def serve(reader: asyncio.StreamReader, out: BinaryIO, *, agent: str, cli:
         try:
             write_frame(out, frame)
         except (BrokenPipeError, ValueError, OSError) as exc:
-            logger.warning("mirasim adapter: the client is gone ({}); dropping a frame", exc)
+            logger.warning("Mirasim adapter: the client is gone ({}); dropping a frame", exc)
 
     server = MirasimAgent(agent=agent, cli=cli, store=store, emit=emit)
     tasks: set[asyncio.Task[None]] = set()
@@ -846,7 +917,10 @@ async def serve(reader: asyncio.StreamReader, out: BinaryIO, *, agent: str, cli:
 
 
 async def _main(args: argparse.Namespace, out: BinaryIO) -> None:
-    cli = UiCli(executable=args.executable)
+    workdir = server_workdir()
+    with contextlib.suppress(OSError):
+        workdir.mkdir(parents=True, exist_ok=True)
+    cli = UiCli(executable=args.executable, workdir=workdir)
     store = BindingStore(store_path(args.agent))
     async with open_stdin() as reader:
         # SIGTERM ends the session the way a closed stdin does, so the turns
@@ -859,14 +933,14 @@ async def _main(args: argparse.Namespace, out: BinaryIO) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m raven.acp.mirasim",
-        description="Serve one mirasim agent over ACP on stdio, one `mirasim ui-cli` command per request.",
+        description="Serve one Mirasim agent over ACP on stdio, one `mirasim ui-cli` command per request.",
     )
-    parser.add_argument("--agent", required=True, help="the mirasim agent id, as `mirasim ui-cli agents` lists it")
-    parser.add_argument("--executable", default=EXECUTABLE, help="the mirasim command (default: %(default)s)")
+    parser.add_argument("--agent", required=True, help="the Mirasim agent id, as `mirasim ui-cli agents` lists it")
+    parser.add_argument("--executable", default=EXECUTABLE, help="the Mirasim command (default: %(default)s)")
     parser.add_argument("--verbose", action="store_true", help="log progress to stderr, not only problems")
     args = parser.parse_args(argv)
     if not _AGENT_ID.match(args.agent):
-        parser.error(f"--agent {args.agent!r} is not a mirasim agent id")
+        parser.error(f"--agent {args.agent!r} is not a Mirasim agent id")
     logger.remove()
     logger.add(sys.stderr, level="INFO" if args.verbose else "WARNING")
     with claim_stdout() as out:

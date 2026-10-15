@@ -2619,7 +2619,7 @@ def test_only_the_measured_non_isolating_preset_withholds_session_mcp() -> None:
     assert declared["OpenCode"] is False
     # And nothing else withholds. Asserted as "the only false" rather than by
     # listing every other preset, so adding one cannot quietly arrive as a false.
-    # The mirasim rows are a measured exception of another kind: ui-cli takes no
+    # The Mirasim rows are a measured exception of another kind: ui-cli takes no
     # MCP servers at all, so withholding them is the honest declaration there.
     mirasim = {row["name"] for row in MIRASIM_PRESETS.values()}
     assert {name for name, isolates in declared.items() if not isolates} == {"OpenCode"} | mirasim
@@ -2747,8 +2747,8 @@ def test_presets_are_valid_and_complete() -> None:
     # One preset per agent, each already carrying that agent's transport: there is
     # no second preset for the same tool over a different one, because connecting
     # must not have to try two transports (and the cli test dispatch spends the
-    # user's own quota to answer a question the repo already knows). A mirasim row
-    # is not that: it is the agent on mirasim's accounts and routes, a different
+    # user's own quota to answer a question the repo already knows). A Mirasim row
+    # is not that: it is the agent on Mirasim's accounts and routes, a different
     # thing to delegate to, and it speaks acp like the rest.
     assert {name for name, p in presets.items() if p["kind"] == "acp"} == {
         "Claude Code",

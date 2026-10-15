@@ -2537,7 +2537,7 @@ textarea:focus, textarea:focus-visible,
 .model-picker-search svg {width:15px; height:15px; flex:0 0 15px; fill:none; stroke:var(--faint); stroke-width:1.7; stroke-linecap:round}
 .model-picker-search input {flex:1; font:inherit; font-size:14px; border:0; background:none; color:var(--text); outline:none}
 .model-picker-search input::placeholder {color:var(--faint)}
-/* 200px holds every heading the mirasim agents' menus carry on one line,
+/* 200px holds every heading the Mirasim agents' menus carry on one line,
    measured at the worst case -- selected (bold), a two-digit count and the dot:
    the longest, "Claude Code" and "Antigravity", need 191px with the column's
    padding. 170px wrapped them. A provider name longer than that (the host's

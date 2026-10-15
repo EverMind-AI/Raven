@@ -31,7 +31,7 @@ import type { JSX } from 'react'
    and rotating qoder's hue back lands on a different green. The attribute
    stays as the file's fact, for the test that ties each tone to its file.
 
-   A `mirasim_` row is the agent of the same name run through mirasim, so it
+   A `mirasim_` row is the agent of the same name run through Mirasim, so it
    wears that agent's mark; the row's name already says the route. DSH (the
    DeepSeek Harness) publishes no mark of its own and wears DeepSeek's, whose
    models it is built around. */
@@ -81,7 +81,7 @@ const OWN_MARK: { file: string } = { file: 'raven' }
    Outside `MARKS` on purpose, and parsed separately in the test that reads this
    file, for the reason `OWN_MARK` is: that table's contract is that it equals
    the third-party presets one for one, and this stands for nine of them at
-   once. It is mirasim's own file, from `https://mirasim.ai/icon.svg` -- the
+   once. It is Mirasim's own file, from `https://mirasim.ai/icon.svg` -- the
    handwritten "m" the vendor's own `marks.tsx` draws -- copied byte for byte
    except for the comment the site carries. It answers the theme from a
    `prefers-color-scheme` rule inside itself, the way raven.svg and

@@ -51,12 +51,12 @@ well (:data:`SHIM_REQUIRED_EXECUTABLES`), so a machine without ``pi`` reads Pi a
 absent rather than as connectable. :data:`SHIM_LAUNCHED_PRESETS` is that split,
 declared; a test holds every command to it.
 
-One shim is not fetched at all, because Raven ships it: the agents mirasim runs
+One shim is not fetched at all, because Raven ships it: the agents Mirasim runs
 (:mod:`raven.agent.subagent.mirasim_presets`) are reached through
 :mod:`raven.acp.mirasim`, launched on Raven's own interpreter, so its version is
 Raven's and there is nothing to pin (:data:`BUNDLED_SHIM_PRESETS`). Those rows
 are the one place an agent has a second preset. That is not a second transport
-for one install: a mirasim row is the agent as mirasim runs it, on mirasim's
+for one install: a Mirasim row is the agent as Mirasim runs it, on Mirasim's
 accounts and model routes, which is a different thing to delegate to and to pay
 for than the same agent on its own login.
 
@@ -175,7 +175,7 @@ executable as well, so a machine without it reports the row absent with the
 install beside it, instead of offering a connect that fails a minute later
 inside the adapter with the same sentence. Listed only where the shim really
 does reach for a local install: ``pi-acp`` launches ``pi`` and fails with
-"executable not found" without it, and every mirasim row runs ``mirasim``. The
+"executable not found" without it, and every Mirasim row runs ``mirasim``. The
 other two shims bring their agent along -- ``codex-acp`` ships it as its own binary, and ``claude-agent-acp``
 runs the CLI its ``@anthropic-ai/claude-agent-sdk`` pin carries as a
 per-platform optional dependency (read from the 0.66.0, 0.79.0 and 0.81.1

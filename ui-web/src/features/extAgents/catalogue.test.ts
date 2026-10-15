@@ -64,7 +64,7 @@ describe('the agent catalogue', () => {
     expect(byOf(row({ preset: 'grok' }))).toBe('xAI')
   })
 
-  it("credits a mirasim row to its agent's maker and sends an absent one to mirasim", () => {
+  it("credits a Mirasim row to its agent's maker and sends an absent one to Mirasim", () => {
     const r = row({ name: 'Claude Code-Mirasim', preset: 'mirasim_claude' })
     expect(shortOf(r)).toBe('gui.agent.short_mirasim')
     expect(byOf(r)).toBe('Anthropic')
