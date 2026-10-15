@@ -2439,9 +2439,13 @@
       "en": "Could not import {name}: {detail}",
       "zh": "无法导入 {name}：{detail}"
     },
-    "gui.imported.not_listed": {
-      "en": "it did not appear in the conversation list",
-      "zh": "它没有出现在会话列表里"
+    "gui.imported.done_unopened": {
+      "en": "Imported \"{title}\", but it could not be opened right now; it is under Imported in the rail",
+      "zh": "已导入《{title}》，但暂时无法打开；可在侧栏的“导入”里找到它"
+    },
+    "gui.imported.open_failed": {
+      "en": "Could not open \"{title}\" right now; it is under Imported in the rail",
+      "zh": "暂时无法打开《{title}》；可在侧栏的“导入”里找到它"
     },
     "gui.turn_died": {
       "en": "Turn failed - {e}",

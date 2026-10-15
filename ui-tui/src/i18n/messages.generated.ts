@@ -796,7 +796,9 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.imported.err_version': '{name} was made by a newer Raven; update Raven to import it',
     'gui.imported.err_invalid': '{name} is damaged or unsafe and was not imported: {detail}',
     'gui.imported.err_failed': 'Could not import {name}: {detail}',
-    'gui.imported.not_listed': 'it did not appear in the conversation list',
+    'gui.imported.done_unopened':
+      'Imported "{title}", but it could not be opened right now; it is under Imported in the rail',
+    'gui.imported.open_failed': 'Could not open "{title}" right now; it is under Imported in the rail',
     'gui.turn_died': 'Turn failed - {e}',
     'gui.notice.by_raven': 'Raven',
     'gui.notice.action_blocked':
@@ -4013,7 +4015,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.imported.err_version': '{name} 由更新版本的 Raven 生成，请升级后再导入',
     'gui.imported.err_invalid': '{name} 已损坏或不安全，未导入：{detail}',
     'gui.imported.err_failed': '无法导入 {name}：{detail}',
-    'gui.imported.not_listed': '它没有出现在会话列表里',
+    'gui.imported.done_unopened': '已导入《{title}》，但暂时无法打开；可在侧栏的“导入”里找到它',
+    'gui.imported.open_failed': '暂时无法打开《{title}》；可在侧栏的“导入”里找到它',
     'gui.turn_died': '回合中断 · {e}',
     'gui.notice.by_raven': 'Raven 提示',
     'gui.notice.action_blocked': '这一步被安全规则拦下了，本回合到此结束。要继续做不依赖它的部分，说一声就行。',

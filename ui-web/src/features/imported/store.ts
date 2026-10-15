@@ -62,17 +62,28 @@ function refusalOf(name: string, err: unknown): string {
   return t('gui.imported.err_failed', { name, detail: detailOf(err) })
 }
 
-/** Open an imported conversation the way a click on its rail row would. */
-export async function openImported(key: string): Promise<void> {
-  await loadSessions()
-  const row = sessionsSource.snapshot().rows.find((r) => r.id === key)
-  if (!row) {
-    toast(t('gui.imported.err_failed', { name: key, detail: t('gui.imported.not_listed') }))
-    return
+/** Open an imported conversation the way a click on its rail row would; whether it opened.
+ *
+ * Never throws: by the time this runs the package is imported and kept, so a
+ * list that cannot be read or a row that is not in it is a failure to open,
+ * not to import, and each caller says so in its own words. */
+export async function openImported(key: string): Promise<boolean> {
+  try {
+    await loadSessions()
+    const row = sessionsSource.snapshot().rows.find((r) => r.id === key)
+    if (!row) return false
+    page.show(null)
+    setCurrent(key)
+    await sessionsSource.open(row)
+    return true
+  } catch {
+    return false
   }
-  page.show(null)
-  setCurrent(key)
-  await sessionsSource.open(row)
+}
+
+/* The duplicate's "open existing": the copy is there whatever happens here. */
+async function openExisting(key: string, title: string): Promise<void> {
+  if (!(await openImported(key))) toast(t('gui.imported.open_failed', { title }))
 }
 
 /* The one place `busy` is taken and the one place it is let go. An operation
@@ -104,14 +115,14 @@ async function send(name: string, contentB64: string, force: boolean): Promise<v
       t('gui.imported.dup_title'),
       t('gui.imported.dup_body', { title: result.title }),
       t('gui.imported.dup_open'),
-      () => void openImported(key),
+      () => void openExisting(key, result.title),
       'primary',
       { label: t('gui.imported.dup_again'), fn: () => void importAgain(name, contentB64) },
     )
     return
   }
-  await openImported(result.session_key)
-  toast(t('gui.imported.done', { title: result.title }))
+  const opened = await openImported(result.session_key)
+  toast(t(opened ? 'gui.imported.done' : 'gui.imported.done_unopened', { title: result.title }))
 }
 
 /** The bytes of one file, as the transport wants them. */

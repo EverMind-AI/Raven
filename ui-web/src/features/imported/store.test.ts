@@ -89,6 +89,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.restoreAllMocks()
   vi.unstubAllGlobals()
   store._resetForTests()
   confirm._resetForTests()
@@ -266,11 +267,64 @@ describe('what a refusal reads as', () => {
   })
 })
 
-describe('opening an imported conversation', () => {
-  it('says so when the row is not listed', async () => {
-    rail.rows = []
-    await store.openImported(KEY)
+describe('opening what was imported', () => {
+  /* The whole import, through to the answer being dealt with. */
+  async function imported(status: ImportedUpload['status'] = 'imported'): Promise<void> {
+    const done = store.importFile(file())
+    HeldReader.made[0]!.finish('QUJD')
+    await flush()
+    uploads[0]!.reply.resolve(answer(status))
+    await done
+  }
+
+  it('says the package is in when the list cannot be read to open it, and only that', async () => {
+    rail.load.mockRejectedValue(new Error('socket closed'))
+    await imported()
+    expect(toast.mock.calls.map((c) => c[0])).toEqual([`gui.imported.done_unopened ${JSON.stringify({ title: 'Trip' })}`])
     expect(rail.open).not.toHaveBeenCalled()
-    expect(toast).toHaveBeenCalledWith(expect.stringContaining('gui.imported.not_listed'))
+    expect(store.get().busy).toBeNull()
+  })
+
+  it('says the package is in when its row is not listed, without also saying it failed', async () => {
+    rail.rows = []
+    await imported()
+    expect(toast.mock.calls.map((c) => c[0])).toEqual([`gui.imported.done_unopened ${JSON.stringify({ title: 'Trip' })}`])
+    expect(store.get().busy).toBeNull()
+  })
+
+  it('says so when opening fails partway', async () => {
+    rail.open.mockRejectedValue(new Error('resume failed'))
+    await imported()
+    expect(toast.mock.calls.map((c) => c[0])).toEqual([`gui.imported.done_unopened ${JSON.stringify({ title: 'Trip' })}`])
+  })
+
+  it('says a copy already there could not be opened, and nothing else', async () => {
+    const ask = vi.spyOn(confirm, 'ask')
+    await imported('duplicate')
+    rail.load.mockRejectedValue(new Error('socket closed'))
+    ask.mock.calls[0]![3]()
+    await flush()
+    await flush()
+    expect(toast.mock.calls.map((c) => c[0])).toEqual([`gui.imported.open_failed ${JSON.stringify({ title: 'Trip' })}`])
+  })
+
+  it('says a second copy is in when it cannot be opened', async () => {
+    const ask = vi.spyOn(confirm, 'ask')
+    await imported('duplicate')
+    rail.load.mockRejectedValue(new Error('socket closed'))
+    ask.mock.calls[0]![5]!.fn()
+    await flush()
+    uploads[1]!.reply.resolve(answer('imported', 'imported:' + 'b'.repeat(32)))
+    await flush()
+    await flush()
+    expect(toast.mock.calls.map((c) => c[0])).toEqual([`gui.imported.done_unopened ${JSON.stringify({ title: 'Trip' })}`])
+    expect(store.get().busy).toBeNull()
+  })
+
+  it('answers whether it opened', async () => {
+    expect(await store.openImported(KEY)).toBe(true)
+    expect(await store.openImported('imported:' + '0'.repeat(32))).toBe(false)
+    rail.load.mockRejectedValue(new Error('socket closed'))
+    expect(await store.openImported(KEY)).toBe(false)
   })
 })
