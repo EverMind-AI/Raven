@@ -795,7 +795,7 @@ def _mount_bug_report_sessions(app: web.Application) -> None:
 
 
 def _mount_imported(app: web.Application) -> None:
-    """Sweep import staging an earlier process left, and stop the import in progress with the app.
+    """Sweep import staging an earlier process left, and call off the import in progress with the app.
 
     Both touch the disk, so both run in a worker thread; a sweep that fails is
     only logged.
@@ -809,7 +809,9 @@ def _mount_imported(app: web.Application) -> None:
             logger.opt(exception=True).warning("imported conversations: the stale staging sweep failed")
 
     async def release(_app: web.Application) -> None:
-        if not await asyncio.to_thread(imported.RUNNER.shutdown, 30):
+        # Not a closing of the runner: a gateway reload mounts the next page in
+        # this same process, and that one takes imports through it again.
+        if not await asyncio.to_thread(imported.RUNNER.stop, 30):
             logger.warning("imported conversations: an import was still running at shutdown")
 
     app.on_startup.append(sweep)

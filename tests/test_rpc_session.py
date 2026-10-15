@@ -3843,7 +3843,7 @@ def _imported_with_record(rows: list[dict]) -> str:
 
     record = "".join(json.dumps(r) + "\n" for r in rows).encode()
     entries = _export_entries(extra=[(f"{EXP}/session.jsonl", tarfile.REGTYPE, record)])
-    return imported.import_bytes(gzip.compress(_raw(entries)), "record.tar.gz", force=True).conversation.key
+    return imported.import_bytes(gzip.compress(_raw(entries), mtime=0), "record.tar.gz", force=True).conversation.key
 
 
 async def test_session_list_adds_imported_rows_when_asked(tmp_path: Path) -> None:

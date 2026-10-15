@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from aiohttp import web
 
 from raven.config.loader import load_config
 from raven.rpc.approval_broker import ApprovalBroker
@@ -21,6 +22,7 @@ from raven.rpc.methods import register_aligned_methods_except_system
 from raven.rpc.methods.system import register_system_methods
 from raven.rpc.question_broker import QuestionBroker
 from raven.rpc.subscriptions import SubscriptionEmitter
+from raven.rpc.transports.ws import _mount_imported
 from raven.session.manager import SessionManager
 from raven.trajectory import imported
 from raven.trajectory import imported_package as ipkg
@@ -38,7 +40,7 @@ def runner(monkeypatch) -> Any:
     fresh = imported.ImportRunner()
     monkeypatch.setattr(imported, "RUNNER", fresh)
     yield fresh
-    assert fresh.shutdown(timeout=10)
+    assert fresh.stop(timeout=10)
     tidx._reset_for_tests()
     tpol._reset_for_tests()
 
@@ -248,7 +250,15 @@ async def test_requests_arriving_together_get_one_slot(dispatcher, runner, monke
     assert gate.peak == 1
 
 
-async def test_shutdown_ends_a_running_upload(dispatcher, runner, monkeypatch):
+def _page() -> web.Application:
+    """One generation of the gateway's page, as far as imports go."""
+    app = web.Application()
+    _mount_imported(app)
+    app.freeze()
+    return app
+
+
+def _waits_for_stop(monkeypatch: pytest.MonkeyPatch) -> threading.Event:
     entered = threading.Event()
     real_unpack = ipkg.unpack
 
@@ -260,13 +270,63 @@ async def test_shutdown_ends_a_running_upload(dispatcher, runner, monkeypatch):
         return real_unpack(package, dest, **kwargs)
 
     monkeypatch.setattr(ipkg, "unpack", slow_unpack)
+    return entered
+
+
+async def test_closing_the_page_ends_a_running_upload(dispatcher, runner, monkeypatch):
+    page = _page()
+    await page.startup()
+    entered = _waits_for_stop(monkeypatch)
     upload = asyncio.ensure_future(_call(dispatcher, "imported.upload", _upload(_export_bytes())))
     assert await asyncio.to_thread(entered.wait, 5)
-    assert await asyncio.to_thread(runner.shutdown, 10)
+    await page.shutdown()
     response = await upload
     assert _code(response) == -32031
     assert _staged() == []
     assert imported.list_conversations() == []
+    await page.cleanup()
+
+
+async def test_a_reloaded_page_takes_imports_again(tmp_path, dispatcher, runner):
+    data = _export_bytes()
+    first = _page()
+    await first.startup()
+    assert (await _call(dispatcher, "imported.upload", _upload(data)))["result"]["status"] == "imported"
+    await first.shutdown()
+    await first.cleanup()
+
+    second = _page()
+    await second.startup()
+    assert (await _call(dispatcher, "imported.upload", _upload(data)))["result"]["status"] == "duplicate"
+    package, _ = builders.build_report(tmp_path / "src")
+    assert (await _call(dispatcher, "imported.upload", _upload(package.read_bytes())))["result"]["status"] == "imported"
+    await second.shutdown()
+    await second.cleanup()
+
+
+async def test_a_new_page_waits_for_an_import_the_old_one_could_not_stop(dispatcher, runner, monkeypatch):
+    gate = _Gate(monkeypatch)
+    real_stop = runner.stop
+    monkeypatch.setattr(runner, "stop", lambda timeout: real_stop(0.05))
+    first = _page()
+    await first.startup()
+    upload = asyncio.ensure_future(_call(dispatcher, "imported.upload", _upload(_export_bytes())))
+    assert await asyncio.to_thread(gate.entered.wait, 5)
+    await first.shutdown()
+    await first.cleanup()
+
+    second = _page()
+    await second.startup()
+    assert _code(await _call(dispatcher, "imported.upload", _upload(_export_bytes(), force=True))) == -32031
+    gate.release.set()
+    assert _code(await upload) == -32031
+    await _until_idle(runner)
+    assert _staged() == []
+    again = await _call(dispatcher, "imported.upload", _upload(_export_bytes()))
+    assert again["result"]["status"] == "imported"
+    assert gate.peak == 1
+    await second.shutdown()
+    await second.cleanup()
 
 
 # ── the guard ──────────────────────────────────────────────────────────

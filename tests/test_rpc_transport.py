@@ -1061,7 +1061,7 @@ async def test_the_app_sweeps_import_staging_and_stops_the_runner(tmp_path, monk
     trash = root / f"{imported.TRASH_PREFIX}{'b' * 32}"
     trash.mkdir()
     stopped: list[float] = []
-    monkeypatch.setattr(imported.RUNNER, "shutdown", lambda timeout: stopped.append(timeout) or True)
+    monkeypatch.setattr(imported.RUNNER, "stop", lambda timeout: stopped.append(timeout) or True)
 
     gateway = WsGateway()
     client = TestClient(TestServer(build_app(gateway, None)))

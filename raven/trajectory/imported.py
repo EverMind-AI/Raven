@@ -437,11 +437,28 @@ def import_bytes(
 
 
 class ImportBusyError(Exception):
-    """Another import holds the one slot, or the runner has shut down."""
+    """Another import holds the one slot."""
+
+
+@dataclass(frozen=True)
+class _Job:
+    """One granted import: its thread, the answer it will give, and the signal that calls it off."""
+
+    thread: threading.Thread
+    future: concurrent.futures.Future[ImportOutcome]
+    stop: threading.Event
 
 
 class ImportRunner:
-    """Runs imports one at a time, each on a thread of its own that owns the slot until it ends."""
+    """Runs imports one at a time, each on a thread of its own that owns the slot until it ends.
+
+    There is no closed state. The gateway's page is torn down and mounted again
+    in the same process on a reload, and every generation of it shares this
+    runner: :meth:`stop` calls off the import in progress and waits for it, and
+    the slot opens again only once that import's thread has ended -- so a new
+    generation is turned away while an old import is still finishing, and takes
+    imports again as soon as it has.
+    """
 
     def __init__(
         self,
@@ -452,9 +469,7 @@ class ImportRunner:
         self._root = root
         self._limits = limits
         self._lock = threading.Lock()
-        self._stop = threading.Event()
-        self._closed = False
-        self._active: tuple[threading.Thread, concurrent.futures.Future[ImportOutcome]] | None = None
+        self._active: _Job | None = None
 
     @property
     def busy(self) -> bool:
@@ -467,17 +482,19 @@ class ImportRunner:
         future: concurrent.futures.Future[ImportOutcome] = concurrent.futures.Future()
         # Running before anyone can see it: a running future refuses cancel(),
         # so a caller that stops waiting -- even before the thread is scheduled
-        # -- cannot call off an import it was granted. Only shutdown stops one.
+        # -- cannot call off an import it was granted. Only stop() calls one off.
         future.set_running_or_notify_cancel()
+        stop = threading.Event()
+        thread = threading.Thread(
+            target=self._run, args=(future, stop, content_b64, source_name, force), name="raven-import", daemon=True
+        )
+        job = _Job(thread, future, stop)
         with self._lock:
-            if self._closed or self._active is not None:
+            if self._active is not None:
                 raise ImportBusyError("an import is already running")
-            thread = threading.Thread(
-                target=self._run, args=(future, content_b64, source_name, force), name="raven-import", daemon=True
-            )
-            self._active = (thread, future)
+            self._active = job
             try:
-                thread.start()
+                job.thread.start()
             except BaseException:
                 self._active = None
                 raise
@@ -486,6 +503,7 @@ class ImportRunner:
     def _run(
         self,
         future: concurrent.futures.Future[ImportOutcome],
+        stop: threading.Event,
         content_b64: str,
         source_name: str,
         force: bool,
@@ -501,7 +519,7 @@ class ImportRunner:
                 force=force,
                 root=self._root(),
                 limits=self._limits,
-                should_stop=self._stop.is_set,
+                should_stop=stop.is_set,
             )
             future.set_result(outcome)
         except (PackageError, ImportCancelledError) as exc:
@@ -512,18 +530,22 @@ class ImportRunner:
             future.set_exception(exc)
         finally:
             with self._lock:
-                self._active = None
+                if self._active is not None and self._active.future is future:
+                    self._active = None
 
-    def shutdown(self, timeout: float) -> bool:
-        """Stop taking imports and ask the running one to stop; whether it ended within ``timeout``."""
+    def stop(self, timeout: float) -> bool:
+        """Call off the import in progress and wait for its thread; whether nothing is running after ``timeout``.
+
+        The runner keeps taking imports afterwards: a slot whose import has not
+        ended by then stays taken until it does.
+        """
         with self._lock:
-            self._closed = True
-            self._stop.set()
-            active = self._active
-        if active is None:
+            job = self._active
+        if job is None:
             return True
-        active[0].join(timeout)
-        return not active[0].is_alive()
+        job.stop.set()
+        job.thread.join(timeout)
+        return not job.thread.is_alive()
 
 
 RUNNER = ImportRunner()

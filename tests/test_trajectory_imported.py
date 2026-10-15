@@ -45,7 +45,7 @@ def _residue(root: Path) -> list[str]:
 
 
 def _tar_gz(entries: list[tuple[Any, ...]]) -> bytes:
-    return gzip.compress(_raw(entries))
+    return gzip.compress(_raw(entries), mtime=0)
 
 
 def _export_bytes(**manifest: Any) -> bytes:
@@ -268,6 +268,7 @@ def test_source_names_are_cleaned(name, expected):
         (_tar_gz([("root", DIR), ("root/x", REG, b"x")]), ipkg.CODE_NOT_IMPORTABLE),
         (_export_bytes(format_version=2), ipkg.CODE_UNSUPPORTED_VERSION),
     ],
+    ids=["empty", "not-gzip", "dot-dot", "symlink", "not-importable", "unknown-version"],
 )
 def test_a_refused_package_leaves_no_residue(root, data, code):
     with pytest.raises(PackageError) as caught:
@@ -421,7 +422,7 @@ def test_sweep(root):
 def runner(root):
     made = imp.ImportRunner(root=lambda: root)
     yield made
-    assert made.shutdown(timeout=10)
+    assert made.stop(timeout=10)
 
 
 def _b64(data: bytes) -> str:
@@ -516,7 +517,7 @@ def test_an_unexpected_failure_is_handed_to_the_caller(runner, monkeypatch):
         runner.try_submit(_b64(b"x"), "x").result(10)
 
 
-def test_shutdown_stops_a_running_import(root, monkeypatch):
+def test_stop_calls_off_a_running_import_and_the_runner_goes_on(root, monkeypatch):
     runner = imp.ImportRunner(root=lambda: root)
     entered = threading.Event()
     real_unpack = ipkg.unpack
@@ -532,17 +533,36 @@ def test_shutdown_stops_a_running_import(root, monkeypatch):
     monkeypatch.setattr(ipkg, "unpack", slow_unpack)
     future = runner.try_submit(_b64(_export_bytes()), "x.tar.gz")
     assert entered.wait(5)
-    assert runner.shutdown(timeout=10) is True
+    assert runner.stop(timeout=10) is True
     with pytest.raises(ImportCancelledError):
         future.result(1)
     assert _residue(root) == []
-    with pytest.raises(imp.ImportBusyError):
-        runner.try_submit(_b64(_export_bytes()), "x.tar.gz")
+    assert not runner.busy
+    monkeypatch.setattr(ipkg, "unpack", real_unpack)
+    assert runner.try_submit(_b64(_export_bytes()), "x.tar.gz").result(10).status == imp.STATUS_IMPORTED
 
 
-def test_shutdown_without_an_import(root):
+def test_a_slot_whose_import_outlives_stop_stays_taken_until_it_ends(root, monkeypatch):
     runner = imp.ImportRunner(root=lambda: root)
-    assert runner.shutdown(timeout=1) is True
+    gate = _Gate(monkeypatch)
+    first = runner.try_submit(_b64(_export_bytes()), "x.tar.gz")
+    assert gate.entered.wait(5)
+    assert runner.stop(timeout=0.05) is False
+    with pytest.raises(imp.ImportBusyError):
+        runner.try_submit(_b64(_export_bytes()), "y.tar.gz")
+    gate.release.set()
+    with pytest.raises(ImportCancelledError):
+        first.result(10)
+    deadline = time.monotonic() + 5
+    while runner.busy and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert runner.try_submit(_b64(_export_bytes()), "y.tar.gz").result(10).status == imp.STATUS_IMPORTED
+    assert _residue(root) == [p for p in _residue(root) if not p.startswith(imp.STAGING_DIR + "/")]
+
+
+def test_stop_without_an_import(root):
+    runner = imp.ImportRunner(root=lambda: root)
+    assert runner.stop(timeout=1) is True
 
 
 def test_an_import_granted_before_its_thread_runs_survives_its_caller_leaving(root, monkeypatch):
@@ -574,7 +594,7 @@ def test_an_import_granted_before_its_thread_runs_survives_its_caller_leaving(ro
     release.set()
     assert future.result(10).status == imp.STATUS_IMPORTED
     assert len(imp.list_conversations(root)) == 1
-    assert runner.shutdown(timeout=10)
+    assert runner.stop(timeout=10)
 
 
 def test_a_thread_that_cannot_start_gives_the_slot_back(root, monkeypatch):
@@ -590,4 +610,4 @@ def test_a_thread_that_cannot_start_gives_the_slot_back(root, monkeypatch):
     assert not runner.busy
     monkeypatch.setattr(threading.Thread, "start", real_start)
     assert runner.try_submit(_b64(_export_bytes()), "x.tar.gz").result(10).status == imp.STATUS_IMPORTED
-    assert runner.shutdown(timeout=10) is True
+    assert runner.stop(timeout=10) is True

@@ -48,7 +48,7 @@ def _raw(entries: list[tuple[Any, ...]]) -> bytes:
 
 def _write(tmp_path: Path, raw: bytes, *, trailing: bytes = b"", name: str = "pkg.tar.gz") -> Path:
     path = tmp_path / name
-    path.write_bytes(gzip.compress(raw + trailing))
+    path.write_bytes(gzip.compress(raw + trailing, mtime=0))
     return path
 
 
@@ -108,7 +108,7 @@ def _bug_report(tmp_path: Path, files: dict[str, bytes], name: str = "br.tar.gz"
 
 
 def _gz_bytes(raw: bytes) -> bytes:
-    return gzip.compress(raw)
+    return gzip.compress(raw, mtime=0)
 
 
 def _walk_bytes(data: bytes) -> pcheck.ArchiveStats:
@@ -355,7 +355,12 @@ def test_empty_and_oversized_packages(tmp_path):
 
 @pytest.mark.parametrize(
     "data",
-    [b"plain text, not gzip", gzip.compress(b"gzip but not a tar archive" * 40), gzip.compress(_raw([]))[:-12]],
+    [
+        b"plain text, not gzip",
+        gzip.compress(b"gzip but not a tar archive" * 40, mtime=0),
+        gzip.compress(_raw([]), mtime=0)[:-12],
+    ],
+    ids=["plain-text", "gzip-not-tar", "truncated-gzip"],
 )
 def test_not_a_gzip_tar(tmp_path, data):
     path = tmp_path / "bad.tar.gz"
@@ -366,7 +371,7 @@ def test_not_a_gzip_tar(tmp_path, data):
 def test_a_truncated_member_is_refused(tmp_path):
     raw = _block(f"{EXP}/export.json", b"x" * 100, size=4096)
     path = tmp_path / "short.tar.gz"
-    path.write_bytes(gzip.compress(raw))
+    path.write_bytes(gzip.compress(raw, mtime=0))
     _refused(tmp_path, path, pcheck.CODE_NOT_GZIP_TAR)
 
 
@@ -539,14 +544,14 @@ def _layered(tmp_path: Path, *, trailing: bytes = b"", name: str = "br.tar.gz") 
     entries = _report_entries(root, files=files, metadata=_report_metadata(root, files))
     raw = b"".join(_block(n, d, k) for n, k, d in entries) + END
     path = tmp_path / name
-    path.write_bytes(gzip.compress(raw + trailing))
+    path.write_bytes(gzip.compress(raw + trailing, mtime=0))
     return path, inner
 
 
 def test_a_walk_counts_everything_the_stream_produced(tmp_path):
     raw = _raw(_export_entries())
-    plain = _walk_bytes(gzip.compress(raw))
-    padded = _walk_bytes(gzip.compress(raw + b"\0" * 8192))
+    plain = _walk_bytes(gzip.compress(raw, mtime=0))
+    padded = _walk_bytes(gzip.compress(raw + b"\0" * 8192, mtime=0))
     assert plain.unpacked_bytes == len(raw)
     assert padded.unpacked_bytes == len(raw) + 8192
     assert plain.members == padded.members == 3

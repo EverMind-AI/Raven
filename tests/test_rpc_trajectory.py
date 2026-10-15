@@ -639,7 +639,7 @@ async def test_an_import_whose_spans_name_no_session_lists_nothing(tmp_path):
     tpol.arm(True)
     spans = (json.dumps(_span("t", "s", "session.turn", attrs={"session.key": None})) + "\n").encode()
     manifest = {"format_version": 1, "attempt_id": ATT, "session_key": None}
-    data = gzip.compress(_raw(_report_tree(manifest=manifest, spans=spans)))
+    data = gzip.compress(_raw(_report_tree(manifest=manifest, spans=spans)), mtime=0)
     conversation = imported.import_bytes(data, "r.tar.gz").conversation
     assert conversation.original_session_key is None
     entries, _ = await _imported_entries(_dispatcher(), conversation.key)
