@@ -611,8 +611,10 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
     actions = row.builtin ? null : (
       <>
         {/* Every agent but the built-in loop can leave the roster, Raven's own
-            specialists included: a shipped folder is switched off by a row the
-            server writes for it, the way any other row is switched. */}
+            specialists included. Coming with Raven, rather than being something
+            the reader connected, does not keep one on: the reader can still want
+            it out of the dispatching model's reach, and a shipped folder is
+            switched off by a row the server writes for it, like any other. */}
         <button className="mini danger" onClick={() => store.disconnectRow(row)}>
           {t('gui.agent.disconnect')}
         </button>
