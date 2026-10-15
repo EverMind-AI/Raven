@@ -421,6 +421,21 @@ def test_a_long_line_is_cut_the_way_the_description_promises(registry, tmp_path)
     assert "1| " in body and "2| last" in body
 
 
+def test_minified_lines_are_cut_before_the_page_is_counted_so_they_share_one_page(registry, tmp_path):
+    """Fifty lines of 10k characters: cut after trunk's page, a dozen made a
+    page; cut on trunk's hook, before its budget counts them, they all do, each
+    cut once (the cut after the read, kept for a file read on a registered
+    machine, leaves a line cut already as it is)."""
+    target = tmp_path / "chunks.js"
+    target.write_text("\n".join("x" * 10_000 for _ in range(50)) + "\n")
+    body = _text(_run(registry.execute("read_file", {"file_path": str(target)})))
+    lines = body.split("\n\n")[0].split("\n")
+    assert len(lines) == 50 and lines[0].startswith("1| ") and lines[-1].startswith("50| ")
+    assert lines[0] == "1| " + "x" * 2000 + "... (line truncated to 2000 chars)", "cut once, at the budget"
+    assert body.endswith("(End of file \u2014 50 lines total)")
+    assert "(Line 1 is" not in body
+
+
 def test_a_read_that_failed_does_not_license_an_edit(registry, tmp_path):
     """A model probing for a file that does not exist yet used to have that
     failed read recorded as having seen it; once something else created the

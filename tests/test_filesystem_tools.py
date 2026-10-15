@@ -339,3 +339,89 @@ async def test_read_file_pages_a_file_without_holding_all_of_it(tmp_path: Path, 
         await read.execute(path=str(target), limit=1)
     ) == "1| fine\n\n(Showing lines 1-1 of 2. Use offset=2 to continue.)"
     assert str(await read.execute(path=str(target), offset=2)).startswith("Error reading file: 'utf-8' codec")
+
+
+# --- a line longer than a page --------------------------------------------------------------
+
+
+_NOTE = (
+    "(Line {n} is {length} characters long; the first {room} are shown. offset moves by lines and cannot reach "
+    "the rest of it: grep tells whether a piece is in it, and a shell command that cuts by bytes, such as "
+    "cut -c, shows another stretch.)"
+)
+
+
+@pytest.mark.asyncio
+async def test_a_line_longer_than_a_page_shows_its_head_and_says_how_to_see_the_rest(tmp_path: Path):
+    """One line over the page's character budget: the page used to be empty, with offset=1 to continue.
+
+    A minified script, a one-line JSON, a CSV row of a few hundred thousand
+    characters: the trim kept whole lines within the budget, the first line
+    did not fit, so nothing was shown and the footer sent the reader back to
+    the line it had just not shown (measured 2026-10-15: "(Showing lines 1-0
+    of 1. Use offset=1 to continue.)").
+    """
+    target = tmp_path / "bundle.min.js"
+    target.write_text("x" * 200_000, encoding="utf-8")
+    read = ReadFileTool(workspace=tmp_path)
+
+    got = await read.execute(path=str(target))
+
+    room = ReadFileTool._MAX_CHARS - len("1| ")
+    body, note, footer = got.split("\n\n")
+    assert body == "1| " + "x" * room
+    assert note == _NOTE.format(n=1, length=200_000, room=room)
+    assert footer == "(End of file — 1 lines total)"
+
+
+@pytest.mark.asyncio
+async def test_paging_moves_past_a_line_longer_than_a_page_instead_of_going_round(tmp_path: Path):
+    """The lines before it fill a page of their own; the page after shows its head and moves on to the next line."""
+    target = tmp_path / "rows.csv"
+    target.write_text("header\n" + "y" * 200_000 + "\nlast\n", encoding="utf-8")
+    read = ReadFileTool(workspace=tmp_path)
+
+    first = await read.execute(path=str(target))
+    second = await read.execute(path=str(target), offset=2)
+    third = await read.execute(path=str(target), offset=3)
+
+    assert first == "1| header\n\n(Showing lines 1-1 of 3. Use offset=2 to continue.)"
+    room = ReadFileTool._MAX_CHARS - len("2| ")
+    assert second == (
+        "2| "
+        + "y" * room
+        + "\n\n"
+        + _NOTE.format(n=2, length=200_000, room=room)
+        + "\n\n(Showing lines 2-2 of 3. Use offset=3 to continue.)"
+    )
+    assert third == "3| last\n\n(End of file — 3 lines total)"
+
+
+@pytest.mark.asyncio
+async def test_a_tool_s_own_cut_per_line_lands_before_the_page_s_budget(tmp_path: Path):
+    """A tool with a budget per line (Raven-Code's read: 2000, with a mark) cuts on the hook, so minified lines share a page."""
+
+    class Cut(ReadFileTool):
+        def _cut_line(self, line: str) -> str:
+            return line[:8] + "..." if len(line) > 8 else line
+
+    target = tmp_path / "bundle.min.js"
+    target.write_text("\n".join("y" * 200_000 for _ in range(3)) + "\nend\n", encoding="utf-8")
+
+    got = await Cut(workspace=tmp_path).execute(path=str(target))
+
+    assert got == "1| yyyyyyyy...\n2| yyyyyyyy...\n3| yyyyyyyy...\n4| end\n\n(End of file \u2014 4 lines total)"
+    assert "(Line 1 is" not in got and "(Showing lines" not in got
+
+
+@pytest.mark.asyncio
+async def test_a_first_line_that_just_fills_the_page_is_shown_whole_and_the_page_moves_on(tmp_path: Path):
+    """At the edge the budget counts the line break too: the line fits, and is not cut or noted."""
+    room = ReadFileTool._MAX_CHARS - len("1| ")
+    target = tmp_path / "edge.txt"
+    target.write_text("z" * room + "\nnext\n", encoding="utf-8")
+    read = ReadFileTool(workspace=tmp_path)
+
+    got = await read.execute(path=str(target))
+
+    assert got == "1| " + "z" * room + "\n\n(Showing lines 1-1 of 2. Use offset=2 to continue.)"

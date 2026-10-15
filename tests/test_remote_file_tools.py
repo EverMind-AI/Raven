@@ -520,3 +520,18 @@ async def test_a_remote_write_and_edit_through_the_real_node_match_local_ones(re
         "Successfully"
     )
     assert there.read_text(encoding="utf-8") == "four\n"
+
+
+@pytest.mark.slow
+async def test_a_line_longer_than_a_page_reads_the_same_through_the_real_node(real, tmp_path):
+    """The one line over the budget is shown by its head on the machine too, with the same note: the node runs the same tool."""
+    home = str(real.home)
+    (real.home / "raven-work" / "t1" / "bundle.min.js").write_text("x" * 200_000, encoding="utf-8")
+    local = ReadFileTool(workspace=real.home, allowed_dirs=(real.home,), follow_binding=False)
+
+    got = await _tools(tmp_path)["read_file"].execute("box:raven-work/t1/bundle.min.js")
+
+    assert got == await local.execute(f"{home}/raven-work/t1/bundle.min.js")
+    room = ReadFileTool._MAX_CHARS - len("1| ")
+    assert got.startswith("1| " + "x" * room + "\n\n(Line 1 is 200000 characters long; the first ")
+    assert got.endswith("\n\n(End of file — 1 lines total)")

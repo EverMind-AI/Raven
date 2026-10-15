@@ -90,11 +90,9 @@ class ReadFileTool(_Aliased, trunk.ReadFileTool):
     ALIASES = {"path": "file_path"}
 
     #: One line may spend this many characters before it is cut, the fork's
-    #: budget. Trunk numbers a line whole, so a minified bundle or a base64
-    #: blob on one line overruns the whole-result budget by itself: the result
-    #: comes back with NO body and a note telling the model to continue from
-    #: the same offset, which it can do forever. Cutting the line keeps the
-    #: read useful and makes the description's promise true.
+    #: budget. Cut on trunk's own hook, before the page's budget counts the
+    #: line, so a page of minified lines holds its lines rather than one
+    #: line's head; the mark makes the description's promise true.
     _MAX_LINE_CHARS = 2_000
 
     @property
@@ -131,51 +129,13 @@ class ReadFileTool(_Aliased, trunk.ReadFileTool):
             return _cut_long_lines(result, self._MAX_LINE_CHARS)
         if (ledger := self._ledger) is not None:
             ledger.note(fp)
-        if _bodyless(result):
-            # One line longer than the whole-result budget leaves trunk's read
-            # with nothing to show and a note pointing at the same offset, so
-            # the cut has to happen before that budget is spent, not after.
-            taken = self._read_cut(fp, offset, limit)
-            if taken is not None:
-                return taken
+        # A page read here was cut line by line on trunk's hook; one read on a
+        # registered machine was not, since its node runs trunk's tool.
         return _cut_long_lines(result, self._MAX_LINE_CHARS)
 
-    def _read_cut(self, fp: Path, offset: int, limit: int | None) -> str | None:
-        """Trunk's own numbering, with every line cut to the line budget first.
-
-        Returns ``None`` when the file cannot be read as text -- the caller
-        then keeps whatever trunk answered rather than inventing something.
-        """
-        try:
-            all_lines = fp.read_text(encoding="utf-8", errors="replace").splitlines()
-        except OSError:
-            return None
-        total = len(all_lines)
-        if total == 0:
-            return None
-        start = max(offset, 1) - 1
-        if start >= total:
-            return None
-        end = min(start + (limit or self._DEFAULT_LIMIT), total)
-        numbered = []
-        for index, line in enumerate(all_lines[start:end]):
-            if len(line) > self._MAX_LINE_CHARS:
-                line = line[: self._MAX_LINE_CHARS] + f"... (line truncated to {self._MAX_LINE_CHARS} chars)"
-            numbered.append(f"{start + index + 1}| {line}")
-        body, chars, kept = [], 0, 0
-        for line in numbered:
-            chars += len(line) + 1
-            if chars > self._MAX_CHARS and kept:
-                break
-            body.append(line)
-            kept += 1
-        shown_end = start + kept
-        text = "\n".join(body)
-        if shown_end < total:
-            text += f"\n\n(Showing lines {start + 1}-{shown_end} of {total}. Use offset={shown_end + 1} to continue.)"
-        else:
-            text += f"\n\n(End of file — {total} lines total)"
-        return text
+    def _cut_line(self, line: str) -> str:
+        """Trunk's hook: the line cut to the fork's budget before it is numbered and the page's budget counts it."""
+        return _cut(line, self._MAX_LINE_CHARS)
 
 
 class WriteFileTool(_Aliased, trunk.WriteFileTool):
@@ -264,29 +224,29 @@ def _respell(result: str | ToolResult) -> str | ToolResult:
     return respelled(str(result))
 
 
+def _mark(budget: int) -> str:
+    return f"... (line truncated to {budget} chars)"
+
+
+def _cut(line: str, budget: int) -> str:
+    """``line`` cut to ``budget`` characters and marked, or as it is when it fits or was cut already."""
+    if len(line) <= budget or line.endswith(_mark(budget)):
+        return line
+    return line[:budget] + _mark(budget)
+
+
 def _cut_long_lines(result: str | ToolResult, budget: int) -> str | ToolResult:
-    """Cut any numbered line past ``budget`` characters, marking the cut."""
+    """Cut any line of a result past ``budget`` characters, marking the cut; a line cut already is left alone."""
 
     def cut(text: str) -> str:
         if not any(len(line) > budget for line in text.split("\n")):
             return text
-        out = []
-        for line in text.split("\n"):
-            if len(line) > budget:
-                line = line[:budget] + f"... (line truncated to {budget} chars)"
-            out.append(line)
-        return "\n".join(out)
+        return "\n".join(_cut(line, budget) for line in text.split("\n"))
 
     if isinstance(result, ToolResult):
         result.model_text = cut(result.model_text)
         return result
     return cut(str(result))
-
-
-def _bodyless(result: str | ToolResult) -> bool:
-    """A read that answered with a note and no numbered line at all."""
-    text = result.model_text if isinstance(result, ToolResult) else str(result)
-    return "| " not in text and "(Showing lines" in text
 
 
 def _failed(result: str | ToolResult) -> bool:
