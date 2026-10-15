@@ -22,12 +22,10 @@ as absent rather than shown as current, which also covers a hand-edited
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import hashlib
 import json
 import os
 import re
-import tempfile
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
@@ -44,6 +42,7 @@ from raven.home import subagent_role_env
 from raven.ops import remote_path
 from raven.utils.atomic_io import atomic_update
 from raven.utils.commands import command_argv
+from raven.utils.scratch import ScratchDir
 
 _FILENAME = "subagent_acp_capabilities.json"
 
@@ -905,6 +904,7 @@ async def verify_agent(cfg: Any, *, env: dict[str, str] | None = None) -> Capabi
         except _NotThereError as exc:
             return done("attention", str(exc))
     client: AcpClient | None = None
+    scratch: ScratchDir | None = None
     try:
         # Nothing here is prompted, so no permission request is expected. One
         # that arrives anyway still has to be answered, or the agent waits for
@@ -955,48 +955,51 @@ async def verify_agent(cfg: Any, *, env: dict[str, str] | None = None) -> Capabi
                 f"agent speaks ACP v{handshake.protocol_version}, raven speaks v{protocol.PROTOCOL_VERSION}"
             )
 
-        with contextlib.ExitStack() as scratch:
-            if there is None:
-                tmp = scratch.enter_context(tempfile.TemporaryDirectory(prefix="raven_acp_verify_"))
-            else:
-                # On the machine, the one directory every check reuses: a local
-                # temp dir does not exist where the agent runs, and it refuses one.
-                try:
-                    tmp, _since = await there.link.session_dir(
-                        machine_id,
-                        remote.session_root(getattr(cfg, "remote_cwd", None), remote.CHECK_HANDLE),
-                    )
-                except remote_path.NodeCallError as exc:
-                    return done("attention", str(exc), handshake)
+        if there is None:
+            # Removed in the `finally`, after the close: an agent may start its
+            # worker in the session's directory (Claude Code does), and Windows
+            # will not remove one a live process works in.
+            scratch = ScratchDir("raven_acp_verify_")
+            tmp = str(scratch.path)
+        else:
+            # On the machine, the one directory every check reuses: a local
+            # temp dir does not exist where the agent runs, and it refuses one.
             try:
-                session = await client.request("session/new", {"cwd": tmp, "mcpServers": []}, timeout=budget)
-            except AcpRemoteError as exc:
-                # Two readings of one refusal, and they do not take the same
-                # evidence. The advertisement is enough for the coarse status --
-                # it only decides whether a reader should look at this row -- and
-                # it is not enough for `needs_auth`, which is persisted, rendered
-                # as a disabled control and read as "go and sign in". Every agent
-                # that works advertises auth methods too, so taking the
-                # advertisement there would label any unrelated session failure,
-                # a transient one included, as a credential story with no way out.
-                advertised = bool(handshake.auth_methods)
-                # The agent's whole answer, `data` included: the Connect button
-                # classifies this same text (`reason_of`), and two readers given
-                # different halves of one refusal are how they came to disagree.
-                refused_over_a_credential = looks_like_auth(reason_of(exc))
-                needs_auth = refused_over_a_credential
-                status: SnapshotStatus = "attention" if advertised or refused_over_a_credential else "unknown"
-                hint = f" (auth methods: {', '.join(handshake.auth_methods)})" if handshake.auth_methods else ""
-                return done(
-                    status,
-                    f"connected, but no session could be opened: {reason_of(exc)}{hint}",
-                    handshake,
-                    needs_auth=needs_auth,
+                tmp, _since = await there.link.session_dir(
+                    machine_id,
+                    remote.session_root(getattr(cfg, "remote_cwd", None), remote.CHECK_HANDLE),
                 )
-            except AcpError as exc:
-                tail = client.stderr_tail(400)
-                suffix = f"; stderr: {tail}" if tail else ""
-                return done("attention", f"connected, but session/new failed: {exc}{suffix}", handshake)
+            except remote_path.NodeCallError as exc:
+                return done("attention", str(exc), handshake)
+        try:
+            session = await client.request("session/new", {"cwd": tmp, "mcpServers": []}, timeout=budget)
+        except AcpRemoteError as exc:
+            # Two readings of one refusal, and they do not take the same
+            # evidence. The advertisement is enough for the coarse status --
+            # it only decides whether a reader should look at this row -- and
+            # it is not enough for `needs_auth`, which is persisted, rendered
+            # as a disabled control and read as "go and sign in". Every agent
+            # that works advertises auth methods too, so taking the
+            # advertisement there would label any unrelated session failure,
+            # a transient one included, as a credential story with no way out.
+            advertised = bool(handshake.auth_methods)
+            # The agent's whole answer, `data` included: the Connect button
+            # classifies this same text (`reason_of`), and two readers given
+            # different halves of one refusal are how they came to disagree.
+            refused_over_a_credential = looks_like_auth(reason_of(exc))
+            needs_auth = refused_over_a_credential
+            status: SnapshotStatus = "attention" if advertised or refused_over_a_credential else "unknown"
+            hint = f" (auth methods: {', '.join(handshake.auth_methods)})" if handshake.auth_methods else ""
+            return done(
+                status,
+                f"connected, but no session could be opened: {reason_of(exc)}{hint}",
+                handshake,
+                needs_auth=needs_auth,
+            )
+        except AcpError as exc:
+            tail = client.stderr_tail(400)
+            suffix = f"; stderr: {tail}" if tail else ""
+            return done("attention", f"connected, but session/new failed: {exc}{suffix}", handshake)
 
         handshake.available_models = _read_session_models(session)
         handshake.model_choices = _read_session_model_choices(session)
@@ -1029,6 +1032,8 @@ async def verify_agent(cfg: Any, *, env: dict[str, str] | None = None) -> Capabi
                 await asyncio.wait_for(client.close(), timeout=_CLOSE_TIMEOUT_S)
             except Exception as exc:  # noqa: BLE001 - teardown must never mask the verdict
                 logger.debug("acp verify: closing {!r} did not finish cleanly: {}", name, exc)
+        if scratch is not None:
+            await scratch.remove()
 
 
 __all__ = [

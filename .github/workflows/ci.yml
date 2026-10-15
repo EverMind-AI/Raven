@@ -401,6 +401,9 @@ jobs:
       - name: Test the registered launcher command
         run: uv run --frozen --python 3.13 --no-sync pytest tests/test_cli_agents_commands.py::test_register_pins_the_resolved_row_into_the_host_roster -q -n 0 --tb=short
 
+      - name: Test a connect's checks against a live process tree
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/integration/test_subagent_connect_windows_real_process.py -m integration -q -n 0 --tb=short
+
       - name: Test Windows ACP teardown
         run: uv run --frozen --python 3.13 --no-sync pytest tests/test_subagent_acp.py -k close_without_killpg -q -n 0 --tb=short
 

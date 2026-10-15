@@ -47,6 +47,7 @@ from raven.agent.subagent.probe_state import fingerprint
 from raven.agent.subagent.registry import _row_for
 from raven.config.schema import SubagentsConfig, ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
 from raven.config.update_subagents import reject_unsupported_acp_fields
+from tests._windows_dirs import scratch_root, windows_removal
 
 _STUB = Path(__file__).with_name("acp_stub_server.py")
 
@@ -326,6 +327,87 @@ async def test_the_roster_and_the_connect_button_read_one_answer() -> None:
     assert pinged.ok is False
     assert "no usable credential" in pinged.detail
     assert reason in pinged.detail
+
+
+def _held_by_running_agents(monkeypatch: pytest.MonkeyPatch, root: Path) -> tuple[list[Any], list[Path]]:
+    """Every agent launched from here on, and a removal under ``root`` refused while one is not yet closed.
+
+    Windows refuses to remove a directory a live process works in, and a check
+    hands its agent one of these: as its working directory (the ping), or its
+    session's, where an agent may start a worker of its own (the handshake --
+    Claude Code does). Holding until the close is the order under test.
+    """
+    from raven.acp_client.client import AcpClient
+
+    launched: list[Any] = []
+    real_launch = AcpClient.__dict__["launch"].__func__
+
+    async def launch(cls, *args, **kwargs):
+        client = await real_launch(cls, *args, **kwargs)
+        launched.append(client)
+        return client
+
+    monkeypatch.setattr(AcpClient, "launch", classmethod(launch))
+    refused = windows_removal(
+        monkeypatch, lambda path: path.parent == root and any(not client.closed for client in launched)
+    )
+    return launched, refused
+
+
+async def test_a_ping_removes_its_directory_only_once_its_agent_has_ended(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other order failed every Connect of an `npx` agent on native Windows with WinError 32.
+
+    The directory went before the pool that ends the agent's tree, Windows
+    refused, and the refusal was reported as the agent not answering a test
+    message -- after it had answered.
+    """
+    from raven.agent.subagent.probe import ping_agent
+
+    root = scratch_root(tmp_path, monkeypatch)
+    launched, refused = _held_by_running_agents(monkeypatch, root)
+
+    pinged = await ping_agent(stub_config())
+
+    assert pinged.ok is True, pinged.detail
+    assert len(launched) == 1 and launched[0].closed
+    assert refused == []
+    assert list(root.iterdir()) == []
+
+
+async def test_a_handshake_removes_its_session_directory_only_once_its_agent_has_ended(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Removed while the agent ran, the session directory came back as "verify failed: [WinError 32]".
+
+    That is the Test button's verdict for an agent that answered the whole
+    handshake, and the snapshot a Connect records after its ping passed.
+    """
+    root = scratch_root(tmp_path, monkeypatch)
+    launched, refused = _held_by_running_agents(monkeypatch, root)
+
+    snapshot = await verify_agent(stub_config())
+
+    assert snapshot.status == "ready", snapshot.detail
+    assert len(launched) == 1 and launched[0].closed
+    assert refused == []
+    assert list(root.iterdir()) == []
+
+
+async def test_a_handshake_with_nowhere_to_make_its_session_directory_says_so_and_ends_its_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "gone"))
+    launched, _refused = _held_by_running_agents(monkeypatch, tmp_path / "gone")
+
+    snapshot = await verify_agent(stub_config())
+
+    assert snapshot.status == "unknown"
+    assert snapshot.detail.startswith("verify failed:") and "gone" in snapshot.detail
+    assert len(launched) == 1 and launched[0].closed
 
 
 async def test_a_handshake_refused_over_a_credential_carries_its_fix_into_the_test() -> None:

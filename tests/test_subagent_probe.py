@@ -22,6 +22,7 @@ from raven.config.schema import (
     ThirdPartyCliSubagentConfig,
     ThirdPartyOpenAISubagentConfig,
 )
+from tests._windows_dirs import scratch_root, windows_removal
 
 
 def _free_port() -> int:
@@ -546,6 +547,24 @@ async def test_test_of_a_failing_cli_reports_its_error_rather_than_raising(
     assert "ProviderAuthError" in res.detail
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the stand-in CLI is a POSIX shell script")
+async def test_a_cli_test_whose_directory_stays_in_use_reports_the_reply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On Windows a process the CLI left running keeps the directory; the test reports what the CLI said."""
+    exe = tmp_path / "echo-agent"
+    exe.write_text("#!/bin/sh\necho PONG\n")
+    exe.chmod(0o755)
+    _patch_login_env_for_spawn(monkeypatch, tmp_path)
+    root = scratch_root(tmp_path, monkeypatch)
+    refused = windows_removal(monkeypatch, lambda path: path.parent == root)
+
+    res = await run_test(_cli("echo-agent {prompt}"), source="config")
+
+    assert (res.ok, res.reply) == (True, "PONG")
+    assert refused, "no removal was refused, so this tested nothing"
+
+
 async def test_stateful_cli_test_leaves_the_real_registry_untouched(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -907,6 +926,75 @@ async def test_ping_closes_the_pool_it_opened(monkeypatch: pytest.MonkeyPatch) -
     )
     assert result.ok is False
     assert closed == [1, 1]
+
+
+async def test_a_directory_its_agent_will_not_let_go_does_not_fail_a_ping_that_answered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The verdict is the agent's answer; the directory is logged and left, not reported in its place.
+
+    A refused removal raised out of the ping was reported as "did not answer a
+    test message" about an agent that had answered: on native Windows that is
+    every Connect of an agent whose processes still worked in the directory.
+    """
+    root = scratch_root(tmp_path, monkeypatch)
+
+    class _Answers:
+        async def run(self, prompt, **kwargs):
+            return "PONG"
+
+    monkeypatch.setattr(probe_mod, "build_third_party_backend", lambda cfg, **kw: _Answers())
+    refused = windows_removal(monkeypatch, lambda path: path.parent == root)
+
+    result = await probe_mod.ping_agent(
+        ThirdPartyAcpSubagentConfig(name="ping-acp", kind="acp", command="fake-agent acp")
+    )
+
+    assert result == probe_mod.PingResult(True, "it ran and replied")
+    assert refused, "no removal was refused, so this tested nothing"
+    assert [path.name.startswith("raven_subagent_ping_") for path in root.iterdir()] == [True]
+
+
+async def test_a_ping_that_runs_out_says_so_while_its_directory_is_still_in_use(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refusal raised on the way out took the timeout's place, so a silent agent read as a file error."""
+    root = scratch_root(tmp_path, monkeypatch)
+
+    class _Hangs:
+        async def run(self, prompt, **kwargs):
+            await asyncio.sleep(30)
+
+    monkeypatch.setattr(probe_mod, "build_third_party_backend", lambda cfg, **kw: _Hangs())
+    monkeypatch.setattr(probe_mod, "_ENABLE_PING_TIMEOUT_SECONDS", 0.2)
+    refused = windows_removal(monkeypatch, lambda path: path.parent == root)
+
+    cfg = ThirdPartyAcpSubagentConfig(name="hanging-acp", kind="acp", command="fake-agent acp", ready_timeout_ms=100)
+    result = await probe_mod.ping_agent(cfg)
+
+    assert result.ok is False
+    assert result.detail.startswith("it did not answer within"), result.detail
+    assert refused, "no removal was refused, so this tested nothing"
+
+
+async def test_a_ping_with_nowhere_to_make_its_directory_says_so_rather_than_raising(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "gone"))
+
+    def must_not_build(*args, **kwargs):
+        raise AssertionError("there is no directory to hand the agent")
+
+    monkeypatch.setattr(probe_mod, "build_third_party_backend", must_not_build)
+
+    result = await probe_mod.ping_agent(
+        ThirdPartyAcpSubagentConfig(name="ping-acp", kind="acp", command="fake-agent acp")
+    )
+
+    assert result.ok is False
+    assert "gone" in result.detail
 
 
 def test_the_factory_honours_the_pool_its_caller_overrides() -> None:

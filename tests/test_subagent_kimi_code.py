@@ -28,6 +28,7 @@ from raven.agent.subagent import kimi_code
 from raven.agent.subagent.probe_state import Remedy
 from raven.config.schema import ThirdPartyAcpSubagentConfig
 from raven.utils.pid import pid_alive
+from tests._windows_dirs import scratch_root, windows_removal
 from tests._windows_kill import PYTHON, windows_kill_path
 
 _STUB = Path(__file__).with_name("acp_stub_server.py")
@@ -384,9 +385,12 @@ async def test_a_connect_that_goes_away_mid_ask_takes_the_kimi_it_asked(tmp_path
     assert not _alive(pid)
 
 
-def _python_kimi(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ThirdPartyAcpSubagentConfig:
+def _python_kimi(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, says: str | None = None
+) -> ThirdPartyAcpSubagentConfig:
     """The Kimi Code preset, its `kimi -p` a script on ``PYTHON`` that notes its pid and does not finish.
 
+    With ``says``, it prints that as Kimi Code's failure line and exits 1 instead.
     Found by name through ``resolve_program``, the way the ask finds the real one;
     a script on PATH would not start on Windows, where a bare name means ``.exe``.
     """
@@ -396,7 +400,9 @@ def _python_kimi(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ThirdPartyA
         f"with open({str(noted)!r} + '.tmp', 'w') as out:\n"
         "    out.write(str(os.getpid()))\n"
         f"os.replace({str(noted)!r} + '.tmp', {str(noted)!r})\n"
-        "time.sleep(30)\n",
+        "time.sleep(30)\n"
+        if says is None
+        else f"import sys\nprint({f'error: failed to run prompt: {says}'!r}, file=sys.stderr)\nsys.exit(1)\n",
         encoding="utf-8",
     )
     real = env_mod.resolve_program
@@ -442,6 +448,22 @@ async def test_an_ask_that_runs_out_without_killpg_still_says_nothing(
 
     assert [call[:3] for call in calls] == [["/T", "/F", "/PID"]]
     assert not pid_alive(int(calls[0][3]))
+
+
+async def test_an_ask_whose_directory_stays_in_use_returns_what_kimi_code_said(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On Windows a process the `kimi` left running keeps its directory, and the refusal used to raise.
+
+    It raised out of the ask, and so out of the connect's own ping, which
+    promises never to.
+    """
+    cfg = _python_kimi(tmp_path, monkeypatch, says="No model configured.")
+    root = scratch_root(tmp_path, monkeypatch)
+    refused = windows_removal(monkeypatch, lambda path: path.parent == root)
+
+    assert await kimi_code.ask(cfg, "hi") == (1, "No model configured.")
+    assert refused, "no removal was refused, so this tested nothing"
 
 
 @pytest.mark.skipif(not hasattr(os, "killpg"), reason="process groups are POSIX")
