@@ -356,16 +356,27 @@ def test_empty_and_oversized_packages(tmp_path):
 @pytest.mark.parametrize(
     "data",
     [
-        b"plain text, not gzip",
         gzip.compress(b"gzip but not a tar archive" * 40, mtime=0),
         gzip.compress(_raw([]), mtime=0)[:-12],
+        b"\x1f\x8b",
     ],
-    ids=["plain-text", "gzip-not-tar", "truncated-gzip"],
+    ids=["gzip-not-tar", "truncated-gzip", "magic-only"],
 )
 def test_not_a_gzip_tar(tmp_path, data):
     path = tmp_path / "bad.tar.gz"
     path.write_bytes(data)
     _refused(tmp_path, path, pcheck.CODE_NOT_GZIP_TAR)
+
+
+@pytest.mark.parametrize(
+    "data",
+    [b"plain text, not gzip", b"\x1f", b"PK\x03\x04 a zip file", b"\x8b\x1f the magic reversed"],
+    ids=["plain-text", "one-byte", "zip", "reversed-magic"],
+)
+def test_a_file_that_is_not_gzip_is_not_importable(tmp_path, data):
+    path = tmp_path / "picked-by-mistake.txt"
+    path.write_bytes(data)
+    _refused(tmp_path, path, ipkg.CODE_NOT_IMPORTABLE)
 
 
 def test_a_truncated_member_is_refused(tmp_path):

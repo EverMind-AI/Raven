@@ -262,7 +262,7 @@ def test_source_names_are_cleaned(name, expected):
     "data,code",
     [
         (b"", pcheck.CODE_NOT_GZIP_TAR),
-        (b"not gzip at all", pcheck.CODE_NOT_GZIP_TAR),
+        (b"not gzip at all", ipkg.CODE_NOT_IMPORTABLE),
         (_tar_gz([(EXP, DIR), (f"{EXP}/../x", REG, b"x")]), pcheck.CODE_BAD_MEMBER_NAME),
         (_tar_gz([(EXP, DIR), (f"{EXP}/l", tarfile.SYMTYPE, b"", "/etc")]), pcheck.CODE_BAD_MEMBER_TYPE),
         (_tar_gz([("root", DIR), ("root/x", REG, b"x")]), ipkg.CODE_NOT_IMPORTABLE),
@@ -492,7 +492,8 @@ def test_the_slot_outlives_a_caller_that_stops_waiting(runner, root, monkeypatch
     "content,code",
     [
         ("not base64 at all!", ipkg.CODE_BAD_ENCODING),
-        (_b64(b"not a package"), pcheck.CODE_NOT_GZIP_TAR),
+        (_b64(b"not a package"), ipkg.CODE_NOT_IMPORTABLE),
+        (_b64(b"\x1f\x8b not gzip after all"), pcheck.CODE_NOT_GZIP_TAR),
     ],
 )
 def test_a_failed_import_releases_the_slot(runner, root, content, code):

@@ -50,6 +50,7 @@ KIND_BUGREPORT = "bugreport"
 KIND_REPORT = "report"
 
 MAX_PACKAGE_BYTES = 100 * 2**20
+GZIP_MAGIC = b"\x1f\x8b"
 
 CODE_NOT_IMPORTABLE = "not_importable"
 CODE_UNSUPPORTED_VERSION = "unsupported_version"
@@ -242,6 +243,11 @@ def unpack(
     if size > limits.max_package_bytes:
         raise PackageError(pcheck.CODE_TOO_LARGE, f"package is {size} bytes; the limit is {limits.max_package_bytes}")
     with package.open("rb") as raw:
+        # Every kind is a gzip tar, so a file that does not even start as gzip
+        # is some other file picked by mistake rather than a damaged package.
+        if raw.read(len(GZIP_MAGIC)) != GZIP_MAGIC:
+            raise PackageError(CODE_NOT_IMPORTABLE, "not a gzip file")
+        raw.seek(0)
         root_name, outer = _walk_into(
             raw,
             dest,

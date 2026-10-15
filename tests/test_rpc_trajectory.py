@@ -604,6 +604,7 @@ async def test_an_imported_export_reads_through_its_own_store(tmp_path):
     assert "result" in changes, changes
     llm = next(e for e in entries if e["kind"] == "llm.input" and e["turn_number"] == 1)
     detail = (await _call(dispatcher, "trajectory.detail", {"session_key": key, "entry_id": llm["entry_id"]}))["result"]
+    assert detail["session_key"] == key
     blocks = {b["id"]: b["availability"] for b in detail["blocks"]}
     assert blocks["messages"] == blocks["system"] == blocks["prompt"] == "available"
     assert await _all_messages(dispatcher, key, llm, first["epoch"]) == source.first_call

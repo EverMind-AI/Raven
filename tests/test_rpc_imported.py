@@ -177,7 +177,7 @@ async def test_bad_params(dispatcher, params):
 async def test_a_refused_package_says_why(dispatcher):
     response = await _call(dispatcher, "imported.upload", _upload(b"this is not a package"))
     assert _code(response) == -32030
-    assert response["error"]["data"]["reason"] == "not_gzip_tar"
+    assert response["error"]["data"]["reason"] == "not_importable"
     assert response["error"]["data"]["detail"]
     assert imported.list_conversations() == []
     assert _staged() == []

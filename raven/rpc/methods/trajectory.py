@@ -143,7 +143,8 @@ async def trajectory_changes(params: dict) -> dict:
 async def trajectory_detail(params: dict) -> dict:
     request = _params(TrajectoryDetailParams, params)
     _require_enabled()
-    indexer, state, key = await _target(_session_key(request.session_key))
+    asked = _session_key(request.session_key)
+    indexer, state, key = await _target(asked)
     # Refreshed like the list: after a restart or an idle eviction the index
     # is new, and an entry it has not scanned yet is not a gone one.
     session = await indexer.refresh(key)
@@ -161,7 +162,9 @@ async def trajectory_detail(params: dict) -> dict:
         ) from None
     if descriptor is None:
         raise EntryNotFoundError(request.entry_id)
-    return asdict(descriptor)
+    # The page files a descriptor under the key it answers for; an Imported
+    # Conversation is indexed under the key its spans were recorded with.
+    return {**asdict(descriptor), "session_key": asked}
 
 
 async def trajectory_block(params: dict) -> dict:
