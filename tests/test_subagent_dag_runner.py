@@ -465,6 +465,41 @@ async def test_run_dag_without_a_factory_leaves_the_executor_unset() -> None:
     assert log == ["run:none"]
 
 
+async def test_a_node_whose_vm_cannot_start_still_reaps_its_stall_watcher() -> None:
+    """A VM that fails to boot (an unavailable Boxlite) is an expected
+    operational failure, not a crash: the node is recorded failed and the
+    watcher that started before the VM was asked for is cancelled with it --
+    one that outlives its node publishes a false stall notice afterwards."""
+
+    class _DeadVm:
+        async def __aenter__(self) -> "_DeadVm":
+            raise RuntimeError("the sandbox backend could not start")
+
+        async def __aexit__(self, *exc: object) -> None:
+            return None
+
+    spec = parse_dag_spec(
+        {
+            "task_summary": "run the graph under test",
+            "nodes": [{"id": "a", "subagent": "x", "node_summary": "one", "prompt_template": "hello"}],
+        }
+    )
+    result = await run_dag(
+        spec,
+        resolve=_by_name({"x": _ExecutorReceiver([])}),
+        backend=_InMemBackend(),
+        workdir="/w",
+        run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
+        sandbox_factory=lambda workdir: _DeadVm(),
+    )
+    assert result.summary == {"total": 1, "completed": 0, "failed": 1, "skipped": 0, "cancelled": 0}
+    await asyncio.sleep(0)
+    leaked = [t for t in asyncio.all_tasks() if t.get_coro().__name__ == "_watch_stall"]
+    assert leaked == [], f"{len(leaked)} stall watcher(s) outlived their node"
+
+
 async def test_the_graph_tool_resolves_the_turn_binding_per_dispatch(tmp_path: Path, monkeypatch) -> None:
     """Read at dispatch, not when the tool was built, for the reason the judge's
     provider is: a session that switched model must reach its nodes."""

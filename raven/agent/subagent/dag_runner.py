@@ -1722,9 +1722,12 @@ async def _run_node(
                     # One VM per node, the way a spawn holds one per sub-agent
                     # (manager.py): a sibling's crashed VM takes no neighbour
                     # with it, and the graph's semaphore bounds how many boot.
-                    executor = sandbox_factory(workdir) if sandbox_factory is not None else None
-                    async with executor if executor is not None else contextlib.nullcontext():
-                        try:
+                    # All of it under the watcher's cancel: a VM that fails to
+                    # boot is an expected operational failure, and a watcher
+                    # left behind would report a stall that is not one.
+                    try:
+                        executor = sandbox_factory(workdir) if sandbox_factory is not None else None
+                        async with executor if executor is not None else contextlib.nullcontext():
                             result = await agent_backend.run(
                                 # The graph's own dispatch route: `spawn` goes
                                 # through the manager and never reaches here, so
@@ -1760,14 +1763,14 @@ async def _run_node(
                                 # this node's output, and a node that read it as
                                 # one fed the error to the step downstream.
                                 raise SubagentNoAnswerError(failure)
-                        finally:
-                            stall_watch.cancel()
-                            node_activity[node.id] = did.as_meta()
-                            # Set aside for the reader until the manifest carries
-                            # it: `collecting` drops the live entry as this block
-                            # exits, and the manifest is written once the whole
-                            # run is over.
-                            activity.record_settled(node_live_key(store.run_id, node.id), node_activity[node.id])
+                    finally:
+                        stall_watch.cancel()
+                        node_activity[node.id] = did.as_meta()
+                        # Set aside for the reader until the manifest carries
+                        # it: `collecting` drops the live entry as this block
+                        # exits, and the manifest is written once the whole
+                        # run is over.
+                        activity.record_settled(node_live_key(store.run_id, node.id), node_activity[node.id])
             # The whole answer when the reply cap cut one: the in-context copy of
             # a terminal output is capped again on the way out (see
             # `_terminal_outputs`), and this file is what the reader, the next
