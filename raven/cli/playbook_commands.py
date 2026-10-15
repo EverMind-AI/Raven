@@ -508,6 +508,9 @@ def playbook_run(
         guide_skill_id=None,
         state_for=manager.instance_state,
         model_for=manager.session_model_for,
+        # The manager was built from the same tools.sandbox above; its builder
+        # keeps a node's exec inside that sandbox rather than on the host.
+        sandbox_for=manager.sandbox_executor_for,
         # A stint only. Its `verify` is shell from a file, which is why such a
         # playbook must keep `confirm: true`, and a gate nobody is asked at does
         # not hold that line. Every other mode keeps this path's approval as it
@@ -897,6 +900,7 @@ def _stint_driver(config, home: Path):
         registry=manager.registry,
         guide_skill_id=None,
         state_for=manager.instance_state,
+        sandbox_for=manager.sandbox_executor_for,
         session_dir=lambda _key: home,
         ask=ask_at_the_terminal,
     )

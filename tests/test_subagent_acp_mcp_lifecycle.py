@@ -243,6 +243,7 @@ async def _dispatch(backend: AcpAgentBackend, monkeypatch, workspace: Path, node
     return seen[0], reply
 
 
+@pytest.mark.usefixtures("unix_socket_host")
 def test_an_unmeasured_peer_is_never_refused() -> None:
     """No snapshot is not evidence of a refusal.
 
@@ -256,6 +257,7 @@ def test_an_unmeasured_peer_is_never_refused() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("unix_socket_host")
 async def test_a_raven_peer_without_the_promise_is_told_why_it_got_nothing(
     tmp_path: Path, monkeypatch, raven_on_the_adapter_path: Path
 ) -> None:
@@ -288,6 +290,7 @@ async def test_a_raven_peer_that_declares_the_promise_is_handed_the_bridge(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("unix_socket_host")
 async def test_an_agent_declared_as_not_isolating_is_withheld_and_told_why(
     tmp_path: Path, monkeypatch, raven_on_the_adapter_path: Path
 ) -> None:
@@ -316,6 +319,7 @@ async def test_an_agent_declared_as_not_isolating_is_withheld_and_told_why(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("unix_socket_host")
 async def test_the_operator_log_names_which_refusal_it_was(
     tmp_path: Path, monkeypatch, raven_on_the_adapter_path: Path, caplog
 ) -> None:
@@ -348,6 +352,7 @@ async def test_the_operator_log_names_which_refusal_it_was(
     assert SESSION_MCP_CAPABILITY not in declared_line
 
 
+@pytest.mark.usefixtures("unix_socket_host")
 def test_the_two_refusals_are_independent(raven_on_the_adapter_path: Path) -> None:
     """One is the agent's own property, the other is a build that would error.
 
@@ -513,6 +518,7 @@ async def test_the_capture_a_bridged_dispatch_needs_runs_off_the_event_loop(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("unix_socket_host")
 async def test_the_endpoint_gets_the_hosts_sandbox_and_deny_set(
     tmp_path: Path, raven_on_the_adapter_path: Path, monkeypatch
 ) -> None:
@@ -549,6 +555,7 @@ async def test_the_endpoint_gets_the_hosts_sandbox_and_deny_set(
     assert seen["disabled_tools"] == frozenset({"mcp_echo_ping"})
 
 
+@pytest.mark.usefixtures("unix_socket_host")
 async def test_a_bridged_oauth_server_is_dialled_with_the_hosts_credential(
     tmp_path: Path, monkeypatch, raven_on_the_adapter_path: Path
 ) -> None:
@@ -629,3 +636,37 @@ async def test_dispatch_keeps_usage_ownership_out_of_process_binding(tmp_path, m
     with pytest.raises(RuntimeError, match="stop before launch"):
         await backend.run("draw", task_id="node", workspace=tmp_path, executor=None, session_key="task-a", mcps=[])
     assert acquire.call_args.kwargs["binding"] is None
+
+
+@pytest.mark.parametrize("machine", ["box", None], ids=["on a machine", "on this computer"])
+@pytest.mark.parametrize("missing", ["start_unix_server", "open_unix_connection"])
+async def test_mcp_is_withheld_before_any_endpoint_opens_on_a_computer_without_unix_sockets(
+    monkeypatch, missing, machine
+):
+    """A Windows host has neither asyncio call: no endpoint is opened for a row here or on a machine, the reply
+    says why, and the roster does not advertise what the dispatch would withhold."""
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.backends import session_mcp_effective
+    from raven.agent.subagent.mcp_grant import GrantedServer, McpGrant
+    from raven.agent.subagent.registry import _row_for
+
+    monkeypatch.delattr(asyncio, missing, raising=False)
+    cfg = ThirdPartyAcpSubagentConfig(name="remote", command="agent", machine=machine, session_mcp=True)
+    backend = build_third_party_backend(cfg)
+    grant = McpGrant(granted=(GrantedServer("private", "stdio", _idle_config()),))
+    launched = SimpleNamespace(target=SimpleNamespace(id="box")) if machine else None
+
+    async def opened(*args, **kwargs):
+        pytest.fail("a computer without unix sockets must withhold before opening endpoints")
+
+    monkeypatch.setattr(McpEndpoints, "open", opened)
+    monkeypatch.setattr(backend, "_adapter_path", lambda: pytest.fail("nothing of the adapter's PATH is asked"))
+    async with backend._mcp_endpoints("d1", grant, launched) as endpoints:
+        assert endpoints == []
+    note = backend._mcp_note(grant)
+    assert "MCP servers 'private' were not delivered to acp agent 'remote'" in note
+    assert "this computer does not support Unix-socket MCP endpoints" in note
+    assert ("on machine 'box'" in note) is bool(machine)
+    assert not session_mcp_effective(cfg)
+    assert not _row_for(cfg).injectable.mcps

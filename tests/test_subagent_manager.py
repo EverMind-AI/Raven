@@ -110,6 +110,35 @@ def _make_manager(max_concurrent: int) -> SubagentManager:
     )
 
 
+def test_a_graph_nodes_executor_comes_from_the_spawn_paths_own_builder(monkeypatch, tmp_path: Path) -> None:
+    """The graph executor builder is the spawn paths' single source of truth:
+    the config, owned-id set, home mount and sandbox dir a node's VM is built
+    with are the ones a spawn's VM is, so the two dispatch routes cannot drift
+    back apart once a node execs sandboxed."""
+    from raven.agent.subagent import manager as manager_module
+    from raven.config.paths import get_sandbox_dir
+    from raven.sandbox.config import SandboxConfig
+
+    config = SandboxConfig(backend="none")
+    mgr = SubagentManager(provider=_StubProvider(), workspace=tmp_path, sandbox_config=config)
+    sentinel = object()
+    captured: dict[str, Any] = {}
+
+    def fake_build(cfg, workspace, owned_ids, extra_volumes, *, sandbox_dir):
+        captured.update(
+            cfg=cfg, workspace=workspace, owned_ids=owned_ids, extra_volumes=extra_volumes, sandbox_dir=sandbox_dir
+        )
+        return sentinel
+
+    monkeypatch.setattr(manager_module, "build_executor", fake_build)
+    assert mgr.sandbox_executor_for(tmp_path) is sentinel
+    assert captured["cfg"] is config
+    assert captured["workspace"] == tmp_path
+    assert captured["owned_ids"] is mgr._owned_ids
+    assert captured["extra_volumes"] == mgr._home_volume(tmp_path)
+    assert captured["sandbox_dir"] is get_sandbox_dir
+
+
 class _MissingMcpSource:
     def server(self, name: str) -> None:
         return None
@@ -190,6 +219,7 @@ def test_registry_late_binds_mcp_sources_across_hot_apply() -> None:
     assert second is not None and second is not first and second.mcp_source is source
 
 
+@pytest.mark.usefixtures("unix_socket_host")
 def test_registry_derives_mcp_injection_from_each_transport_contract() -> None:
     registry = AgentRegistry()
     registry.apply(

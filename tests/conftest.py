@@ -1148,3 +1148,23 @@ def _this_process_goes_on() -> Iterator[None]:
     remote = sys.modules.get("raven.acp_client.remote")
     if remote is not None:
         remote.staying()
+
+
+@pytest.fixture
+def unix_socket_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    """This computer has the unix sockets MCP lending rides on, whatever host the test runs on.
+
+    For a test of the lending logic rather than of the host. On a host without
+    them (a Windows host) every acp row is withheld MCP
+    (``raven.agent.subagent.backends.session_mcp_delivered``), and a test that
+    expects delivery would be asserting the host instead. Pinned at its source
+    and in every raven module that imported it by name, so a module imported
+    after this reads the pin too.
+    """
+    from raven.mcp import bridge
+
+    original = bridge.unix_sockets_available
+    monkeypatch.setattr(bridge, "unix_sockets_available", lambda: True)
+    for name, module in list(sys.modules.items()):
+        if name.startswith("raven.") and getattr(module, "unix_sockets_available", None) is original:
+            monkeypatch.setattr(module, "unix_sockets_available", lambda: True)
