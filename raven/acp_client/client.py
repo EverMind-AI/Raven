@@ -5,11 +5,11 @@ run as ``session/prompt`` requests on it, which is the whole difference from the
 cli transport (one process per task). Everything about keeping that process alive
 lives here; deciding when to have one lives in the pool.
 
-Process discipline is copied deliberately from
-:class:`raven.agent.subagent.backends.cli_agent.CliAgentBackend`: own session, pgid
-captured at spawn, ``killpg`` on teardown (``taskkill /T`` by pid where there is
-no ``killpg``). An ACP server that reparents a worker would otherwise survive
-``proc.kill()`` exactly as a ``codex``-style CLI does.
+On POSIX, an agent has its own session, with pgid captured at spawn and
+``killpg`` on teardown. On Windows, a gated launcher joins a kill-on-close
+Job Object before starting the agent, so the whole tree ends even if the host
+dies before teardown. Endpoints supplied without a job retain the
+``taskkill /T`` fallback. An ACP server's workers would otherwise survive ``proc.kill()``.
 
 What a connection runs over is an :class:`Endpoint`: the child's pipes and
 process group for an agent on this computer (:class:`_ProcessEndpoint`), or one
@@ -26,6 +26,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable, Sequence
@@ -34,7 +35,7 @@ from typing import Any, Protocol
 
 from loguru import logger
 
-from raven.acp_client import leftovers, protocol
+from raven.acp_client import leftovers, protocol, windows
 from raven.acp_client.journal import FrameJournal, redact_acp_frame
 from raven.acp_client.protocol import (
     CANCEL_REQUEST_METHOD,
@@ -154,10 +155,11 @@ class Endpoint(Protocol):
 
 
 class _ProcessEndpoint:
-    """A child process on this computer: its pipes, and the process group it leads."""
+    """A local child's pipes and lifetime, owned by a process group or Windows job."""
 
-    def __init__(self, proc: asyncio.subprocess.Process, pgid: int) -> None:
+    def __init__(self, proc: asyncio.subprocess.Process, pgid: int, job: windows.JobObject | None = None) -> None:
         self.proc = proc
+        self._job = job
         # Captured at spawn by the caller, not re-derived here: with
         # start_new_session the launcher's pid doubles as the group's pgid, and
         # once the launcher exits its pid can be recycled onto an unrelated
@@ -193,7 +195,10 @@ class _ProcessEndpoint:
         return await self.proc.stderr.readline()
 
     async def end(self) -> None:
-        await _end(self._pgid, self.proc)
+        if self._job is not None:
+            self._job.close()
+        else:
+            await _end(self._pgid, self.proc)
 
     async def wait(self) -> int | None:
         return await self.proc.wait()
@@ -210,6 +215,8 @@ class _ProcessEndpoint:
         ``RuntimeError`` traceback the user can do nothing about. Closing it
         here is the only point at which that is still a no-op.
         """
+        if self._job is not None:
+            self._job.close()
         transport = getattr(self.proc, "_transport", None)
         if transport is not None:
             try:
@@ -420,24 +427,28 @@ class AcpClient:
         # may lead with the parent-death wrapper.
         program_argv = argv
         argv = leftovers.bind_to_host(argv, child_env, cwd)
+        job = None
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *argv,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=cwd,
-                env=child_env,
-                start_new_session=True,
-                limit=_READER_LIMIT,
-            )
+            spawn_options = {
+                "stdin": asyncio.subprocess.PIPE,
+                "stdout": asyncio.subprocess.PIPE,
+                "stderr": asyncio.subprocess.PIPE,
+                "cwd": cwd,
+                "env": child_env,
+                "start_new_session": True,
+                "limit": _READER_LIMIT,
+            }
+            if sys.platform == "win32":
+                proc, job = await windows.launch(argv, **spawn_options)
+            else:
+                proc = await asyncio.create_subprocess_exec(*argv, **spawn_options)
         except (OSError, ValueError) as exc:
             raise AcpConnectionError(f"acp agent {name!r}: cannot start {program_argv[0]!r}: {exc}") from exc
         leftovers.record(proc.pid, name)
 
         client = cls(
             name=name,
-            endpoint=_ProcessEndpoint(proc, proc.pid),
+            endpoint=_ProcessEndpoint(proc, proc.pid, job),
             on_request=on_request,
             on_notification=on_notification,
             journal=journal,
@@ -497,7 +508,7 @@ class AcpClient:
         return self._reader_task is None or not self._reader_task.done()
 
     async def close(self) -> None:
-        """Kill the whole process group and stop reading. Idempotent.
+        """End the agent's process tree and stop reading. Idempotent.
 
         Bounded from the inside, not by its caller: a ``close`` cancelled from
         outside stops before releasing the subprocess transport, whose
