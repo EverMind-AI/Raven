@@ -145,7 +145,14 @@ async def test_an_upstream_that_goes_unreachable_closes_the_subagent_promptly(tm
     tells them apart.
     """
     pid_file = tmp_path / "upstream.pid"
-    cfg = MCPServerConfig(command=sys.executable, args=[str(_UPSTREAM), str(pid_file)])
+    # The Windows venv launcher holds another stdout handle until its child
+    # exits. Start the interpreter directly while retaining this environment,
+    # so closing the upstream's stdout really delivers EOF while it stays alive.
+    cfg = MCPServerConfig(
+        command=sys._base_executable if sys.platform == "win32" else sys.executable,
+        args=[str(_UPSTREAM), str(pid_file)],
+        env={"__PYVENV_LAUNCHER__": sys.executable} if sys.platform == "win32" else {},
+    )
     endpoints = McpEndpoints()
     try:
         path = await endpoints.open("e2e-silent", "upstream", cfg)
