@@ -45,6 +45,8 @@ from typing import Any, TextIO
 
 from loguru import logger
 
+from raven.mcp.transport import endpoint_label
+
 _OFF = {"0", "false", "off", "no"}
 
 MAX_BYTES = 64 * 1024 * 1024
@@ -86,6 +88,14 @@ def redact_acp_frame(frame: dict[str, Any]) -> dict[str, Any]:
     for server in servers:
         if not isinstance(server, dict):
             continue
+        args = server.get("args")
+        if isinstance(args, list):
+            server["args"] = [
+                endpoint_label(arg) + "/<redacted>"
+                if isinstance(arg, str) and arg.startswith("tcp://127.0.0.1:")
+                else arg
+                for arg in args
+            ]
         for field in ("env", "headers"):
             entries = server.get(field)
             if not isinstance(entries, list):
