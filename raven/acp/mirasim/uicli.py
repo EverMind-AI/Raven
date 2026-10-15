@@ -49,6 +49,7 @@ measured against Mirasim 0.0.465:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import re
@@ -56,7 +57,8 @@ import shutil
 import signal
 import subprocess
 import sys
-from collections.abc import Mapping, Sequence
+import tempfile
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -78,6 +80,10 @@ INLINE_TEXT_LIMIT = 100_000
 """The most bytes of prompt text passed as ``--text``. Linux refuses a single argv
 entry over 128 KiB (``E2BIG``), and a delegated prompt carrying its upstream
 results can be that long; past this the text goes in a file instead."""
+
+PROMPT_FILE_NOTE = "This message continues in the attached file {name}. Read all of it and act on it."
+
+_WINDOWS_COMMAND_LINE_LIMIT = 32_767
 
 TREE_GRACE_S = 2.0
 """How long a cancelled turn's processes get to exit on SIGTERM before SIGKILL.
@@ -317,6 +323,36 @@ class Outcome:
         return ""
 
 
+def _guard_argv(argv: list[str]) -> list[str]:
+    return [sys.executable, *_GUARD, *argv]
+
+
+def _fits_windows_command_line(argv: list[str]) -> bool:
+    # CreateProcess counts UTF-16 units, including quoting and the final NUL.
+    command = subprocess.list2cmdline(_guard_argv(argv))
+    return len(command.encode("utf-16-le")) // 2 + 1 <= _WINDOWS_COMMAND_LINE_LIMIT
+
+
+@contextlib.contextmanager
+def _staged_command(argv: list[str]) -> Iterator[list[str]]:
+    """Keep the complete Windows guard command within the native launch limit."""
+    if sys.platform != "win32" or _fits_windows_command_line(argv):
+        yield argv
+        return
+    index = next((i for i, arg in enumerate(argv) if arg.startswith("--text=")), None)
+    if index is None:
+        raise UiCliError("command exceeds the Windows command-line limit")
+    with tempfile.TemporaryDirectory(prefix="raven-mirasim-") as folder:
+        path = Path(folder) / "prompt.md"
+        path.write_text(argv[index].removeprefix("--text="), encoding="utf-8", newline="")
+        staged = list(argv)
+        staged[index] = "--text=" + PROMPT_FILE_NOTE.format(name=path.name)
+        staged.append(f"--file={path}")
+        if not _fits_windows_command_line(staged):
+            raise UiCliError("command exceeds the Windows command-line limit even with its prompt in a file")
+        yield staged
+
+
 class Invocation:
     """One ``ui-cli`` command, which a cancel ends together with everything it started.
 
@@ -354,11 +390,13 @@ class Invocation:
             return Outcome(None, None, "", cancelled=True)
         if shutil.which(self.argv[0], path=self._env.get("PATH")) is None:
             raise UiCliError(f"cannot start {self.argv[0]!r}: no such executable")
+        with _staged_command(self.argv) as argv:
+            return await self._execute(argv)
+
+    async def _execute(self, argv: list[str]) -> Outcome:
         try:
             self._proc = await asyncio.create_subprocess_exec(
-                sys.executable,
-                *_GUARD,
-                *self.argv,
+                *_guard_argv(argv),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,

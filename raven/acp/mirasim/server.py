@@ -108,6 +108,7 @@ from raven.acp.mirasim.store import Binding, BindingStore, server_workdir, store
 from raven.acp.mirasim.uicli import (
     EXECUTABLE,
     INLINE_TEXT_LIMIT,
+    PROMPT_FILE_NOTE,
     QUERY_TIMEOUT_S,
     Invocation,
     Outcome,
@@ -180,7 +181,6 @@ PERMISSION_METHOD = "session/request_permission"
 ELICITATION_METHOD = "elicitation/create"
 
 _AGENT_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
-_LONG_PROMPT_NOTE = "This message continues in the attached file {name}. Read all of it and act on it."
 
 
 class RefusalError(Exception):
@@ -849,7 +849,7 @@ def _staged_prompt(text: str) -> Iterator[tuple[str, list[str]]]:
     try:
         path = folder / "prompt.md"
         path.write_text(text, encoding="utf-8")
-        yield _LONG_PROMPT_NOTE.format(name=path.name), [str(path)]
+        yield PROMPT_FILE_NOTE.format(name=path.name), [str(path)]
     finally:
         shutil.rmtree(folder, ignore_errors=True)
 
