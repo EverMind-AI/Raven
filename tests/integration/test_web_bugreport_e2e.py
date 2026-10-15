@@ -143,14 +143,17 @@ async def test_a_report_is_decided_uploaded_and_remembered(world, tmp_path, monk
         status = await _until(dispatcher, first, "deciding")
         kinds = {item["kind"] for item in status["items"]}
         assert kinds == {"confirmed", "suspected"}, status["items"]
-        assert TOKEN not in json.dumps(status) and "MIIabcdef" not in json.dumps(status)
         suspected = next(i for i in status["items"] if i["kind"] == "suspected")
+        confirmed = next(i for i in status["items"] if i["kind"] == "confirmed")
+        assert suspected["value"] == TOKEN, "a suspected value is shown in full"
+        assert confirmed["value"] == confirmed["masked_sample"] and "MIIabcdef" not in confirmed["value"]
         contexts = await _call(dispatcher, "bugreport.item", {"report_id": first, "item_id": suspected["id"]})
         assert any(TOKEN in _cut(g["text"], g["spans"]) for g in contexts["groups"])
 
         await _decide_all(dispatcher, first, status)
         ready = await _until(dispatcher, first, "ready")
         assert ready["summary"]["redacted"] >= 1 and ready["summary"]["acknowledged"] >= 1
+        assert TOKEN not in json.dumps(ready) and "MIIabcdef" not in json.dumps(ready)
         await _call(dispatcher, "bugreport.upload", {"report_id": first, "risk_accepted": True})
         delivered = await _until(dispatcher, first, "uploaded")
         receipt = delivered["receipt"]["receipt_id"]

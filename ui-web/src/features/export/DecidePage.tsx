@@ -1,14 +1,16 @@
 /* The decisions: what the redaction history settled on its own, then every
-   value still undecided -- masked on the left, where it was seen on the
-   right -- and the four buttons that decide them.
+   value still undecided -- the values on the left, where the picked one was
+   seen on the right -- and the four buttons that decide them.
 
-   The left column is the shared two-pane frame's list (components/TwoPane):
-   one row per item, the masked value, its category, how often it occurs, the
-   current decision and how many items it is linked to. Confirmed items --
-   values already replaced, such as a private key -- come first and are only
-   acknowledged. The right column asks for the focused item's contexts once
-   (bugreport.item) and marks each hit inside them. A long list is paged
-   here, not by the gateway: the status already carries every masked row. */
+   The left column is the shared two-pane frame's list (components/TwoPane)
+   and holds the values and nothing else, each in full; a redacted one is
+   struck through, and a confirmed one -- a private key, already replaced --
+   shows its replacement. Everything else about the picked value is on the
+   right: its category, how often it occurs, the decision, what it is linked
+   to, and for a confirmed item the acknowledgement it needs. The right column
+   asks for the item's contexts once (bugreport.item) and marks each hit
+   inside them. A long list is paged here, not by the gateway: the status
+   already carries every row. */
 
 import { TwoPane, TwoPaneHead, TwoPaneList, TwoPaneRow, TwoPaneWait } from '../../components/TwoPane'
 import { t } from '../../i18n/t'
@@ -35,8 +37,8 @@ function History({ s }: { s: ExportState }): JSX.Element | null {
   )
 }
 
-function rowSub(s: ExportState, item: ReportItem): string {
-  if (item.kind === 'confirmed') return t('gui.export.confirmed')
+function facts(s: ExportState, item: ReportItem): string {
+  if (item.kind === 'confirmed') return `${item.category} · ${t('gui.export.confirmed')}`
   const parts = [
     item.category,
     t('gui.export.count', { n: item.count }),
@@ -48,25 +50,27 @@ function rowSub(s: ExportState, item: ReportItem): string {
 
 function Row({ s, item }: { s: ExportState; item: ReportItem }): JSX.Element {
   return (
-    <div className="export-item" data-bad={s.marked.includes(item.id) || undefined}>
-      <TwoPaneRow
-        current={s.focus === item.id}
-        name={item.masked_sample}
-        sub={rowSub(s, item)}
-        tone={item.kind === 'confirmed' ? 'bad' : s.choices[item.id] === 'redacted' ? 'warn' : undefined}
-        onOpen={() => store.focusItem(item.id)}
-        trailing={item.kind === 'confirmed' ? (
-          <label className="export-ack">
-            <input
-              type="checkbox"
-              checked={s.acknowledged.includes(item.id)}
-              onChange={(e) => store.acknowledge(item.id, e.currentTarget.checked)}
-            />
-            <span>{t('gui.export.acknowledge')}</span>
-          </label>
-        ) : undefined}
-      />
+    <div
+      className="export-item"
+      data-kind={item.kind}
+      data-action={item.kind === 'suspected' ? (s.choices[item.id] ?? 'kept') : undefined}
+      data-bad={s.marked.includes(item.id) || undefined}
+    >
+      <TwoPaneRow current={s.focus === item.id} name={item.value} onOpen={() => store.focusItem(item.id)} />
     </div>
+  )
+}
+
+function Acknowledge({ s, item }: { s: ExportState; item: ReportItem }): JSX.Element {
+  return (
+    <label className="export-ack">
+      <input
+        type="checkbox"
+        checked={s.acknowledged.includes(item.id)}
+        onChange={(e) => store.acknowledge(item.id, e.currentTarget.checked)}
+      />
+      <span>{t('gui.export.acknowledge')}</span>
+    </label>
   )
 }
 
@@ -104,7 +108,11 @@ function Contexts({ s, item }: { s: ExportState; item: ReportItem }): JSX.Elemen
   }
   return (
     <>
-      <TwoPaneHead name={item.masked_sample} meta={item.category} />
+      <TwoPaneHead
+        name={item.value}
+        meta={facts(s, item)}
+        aside={item.kind === 'confirmed' ? <Acknowledge s={s} item={item} /> : undefined}
+      />
       <div className="export-ctxs">{body}</div>
     </>
   )

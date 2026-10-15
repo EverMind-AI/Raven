@@ -5032,11 +5032,12 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
   background: var(--black); filter: brightness(1.18);
 }
 
-/* The export wizard's dialog (src/App.tsx's ExportVeil): sized between the
-   confirm sheet and the settings dialog, a column whose middle scrolls. The
-   wizard inside is features/export/'s, styled by its own sheet. */
+/* The export wizard's dialog (src/App.tsx's ExportVeil): about the settings
+   dialog's size, since the decisions page is two columns of values and their
+   contexts, a column whose middle scrolls. The wizard inside is
+   features/export/'s, styled by its own sheet. */
 .chrome-export-modal {
-  width: min(640px, 94vw); height: min(560px, 88vh); display: flex; flex-direction: column;
+  width: min(960px, 94vw); height: min(720px, 90vh); display: flex; flex-direction: column;
   background: var(--ink); border: 1px solid var(--line); border-radius: 14px;
   box-shadow: 0 24px 64px -20px rgba(0,0,0,.45), 0 2px 8px rgba(0,0,0,.12);
   overflow: hidden; animation: up .18s ease both;

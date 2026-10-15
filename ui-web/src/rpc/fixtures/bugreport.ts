@@ -2,11 +2,12 @@
  *
  * `bugreport.start` opens it, and the first look finds two suspected values
  * and one private key to decide; deciding freezes it, uploading lands it with
- * a receipt, and cancelling starts over. The values are masked the way the
- * gateway masks them, and the contexts carry the one place each was seen, so
- * the two-column page has something on both sides. English content,
- * deliberately: these are demo rows; the page's own words come from the
- * catalogue through t().
+ * a receipt, and cancelling starts over. Each item carries its value in full
+ * and masked the way the gateway masks it -- the private key only as its
+ * replacement, as the gateway sends it -- and the contexts carry the one place
+ * each was seen, so the two-column page has something on both sides. English
+ * content, deliberately: these are demo rows; the page's own words come from
+ * the catalogue through t().
  */
 
 import type { FixtureEnv, Fixtures } from '../fixtureTransport'
@@ -22,6 +23,7 @@ const ITEMS: Item[] = [
     id: 'pk1',
     kind: 'confirmed',
     category: 'private-key-block',
+    value: '[REDACTED:pattern.private-key-block]',
     masked_sample: '[REDACTED:pattern.private-key-block]',
     count: 1,
     sources: [{ label: 'a tool result', count: 1 }],
@@ -32,7 +34,8 @@ const ITEMS: Item[] = [
     id: 'tok1',
     kind: 'suspected',
     category: 'high-entropy',
-    masked_sample: 'aB3x...yN1',
+    value: 'aB3xK9mQ7pL2vR8sT4wZ6yN1',
+    masked_sample: 'aB3x***yN1',
     count: 2,
     sources: [{ label: 'the session transcript', count: 1 }, { label: 'a model input', count: 1 }],
     linked: [],
@@ -42,7 +45,8 @@ const ITEMS: Item[] = [
     id: 'jwt1',
     kind: 'suspected',
     category: 'jwt-like',
-    masked_sample: 'eyJh...Q5c',
+    value: 'eyJhbGciOiJIUzI1NiJ9.e30.Q5c',
+    masked_sample: 'eyJh***.Q5c',
     count: 1,
     sources: [{ label: 'a tool result', count: 1 }],
     linked: [],

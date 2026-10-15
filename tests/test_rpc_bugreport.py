@@ -106,8 +106,8 @@ async def test_a_report_is_decided_and_frozen_over_rpc(tmp_path):
     rid = started["result"]["report_id"]
     status = await _wait(dispatcher, rid, "deciding")
     BugReportStatusResult.model_validate(status)
-    assert TOKEN not in json.dumps(status)
     [item] = status["items"]
+    assert item["value"] == TOKEN and TOKEN not in item["masked_sample"]
     contexts = (await _call(dispatcher, "bugreport.item", {"report_id": rid, "item_id": item["id"]}))["result"]
     BugReportItemResult.model_validate(contexts)
     decided = await _call(
@@ -118,6 +118,7 @@ async def test_a_report_is_decided_and_frozen_over_rpc(tmp_path):
     assert decided["result"] == {"ok": True}
     status = await _wait(dispatcher, rid, "ready")
     BugReportStatusResult.model_validate(status)
+    assert TOKEN not in json.dumps(status)
     refused = await _call(dispatcher, "bugreport.upload", {"report_id": rid, "risk_accepted": False})
     assert refused["error"]["code"] == -32028 and refused["error"]["data"]["reason"] == "risk_not_accepted"
     assert (await _call(dispatcher, "bugreport.cancel", {"report_id": rid}))["result"] == {"ok": True}

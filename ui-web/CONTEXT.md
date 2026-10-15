@@ -420,9 +420,10 @@ conversation has a single finished turn, and the decisions are marked skipped
 when the Redaction History or a clean snapshot leaves nothing to decide. The
 export runs as a gateway job (`trajectory.export`) the page follows through
 `trajectory.export_status` and downloads with the job's link; the report is a
-Report Session the page follows through `bugreport.status`, which carries only
-masked values -- an item's contexts come one item at a time (`bugreport.item`),
-their hit spans counted in code points. The close button and Escape both
+Report Session the page follows through `bugreport.status`, which carries the
+values to decide in full only while it waits on the decisions -- the
+decisions page lists those values and nothing else, and an item's contexts
+come one at a time (`bugreport.item`), their hit spans counted in code points. The close button and Escape both
 cancel, asking first while a job is under way or a report is started and not
 over, and closing cancels the report (`bugreport.cancel`) whatever its phase.
 Every answer is checked against the wizard's `epoch` and the job or report it

@@ -38,7 +38,7 @@ const status = (state: ExportStatus['state'], jobId = 'exj-1'): ExportStatus => 
 })
 
 const item = (id: string, kind: ReportItem['kind'], linked: string[] = [], hint: ReportItem['hint'] = null): ReportItem => ({
-  id, kind, category: 'high-entropy', masked_sample: `${id}...`, count: 1, sources: [], linked, hint,
+  id, kind, category: 'high-entropy', value: `${id}-value`, masked_sample: `${id}...`, count: 1, sources: [], linked, hint,
 })
 
 /* a and b are linked, b and c are linked: one group of three. d stands alone,

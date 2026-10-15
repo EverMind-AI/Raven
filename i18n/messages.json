@@ -12707,10 +12707,6 @@
       "en": "{auto} replaced automatically, {kept} kept, {redacted} redacted, {acknowledged} acknowledged",
       "zh": "自动替换 {auto} 个，保持 {kept} 个，脱敏 {redacted} 个，已知悉 {acknowledged} 个"
     },
-    "gui.export.completeness": {
-      "en": "Completeness",
-      "zh": "完整性"
-    },
     "gui.export.risk": {
       "en": "I have reviewed what is kept and accept sending it.",
       "zh": "我已检查过保留的内容，确认上传。"

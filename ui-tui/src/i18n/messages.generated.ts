@@ -3491,7 +3491,6 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.export.summary_redaction': 'Redaction',
     'gui.export.summary_counts':
       '{auto} replaced automatically, {kept} kept, {redacted} redacted, {acknowledged} acknowledged',
-    'gui.export.completeness': 'Completeness',
     'gui.export.risk': 'I have reviewed what is kept and accept sending it.',
     'gui.export.risk_needed': 'Accept the risk before uploading.',
     'gui.export.upload': 'Upload',
@@ -6622,7 +6621,6 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.export.summary_size': '包大小',
     'gui.export.summary_redaction': '脱敏',
     'gui.export.summary_counts': '自动替换 {auto} 个，保持 {kept} 个，脱敏 {redacted} 个，已知悉 {acknowledged} 个',
-    'gui.export.completeness': '完整性',
     'gui.export.risk': '我已检查过保留的内容，确认上传。',
     'gui.export.risk_needed': '上传前请先确认风险。',
     'gui.export.upload': '确认上传',

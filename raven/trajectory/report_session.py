@@ -531,6 +531,10 @@ class ReportSessions:
                     "id": item.id,
                     "kind": item.kind,
                     "category": item.category,
+                    # A confirmed item keeps no value of its own -- every
+                    # private key is replaced whatever the reader says -- so
+                    # what it shows is the replacement.
+                    "value": item.token or item.masked_sample,
                     "masked_sample": item.masked_sample,
                     "count": len(item.occurrences),
                     "sources": [{"label": s.get("label", ""), "count": s.get("count", 0)} for s in item.sources],
