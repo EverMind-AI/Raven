@@ -15,8 +15,10 @@ Agent 的安装见[Agent 集成](agent-integrations.md)。
   登录必须只凭密钥就能完成。
 - 机器上是 Linux 或 macOS，该用户有 POSIX shell。节点依赖 unix 套接字和进程组，
   所以 Windows 机器不能作为目标。（Raven 本机可以是 Windows，见[限制与默认值](#limits-and-defaults)。）
-- 机器上有 Python 3.12 或更新版本，**或者**有 `uv`，**或者**有 `curl` 或 `wget`
-  让安装程序去取 `uv`。三者有其一即可。
+- 机器上有 `uv`（在 PATH 上，或在它的安装程序放置的位置），**或者**有 `curl` 或 `wget`
+  让安装程序去取一个。安装程序用 `uv` 构建节点，没有 `uv` 就停下，不管机器上有什么
+  Python。机器上有 Python 3.12 或更新版本更好，但不是必需：有的话，节点的虚拟环境从它
+  建出来；没有的话，`uv` 自带一个 Python 3.12，占用空间更多。
 - 要运行的 Agent 已经装在那台机器上，并且以那个用户登录过：Claude Code、Codex、
   Qwen Code 这类 ACP Agent，命令行 Agent，或者一个只在那台机器网络里能访问的
   OpenAI 兼容端点。
@@ -52,8 +54,9 @@ raven ops connection add --id gpu1 --name "GPU box 1" \
 - `~/.ssh/config` 里会写入一段受管理的 `Host <id>`，这样本机的 `scp` 和 `rsync`
   可以按 id 找到这台机器。
 
-`raven ops connection list` 列出机器；`raven ops connection doctor` 指出条目的问题，
-有不能用的条目时退出码非零。
+`raven ops connection list` 列出机器。`raven ops connection doctor` 逐条列出条目的问题，
+阻塞的和提示性的都列，但只有一台可用的机器都没有时退出码才非零：一条坏的条目旁边有一条
+可用的，退出码仍是零，所以要看它的输出，不要只看退出码。
 
 ## 2. 安装节点 { #2-install-the-node }
 
@@ -190,8 +193,7 @@ Agent 在机器能读到的地方使用它（两边都挂载的盘上的同一�
 读不到就在回复里说明找不到，然后继续。
 
 **MCP 服务器不出借。** 宿主的 MCP 服务器通过本机上的一个套接字访问，别的机器上的
-Agent 打不开它。授权了的服务器会在回复里注明没有出借。跨链路出借即将提供，
-见 [#947](https://github.com/EverMind-AI/Raven/pull/947)。
+Agent 打不开它。授权了的服务器会在回复里注明没有出借。跨链路出借即将提供（拉取请求 #947）。
 
 **它写的文件留在机器上。** 这一轮结束时什么都不会自动拿回来。回复末尾有一行说明它在哪里工作：
 
@@ -256,8 +258,9 @@ Raven 对每台机器保持一条 ssh 链路，用心跳看着它：每 5 秒 pi
 接不回来的情况：机器重启过，或者守护进程被手动结束，任务就不再被机器认识。这一轮会以错误
 通告（*no longer runs 'agent' (task …)*），机器上也不会留下任何在跑的东西。
 
-一条上面没有 Agent、10 分钟没有事做的链路会被关闭；守护进程空闲 10 分钟后退出。两者都
-不是错误，下次使用会重新建立。
+一条 10 分钟内没有调用、也没有 Agent 的链路，会在 Raven 下一次使用别的机器时被关闭；
+没有定时器，所以最后那条在用的链路会一直开着，直到那时。守护进程有定时器：没有连接也没有
+Agent 满 10 分钟就退出。两者都不是错误，下次使用会重新建立。
 
 ## 限制与默认值 { #limits-and-defaults }
 
@@ -267,7 +270,8 @@ Raven 对每台机器保持一条 ssh 链路，用心跳看着它：每 5 秒 pi
 | 已结束任务的记录在机器上保留 | 7 天 |
 | 心跳间隔 / 判定断链 | 5 秒 / 15 秒 |
 | 重连退避 | 2、4、8、16 秒 |
-| 空闲链路关闭 / 守护进程退出 | 10 分钟 / 10 分钟 |
+| 空闲链路关闭 | 10 分钟没有调用也没有 Agent 之后，在下一次使用别的机器时关闭；没有定时器 |
+| 守护进程退出 | 没有连接也没有 Agent 满 10 分钟；有定时器 |
 | ssh 连接超时 | 15 秒 |
 | 一次文件调用的回应 | 120 秒内，否则调用失败 |
 | `deliver_files` 取回的文件 | 最大 20 MiB |
@@ -296,7 +300,7 @@ Windows 保留的字符，落地时该字符写成百分号编码。
 | *could not be reached* / *did not answer within the connection timeout* | 网络或地址问题 | 检查地址、端口，以及 sshd 是否在运行 |
 | *is not installed on machine …; install it with `raven ops connection install-node …`* | 那里没有节点 | 安装节点 |
 | *runs different code from this Raven; update it with …* | 节点来自另一个 Raven 版本 | 再跑一次 `install-node` |
-| *has no uv, and no curl or wget to fetch one with* | 安装程序没办法得到 Python 环境 | 在机器上装 `uv` 或 Python 3.12，再试 |
+| *has no uv, and no curl or wget to fetch one with* | 安装程序需要 `uv`，机器上既没有它也没有取它的办法；有 Python 也不改变这一点 | 在机器上装 `uv`（提示里给了它的安装程序），或者装 `curl` 或 `wget`，再试 |
 | *the agent's command was not found on machine …* | 那个用户在机器上没装这个 Agent | 在机器上安装并登录 |
 | *already runs 8 agents; wait for one to finish* | 机器已到上限 | 等一等，或换一台机器 |
 | *did not answer a heartbeat within 15s* | 链路断了 | 不用做什么，Raven 会重连；Agent 还在跑 |

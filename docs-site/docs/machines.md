@@ -20,8 +20,12 @@ installing the agents themselves.
   uses unix sockets and process groups, so a Windows machine cannot be a
   destination. (Raven itself may run on Windows; see
   [Limits and defaults](#limits-and-defaults).)
-- Python 3.12 or newer on the machine, **or** `uv`, **or** `curl` or `wget`
-  so the installer can fetch `uv`. Any one of the three is enough.
+- `uv` on the machine (on the PATH, or where its installer puts it), **or**
+  `curl` or `wget` so the installer can fetch one. The installer builds the
+  node with `uv` and stops without it, whatever Python the machine has. A
+  Python 3.12 or newer there is welcome but not required: with one, the node's
+  virtualenv is made from it; without one, `uv` brings a Python 3.12 of its
+  own, which takes more space.
 - The agent you want to run installed and signed in on that machine, for that
   user: an ACP agent such as Claude Code, Codex or Qwen Code; a CLI agent; or an
   OpenAI-compatible endpoint that answers on that machine's network.
@@ -63,8 +67,10 @@ What gets recorded, and where:
 - A managed `Host <id>` block is written to `~/.ssh/config`, so `scp` and
   `rsync` on this computer can address the machine by its id.
 
-`raven ops connection list` shows the machines; `raven ops connection doctor`
-says what is wrong with an entry and exits non-zero when one cannot be used.
+`raven ops connection list` shows the machines. `raven ops connection doctor`
+lists what is wrong with each entry, blocking or advisory, and exits non-zero
+only when no entry is usable: a broken entry beside a usable one still exits
+zero, so read its output rather than its exit code.
 
 ## 2. Install the node
 
@@ -231,7 +237,7 @@ could not be found on the machine, and goes on.
 **MCP servers are not lent.** The host's MCP servers are reached through a
 socket on this computer, which an agent elsewhere cannot open. A granted
 server is noted in the reply as not lent. Lending them across the link is
-coming in [#947](https://github.com/EverMind-AI/Raven/pull/947).
+coming, in pull request #947.
 
 **Its files stay on the machine.** Nothing is brought back when the turn
 ends. The reply closes with a line that says where it worked:
@@ -316,9 +322,11 @@ What is not recoverable: a machine that rebooted, or a daemon that was ended
 by hand, no longer knows the task. The turn is then announced as an error
 (*no longer runs 'agent' (task …)*), and nothing is left running there.
 
-A link with no agent on it and nothing to do for 10 minutes is closed; the
-daemon leaves after 10 minutes idle. Neither is an error; the next use starts
-them again.
+A link that has carried no call and run no agent for 10 minutes is closed
+the next time Raven uses another machine; there is no timer, so the last link
+in use stays open until then. The daemon does keep a timer: it leaves after
+10 minutes with no connection and no agent. Neither is an error; the next use
+starts them again.
 
 ## Limits and defaults
 
@@ -328,7 +336,8 @@ them again.
 | A finished task's record on the machine | kept 7 days |
 | Heartbeat / link lost after | 5 s / 15 s |
 | Reconnect backoff | 2, 4, 8, 16 s |
-| Idle link closed after / daemon leaves after | 10 min / 10 min |
+| Idle link closed | after 10 min without a call or an agent, at the next use of another machine; no timer |
+| Daemon leaves | after 10 min with no connection and no agent; a timer |
 | ssh connect timeout | 15 s |
 | A file call's answer | within 120 s, or the call fails |
 | A file fetched by `deliver_files` | 20 MiB at most |
@@ -361,7 +370,7 @@ to an owner-only log under the Raven home (`logs/ssh/`).
 | *could not be reached* / *did not answer within the connection timeout* | Network or address | Check address, port and whether sshd is up |
 | *is not installed on machine …; install it with `raven ops connection install-node …`* | No node there | Run the install |
 | *runs different code from this Raven; update it with …* | The node is from another Raven version | Run `install-node` again |
-| *has no uv, and no curl or wget to fetch one with* | The installer has no way to a Python environment | Install `uv` or a Python 3.12 on the machine, then retry |
+| *has no uv, and no curl or wget to fetch one with* | The installer needs `uv`, and the machine has neither it nor a way to fetch it; a Python there does not change this | Install `uv` on the machine (the sentence names its installer), or `curl` or `wget`, then retry |
 | *the agent's command was not found on machine …* | The agent is not installed there for that user | Install and sign in on the machine |
 | *already runs 8 agents; wait for one to finish* | The machine is at its limit | Wait, or use another machine |
 | *did not answer a heartbeat within 15s* | The link dropped | Nothing; Raven reconnects. The agent keeps running |
