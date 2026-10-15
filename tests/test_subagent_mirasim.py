@@ -18,6 +18,7 @@ from raven.agent.subagent.instances import InstanceRegistry
 from raven.agent.subagent.mirasim_presets import MIRASIM_AGENTS, MIRASIM_PRESETS
 from raven.agent.subagent.presets import third_party_subagent_preset
 from raven.config.schema import ThirdPartyAcpSubagentConfig
+from raven.utils.commands import command_argv
 from tests.mirasim_stub_cli import install
 
 posix_only = pytest.mark.skipif(os.name == "nt", reason="the stand-in Mirasim is a /bin/sh wrapper")
@@ -43,12 +44,20 @@ def test_each_row_runs_the_adapter_on_this_interpreter(monkeypatch: pytest.Monke
     for key, (agent, label, _) in MIRASIM_AGENTS.items():
         row = third_party_subagent_preset(key)
         assert row["name"] == f"{label}-Mirasim"
-        assert row["command"] == f"{sys.executable} -P -m raven.acp.mirasim --agent {agent}"
+        assert command_argv(row["command"]) == [sys.executable, "-P", "-m", "raven.acp.mirasim", "--agent", agent]
         assert row["sessionMcp"] is False
     # The table itself keeps the template, so nothing machine-specific is shipped.
     assert all(row["command"].startswith("{PYTHON} ") for row in MIRASIM_PRESETS.values())
-    monkeypatch.setenv("SUBAGENT_PYTHON", "/opt/raven/bin/python")
-    assert third_party_subagent_preset("mirasim_codex")["command"].startswith("/opt/raven/bin/python -P ")
+    interpreter = str(Path("Python with spaces") / "python")
+    monkeypatch.setenv("SUBAGENT_PYTHON", interpreter)
+    assert command_argv(third_party_subagent_preset("mirasim_codex")["command"]) == [
+        interpreter,
+        "-P",
+        "-m",
+        "raven.acp.mirasim",
+        "--agent",
+        "codex",
+    ]
 
 
 @posix_only
