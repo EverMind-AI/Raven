@@ -578,14 +578,41 @@ def _death_pact() -> dict[str, Any]:
     return {"preexec_fn": _sign_death_pact} if _PRCTL is not None else {}
 
 
-def _still_ours(pid: int, command: Any) -> bool:
+def _born(pid: int) -> str | None:
+    """A mark of when ``pid`` started: the same for the same process, another for a later one given its number.
+
+    Linux's start tick from ``/proc`` where there is one; elsewhere the start
+    time ``ps`` prints, to the second. ``None`` when neither can be read.
+    """
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as handle:
+            # The fields after the parenthesised name: state first, the start tick 20th.
+            after_name = handle.read().rpartition(")")[2].split()
+        return f"tick:{int(after_name[19])}"
+    except (OSError, IndexError, ValueError):
+        pass
+    ps = shutil.which("ps") or "/bin/ps"
+    try:
+        done = subprocess.run([ps, "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    text = " ".join(done.stdout.split())
+    return f"lstart:{text}" if done.returncode == 0 and text else None
+
+
+def _still_ours(pid: int, command: Any, born: Any) -> bool:
     """Whether ``pid`` is still the agent a record names.
 
-    Alive, the leader of its own process group -- as every agent is started,
-    in a session of its own -- and running the command the record says: a
-    pid that has moved on to another process fails one of the two. (The
-    session id would be a third mark, but macOS's ``ps`` prints 0 for it.)
+    Three marks, all required: alive and the leader of its own process group
+    (as every agent is started, in a session of its own), running the
+    command the record says, and started when the record says (``born``,
+    :func:`_born`). A pid that has moved on to another process fails the
+    last one even when the program is the same; a record without the mark
+    proves nothing, so its pid is left alone. (The session id would be one
+    more mark, but macOS's ``ps`` prints 0 for it.)
     """
+    if not isinstance(born, str) or not born:
+        return False
     ps = shutil.which("ps") or "/bin/ps"
     try:
         done = subprocess.run([ps, "-o", "pgid=,command=", "-p", str(pid)], capture_output=True, text=True, timeout=5)
@@ -601,7 +628,9 @@ def _still_ours(pid: int, command: Any) -> bool:
         want = shlex.split(str(command or ""))[:1]
     except ValueError:
         return False
-    return bool(want) and os.path.basename(want[0]) in parts[1]
+    if not want or os.path.basename(want[0]) not in parts[1]:
+        return False
+    return _born(pid) == born
 
 
 def _lose_record(record: Path, info: dict[str, Any]) -> dict[str, Any]:
@@ -613,7 +642,9 @@ def _lose_record(record: Path, info: dict[str, Any]) -> dict[str, Any]:
     (:func:`_still_ours`); a pid that has moved on is left alone.
     """
     pid = info.get("pid")
-    ended = isinstance(pid, int) and not isinstance(pid, bool) and _still_ours(pid, info.get("command"))
+    ended = (
+        isinstance(pid, int) and not isinstance(pid, bool) and _still_ours(pid, info.get("command"), info.get("born"))
+    )
     if ended:
         _end_tree(pid)
     info["state"], info["rc"] = "lost", LOST_RC
@@ -759,6 +790,8 @@ class _Task:
         self.command = command
         self.cwd = cwd
         self.started = time.time()
+        self.born = _born(proc.pid)
+        """When the agent started, as :func:`_born` marks it: what a later daemon checks before ending its pid."""
         self.ended: float | None = None
         self.rc: int | None = None
         self.frames = 0
@@ -783,6 +816,7 @@ class _Task:
             "command": self.command,
             "cwd": self.cwd,
             "pid": self.proc.pid,
+            "born": self.born,
             "state": state,
             "rc": self.rc,
             "started": self.started,
