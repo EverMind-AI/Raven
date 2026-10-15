@@ -28,19 +28,6 @@ Shared helpers used across multiple command modules live in
 ``raven/core/provider_stack.py`` (assembly).
 """
 
-import os
-import sys
-
-# Force UTF-8 encoding for Windows console
-if sys.platform == "win32":
-    if sys.stdout.encoding != "utf-8":
-        os.environ["PYTHONIOENCODING"] = "utf-8"
-        try:
-            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
-
 import typer
 from rich.console import Console
 

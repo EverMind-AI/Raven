@@ -139,6 +139,31 @@ def test_the_entry_settles_trust_then_hands_the_process_to_the_cli(monkeypatch) 
     assert calls == ["trust", "cli"]
 
 
+@pytest.mark.parametrize(
+    ("argv", "taken"),
+    [
+        (["raven", "web", "--supervise", "--port", "18999"], ["trust", "supervisor"]),
+        (["raven", "web", "--supervise", "--port", "x"], ["trust", "cli"]),
+    ],
+    ids=["the supervisor", "a near miss"],
+)
+def test_the_supervisor_skips_the_cli_but_not_the_switch(monkeypatch, argv: list[str], taken: list[str]) -> None:
+    """`raven web` starts its supervisor through the entry too. That launch is taken
+    without the command table, after the switch like every other."""
+    from raven.cli import commands, entry, serve_commands
+    from raven.security import tls
+
+    calls: list[str] = []
+    monkeypatch.setattr(tls, "use_system_ca", lambda: calls.append("trust"))
+    monkeypatch.setattr(commands, "run", lambda: calls.append("cli"))
+    monkeypatch.setattr(serve_commands, "_web", lambda *_a, **_kw: calls.append("supervisor"))
+    monkeypatch.setattr(sys, "argv", argv)
+
+    entry.run()
+
+    assert calls == taken
+
+
 def test_no_cli_module_is_a_third_way_to_start_raven() -> None:
     """The two launches above are the only ones: a CLI module run as a script skips the switch.
 

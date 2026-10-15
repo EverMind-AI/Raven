@@ -424,7 +424,7 @@ class AcpClient:
         # stdio -- so a batch file may stand in for the program here.
         argv = resolve_program(argv, child_env, batch_files=True)
         # The agent's own argv, for what this logs and reports: the spawned one
-        # may lead with the parent-death wrapper.
+        # may lead with the wrapper that ties the agent to this host.
         program_argv = argv
         argv = leftovers.bind_to_host(argv, child_env, cwd)
         job = None

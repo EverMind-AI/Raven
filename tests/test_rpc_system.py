@@ -12,6 +12,7 @@ runs inside handlers (validation errors bubble up as RpcError subclasses).
 
 from __future__ import annotations
 
+import sys
 import time
 
 import pytest
@@ -24,6 +25,8 @@ from raven.rpc.methods.system import (
     system_ping,
     system_version,
 )
+
+_RAVEN_EXECUTABLE = "raven.exe" if sys.platform == "win32" else "raven"
 
 # ---------------------------------------------------------------------------
 # system.* handler tests (direct calls, no dispatcher)
@@ -269,7 +272,14 @@ class TestUpgradingFromAGatewayHostedPage:
         finally:
             SERVE.disarm()
 
-        assert spawned["relaunch"] == [str(bin_dir / "raven"), "web", "--supervise", "--port", "18792"]
+        assert spawned["relaunch"] == [str(bin_dir / _RAVEN_EXECUTABLE), "web", "--supervise", "--port", "18792"]
+        # The argv the entry point takes to the supervisor without the command table.
+        from raven.cli import serve_commands
+
+        taken: list[tuple] = []
+        monkeypatch.setattr(serve_commands, "_web", lambda *a, **kw: taken.append((a, kw)))
+        assert serve_commands.supervise_from_argv(spawned["relaunch"][1:]) is True
+        assert taken == [((18792,), {"foreground": False, "stop": False, "supervise": True})]
         assert spawned["extra_env"] == {
             "RAVEN_SERVE_PORT_STRICT": "1",
             "RAVEN_SERVE_TOKEN": "tok",
@@ -452,7 +462,7 @@ async def test_upgrade_hands_off_then_stops_the_gateway(monkeypatch: pytest.Monk
     finally:
         SERVE.disarm()
 
-    assert spawned["relaunch"] == [str(bin_dir / "raven"), "serve", "--port", "18792"]
+    assert spawned["relaunch"] == [str(bin_dir / _RAVEN_EXECUTABLE), "serve", "--port", "18792"]
     # Both credentials travel, and that is the point: the browser presents the
     # cookie, a relauncher needs the shared secret, and since they are no longer
     # the same string, carrying only one of them would sign the open page out.
@@ -476,7 +486,7 @@ async def test_an_upgrade_relaunch_never_passes_dev(monkeypatch, tmp_path):
         await system_upgrade({})
     finally:
         SERVE.disarm()
-    assert spawned["relaunch"] == [str(bin_dir / "raven"), "serve", "--port", "18792"]
+    assert spawned["relaunch"] == [str(bin_dir / _RAVEN_EXECUTABLE), "serve", "--port", "18792"]
 
     _bin_dir, spawned = _plan(tmp_path, monkeypatch)
     SERVE.arm_hosted(18792, "tok", "cookie")
@@ -485,7 +495,7 @@ async def test_an_upgrade_relaunch_never_passes_dev(monkeypatch, tmp_path):
         await system_upgrade({})
     finally:
         SERVE.disarm()
-    assert spawned["relaunch"] == [str(bin_dir / "raven"), "web", "--supervise", "--port", "18792"]
+    assert spawned["relaunch"] == [str(bin_dir / _RAVEN_EXECUTABLE), "web", "--supervise", "--port", "18792"]
 
 
 # ---------------------------------------------------------------------------

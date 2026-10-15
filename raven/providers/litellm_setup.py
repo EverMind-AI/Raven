@@ -96,6 +96,28 @@ RAVEN_MODEL_ROWS: dict[str, dict] = {
 }
 
 
+def _drop_unread_tokenizer_copies() -> None:
+    """Free two tokenizer copies litellm's import leaves resident and nothing it runs reads.
+
+    ``litellm.utils`` loads Anthropic's tokenizer JSON into ``json_data`` and keeps
+    it after dumping it to ``claude_json_str``, which is what its Claude tokenizer
+    is built from. The cl100k encoding litellm loads at import, which raven's own
+    estimator shares through tiktoken's registry, keeps a Python copy of its ranks
+    beside the one its core encodes with; tiktoken itself reads that copy only to
+    pickle an encoding outside the registry, since a registered one pickles by
+    name. Code that reads the private copy off the registered encoding, as
+    tiktoken's README does to extend one, gets an AttributeError after this.
+    Together about 25 MiB.
+    """
+    utils = sys.modules.get("litellm.utils")
+    if isinstance(getattr(utils, "json_data", None), dict) and isinstance(getattr(utils, "claude_json_str", None), str):
+        utils.json_data = None
+    registry = sys.modules.get("tiktoken.registry")
+    encoding = getattr(registry, "ENCODINGS", {}).get("cl100k_base")
+    if encoding is not None and hasattr(encoding, "_mergeable_ranks"):
+        del encoding._mergeable_ranks
+
+
 def _register_raven_model_rows(litellm) -> None:
     """Add :data:`RAVEN_MODEL_ROWS` to LiteLLM's live table, once per row.
 
@@ -151,6 +173,10 @@ def import_litellm():
                 lg.setLevel(prev)
 
         _detach_tty_handlers(loggers)
+        try:
+            _drop_unread_tokenizer_copies()
+        except Exception:  # noqa: BLE001 - freeing memory must not fail the import
+            logging.getLogger(__name__).debug("litellm's tokenizer copies were kept", exc_info=True)
 
         _READY = litellm
         return litellm

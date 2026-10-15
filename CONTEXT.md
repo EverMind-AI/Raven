@@ -2872,16 +2872,21 @@ An ACP agent process group whose launching host is no longer running. An ACP age
 session of its own, so it gets none of the signals sent to its host's process group or
 terminal, and while the host lives only `AcpClient.close` ends it; a host that dies before its
 teardown can leave its agents' groups running with nobody on the other end of their pipes. On
-Linux the agent starts through an exec wrapper (`_WRAPPER`) that arms `PR_SET_PDEATHSIG`, so
-where the signal is armed and survives the exec (a set-id or file-capability binary clears it)
-its direct process ends when the thread that launched it does, which for an agent launched
-from the host's event loop is when the host dies. Every Linux host records the ACP agent groups it
+Linux and macOS the agent starts through an exec wrapper (`_WRAPPERS`) that ties it to its host.
+On Linux it arms `PR_SET_PDEATHSIG`, so where the signal is armed and survives the exec (a
+set-id or file-capability binary clears it) its direct process ends when the thread that
+launched it does, which for an agent launched from the host's event loop is when the host dies.
+On macOS, which has no such signal, it leaves a watcher in the agent's group, adopted by
+launchd and holding none of the agent's descriptors, that waits on the host process's exit with
+kqueue and then ends the whole group - while the agent leads that group, as every launch has it
+do. Every Linux and macOS host records the ACP agent groups it
 launched in a file of its own under `acp-launches/` in the config file's directory
 (`<raven home>` unless `--config` moves it), and the first launch in any process ends the
 groups recorded by hosts that have since died, in the same boot and PID namespace, and only
 where a surviving member still carries the dead host's mark and, while the leader still runs,
 its start time matches the record - the group number alone can have been handed out again. Not
-covered by the Linux sweep: other platforms, a group whose record was never written (its host died first, the
+covered by the Linux and macOS sweep: other platforms, a group whose record was never written
+(its host died first, the
 write failed, or its leader had already exited when the record was taken), and agents started
 by a Raven older than the records.
 
@@ -2890,22 +2895,23 @@ On Windows, each locally launched ACP connection owns an unnamed, non-inheritabl
 the agent; the host sends it only after assigning the launcher to the job. Host death before
 assignment closes stdin, so no agent starts. After assignment, host death or closing the
 connection closes the job's only handle, ending its processes and descendants even if the
-original launcher has already exited. macOS still relies on explicit connection teardown.
+original launcher has already exited.
 _Avoid_: "orphaned" - in POSIX terms every agent group is an orphaned process group from the
 moment it starts, since its session does not hold the host; and the DAG vocabulary rules the
 word out for a released run.
 
 **Launch mark** (`raven/acp_client/leftovers.py`):
 `RAVEN_ACP_HOST` in a launched agent's environment, naming the host that launched it as
-`<host pid>-<host start ticks>`, the stem of that host's launch record. Every process the
+`<host pid>-<host start time>` (clock ticks since boot on Linux, microseconds since the epoch on
+macOS), the stem of that host's launch record. Every process the
 agent starts inherits it unless it is started with a fresh environment, so after the host dies
 a sweep can tell a group made of that host's agents and what they started from an unrelated
 group that happens to hold the same number. A process whose environment this user cannot read
-counts as carrying none (any other read error keeps the record for a later sweep), and a group
+(on macOS that includes every platform binary, such as `/bin/sh`) counts as carrying none (any other read error keeps the record for a later sweep), and a group
 none of whose surviving processes carries the mark is left running - which is what remains
 when the agent exits after starting its children without it.
 _Avoid_: a security token - it is an identifier, not a secret; its parts are world-readable in
-`/proc/<pid>/stat`.
+`/proc/<pid>/stat` and, on macOS, through `sysctl`.
 
 **Instance Log** (`raven/agent/subagent/instance_log.py`):
 One sub-agent instance's own conversation, for the whole conversation that owns it, at
