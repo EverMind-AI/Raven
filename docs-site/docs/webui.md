@@ -64,8 +64,9 @@ bug report package (from **Report a problem** or
 `raven trajectory report-bug`), and a trajectory report from
 `raven trajectory report`. Any other file is refused with a message saying so.
 A damaged or unsafe package (a path that leaves the package, a link, more data
-unpacked than the limit allows) is refused and leaves nothing behind, and a
-package made by a newer Raven asks you to update first.
+unpacked than the limit allows) is refused and leaves nothing behind, and so is
+one whose conversation record is too large to open (over 32 MiB or 50,000
+entries). A package made by a newer Raven asks you to update first.
 
 Imported packages are kept under `imports/` in the Raven home and stay there
 across restarts. They are never added to the workspace's sessions. Importing

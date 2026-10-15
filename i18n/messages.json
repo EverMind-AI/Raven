@@ -2431,6 +2431,10 @@
       "en": "{name} was made by a newer Raven; update Raven to import it",
       "zh": "{name} 由更新版本的 Raven 生成，请升级后再导入"
     },
+    "gui.imported.err_transcript": {
+      "en": "{name} holds a conversation record too large to open here: {detail}",
+      "zh": "{name} 中的会话记录过大，无法在这里打开：{detail}"
+    },
     "gui.imported.err_invalid": {
       "en": "{name} is damaged or unsafe and was not imported: {detail}",
       "zh": "{name} 已损坏或不安全，未导入：{detail}"

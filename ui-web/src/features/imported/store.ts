@@ -57,6 +57,7 @@ function refusalOf(name: string, err: unknown): string {
     if (reason === 'too_large') return t('gui.imported.err_too_large', { name })
     if (reason === 'not_importable') return t('gui.imported.err_not_importable', { name })
     if (reason === 'unsupported_version') return t('gui.imported.err_version', { name })
+    if (reason === 'transcript_too_large') return t('gui.imported.err_transcript', { name, detail: detailOf(err) })
     return t('gui.imported.err_invalid', { name, detail: detailOf(err) })
   }
   return t('gui.imported.err_failed', { name, detail: detailOf(err) })

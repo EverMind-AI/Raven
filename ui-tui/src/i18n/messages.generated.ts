@@ -794,6 +794,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.imported.err_not_importable':
       '{name} is not a package Raven can import (an export, a bug report or a trajectory report)',
     'gui.imported.err_version': '{name} was made by a newer Raven; update Raven to import it',
+    'gui.imported.err_transcript': '{name} holds a conversation record too large to open here: {detail}',
     'gui.imported.err_invalid': '{name} is damaged or unsafe and was not imported: {detail}',
     'gui.imported.err_failed': 'Could not import {name}: {detail}',
     'gui.imported.done_unopened':
@@ -4016,6 +4017,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.imported.err_too_large': '{name} 超出了上传上限',
     'gui.imported.err_not_importable': '{name} 不是可导入的包（导出包、问题报告包或轨迹报告）',
     'gui.imported.err_version': '{name} 由更新版本的 Raven 生成，请升级后再导入',
+    'gui.imported.err_transcript': '{name} 中的会话记录过大，无法在这里打开：{detail}',
     'gui.imported.err_invalid': '{name} 已损坏或不安全，未导入：{detail}',
     'gui.imported.err_failed': '无法导入 {name}：{detail}',
     'gui.imported.done_unopened': '已导入《{title}》，但暂时无法打开；可在侧栏的“导入”里找到它',

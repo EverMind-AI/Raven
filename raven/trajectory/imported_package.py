@@ -56,6 +56,7 @@ CODE_NOT_IMPORTABLE = "not_importable"
 CODE_UNSUPPORTED_VERSION = "unsupported_version"
 CODE_MANIFEST_INVALID = "manifest_invalid"
 CODE_BAD_ENCODING = "bad_encoding"
+CODE_TRANSCRIPT_TOO_LARGE = "transcript_too_large"
 
 EXPORT_MANIFEST = "export.json"
 REPORT_METADATA = "bugreport.json"
@@ -85,6 +86,8 @@ class ImportLimits:
     max_unpacked_report: int = 256 * 2**20
     max_metadata_bytes: int = 4 * 2**20
     max_convert_bytes: int = 32 * 2**20
+    max_transcript_bytes: int = 32 * 2**20
+    max_transcript_records: int = 50_000
 
 
 class ImportCancelledError(Exception):
@@ -510,6 +513,34 @@ def _place_blobs(messages: Path, store_root: Path, should_stop: Callable[[], boo
             _check_stop(should_stop)
 
 
+def _check_transcript(path: Path, limits: ImportLimits, should_stop: Callable[[], bool]) -> None:
+    """Refuse a session record too large to be read whole.
+
+    The import and every later open load the record at once
+    (:func:`raven.session.manager.read_session_file`), while the unpack budget
+    would let it run to a gigabyte; both its size and its record count are
+    bounded here, before anything reads it.
+    """
+    size = path.stat().st_size
+    if size > limits.max_transcript_bytes:
+        raise PackageError(
+            CODE_TRANSCRIPT_TOO_LARGE,
+            f"the session record is {size} bytes; the limit is {limits.max_transcript_bytes}",
+        )
+    records = 0
+    with path.open("rb") as transcript:
+        for line in transcript:
+            if not line.strip():
+                continue
+            records += 1
+            if records > limits.max_transcript_records:
+                raise PackageError(
+                    CODE_TRANSCRIPT_TOO_LARGE,
+                    f"the session record holds more than {limits.max_transcript_records} records",
+                )
+    _check_stop(should_stop)
+
+
 def normalize(
     unpacked: Unpacked,
     staging: Path,
@@ -540,6 +571,7 @@ def normalize(
     transcript = bundle / SESSION_FILE
     included = transcript.is_file() and not transcript.is_symlink()
     if included:
+        _check_transcript(transcript, limits, should_stop)
         shutil.copyfile(transcript, staging / SESSION_FILE)
 
     if unpacked.kind == KIND_EXPORT:
@@ -560,6 +592,7 @@ __all__ = [
     "CODE_BAD_ENCODING",
     "CODE_MANIFEST_INVALID",
     "CODE_NOT_IMPORTABLE",
+    "CODE_TRANSCRIPT_TOO_LARGE",
     "CODE_UNSUPPORTED_VERSION",
     "KIND_BUGREPORT",
     "KIND_EXPORT",

@@ -241,6 +241,7 @@ describe('what a refusal reads as', () => {
     [new RpcError(-32030, 'imported_package_invalid', { reason: 'too_large' }), 'gui.imported.err_too_large'],
     [new RpcError(-32030, 'imported_package_invalid', { reason: 'not_importable' }), 'gui.imported.err_not_importable'],
     [new RpcError(-32030, 'imported_package_invalid', { reason: 'unsupported_version' }), 'gui.imported.err_version'],
+    [new RpcError(-32030, 'imported_package_invalid', { reason: 'transcript_too_large', detail: 'past 32 MiB' }), 'gui.imported.err_transcript'],
     [new RpcError(-32030, 'imported_package_invalid', { reason: 'contents_mismatch', detail: 'tampered' }), 'gui.imported.err_invalid'],
     [new Error('socket closed'), 'gui.imported.err_failed'],
   ]

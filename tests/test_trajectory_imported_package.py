@@ -170,6 +170,46 @@ def test_export_keeps_shells_and_moves_blobs_into_the_message_store(tmp_path):
     assert resolved["systemPrompt"] == builders.SYSTEM_TEXT
 
 
+def _transcript_size(unpacked: ipkg.Unpacked) -> tuple[int, int]:
+    path = unpacked.bundle / ipkg.SESSION_FILE
+    return path.stat().st_size, sum(1 for line in path.read_bytes().splitlines() if line.strip())
+
+
+def test_a_session_record_at_its_limits_is_kept(tmp_path):
+    package, _ = builders.build_export(tmp_path / "src")
+    unpacked = _unpack(tmp_path, package)
+    size, records = _transcript_size(unpacked)
+    limits = ImportLimits(max_transcript_bytes=size, max_transcript_records=records)
+    assert ipkg.normalize(unpacked, tmp_path / "staging", limits=limits).transcript_included
+    assert (tmp_path / "staging" / ipkg.SESSION_FILE).read_bytes() == (unpacked.bundle / ipkg.SESSION_FILE).read_bytes()
+
+
+@pytest.mark.parametrize("past", ["bytes", "records"])
+def test_a_session_record_too_large_to_read_whole_is_refused(tmp_path, past):
+    package, _ = builders.build_export(tmp_path / "src")
+    unpacked = _unpack(tmp_path, package)
+    size, records = _transcript_size(unpacked)
+    limits = (
+        ImportLimits(max_transcript_bytes=size - 1)
+        if past == "bytes"
+        else ImportLimits(max_transcript_records=records - 1)
+    )
+    with pytest.raises(PackageError) as caught:
+        ipkg.normalize(unpacked, tmp_path / "staging", limits=limits)
+    assert caught.value.code == ipkg.CODE_TRANSCRIPT_TOO_LARGE
+    assert not (tmp_path / "staging" / ipkg.SESSION_FILE).exists()
+
+
+def test_blank_lines_are_not_records(tmp_path):
+    package, _ = builders.build_export(tmp_path / "src")
+    unpacked = _unpack(tmp_path, package)
+    path = unpacked.bundle / ipkg.SESSION_FILE
+    _, records = _transcript_size(unpacked)
+    path.write_bytes(path.read_bytes() + b"\n \n\n")
+    limits = ImportLimits(max_transcript_records=records)
+    assert ipkg.normalize(unpacked, tmp_path / "staging", limits=limits).transcript_included
+
+
 def test_export_pointer_to_an_unexported_file_becomes_null(tmp_path):
     package, _ = builders.build_export(tmp_path / "src")
     staging = tmp_path / "staging"

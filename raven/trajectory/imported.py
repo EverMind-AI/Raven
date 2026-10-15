@@ -197,7 +197,17 @@ def read_session(key: Any, root: Path | None = None) -> Session | None:
     conversation = get(key, root)
     if conversation is None:
         return None
-    return read_session_file(conversation.path / SESSION_FILE, conversation.key)
+    path = conversation.path / SESSION_FILE
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return None
+    # An import bounds the record before keeping it; one past that bound was
+    # not written by an import, and is not loaded whole.
+    if size > ipkg.ImportLimits().max_transcript_bytes:
+        logger.warning("imported conversation {}: the session record is {} bytes; not reading it", key, size)
+        return None
+    return read_session_file(path, conversation.key)
 
 
 def trajectory_target(key: Any, root: Path | None = None) -> tuple[Path, str | None] | None:

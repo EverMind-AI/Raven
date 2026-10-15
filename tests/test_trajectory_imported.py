@@ -278,6 +278,14 @@ def test_a_refused_package_leaves_no_residue(root, data, code):
     assert imp.list_conversations(root) == []
 
 
+def test_a_session_record_past_its_limit_leaves_no_residue(tmp_path, root):
+    package, _ = builders.build_export(tmp_path / "src")
+    with pytest.raises(PackageError) as caught:
+        imp.import_bytes(package.read_bytes(), package.name, root=root, limits=ImportLimits(max_transcript_records=1))
+    assert caught.value.code == ipkg.CODE_TRANSCRIPT_TOO_LARGE
+    assert _residue(root) == []
+
+
 def test_an_oversized_package_is_refused_before_anything_is_written(root):
     with pytest.raises(PackageError) as caught:
         imp.import_bytes(_export_bytes(), "x.tar.gz", root=root, limits=ImportLimits(max_package_bytes=10))
@@ -370,6 +378,17 @@ def test_read_session_and_trajectory_target(tmp_path, root):
     assert key == builders.SESSION
     assert imp.read_session("imported:" + "0" * 32, root) is None
     assert imp.trajectory_target("tui:x", root) is None
+    unrecorded = imp.import_bytes(_export_bytes(), "no-record.tar.gz", root=root).conversation
+    assert not (unrecorded.path / imp.SESSION_FILE).exists()
+    assert imp.read_session(unrecorded.key, root) is None
+
+
+def test_a_session_record_past_the_import_limit_is_not_read_whole(tmp_path, root):
+    package, _ = builders.build_export(tmp_path / "src")
+    conversation = imp.import_bytes(package.read_bytes(), package.name, root=root).conversation
+    with (conversation.path / imp.SESSION_FILE).open("r+b") as record:
+        record.truncate(ImportLimits().max_transcript_bytes + 1)
+    assert imp.read_session(conversation.key, root) is None
 
 
 def test_rename(root):

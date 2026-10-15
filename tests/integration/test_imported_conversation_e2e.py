@@ -6,7 +6,7 @@ a dispatcher carrying every method production registers: ``imported.upload``
 and its runner, ``session.*`` serving the conversation from ``imports/``,
 ``trajectory.*`` reading its store, and the read-only guard. Nothing under test
 is stood in for; the limits are the shipped ones, so the oversized upload and
-the decompression bomb are built at full size.
+the decompression bomb and the oversized session records are built at full size.
 """
 
 from __future__ import annotations
@@ -36,6 +36,7 @@ from raven.rpc.question_broker import QuestionBroker
 from raven.rpc.subscriptions import SubscriptionEmitter
 from raven.session.manager import SessionManager
 from raven.trajectory import imported
+from raven.trajectory import imported_package as ipkg
 from raven.trajectory import index as tidx
 from raven.trajectory import package_check as pcheck
 from raven.trajectory import policy as tpol
@@ -47,6 +48,7 @@ pytestmark = pytest.mark.integration
 SECRET = "sk-e2e0123456789abcdefghijKLMNOP"
 PLACEHOLDER = "[REDACTED:pattern.openai-style-key]"
 LONG_CONVERSATION_BYTES = 512 * 1024
+TRANSCRIPT_LIMITS = ImportLimits()
 UNPACKED_LIMIT = ImportLimits().max_unpacked_export
 BOMB_MEMBERS = 5
 BOMB_MEMBER_BYTES = 256 << 20
@@ -426,6 +428,29 @@ def _symlink(package: Path) -> bytes:
     return _repack(package, [info])
 
 
+def _with_transcript(package: Path, record: bytes) -> bytes:
+    """The real export with its session record swapped for ``record``."""
+    name = f"{_root(package)}/session.jsonl"
+    out = io.BytesIO()
+    with tarfile.open(fileobj=out, mode="w:gz", compresslevel=1) as tar:
+        for info, data in _members(package):
+            if info.name == name:
+                info.size, data = len(record), record
+            tar.addfile(info, io.BytesIO(data) if data is not None else None)
+    return out.getvalue()
+
+
+def _long_transcript(package: Path) -> bytes:
+    line = json.dumps({"role": "user", "content": "x" * (1 << 20)}).encode() + b"\n"
+    return _with_transcript(package, line * (TRANSCRIPT_LIMITS.max_transcript_bytes // len(line) + 1))
+
+
+def _many_records(package: Path) -> bytes:
+    return _with_transcript(
+        package, b'{"role": "user", "content": "x"}\n' * (TRANSCRIPT_LIMITS.max_transcript_records + 1)
+    )
+
+
 def _truncated(package: Path) -> bytes:
     data = package.read_bytes()
     return data[: len(data) // 2]
@@ -438,8 +463,10 @@ def _truncated(package: Path) -> bytes:
         (_traversal, {pcheck.CODE_BAD_MEMBER_NAME}),
         (_symlink, {pcheck.CODE_BAD_MEMBER_TYPE}),
         (_bomb, {pcheck.CODE_UNPACKED_TOO_LARGE}),
+        (_long_transcript, {ipkg.CODE_TRANSCRIPT_TOO_LARGE}),
+        (_many_records, {ipkg.CODE_TRANSCRIPT_TOO_LARGE}),
     ],
-    ids=["truncated", "traversal", "symlink", "bomb"],
+    ids=["truncated", "traversal", "symlink", "bomb", "long-transcript", "many-records"],
 )
 async def test_a_damaged_or_hostile_package_is_refused_and_leaves_nothing(homes, monkeypatch, tmp_path, make, reasons):
     package, _ = builders.build_export(homes["src"])
