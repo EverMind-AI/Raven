@@ -16,6 +16,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -152,7 +153,7 @@ def test_exec_diagnostics_do_not_read_files_withheld_by_the_host(tmp_path):
 
 @pytest.mark.parametrize("kind", ["missing", "exception"])
 def test_unavailable_pre_command_snapshot_does_not_block_or_scan_all_files(tmp_path, monkeypatch, kind):
-    from raven.agent.tools import snapshot
+    from code_flow.tools import workspace_scan
 
     tool = _tool(tmp_path)
 
@@ -161,7 +162,7 @@ def test_unavailable_pre_command_snapshot_does_not_block_or_scan_all_files(tmp_p
             raise RuntimeError("listing failed")
         return None
 
-    monkeypatch.setattr(snapshot, "take", unavailable)
+    monkeypatch.setattr(workspace_scan, "take", unavailable)
     out = _run(tool.execute(command="printf 'result = missing\n' > kept.py"))
     assert out.ok is True and "Python diagnostics" not in str(out)
     assert (tmp_path / "home" / "kept.py").exists()
@@ -223,6 +224,28 @@ def test_exec_diagnostics_skip_symlinks_cache_and_non_python_files(tmp_path):
         )
     )
     assert "Python diagnostics" not in out
+
+
+def test_coding_snapshot_deadline_discards_partial_results(tmp_path, monkeypatch):
+    from code_flow.tools import workspace_scan
+
+    (tmp_path / "a.py").touch()
+    (tmp_path / "b.py").touch()
+    ticks = iter([0, 0, 2])
+    monkeypatch.setattr(workspace_scan, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
+    assert workspace_scan.take(tmp_path, deadline=1) is None
+    monkeypatch.setattr(workspace_scan, "time", SimpleNamespace(monotonic=lambda: 0))
+    assert len(workspace_scan.take(tmp_path, deadline=1)) == 2
+
+
+def test_coding_snapshot_entry_limit_and_invalid_directory(tmp_path, monkeypatch):
+    from code_flow.tools import workspace_scan
+
+    (tmp_path / "a.py").touch()
+    (tmp_path / "b.py").touch()
+    monkeypatch.setattr(workspace_scan, "MAX_ENTRIES", 1)
+    assert workspace_scan.take(tmp_path, deadline=float("inf")) is None
+    assert workspace_scan.take(tmp_path / "missing", deadline=float("inf")) is None
 
 
 @pytest.mark.parametrize("params", [{"machine": "elsewhere"}, {"run_in_background": True}])

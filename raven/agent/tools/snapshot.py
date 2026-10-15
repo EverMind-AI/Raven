@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import os
 import stat
-import time
 from pathlib import Path
 from typing import Any
 
@@ -52,7 +51,7 @@ MAX_ENTRIES = 20000
 Snapshot = dict[str, tuple[int, int]]
 
 
-def take(root: Path | str, *, deadline: float | None = None) -> Snapshot | None:
+def take(root: Path | str) -> Snapshot | None:
     """List ``root``'s regular files with what would change if one were written.
 
     ``None`` means no listing: the tree is past :data:`MAX_ENTRIES`, or the root
@@ -60,8 +59,6 @@ def take(root: Path | str, *, deadline: float | None = None) -> Snapshot | None:
     listing compared against a real one reports every file in the tree as
     created. Symlinks are skipped on both counts: a link is not a file this run
     wrote, and following one leaves the tree being described.
-    An optional monotonic ``deadline`` also discards an incomplete walk; it
-    cannot interrupt a filesystem call already in progress.
     """
     try:
         start = Path(root).resolve()
@@ -71,12 +68,8 @@ def take(root: Path | str, *, deadline: float | None = None) -> Snapshot | None:
         return None
     entries: Snapshot = {}
     for dirpath, dirnames, filenames in os.walk(start, followlinks=False):
-        if deadline is not None and time.monotonic() >= deadline:
-            return None
         dirnames[:] = [name for name in dirnames if name not in SKIP_DIRS]
         for name in filenames:
-            if deadline is not None and time.monotonic() >= deadline:
-                return None
             path = os.path.join(dirpath, name)
             try:
                 info = os.stat(path, follow_symlinks=False)
