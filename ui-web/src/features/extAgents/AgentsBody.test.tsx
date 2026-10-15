@@ -127,8 +127,10 @@ describe('the onboarding wizard\'s agents step', () => {
     expect(sectionOf('shipped')).toBe('gui.agent.g_shipped {"n":1}')
     expect(control('preset_a').textContent).toBe('gui.agent.connect')
     expect(control('switched_on').textContent).toBe('gui.agent.disconnect')
-    /* Part of Raven: never offered a disconnect. */
-    expect(rowNamed('shipped').querySelector('.extAgents-ctl button')).toBeNull()
+    /* Part of Raven, and still the reader's to take off the roster: the server
+       switches a shipped folder off with a row of its own, the way it switches
+       any other. Grouped apart, offered the same verb. */
+    expect(control('shipped').textContent).toBe('gui.agent.disconnect')
     expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).toEqual(['preset_a', 'switched_on', 'shipped'])
   })
 
@@ -230,7 +232,8 @@ describe('the onboarding wizard\'s agents step', () => {
       fireEvent.click(control('raven_coder'))
     })
     expect(sectionOf('raven_coder')).toBe('gui.agent.g_shipped {"n":1}')
-    expect(rowNamed('raven_coder').querySelector('.extAgents-ctl button')).toBeNull()
+    /* Back on, it offers the way off again, as any connected agent does. */
+    expect(control('raven_coder').textContent).toBe('gui.agent.disconnect')
     /* Drawn as connected, still not counted: the step is about an external agent. */
     expect(store.stepDone()).toBe(false)
   })
@@ -427,6 +430,21 @@ describe('the onboarding wizard\'s agents step', () => {
       fireEvent.click(control('preset_a'))
     })
     expect(store.stepDone()).toBe(true)
+    expect(store.found().map((r) => r.name)).toEqual(['preset_a'])
+  })
+
+  /* An install can register one of Raven's own agents as a config row, which
+     says it is Raven's either through the wire's `own` or only by a name
+     `catalogue.ts` lists as Raven's. */
+  it("files Raven's own config rows with the shipped ones, and never counts them", async () => {
+    await mounted([
+      row({ name: 'Raven-Design', preset: undefined, configured: true, enabled: true, own: true }),
+      row({ name: 'Raven-Oncall', preset: undefined, configured: true, enabled: false }),
+      row({ name: 'preset_a', configured: false, enabled: false }),
+    ])
+    expect(sectionOf('Raven-Design')).toBe('gui.agent.g_shipped {"n":2}')
+    expect(sectionOf('Raven-Oncall')).toBe('gui.agent.g_shipped {"n":2}')
+    expect(store.stepDone()).toBe(false)
     expect(store.found().map((r) => r.name)).toEqual(['preset_a'])
   })
 })

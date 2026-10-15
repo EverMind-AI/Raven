@@ -74,6 +74,7 @@ plugins:
             Quick Start: 快速开始
             Using Raven: 使用 Raven
             Working with Sub-agents: 与子 Agent 协作
+            Working on Registered Machines: 在登记机器上工作
             Browser and Human Collaboration: 浏览器与人工协作
             Knowledge Bases: 知识库与文档检索
             Long-running Work (Oncall): 长任务托管（Oncall）
@@ -119,6 +120,7 @@ nav:
           - Launch WebUI: webui.md
           - Sandbox: sandbox.md
           - Working with Sub-agents: agent-collaboration.md
+          - Working on Registered Machines: machines.md
           - Browser and Human Collaboration: browser-collaboration.md
           - Knowledge Bases: knowledge.md
           - Playbooks: playbooks.md
