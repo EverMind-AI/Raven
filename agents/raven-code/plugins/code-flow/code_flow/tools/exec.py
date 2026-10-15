@@ -56,6 +56,7 @@ from typing import Any
 
 from loguru import logger
 
+from code_flow.tools import workspace_scan
 from code_flow.tools.diagnostics import UNKNOWN, PythonDiagnostics
 from raven.agent.tools import snapshot
 from raven.agent.tools.shell import ExecTool
@@ -316,7 +317,7 @@ class CodeExecTool(ExecTool):
     async def _listing(self, root: Path) -> snapshot.Snapshot | None:
         try:
             return await asyncio.wait_for(
-                asyncio.to_thread(snapshot.take, root, deadline=time.monotonic() + _SCAN_WAIT_SECONDS),
+                asyncio.to_thread(workspace_scan.take, root, deadline=time.monotonic() + _SCAN_WAIT_SECONDS),
                 timeout=_SCAN_WAIT_SECONDS,
             )
         except Exception:  # noqa: BLE001 - diagnostics must not prevent the command from running
