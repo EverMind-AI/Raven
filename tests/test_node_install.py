@@ -58,6 +58,8 @@ def _plan(**fields: Any) -> Plan:
         "present": False,
         "python": "/usr/bin/python3.12",
         "uv": "/usr/bin/uv",
+        # What a probe of that uv reports: one recent enough to read a configured index.
+        "uv_version": install.UV_VERSION,
         "free_kb": 10 * 1024 * 1024,
         "fetch": "/usr/bin/curl",
     }
@@ -134,17 +136,19 @@ def test_the_probe_s_answers_become_the_plan(registry):
         sent.append(command)
         return (
             0,
-            "bash: no job control\nPRESENT=1\nPYTHON=/usr/bin/python3.12\nUV=/root/.local/bin/uv\nFREE_KB=2097152\n",
+            "bash: no job control\nPRESENT=1\nPYTHON=/usr/bin/python3.12\nUV=/root/.local/bin/uv\nUV_VERSION=0.13.0\n"
+            "FREE_KB=2097152\n",
         )
 
     p = install.plan("box", run=run)
 
-    assert (p.node_dir, p.install_name, p.present, p.python, p.uv, p.free_kb) == (
+    assert (p.node_dir, p.install_name, p.present, p.python, p.uv, p.uv_version, p.free_kb) == (
         "~/.raven-node",
         bundle.install_name(),
         True,
         "/usr/bin/python3.12",
         "/root/.local/bin/uv",
+        "0.13.0",
         2097152,
     )
     assert p.target.label == "'Lab box' (box)"
@@ -412,25 +416,44 @@ def test_an_index_is_shown_without_its_sign_in_whatever_its_port_says(url, shown
 
 
 @pytest.mark.parametrize("port", ["84a3", "99999"], ids=["not a number", "past 65535"])
-def test_an_index_whose_port_is_not_a_port_is_refused_in_one_sentence_before_anything_runs(registry, port):
-    sent: list[str] = []
+def test_an_index_whose_port_is_not_a_port_is_refused_in_one_sentence_by_an_install_before_anything_runs(
+    registry, port
+):
+    """Only an install needs the index, so only an install refuses it: the look takes the machine as it is."""
+    looked: list[str] = []
 
     def run(target: remote.Machine, command: str) -> tuple[int, str]:
-        sent.append(command)
+        looked.append(command)
         return 0, (
-            "PYTHON=/usr/bin/python3.12\nUV=/usr/bin/uv\n"
+            "PYTHON=/usr/bin/python3.12\nUV=/usr/bin/uv\nUV_VERSION=0.13.0\n"
             f"INDEX=https://user:s3cret-pw@mirror.example:{port}/simple\nFREE_KB=2097152\n"
         )
 
-    with pytest.raises(InstallError) as raised:
-        install.plan("box", run=run)
+    p = install.plan("box", run=run)
 
-    assert str(raised.value) == (
+    said = (
         "the package index pip is configured with on machine 'Lab box' (box) has a port that is not a number "
         f"from 0 to 65535 (https://mirror.example:{port}/simple); correct index-url in pip's configuration there, "
         "or PIP_INDEX_URL"
     )
-    assert len(sent) == 1, "the look only: nothing is installed"
+    assert install.refusal(p) == said
+    machine = Machine()
+    with pytest.raises(InstallError) as raised:
+        install.install(p, run=machine.run, push=machine.push)
+    assert str(raised.value) == said
+    assert machine.sent == [] and len(looked) == 1, "nothing ran on the machine but the look"
+
+
+def test_a_machine_that_has_this_node_is_found_so_and_pruned_whatever_port_its_index_names(registry):
+    """Neither the look nor a prune needs the index, so a bad port in pip's configuration stops neither:
+    install-node says the node is already there, and --prune runs."""
+    p = install.plan(
+        "box",
+        run=lambda target, command: (0, "PRESENT=1\nUV=/usr/bin/uv\nINDEX=https://u:pw@mirror.example:84a3/simple\n"),
+    )
+
+    assert p.present
+    assert install.prune(p, run=lambda target, command: (0, "PRUNED=0.1-old\n")) == ("0.1-old",)
 
 
 def test_an_index_whose_port_is_a_port_or_none_goes_ahead(registry):
@@ -442,6 +465,62 @@ def test_an_index_whose_port_is_a_port_or_none_goes_ahead(registry):
     ):
         p = install.plan("box", run=lambda target, command, index=index: (0, f"UV=/usr/bin/uv\nINDEX={index}\n"))
         assert p.index == index and "pw" not in p.describe()
+
+
+_MIRROR = "https://mirror.example/simple"
+
+
+@pytest.mark.parametrize(
+    ("version", "fetch", "uv_from"),
+    [
+        ("0.4.23", "/usr/bin/curl", "machine"),
+        ("0.13.0", "", "machine"),
+        ("0.4.22", "/usr/bin/curl", "fetched"),
+        ("", "/usr/bin/wget", "fetched"),
+        ("0.4.22", "", ""),
+        ("", "", ""),
+    ],
+    ids=[
+        "the first that reads it",
+        "a later one",
+        "older, fetchable",
+        "unreadable, fetchable",
+        "older, nothing to fetch with",
+        "unreadable, nothing to fetch with",
+    ],
+)
+def test_a_machine_uv_that_would_ignore_the_configured_index_is_not_the_one_used(version, fetch, uv_from):
+    """UV_DEFAULT_INDEX arrived in uv 0.4.23 (with --default-index). An older uv ignores the variable and installs
+    from PyPI while the plan names the mirror, so with an index configured the pinned uv is fetched instead, and
+    with nothing to fetch it with the install says why."""
+    p = _plan(index=_MIRROR, uv="/usr/bin/uv", uv_version=version, fetch=fetch)
+
+    assert p.uv_from == uv_from
+    commands = dict(install.steps(p)) if uv_from else {}
+    if uv_from == "machine":
+        assert "uv" not in commands and "uv=/usr/bin/uv; " in commands["packages"]
+    if uv_from == "fetched":
+        assert "uv" in commands and 'uv="$dir/.uv/uv"; ' in commands["packages"]
+        said = f"uv {version}" if version else "a uv that does not say which version it is"
+        assert (
+            f" uv {install.UV_VERSION} itself first, under ~/.raven-node/.uv (the machine has {said}, and only uv "
+            f"0.4.23 or later installs from the index pip is configured with), fetched with its own {fetch};"
+        ) in p.describe()
+        assert p.needed_kb == install._NODE_KB + install._UV_KB
+    if not uv_from:
+        said = f"uv {version}" if version else "a uv that does not say which version it is"
+        assert install.refusal(p) == (
+            f"machine 'Lab box' (box) has {said}, and only uv 0.4.23 or later installs from the package index pip is "
+            f"configured with there; with no curl or wget to fetch uv {install.UV_VERSION}, upgrade uv there "
+            f"({install.UV_INSTALLER}), then run this again"
+        )
+
+
+@pytest.mark.parametrize("version", ["0.1.0", ""], ids=["an old uv", "a uv that says no version"])
+def test_an_old_uv_still_serves_a_machine_with_no_index_configured(version):
+    p = _plan(uv="/usr/bin/uv", uv_version=version, fetch="")
+
+    assert p.uv_from == "machine" and install.refusal(p) is None and "itself first" not in p.describe()
 
 
 def test_a_plan_whose_index_port_cannot_be_read_still_describes_itself_and_its_failures():
@@ -691,6 +770,18 @@ def test_the_probe_finds_the_node_a_new_enough_python_uv_and_the_room(shell):
 
 
 @pytest.mark.slow
+def test_the_probe_says_which_version_the_uv_it_found_is_and_nothing_for_one_that_does_not_say(shell):
+    home, tools = shell
+    uv = _script(tools / "uv", 'echo "uv 0.4.22 (5b9c1fa1c 2024-10-16)"\n')
+
+    seen = _lines(_sh(install.probe_script("~/.raven-node", "0.1-x", "d"), home, str(tools)))
+
+    assert (seen["UV"], seen["UV_VERSION"]) == (str(uv), "0.4.22")
+    _script(tools / "uv", "exit 0\n")
+    assert "UV_VERSION" not in _lines(_sh(install.probe_script("~/.raven-node", "0.1-x", "d"), home, str(tools)))
+
+
+@pytest.mark.slow
 def test_the_probe_reads_the_index_pip_is_configured_with_as_pip_reads_it(shell):
     home, tools = shell
     _script(tools / "python3", f'exec {sys.executable} "$@"\n')
@@ -856,12 +947,17 @@ def test_prune_of_a_node_dir_that_does_not_exist_removes_nothing(shell, tmp_path
 
 
 @pytest.mark.slow
-def test_a_real_install_makes_a_node_that_reports_this_raven_s_code(registry, tmp_path):
+@pytest.mark.parametrize(
+    "index", [None, "https://user:pw@mirror.invalid/simple"], ids=["no index", "an index pip is configured with"]
+)
+def test_a_real_install_makes_a_node_that_reports_this_raven_s_code(registry, tmp_path, index):
     if not Path("/bin/sh").exists():
         pytest.skip("the install steps run under /bin/sh")
     home = tmp_path / "home"
     home.mkdir()
-    env = {"HOME": str(home), "PATH": "/usr/bin:/bin"}
+    env = {"HOME": str(home), "PATH": "/usr/bin:/bin", **({"PIP_INDEX_URL": index} if index else {})}
+
+    fed: list[bytes] = []
 
     def run(target: remote.Machine, command: str) -> tuple[int, str]:
         if "pip install" in command:
@@ -871,6 +967,11 @@ def test_a_real_install_makes_a_node_that_reports_this_raven_s_code(registry, tm
         return done.returncode, done.stdout + (f"\n{done.stderr}" if done.returncode else "")
 
     def push(target: remote.Machine, command: str, data: bytes) -> tuple[int, str]:
+        if "pip install" in command:
+            # Nor when the step is sent with the index on its stdin, as it is once pip is configured with one --
+            # by this test, or by a system-wide pip.conf of the computer running it.
+            fed.append(data)
+            return 0, "RG=0\n" if "RG=1" in command else ""
         done = subprocess.run(["/bin/sh", "-c", command], input=data, capture_output=True, env=env, cwd=home)
         return done.returncode, done.stdout.decode() + (f"\n{done.stderr.decode()}" if done.returncode else "")
 
@@ -880,13 +981,18 @@ def test_a_real_install_makes_a_node_that_reports_this_raven_s_code(registry, tm
 
     first = install.plan("box", node_dir=str(nodes), run=run)
     assert not first.present
+    if index:
+        assert first.index == index, "the environment's index, over any pip.conf"
     uv = shutil.which("uv")
     if uv is None:
         pytest.skip("the install goes through uv, which this computer does not have")
-    p = dataclasses.replace(first, python=sys.executable, uv=uv)
+    said = subprocess.run([uv, "--version"], capture_output=True, text=True, check=True).stdout.split()
+    p = dataclasses.replace(first, python=sys.executable, uv=uv, uv_version=said[1])
     done = install.install(p, run=run, push=push)
 
     assert done.install_name == bundle.install_name() and done.rg is False and (done.size_kb or 0) > 1000
+    if index:
+        assert fed == [index.encode() + b"\n"] * 2, "both steps that run uv pip were fed the index, and stood in for"
     node = nodes / bundle.install_name()
     reported = subprocess.run(
         [str(node / "bin" / "python"), "-m", "raven.node", "--version"],
