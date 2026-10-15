@@ -395,6 +395,9 @@ jobs:
       - name: Install the test environment
         run: uv sync --frozen --python 3.13 --extra dev
 
+      - name: Test that the suite keeps out of the runner's own home
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/test_conftest_home.py -q -n 0 --tb=short
+
       - name: Test ACP handshakes and bundled launchers
         run: uv run --frozen --python 3.13 --no-sync pytest tests/integration/test_acp_stdio_smoke.py -m integration -q -n 0 --tb=short
 

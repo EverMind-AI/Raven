@@ -646,6 +646,16 @@ def _no_real_raven_home(tmp_path, monkeypatch):
     both camps (measured: 17 unrelated failures), patching ``Path.home`` beats the
     ``setenv`` camp (measured: 3), and setting ``HOME`` beats neither: an attribute
     patch shadows it, and a later ``setenv`` replaces it.
+
+    On Windows ``Path.home()`` reads ``USERPROFILE`` and never ``HOME``, so the
+    knob there is ``USERPROFILE``, and children inherit it as they do ``HOME``.
+    With ``HOME`` alone a Windows run worked in the real profile: measured
+    2026-10-15, one run rewrote the ``.raven`` config, cron store and capability
+    records of whoever ran it, added three test machines to their
+    ``.ssh/config``, and opened empty sessions in the database of an opencode
+    found on PATH. A test in the ``setenv("HOME", ...)`` camp does not reach
+    ``Path.home()`` on Windows either: there it lands in this home rather than
+    its own, which is no longer the real one.
     """
 
     # Outside ``tmp_path`` rather than under it, and fresh per test. Tests use
@@ -658,6 +668,8 @@ def _no_real_raven_home(tmp_path, monkeypatch):
     home = tmp_path.with_name(f"{tmp_path.name}-home")
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
+    if os.name == "nt":
+        monkeypatch.setenv("USERPROFILE", str(home))
     # The suite's baseline permission mode is full access -- the behaviour the
     # whole suite was written against before the gate existed, and what a test
     # about streaming or diffs should keep seeing. The product default is ask;
