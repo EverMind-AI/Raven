@@ -151,7 +151,7 @@ async def test_each_turn_names_its_model_and_effort_and_the_next_continues_the_c
     first_args, second_args = harness.prompts()
     assert "--agent=claude" in first_args and f"--cwd={harness.tmp_path}" in first_args
     assert "--session=sess-1" in second_args and not any(arg.startswith("--agent=") for arg in second_args)
-    # A bare model id is the model on Mirasim's own route, which no flag names.
+    # An id with no route prefix is the model on Mirasim's own route, which no flag names.
     assert not any(arg.startswith("--route") for args in (first_args, second_args) for arg in args)
     assert harness.routes() == []
 

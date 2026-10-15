@@ -298,7 +298,7 @@ export const extAgentsSource: ExtAgentsSource = {
     const a = args || {}
     if (op === 'connect') {
       /* Only name / description / key / model travel: every execution field
-         comes from the preset server-side. A page that could post a command
+         comes from the preset server-side. A client that could post a command
          line would make "which agent is this" unanswerable.
 
          `model` is the one execution field that is the reader's: the add stores

@@ -16,7 +16,7 @@ platform ``deepseek-flash`` and an own-key profile that also reaches DeepSeek --
 and the label alone cannot say which one bills where.
 
 Which of the two a session bills, the platform's quota or the user's own
-account, is the session's route, not a property of the model id: Mirasim puts a
+account, is the session's route, not a property of the model: Mirasim puts a
 session on one with ``--route`` on its first turn, or with ``session route``
 after, and the id it runs stays the same. The platform runs the own models of the
 agents in :data:`PLATFORM_ROUTE_AGENTS` too, so for those each own model is

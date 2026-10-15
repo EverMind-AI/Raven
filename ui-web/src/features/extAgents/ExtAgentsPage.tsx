@@ -725,19 +725,21 @@ const TABS: Array<{ tab: Tab; label: string; empty: string }> = [
    with the connect, which is what keeps the row from being briefly connected on
    the agent's default before the reader's model lands. */
 function PickRow({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Element {
-  /* The menu hangs off the row, not the pill: `anchorRow` sizes a panel from its
-     anchor's left edge to the drawer's right, and the pill sits at the right of
-     the row, which left the menu at its 320px floor -- too narrow for a provider
-     heading and a model id side by side. From the row it opens as wide as the
-     sheet's. It is drawn BESIDE the row, not in it: `anchorRow` measures the
-     anchor before the panel leaves the flow, and a panel inside the row
-     stretched the row it measured, so every menu flipped up over the drawer. */
+  /* The model picker hangs off the row, not the pill: `anchorRow` sizes a
+     popover from its anchor's left edge to the drawer's right, and the pill
+     sits at the right of the row, which left the picker at its 320px floor --
+     too narrow for a provider heading and a model name side by side. From the
+     row it opens as wide as the sheet's. It is drawn BESIDE the row, not in it:
+     `anchorRow` measures the anchor before the picker leaves the flow, and a
+     picker inside the row stretched the row it measured, so every one flipped
+     up over the drawer. */
   const rowEl = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
   const pick = s.picked[row.name] ?? ''
   const provs = pickerProvidersFor(row)
-  /* No menu is the agent's own answer -- a handshake that offered none -- which
-     is why the pill says so rather than opening an empty panel. */
+  /* Nothing to pick is the agent's own answer -- a handshake that offered no
+     model choices -- which is why the pill says so rather than opening an
+     empty picker. */
   const menuless = !provs.length
   const busy = !!s.joining[row.name]
   const failed = s.failed[row.name]
@@ -786,8 +788,8 @@ function PickRow({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Eleme
           className="extAgents-pickgo mini go"
           disabled={busy}
           onClick={() => {
-            /* The row is the menu's anchor, so a press on its own button is not
-               "outside" the menu and would leave it open over a running connect. */
+            /* The row is the picker's anchor, so a press on its own button is not
+               "outside" the picker and would leave it open over a running connect. */
             setOpen(false)
             void store.pickAndConnect(row)
           }}

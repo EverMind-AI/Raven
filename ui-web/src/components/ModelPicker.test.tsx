@@ -87,9 +87,9 @@ describe('model picker', () => {
     expect(picks).toEqual([['openai/gpt-4o', 'openrouter', false], ['brand-new-model', 'anthropic', true]])
   })
 
-  /* The document owns Escape too: the page's escape table closes the drawer the
-     menu hangs in, so a menu that let its Escape through took the drawer with
-     it. From the search field and from a row the reader moved to alike. */
+  /* The document owns Escape too: its escape table closes the drawer the
+     picker hangs in, so a picker that let its Escape through took the drawer
+     with it. From the search field and from a row the reader moved to alike. */
   it('closes on Escape and does not let it reach the document', () => {
     const { closes } = draw()
     let reached = 0
@@ -102,7 +102,7 @@ describe('model picker', () => {
       fireEvent.keyDown(document.querySelector('.model-picker-prov')!, { key: 'Escape' })
       expect(closes.length).toBe(2)
       expect(reached).toBe(0)
-      /* Only Escape is kept: any other key still reaches the page. */
+      /* Only Escape is kept: any other key still reaches the document. */
       fireEvent.keyDown(document.querySelector('.model-picker-search input')!, { key: 'a' })
       expect(reached).toBe(1)
     } finally {
@@ -110,9 +110,9 @@ describe('model picker', () => {
     }
   })
 
-  /* The field takes focus once the panel is placed, and without a scroll: an
-     autoFocus fired while the panel was still in the flow, the drawer's scroller
-     jumped to show it, and the row the panel was then placed under had moved. */
+  /* The field takes focus once the picker is placed, and without a scroll: an
+     autoFocus fired while the picker was still in the flow, the drawer's scroller
+     jumped to show it, and the row the picker was then placed under had moved. */
   it('takes focus after it is placed, without scrolling anything to reach it', () => {
     const seen: Array<{ preventScroll?: boolean; placed: string }> = []
     const focus = HTMLInputElement.prototype.focus

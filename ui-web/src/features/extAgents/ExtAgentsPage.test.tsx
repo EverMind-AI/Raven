@@ -290,9 +290,9 @@ describe('the Mirasim family card', () => {
     )
 
   /* A member whose handshake offered these choices; every other member as is. */
-  const withMenu = (rows: ExtAgentRow[], name: string, choices: ExtAgentModelChoice[]): ExtAgentRow[] =>
+  const withChoices = (rows: ExtAgentRow[], name: string, choices: ExtAgentModelChoice[]): ExtAgentRow[] =>
     rows.map((m) => (m.name === name ? { ...m, model_source: 'agent' as const, model_choices: choices } : m))
-  const CODEX_MENU: ExtAgentModelChoice[] = [
+  const CODEX_CHOICES: ExtAgentModelChoice[] = [
     { value: 'gpt-5.5', name: 'GPT-5.5', group: 'OpenAI' },
     { value: 'gpt-6', name: 'GPT-6', group: 'OpenAI' },
   ]
@@ -399,7 +399,7 @@ describe('the Mirasim family card', () => {
      reader has made but not yet sent: trying one agent and having it refused is
      exactly when they move on to the one they had already set up. */
   it('keeps the model picked on one row while another row s refusal reloads the roster', async () => {
-    const all = withMenu(members(), 'codex-Mirasim', CODEX_MENU)
+    const all = withChoices(members(), 'codex-Mirasim', CODEX_CHOICES)
     const sent: Array<[string, string, ExtAgentActArgs]> = []
     install(all, {
       act: async (op, r, args) => {
@@ -423,10 +423,11 @@ describe('the Mirasim family card', () => {
     expect(sent.at(-1)).toEqual(['connect', 'codex-Mirasim', { model: 'gpt-6' }])
   })
 
-  /* The same for a menu the reader has open: a reload -- any write's refetch,
-     or the poll while some agent builds -- does not shut it under the cursor. */
-  it('keeps a model menu open across a reload', async () => {
-    install(withMenu(members(), 'codex-Mirasim', CODEX_MENU))
+  /* The same for a model picker the reader has open: a reload -- any write's
+     refetch, or the poll while some agent builds -- does not shut it under the
+     cursor. */
+  it('keeps a model picker open across a reload', async () => {
+    install(withChoices(members(), 'codex-Mirasim', CODEX_CHOICES))
     await mount()
     await click(family())
     await click(pickNamed('codex-Mirasim').querySelector<HTMLElement>('.extAgents-pm')!)
@@ -437,12 +438,12 @@ describe('the Mirasim family card', () => {
     expect(document.querySelector('.model-picker')).toBeTruthy()
   })
 
-  /* The menu measures itself against the ROW: `anchorRow` sizes a panel from its
-     anchor's left edge to 20px inside the drawer, and from the pill -- at the
+  /* The picker measures itself against the ROW: `anchorRow` sizes a popover from
+     its anchor's left edge to 20px inside the drawer, and from the pill -- at the
      row's right -- it fell to its 320px floor. happy-dom does no layout, so the
-     rects are stubbed; what this pins is which element the panel is sized from. */
-  it('hangs the model menu off the row, so it opens as wide as the sheet s', async () => {
-    install(withMenu(members(), 'codex-Mirasim', CODEX_MENU))
+     rects are stubbed; what this pins is which element the picker is sized from. */
+  it('hangs the model picker off the row, so it opens as wide as the sheet s', async () => {
+    install(withChoices(members(), 'codex-Mirasim', CODEX_CHOICES))
     await mount()
     await click(family())
     const rect = (left: number, right: number, top: number, bottom: number) => (): DOMRect =>
@@ -455,17 +456,17 @@ describe('the Mirasim family card', () => {
     codex.querySelector<HTMLElement>('.extAgents-pm')!.getBoundingClientRect = rect(262, 430, 109, 137)
     await click(codex.querySelector<HTMLElement>('.extAgents-pm')!)
     /* 540 - 20 - 20 from the row; the pill would have given the 320 floor. */
-    const panel = document.querySelector<HTMLElement>('.model-picker')!
-    expect(panel.style.width).toBe('500px')
-    /* And not INSIDE it: `anchorRow` measures the anchor before the panel leaves
-       the flow, so a panel within the row stretched the very rect it measured
-       and every menu flipped up over the drawer. A stub cannot stretch, so the
+    const picker = document.querySelector<HTMLElement>('.model-picker')!
+    expect(picker.style.width).toBe('500px')
+    /* And not INSIDE it: `anchorRow` measures the anchor before the picker leaves
+       the flow, so a picker within the row stretched the very rect it measured
+       and every one flipped up over the drawer. A stub cannot stretch, so the
        containment itself is what is held here. */
-    expect(codex.contains(panel)).toBe(false)
+    expect(codex.contains(picker)).toBe(false)
   })
 
-  it('puts the menu away when its row is connected', async () => {
-    const { acts } = install(withMenu(members(), 'codex-Mirasim', CODEX_MENU))
+  it('puts the model picker away when its row is connected', async () => {
+    const { acts } = install(withChoices(members(), 'codex-Mirasim', CODEX_CHOICES))
     await mount()
     await click(family())
     await click(pickNamed('codex-Mirasim').querySelector<HTMLElement>('.extAgents-pm')!)
@@ -494,24 +495,17 @@ describe('the Mirasim family card', () => {
   /* The reader's model rides the add, so the row is never connected on the
      agent's default first and moved afterwards. */
   it('sends the model picked for an agent with its connect, in the one write', async () => {
-    const menu = members().map((m) =>
-      m.name === 'codex-Mirasim'
-        ? {
-            ...m,
-            model_source: 'agent' as const,
-            model_choices: [
-              { value: 'gpt-5.5', name: 'GPT-5.5', group: 'OpenAI' },
-              { value: 'glm-5.3-flash', name: 'GLM 5.3 Flash', group: 'Platform' },
-            ],
-          }
-        : m,
+    const { acts } = install(
+      withChoices(members(), 'codex-Mirasim', [
+        { value: 'gpt-5.5', name: 'GPT-5.5', group: 'OpenAI' },
+        { value: 'glm-5.3-flash', name: 'GLM 5.3 Flash', group: 'Platform' },
+      ]),
     )
-    const { acts } = install(menu)
     await mount()
     await click(family())
     const codex = pickNamed('codex-Mirasim')
     await click(codex.querySelector<HTMLElement>('.extAgents-pm')!)
-    /* The agent's own buckets, as the left column: its menu, not the host's. */
+    /* The agent's own groups, as the left column: its choices, not Raven's providers. */
     /* By the name span: the button also carries the provider's icon letter. */
     const prov = [...document.querySelectorAll<HTMLElement>('.model-picker-prov')].find((p) =>
       [...p.querySelectorAll('span')].some((x) => x.textContent === 'Platform'),
@@ -534,8 +528,8 @@ describe('the Mirasim family card', () => {
     expect(acts).toEqual([['connect', 'codex-Mirasim', { model: 'glm-5.3-flash' }]])
   })
 
-  /* An agent whose handshake offered no menu runs on its own default, and the
-     pill says so rather than opening an empty panel. */
+  /* An agent whose handshake offered no model choices runs on its own default,
+     and the pill says so rather than opening an empty picker. */
   it('offers no model to pick when the agent advertised none', async () => {
     install(members())
     await mount()
@@ -782,7 +776,7 @@ describe('connecting', () => {
       },
     })
     await mount()
-    /* Nineteen and not the catalogue's twenty-seven: the nine Mirasim presets
+    /* Nineteen and not the agent catalogue's twenty-seven: the nine Mirasim presets
        are one card while none of them has been opened out, so the skeleton has
        to draw one cell for them or the grid jumps by eight when the roster
        lands -- which is the whole reason this count is pinned. */

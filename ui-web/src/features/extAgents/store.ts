@@ -90,8 +90,9 @@ export interface ExtAgentsState {
      group key written there opens an empty drawer -- and `run` closes the
      drawer whenever the open name leaves the rows, which a group key never
      enters. Unlike the sheet, the picker is not remounted per `epoch`: every
-     load bumps that, and the picker holds a choice in progress -- an open model
-     menu -- that a reload after another row's write must not throw away. */
+     load bumps that, and the picker holds a choice in progress -- a model
+     picker open in it -- that a reload after another row's write must not
+     throw away. */
   picking: string | null
   /* The model the reader picked in the family picker, by row name. A preset has
      no row to hold it until `subagents.add`, so -- like `drafts` -- the pick

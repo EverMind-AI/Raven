@@ -442,7 +442,7 @@
    320px is the width of a whole field column, and here it would leave the name
    nothing. One fixed width for all nine, so the pills read as a column rather
    than a ragged edge, and a long id ellipses instead of pushing the button out.
-   The frameless pill of an agent with no menu keeps this rule's padding, which
+   The frameless pill of an agent with nothing to pick keeps this rule's padding, which
    puts its words at the x the framed ones start at. */
 .extAgents-pickpill { flex: none; display: flex; width: 168px; }
 .extAgents-pickpill .extAgents-pill { width: 100%; height: 28px; }

@@ -56,7 +56,7 @@ export function familyOf(row: ExtAgentRow): string | null {
   return row.preset && row.preset.startsWith(`${MIRASIM_FAMILY}_`) ? MIRASIM_FAMILY : null
 }
 
-/* A catalogue key that belongs to a family, by the same prefix test the rows
+/* An agent catalogue key that belongs to a family, by the same prefix test the rows
    are folded by, so the skeleton and the grid cannot disagree about which
    entries collapse. */
 const familyOfKey = (key: string): string | null =>

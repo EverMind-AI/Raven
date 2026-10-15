@@ -80,12 +80,12 @@ export function ModelPicker({ title, providers, current, onPick, onClose, emptyN
      below is filtered, not resized, so a search term never moves the panel. */
   useLayoutEffect(() => {
     if (anchor && box.current) anchorRow(box.current, anchor)
-    /* Focused here, after the panel is placed, and without scrolling -- not by
-       `autoFocus`. React runs autoFocus before this effect, while the panel is
+    /* Focused here, after the picker is placed, and without scrolling -- not by
+       `autoFocus`. React runs autoFocus before this effect, while the picker is
        still in the flow, so a scroller holding it scrolled to show the field:
-       the row moved, the panel was placed against where it had moved to, and
-       the scroller settled back once the panel left the flow, leaving the menu
-       over its own row. */
+       the row moved, the picker was placed against where it had moved to, and
+       the scroller settled back once the picker left the flow, leaving it over
+       its own row. */
     field.current?.focus({ preventScroll: true })
   }, [anchor])
   /* A scroll closes the panel; a resize re-places it. The two events move the
@@ -149,9 +149,9 @@ export function ModelPicker({ title, providers, current, onPick, onClose, emptyN
       aria-label={title}
       ref={box}
       onKeyDown={(e) => {
-        /* The menu keeps the Escape it answers, from the field or from a row the
+        /* The picker keeps the Escape it answers, from the field or from a row the
            reader moved to: the document owns Escape too, and its escape table
-           would also close the drawer this menu hangs in -- one key, one layer. */
+           would also close the drawer this picker hangs in -- one key, one layer. */
         if (e.key !== 'Escape') return
         e.stopPropagation()
         onClose()
