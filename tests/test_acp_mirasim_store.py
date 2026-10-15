@@ -65,13 +65,13 @@ def test_a_file_that_is_not_json_reads_as_empty_and_is_replaced(tmp_path: Path) 
     assert store.get("acp-1") is not None
 
 
-def test_each_agent_has_its_own_file_under_the_raven_home(tmp_path: Path, monkeypatch) -> None:
+def test_an_agent_has_a_file_of_its_own_under_the_raven_home(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
     assert store_path("claude") == tmp_path / "home" / "subagent_sessions" / "mirasim" / "claude.json"
     assert store_path("claude") != store_path("codex")
 
 
-def test_every_mirasim_server_runs_in_one_directory_under_the_raven_home(tmp_path: Path, monkeypatch) -> None:
+def test_the_server_directory_is_one_folder_under_the_raven_home(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
     assert server_workdir() == tmp_path / "home" / "subagent_sessions" / "mirasim"
 

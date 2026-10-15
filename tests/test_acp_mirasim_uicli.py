@@ -110,7 +110,7 @@ async def test_a_command_with_no_server_announces_nothing(tmp_path: Path) -> Non
     assert await invocation.announced() is None
 
 
-def test_each_command_sent_to_a_server_names_the_port_before_the_verb() -> None:
+def test_a_command_sent_to_a_server_names_the_port_before_the_verb() -> None:
     cli = UiCli(executable="/usr/bin/true")
     assert cli.start(["agents"]).argv == ["/usr/bin/true", "ui-cli", "agents"]
     assert cli.start(["agents"], port=4970).argv == ["/usr/bin/true", "ui-cli", "--port=4970", "agents"]
