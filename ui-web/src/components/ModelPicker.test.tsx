@@ -54,9 +54,10 @@ describe('model picker', () => {
   })
 
   /* A heading stays on one line and gives way at its end rather than wrapping
-     (page.css, `.model-picker-name`, pinned by scripts/gates/model-picker-css):
-     so the name is its own element for that rule to reach, and the row carries
-     the whole name for the case where it does give way. */
+     (page.css, `.model-picker-name`, pinned by
+     scripts/gates/model-picker-css.test.mjs): so the name is its own element for
+     that rule to reach, and the row carries the whole name for the case where it
+     does give way. */
   it('names each provider in an element of its own, with the whole name on the row', () => {
     draw({ providers: [{ id: 'minimax_oauth', name: 'MiniMax Global (OAuth)', models: ['MiniMax-M3'] }] })
     const row = document.querySelector<HTMLElement>('.model-picker-prov')!
