@@ -15,6 +15,7 @@
 
 import { hasBuildFlag } from '../../rpc/capabilities'
 import { gateway } from '../../rpc/gateway'
+import { isOwnRow } from './catalogue'
 
 import type { ResultOf } from '../../rpc/generated'
 import type { ExtAgentActArgs, ExtAgentOp, ExtAgentRow, ExtAgentsSource, Remedy } from './types'
@@ -151,12 +152,14 @@ export function wizardSection(row: ExtAgentRow): Section | null {
    has, whichever of the two sections each sits in. Raven's own shipped agents
    are drawn -- connected when on, available when off -- but never counted:
    the step is about connecting something external, and the prototype counts
-   it done on those alone. A connected row counts whatever its probe says --
-   it is on the roster and dispatchable, which is what `sectionOf` reads
-   first -- so a verdict that failed to carry over a re-scan no longer flips
-   the step back to not done. */
+   it done on those alone. Raven's own whichever way this install registered
+   it (`isOwnRow`), not only a discovered folder: an install can write one
+   of Raven's own agents down as a config row. A connected row counts whatever its
+   probe says -- it is on the roster and dispatchable, which is what
+   `sectionOf` reads first -- so a verdict that failed to carry over a re-scan
+   no longer flips the step back to not done. */
 export function isFound(row: ExtAgentRow): boolean {
-  return !row.vendored && wizardSection(row) !== null
+  return !isOwnRow(row) && wizardSection(row) !== null
 }
 
 /* What the last fetch reported, kept here rather than read back off the page:

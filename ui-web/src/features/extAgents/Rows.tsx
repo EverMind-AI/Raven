@@ -286,8 +286,10 @@ function RowControl({ row, s, shown }: { row: ExtAgentRow; s: ExtAgentsState; sh
     )
   }
   if (shown === 'on') {
-    /* Raven's shipped specialists are part of Raven: never disconnected. */
-    if (row.builtin || row.vendored) return null
+    /* The built-in loop alone has no switch: an unnamed spawn and a dag node
+       with no sub-agent dispatch to it. Raven's shipped specialists switch off
+       like any other agent; coming with Raven does not keep one on the roster. */
+    if (row.builtin) return null
     return (
       <button className="mini" onClick={() => store.disconnectRow(row)}>
         {t('gui.agent.disconnect')}

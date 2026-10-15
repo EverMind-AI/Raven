@@ -226,6 +226,19 @@ const BUILTIN_ROW: SubagentRow = {
   test_running: false
 }
 
+// One of raven's own agents, discovered under `agents/` rather than written into
+// config: `configured: false` like a preset, yet on the roster, and switched by the
+// same `subagents.toggle` (the server writes a switch-only row for "off").
+const SHIPPED_ROW: SubagentRow = {
+  ...ACP_ROW,
+  configured: false,
+  description: 'autonomous software development',
+  name: 'Raven-Code',
+  own: true,
+  preset: undefined,
+  vendored: true
+}
+
 interface Harness {
   // frame()'s `output` is an append-only concatenation of every byte ink
   // ever wrote (ink's cell-diffing can skip re-emitting a cell whose content
@@ -324,6 +337,15 @@ describe('flattenSubagentRows', () => {
     expect(installedCount).toBe(1)
     expect(uninstalledCount).toBe(1)
     expect(presetsCount).toBe(1)
+  })
+
+  // Split on `configured` alone, an agent raven ships filed as a preset -- "[new]",
+  // "press Enter to add it" -- for an agent already on the roster.
+  it('files an agent raven ships under installed, not under presets', () => {
+    const { installedCount, presetsCount } = flattenSubagentRows([SHIPPED_ROW])
+
+    expect(installedCount).toBe(1)
+    expect(presetsCount).toBe(0)
   })
 
   it('files a built-in row under installed, not under not-installed', () => {
@@ -1651,6 +1673,70 @@ describe('SubagentsHub built-in row', () => {
     // the package's default" is spelled. So it told the user to press Enter to add
     // an agent already on the table, for which Enter opens nothing.
     expect(h.frame()).not.toContain('only a preset')
+
+    h.unmount()
+  })
+})
+
+describe('SubagentsHub discovered agent', () => {
+  // A single-row fixture puts the target at index 0, as the built-in cases do.
+  it('shows its switch where a preset shows [new]', async () => {
+    const h = mount({ rows: [SHIPPED_ROW] })
+    await waitForFrame(h, 'Raven-Code')
+
+    expect(h.frame()).toContain('[on ]')
+    expect(h.frame()).not.toContain('[new]')
+
+    h.unmount()
+  })
+
+  it("'space' switches it off rather than calling it a preset", async () => {
+    const h = mount({ rows: [SHIPPED_ROW] })
+    await waitForFrame(h, 'Raven-Code')
+
+    h.gw.request.mockClear()
+    await h.type(' ')
+    await waitForRpcCall(h.gw.request, 'subagents.toggle')
+
+    expect(h.gw.request).toHaveBeenCalledWith('subagents.toggle', { enabled: false, name: 'Raven-Code' })
+    expect(h.frame()).not.toContain('only a preset')
+
+    h.unmount()
+  })
+
+  // Neither pool the other two sources read holds a discovered folder, so either
+  // answers "no such sub-agent" before anything is dispatched.
+  it("'t' tests it from its folder, not as a preset", async () => {
+    const h = mount({ rows: [SHIPPED_ROW] })
+    await waitForFrame(h, 'Raven-Code')
+
+    h.gw.request.mockClear()
+    await h.type('t')
+    await waitForRpcCall(h.gw.request, 'subagents.test')
+
+    expect(h.gw.request).toHaveBeenCalledWith('subagents.test', { name: 'Raven-Code', source: 'vendored' })
+
+    h.unmount()
+  })
+
+  // Edited in place, as the web edits it: as an add it named no preset, and
+  // the server refused it as an unknown one.
+  it('Enter edits it through subagents.update, not as a preset to add', async () => {
+    const h = mount({ rows: [SHIPPED_ROW] })
+    await waitForFrame(h, 'Raven-Code')
+
+    await h.type(ENTER)
+    await waitForFrame(h, 'Edit subagent')
+    h.gw.request.mockClear()
+    await h.type(TAB)
+    await h.type(ENTER)
+    await waitForRpcCall(h.gw.request, 'subagents.update')
+
+    expect(h.gw.request).toHaveBeenCalledWith('subagents.update', {
+      description: SHIPPED_ROW.description,
+      name: 'Raven-Code',
+      new_name: 'Raven-Code'
+    })
 
     h.unmount()
   })

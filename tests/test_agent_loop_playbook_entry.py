@@ -201,6 +201,40 @@ def test_a_playbook_config_that_is_on_registers_both_entries_even_empty(tmp_path
     assert "enum" not in name_schema, name_schema
 
 
+def test_the_playbook_runtime_dag_tool_is_wired_to_the_manager_sandbox(tmp_path):
+    """The funnel's private graph tool is one of the sites that must hand over
+    the manager's sandbox builder. A stored graph's nodes exec too, and a site
+    that drops the keyword returns them to the host silently -- the shape of
+    the defect the builder seam was added for.
+    """
+    from raven.config.schema import PlaybookConfig
+    from raven.playbook import PlaybookExecutor
+
+    captured = {}
+    orig_init = PlaybookExecutor.__init__
+
+    def recording_init(self, *args, **kwargs):
+        captured["dag_tool"] = kwargs.get("dag_tool")
+        return orig_init(self, *args, **kwargs)
+
+    import pytest
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(PlaybookExecutor, "__init__", recording_init)
+    try:
+        loop = AgentLoop(
+            provider=_Provider(),
+            workspace=tmp_path,
+            model="fake/default",
+            policy=TurnPolicy(max_iterations=2),
+            engine=EngineWiring(playbook_config=PlaybookConfig(enabled=True)),
+        )
+    finally:
+        monkeypatch.undo()
+    assert loop._playbooks is not None, "the runtime must build for its tool to be pinned"
+    assert captured["dag_tool"]._sandbox_for == loop.subagents.sandbox_executor_for
+
+
 def test_a_user_playbook_in_the_library_registers_the_loader(tmp_path) -> None:
     """The flip side of the empty check: content is what gates the loader.
 

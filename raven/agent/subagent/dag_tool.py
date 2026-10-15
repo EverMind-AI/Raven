@@ -559,6 +559,7 @@ class SubAgentDagTool(Tool):
         provider_for: "Callable[[], Any] | None" = None,
         binding_for: "Callable[[], tuple[Any, str | None]] | None" = None,
         worker_table_for: "Callable[[], DelegateTable | None] | None" = None,
+        sandbox_for: "Callable[[Path], Any] | None" = None,
         verdict_config: "SubagentDagConfig | None" = None,
         stint_driver: StintDriver | None = None,
     ) -> None:
@@ -629,6 +630,10 @@ class SubAgentDagTool(Tool):
         # DAG tools may inject an empty source when their graph came from a
         # stored Playbook and must retain the agents and prompts it authored.
         self._worker_table_for = worker_table_for or current_delegate
+        # The spawn paths' own sandbox, handed over as a builder so a graph can
+        # give each node its VM the way a spawn gives each sub-agent one; None
+        # keeps node exec on the host exactly as before this seam existed.
+        self._sandbox_for = sandbox_for
         self._verdict_config = verdict_config if verdict_config is not None else SubagentDagConfig()
         self._cancels: dict[str, asyncio.Event] = {}
         self._desks: dict[str, AdjudicationDesk] = {}
@@ -2414,6 +2419,7 @@ class SubAgentDagTool(Tool):
                 nodes_root=dirs.nodes_root,
                 history_root=dirs.subagents_root,
                 subagents_root=dirs.subagents_root,
+                sandbox_factory=self._sandbox_for,
                 progress_publisher=emit,
                 semaphore=self._gate if stint is None else _StintShare(self._gate, STINT_MAX_PARALLEL),
                 session_key=origin.conversation,

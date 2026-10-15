@@ -144,13 +144,15 @@ def test_a_report_runs_from_collecting_to_its_receipt(make, state, uploads):
     view = _wait(reports, rid, "deciding")
     assert view["bug_report_id"].startswith("br-")
     [item] = view["items"]
-    assert item["kind"] == "suspected" and TOKEN not in json.dumps(view), "the page never sees the plain value"
+    assert item["kind"] == "suspected" and item["value"] == TOKEN, "the page decides on the value in full"
+    assert TOKEN not in item["masked_sample"]
     assert item["count"] >= 1 and item["sources"]
     contexts = reports.item(rid, item["id"])
     assert contexts["total_groups"] >= 1 and TOKEN in contexts["groups"][0]["text"]
     reports.decide(rid, *_decide_all(view, "redacted"))
     view = _wait(reports, rid, "ready")
     assert view["summary"]["redacted"] == 1 and view["summary"]["classification"] == "needs_review"
+    assert TOKEN not in json.dumps(view), "the values travel only while they are being decided"
     reports.upload(rid, risk_accepted=True)
     view = _wait(reports, rid, "uploaded")
     assert view["receipt"] == {"receipt_id": "rcpt-1", "duplicate": False}
@@ -236,7 +238,11 @@ def test_a_confirmed_item_must_be_acknowledged(make, state, uploads):
     reports = make()
     rid = reports.start(_plan(state), _problem(f"key {PEM}"))
     view = _wait(reports, rid, "deciding")
-    assert view["items"][0]["kind"] == "confirmed"
+    confirmed = view["items"][0]
+    assert confirmed["kind"] == "confirmed"
+    assert confirmed["value"] == confirmed["masked_sample"] and "MIIabcdef" not in confirmed["value"], (
+        "a private key is shown as its replacement, never in full"
+    )
     decisions, _ack = _decide_all(view)
     with pytest.raises(rs.ReportStateError) as excinfo:
         reports.decide(rid, decisions, [])

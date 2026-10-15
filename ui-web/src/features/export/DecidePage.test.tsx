@@ -26,11 +26,17 @@ function deferred<T>(): Deferred<T> {
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
+const PLACEHOLDER = '[REDACTED:pattern.private-key-block]'
+
 const turn = (n: number): ExportTurn => ({
   trace_id: `t${n}`, number: n, start: '2026-10-01T10:00:00Z', input_preview: `input ${n}`, in_progress: false,
 })
 const item = (id: string, kind: ReportItem['kind'], linked: string[] = []): ReportItem => ({
-  id, kind, category: kind === 'confirmed' ? 'private-key-block' : 'high-entropy', masked_sample: `${id}...masked`,
+  id,
+  kind,
+  category: kind === 'confirmed' ? 'private-key-block' : 'high-entropy',
+  value: kind === 'confirmed' ? PLACEHOLDER : `${id}-secret-value`,
+  masked_sample: `${id}...masked`,
   count: 2, sources: [], linked, hint: null,
 })
 
@@ -66,7 +72,12 @@ const settle = async (ms = 0): Promise<void> => { await act(async () => { await 
 const button = (label: string): HTMLButtonElement => $$('button').find((b) => b.textContent === label) as HTMLButtonElement
 const tap = (el: Element): void => { act(() => { fireEvent.click(el) }) }
 const rows = (): HTMLElement[] => $$('.export-item')
-const sub = (id: string): string => rows().find((row) => row.textContent?.includes(`${id}...masked`))!.querySelector('.ds')!.textContent!
+const words = (): string[] => rows().map((row) => row.querySelector('.nm')!.textContent!)
+const action = (id: string): string | undefined =>
+  rows().find((row) => row.querySelector('.nm')!.textContent === `${id}-secret-value`)!.dataset.action
+const head = (): string => $('.two-pane-head .nm').textContent!
+const facts = (): string => $('.two-pane-head .two-pane-meta').textContent!
+const ack = (): HTMLInputElement => $<HTMLInputElement>('.two-pane-head .export-ack input')
 
 async function atDecisions(): Promise<void> {
   document.body.innerHTML = FRAME
@@ -128,18 +139,28 @@ describe('the decisions page', () => {
     expect($('.export-history [data-bad]').textContent).toBe('the redaction history could not be read')
   })
 
-  it('lists every item masked, confirmed first with an acknowledgement, and Next waits for it', async () => {
+  it('lists the values and nothing else, each in full, confirmed first', async () => {
     await atDecisions()
-    expect(rows().map((row) => row.querySelector('.nm')!.textContent)).toEqual(['k...masked', 'a...masked', 'b...masked', 'd...masked'])
-    expect(sub('k')).toBe('gui.export.confirmed')
-    expect(sub('a')).toContain('gui.export.count:{"n":2}')
-    expect(sub('a')).toContain('gui.export.kept')
-    expect(sub('a')).toContain('gui.export.linked:{"n":1}')
-    expect(rows()[0]!.querySelector('.export-ack input')).not.toBeNull()
-    expect(rows()[1]!.querySelector('.export-ack')).toBeNull()
+    expect(words()).toEqual([PLACEHOLDER, 'a-secret-value', 'b-secret-value', 'd-secret-value'])
+    for (const row of rows()) {
+      expect(row.textContent).toBe(row.querySelector('.nm')!.textContent)
+      expect(row.querySelector('.ds, .export-ack, input')).toBeNull()
+    }
+    expect(document.querySelector('.two-pane-side')!.textContent).not.toContain('...masked')
+  })
+
+  it('says everything else about the picked value on the right, and Next waits for the acknowledgement', async () => {
+    await atDecisions()
+    expect(head()).toBe(PLACEHOLDER)
+    expect(facts()).toBe('private-key-block · gui.export.confirmed')
     expect($('.export-primary').hasAttribute('disabled')).toBe(true)
-    tap(rows()[0]!.querySelector('.export-ack input')!)
+    tap(ack())
     expect($('.export-primary').hasAttribute('disabled')).toBe(false)
+    tap(rows()[1]!.querySelector('.two-pane-hit')!)
+    await settle()
+    expect(head()).toBe('a-secret-value')
+    expect(facts()).toBe('high-entropy · gui.export.count:{"n":2} · gui.export.kept · gui.export.linked:{"n":1}')
+    expect(document.querySelector('.two-pane-head .export-ack')).toBeNull()
   })
 
   it('shows the focused item\'s contexts with each hit marked at its code points', async () => {
@@ -158,25 +179,25 @@ describe('the decisions page', () => {
     await atDecisions()
     expect(button('gui.export.keep').disabled).toBe(true)
     tap(button('gui.export.redact_all'))
-    expect(['a', 'b', 'd'].map(sub).every((text) => text.includes('gui.export.redacted'))).toBe(true)
+    expect(['a', 'b', 'd'].map(action)).toEqual(['redacted', 'redacted', 'redacted'])
+    expect(rows()[0]!.dataset.action).toBeUndefined()
     tap(rows()[1]!.querySelector('.two-pane-hit')!)
     await settle()
+    expect(facts()).toContain('gui.export.redacted')
     tap(button('gui.export.keep'))
-    expect(sub('a')).toContain('gui.export.kept')
-    expect(sub('b')).toContain('gui.export.kept')
-    expect(sub('d')).toContain('gui.export.redacted')
+    expect(['a', 'b', 'd'].map(action)).toEqual(['kept', 'kept', 'redacted'])
     tap(button('gui.export.keep_all'))
-    expect(sub('d')).toContain('gui.export.kept')
+    expect(action('d')).toBe('kept')
   })
 
   it('outlines the items a refused decision names', async () => {
     decide = () => Promise.reject(new RpcError(-32027, 'clash', { item_ids: ['a', 'b'] }))
     await atDecisions()
-    tap(rows()[0]!.querySelector('.export-ack input')!)
+    tap(ack())
     tap($('.export-primary'))
     await settle()
     expect(rows().filter((row) => row.hasAttribute('data-bad')).map((row) => row.querySelector('.nm')!.textContent))
-      .toEqual(['a...masked', 'b...masked'])
+      .toEqual(['a-secret-value', 'b-secret-value'])
     expect($('[role="alert"]').textContent).toBe('gui.export.conflict')
   })
 
@@ -186,13 +207,13 @@ describe('the decisions page', () => {
     expect(rows()).toHaveLength(200)
     expect($('.export-pager span').textContent).toBe('gui.export.page_of:{"page":1,"pages":2}')
     tap(button('gui.export.next_page'))
-    expect(rows().map((row) => row.querySelector('.nm')!.textContent)).toEqual(['s200...masked'])
+    expect(words()).toEqual(['s200-secret-value'])
     expect(button('gui.export.next_page').disabled).toBe(true)
   })
 
   it('says the status could not be read after a decision, and asks again on request without deciding again', async () => {
     await atDecisions()
-    tap(rows()[0]!.querySelector('.export-ack input')!)
+    tap(ack())
     answer = () => Promise.reject(new RpcError(-1, 'connection closed'))
     tap($('.export-primary'))
     await settle()
@@ -213,7 +234,7 @@ describe('the decisions page', () => {
 
   it('writes nothing from a status that lands after the wizard closed', async () => {
     await atDecisions()
-    tap(rows()[0]!.querySelector('.export-ack input')!)
+    tap(ack())
     const late = deferred<ReportStatus>()
     answer = () => late.promise
     tap($('.export-primary'))

@@ -9,25 +9,23 @@ covers using them, not installing their transports.
 
 ## Work on a registered machine
 
-Register the destination with `raven ops connection add`, then install its node
-with `raven ops connection install-node <machine-id>`. Set an agent entry's
-`machine` to that registry id, or ask Raven to add a preset on that machine.
-Start Raven normally, for example with `raven serve`; no environment switch is
-required. Entries without `machine` continue to run locally.
+An agent entry that names a `machine` runs on that registered machine, works
+there and leaves its files there; entries without one run locally as before.
+[Working on Registered Machines](machines.md) walks through registering the
+machine, installing its node, configuring the entry, and what to expect when
+the connection drops.
 
-ACP and CLI entries run under the machine's node. An OpenAI entry reaches its
-HTTP endpoint through an SSH tunnel from that machine; built-in entries run
-locally. The registered SSH credentials, file permission prompts and concurrency
-limits still apply. Attachments are named by address, not copied automatically.
+On hosts with Unix-socket support, remote ACP agents can use the MCP servers
+granted to their entry through the Raven node. Server definitions and credentials
+stay on the host, as do tool restrictions and sandbox rules. The node tells which
+task a bridge belongs to by the process that opened it, and the host checks that
+task against the grant; another task cannot select a grant by name.
 
-If Raven stops during a remote ACP or CLI task, the machine keeps working. The
-next start uses the records in the same Raven home to recover the result into
-the original conversation. Keep the machine registration and agent entry
-available for that recovery.
-
-`RAVEN_DEBUG_MACHINES` was a default-off trial switch for machine dispatch and
-remote file access. It is no longer read; an old value of `0` does not disable
-these features or prevent task recovery.
+On Windows hosts, remote MCP lending is currently withheld because the host
+endpoint transport requires Unix sockets. The remote task still runs and its
+reply explains that MCP was not provided. CLI agents on machines also continue
+without lent MCP. A host restart recovers the task result but does not restore
+its previous MCP connections.
 
 ## Choose a collaboration shape
 

@@ -923,6 +923,25 @@ def _spawn_supervisor(port: int) -> None:
         handle.close()
 
 
+def supervise_from_argv(argv: list[str]) -> bool:
+    """Be the supervisor for the argv `raven web` and `system.upgrade` start it with; False for any other.
+
+    The entry point asks this before it imports the command table, which a
+    supervisor never uses. Only that exact shape -- ``web --supervise --port N``
+    with N in ASCII digits -- is taken, and it reaches ``_web`` as the ``web``
+    command hands it on; any other argv is left to the table to parse as before.
+    """
+    if len(argv) != 4 or argv[:3] != ["web", "--supervise", "--port"]:
+        return False
+    if not (argv[3].isascii() and argv[3].isdecimal()):
+        return False
+    try:
+        _web(int(argv[3]), foreground=False, stop=False, supervise=True)
+    except typer.Exit as exc:
+        raise SystemExit(exc.exit_code) from None
+    return True
+
+
 def _bound_port_of(proc: object, timeout_s: float = 15.0) -> Optional[int]:
     """The port this gateway process bound, read out of the file it writes.
 

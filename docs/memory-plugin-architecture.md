@@ -315,7 +315,7 @@ imported.
 
 ## 7. EverOS version pinning & upgrade SOP
 
-### 7.1 Exact pin is mandatory **[DONE: `everos[multimodal]==1.4.1`]**
+### 7.1 Exact pin is mandatory **[DONE: `everos[multimodal]==1.4.2`]**
 
 The adapter is written against EverOS **internal** APIs, not a stable
 public surface:
@@ -343,7 +343,7 @@ Single pin: EverOS is pinned in **one** place, the plugin's own
    (`~/.everos/.index/` sqlite + lancedb) changed.
 1. **Bump the pin (uv only — never hand-edit pyproject/lock)**:
    ```bash
-   uv add --package everos-memory 'everos[multimodal]==1.4.1' && uv sync
+   uv add --package everos-memory 'everos[multimodal]==1.4.2' && uv sync
    ```
    Always keep the `[multimodal]` extra. Skip `1.2.0`: it shipped a
    path-traversal regression fixed in `1.2.1`.
@@ -370,9 +370,13 @@ Single pin: EverOS is pinned in **one** place, the plugin's own
    notes for any bump whose migration behaves this way. An upgrade whose
    only record is a pull-request description is known to whoever read
    that description.
-5. **Finalize**: bump the manifest `version`. Two tests assert it as a
-   literal and must be updated with it —
-   `test_everos_plugin_discovery.py::test_bundled_shadows_lower_priority_source`
+5. **Finalize**: set the plugin's own `version` to the EverOS version it
+   pins — the two are read together, and a plugin `1.4.0` that ships EverOS
+   `1.4.1` only invites the question which of them a given install has.
+   Three files carry it: `pyproject.toml`, `raven_everos/raven-plugin.toml`,
+   `raven_everos/__init__.py`. Two tests assert it as a literal and must be
+   updated with it —
+   `test_everos_plugin_discovery.py::TestPackageSurface::test_imports_clean`
    and `test_cli_plugin_commands.py::TestActiveBackend::test_lists_everos_memory`.
    Then commit
    `pyproject.toml` + `uv.lock` + adapter changes. Rollback =
@@ -549,6 +553,46 @@ width before writing the pin and refuses anything narrower than
 the memory backend: a knowledge base sizes itself to whatever width the
 model returns, so an install with memory off or on another backend keeps
 any width. The wizard's own check reads the same constant and probe.
+
+### 7.5 Record: `1.4.1` -> `1.4.2`
+
+One package moved: `everos` `1.4.1` -> `1.4.2`. EverOS declares the same 36
+requirements in both releases, so nothing else in the lock follows it. The
+plugin's own version goes `1.4.0` -> `1.4.2` rather than `1.4.1`: step 5 now
+holds it equal to the EverOS it pins, and the number this upgrade skips is the
+gap that rule closes.
+
+**No adapter change.** Every internal symbol the adapter reaches is present
+in `1.4.2` with the same signature, the package layout churn underneath
+included: `everos.infra.persistence.lancedb.tables` became
+`everos.infra.persistence.records` and `everos.infra.persistence.backends`
+became `.lancedb.LanceIndexBackend`, but the adapter imports
+`episode_repo` / `agent_skill_repo` from the `lancedb` package, which
+re-exports both the way it did before.
+
+**The derived index repairs itself, once, on the first start.** `1.4.2`
+makes a table's primary key `(app_id, project_id, id)` rather than `id`
+alone, and the first full cascade pass after the upgrade re-reconciles every
+indexed markdown file against the index, re-embedding only rows that are
+missing or stale and recording that it ran in
+`.index/.index_reconcile_version`. A healthy root pays one read pass and no
+embedding. Markdown was never affected by the bug this fixes, so the
+markdown a root keeps is the source either way. The two roots EverOS says
+need `everos cascade rebuild` by hand are a Milvus derived index and a root
+where reflection already ran across projects; raven writes one project into
+a LanceDB root and reaches neither, but a user who pointed raven at a root
+of their own might.
+
+**Three faults fixed that a long-lived server hits.** A LanceDB index reader
+leaked file descriptors for the life of the process (capped now by
+`[lancedb] metadata_cache_size_bytes`, default 1 MB), an interactive search
+queued behind the cascade's background embedding (queries draw on
+`[embedding] query_max_concurrent`, default 4), and a cascade pass embedded
+one request per entry instead of one per file. The settings are EverOS's
+own; raven writes only `[api]` into `everos.toml` and copies the shipped
+template for a root that has none, so an existing root keeps `max_concurrent`
+as its own file spells it and picks up `query_max_concurrent` from the class
+default behind the file.
 
 ---
 

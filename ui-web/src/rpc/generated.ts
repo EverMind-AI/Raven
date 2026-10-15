@@ -2519,6 +2519,10 @@ export interface BugReportItem {
   id: string;
   kind: 'suspected' | 'confirmed';
   category: string;
+  /**
+   * The value in full, for the reader to decide on; a confirmed item, replaced whatever the reader says, shows its replacement.
+   */
+  value: string;
   masked_sample: string;
   count: number;
   sources: {

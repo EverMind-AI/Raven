@@ -73,6 +73,18 @@ All notable changes to Raven are documented here.
 
 ### Changed
 
+- Memory runs on EverOS 1.4.2, which fixes what a memory server that stays up
+  for days ran into: a LanceDB index reader leaked file descriptors until
+  searches took seconds, an interactive search queued behind the cascade's
+  background embedding (vector search p50 46 s under three concurrent
+  writers, 0.60 s now), and a cascade pass sent one embedding request per
+  entry instead of one per file. The derived index also repairs itself on the
+  first start after the upgrade: EverOS re-reconciles every indexed markdown
+  file against the index once, re-embedding only the rows that are missing,
+  and a healthy index pays one read pass and no embedding. Markdown is the
+  source either way and was never affected. A server left running from the
+  older version is restarted, as it has been since the pin moved to 1.4.1.
+
 - Research reports are written for a reader rather than for a grader. The
   report opens with the answer as a blockquote, with no label or bold lead-in
   before it, stated first and then why it

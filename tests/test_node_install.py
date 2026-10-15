@@ -71,6 +71,8 @@ class Machine:
         self.answers = answers
         self.sent: list[str] = []
         self.pushed: list[bytes] = []
+        self.pushed_by: list[tuple[str, bytes]] = []
+        """Each push with the command it fed: what reached a step's stdin."""
         self.check = json.dumps({"protocol": protocol.PROTOCOL, "digest": bundle.digest()})
 
     def _answer(self, command: str) -> tuple[int, str]:
@@ -93,7 +95,10 @@ class Machine:
     def push(self, target: remote.Machine, command: str, data: bytes) -> tuple[int, str]:
         self.sent.append(command)
         self.pushed.append(data)
-        return self.answers.get("code", (0, ""))
+        self.pushed_by.append((command, data))
+        if command.endswith('tar -xzf - -C "$node/lib"'):
+            return self.answers.get("code", (0, ""))
+        return self._answer(command)
 
 
 @pytest.fixture
@@ -300,6 +305,7 @@ def test_the_steps_build_a_virtualenv_with_uv_then_fill_it_with_uv():
     pip = f'{_UV_ENV} "$uv" pip install --quiet --python "$node/bin/python"'
     assert commands["packages"] == head + f"{pip} " + " ".join(bundle.pinned(protocol.REQUIREMENTS))
     assert "--default-index" not in " ".join(commands.values()), "no index configured for pip: uv's own default"
+    assert "UV_DEFAULT_INDEX" not in " ".join(commands.values()), "and nothing is read off a step's stdin for one"
     assert "python -m pip" not in " ".join(commands.values()) and " -m venv " not in " ".join(commands.values())
     (rg,) = bundle.pinned((protocol.SEARCH_REQUIREMENT,))
     assert commands["search"].count(rg) == 2 and commands["search"].count(pip) == 2
@@ -311,6 +317,18 @@ def test_the_steps_build_a_virtualenv_with_uv_then_fill_it_with_uv():
     assert commands["check"] == head + '"$node/bin/python" -I -m raven.node --version'
 
 
+def test_the_node_is_told_the_version_its_directory_is_named_by():
+    """A node runs this code from ``lib/``, not as an installed distribution, so it has no version of its own to
+    read; the install writes the one the host named its directory by beside the code."""
+    commands = dict(install.steps(_plan(install_name="0.2.4-abcdef123456")))
+
+    assert commands["path"].endswith(' "$node/lib" 0.2.4')
+    assert '"raven-" + version + ".dist-info"' in commands["path"] and "Version: " in commands["path"]
+    assert dict(install.steps(_plan(install_name="0.0.0+local-abcdef123456")))["path"].endswith(
+        ' "$node/lib" 0.0.0+local'
+    )
+
+
 def test_uv_makes_its_python_inside_the_node_dir():
     commands = dict(install.steps(_plan(python="", uv="/root/.local/bin/uv")))
 
@@ -319,42 +337,121 @@ def test_uv_makes_its_python_inside_the_node_dir():
     )
 
 
-def test_the_index_pip_is_configured_with_is_handed_to_uv_and_named_in_the_plan():
+_TAKE_INDEX = "IFS= read -r UV_DEFAULT_INDEX && export UV_DEFAULT_INDEX && "
+
+
+def test_the_index_pip_is_configured_with_is_read_off_the_step_s_stdin_and_named_in_the_plan():
     p = _plan(index="https://mirror.example/simple")
 
     commands = dict(install.steps(p))
 
-    pip = (
-        f'{_UV_ENV} "$uv" pip install --quiet --python "$node/bin/python" --default-index https://mirror.example/simple'
-    )
-    assert commands["packages"] == commands["packages"].split(pip)[0] + pip + " " + " ".join(
-        bundle.pinned(protocol.REQUIREMENTS)
-    )
+    head = "dir=~/.raven-node; id=" + bundle.install_name() + '; node="$dir/$id"; uv=/usr/bin/uv; '
+    pip = f'{_UV_ENV} "$uv" pip install --quiet --python "$node/bin/python"'
+    assert commands["packages"] == head + _TAKE_INDEX + pip + " " + " ".join(bundle.pinned(protocol.REQUIREMENTS))
     # The search package tries the machine's index first, then that index with the public one beside it.
+    assert commands["search"].startswith(head + _TAKE_INDEX + "{ " + pip + " ")
     assert commands["search"].count(pip) == 2 and f"--extra-index-url {protocol.PUBLIC_INDEX}" in commands["search"]
+    assert not any("mirror.example" in command for command in commands.values()), "no command line names it"
+    assert not any("--default-index" in command for command in commands.values())
+    others = [name for name in commands if name not in ("packages", "search")]
+    assert not any("UV_DEFAULT_INDEX" in commands[name] for name in others), "only the steps that run uv pip read it"
     assert "from https://mirror.example/simple (the index pip is configured with there), and this Raven's code" in (
         p.describe()
     )
     assert "from PyPI (pip is configured with no other index there), and this Raven's code" in _plan().describe()
 
 
-def test_a_sign_in_inside_the_index_url_reaches_uv_and_never_a_sentence():
-    """pip takes `https://user:password@host/simple`; the plan is printed before the confirmation, and under --yes."""
-    p = _plan(index="https://user:s3cret-pw@mirror.example:8443/simple")
+def test_a_sign_in_inside_the_index_url_reaches_uv_only_on_stdin_never_a_command_line_or_a_sentence(small_tarball):
+    """pip takes `https://user:password@host/simple`. A command line on the machine is readable by every account
+    there (``/proc/<pid>/cmdline``), and this computer's ssh argv by every account here; the plan is printed before
+    the confirmation, and under --yes."""
+    index = "https://user:s3cret-pw@mirror.example:8443/simple"
+    p = _plan(index=index)
+    machine = Machine()
 
+    done = install.install(p, run=machine.run, push=machine.push)
+
+    assert done.rg is True
+    assert not any("s3cret-pw" in command or "mirror.example" in command for command in machine.sent)
+    names = {command: name for name, command in install.steps(p)}
+    assert [(names[command], data) for command, data in machine.pushed_by] == [
+        ("packages", index.encode() + b"\n"),
+        ("search", index.encode() + b"\n"),
+        ("code", small_tarball),
+    ], "the two steps that run uv pip read the whole URL, one line, off stdin; the code step its tarball"
     said = p.describe()
     assert (
         "from https://mirror.example:8443/simple (the index pip is configured with there, shown without its sign-in)"
         in said
     )
     assert "s3cret-pw" not in said and "user:" not in said
-    assert "--default-index https://user:s3cret-pw@mirror.example:8443/simple" in dict(install.steps(p))["packages"]
     failed = install._failed(
         p, "packages", 2, "error: Failed to fetch: `https://user:s3cret-pw@mirror.example:8443/simple/loguru/`"
     )
     assert "s3cret-pw" not in failed and "https://mirror.example:8443/simple/loguru/" in failed
     assert install._shown_index("https://mirror.example/simple") == "https://mirror.example/simple"
     assert install._shown_index("http://u:p@[::1]:8080/simple") == "http://[::1]:8080/simple"
+
+
+# ---- E2: a port pip's configuration holds that is not a port ---------------------------------
+
+
+@pytest.mark.parametrize(
+    ("url", "shown"),
+    [
+        ("https://u:pw@mirror.example:84a3/simple", "https://mirror.example:84a3/simple"),
+        ("https://u:pw@mirror.example:99999/simple", "https://mirror.example:99999/simple"),
+        ("https://mirror.example:84a3/simple", "https://mirror.example:84a3/simple"),
+        ("https://u:p@ss@mirror.example/simple", "https://mirror.example/simple"),
+        ("https://u@[::1]:x/simple", "https://[::1]:x/simple"),
+    ],
+    ids=["not a number", "past 65535", "no sign-in", "an @ in the password", "ipv6"],
+)
+def test_an_index_is_shown_without_its_sign_in_whatever_its_port_says(url, shown):
+    assert install._shown_index(url) == shown
+
+
+@pytest.mark.parametrize("port", ["84a3", "99999"], ids=["not a number", "past 65535"])
+def test_an_index_whose_port_is_not_a_port_is_refused_in_one_sentence_before_anything_runs(registry, port):
+    sent: list[str] = []
+
+    def run(target: remote.Machine, command: str) -> tuple[int, str]:
+        sent.append(command)
+        return 0, (
+            "PYTHON=/usr/bin/python3.12\nUV=/usr/bin/uv\n"
+            f"INDEX=https://user:s3cret-pw@mirror.example:{port}/simple\nFREE_KB=2097152\n"
+        )
+
+    with pytest.raises(InstallError) as raised:
+        install.plan("box", run=run)
+
+    assert str(raised.value) == (
+        "the package index pip is configured with on machine 'Lab box' (box) has a port that is not a number "
+        f"from 0 to 65535 (https://mirror.example:{port}/simple); correct index-url in pip's configuration there, "
+        "or PIP_INDEX_URL"
+    )
+    assert len(sent) == 1, "the look only: nothing is installed"
+
+
+def test_an_index_whose_port_is_a_port_or_none_goes_ahead(registry):
+    """An empty port is the scheme's default (RFC 3986), not a port that is not one."""
+    for index in (
+        "https://u:pw@mirror.example:8443/simple",
+        "https://mirror.example/simple",
+        "https://u:pw@mirror.example:/simple",
+    ):
+        p = install.plan("box", run=lambda target, command, index=index: (0, f"UV=/usr/bin/uv\nINDEX={index}\n"))
+        assert p.index == index and "pw" not in p.describe()
+
+
+def test_a_plan_whose_index_port_cannot_be_read_still_describes_itself_and_its_failures():
+    """The look refuses such an index; a plan made some other way must not trace back either."""
+    p = _plan(index="https://u:pw@mirror.example:84a3/simple")
+
+    assert "https://mirror.example:84a3/simple (the index pip is configured with there, shown without its sign-in)" in (
+        p.describe()
+    )
+    assert "pw@" not in install._failed(p, "packages", 2, "error: https://u:pw@mirror.example:84a3/simple/x")
 
 
 @pytest.mark.parametrize(
@@ -686,6 +783,51 @@ def test_the_search_package_never_fails_the_install(shell, tmp_path, uv_rc, said
         assert f"--extra-index-url {protocol.PUBLIC_INDEX}" in asked[1]
 
 
+def _sh_in(command: str, home: Path, path: str, data: str) -> subprocess.CompletedProcess[str]:
+    """``command`` under ``/bin/sh`` with ``data`` on its stdin, as a pushed step gets it."""
+    return subprocess.run(
+        ["/bin/sh", "-c", command],
+        input=data,
+        capture_output=True,
+        text=True,
+        env={"HOME": str(home), "PATH": path},
+        cwd=home,
+        timeout=60,
+    )
+
+
+@pytest.mark.slow
+def test_the_index_reaches_uv_through_its_environment_and_never_its_argv_under_a_real_shell(shell, tmp_path):
+    """On the machine, uv's argv is what another account's ``ps`` shows; its environment is this user's alone."""
+    home, tools = shell
+    calls = tmp_path / "uv-calls"
+    # Fails the search package from the machine's index alone, so the fallback beside the public one runs too.
+    uv = _script(
+        tools / "uv",
+        f'echo "ARGV=$* INDEX=$UV_DEFAULT_INDEX" >> "{calls}"\n'
+        'case "$*" in *--extra-index-url*) exit 0 ;; *ripgrep*) exit 1 ;; esac\nexit 0\n',
+    )
+    index = "https://user:s3cret-pw@mirror.example:8443/simple"
+    commands = dict(
+        install.steps(_plan(node_dir=str(tmp_path / "nodes"), install_name="0.1-x", uv=str(uv), index=index))
+    )
+
+    packages = _sh_in(commands["packages"], home, str(tools), index + "\n")
+    search = _sh_in(commands["search"], home, str(tools), index + "\n")
+
+    assert packages.returncode == 0, packages.stderr
+    assert search.returncode == 0 and search.stdout.strip() == "RG=1", search.stderr
+    asked = calls.read_text(encoding="utf-8").splitlines()
+    assert len(asked) == 3, "the packages, the search package from the index, then beside the public one"
+    assert all(line.endswith(f" INDEX={index}") for line in asked), "uv reads the index from its environment"
+    assert not any("s3cret-pw" in line.split(" INDEX=")[0] for line in asked), "and no argv of uv's carries it"
+    assert f"--extra-index-url {protocol.PUBLIC_INDEX}" in asked[2]
+
+    # No line on stdin: the step fails, rather than install from PyPI behind the owner's back.
+    nothing = _sh_in(commands["packages"], home, str(tools), "")
+    assert nothing.returncode != 0 and len(calls.read_text(encoding="utf-8").splitlines()) == 3
+
+
 @pytest.mark.slow
 def test_prune_removes_only_other_nodes(shell, tmp_path):
     home, tools = shell
@@ -756,6 +898,22 @@ def test_a_real_install_makes_a_node_that_reports_this_raven_s_code(registry, tm
     ).stdout
     assert json.loads(reported) == {"protocol": protocol.PROTOCOL, "digest": bundle.digest()}
     assert bundle.tree_digest(node / "lib" / "raven") == bundle.digest()
+    # The node reads the version its directory is named by, and so names itself as the host named it: its
+    # socket and lock under run/, and the version it reports at the handshake.
+    named = subprocess.run(
+        [
+            str(node / "bin" / "python"),
+            "-I",
+            "-c",
+            "import raven; from raven.node import bundle; print(raven.__version__); print(bundle.install_name())",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=home,
+        check=True,
+    ).stdout.split()
+    assert named == [bundle.install_name().rsplit("-", 1)[0], bundle.install_name()]
     assert install.plan("box", node_dir=str(nodes), run=run).present, "the next look finds it"
 
     assert install.prune(p, run=run) == ("0.0.1-old",)

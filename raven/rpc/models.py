@@ -20,13 +20,16 @@ from pydantic import BaseModel, ConfigDict, Field
 # Re-usable model config.  ``extra="forbid"`` makes Pydantic emit
 # ``additionalProperties: false`` in the generated JSON Schema, matching the
 # OpenRPC schema's explicit ``additionalProperties: false`` on every object.
+# ``defer_build`` builds each model's validator on its first use: a host
+# validates only the methods its clients call, and building all of them at
+# import held about 6 MiB for the life of the process.
 # ---------------------------------------------------------------------------
 
 
 class _Strict(BaseModel):
     """Base class for all RPC models — forbids extra fields by default."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", defer_build=True)
 
 
 # ---------------------------------------------------------------------------
@@ -6234,11 +6237,14 @@ class BugReportSource(_Strict):
 
 
 class BugReportItem(_Strict):
-    """One Review Item still to decide, masked; the plain value never leaves the gateway."""
+    """One Review Item still to decide: the value in full, which is what the reader
+    decides on, and its masked sample. A confirmed item, replaced whatever the
+    reader says, has no value of its own and shows its replacement."""
 
     id: str
     kind: Literal["suspected", "confirmed"]
     category: str
+    value: str
     masked_sample: str
     count: int
     sources: list[BugReportSource]

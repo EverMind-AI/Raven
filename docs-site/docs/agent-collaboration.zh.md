@@ -7,21 +7,18 @@ Raven 同时提供委派任务与有状态 Agent 实例，两者不是一回事�
 
 ## 在登记机器上工作 { #work-on-a-registered-machine }
 
-先用 `raven ops connection add` 登记设备，再用
-`raven ops connection install-node <机器 id>` 安装节点。把 Agent 配置的
-`machine` 设为该登记 id，或在对话里让 Raven 把预设 Agent 添加到那台机器。
-正常运行 `raven serve` 即可，不需要额外环境开关；未配置 `machine` 的 Agent 仍在本机运行。
+配置了 `machine` 的 Agent 会在那台登记机器上运行，在那里工作，文件也留在那里；
+没有配置的 Agent 仍像以前一样在本机运行。登记机器、安装节点、配置条目，以及断线时会
+发生什么，见[在登记机器上工作](machines.md)。
 
-ACP 和 CLI 类型由设备上的节点启动；OpenAI 类型通过 SSH 隧道访问设备那边的
-HTTP 端点；内置 Agent 仍在本机运行。SSH 登录凭据、文件审批和并发限制照常生效。
-附件只提供地址，不自动复制。
+本机支持 Unix socket 时，远端 ACP Agent 可通过 Raven 节点使用配置授权给它的
+MCP 服务器。服务器定义、凭据、工具限制和沙箱规则仍在本机；节点按发起连接的
+进程判定每条流属于哪个任务，本机再核对该任务与授权的对应关系，别的任务不能凭
+授权名称冒用。
 
-远端 ACP 或 CLI 任务运行时退出 Raven，设备上的任务会继续。下次使用同一个
-Raven 主目录启动时，会根据保存的记录接回结果并通告到原会话。接回时需保留
-对应的机器登记和 Agent 配置。
-
-`RAVEN_DEBUG_MACHINES` 原来是默认关闭的试用开关，控制远端派发和按地址访问文件。
-现在不再读取这个变量；旧环境里即使还设为 `0`，也不会禁用这些功能或阻止任务恢复。
+Windows 宿主目前不借出远端 MCP，因为本机端点依赖 Unix socket。远端任务仍会
+运行，回复会说明没有提供 MCP。机器上的 CLI Agent 也暂不借用 MCP；本机重启后
+可以接回任务结果，但不会恢复之前的 MCP 连接。
 
 ## 选择协作形式 { #choose-a-collaboration-shape }
 

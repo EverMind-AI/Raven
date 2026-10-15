@@ -56,7 +56,7 @@ from raven.contracts.subagent_backend import SubagentNoAnswerError
 from raven.observability import semconv
 from raven.providers.binding import ModelBinding, resolve
 from raven.providers.pool import ProviderPool, live_pin_resolver
-from raven.sandbox import SandboxConfig, build_executor
+from raven.sandbox import SandboxConfig, SandboxExecutor, build_executor
 from raven.security.trust import wrap_untrusted
 from raven.spine.message import Media
 from raven.tracing import trace
@@ -1234,13 +1234,7 @@ class SubagentManager:
                 live_key=record.dir.name, instance=(session_key, agent, handle), prompt=recorded
             ) as did:
                 try:
-                    executor = build_executor(
-                        self._sandbox_config,
-                        effective_workspace,
-                        self._owned_ids,
-                        self._home_volume(effective_workspace),
-                        sandbox_dir=get_sandbox_dir,
-                    )
+                    executor = self.sandbox_executor_for(effective_workspace)
                     async with executor:
                         reply = await backend.run(
                             text,
@@ -1655,13 +1649,7 @@ class SubagentManager:
             # Each subagent runs its own sandbox VM; gate the count so heavy
             # fan-out can't exhaust host resources.
             async with self._gate:
-                executor = build_executor(
-                    self._sandbox_config,
-                    effective_workspace,
-                    self._owned_ids,
-                    self._home_volume(effective_workspace),
-                    sandbox_dir=get_sandbox_dir,
-                )
+                executor = self.sandbox_executor_for(effective_workspace)
                 async with executor:
                     dispatched = True
                     kwargs = {"mcp_grant": mcp_grant} if mcp_grant is not None else {}
@@ -1690,6 +1678,22 @@ class SubagentManager:
         if workdir.is_within(Path(self.workspace), mount_root):
             return ()
         return ((str(self.workspace), "/agent-home", "rw"),)
+
+    def sandbox_executor_for(self, workspace: Path) -> "SandboxExecutor":
+        """The executor a sandboxed run execs in: a spawn's or a graph node's.
+
+        The one sandbox config this manager holds, with the owned-id set and
+        home mount a spawn's executor gets, so both dispatch routes raise their
+        VMs the same way. Cheap to call: construction is synchronous, the VM
+        itself starts inside the caller's ``async with``.
+        """
+        return build_executor(
+            self._sandbox_config,
+            workspace,
+            self._owned_ids,
+            self._home_volume(workspace),
+            sandbox_dir=get_sandbox_dir,
+        )
 
     def session_dir_for(self, session_key: str) -> Path:
         """The metadata directory of the session a spawn was made from.
