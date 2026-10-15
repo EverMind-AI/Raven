@@ -1051,6 +1051,30 @@ def _unbind_the_permission_turn() -> Iterator[None]:
         turn._TOOL_CALL_ID.reset(call_token)
 
 
+@pytest.fixture(autouse=True)
+def _no_leaked_everos_binding() -> Iterator[None]:
+    """Put the EverOS role binding back where the test found it.
+
+    ``bind_roles_here`` writes the four roles into ``os.environ`` directly,
+    records them in ``raven_everos.config._BOUND_HERE`` and publishes that
+    record as ``RAVEN_EVEROS_BOUND``; ``monkeypatch`` undoes none of it. It is
+    reached by ``EverosBackend.start()`` and by every runtime assembled with
+    the memory plugin on -- the launcher, eval-hook, plugin-tool and remote
+    file-tool tests among them, fourteen files in one measured run
+    (2026-10-15) -- so one test's binding was the next test's environment.
+    Which test paid depended on how the suite was dealt into shards: a
+    settings test reading a saved endpoint was told the environment outranks
+    it (``role_is_env_managed``) and refused the write, in one shard and not
+    in another. Tests that assert on the binding read it inside their own
+    run; ``tests/_everos_env.py`` says what goes back and why the set's
+    contents rather than the object.
+    """
+    from tests._everos_env import confined_everos_binding
+
+    with confined_everos_binding():
+        yield
+
+
 def wired_kwarg(kwargs: dict, name: str):
     """Resolve a wiring value from captured AgentLoop kwargs, bundle-aware.
 
