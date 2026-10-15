@@ -57,6 +57,7 @@ from typing import Any
 from loguru import logger
 
 from code_flow.tools import workspace_scan
+from code_flow.tools.diagnostic_workers import MAX_WORKERS, WORKERS
 from code_flow.tools.diagnostics import UNKNOWN, PythonDiagnostics
 from raven.agent.tools import snapshot
 from raven.agent.tools.shell import ExecTool
@@ -316,8 +317,9 @@ class CodeExecTool(ExecTool):
 
     async def _listing(self, root: Path) -> snapshot.Snapshot | None:
         try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(workspace_scan.take, root, deadline=time.monotonic() + _SCAN_WAIT_SECONDS),
+            deadline = time.monotonic() + _SCAN_WAIT_SECONDS
+            return await WORKERS.run(
+                lambda: workspace_scan.take(root, deadline=deadline),
                 timeout=_SCAN_WAIT_SECONDS,
             )
         except Exception:  # noqa: BLE001 - diagnostics must not prevent the command from running
@@ -333,21 +335,39 @@ class CodeExecTool(ExecTool):
             after = await self._listing(root)
             created, modified, _ = snapshot.diff(before, after)
             candidates = [(Path(path), None) for path in created] + [(Path(path), UNKNOWN) for path in modified]
-        candidates = [
-            (path, old)
-            for path, old in candidates
-            if path.suffix == ".py" and not path.is_symlink() and path.resolve().is_relative_to(root.resolve())
-        ]
         if not candidates:
             return ""
-        selected = candidates[:_DIAGNOSTIC_FILES]
+        deadline = time.monotonic() + _SCAN_WAIT_SECONDS
+        candidates = await WORKERS.run(
+            lambda: workspace_scan.eligible(root, candidates, deadline=deadline), timeout=_SCAN_WAIT_SECONDS
+        )
+        if not candidates:
+            return ""
+        unchecked_visibility = 0
         if self._shadow is not None and (shadow := self._shadow(root)) is not None:
-            shown = await shadow.trackable([str(path) for path, _ in selected])
-            selected = [(path, old) for path, old in selected if str(path) in shown]
+            visible = []
+            for start in range(0, len(candidates), _DIAGNOSTIC_FILES):
+                # The host hook can resolve paths synchronously; bound each call
+                # and give the outer deadline a cancellation point between batches.
+                await asyncio.sleep(0)
+                batch = candidates[start : start + _DIAGNOSTIC_FILES]
+                shown = await shadow.trackable([str(path) for path, _ in batch])
+                visible.extend((path, old) for path, old in batch if str(path) in shown)
+                if len(visible) >= _DIAGNOSTIC_FILES:
+                    unchecked_visibility = len(candidates) - start - len(batch)
+                    break
+            candidates = visible
+        selected = candidates[:_DIAGNOSTIC_FILES]
+        limit = asyncio.Semaphore(MAX_WORKERS)
+
+        async def check(path: Path, old: Any) -> str:
+            async with limit:
+                return await self._diagnostics.check(path, before=old)
+
+        results = await asyncio.gather(*(check(path, old) for path, old in selected))
         notes = []
         size = 0
-        for path, old in selected:
-            note = await self._diagnostics.check(path, before=old)
+        for note in results:
             if note:
                 if size + len(note) > _DIAGNOSTIC_CHARS:
                     notes.append("\nFurther Python diagnostics omitted to keep this tool result bounded.")
@@ -358,6 +378,11 @@ class CodeExecTool(ExecTool):
             notes.append(
                 f"\nPython diagnostics limited to {_DIAGNOSTIC_FILES} changed files; "
                 f"{len(candidates) - _DIAGNOSTIC_FILES} more were skipped."
+            )
+        if unchecked_visibility:
+            notes.append(
+                f"\n{unchecked_visibility} additional changed files were not checked after the "
+                f"{_DIAGNOSTIC_FILES}-file diagnostic limit; their visibility was not evaluated."
             )
         return "\n".join(notes)
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ast
-import asyncio
 import io
 import re
 import sys
@@ -11,6 +10,8 @@ import tokenize
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+
+from code_flow.tools.diagnostic_workers import WORKERS
 
 MAX_SOURCE_BYTES = 256 * 1024
 MAX_FINDINGS = 8
@@ -51,7 +52,7 @@ def read_python(path: Path) -> str | None | object:
 
 async def read_before(path: Path) -> str | None | object:
     try:
-        return await asyncio.wait_for(asyncio.to_thread(read_python, path), CHECK_WAIT_SECONDS)
+        return await WORKERS.run(lambda: read_python(path), timeout=CHECK_WAIT_SECONDS)
     except Exception:  # noqa: BLE001 - an unavailable baseline must not block a write
         return UNKNOWN
 
@@ -170,7 +171,7 @@ class PythonDiagnostics:
             return self.note(path, source, before=before) if isinstance(source, str) else ""
 
         try:
-            return await asyncio.wait_for(asyncio.to_thread(inspect), CHECK_WAIT_SECONDS)
+            return await WORKERS.run(inspect, timeout=CHECK_WAIT_SECONDS)
         except Exception as exc:  # noqa: BLE001 - keep the completed operation's result on checker failure
             return f"\nPython diagnostics unavailable ({type(exc).__name__}); the file was kept. Run targeted project checks."
 

@@ -15,6 +15,7 @@ import asyncio
 import json
 import os
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -208,6 +209,109 @@ def test_exec_diagnostics_limit_changed_files_and_output(tmp_path):
     assert out.count("Python diagnostics for") == 8
     assert "2 more were skipped" in out
     assert len(out) < 6500
+
+
+def test_exec_checks_four_files_at_a_time_in_stable_order_with_an_eight_file_cap(tmp_path, monkeypatch):
+    from code_flow.tools import diagnostics
+
+    tool = _tool(tmp_path)
+    barrier = threading.Barrier(4, timeout=2)
+    lock = threading.Lock()
+    active = peak = 0
+    checked = []
+
+    def note(self, path, text, **kwargs):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+            checked.append(path.name)
+        try:
+            barrier.wait()
+            return f"checked:{path.name}"
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(diagnostics.PythonDiagnostics, "note", note)
+    out = str(_run(tool.execute(command="for i in 0 1 2 3 4 5 6 7 8 9; do printf 'x = 1\n' > file$i.py; done")))
+    assert peak == 4 and len(checked) == 8
+    assert sorted(checked) == [f"file{i}.py" for i in range(8)]
+    positions = [out.index(f"checked:file{i}.py") for i in range(8)]
+    assert positions == sorted(positions)
+    assert "2 more were skipped" in out
+
+
+@pytest.mark.parametrize("visible_count", [1, 10])
+def test_withheld_files_do_not_consume_the_diagnostic_file_limit(tmp_path, monkeypatch, visible_count):
+    from raven.contracts.tool import FileWrite, ToolOutput
+
+    batches = []
+
+    class Shadow:
+        async def trackable(self, paths):
+            batches.append(list(paths))
+            return {path for path in paths if Path(path).name.startswith("visible")}
+
+    tool = _tool(tmp_path)
+    tool.measure_writes(lambda root: Shadow())
+    paths = [tmp_path / "home" / f"private{i}.py" for i in range(8)] + [
+        tmp_path / "home" / f"visible{i}.py" for i in range(visible_count)
+    ]
+    for path in paths:
+        path.write_text("value = missing_binding\n")
+
+    async def host(*args, **kwargs):
+        return ToolOutput(
+            "Exit code: 0", ok=True, written=tuple(FileWrite(path=str(p), created=True, size=24) for p in paths)
+        )
+
+    monkeypatch.setattr(TrunkExecTool, "execute", host)
+    out = str(_run(tool.execute(command="test command")))
+    assert "visible0.py" in out and "F821" in out
+    assert all(f"private{i}.py" not in out for i in range(8)) and "were skipped" not in out
+    assert [len(batch) for batch in batches] == [8, min(8, visible_count)]
+    assert out.count("Python diagnostics for") == min(8, visible_count)
+    if visible_count > 8:
+        assert "2 additional changed files were not checked" in out and "visible8.py" not in out
+
+
+@pytest.mark.asyncio
+async def test_path_filtering_wait_does_not_block_the_event_loop(tmp_path, monkeypatch):
+    from code_flow.tools import exec as module
+    from code_flow.tools import workspace_scan
+    from code_flow.tools.diagnostic_workers import DiagnosticWorkers
+
+    from raven.contracts.tool import FileWrite, ToolOutput
+
+    tool = _tool(tmp_path)
+    tool.measure_writes(None)
+    release, entered = threading.Event(), threading.Event()
+    loop_thread = threading.get_ident()
+    thread_ids = []
+
+    def slow_paths(*args, **kwargs):
+        thread_ids.append(threading.get_ident())
+        entered.set()
+        release.wait(2)
+        return []
+
+    async def host(*args, **kwargs):
+        return ToolOutput(
+            "Exit code: 7", ok=False, written=(FileWrite(path=str(tmp_path / "home/file.py"), created=True, size=0),)
+        )
+
+    monkeypatch.setattr(module, "WORKERS", DiagnosticWorkers())
+    monkeypatch.setattr(module, "_SCAN_WAIT_SECONDS", 0.02)
+    monkeypatch.setattr(workspace_scan, "eligible", slow_paths)
+    monkeypatch.setattr(TrunkExecTool, "execute", host)
+    try:
+        out = await asyncio.wait_for(tool.execute(command="test command"), 1)
+        assert entered.is_set() and not release.is_set()
+        assert thread_ids and thread_ids[0] != loop_thread
+        assert str(out) == "Exit code: 7" and out.ok is False
+    finally:
+        release.set()
 
 
 def test_exec_diagnostics_skip_symlinks_cache_and_non_python_files(tmp_path):

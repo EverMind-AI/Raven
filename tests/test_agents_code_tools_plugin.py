@@ -12,6 +12,7 @@ import itertools
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -114,7 +115,16 @@ def test_the_registry_builds_every_tool_from_the_real_factory_strings(tmp_path):
         assert tool is not None and tool.name == name
 
 
-@pytest.mark.parametrize("config", [{}, {"enabled": True}, {"enabled": True, "tools": {"enabled": False}}])
+@pytest.mark.parametrize(
+    "config",
+    [
+        {},
+        {"enabled": True},
+        {"enabled": True, "tools": {"enabled": False}},
+        {"tools": {"pythonLint": True, "execPythonDiagnostics": True}},
+        {"tools": {"enabled": False, "pythonLint": True, "execPythonDiagnostics": True}},
+    ],
+)
 def test_a_slice_that_does_not_ask_for_the_face_contributes_nothing(tmp_path, config):
     """The flow and the face have one switch each: a product can keep the flow
     and hand the tools back to the host."""
@@ -129,6 +139,30 @@ def test_a_slice_that_does_not_ask_for_the_face_contributes_nothing(tmp_path, co
         factories.make_exec,
     ):
         assert make(ctx) is None
+
+
+@pytest.mark.asyncio
+async def test_loading_coding_tools_does_not_add_diagnostics_to_host_tools(tmp_path, monkeypatch):
+    from code_flow.tools.diagnostics import PythonDiagnostics
+
+    from raven.agent.tools.filesystem import WriteFileTool as TrunkWriteFileTool
+    from raven.agent.tools.shell import ExecTool as TrunkExecTool
+
+    calls = []
+
+    async def check(*args, **kwargs):
+        calls.append(args)
+        return "unexpected coding diagnostics"
+
+    monkeypatch.setattr(PythonDiagnostics, "check", check)
+    writer = TrunkWriteFileTool(workspace=tmp_path)
+    out = await writer.execute(path=str(tmp_path / "host.py"), content="value = missing_binding\n")
+    assert "Successfully wrote" in str(out)
+    shell = TrunkExecTool(working_dir=str(tmp_path))
+    out = await shell.execute(command="printf 'other = another_missing\n' > shell.py")
+    assert "Exit code: 0" in str(out)
+    assert calls == []
+    assert "another_missing" in (tmp_path / "shell.py").read_text()
 
 
 # --- the fork's schema, the host's names as aliases ----------------------------
@@ -410,18 +444,26 @@ def test_python_source_read_is_bounded_and_respects_its_encoding(tmp_path):
 @pytest.mark.asyncio
 async def test_diagnostic_wait_is_bounded_and_cancellation_is_preserved(tmp_path, monkeypatch):
     from code_flow.tools import diagnostics
+    from code_flow.tools.diagnostic_workers import DiagnosticWorkers
 
-    async def stalled(*args, **kwargs):
-        await asyncio.Event().wait()
+    release = threading.Event()
 
+    def stalled(*args, **kwargs):
+        release.wait(2)
+        return ""
+
+    monkeypatch.setattr(diagnostics, "WORKERS", DiagnosticWorkers())
     monkeypatch.setattr(diagnostics, "CHECK_WAIT_SECONDS", 0.01)
-    monkeypatch.setattr(diagnostics.asyncio, "to_thread", stalled)
-    note = await diagnostics.PythonDiagnostics().check(tmp_path / "slow.py", text="value = 1\n")
-    assert "diagnostics unavailable (TimeoutError)" in note
-    task = asyncio.create_task(diagnostics.PythonDiagnostics().check(tmp_path / "cancelled.py", text="value = 1\n"))
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+    monkeypatch.setattr(diagnostics.PythonDiagnostics, "note", stalled)
+    try:
+        note = await diagnostics.PythonDiagnostics().check(tmp_path / "slow.py", text="value = 1\n")
+        assert "diagnostics unavailable (TimeoutError)" in note
+        task = asyncio.create_task(diagnostics.PythonDiagnostics().check(tmp_path / "cancelled.py", text="value = 1\n"))
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        release.set()
 
 
 # --- occurrence -----------------------------------------------------------------------
