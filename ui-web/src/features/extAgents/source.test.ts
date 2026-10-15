@@ -419,7 +419,7 @@ describe('the wizard step sections', () => {
     ['a configured agent switched off', { configured: true, enabled: false, probe_status: 'ready' }, 'avail', 'avail', true],
     ["a config row of Raven's own", { configured: true, enabled: true, own: true, probe_status: 'ready' }, 'on', 'on', false],
     [
-      'a shipped product registered as a config row, known by its name',
+      "one of Raven's own agents registered as a config row, known by its name",
       { name: 'Raven-Oncall', configured: true, enabled: false, probe_status: 'ready' },
       'avail',
       'avail',

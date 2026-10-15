@@ -226,7 +226,7 @@ const BUILTIN_ROW: SubagentRow = {
   test_running: false
 }
 
-// One of raven's own products, discovered under `agents/` rather than written into
+// One of raven's own agents, discovered under `agents/` rather than written into
 // config: `configured: false` like a preset, yet on the roster, and switched by the
 // same `subagents.toggle` (the server writes a switch-only row for "off").
 const SHIPPED_ROW: SubagentRow = {
@@ -339,9 +339,9 @@ describe('flattenSubagentRows', () => {
     expect(presetsCount).toBe(1)
   })
 
-  // Split on `configured` alone, a product raven ships filed as a preset -- "[new]",
+  // Split on `configured` alone, an agent raven ships filed as a preset -- "[new]",
   // "press Enter to add it" -- for an agent already on the roster.
-  it('files a product raven ships under installed, not under presets', () => {
+  it('files an agent raven ships under installed, not under presets', () => {
     const { installedCount, presetsCount } = flattenSubagentRows([SHIPPED_ROW])
 
     expect(installedCount).toBe(1)
@@ -1678,7 +1678,7 @@ describe('SubagentsHub built-in row', () => {
   })
 })
 
-describe('SubagentsHub shipped product', () => {
+describe('SubagentsHub discovered agent', () => {
   // A single-row fixture puts the target at index 0, as the built-in cases do.
   it('shows its switch where a preset shows [new]', async () => {
     const h = mount({ rows: [SHIPPED_ROW] })

@@ -29,8 +29,8 @@ const STATUS_GLYPH: Record<SubagentRow['probe_status'], string> = {
 
 /**
  * An un-added preset: neither written into config nor a discovered agent -- one
- * of raven's own products found under `agents/`. That second kind has no config
- * row of its own (`configured` is false for it) yet is on the agent table and is
+ * of raven's own agents found under `agents/`. That second kind is on the agent
+ * table without being configured (`configured` is false for it) and is
  * switched like any other agent: `subagents.toggle` writes a switch-only row for
  * "off" and drops it for "on". Nor is the built-in loop one.
  */
@@ -66,7 +66,7 @@ export const isUnaddedPreset = (row: SubagentRow): boolean =>
  * where a keyless preset is in fact addable. `probe_detail` on the row still
  * reports the missing key, so the state stays visible either way.
  *
- * A discovered agent (`vendored`, one of raven's own products under `agents/`)
+ * A discovered agent (`vendored`, one of raven's own agents under `agents/`)
  * is `configured: false` as well -- it has no config row until it is switched
  * off -- yet it is on the agent table, so it is filed with the installed agents,
  * never as an un-added preset.
@@ -273,7 +273,7 @@ export function switchLabel(row: SubagentRow, switchingSince: number | undefined
     return '[core]'
   }
 
-  // `[new]` means "not added yet", which a built-in row never is, nor a product
+  // `[new]` means "not added yet", which a built-in row never is, nor an agent
   // raven ships.
   if (isUnaddedPreset(row)) {
     return '[new]'

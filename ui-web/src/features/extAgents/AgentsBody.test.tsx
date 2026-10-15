@@ -433,9 +433,9 @@ describe('the onboarding wizard\'s agents step', () => {
     expect(store.found().map((r) => r.name)).toEqual(['preset_a'])
   })
 
-  /* A shipped product's install can register it as a config row, which says
-     it is Raven's either through the wire's `own` or only by its catalogued
-     name. */
+  /* An install can register one of Raven's own agents as a config row, which
+     says it is Raven's either through the wire's `own` or only by a name
+     `catalogue.ts` lists as Raven's. */
   it("files Raven's own config rows with the shipped ones, and never counts them", async () => {
     await mounted([
       row({ name: 'Raven-Design', preset: undefined, configured: true, enabled: true, own: true }),

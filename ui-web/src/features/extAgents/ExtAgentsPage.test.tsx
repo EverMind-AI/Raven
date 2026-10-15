@@ -1823,7 +1823,7 @@ describe('the model pill', () => {
      that row, exactly as any other agent is switched. Whether it was written
      into config by an installer or found under `agents/` is storage, and the
      verbs do not change with it. Only the built-in loop has no switch. */
-  it('disconnects a shipped product, and connects it back', async () => {
+  it('disconnects a discovered agent, and connects it back', async () => {
     const { acts } = install([row({ name: 'Raven-Code', preset: undefined, kind: 'acp', vendored: true, configured: false, own: true })])
     await mount()
     await openSheet('Raven-Code')

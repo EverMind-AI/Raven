@@ -2664,12 +2664,12 @@ async def test_a_probe_miss_on_a_ready_discovered_row_reads_as_attention_not_mis
     assert "not on the login shell PATH" in row["probe_detail"]
 
 
-async def test_a_switched_off_product_still_lists_as_discovered(
+async def test_a_switched_off_folder_still_lists_as_discovered(
     config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The row the switch writes says "not this one" about a folder that still
-    defines the agent, so it does not make the product a config row. Listed as
-    one, the product offered a delete that drops the switch -- the agent back on
+    defines the agent, so it does not make the folder a config row. Listed as
+    one, the folder offered a delete that drops the switch -- the agent back on
     the roster past the enable gate -- and a test by `source: "config"` found the
     switch row and ran its empty command."""
     from raven.agent.subagent import vendored_agents as va
@@ -2683,7 +2683,7 @@ async def test_a_switched_off_product_still_lists_as_discovered(
     assert (row["vendored"], row["configured"], row["own"], row["enabled"]) == (True, False, True, False)
 
 
-async def test_a_written_override_of_a_product_lists_as_config(
+async def test_a_written_override_of_a_folder_lists_as_config(
     config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A stored row that defines the agent its own way is somebody's override --
@@ -2704,7 +2704,7 @@ async def test_a_written_override_of_a_product_lists_as_config(
     assert (row["vendored"], row["configured"]) == (False, True)
 
 
-async def test_an_edit_to_a_switched_off_product_lands_and_keeps_it_off(
+async def test_an_edit_to_a_switched_off_folder_lands_and_keeps_it_off(
     config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The switch's row carries the switch alone -- the table reads only its
@@ -2723,7 +2723,7 @@ async def test_an_edit_to_a_switched_off_product_lands_and_keeps_it_off(
     assert (row["description"], row["enabled"]) == ("edited while off", False)
 
 
-async def test_a_switched_off_product_cannot_be_renamed(
+async def test_a_switched_off_folder_cannot_be_renamed(
     config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Renamed, the switch's row moved off its folder: the agent came back on
@@ -2742,7 +2742,7 @@ async def test_a_switched_off_product_cannot_be_renamed(
     assert _stored(config_path) == before
 
 
-async def test_an_edit_that_changes_nothing_stores_no_copy_of_a_product(
+async def test_an_edit_that_changes_nothing_stores_no_copy_of_a_folder(
     config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A form saves every field it shows, changed or not. A copy of the folder's
@@ -2763,7 +2763,7 @@ async def test_an_edit_that_changes_nothing_stores_no_copy_of_a_product(
     assert _stored(config_path) == switched
 
 
-async def test_removing_an_off_override_of_a_product_keeps_it_off(
+async def test_removing_an_off_override_of_a_folder_keeps_it_off(
     config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Without its row the folder defines the agent again, so dropping an off
@@ -2785,7 +2785,7 @@ async def test_removing_an_off_override_of_a_product_keeps_it_off(
     assert (row["vendored"], row["enabled"]) == (True, False)
 
 
-async def test_removing_an_override_of_a_product_that_is_on_drops_it_whole(
+async def test_removing_an_override_of_a_folder_that_is_on_drops_it_whole(
     config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """On, the folder that governs once the row is gone is on already."""
@@ -2804,7 +2804,7 @@ async def test_removing_an_override_of_a_product_that_is_on_drops_it_whole(
     assert [e for e in _stored(config_path) if e["name"] == "Raven-Probe"] == []
 
 
-async def test_removing_a_products_switch_removes_nothing(
+async def test_removing_a_folders_switch_removes_nothing(
     config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The switch's row is no definition to delete, and removing it would be
