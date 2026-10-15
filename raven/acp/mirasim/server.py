@@ -79,7 +79,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, BinaryIO
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 from urllib.request import url2pathname
 
 from loguru import logger
@@ -832,10 +832,29 @@ def _prompt_input(blocks: Any) -> tuple[str, list[str]]:
 
 
 def _local_file(uri: str) -> str | None:
-    parsed = urlparse(uri)
+    try:
+        parsed = urlparse(uri)
+    except ValueError:
+        return None
     if parsed.scheme != "file":
         return None
-    path = Path(url2pathname(parsed.path))
+    host = unquote(parsed.netloc)
+    if any(char in host for char in "/\\:@") or any(ord(char) < 32 or ord(char) == 127 for char in host):
+        return None
+    # Keep UNC authorities separate from the converter's localhost-drive handling.
+    try:
+        native = url2pathname(parsed.path)
+    except (OSError, ValueError):
+        return None
+    if host:
+        if sys.platform == "win32":
+            if native.startswith("\\") and not native.startswith("\\\\"):
+                native = f"\\\\{host}{native}"
+            elif host.casefold() != "localhost" or re.match(r"^[A-Za-z]:\\", native) is None:
+                return None
+        elif host.casefold() != "localhost":
+            return None
+    path = Path(native)
     return str(path) if path.is_file() else None
 
 
