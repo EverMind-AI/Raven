@@ -28,7 +28,8 @@ changes no PATH; with neither uv nor a way to fetch it, the install stops
 and says so. So does a machine whose uv is older than
 :data:`UV_INDEX_SINCE` when pip there is configured with an index: such a
 uv ignores ``UV_DEFAULT_INDEX`` and would install from PyPI behind a plan
-that names the mirror.
+that names the mirror. A uv an earlier install fetched under ``node_dir/.uv``
+is used in its place when it is there, so the next install fetches nothing.
 
 Each step is one ssh call through :func:`raven.acp_client.remote.run`; a step
 that fails removes the half-made node directory, so the next attempt starts
@@ -213,7 +214,9 @@ def probe_script(node_dir: str, install_name: str, digest: str) -> str:
 
     uv is looked for on the PATH, in the two places its installer puts it
     that a non-login PATH misses, and under ``node_dir/.uv``, where an
-    earlier install of this Raven may have put it. The index is read the way
+    earlier install of this Raven may have put it; that one is reported on
+    its own as well (``NODE_UV``), for :func:`plan` to use when the one
+    found first would ignore the configured index. The index is read the way
     pip reads it (:data:`_PIP_INDEX`), by whichever Python the loop found,
     since uv reads no pip configuration of its own accord.
     """
@@ -226,6 +229,8 @@ def probe_script(node_dir: str, install_name: str, digest: str) -> str:
         'for u in "$(command -v uv 2>/dev/null)" "$HOME/.local/bin/uv" "$HOME/.cargo/bin/uv" "$dir/.uv/uv"; do '
         'if [ -n "$u" ] && [ -x "$u" ]; then echo "UV=$u"; '
         '"$u" --version 2>/dev/null | awk \'NR==1 && $2 {print "UV_VERSION=" $2}\'; break; fi; done; '
+        'if [ -x "$dir/.uv/uv" ]; then echo "NODE_UV=$dir/.uv/uv"; '
+        '"$dir/.uv/uv" --version 2>/dev/null | awk \'NR==1 && $2 {print "NODE_UV_VERSION=" $2}\'; fi; '
         'for f in curl wget; do c=$(command -v "$f" 2>/dev/null) || continue; echo "FETCH=$c"; break; done; '
         f'if [ -n "$PIP_INDEX_URL" ]; then echo "INDEX=$PIP_INDEX_URL"; elif [ -n "$q" ]; then "$q" -c {shlex.quote(_PIP_INDEX)} '
         "2>/dev/null; fi; "
@@ -239,6 +244,9 @@ def plan(machine_id: str, *, node_dir: str | None = None, run: Runner = _run) ->
 
     ``node_dir`` is where to keep nodes when it should differ from the
     machine's registry row; the caller records it once the install succeeds.
+    A uv an earlier install fetched under ``node_dir/.uv`` stands in for the
+    machine's own when that one would ignore the index pip is configured
+    with (older than :data:`UV_INDEX_SINCE`, or silent about its version).
     """
     try:
         target = remote.machine(machine_id)
@@ -252,8 +260,26 @@ def plan(machine_id: str, *, node_dir: str | None = None, run: Runner = _run) ->
     seen: dict[str, str] = {}
     for line in out.splitlines():
         key, sep, value = line.strip().partition("=")
-        if sep and key in {"PRESENT", "PYTHON", "UV", "UV_VERSION", "FETCH", "FREE_KB", "INDEX"}:
+        if sep and key in {
+            "PRESENT",
+            "PYTHON",
+            "UV",
+            "UV_VERSION",
+            "NODE_UV",
+            "NODE_UV_VERSION",
+            "FETCH",
+            "FREE_KB",
+            "INDEX",
+        }:
             seen[key] = value.strip()
+    index = seen.get("INDEX", "")
+    uv, uv_version = seen.get("UV", ""), seen.get("UV_VERSION", "")
+    own, own_version = seen.get("NODE_UV", ""), seen.get("NODE_UV_VERSION", "")
+    if index and uv and own != uv and _version_of_uv(uv_version) < UV_INDEX_SINCE <= _version_of_uv(own_version):
+        # The machine's own uv comes first in the look and would ignore the
+        # index; the one an earlier install fetched under node_dir reads it,
+        # and is used rather than fetched again.
+        uv, uv_version = own, own_version
     free = seen.get("FREE_KB", "")
     return Plan(
         target=target,
@@ -261,11 +287,11 @@ def plan(machine_id: str, *, node_dir: str | None = None, run: Runner = _run) ->
         install_name=install_name,
         present=seen.get("PRESENT") == "1",
         python=seen.get("PYTHON", ""),
-        uv=seen.get("UV", ""),
+        uv=uv,
         free_kb=int(free) if free.isdigit() else None,
         fetch=seen.get("FETCH", ""),
-        index=seen.get("INDEX", ""),
-        uv_version=seen.get("UV_VERSION", ""),
+        index=index,
+        uv_version=uv_version,
     )
 
 

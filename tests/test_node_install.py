@@ -516,6 +516,39 @@ def test_a_machine_uv_that_would_ignore_the_configured_index_is_not_the_one_used
         )
 
 
+def test_a_uv_an_earlier_install_fetched_is_used_when_the_machine_s_own_would_ignore_the_index(registry):
+    """The next install-node after one that passed the machine's uv over finds that uv first again; the one the
+    earlier install fetched under node_dir is reported beside it and used, so nothing is fetched twice and a
+    machine that has since lost its curl is not refused."""
+
+    def look(*, index: str, own_version: str = "0.13.0") -> Plan:
+        said = (
+            "PYTHON=/usr/bin/python3.12\nUV=/usr/local/bin/uv\nUV_VERSION=0.4.22\n"
+            "NODE_UV=/home/worker/.raven-node/.uv/uv\n"
+            + (f"NODE_UV_VERSION={own_version}\n" if own_version else "")
+            + "FETCH=/usr/bin/curl\n"
+            + (f"INDEX={index}\n" if index else "")
+            + "FREE_KB=2097152\n"
+        )
+        return install.plan("box", run=lambda target, command: (0, said))
+
+    p = look(index=_MIRROR)
+
+    assert (p.uv, p.uv_version, p.uv_from) == ("/home/worker/.raven-node/.uv/uv", "0.13.0", "machine")
+    commands = dict(install.steps(p))
+    assert "uv" not in commands and "uv=/home/worker/.raven-node/.uv/uv; " in commands["packages"]
+    assert p.needed_kb == install._NODE_KB and "itself first" not in p.describe()
+    assert install.refusal(dataclasses.replace(p, fetch="")) is None, "nothing to fetch: nothing is needed"
+    # Without an index the machine's own uv serves, as before; one under node_dir that is itself too old, or
+    # silent, does not help, and the pinned uv is fetched over it.
+    assert look(index="").uv == "/usr/local/bin/uv"
+    assert (look(index=_MIRROR, own_version="0.4.22").uv, look(index=_MIRROR, own_version="0.4.22").uv_from) == (
+        "/usr/local/bin/uv",
+        "fetched",
+    )
+    assert look(index=_MIRROR, own_version="").uv_from == "fetched"
+
+
 @pytest.mark.parametrize("version", ["0.1.0", ""], ids=["an old uv", "a uv that says no version"])
 def test_an_old_uv_still_serves_a_machine_with_no_index_configured(version):
     p = _plan(uv="/usr/bin/uv", uv_version=version, fetch="")
@@ -524,7 +557,7 @@ def test_an_old_uv_still_serves_a_machine_with_no_index_configured(version):
 
 
 def test_a_plan_whose_index_port_cannot_be_read_still_describes_itself_and_its_failures():
-    """The look refuses such an index; a plan made some other way must not trace back either."""
+    """An install refuses such an index; a plan that holds one all the same must not trace back either."""
     p = _plan(index="https://u:pw@mirror.example:84a3/simple")
 
     assert "https://mirror.example:84a3/simple (the index pip is configured with there, shown without its sign-in)" in (
@@ -782,6 +815,29 @@ def test_the_probe_says_which_version_the_uv_it_found_is_and_nothing_for_one_tha
 
 
 @pytest.mark.slow
+def test_the_probe_reports_the_uv_under_the_node_dir_beside_the_one_it_found_first(shell):
+    home, tools = shell
+    first = _script(tools / "uv", 'echo "uv 0.4.22 (5b9c1fa1c 2024-10-16)"\n')
+    own = _script(home / "nodes" / ".uv" / "uv", 'echo "uv 0.13.0 (x86_64-unknown-linux-gnu)"\n')
+    probe = install.probe_script(str(home / "nodes"), "0.1-x", "d")
+
+    seen = _lines(_sh(probe, home, str(tools)))
+    assert (seen["UV"], seen["UV_VERSION"], seen["NODE_UV"], seen["NODE_UV_VERSION"]) == (
+        str(first),
+        "0.4.22",
+        str(own),
+        "0.13.0",
+    )
+
+    first.unlink()
+    seen = _lines(_sh(probe, home, str(tools)))
+    assert (seen["UV"], seen["NODE_UV"]) == (str(own), str(own)), "found first, it is reported both ways"
+    own.unlink()
+    seen = _lines(_sh(probe, home, str(tools)))
+    assert "UV" not in seen and "NODE_UV" not in seen and "NODE_UV_VERSION" not in seen
+
+
+@pytest.mark.slow
 def test_the_probe_reads_the_index_pip_is_configured_with_as_pip_reads_it(shell):
     home, tools = shell
     _script(tools / "python3", f'exec {sys.executable} "$@"\n')
@@ -986,8 +1042,10 @@ def test_a_real_install_makes_a_node_that_reports_this_raven_s_code(registry, tm
     uv = shutil.which("uv")
     if uv is None:
         pytest.skip("the install goes through uv, which this computer does not have")
-    said = subprocess.run([uv, "--version"], capture_output=True, text=True, check=True).stdout.split()
-    p = dataclasses.replace(first, python=sys.executable, uv=uv, uv_version=said[1])
+    # Said to be recent enough rather than read off this computer's uv: with one older than 0.4.23 here, the
+    # case with an index would have the install fetch uv through a stand-in that stubs only pip install, and
+    # reach astral.sh. Which uv the plan uses is the other tests' business.
+    p = dataclasses.replace(first, python=sys.executable, uv=uv, uv_version=install.UV_VERSION)
     done = install.install(p, run=run, push=push)
 
     assert done.install_name == bundle.install_name() and done.rg is False and (done.size_kb or 0) > 1000
