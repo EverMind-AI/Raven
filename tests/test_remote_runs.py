@@ -307,3 +307,16 @@ def test_a_record_that_cannot_be_opened_or_set_aside_is_named_and_left(_home: Pa
     assert [run.task for run in remote_runs.pending()] == ["fine"]
     assert "stuck.json is not JSON" in "\n".join(logs) and "could not be set aside" in "\n".join(logs)
     assert (remote_runs.runs_dir() / "stuck.json").exists(), "left where it was when it cannot be moved"
+
+
+def test_a_record_that_is_not_utf8_is_set_aside_like_one_that_is_not_json_and_the_others_are_still_read(
+    _home: Path, logs
+) -> None:
+    """One undecodable file must not end the scan: the healthy record is returned, the bad one set aside and named."""
+    remote_runs.record(_run("z-valid"))
+    bad = remote_runs.runs_dir() / "a-cp1252.json"
+    bad.write_bytes(b'{"version": 1, "machine": "caf\xe9"}')
+
+    assert [run.task for run in remote_runs.pending()] == ["z-valid"]
+    assert not bad.exists() and list(remote_runs.runs_dir().glob("a-cp1252.json.unreadable-*"))
+    assert "a-cp1252.json is not JSON" in "\n".join(logs)

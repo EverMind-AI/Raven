@@ -273,8 +273,9 @@ All notable changes to Raven are documented here.
   id in its output, so the next turn resumes it. A cancel while the machine's
   link is down no longer waits out the settle budget. An openai row's tunnel
   gives a local port that was taken in between up for another instead of
-  sending the request to whoever took it. A run record that is not JSON is set
-  aside once instead of being warned about at every start.
+  sending the request to whoever took it. A run record that is not JSON, or not
+  UTF-8, is set aside once instead of being warned about at every start, and
+  never stops the other records from being read.
 
 - A backslash typed into a bug report's description or steps (a literal
   `\n` standing in for a line break, or a regular expression such as `\d+`)

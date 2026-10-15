@@ -457,7 +457,8 @@ conversation that asked -- the task quoted as the model wrote it, the record rem
 once the announce was taken. A turn that returned here, or whose prompt went out and failed,
 keeps its record the same way until the manager's announce of the reply or the failure was
 taken (`remote_runs.forget_dispatch`), so a host that stops between the two reads the outcome
-again; a record that is not JSON is set aside once under a name that says so. A daemon killed
+again; a record that is not JSON, or not UTF-8, is set aside once under a name that says so,
+and never stops the other records from being read. A daemon killed
 outright ends what it leaves behind at its next start (`Daemon.recover`; on Linux the agent
 also goes with the daemon, `PR_SET_PDEATHSIG`) and says so on the task's exit (`reason`),
 which the host hands on in place of a bare exit code. An MCP server the
