@@ -2147,6 +2147,25 @@ trimmed, and it travels only from the local gateway to the browser, fetched by a
 one-hour token (`raven/trajectory/export_jobs.py`).
 _Avoid_: calling it a bundle or a report.
 
+**Imported Conversation** (`raven/trajectory/imported.py`, `raven/trajectory/imported_package.py`):
+A Trajectory Export, Bug Report Package or Trajectory Report read back in and kept
+as a read-only conversation, addressed as `imported:<id>` (32 lowercase hex). Each
+lives in its own `<raven home>/imports/<id>/`: `meta.json` (`schema:
+"raven_imported_conversation"`, the kind, the source file name and sha256, the
+title, where it came from), `package/` (the package as unpacked, a report's inner
+bundle expanded in place), `state/` (a trace store the trajectory index and detail
+layer read unchanged: the span log copied, every artifact pointer rewritten
+relative to `state/` or set to null when the package does not carry the file, and a
+bundle's v1 model inputs split back into v2 shells so a long conversation reads
+whole) and `session.jsonl` when the package carried a session record. Every layer
+of the archive is walked once under one shared byte and member budget
+(`package_check.walk_archive`); an import is built in `imports/.staging/` and
+renamed into place whole. It never enters the SessionManager or
+`<workspace>/sessions/`, so no session picker, sweep or delivery target can see it.
+_Avoid_: "import" alone — that is the cold-start import of another tool's memory
+(`raven/importer/`, `import.*`); "archive" — session archiving and the tracing
+store's rotated logs.
+
 **Message Blob** (`raven/tracing/artifact_v2.py`):
 One model-input message stored once, at
 `<state_dir>/logs/audit-artifacts/_messages/<sha1[:2]>/<sha1>.json`, addressed by the

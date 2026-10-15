@@ -375,6 +375,66 @@ def _saved_time(value: Any) -> datetime | None:
         return None
 
 
+def read_session_file(path: Path, key: str) -> Session | None:
+    """The session stored in the transcript at ``path``, read as ``key``.
+
+    None when the file is absent or cannot be read. Public because a transcript
+    kept outside the session store -- an Imported Conversation's -- is read by
+    the same rules: metadata records are appended per save and the last one
+    wins.
+    """
+    if not path.exists():
+        return None
+
+    try:
+        messages = []
+        metadata = {}
+        created_at = None
+        updated_at = None
+        last_consolidated = 0
+        pending_clarification = None
+
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    # Partial trailing line from a crashed append.
+                    logger.debug("Skipping undecodable line in session {}", key)
+                    continue
+
+                # Metadata records are appended per save; last one wins.
+                if data.get("_type") == "metadata":
+                    metadata = data.get("metadata", {})
+                    created_at = datetime.fromisoformat(data["created_at"]) if data.get("created_at") else None
+                    updated_at = data.get("updated_at")
+                    last_consolidated = data.get("last_consolidated", 0)
+                    pending_clarification = data.get("pending_clarification")
+                else:
+                    messages.append(data)
+
+        session = Session(
+            key=key,
+            messages=messages,
+            created_at=created_at or datetime.now(),
+            updated_at=_saved_time(updated_at) or datetime.now(),
+            metadata=metadata,
+            last_consolidated=last_consolidated,
+            pending_clarification=pending_clarification,
+        )
+        session._persisted_count = len(messages)
+        session._file_stamp = _stamp(path)
+        session._persisted_metadata = dict(metadata)
+        return session
+    except Exception as e:
+        logger.warning("Failed to load session {}: {}", key, e)
+        return None
+
+
 def _cut_since_persisted(session: Session) -> bool:
     return session.truncations != session._persisted_truncations
 
@@ -753,57 +813,7 @@ class SessionManager:
 
     def _load(self, key: str) -> Session | None:
         """Load a session from disk."""
-        path = self.session_path(key)
-        if not path.exists():
-            return None
-
-        try:
-            messages = []
-            metadata = {}
-            created_at = None
-            updated_at = None
-            last_consolidated = 0
-            pending_clarification = None
-
-            with open(path, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-
-                    try:
-                        data = json.loads(line)
-                    except json.JSONDecodeError:
-                        # Partial trailing line from a crashed append.
-                        logger.debug("Skipping undecodable line in session {}", key)
-                        continue
-
-                    # Metadata records are appended per save; last one wins.
-                    if data.get("_type") == "metadata":
-                        metadata = data.get("metadata", {})
-                        created_at = datetime.fromisoformat(data["created_at"]) if data.get("created_at") else None
-                        updated_at = data.get("updated_at")
-                        last_consolidated = data.get("last_consolidated", 0)
-                        pending_clarification = data.get("pending_clarification")
-                    else:
-                        messages.append(data)
-
-            session = Session(
-                key=key,
-                messages=messages,
-                created_at=created_at or datetime.now(),
-                updated_at=_saved_time(updated_at) or datetime.now(),
-                metadata=metadata,
-                last_consolidated=last_consolidated,
-                pending_clarification=pending_clarification,
-            )
-            session._persisted_count = len(messages)
-            session._file_stamp = _stamp(path)
-            session._persisted_metadata = dict(metadata)
-            return session
-        except Exception as e:
-            logger.warning("Failed to load session {}: {}", key, e)
-            return None
+        return read_session_file(self.session_path(key), key)
 
     def append_metadata_patch(self, key: str, patch: dict[str, Any]) -> bool:
         """Fold ``patch`` into a session's metadata by appending one record.

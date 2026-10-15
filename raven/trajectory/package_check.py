@@ -337,60 +337,142 @@ def _members(tar: tarfile.TarFile) -> Iterator[tarfile.TarInfo]:
         yield member
 
 
-def _walk(stream: _BoundedGunzip, limits: PackageLimits) -> _Walk:
-    chunk = min(_CHUNK, limits.max_header_bytes)
+@dataclass(frozen=True)
+class ArchiveMember:
+    """One member :func:`walk_archive` has accepted, handed to its ``visit``."""
+
+    name: str
+    segments: tuple[str, ...]
+    is_dir: bool
+    size: int
+
+
+@dataclass(frozen=True)
+class ArchiveStats:
+    """What one :func:`walk_archive` pass took: its members, and every byte the gzip stream produced."""
+
+    members: int
+    unpacked_bytes: int
+
+
+class _CountingReader(io.RawIOBase):
+    """A member's data stream that remembers how much of it was read."""
+
+    def __init__(self, handle: Any) -> None:
+        self._handle = handle
+        self.count = 0
+
+    def readable(self) -> bool:
+        return True
+
+    def read(self, size: int = -1) -> bytes:
+        with _tar_boundary():
+            piece = self._handle.read(size)
+        self.count += len(piece)
+        return piece
+
+
+def walk_archive(
+    raw: BinaryIO,
+    *,
+    max_output: int,
+    max_read: int,
+    max_members: int,
+    visit: Callable[[ArchiveMember, BinaryIO | None], None],
+    should_stop: Callable[[], bool] | None = None,
+) -> ArchiveStats:
+    """Walk the gzip tar in ``raw`` once, bounded, and hand each safe member to ``visit``.
+
+    Every member is checked before ``visit`` sees it: within ``max_members``, a
+    regular file or a directory and never sparse, a relative name with no
+    empty, ``.`` or ``..`` segment and no backslash, not a repeat, a directory
+    without data, and a declared size that fits what is left of
+    ``max_output``. A file's data stream is passed to ``visit``, which must read
+    it in pieces of at most ``max_read`` bytes; whatever it leaves unread is
+    drained here, and a member shorter than it declared is refused. The archive
+    must end with an end-of-archive block followed by nothing but padding.
+
+    ``unpacked_bytes`` is everything the stream produced -- headers, extended
+    headers, data, alignment, the end blocks and the zeros after them -- which
+    is what ``max_output`` bounds, so a caller sharing one budget across
+    nested archives spends exactly what each walk spent.
+    """
+    stream = _BoundedGunzip(raw, max_output=max_output, max_read=max_read, should_stop=should_stop)
+    chunk = min(_CHUNK, max_read)
     with _tar_boundary():
         tar = _StrictTarFile(fileobj=stream, mode="r")
-    walk = _Walk()
     seen: set[str] = set()
     for member in _members(tar):
-        if len(walk.names) >= limits.max_members:
-            raise PackageError(CODE_TOO_MANY_MEMBERS, f"more than {limits.max_members} members")
+        if len(seen) >= max_members:
+            raise PackageError(CODE_TOO_MANY_MEMBERS, f"more than {max_members} members")
         if not (member.type in _PLAIN_FILE_TYPES or member.isdir()) or member.sparse is not None:
             raise PackageError(CODE_BAD_MEMBER_TYPE, f"unsupported member type {member.type!r}: {member.name!r}")
         name = member.name
         segments = _segments(name)
-        if not walk.names:
-            walk.root = segments[0]
-            if not is_report_id(walk.root):
-                raise PackageError(CODE_BAD_MEMBER_NAME, f"archive root is not a report id: {walk.root!r}")
-        elif segments[0] != walk.root:
-            raise PackageError(CODE_BAD_MEMBER_NAME, f"member outside the archive root: {name!r}")
         if name in seen:
             raise PackageError(CODE_DUPLICATE_MEMBER, f"duplicate member: {name!r}")
         seen.add(name)
-        walk.names.append(name)
         if member.isdir():
             # tarfile only skips the data of regular files and unknown types:
             # bytes after a directory header are parsed as the next header,
             # and a bad header there silently ends the archive.
             if member.size != 0:
                 raise PackageError(CODE_BAD_MEMBER_TYPE, f"directory entry carries data: {name!r}")
+            visit(ArchiveMember(name, tuple(segments), True, 0), None)
             continue
-        if len(segments) == 1:
-            raise PackageError(CODE_BAD_MEMBER_NAME, f"a file may not use the root directory name: {name!r}")
-        rel = "/".join(segments[1:])
-        if member.size > limits.max_unpacked_bytes - stream.tell():
+        if member.size > max_output - stream.tell():
             raise PackageError(
                 CODE_UNPACKED_TOO_LARGE,
-                f"member {name!r} declares {member.size} bytes, past the {limits.max_unpacked_bytes}-byte archive limit",
+                f"member {name!r} declares {member.size} bytes, past the {max_output}-byte archive limit",
             )
-        handle = tar.extractfile(member)
+        reader = _CountingReader(tar.extractfile(member))
+        visit(ArchiveMember(name, tuple(segments), False, member.size), reader)
+        _read_member(reader, chunk, keep=False)
+        if reader.count != member.size:
+            raise PackageError(CODE_NOT_GZIP_TAR, f"member {name!r} is shorter than declared")
+    if stream.last_read != _END_BLOCK:
+        raise PackageError(CODE_NOT_GZIP_TAR, "archive is not terminated by an end-of-archive block")
+    stream.finish()
+    return ArchiveStats(members=len(seen), unpacked_bytes=stream.tell())
+
+
+def _walk(raw: BinaryIO, limits: PackageLimits, should_stop: Callable[[], bool] | None) -> _Walk:
+    walk = _Walk()
+    chunk = min(_CHUNK, limits.max_header_bytes)
+
+    def visit(member: ArchiveMember, handle: BinaryIO | None) -> None:
+        segments = member.segments
+        if not walk.names:
+            walk.root = segments[0]
+            if not is_report_id(walk.root):
+                raise PackageError(CODE_BAD_MEMBER_NAME, f"archive root is not a report id: {walk.root!r}")
+        elif segments[0] != walk.root:
+            raise PackageError(CODE_BAD_MEMBER_NAME, f"member outside the archive root: {member.name!r}")
+        walk.names.append(member.name)
+        if handle is None:
+            return
+        if len(segments) == 1:
+            raise PackageError(CODE_BAD_MEMBER_NAME, f"a file may not use the root directory name: {member.name!r}")
+        rel = "/".join(segments[1:])
         if rel == PACKAGE_METADATA_FILE:
             if member.size > limits.max_metadata_bytes:
                 raise PackageError(
                     CODE_METADATA_TOO_LARGE,
                     f"{PACKAGE_METADATA_FILE} is {member.size} bytes; the limit is {limits.max_metadata_bytes}",
                 )
-            walk.metadata, _, count = _read_member(handle, chunk, keep=True)
+            walk.metadata, _, _ = _read_member(handle, chunk, keep=True)
         else:
             _, sha256, count = _read_member(handle, chunk, keep=False)
             walk.files[rel] = (sha256, count)
-        if count != member.size:
-            raise PackageError(CODE_NOT_GZIP_TAR, f"member {name!r} is shorter than declared")
-    if stream.last_read != _END_BLOCK:
-        raise PackageError(CODE_NOT_GZIP_TAR, "archive is not terminated by an end-of-archive block")
-    stream.finish()
+
+    walk_archive(
+        raw,
+        max_output=limits.max_unpacked_bytes,
+        max_read=limits.max_header_bytes,
+        max_members=limits.max_members,
+        visit=visit,
+        should_stop=should_stop,
+    )
     return walk
 
 
@@ -494,17 +576,17 @@ def inspect_package(
     if size == 0:
         raise PackageError(CODE_NOT_GZIP_TAR, "empty file")
     with path.open("rb") as raw:
-        stream = _BoundedGunzip(
-            raw, max_output=limits.max_unpacked_bytes, max_read=limits.max_header_bytes, should_stop=should_stop
-        )
-        walk = _walk(stream, limits)
+        walk = _walk(raw, limits, should_stop)
     return _check_metadata(walk, expected_report_id)
 
 
 __all__ = [
+    "ArchiveMember",
+    "ArchiveStats",
     "InspectionStoppedError",
     "PackageError",
     "PackageLimits",
     "PackageSummary",
     "inspect_package",
+    "walk_archive",
 ]
