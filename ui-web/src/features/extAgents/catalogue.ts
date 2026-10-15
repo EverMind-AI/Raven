@@ -139,22 +139,12 @@ function entryOf(row: ExtAgentRow): CatalogueEntry | undefined {
   return Object.hasOwn(CATALOGUE, row.name) ? CATALOGUE[row.name] : undefined
 }
 
-/* One of Raven's own, whichever way this install registered it. The wire says
-   so for a built-in row, a folder discovered under `agents/`, and a configured
-   acp row whose handshake named Raven (`own`) -- the last is the server's to
-   know, whatever the row is called here. The catalogue is the fallback for a
-   server that predates `own`: an install that registered a shipped product as
-   a config row (its `install.py` does that) carries no flag there, and the row
-   is still Raven's. */
-/* How many rows a roster has before the server has said: the catalogue is
-   the roster on every machine -- Raven's own agents and every preset, whether
-   or not it is installed -- and only a hand-written agent adds to it. */
-export const catalogueSize = (): number => Object.keys(CATALOGUE).length
-
-/* How many CARDS that catalogue makes, which is what the grid's skeleton draws
-   so the first frame lands where the real one will instead of jumping when a
-   family folds. Counted here rather than written down, because a number beside
-   the table is the one thing that goes stale in silence. */
+/* How many CARDS the agent catalogue makes, which is what the grid's skeleton
+   draws so the first frame lands where the real one will instead of jumping
+   when a family folds. Every preset and every one of Raven's own agents is
+   listed there whether or not it is installed, so only a hand-written agent
+   makes the real grid larger. Counted here rather than written down, because a
+   number beside the table is the one thing that goes stale in silence. */
 export const catalogueCards = (): number => {
   const families = new Map<string, number>()
   let cards = 0
@@ -167,6 +157,13 @@ export const catalogueCards = (): number => {
   return cards
 }
 
+/* One of Raven's own, whichever way this install registered it. The wire says
+   so for a built-in row, a folder discovered under `agents/`, and a configured
+   acp row whose handshake named Raven (`own`) -- the last is the server's to
+   know, whatever the row is called here. The catalogue is the fallback for a
+   server that predates `own`: an install that registered a shipped product as
+   a config row (its `install.py` does that) carries no flag there, and the row
+   is still Raven's. */
 export function isOwnRow(row: ExtAgentRow): boolean {
   return !!row.own || !!row.builtin || !!row.vendored || entryOf(row)?.by === OWN_BY
 }
