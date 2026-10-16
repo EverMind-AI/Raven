@@ -2044,8 +2044,9 @@ describe('the machines tab', () => {
     await typeInto(sheetTextarea(), '/data/alice/projects\n\n /scratch ')
     expect(go().disabled).toBe(false)
     await click(go())
-    expect(sheetStatus()).toBe('gui.machine.add_bad')
-    expect(note()).toEqual({ t: 'gui.machine.why_login', said: 'could not reach the machine: Permission denied (publickey).' })
+    /* The kind is said in the head line, which never scrolls away; the server's sentence sits under the form. */
+    expect(sheetStatus()).toBe('gui.machine.why_login')
+    expect(note()).toEqual({ t: 'gui.machine.add_bad', said: 'could not reach the machine: Permission denied (publickey).' })
     expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).toEqual(['gui.machine.register'])
     await click(go())
     expect(sheetName()).toBe('GPU box 1')

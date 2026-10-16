@@ -15,7 +15,7 @@
  * reader's language what to do about it, with the server's sentence under it.
  */
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 import { Glyph } from '../../components/Ico'
@@ -315,7 +315,15 @@ export function RegisterSheet({ ms }: { ms: MachinesState }): JSX.Element {
   const userRef = useRef<HTMLInputElement>(null)
   const keyRef = useRef<HTMLInputElement>(null)
   const pathsRef = useRef<HTMLTextAreaElement>(null)
+  const noteRef = useRef<HTMLDivElement>(null)
   const [ready, setReady] = useState(false)
+  /* The form is longer than the sheet, so a refusal's note under it is
+     brought into view; its kind is in the head line anyway, which never
+     scrolls away. */
+  useEffect(() => {
+    const el = noteRef.current
+    if (el && ms.addFailed && typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'nearest' })
+  }, [ms.addFailed])
   const read = (): RegisterForm => ({
     id: idRef.current?.value.trim() || '',
     name: nameRef.current?.value.trim() || '',
@@ -353,7 +361,13 @@ export function RegisterSheet({ ms }: { ms: MachinesState }): JSX.Element {
         <div className="extAgents-meta">
           <h3>{t('gui.machine.register')}</h3>
           <div className={'extAgents-by' + (ms.addFailed ? ' extAgents-by-bad' : '')}>
-            {ms.adding ? t('gui.machine.adding') : ms.addFailed ? t('gui.machine.add_bad') : t('gui.machine.add_hint')}
+            {ms.adding
+              ? t('gui.machine.adding')
+              : ms.addFailed
+                ? ms.addReason
+                  ? t(WHY[ms.addReason])
+                  : t('gui.machine.add_bad')
+                : t('gui.machine.add_hint')}
           </div>
         </div>
       </div>
@@ -370,8 +384,8 @@ export function RegisterSheet({ ms }: { ms: MachinesState }): JSX.Element {
           <textarea aria-label={t('gui.machine.f_paths')} onChange={check} placeholder="/data/alice/projects" ref={pathsRef} />
         </label>
         {ms.addFailed ? (
-          <div className="extAgents-note extAgents-note-warn">
-            <div className="extAgents-note-t">{ms.addReason ? t(WHY[ms.addReason]) : t('gui.machine.add_bad')}</div>
+          <div className="extAgents-note extAgents-note-warn" ref={noteRef}>
+            <div className="extAgents-note-t">{t('gui.machine.add_bad')}</div>
             <div className="extAgents-note-said">{ms.addFailed}</div>
           </div>
         ) : null}
