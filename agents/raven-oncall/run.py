@@ -134,18 +134,31 @@ def connections_registry() -> Path:
 
 
 def seed_guide(workspace: Path) -> None:
-    """Seed the workspace TOOLS.md with the on-call section already in place.
+    """Write the workspace TOOLS.md with the on-call section already in place.
 
     The vendored twin appended TOOLS_ONCALL.md to the workspace TOOLS.md on
-    every sync while its gate was on; here the composed file is seeded once,
-    before first launch, so trunk's own template sync finds it existing and
-    leaves it alone. Once is the contract: the workspace copy is the live one
-    afterwards, and a product update must not silently overwrite what an
-    operator tuned in place. The composition mirrors the twin's append --
-    template body, blank line, section -- so the model-visible text is
+    every sync while its gate was on; here the composed file is written before
+    the engine starts, so trunk's own template sync finds it existing and
+    leaves it alone. Regenerated on every launch (``write_generated``): the
+    template half changes with the installed raven, and an operator's own
+    lines go in ``TOOLS.local.md``. The composition mirrors the twin's append
+    -- template body, blank line, section -- so the model-visible text is
     byte-equal to what the fork produced on a fresh workspace.
+
+    A raven older than ``write_generated`` -- a home tree copied out by a newer
+    wheel serves an older checkout too -- seeds the guide once instead, and
+    says that it will not be refreshed.
     """
-    render.seed_once(workspace / "TOOLS.md", _guide_text)
+    target = workspace / "TOOLS.md"
+    generate = getattr(render, "write_generated", None)
+    if generate is None:
+        render.seed_once(target, _guide_text)
+        log(f"[run] {target.name}: this raven predates regenerated prompts; seeded once, never refreshed")
+        return
+    try:
+        generate(target, _guide_text(), notify=lambda message: log(f"[run] {message}"))
+    except (OSError, UnicodeDecodeError) as exc:
+        raise SystemExit(f"error: cannot regenerate {target}: {exc}") from exc
 
 
 def _guide_text() -> str:

@@ -8,6 +8,7 @@ so the next product inherits tested parts rather than a copy of run.py.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import re
@@ -563,6 +564,234 @@ def test_seed_once_writes_once(tmp_path):
     assert render.seed_once(target, lambda: calls.append(1) or "second") is False
     assert target.read_text() == "first", "a product update must not overwrite what an operator tuned"
     assert calls == [1], "the render is not evaluated when the target exists"
+
+
+def _receipt(target):
+    return target.with_name(f".{target.name}.generated.sha256")
+
+
+def _backups(target):
+    return sorted(target.parent.glob(f"{target.name}.bak-*"))
+
+
+def test_write_generated_writes_the_product_text_byte_for_byte_with_a_receipt(tmp_path):
+    target = tmp_path / "profile" / "agent.md"
+    assert render.write_generated(target, "line one\nline two") == "written"
+    assert target.read_bytes() == b"line one\nline two"
+    assert _receipt(target).read_text().strip() == hashlib.sha256(b"line one\nline two").hexdigest()
+    assert render.write_generated(target, "line one\nline two") == "unchanged"
+    assert _backups(target) == []
+
+
+def test_write_generated_follows_every_product_update_of_a_file_it_wrote(tmp_path):
+    target = tmp_path / "agent.md"
+    render.write_generated(target, "v1")
+    assert render.write_generated(target, "v2") == "written"
+    assert target.read_text() == "v2"
+    assert _backups(target) == [], "the product's own text is not an edit"
+
+
+def test_an_edited_file_is_backed_up_before_it_is_regenerated(tmp_path):
+    target = tmp_path / "agent.md"
+    render.write_generated(target, "v1")
+    target.write_bytes(b"operator tuned\r\n")
+    said: list[str] = []
+    assert render.write_generated(target, "v2", notify=said.append) == "written"
+    assert target.read_text() == "v2"
+    [backup] = _backups(target)
+    assert backup.read_bytes() == b"operator tuned\r\n", "the backup is the edited bytes, untranslated"
+    assert str(backup) in said[0] and "agent.local.md" in said[0]
+    assert render.write_generated(target, "v2", notify=said.append) == "unchanged"
+    assert len(said) == 1 and len(_backups(target)) == 1, "a regenerated file is the product's again"
+
+
+def test_a_file_without_a_receipt_is_the_products_when_a_legacy_digest_or_the_text_matches(tmp_path):
+    legacy = tmp_path / "legacy.md"
+    legacy.write_text("old release text")
+    digest = hashlib.sha256(b"old release text").hexdigest()
+    assert render.write_generated(legacy, "new", legacy_digests={digest}) == "written"
+    assert _backups(legacy) == []
+
+    current = tmp_path / "current.md"
+    current.write_text("same text")
+    assert render.write_generated(current, "same text") == "unchanged"
+    assert _backups(current) == []
+    assert _receipt(current).is_file(), "the receipt is recorded for the next launch"
+
+    unknown = tmp_path / "unknown.md"
+    unknown.write_text("whoever wrote this")
+    _receipt(unknown).write_text("not a digest\n")
+    render.write_generated(unknown, "new")
+    assert [b.read_text() for b in _backups(unknown)] == ["whoever wrote this"], "unprovable means backed up"
+
+
+def test_another_launch_rewriting_the_file_is_not_an_edit(tmp_path):
+    """Two bindings of one product share the file; the receipt follows whichever
+    launch wrote last, so a model switch is never mistaken for an edit."""
+    target = tmp_path / "agent.md"
+    render.write_generated(target, "anthropic variant")
+    render.write_generated(target, "default variant")
+    render.write_generated(target, "anthropic variant")
+    assert _backups(target) == []
+
+
+def test_the_local_addendum_follows_the_product_text(tmp_path):
+    target = tmp_path / "profile" / "agent.md"
+    local = render.local_addendum(target)
+    assert local == tmp_path / "profile" / "agent.local.md"
+    render.write_generated(target, "product\n")
+    local.write_text("\nmy own rule\n")
+    assert render.write_generated(target, "product\n") == "written"
+    assert target.read_text() == "product\n\nmy own rule\n"
+    local.write_text("a different rule")
+    render.write_generated(target, "product v2\n")
+    assert target.read_text() == "product v2\n\na different rule\n"
+    local.unlink()
+    render.write_generated(target, "product v2\n")
+    assert target.read_text() == "product v2\n"
+    assert _backups(target) == [], "changing the addendum is not editing the file"
+
+
+def test_turning_a_generated_file_off_removes_only_what_the_product_wrote(tmp_path):
+    said: list[str] = []
+    managed = tmp_path / "managed.md"
+    render.write_generated(managed, "text")
+    assert render.write_generated(managed, None, notify=said.append) == "removed"
+    assert not managed.exists() and not _receipt(managed).exists()
+    assert render.write_generated(managed, None) == "absent"
+
+    edited = tmp_path / "edited.md"
+    render.write_generated(edited, "text")
+    edited.write_text("operator tuned")
+    assert render.write_generated(edited, None, notify=said.append) == "kept"
+    assert edited.read_text() == "operator tuned" and not _receipt(edited).exists()
+    assert "edited in place" in said[-1]
+
+    foreign = tmp_path / "foreign.md"
+    foreign.write_text("a template someone else wrote")
+    before = len(said)
+    assert render.write_generated(foreign, None, notify=said.append) == "kept"
+    assert len(said) == before, "a file this product never tracked is not its business"
+
+    render.local_addendum(managed).write_text("my rule")
+    render.write_generated(managed, None, notify=said.append)
+    assert "is not applied" in said[-1] and not managed.exists()
+
+
+def test_a_failed_backup_leaves_the_edited_file_and_its_receipt_alone(tmp_path, monkeypatch):
+    target = tmp_path / "agent.md"
+    render.write_generated(target, "v1")
+    receipt = _receipt(target).read_text()
+    target.write_text("operator tuned")
+
+    def no_room(_target, _raw):
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(render, "_back_up", no_room)
+    with pytest.raises(OSError):
+        render.write_generated(target, "v2")
+    assert target.read_text() == "operator tuned"
+    assert _receipt(target).read_text() == receipt
+
+
+def test_a_failed_write_leaves_the_previous_text_and_receipt_in_place(tmp_path, monkeypatch):
+    target = tmp_path / "agent.md"
+    render.write_generated(target, "v1")
+    receipt = _receipt(target).read_text()
+
+    def interrupted(_path, _data, **_kwargs):
+        raise OSError("interrupted")
+
+    monkeypatch.setattr(render, "atomic_replace", interrupted)
+    with pytest.raises(OSError):
+        render.write_generated(target, "v2")
+    assert target.read_text() == "v1"
+    assert _receipt(target).read_text() == receipt
+
+
+def _fail_on_call(monkeypatch, failing: int) -> None:
+    """Make the ``failing``-th ``atomic_replace`` of the next write raise."""
+    real = render.atomic_replace
+    calls = []
+
+    def flaky(path, data, **kwargs):
+        calls.append(path)
+        if len(calls) == failing:
+            raise OSError(f"write {failing} failed")
+        return real(path, data, **kwargs)
+
+    monkeypatch.setattr(render, "atomic_replace", flaky)
+
+
+def test_a_failed_receipt_after_the_new_text_landed_still_recognises_it(tmp_path, monkeypatch):
+    """Target written, final receipt lost: turning the file off must still
+    remove it, or a switched-off conduct stays in the model's context."""
+    target = tmp_path / "agent.md"
+    render.write_generated(target, "v1")
+    _fail_on_call(monkeypatch, 3)
+    with pytest.raises(OSError):
+        render.write_generated(target, "v2")
+    monkeypatch.undo()
+    assert target.read_text() == "v2"
+    assert render.write_generated(target, None) == "removed"
+    assert _backups(target) == []
+
+
+def test_a_failed_target_write_keeps_the_old_text_recognised(tmp_path, monkeypatch):
+    target = tmp_path / "agent.md"
+    render.write_generated(target, "v1")
+    target.write_text("operator tuned")
+    _fail_on_call(monkeypatch, 2)
+    with pytest.raises(OSError):
+        render.write_generated(target, "v2")
+    monkeypatch.undo()
+    assert target.read_text() == "operator tuned"
+    assert len(_backups(target)) == 1
+    assert render.write_generated(target, "v2") == "written"
+    assert len(_backups(target)) == 1, "an edit already backed up is not backed up twice"
+
+
+def test_a_fresh_file_whose_write_failed_leaves_nothing_unrecognised(tmp_path, monkeypatch):
+    target = tmp_path / "agent.md"
+    _fail_on_call(monkeypatch, 2)
+    with pytest.raises(OSError):
+        render.write_generated(target, "v1")
+    monkeypatch.undo()
+    assert not target.exists()
+    assert render.write_generated(target, "v1") == "written"
+    assert render.write_generated(target, None) == "removed"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not available on Windows")
+def test_a_backup_is_never_more_open_than_the_file_it_copies(tmp_path):
+    previous = os.umask(0o022)
+    try:
+        private = tmp_path / "private.md"
+        render.write_generated(private, "v1")
+        private.write_text("private tuning")
+        private.chmod(0o600)
+        render.write_generated(private, "v2")
+        [backup] = _backups(private)
+        assert stat.S_IMODE(backup.stat().st_mode) == 0o600
+        assert stat.S_IMODE(private.stat().st_mode) == 0o600
+
+        shared = tmp_path / "shared.md"
+        shared.write_text("group-readable tuning")
+        shared.chmod(0o644)
+        render.write_generated(shared, "v1")
+        [backup] = _backups(shared)
+        assert stat.S_IMODE(backup.stat().st_mode) == 0o600, "owner-only even when the original was not"
+    finally:
+        os.umask(previous)
+
+
+def test_backups_taken_in_the_same_second_do_not_collide(tmp_path, monkeypatch):
+    monkeypatch.setattr(render.time, "strftime", lambda _fmt: "20261016-120000")
+    target = tmp_path / "agent.md"
+    for edit, release in (("first edit", "v1"), ("second edit", "v2")):
+        target.write_text(edit)
+        render.write_generated(target, release)
+    assert sorted(b.read_text() for b in _backups(target)) == ["first edit", "second edit"]
 
 
 def test_mode_catalogue_assembles_the_acp_modes_contract(tmp_path):
