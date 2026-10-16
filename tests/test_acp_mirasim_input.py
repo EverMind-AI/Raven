@@ -89,7 +89,7 @@ def test_a_unc_attachment_retains_its_authority_from_caller_to_parser(monkeypatc
     ],
 )
 def test_an_invalid_file_authority_is_not_looked_up(monkeypatch, authority: str) -> None:
-    """Under Windows conversion any other host becomes a UNC server, so only the authority check stops these."""
+    """Under Windows conversion any other host becomes a UNC server, so each must be refused before any lookup."""
     from nturl2path import url2pathname
 
     monkeypatch.setattr(server_mod, "sys", SimpleNamespace(platform="win32"))
@@ -127,7 +127,7 @@ def test_a_windows_drive_under_localhost_is_this_machine(monkeypatch) -> None:
 
 
 def test_a_path_the_converter_refuses_stays_a_link(monkeypatch) -> None:
-    """The Windows converter of Python 3.12 and 3.13 raises ``OSError("Bad URL")`` for a path such as ``/1:/notes.md``."""
+    """Python 3.12's Windows converter raises ``OSError("Bad URL")`` for a path such as ``/1:/notes.md``."""
 
     def refuse(path: str) -> str:
         raise OSError(f"Bad URL: {path}")
