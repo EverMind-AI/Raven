@@ -814,7 +814,7 @@ async def test_a_cli_run_left_on_the_machine_when_this_computer_stops_is_picked_
         )
     )
     pid_file = box.home / "raven-work" / "left" / "pid.txt"
-    await _until(pid_file.exists)
+    await _until(lambda: pid_file.exists() and remote_runs.pending())
     pid = int(pid_file.read_text(encoding="utf-8"))
     (run,) = remote_runs.pending()
     assert (run.kind, run.machine, run.agent, run.session_key, run.handle, run.task_id) == (
@@ -878,13 +878,14 @@ async def test_a_cancel_while_this_computer_goes_on_ends_the_command_and_keeps_n
         _run(cli_config("sh -c 'echo $$ > pid.txt; exec sleep 30'"), "hi", tmp_path, instance="gone")
     )
     pid_file = box.home / "raven-work" / "gone" / "pid.txt"
-    await _until(pid_file.exists)
-    pid = int(pid_file.read_text(encoding="utf-8"))
-    assert [run.kind for run in remote_runs.pending()] == ["cli"], "recorded while it runs"
-
-    turn.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await turn
+    try:
+        await _until(lambda: pid_file.exists() and remote_runs.pending())
+        pid = int(pid_file.read_text(encoding="utf-8"))
+        assert [run.kind for run in remote_runs.pending()] == ["cli"], "recorded while it runs"
+    finally:
+        turn.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await turn
 
     await _until(lambda: _gone(pid))
     assert remote_runs.pending() == [] and not remote_runs.was_left("t1")
