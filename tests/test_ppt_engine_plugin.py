@@ -831,6 +831,30 @@ def test_a_seat_the_engine_never_wrote_is_left_alone(tmp_path: Path) -> None:
     assert (home / "TOOLS.md").is_file(), "the missing seats are still filled"
 
 
+def test_prompts_another_product_generated_are_not_taken_for_the_engines(tmp_path: Path, monkeypatch) -> None:
+    """raven-code generates its prompts first, then the engine is enabled on the
+    same home. Code's receipts are not the engine's proof: its conduct, identity
+    and guide stay, and nothing is backed up."""
+    import importlib.util
+
+    from raven_ppt.plugin.hook import IDENTITY_SEATS
+
+    monkeypatch.delenv("CODE_CONDUCT", raising=False)
+    run_py = Path(__file__).resolve().parent.parent / "agents" / "raven-code" / "run.py"
+    spec = importlib.util.spec_from_file_location("agents_code_run_for_ppt", run_py)
+    code = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(code)
+    home = tmp_path / "home"
+    code.seed_guide(home)
+    code.seed_soul(home)
+    code.seed_conduct(home, "deepseek/deepseek-v4")
+    seats = [home / seat for _name, seat in IDENTITY_SEATS]
+    before = {seat: seat.read_text(encoding="utf-8") for seat in seats}
+    _first_turn(home, tmp_path)
+    assert {seat: seat.read_text(encoding="utf-8") for seat in seats} == before
+    assert not list(home.rglob("*.bak-*"))
+
+
 def test_an_edited_identity_the_engine_wrote_is_backed_up_and_restored(tmp_path: Path) -> None:
     """The prompts are the wheel's: an engine upgrade has to reach the model, so
     a seat this engine wrote and someone then edited is copied aside and the

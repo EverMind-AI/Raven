@@ -234,7 +234,13 @@ def _seed_prompt(target: Path, wanted: str | None, pristine: set[str] | frozense
     except (OSError, UnicodeDecodeError):
         previous = set()
     try:
-        generate(target, wanted, legacy_digests=pristine | previous, notify=lambda message: log(f"[run] {message}"))
+        generate(
+            target,
+            wanted,
+            owner=PRODUCT,
+            legacy_digests=pristine | previous,
+            notify=lambda message: log(f"[run] {message}"),
+        )
         old_receipt.unlink(missing_ok=True)
     except (OSError, UnicodeDecodeError) as exc:
         raise SystemExit(f"error: cannot regenerate {target}: {exc}") from exc
