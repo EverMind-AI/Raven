@@ -436,6 +436,13 @@ def test_a_plain_exception_has_no_body():
     assert call_record.exception_body(plain) is None
 
 
+@pytest.mark.parametrize("body", [{}, [], ""], ids=["empty-object", "empty-list", "empty-text"])
+def test_an_empty_parsed_body_is_no_body(body):
+    exc = _ClientError("litellm.BadRequestError: OpenAIException - stub refusal", body)
+    assert call_record.exception_body(exc) is None
+    assert call_record.from_exception(exc, status=400).body == str(exc)
+
+
 def test_a_record_built_from_a_client_error_keeps_its_body():
     body = {"error": {"message": "stub refusal", "tail": "TAIL-MARKER"}}
     record = call_record.from_exception(

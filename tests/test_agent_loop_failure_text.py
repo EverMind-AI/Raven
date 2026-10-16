@@ -55,6 +55,11 @@ def test_the_account_is_capped_at_the_call_record_body_ceiling():
     assert text.endswith("...")
 
 
+def test_an_account_exactly_at_the_ceiling_is_kept_whole():
+    text = "y" * MAX_BODY_CHARS
+    assert full_failure_text(text) == text
+
+
 def test_an_exception_is_named_the_way_the_lane_names_it():
     assert exception_failure_text(ValueError("boom")) == "ValueError: boom"
     assert exception_failure_text(TimeoutError()) == "TimeoutError"
