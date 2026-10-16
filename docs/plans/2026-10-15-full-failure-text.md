@@ -20,7 +20,7 @@
 - Source language: English for code, comments and docstrings (AGENTS.md 1); CJK only inside `i18n/messages.json` (already a CJK carrier) and the regenerated `ui-tui/src/i18n/messages.generated.ts`.
 - Every new Python file opens with an English module docstring (AGENTS.md 1.1). Comments only where they say why.
 - Python tests run as `uv run --frozen --python 3.12 --all-extras pytest ... -q -p no:randomly`, never bare `pytest` (AGENTS.md 4, 5.4). Vitest runs as `node node_modules/vitest/vitest.mjs run <paths>` from `ui-web/`, never through `npx`.
-- Branch `feat/full_failure_text`, cut from `origin/main` at `a71b488e6`, in the worktree `/Evermind/sh_evermind/xuedizhan/Raven/.claude/worktrees/continue_failed_turn`.
+- Branch `feat/full_failure_text`, cut from `origin/main` at `a71b488e6`, in its own worktree. Commands below write that worktree's path as `$WT` and the main checkout's, whose `node_modules` the worktree links, as `$MAIN`.
 - No commit and no push without the owner's explicit word (AGENTS.md 3.4). Each task ends by staging its files; the commit is Task 8, one commit, Conventional Commits.
 
 ## Review Focus
@@ -51,7 +51,7 @@
 - [ ] **Step 1: Prepare the worktree**
 
 ```bash
-cd /Evermind/sh_evermind/xuedizhan/Raven/.claude/worktrees/continue_failed_turn
+cd "$WT"
 /usr/bin/git branch -m feat/continue_failed_turn feat/full_failure_text
 /usr/bin/git branch --show-current          # expect: feat/full_failure_text
 uv sync --frozen --all-extras --python 3.12
@@ -937,9 +937,9 @@ class TranscriptTurnEnded(_Strict):
 - [ ] **Step 5: Regenerate both clients**
 
 ```bash
-ln -sfn /Evermind/sh_evermind/xuedizhan/Raven/ui-web/node_modules ui-web/node_modules
-ln -sfn /Evermind/sh_evermind/xuedizhan/Raven/ui-tui/node_modules ui-tui/node_modules
-cmp /Evermind/sh_evermind/xuedizhan/Raven/ui-web/package-lock.json ui-web/package-lock.json && cmp /Evermind/sh_evermind/xuedizhan/Raven/ui-tui/package-lock.json ui-tui/package-lock.json && echo "lockfiles match"
+ln -sfn "$MAIN/ui-web/node_modules" ui-web/node_modules
+ln -sfn "$MAIN/ui-tui/node_modules" ui-tui/node_modules
+cmp "$MAIN/ui-web/package-lock.json" ui-web/package-lock.json && cmp "$MAIN/ui-tui/package-lock.json" ui-tui/package-lock.json && echo "lockfiles match"
 node ui-web/scripts/gen-rpc-client.mjs
 node ui-tui/scripts/gen-rpc-types.mjs
 node ui-web/scripts/gen-rpc-client.mjs --check && node ui-tui/scripts/gen-rpc-types.mjs --check && echo "clients in sync"
@@ -1293,7 +1293,7 @@ const NoteView = memo(function NoteView({ lane, seg }: { lane: Lane; seg: NoteDa
 cd ui-web
 node node_modules/vitest/vitest.mjs run src/features/transcript/TranscriptPage.test.tsx src/state/session/pipeline.events.test.ts scripts/gates/i18n-keys.test.mjs
 node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
-node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json --listFiles | grep -c "worktrees/continue_failed_turn/ui-web/src/features/transcript/TranscriptPage.tsx"
+node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json --listFiles | grep -c "$WT/ui-web/src/features/transcript/TranscriptPage.tsx"
 cd ..
 ```
 
@@ -1380,7 +1380,7 @@ A throwaway check outside the repository: a local OpenAI-compatible stub that re
 - [ ] **Step 1: Build this worktree's page**
 
 ```bash
-cd /Evermind/sh_evermind/xuedizhan/Raven/.claude/worktrees/continue_failed_turn/ui-web
+cd "$WT/ui-web"
 node node_modules/vite/bin/vite.js build
 cd .. && .venv/bin/python ui-web/build.py
 grep -c "gui.transcript.error_expand" ui-web/dist/index.html
@@ -1445,7 +1445,6 @@ Run it as a background task; then `curl -s http://127.0.0.1:18931/v1/models` mus
 - [ ] **Step 3: Start an isolated `raven web` from the worktree**
 
 ```bash
-WT=/Evermind/sh_evermind/xuedizhan/Raven/.claude/worktrees/continue_failed_turn
 cd /tmp/ffx && RAVEN_HOME=/tmp/ffx/home BROWSER=true \
   PYTHONPATH="$WT:$WT/plugins-dist/ppt-engine:$WT/plugins-dist/design-engine" \
   "$WT/.venv/bin/python" -m raven web --port 18932 --foreground
@@ -1490,7 +1489,7 @@ with sync_playwright() as p:
 print("full failure text: ok")
 EOF
 cd /tmp/ffx/drive && env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy \
-  /Evermind/sh_evermind/xuedizhan/Raven/.claude/worktrees/continue_failed_turn/.venv/bin/python -I check_full_error.py
+  "$WT/.venv/bin/python" -I check_full_error.py
 ```
 
 Expected: `full failure text: ok`. Open `/tmp/ffx/expanded.png` and look at it: one red row, the toggle reading "收起" or "Hide", the account below it in a bordered block.
