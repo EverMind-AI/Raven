@@ -710,6 +710,26 @@ def test_a_failed_write_leaves_the_previous_text_and_receipt_in_place(tmp_path, 
     assert _receipt(target).read_text() == receipt
 
 
+def test_without_adopt_only_a_file_this_product_wrote_is_replaced(tmp_path):
+    said: list[str] = []
+    foreign = tmp_path / "foreign.md"
+    foreign.write_text("someone else's identity")
+    assert render.write_generated(foreign, "product", adopt=False, notify=said.append) == "kept"
+    assert foreign.read_text() == "someone else's identity" and _backups(foreign) == []
+    assert not _receipt(foreign).exists() and "nothing shows this product wrote it" in said[-1]
+
+    legacy = tmp_path / "legacy.md"
+    legacy.write_text("older release")
+    digest = hashlib.sha256(b"older release").hexdigest()
+    assert render.write_generated(legacy, "product", legacy_digests={digest}, adopt=False) == "written"
+
+    tracked = tmp_path / "tracked.md"
+    render.write_generated(tracked, "v1", adopt=False)
+    tracked.write_text("edited after the product wrote it")
+    assert render.write_generated(tracked, "v2", adopt=False) == "written"
+    assert [b.read_text() for b in _backups(tracked)] == ["edited after the product wrote it"]
+
+
 def _fail_when(monkeypatch, failing) -> None:
     """Make every ``atomic_replace(path, data)`` that ``failing`` matches raise.
 

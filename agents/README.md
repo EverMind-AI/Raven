@@ -199,7 +199,10 @@ Agent vocabulary:
   older release before receipts existed -- is copied to
   `<name>.bak-<time>-<pid>` before it is replaced, and the launcher's log
   names the copy. Backups are never deleted for you: remove one once what you
-  need from it is in the `*.local.md` file. Two processes of one product share these
+  need from it is in the `*.local.md` file. The ppt engine writes into
+  whatever home its plugin is granted, which can be a host's own, so it
+  replaces only a seat its receipt or a shipped prompt's digest shows it
+  wrote, and leaves any other file as it is. Two processes of one product share these
   files, so a launch can change what an older process still running reads
   next turn. Rolling back the code does not roll back the files: stop the
   product's processes, delete each file whose `.<name>.generated.sha256`
