@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -542,3 +543,61 @@ async def test_a_minted_id_is_bound_only_where_nothing_is_bound_so_a_newer_turn_
         is True
     )
     assert fresh.committed == [("tui:s1", "stub@box", "t1", "minted-X", "acp")], "unbound: the minted id binds"
+
+
+async def test_a_left_turn_that_resumed_the_session_its_handle_is_bound_to_closes_the_instance_s_row(
+    tmp_path, monkeypatch
+):
+    """The manager wrote ``running`` on the row when the turn began, and nothing wrote it since; the pick-up's bind,
+    which finds the handle bound to this very session, is what closes the row -- or the instance reads as interrupted
+    after its reply was announced."""
+    from raven.agent.subagent.instances import InstanceRegistry
+
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    monkeypatch.setattr(resume_remote, "get_registry", lambda: registry)
+    await registry.commit("tui:s1", "stub@box", "t1", "X", kind="acp")
+    await registry.upsert_spawn("tui:s1", "stub@box", "t1", "running")
+    manager = _Manager(_backend(), tmp_path / "s1")
+    _open_record(tmp_path / "s1")
+
+    assert await resume_remote._conclude(manager, _run(stateful=True, session_id="X"), "ok", "the answer") is True
+
+    row = registry._load()[("tui:s1", "stub@box", "t1")]
+    assert row["agentId"] == "X" and row["kind"] == "acp" and "status" not in row
+    assert manager.announced[0]["status"] == "ok"
+
+
+async def test_a_pick_up_concludes_the_record_the_run_s_origin_names_not_the_newest_running_one_of_the_handle(
+    tmp_path, monkeypatch
+):
+    """A newer turn to the same named instance opens its own record, ``running`` and under the handle, as its dispatch
+    starts; the left run's reply goes to the record the manager named when it left the run, and the newer turn's stays
+    open for that turn to finish. With no origin -- a host killed outright annotated nothing -- the latest left running
+    is the best guess, as before."""
+    registry = _Registry()
+    monkeypatch.setattr(resume_remote, "get_registry", lambda: registry)
+    session_dir = tmp_path / "s1"
+    _open_record(session_dir, node_id="n-left")
+    time.sleep(0.02)
+    _open_record(session_dir, node_id="n-newer")
+    manager = _Manager(_backend(), session_dir)
+
+    assert (
+        await resume_remote._conclude(manager, _run(origin={"node_id": "n-left"}), "ok", "THE LEFT RUN'S REPLY") is True
+    )
+
+    root = nodes_root(session_dir)
+
+    def meta(node_id: str) -> dict[str, Any]:
+        return json.loads((root / f"{node_id}.meta.json").read_text(encoding="utf-8"))
+
+    assert meta("n-left")["status"] == "completed" and meta("n-newer")["status"] == "running"
+    assert "THE LEFT RUN'S REPLY" in (root / "n-left.out.md").read_text(encoding="utf-8")
+    assert manager.finalized == ["n-left"] and str(manager.announced[0]["record"]).endswith("n-left.out.md")
+
+    _open_record(tmp_path / "s2", node_id="n-old")
+    time.sleep(0.02)
+    _open_record(tmp_path / "s2", node_id="n-new")
+    later = _Manager(_backend(), tmp_path / "s2")
+    assert await resume_remote._conclude(later, _run(), "ok", "x") is True
+    assert later.finalized == ["n-new"], "no origin: the latest left running"

@@ -156,7 +156,7 @@ class InstanceRegistry:
     async def bind_if_absent(
         self, session_key: str, agent: str, handle: str, agent_id: str, *, kind: str = "cli"
     ) -> str:
-        """Bind ``handle`` to ``agent_id`` unless it is bound already; the id it is bound to after this.
+        """Bind ``handle`` to ``agent_id`` unless it is bound to another id already; the id it is bound to after this.
 
         One step under the registry's own lock, for a writer that must neither
         replace a binding made meanwhile nor wait for the handle's lock: the
@@ -166,15 +166,21 @@ class InstanceRegistry:
         its whole turn and commits last; whichever order the two land in,
         the handle ends bound to the dispatch's session, and the pick-up
         never waits for that turn. A row of another ``kind``, or a status row
-        with no id, counts as absent, as :meth:`lookup` reads it.
+        with no id, counts as absent, as :meth:`lookup` reads it. A row
+        bound to ``agent_id`` itself is rebuilt as a binding alone, as
+        :meth:`commit` rebuilds one: a left turn that resumed the session
+        its handle is bound to owns that row, and the rebuild closes the
+        ``running`` the manager put on it when the turn began -- or the
+        instance reads as interrupted after a reply that was announced.
         """
         async with self._lock:
             with write_transaction(self._path):
                 records = self._load()
                 key = (session_key, agent, handle)
                 rec = records.get(key)
-                if rec and rec.get("kind") == kind and rec.get("agentId"):
+                if rec and rec.get("kind") == kind and rec.get("agentId") and rec["agentId"] != agent_id:
                     return str(rec["agentId"])
+                # Unbound, or bound to this very id: this run's own row either way.
                 self._bind(records, key, agent_id, kind)
                 return agent_id
 

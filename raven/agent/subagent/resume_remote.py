@@ -216,17 +216,26 @@ def _origin_of(
 
 
 def _spawn_record(session_dir: Path, run: remote_runs.RemoteRun) -> tuple[SpawnRecord | None, dict[str, Any]]:
-    """The dispatch's record under the session, still open: the latest of this agent and handle left running."""
+    """The dispatch's record under the session, still open.
+
+    The one the manager named when it left the run -- ``node_id`` in the
+    run's origin (:func:`raven.acp_client.remote_runs.annotate`): a newer
+    turn to the same named instance opens its own record, ``running`` and
+    under the handle, as its dispatch starts, and that record is the newer
+    turn's to finish. A run a host killed outright carries no origin; for it
+    the latest of this agent and handle left running is the best guess.
+    """
     root = nodes_root(session_dir)
+    origin = run.origin if isinstance(run.origin, dict) else {}
+    named = str(origin.get("node_id") or "")
+    if named:
+        meta = _open_meta(root / f"{named}.meta.json", run)
+        if meta is not None:
+            return _record(root, session_dir, named), meta
     best: tuple[int, str, dict[str, Any]] | None = None
     for path in root.glob("*.meta.json") if root.is_dir() else []:
-        try:
-            meta = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if not isinstance(meta, dict) or meta.get("status") != "running":
-            continue
-        if meta.get("agent") != run.agent or str(meta.get("handle") or "") != run.handle:
+        meta = _open_meta(path, run)
+        if meta is None:
             continue
         started = int(meta.get("started_at_ms") or 0)
         if best is None or started > best[0]:
@@ -234,12 +243,29 @@ def _spawn_record(session_dir: Path, run: remote_runs.RemoteRun) -> tuple[SpawnR
     if best is None:
         return None, {}
     _, node_id, meta = best
+    return _record(root, session_dir, node_id), meta
+
+
+def _open_meta(path: Path, run: remote_runs.RemoteRun) -> dict[str, Any] | None:
+    """The record at ``path``, when it is this agent and handle's and still running; else ``None``."""
+    try:
+        meta = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(meta, dict) or meta.get("status") != "running":
+        return None
+    if meta.get("agent") != run.agent or str(meta.get("handle") or "") != run.handle:
+        return None
+    return meta
+
+
+def _record(root: Path, session_dir: Path, node_id: str) -> SpawnRecord:
     task = ""
     try:
         task = (root / f"{node_id}.prompt.md").read_text(encoding="utf-8")
     except OSError:
         pass
-    return SpawnRecord(root, session_dir=session_dir, task=task, node_id=node_id), meta
+    return SpawnRecord(root, session_dir=session_dir, task=task, node_id=node_id)
 
 
 __all__ = ["START_DELAY_S", "resume_remote_runs", "schedule_remote_resume"]

@@ -1177,6 +1177,28 @@ async def test_bind_if_absent_binds_once_and_reads_a_status_row_or_another_kind_
     assert await registry.lookup("tui:s1", "a", "other") == "cli-sess"
 
 
+async def test_bind_if_absent_closes_a_row_bound_to_this_very_id_and_leaves_one_bound_to_another_alone(tmp_path):
+    """A left turn that resumed the session its handle is bound to: the manager wrote ``running`` on the row when the
+    turn began, and the pick-up's bind is what closes it -- as ``commit``'s rebuild did before -- or the instance
+    reads as interrupted after a reply that was announced. A row bound to another turn's session is that turn's to
+    close."""
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    await registry.commit("tui:s1", "a", "own", "X")
+    await registry.upsert_spawn("tui:s1", "a", "own", "running")
+    await registry.commit("tui:s1", "a", "other", "X")
+    await registry.upsert_spawn("tui:s1", "a", "other", "running")
+    was = {key: dict(row) for key, row in registry._load().items()}
+
+    assert await registry.bind_if_absent("tui:s1", "a", "own", "X") == "X"
+    assert await registry.bind_if_absent("tui:s1", "a", "other", "Y") == "X"
+
+    rows = registry._load()
+    own, other = rows[("tui:s1", "a", "own")], rows[("tui:s1", "a", "other")]
+    assert own["agentId"] == "X" and "status" not in own, "bound to this id: the row is this run's, and closed"
+    assert own["createdAtMs"] == was[("tui:s1", "a", "own")]["createdAtMs"]
+    assert other == was[("tui:s1", "a", "other")], "bound to another id: untouched, that turn closes it"
+
+
 async def test_a_left_cli_run_that_exited_non_zero_is_an_error_with_its_one_line(box):
     picked = await build_third_party_backend(cli_config("cat")).pick_up(
         _left_run(), pool=_PickUpLink(_left_endpoint("token expired", rc=3))
