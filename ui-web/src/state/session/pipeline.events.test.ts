@@ -305,8 +305,9 @@ describe('turn.started', () => {
     expect(h.live.startedAt).toBeGreaterThan(0)
     expect(h.live.answerAt).toBe(0)
     expect(h.park.turnOwner).toBe('s1')
-    /* A runtime turn is NOT cancellable. */
-    expect(h.did('dispatch')).toEqual([['dispatch', 'stream', false]])
+    /* Cancellable: the turn is the lane's running one, and turn.cancel reaches
+       it through the scheduler even though nothing bound a handle. */
+    expect(h.did('dispatch')).toEqual([['dispatch', 'stream', true]])
   })
 })
 
