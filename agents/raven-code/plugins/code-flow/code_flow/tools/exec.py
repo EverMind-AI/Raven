@@ -326,6 +326,8 @@ class CodeExecTool(ExecTool):
             return None
 
     async def _diagnose_writes(self, root: Path, before: snapshot.Snapshot | None, out: str | ToolResult) -> str:
+        if self._shadow is None or (shadow := self._shadow(root)) is None:
+            return ""
         written = getattr(out, "written", ())
         if self.record_writes:
             candidates = [(Path(item.path), None if item.created else UNKNOWN) for item in written]
@@ -344,19 +346,18 @@ class CodeExecTool(ExecTool):
         if not candidates:
             return ""
         unchecked_visibility = 0
-        if self._shadow is not None and (shadow := self._shadow(root)) is not None:
-            visible = []
-            for start in range(0, len(candidates), _DIAGNOSTIC_FILES):
-                # The host hook can resolve paths synchronously; bound each call
-                # and give the outer deadline a cancellation point between batches.
-                await asyncio.sleep(0)
-                batch = candidates[start : start + _DIAGNOSTIC_FILES]
-                shown = await shadow.trackable([str(path) for path, _ in batch])
-                visible.extend((path, old) for path, old in batch if str(path) in shown)
-                if len(visible) >= _DIAGNOSTIC_FILES:
-                    unchecked_visibility = len(candidates) - start - len(batch)
-                    break
-            candidates = visible
+        visible = []
+        for start in range(0, len(candidates), _DIAGNOSTIC_FILES):
+            # The host hook can resolve paths synchronously; bound each call
+            # and give the outer deadline a cancellation point between batches.
+            await asyncio.sleep(0)
+            batch = candidates[start : start + _DIAGNOSTIC_FILES]
+            shown = await shadow.trackable([str(path) for path, _ in batch])
+            visible.extend((path, old) for path, old in batch if str(path) in shown)
+            if len(visible) >= _DIAGNOSTIC_FILES:
+                unchecked_visibility = len(candidates) - start - len(batch)
+                break
+        candidates = visible
         selected = candidates[:_DIAGNOSTIC_FILES]
         limit = asyncio.Semaphore(MAX_WORKERS)
 
@@ -416,6 +417,11 @@ class CodeExecTool(ExecTool):
         root = Path(self._cwd_for(working_dir))
         if inspect_writes and self._guard_command(command, str(root)):
             inspect_writes = False
+        if inspect_writes:
+            try:
+                inspect_writes = self._shadow is not None and self._shadow(root) is not None
+            except Exception:  # noqa: BLE001 - unavailable visibility must not prevent the command
+                inspect_writes = False
         before = await self._listing(root) if inspect_writes and not self.record_writes else None
         if timeout is not None and not machine and not run_in_background and timeout > self._MAX_TIMEOUT:
             note = (

@@ -60,14 +60,15 @@ async def read_before(path: Path) -> str | None | object:
 def _ignores(text: str) -> dict[int, set[str] | None]:
     ignored: dict[int, set[str] | None] = {}
     for token in tokenize.generate_tokens(io.StringIO(text).readline):
-        if token.type != tokenize.COMMENT or not (match := _NOQA.match(token.string)):
+        if token.type != tokenize.COMMENT:
             continue
-        row = 0 if match[1] else token.start[0]
-        codes = set(re.findall(r"[A-Z]+\d+", match[2].upper())) if match[2] else None
-        if row not in ignored:
-            ignored[row] = codes
-        elif ignored[row] is not None:
-            ignored[row] = None if codes is None else ignored[row] | codes
+        for match in _NOQA.finditer(token.string):
+            row = 0 if match[1] else token.start[0]
+            codes = set(re.findall(r"[A-Z]+\d+", match[2].upper())) if match[2] else None
+            if row not in ignored:
+                ignored[row] = codes
+            elif ignored[row] is not None:
+                ignored[row] = None if codes is None else ignored[row] | codes
     return ignored
 
 
@@ -116,7 +117,10 @@ class PythonDiagnostics:
             if before is None:
                 baseline = Counter()
             elif isinstance(before, str) and len(before.encode("utf-8")) <= MAX_SOURCE_BYTES:
-                baseline = Counter(item.key for item in self.findings(path, before))
+                earlier = self.findings(path, before)
+                baseline = (
+                    None if any(item.code == "syntax" for item in earlier) else Counter(item.key for item in earlier)
+                )
             else:
                 baseline = None
         except Exception as exc:  # noqa: BLE001 - diagnostics must not change an already completed write's verdict
@@ -134,7 +138,7 @@ class PythonDiagnostics:
         scope = (
             "new findings compared with the content before this call"
             if baseline is not None
-            else "current findings; the pre-command baseline is unknown, so these may predate this command"
+            else "current findings; the baseline is unknown or could not be parsed, so these may predate this call"
         )
         rows = [f"\nPython diagnostics for {path} ({scope}; the file was kept):"]
         for finding in findings[:MAX_FINDINGS]:
