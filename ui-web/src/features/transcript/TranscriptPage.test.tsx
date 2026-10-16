@@ -1192,6 +1192,37 @@ describe('transcript island, history', () => {
     expect($$('.tnote')[0]?.querySelector('button.transcript-note-more')).toBeNull()
   })
 
+  it.each(['long notice '.repeat(20), 'first line\nsecond line'])('uses a neutral toggle for a quiet notice: %s', (detail) => {
+    act(() => { noteRow('Runtime notice', detail, { quiet: true }) })
+    const row = $$('.tnote')[0] as HTMLElement
+    const toggle = row.querySelector('.transcript-note-more') as HTMLButtonElement
+    expect(row.classList.contains('bad')).toBe(false)
+    expect(toggle.textContent).toBe('en:gui.transcript.notice_expand')
+    act(() => { toggle.click() })
+    expect(row.querySelector('.transcript-note-full')?.textContent).toBe(detail)
+    expect(toggle.textContent).toBe('en:gui.transcript.error_collapse')
+  })
+
+  it('replays a quiet notice with the same neutral expansion label', () => {
+    const detail = 'first line\nsecond line'
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'hello', timestamp: iso(Date.now() - 9000) },
+        { role: 'assistant', text: '', notice: { kind: 'organ_degraded', detail }, timestamp: iso(Date.now() - 3000) },
+      ])
+    })
+    const row = $$('.tnote')[0] as HTMLElement
+    const toggle = row.querySelector('.transcript-note-more') as HTMLButtonElement
+    expect(toggle.textContent).toBe('en:gui.transcript.notice_expand')
+    act(() => { toggle.click() })
+    expect(row.querySelector('.transcript-note-full')?.textContent).toBe(detail)
+  })
+
+  it('keeps a short quiet notice on one line without a toggle', () => {
+    act(() => { noteRow('Runtime notice', 'ready', { quiet: true }) })
+    expect($$('.tnote')[0]?.querySelector('.transcript-note-more')).toBeNull()
+  })
+
   it('opens an older marker to the bounded reason it kept', () => {
     const reason = `RateLimitError: ${'x'.repeat(180)}...`
     act(() => {

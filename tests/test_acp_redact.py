@@ -64,6 +64,15 @@ class TestWhatItCatches:
         assert "MIIEowIBAAKCAQEA" not in result
         assert head in result, "the reader needs to know what was there"
 
+    @pytest.mark.parametrize("closed", [False, True], ids=["cut", "complete"])
+    def test_a_private_key_keeps_no_body_when_its_closing_armour_is_missing(self, closed):
+        head = "-----BEGIN " + "PRIVATE KEY-----"
+        tail = "\n-----END " + "PRIVATE KEY-----" if closed else ""
+        result = redact(f"{head}\nsynthetic-private-material{tail}")
+        assert "synthetic-private-material" not in result
+        assert result.startswith(head + REPLACEMENT)
+        assert redact(result) == result
+
     def test_a_key_that_names_a_secret_redacts_its_value(self):
         """The ``mcpServers`` ``env`` channel. A per-string pass cannot do this:
         on its own, the value is indistinguishable from a hash -- the label is in
@@ -141,12 +150,31 @@ class TestWhatItLeavesAlone:
 
 
 class TestTheLimits:
+    @pytest.mark.parametrize(
+        "text",
+        ['"Authorization": "Bearer opaqu', "password=abcde", "--token abcde", "ghp_ABCD", "eyJabcdefghijk"],
+    )
+    def test_a_known_cut_removes_short_credential_tails(self, text):
+        assert REPLACEMENT in redact(text, truncated=True)
+        assert redact(text) == text
+
+    def test_a_known_cut_keeps_ordinary_unlabelled_text(self):
+        text = "ordinary diagnostic " + "x" * 1000
+        assert redact(text, truncated=True) == text
+
     def test_a_huge_string_is_truncated_rather_than_scanned(self):
         """Titles and previews reach here, not file bodies; a half-scanned string
         is worse than an honestly shortened one."""
         result = redact("a" * (MAX_SCAN_CHARS + 100))
 
         assert len(result) < MAX_SCAN_CHARS + 100
+        assert "truncated before scanning" in result
+
+    def test_the_scrubbers_own_scan_cut_removes_a_partial_url_password(self):
+        prefix = "x " * ((MAX_SCAN_CHARS - 40) // 2)
+        text = prefix + "https://user:synthetic-password-" + "a" * 100 + "@host"
+        result = redact(text)
+        assert "synthetic-password" not in result
         assert "truncated before scanning" in result
 
     def test_an_unlabelled_secret_passes_through(self):

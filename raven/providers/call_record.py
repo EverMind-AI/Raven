@@ -20,10 +20,9 @@ Three constraints shape what is kept:
   allow list -- the header that explains an incident is exactly the one an allow
   list would not have thought of -- so the name is tested against
   :data:`_SECRET_HEADER` and a hit keeps the name with its value replaced. The
-  body goes through :func:`scrub_credentials`, deliberately a handful of patterns rather
-  than the full table in ``raven.security.redact``: a response body is not a
-  config file. The one realistic echo is a 401 quoting the request's own
-  ``Authorization`` header, which is what the patterns are chosen for.
+  body goes through :func:`scrub_credentials` for quoted request headers, then
+  ``raven.security.redact`` before truncation: a parsed error body can carry
+  credentials whose closing delimiter would otherwise be lost at the cap.
 * **No image payloads.** A picture reaches here only inside the request, which
   this module never touches. How many rode along and what they weighed is
   counted on the ``llm.input`` side, from the messages, by
@@ -38,6 +37,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from raven.contracts.llm_provider import CallRecord
+from raven.security.redact import MAX_SCAN_CHARS, redact
 
 #: A response body is stored to be read by a person diagnosing one call. Past
 #: this the head is kept and ``body_truncated`` says so -- an empty or refused
@@ -77,10 +77,13 @@ _SECRET_HEADER = re.compile(
 #: recognisable with no label beside them. Each pattern captures only the
 #: secret, so the line stays readable and says what was there.
 _BODY_SECRETS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"((?:Proxy-)?Authorization\"?\s*[:=]\s*\"?(?:Bearer|Basic|Token)?\s*)([\w\-.~+/=]{8,})", re.IGNORECASE),
+    re.compile(
+        r"((?:Proxy-)?Authorization\"?\s*+[:=]\s*+\"?(?:(?:Bearer|Basic|Token)\s++)?)([\w\-.~+/=]{8,}+)",
+        re.IGNORECASE,
+    ),
     re.compile(r"(api[_-]?key\"?\s*[:=]\s*\"?)([^\s\"',;&|)]{6,})", re.IGNORECASE),
     re.compile(r"()(sk-(?:proj-|ant-|or-)?[A-Za-z0-9_-]{16,})"),
-    re.compile(r"()(eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})"),
+    re.compile(r"()(?<![A-Za-z0-9_-])(eyJ[A-Za-z0-9_-]{10,}+\.[A-Za-z0-9_-]{10,}+\.[A-Za-z0-9_-]{10,}+)"),
 )
 
 REPLACEMENT = "[redacted]"
@@ -110,9 +113,11 @@ def _bounded_body(value: Any) -> tuple[str | None, bool]:
         except Exception:  # noqa: BLE001 - the record must never be the thing that fails
             text = str(value)
     text = scrub_credentials(text)
+    truncated = len(text) > MAX_SCAN_CHARS
+    text = redact(text)
     if len(text) > MAX_BODY_CHARS:
         return text[:MAX_BODY_CHARS], True
-    return text, False
+    return text, truncated
 
 
 def keep_headers(headers: Any) -> dict[str, str]:

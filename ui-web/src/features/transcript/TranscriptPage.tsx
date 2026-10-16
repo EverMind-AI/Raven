@@ -1172,7 +1172,8 @@ const NoteView = memo(function NoteView({ lane, seg }: { lane: Lane; seg: NoteDa
       <span className="tx">{brief ? `${seg.label} · ${brief}` : seg.label}</span>
       {more ? (
         <button className="transcript-note-more" aria-expanded={open} onClick={() => setOpen((was) => !was)}>
-          {open ? t('gui.transcript.error_collapse') : t('gui.transcript.error_expand')}
+          {open ? t('gui.transcript.error_collapse')
+            : seg.quiet ? t('gui.transcript.notice_expand') : t('gui.transcript.error_expand')}
         </button>
       ) : null}
       {seg.retry ? (

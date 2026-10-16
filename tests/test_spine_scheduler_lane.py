@@ -672,6 +672,26 @@ async def test_a_crash_with_no_long_account_carries_none():
     assert failed.full_detail is None
 
 
+async def test_a_foreign_detail_property_cannot_swallow_the_failure_event():
+    class ForeignError(Exception):
+        @property
+        def full_detail(self):
+            raise RuntimeError("cannot read full_detail")
+
+    class Runner:
+        async def run(self, req, emit, drain):
+            raise ForeignError("original failure")
+
+    events, sink = _collector()
+    lane = Lane(runner=Runner(), pools=OriginPools(user=1, system=1), sink=sink, conversation_id="c")
+    await lane.submit(_req())
+    worker_result = await asyncio.gather(lane._worker, return_exceptions=True)
+    failed = [event for event in events if isinstance(event, TurnFailed)]
+    assert len(failed) == 1, worker_result
+    assert failed[0].error == "ForeignError: original failure"
+    assert failed[0].full_detail is None
+
+
 def test_only_a_non_empty_string_counts_as_a_long_account():
     from raven.spine.scheduler import full_detail_of
 

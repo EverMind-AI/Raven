@@ -482,3 +482,20 @@ def test_an_exception_that_cannot_be_read_has_no_body_and_still_gets_a_record():
     record = call_record.from_exception(exc, status=500)
     assert record.http_status == 500
     assert record.body == "boom"
+
+
+def test_a_parsed_body_is_scrubbed_before_a_cap_can_remove_its_closing_armour():
+    body = "diagnostic " * 700 + "\n-----BEGIN " + "PRIVATE KEY-----\nsynthetic-private-material-" + "a" * 1600
+    body += "\n-----END " + "PRIVATE KEY-----"
+    record = call_record.from_exception(_ClientError("refused", body), status=400)
+    assert "synthetic-private-material" not in record.body
+    assert call_record.REPLACEMENT in record.body
+    assert "diagnostic" in record.body
+
+
+def test_a_scrubbed_body_still_reports_that_its_scan_was_truncated():
+    body = "-----BEGIN " + "PRIVATE KEY-----\n" + "a" * call_record.MAX_SCAN_CHARS
+    record = call_record.from_exception(_ClientError("refused", body), status=400)
+    assert record.body_truncated is True
+    assert len(record.body) < call_record.MAX_BODY_CHARS
+    assert call_record.REPLACEMENT in record.body

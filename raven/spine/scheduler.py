@@ -54,10 +54,11 @@ def full_detail_of(exc: BaseException) -> str | None:
 
     Read, never built: the kernel imports no other raven package, so it cannot
     scrub a crash's message itself. A runner that wants the row expandable sets
-    a ``full_detail`` string on the exception it lets out; anything else --
-    absent, blank, not a string -- is no account at all.
+    a ``full_detail`` string in the exception's instance dictionary; descriptors
+    are never called, since a foreign getter can throw or return unsanitized data.
+    Absent, blank or non-string values mean no account.
     """
-    value = getattr(exc, "full_detail", None)
+    value = BaseException.__dict__["__dict__"].__get__(exc).get("full_detail")
     return value if isinstance(value, str) and value.strip() else None
 
 

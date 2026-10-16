@@ -833,6 +833,8 @@ credentials scrubbed, capped at the call record's body ceiling. The runner build
 (`agent/loop/failure_text.py`), since the kernel imports nothing to scrub with, and sets it on the
 exception it lets out; the lane copies it onto `TurnFailed.full_detail`, and it is filed on the
 marker as `turn_ended.full_detail`, only when the bounded text left something out.
+Both use the base exception's instance storage so a foreign property cannot substitute a value
+or disrupt failure reporting. The turn path and runner reuse the same scrubbed account.
 _Avoid_: conflating AnswerlessTurnError with `TurnFailed`, the lifecycle event the Spine worker
 emits for any exception a runner lets out, this one included.
 

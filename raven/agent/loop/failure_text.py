@@ -14,6 +14,8 @@ the exception it lets out (``attach_full_detail``). The lane copies it onto
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from raven.contracts.llm_provider import CallRecord
 from raven.providers.call_record import MAX_BODY_CHARS, exception_body, scrub_credentials
 from raven.security.redact import redact
@@ -22,24 +24,30 @@ from raven.spine.turn import AnswerlessTurnError
 
 _ELLIPSIS = "..."
 
-#: How much of a failure text the scrubbers read. Both carry patterns whose cost
-#: grows faster than the text (an unterminated PEM header, a dot-free run after
-#: ``eyJ``), and this runs on the event loop inside a failing turn's except arms.
-#: The window ends far past the cap, so a credential the cut splits is cut off
-#: again by the cap.
+#: Bound synchronous work even when a crash carries a very large body. The
+#: scrubber treats a private key without closing armour as secret to the end;
+#: earlier replacements can move a scan-cut fragment inside the output cap.
 _SCRUB_WINDOW = 4 * MAX_BODY_CHARS
 
 
-def full_failure_text(text: str) -> str:
+@dataclass(frozen=True)
+class _AttachedDetail:
+    detail: str | None
+
+
+def full_failure_text(text: str, *, truncated: bool = False) -> str:
     """``text`` with credentials scrubbed, capped at ``MAX_BODY_CHARS``.
 
     Two passes, because the text is either a provider body or an arbitrary crash
     message: the call record's body scrubber knows a JSON-quoted ``Authorization``
     value, and ``raven.security.redact`` knows the shapes a crash message carries
-    (a key in a URL, userinfo, ``password=``, vendor tokens). Scrubbed before the
-    cap, so a credential straddling the cut cannot survive as a fragment.
+    (a key in a URL, userinfo, ``password=``, vendor tokens). Incomplete private
+    key blocks and recognized credential tails are scrubbed too, including
+    those a call record already cut.
     """
-    text = redact(scrub_credentials(text.strip()[:_SCRUB_WINDOW]))
+    text = text.strip()
+    truncated = truncated or len(text) > _SCRUB_WINDOW
+    text = redact(scrub_credentials(text[:_SCRUB_WINDOW]), truncated=truncated)
     if len(text) <= MAX_BODY_CHARS:
         return text
     return text[: MAX_BODY_CHARS - len(_ELLIPSIS)].rstrip() + _ELLIPSIS
@@ -79,22 +87,25 @@ def response_failure_text(content: str | None, record: CallRecord | None) -> str
     body = ((record.body if record is not None else None) or "").strip()
     if body and body not in head:
         head = f"{head}\n\n{body}" if head else body
-    return full_failure_text(head) if head else None
+    return full_failure_text(head, truncated=bool(record and record.body_truncated)) if head else None
 
 
 def attach_full_detail(exc: BaseException) -> str | None:
     """Hand the lane ``exc``'s long account when it says more than the short one.
 
     Set as ``exc.full_detail`` -- None when the bounded text already is the whole
-    account, so the row offers nothing to open -- and returned. Recomputed from
-    the exception on every call, so the turn path's call and the runner's file the
-    same text, and a value some library put there is overwritten (an exception that
-    refuses the attribute keeps whatever it had).
+    account, so the row offers nothing to open -- and returned. The turn path
+    and runner reuse the same result. The base exception's instance storage
+    bypasses foreign getters and setters, including a read-only ``full_detail``;
+    the lane reads that same storage rather than invoking a descriptor.
     """
-    long = exception_failure_text(exc)
-    detail = long if long != describe_failure(exc) else None
-    try:
-        setattr(exc, "full_detail", detail)
-    except (AttributeError, TypeError):
-        pass
+    attributes = BaseException.__dict__["__dict__"].__get__(exc)
+    cached = attributes.get("_raven_failure_detail")
+    if isinstance(cached, _AttachedDetail):
+        detail = cached.detail
+    else:
+        long = exception_failure_text(exc)
+        detail = long if long != describe_failure(exc) else None
+        attributes["_raven_failure_detail"] = _AttachedDetail(detail)
+    attributes["full_detail"] = detail
     return detail

@@ -3,6 +3,8 @@ only when it says more than the 200-character text already does."""
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from raven.agent.loop import failure_text
@@ -13,7 +15,7 @@ from raven.agent.loop.failure_text import (
     response_failure_text,
 )
 from raven.contracts.llm_provider import CallRecord
-from raven.providers.call_record import MAX_BODY_CHARS, REPLACEMENT
+from raven.providers.call_record import MAX_BODY_CHARS, REPLACEMENT, from_exception
 from raven.spine.scheduler import describe_failure
 from raven.spine.turn import AnswerlessTurnError
 
@@ -228,3 +230,96 @@ def _unreadable(attribute: str) -> Exception:
 @pytest.mark.parametrize("attribute", ["response", "status_code", "body"])
 def test_an_unreadable_attribute_costs_the_body_not_the_account(attribute):
     assert attach_full_detail(_unreadable(attribute)) == "_Unreadable: " + "z" * 500
+
+
+def test_a_scan_cut_private_key_stays_hidden_after_an_earlier_secret_shrinks():
+    secret = "synthetic-private-material-" + "a" * 1600
+    pem = "-----BEGIN " + f"PRIVATE KEY-----\n{secret}\n-----END PRIVATE KEY-----"
+    text = "Authorization: Bearer " + "b" * 31000 + "\n" + pem
+
+    full = full_failure_text(text)
+
+    assert "synthetic-private-material" not in full
+    assert len(full) <= MAX_BODY_CHARS
+    assert REPLACEMENT in full
+
+
+@pytest.mark.parametrize(
+    ("tail", "visible", "kept"),
+    [
+        ("eyJ" + "A" * 1400 + "." + "B" * 20 + "." + "C" * 20, "eyJ" + "A" * 30, 978),
+        ("https://user:synthetic-password-" + "a" * 1400 + "@host", "synthetic-password", 978),
+        ("ghp_" + "A" * 30, "ghp_" + "A" * 8, 12),
+        ("password=abcdefghijk", "abcde", 14),
+        ('"Authorization": "Bearer opaque-token-value"', "opaqu", 30),
+    ],
+    ids=["jwt", "url-userinfo", "vendor-token", "named-secret", "quoted-header"],
+)
+def test_a_scan_cut_credential_tail_is_removed_before_earlier_redactions_move_it(tail, visible, kept):
+    prefix = "Authorization: Bearer "
+    text = prefix + "b" * (4 * MAX_BODY_CHARS - len(prefix) - kept - 1) + "\n" + tail
+    assert visible not in full_failure_text(text)
+
+
+def test_a_previously_capped_record_does_not_expose_a_private_key_fragment():
+    body = "diagnostic " * 700 + "\n-----BEGIN " + "PRIVATE KEY-----\nsynthetic-private-material-" + "a" * 1600
+    full = response_failure_text("provider refused", CallRecord(body=body[:MAX_BODY_CHARS], body_truncated=True))
+    assert "synthetic-private-material" not in full
+
+
+def test_a_previously_capped_record_removes_an_incomplete_jwt():
+    token = "eyJ" + "a" * 100
+    full = response_failure_text("provider refused", CallRecord(body=token, body_truncated=True))
+    assert token not in full
+    assert REPLACEMENT in full
+
+
+def test_a_client_body_loses_its_private_key_before_the_record_is_capped():
+    body = "diagnostic " * 700 + "\n-----BEGIN " + "PRIVATE KEY-----\nsynthetic-private-material-" + "a" * 1600
+    record = from_exception(_ClientError("provider refused", body), status=400)
+    assert "synthetic-private-material" not in record.body
+
+
+@pytest.mark.production_timing
+@pytest.mark.parametrize(
+    "tail",
+    ["Authorization:" + " " * 32000 + "!", "eyJ" * 10000 + "!"],
+    ids=["authorization-whitespace", "jwt-prefixes"],
+)
+def test_detail_processing_does_not_hold_the_event_loop_for_seconds(tail):
+    exc = RuntimeError("diagnostic " * 25 + tail)
+    start = time.thread_time()
+    attach_full_detail(exc)
+    attach_full_detail(exc)
+    assert time.thread_time() - start < 0.5
+
+
+@pytest.mark.parametrize("value", [None, "x" * 500], ids=["no-detail", "long-detail"])
+def test_the_same_failure_is_scrubbed_only_once(monkeypatch, value):
+    calls = []
+    original = failure_text.exception_failure_text
+
+    def record(exc):
+        calls.append(exc)
+        return original(exc)
+
+    monkeypatch.setattr(failure_text, "exception_failure_text", record)
+    exc = RuntimeError(value or "boom")
+    first = attach_full_detail(exc)
+    assert attach_full_detail(exc) == first
+    assert calls == [exc]
+
+
+@pytest.mark.parametrize("getter_raises", [False, True], ids=["readonly", "unreadable"])
+def test_a_foreign_property_cannot_replace_the_runners_safe_detail(getter_raises):
+    class ForeignError(Exception):
+        @property
+        def full_detail(self):
+            if getter_raises:
+                raise RuntimeError("cannot read full_detail")
+            return "x" * 9000 + " password=synthetic-password"
+
+    exc = ForeignError("diagnostic " * 25 + " password=synthetic-password")
+    expected = attach_full_detail(exc)
+    assert "synthetic-password" not in expected
+    assert failure_text.full_detail_of(exc) == expected

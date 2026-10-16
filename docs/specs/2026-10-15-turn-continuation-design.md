@@ -63,7 +63,7 @@ The web client's button keeps its existing label, `gui.retry`.
 ## Why the trace, not the session
 
 The session file records the conversation; the trace records each request as the
-provider received it. Measured on the 2026-10-15 failure (`trace-1a13f4bb277-017177dd`):
+provider received it. In an inspected failed turn,
 the failed `llm.call` span's `llm.input` artifact (`audit.artifact.v2`) held the system
 prompt as assembled for that call, all 24 messages exactly as sent (a pasted screenshot
 inline as a data URI, reasoning content, a mid-turn user message, three tool results),
@@ -194,6 +194,14 @@ question.
   `scrub_credentials`), then with `raven.security.redact.redact`, which knows the
   shapes a crash message carries (a key in a URL, userinfo, `password=`, vendor
   tokens) -- and capped at `call_record.MAX_BODY_CHARS` (8,000) rather than a new number.
+  The scrubbers read a window of at most 32,000 characters for a crash. A private key
+  without closing armour is scrubbed through the end of that window, since a prior
+  replacement can move a cut fragment inside the output cap. Call records use both
+  scrubbers before their own body cap. Authorization whitespace is consumed without
+  backtracking, and JWT matching starts only at token boundaries. Known truncation
+  is passed into the scrubber so incomplete JWTs, vendor tokens, URL passwords and
+  labelled credential tails are removed even without their normal minimum length
+  or closing delimiter. Ordinary unlabelled diagnostic text is preserved.
   The long text is the scrubbed one; the 200-character texts keep the wording they had,
   unscrubbed, so a credential inside a short crash message makes the opened text differ
   from the row only by its redaction.
@@ -220,6 +228,10 @@ question.
   `exc.body`; litellm reduces an OpenAI-style error body to one line in `str(exc)` and
   keeps the rest there). `call_record.from_exception` reads the same body, so a
   non-streamed error response's call record keeps it too.
+  The turn path and outer runner share the computed account, including an absent
+  one, so a failure is not scanned twice. Attachment and lane reads use the base
+  exception's instance storage; a foreign read-only property or throwing getter
+  is never consulted.
 - It travels three ways: `TurnFailed.full_detail` (`raven/spine/events.py`), the
   `error` event (`raven/rpc/spine.py` passes it to `emit_error`, a new optional
   `ErrorEventPayload.full_detail`), and the marker (`turn_ended.full_detail`, written
@@ -238,6 +250,7 @@ question.
   option; the live `error` handler passes `p.full_detail`, the replay passes
   `m.turn_ended.full_detail`. A marker written before this change has none; its row
   opens to the bounded `reason` it kept, when that is longer than the row's line.
+  Quiet runtime notices use the neutral "Show details" label for the same expansion.
 - **Retry.** A failed-turn row is no longer removed when its action is clicked; the
   handler calls `turn.continue`. `continued`: nothing more here (the next point turns
   the row). `fallback`, or an error from the call (an older Raven gateway without
@@ -266,6 +279,7 @@ question.
   | key | en | zh |
   |---|---|---|
   | `gui.transcript.error_expand` | Show full error | 展开完整错误 |
+  | `gui.transcript.notice_expand` | Show details | 展开详情 |
   | `gui.transcript.error_collapse` | Hide | 收起 |
   | `gui.transcript.resumed` | Interrupted here, then continued | 此处曾中断，已重试 |
   | `gui.turn.go_on` | Go on | 继续 |

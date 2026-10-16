@@ -47,7 +47,8 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "http-auth",
         re.compile(
-            r"((?:Authorization|Proxy-Authorization)\s*:\s*(?:Bearer|Basic|Token)\s+)([\w\-.~+/=]{8,})", re.IGNORECASE
+            r"((?:Authorization|Proxy-Authorization)\s*+:\s*+(?:Bearer|Basic|Token)\s++)([\w\-.~+/=]{8,}+)",
+            re.IGNORECASE,
         ),
     ),
     # An assignment to anything whose name says secret. Quoted or bare.
@@ -73,9 +74,12 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("google", re.compile(r"()(AIza[0-9A-Za-z_-]{30,})")),
     ("aws-access-key", re.compile(r"()((?:A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA)[A-Z0-9]{16})")),
     ("anthropic-legacy", re.compile(r"()(sk_live_[A-Za-z0-9]{16,})")),
-    ("jwt", re.compile(r"()(eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})")),
-    # PEM blocks: the body, not the armour, so the reader still sees what it was.
-    ("pem", re.compile(r"(-----BEGIN [A-Z ]*PRIVATE KEY-----)([\s\S]+?)(?=-----END)")),
+    (
+        "jwt",
+        re.compile(r"()(?<![A-Za-z0-9_-])(eyJ[A-Za-z0-9_-]{10,}+\.[A-Za-z0-9_-]{10,}+\.[A-Za-z0-9_-]{10,}+)"),
+    ),
+    # A scan or call-record cap may have removed the closing armour.
+    ("pem", re.compile(r"(-----BEGIN [A-Z ]*PRIVATE KEY-----)([\s\S]+?)(?=-----END|\Z)")),
     # A heredoc or echo piping a credential into a file.
     ("env-export", re.compile(r"((?:export|set)\s+[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_]*=)(\S+)")),
     # Deliberately NOT here: a pattern for credential *paths*
@@ -92,20 +96,50 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 # string is worse than an honestly shortened one.
 MAX_SCAN_CHARS = 256 * 1024
 
+# At a known cut, a token may be too short for the ordinary patterns or have
+# lost a closing delimiter. Keep ordinary unlabelled text, but remove a tail
+# whose label or prefix already identifies it as a credential.
+_TRUNCATED_SECRETS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"()(?<![A-Za-z0-9_-])((?:sk-|gh[pousr]_|glpat-|xox[abposr]-|AIza|A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA|eyJ)"
+        r"[A-Za-z0-9_.-]*+)\Z"
+    ),
+    re.compile(r"(://[^\s/:@]++:)([^\s/@]++)\Z"),
+    re.compile(
+        r"((?:api[_-]?key|secret|token|password|passwd|pwd|credential|private[_-]?key|access[_-]?key|auth)"
+        r"[\"']?\s*+[:=]\s*+[\"']?)([^\s\"',;&|)]++)\Z",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"((?:Proxy-)?Authorization[\"']?\s*+[:=]\s*+[\"']?(?:(?:Bearer|Basic|Token)\s++)?)"
+        r"([\w\-.~+/=]++)\Z",
+        re.IGNORECASE,
+    ),
+    re.compile(r"(--(?:token|password|api-key|secret|with-token)[= ])([^\s\"']++)\Z", re.IGNORECASE),
+)
 
-def redact(text: str) -> str:
+
+def redact(text: str, *, truncated: bool = False) -> str:
     """Return ``text`` with every recognised credential replaced.
 
     Idempotent: the replacement token matches none of the patterns, so a string
     that has already been through here is unchanged by a second pass. That
     matters because the same text can be redacted at more than one layer.
+    ``truncated`` says a caller already cut the input, so recognized credential
+    tails must be removed even without their usual length or closing delimiter.
     """
     if not text:
         return text
-    if len(text) > MAX_SCAN_CHARS:
-        text = text[:MAX_SCAN_CHARS] + "\n[truncated before scanning for credentials]"
+    scan_cut = len(text) > MAX_SCAN_CHARS
+    if scan_cut:
+        text = text[:MAX_SCAN_CHARS]
+    if truncated or scan_cut:
+        for pattern in _TRUNCATED_SECRETS:
+            text = pattern.sub(lambda m: m.group(1) + REPLACEMENT, text)
     for _, pattern in _PATTERNS:
         text = pattern.sub(lambda m: m.group(1) + REPLACEMENT, text)
+    if scan_cut:
+        text += "\n[truncated before scanning for credentials]"
     return text
 
 

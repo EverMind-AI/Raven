@@ -524,3 +524,26 @@ async def test_a_call_the_ladder_gave_up_on_files_the_body_its_record_kept_on_th
         await agent._process_message(_make_msg("hello"))
 
     assert _persisted(workspace)[-1]["turn_ended"]["full_detail"] == f"{content}\n\n{body}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_error", [False, True], ids=["crash-window", "capped-record"])
+async def test_a_partial_private_key_never_reaches_the_failure_marker(workspace, monkeypatch, provider_error):
+    pem = "-----BEGIN " + "PRIVATE KEY-----\nsynthetic-private-material-" + "a" * 1600 + "\n-----END PRIVATE KEY-----"
+    if provider_error:
+        body = ("diagnostic " * 700 + "\n" + pem)[:8000]
+        agent = _agent(workspace, _RefusedWithABody("Error calling LLM (rate_limit@audit): refused", body))
+    else:
+        agent = _agent(workspace, DyingProvider([LLMResponse(content="unused")]))
+
+        async def explode(*args, **kwargs):
+            raise RuntimeError("diagnostic " * 25 + "Authorization: Bearer " + "b" * 31000 + "\n" + pem)
+
+        monkeypatch.setattr(agent, "_run_agent_loop", explode)
+
+    with pytest.raises((AnswerlessTurnError, RuntimeError)):
+        await agent._process_message(_make_msg())
+
+    marker = _persisted(workspace)[-1]["turn_ended"]
+    assert "synthetic-private-material" not in marker["reason"]
+    assert "synthetic-private-material" not in marker["full_detail"]

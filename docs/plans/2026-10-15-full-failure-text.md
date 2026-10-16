@@ -6,7 +6,7 @@
 
 **Architecture:** The agent loop builds the long account (`raven/agent/loop/failure_text.py`: unbounded, credentials scrubbed with the call record's scrubber, capped at the call record's body ceiling) and puts it on the exception it lets out as `full_detail`; the kernel lane only copies that string onto `TurnFailed.full_detail`, because `raven/spine` imports no other raven package. The RPC outlet sends it as `ErrorEventPayload.full_detail`, `_save_broken_turn` files it as `turn_ended.full_detail`, and the page's `NoteView` gains an expand toggle that shows it.
 
-**Tech Stack:** Python 3.12 (asyncio, dataclasses, pytest), import-linter, OpenRPC JSON schema with generated TypeScript clients, React 18 + vitest (`ui-web`).
+**Tech Stack:** Python 3.12 (asyncio, dataclasses, pytest), import-linter, OpenRPC JSON schema with generated TypeScript clients, React + vitest (`ui-web`).
 
 **Spec:** `docs/specs/2026-10-15-turn-continuation-design.md` -- this plan is its first pull request (Delivery item 1: section 5, the expand half of section 6, the `full_detail` fields of the contract surface). Turn Continuation (Delivery item 2) gets its own plan once this one has landed.
 
@@ -14,13 +14,13 @@
 
 - The bounded texts do not change: `TURN_FAILURE_TEXT_MAX = 200` (`raven/spine/events.py`), `LLM_ERROR_DETAIL_MAX = 200` (`raven/providers/base.py`), `describe_failure`'s output, the marker's `turn_ended.reason`.
 - The long account is scrubbed with `raven/providers/call_record.py`'s scrubber (made public as `scrub_credentials`), then with `raven.security.redact.redact` (the shapes a crash message carries), and capped at `call_record.MAX_BODY_CHARS` (8,000). No new cap constant.
-- `raven/spine` imports no other raven package and stays under `LINE_CEILING = 2_000` lines (`tests/test_kernel_budget.py`; 1,531 at `a71b488e6`).
+- `raven/spine` imports no other raven package and stays under `LINE_CEILING = 2_000` lines (`tests/test_kernel_budget.py`).
 - `rpc-schema/openrpc.json` is the contract source; `raven/rpc/models.py` mirrors it by hand; both `src/rpc/generated.ts` files are regenerated, never edited.
-- New web client strings: `gui.transcript.error_expand` = en "Show full error" / zh "展开完整错误"; `gui.transcript.error_collapse` = en "Hide" / zh "收起". They live in `i18n/messages.json`; the TUI copy is regenerated.
+- New web client strings: `gui.transcript.notice_expand` = en "Show details" / zh "展开详情"; `gui.transcript.error_expand` = en "Show full error" / zh "展开完整错误"; `gui.transcript.error_collapse` = en "Hide" / zh "收起". They live in `i18n/messages.json`; the TUI copy is regenerated.
 - Source language: English for code, comments and docstrings (AGENTS.md 1); CJK only inside `i18n/messages.json` (already a CJK carrier) and the regenerated `ui-tui/src/i18n/messages.generated.ts`.
 - Every new Python file opens with an English module docstring (AGENTS.md 1.1). Comments only where they say why.
 - Python tests run as `uv run --frozen --python 3.12 --all-extras pytest ... -q -p no:randomly`, never bare `pytest` (AGENTS.md 4, 5.4). Vitest runs as `node node_modules/vitest/vitest.mjs run <paths>` from `ui-web/`, never through `npx`.
-- Branch `feat/full_failure_text`, cut from `origin/main` at `a71b488e6`, in its own worktree. Commands below write that worktree's path as `$WT` and the main checkout's, whose `node_modules` the worktree links, as `$MAIN`.
+- Work in the feature's own worktree, with its base confirmed under AGENTS.md. Commands below write that worktree's path as `$WT` and the main checkout's, whose `node_modules` the worktree links, as `$MAIN`.
 - No commit and no push without the owner's explicit word (AGENTS.md 3.4). Each task ends by staging its files; the commit is Task 8, one commit, Conventional Commits.
 
 ## Review Focus
@@ -52,8 +52,7 @@
 
 ```bash
 cd "$WT"
-/usr/bin/git branch -m feat/continue_failed_turn feat/full_failure_text
-/usr/bin/git branch --show-current          # expect: feat/full_failure_text
+/usr/bin/git branch --show-current
 uv sync --frozen --all-extras --python 3.12
 .venv/bin/python -V                          # expect: Python 3.12.x
 uv run --frozen --python 3.12 --all-extras pytest tests/test_spine_scheduler_lane.py tests/test_spine_events.py tests/test_agent_loop_broken_turn.py tests/test_agent_loop_llm_error_patience.py tests/test_agent_loop_run_emit.py tests/test_rpc_spine.py tests/test_llm_call_record.py tests/test_rpc_schema_match.py tests/test_kernel_budget.py tests/test_kernel_closure.py -q -p no:randomly
@@ -188,10 +187,11 @@ def full_detail_of(exc: BaseException) -> str | None:
 
     Read, never built: the kernel imports no other raven package, so it cannot
     scrub a crash's message itself. A runner that wants the row expandable sets
-    a ``full_detail`` string on the exception it lets out; anything else --
-    absent, blank, not a string -- is no account at all.
+    a ``full_detail`` string in the exception's instance dictionary; descriptors
+    are never called, since a foreign getter can throw or return unsanitized data.
+    Absent, blank or non-string values mean no account.
     """
-    value = getattr(exc, "full_detail", None)
+    value = BaseException.__dict__["__dict__"].__get__(exc).get("full_detail")
     return value if isinstance(value, str) and value.strip() else None
 ```
 
@@ -353,7 +353,16 @@ def scrub_credentials(text: str) -> str:
 
 ```python
     text = scrub_credentials(text)
+    truncated = len(text) > MAX_SCAN_CHARS
+    text = redact(text)
 ```
+
+Import `MAX_SCAN_CHARS` and `redact` from `raven.security.redact`, and preserve
+`truncated` in the returned body flag when the scrubbed text fits the body cap.
+The header pattern uses possessive whitespace quantifiers and JWT matching
+starts at token boundaries. Unterminated private key bodies are removed too;
+known truncated inputs also remove incomplete JWTs, vendor tokens, URL passwords,
+and labelled credential tails, even if too short for the normal patterns.
 
 and add `"scrub_credentials",` to `__all__` between `"keep_headers",` and `"stream_body",`. Confirm nothing else used the old name:
 
@@ -381,33 +390,66 @@ the exception it lets out (``attach_full_detail``). The lane copies it onto
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from raven.contracts.llm_provider import CallRecord
-from raven.providers.call_record import MAX_BODY_CHARS, scrub_credentials
-from raven.spine.scheduler import describe_failure
+from raven.providers.call_record import MAX_BODY_CHARS, exception_body, scrub_credentials
+from raven.security.redact import redact
+from raven.spine.scheduler import describe_failure, full_detail_of
 from raven.spine.turn import AnswerlessTurnError
 
 _ELLIPSIS = "..."
 
+#: Bound synchronous work even when a crash carries a very large body. The
+#: scrubber treats a private key without closing armour as secret to the end;
+#: earlier replacements can move a scan-cut fragment inside the output cap.
+_SCRUB_WINDOW = 4 * MAX_BODY_CHARS
 
-def full_failure_text(text: str) -> str:
-    """``text`` with credentials scrubbed, capped at ``MAX_BODY_CHARS``."""
-    text = scrub_credentials(text.strip())
+
+@dataclass(frozen=True)
+class _AttachedDetail:
+    detail: str | None
+
+
+def full_failure_text(text: str, *, truncated: bool = False) -> str:
+    """``text`` with credentials scrubbed, capped at ``MAX_BODY_CHARS``.
+
+    Two passes, because the text is either a provider body or an arbitrary crash
+    message: the call record's body scrubber knows a JSON-quoted ``Authorization``
+    value, and ``raven.security.redact`` knows the shapes a crash message carries
+    (a key in a URL, userinfo, ``password=``, vendor tokens). Incomplete private
+    key blocks and recognized credential tails are scrubbed too, including
+    those a call record already cut.
+    """
+    text = text.strip()
+    truncated = truncated or len(text) > _SCRUB_WINDOW
+    text = redact(scrub_credentials(text[:_SCRUB_WINDOW]), truncated=truncated)
     if len(text) <= MAX_BODY_CHARS:
         return text
     return text[: MAX_BODY_CHARS - len(_ELLIPSIS)].rstrip() + _ELLIPSIS
 
 
 def exception_failure_text(exc: BaseException) -> str:
-    """``exc``'s account worded the way ``describe_failure`` words it, without its 200-character cut."""
+    """``exc``'s account worded the way ``describe_failure`` words it, without its 200-character cut.
+
+    An HTTP error's body (``call_record.exception_body``) follows the message,
+    because a client library can keep the provider's whole answer there while
+    its message holds one line.
+    """
     name = type(exc).__name__
     if isinstance(exc, AnswerlessTurnError):
-        return full_failure_text(exc.full_detail or str(exc).strip() or name)
+        return full_failure_text(full_detail_of(exc) or str(exc).strip() or name)
     text = str(exc).strip()
     if not text:
-        return name
-    if text.startswith(f"{name}:") or text.startswith(f"{name} ") or text == name:
-        return full_failure_text(text)
-    return full_failure_text(f"{name}: {text}")
+        head = name
+    elif text.startswith(f"{name}:") or text.startswith(f"{name} ") or text == name:
+        head = text
+    else:
+        head = f"{name}: {text}"
+    body = (exception_body(exc) or "").strip()
+    if body and body not in head:
+        head = f"{head}\n\n{body}"
+    return head if head == name else full_failure_text(head)
 
 
 def response_failure_text(content: str | None, record: CallRecord | None) -> str | None:
@@ -421,23 +463,27 @@ def response_failure_text(content: str | None, record: CallRecord | None) -> str
     body = ((record.body if record is not None else None) or "").strip()
     if body and body not in head:
         head = f"{head}\n\n{body}" if head else body
-    return full_failure_text(head) if head else None
+    return full_failure_text(head, truncated=bool(record and record.body_truncated)) if head else None
 
 
 def attach_full_detail(exc: BaseException) -> str | None:
     """Hand the lane ``exc``'s long account when it says more than the short one.
 
     Set as ``exc.full_detail`` -- None when the bounded text already is the whole
-    account, so the row offers nothing to open -- and returned. Recomputed from
-    the exception on every call, so the turn path's call and the runner's file the
-    same text, and an attribute some library put there is never passed on.
+    account, so the row offers nothing to open -- and returned. The turn path
+    and runner reuse the same result. The base exception's instance storage
+    bypasses foreign getters and setters, including a read-only ``full_detail``;
+    the lane reads that same storage rather than invoking a descriptor.
     """
-    long = exception_failure_text(exc)
-    detail = long if long != describe_failure(exc) else None
-    try:
-        setattr(exc, "full_detail", detail)
-    except (AttributeError, TypeError):
-        pass
+    attributes = BaseException.__dict__["__dict__"].__get__(exc)
+    cached = attributes.get("_raven_failure_detail")
+    if isinstance(cached, _AttachedDetail):
+        detail = cached.detail
+    else:
+        long = exception_failure_text(exc)
+        detail = long if long != describe_failure(exc) else None
+        attributes["_raven_failure_detail"] = _AttachedDetail(detail)
+    attributes["full_detail"] = detail
     return detail
 ```
 
@@ -971,7 +1017,7 @@ Expected: PASS.
 - Modify: `ui-web/src/state/session/stages.ts:259-260` (the `error` arm)
 - Modify: `ui-web/src/features/transcript/TranscriptPage.tsx:1152-1172` (`NoteView`)
 - Modify: `ui-web/src/styles/page.css:1986-1996` (`.tnote`)
-- Modify: `i18n/messages.json` (two keys); regenerate `ui-tui/src/i18n/messages.generated.ts`
+- Modify: `i18n/messages.json` (three keys); regenerate `ui-tui/src/i18n/messages.generated.ts`
 - Test: `ui-web/src/features/transcript/TranscriptPage.test.tsx`, `ui-web/src/state/session/pipeline.events.test.ts`
 
 **Interfaces:**
@@ -1249,7 +1295,8 @@ const NoteView = memo(function NoteView({ lane, seg }: { lane: Lane; seg: NoteDa
       <span className="tx">{brief ? `${seg.label} · ${brief}` : seg.label}</span>
       {more ? (
         <button className="transcript-note-more" aria-expanded={open} onClick={() => setOpen((was) => !was)}>
-          {open ? t('gui.transcript.error_collapse') : t('gui.transcript.error_expand')}
+          {open ? t('gui.transcript.error_collapse')
+            : seg.quiet ? t('gui.transcript.notice_expand') : t('gui.transcript.error_expand')}
         </button>
       ) : null}
       {seg.retry ? (
@@ -1297,6 +1344,8 @@ node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json --listFiles | gre
 cd ..
 ```
 
+Also cover long single-line and multiline quiet notices, live and replayed: their toggle says "Show details"; a short quiet notice has no toggle.
+
 Expected: vitest PASS (the existing snapshot "keeps its rendered shape" included: it has no failed row); `tsc` exits 0; the `--listFiles` count is 1, which proves the compiler read the worktree's file and not the donor checkout's. If the `TranscriptPage` snapshot moved, read the diff: a change outside `.tnote` rows means the edit leaked.
 
 - [ ] **Step 7: Stage**
@@ -1337,7 +1386,7 @@ make lint-python lint-imports lint-types
 uv run --frozen --python 3.12 --all-extras pytest -q -p no:randomly
 ```
 
-Expected: the targeted run passes; the three lint targets exit 0. The full suite is not expected to be green on this box and must not be run with `-x`: at `afdc04f89` it was 2 failed / 25898 passed / 113 skipped in 5m11s, both failures pre-existing (`test_cli_serve_commands.py::TestTheSupervisorsStopOfItsGateway::test_a_stubborn_gateway_is_killed_with_its_group_in_one_step`, the #712 flake, and `test_install_script.py::test_resolve_node_dir_answers_each_case_it_exists_for`), plus the five proxy tests in `tests/test_config_update_providers.py` that fail whenever the box proxy is exported. Compare failing ids against those, not counts; a failing id outside them is this branch's until a run of the same id on a clean `origin/main` worktree fails too. A shutdown fault can report 139 after printing the summary -- read the printed summary, and if it is short of the expected count, re-run that file alone.
+Expected: the targeted run passes and the three lint targets exit 0. For a full-suite failure, compare the same test on a clean copy of the PR base with the same environment before attributing it to the change. Record actual commands and results; a partial or interrupted run is not a pass.
 
 - [ ] **Step 3: Run the web client and contract gates**
 
@@ -1727,4 +1776,4 @@ EOF
 /usr/bin/git log -1 --format=%B | .venv/bin/python -c "import sys; t=sys.stdin.read(); bad=[c for c in t if ord(c)>0x7F]; print('non-ascii:', bad); sys.exit(1 if bad else 0)"
 ```
 
-Expected: the commit lands on `feat/full_failure_text`; the ASCII check prints `non-ascii: []`. Push and the pull request wait for their own word (AGENTS.md 3.6, 3.7).
+Expected: the commit lands on the confirmed feature branch; the ASCII check prints `non-ascii: []`. Push and the pull request wait for their own word (AGENTS.md 3.6, 3.7).
