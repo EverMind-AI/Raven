@@ -223,10 +223,16 @@ class LoopOutcome:
     returned no text at all with the recovery switched off, which the caller
     fails on by itself. The caller fails the turn on it unless one of the
     turn's tools has already put an answer in front of the reader.
+
+    ``error_full`` is the same failure at length: the failed call's content
+    unbounded, then the body its call record kept. The caller raises it with
+    the error so a reader who expands the row can read it, and the runner drops
+    it when it says nothing more than ``error`` (``attach_full_detail``).
     """
 
     status: str = "completed"  # "completed" | "interrupted" | "error"
     error: str | None = None
+    error_full: str | None = None
     checkpoint_id: str | None = None
     edited_files: list[str] = field(default_factory=list)
 

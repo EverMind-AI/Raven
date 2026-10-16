@@ -49,6 +49,18 @@ def describe_failure(exc: BaseException) -> str:
     return bound_failure_text(f"{name}: {text}")
 
 
+def full_detail_of(exc: BaseException) -> str | None:
+    """The long account a runner put on ``exc``, for ``TurnFailed.full_detail``.
+
+    Read, never built: the kernel imports no other raven package, so it cannot
+    scrub a crash's message itself. A runner that wants the row expandable sets
+    a ``full_detail`` string on the exception it lets out; anything else --
+    absent, blank, not a string -- is no account at all.
+    """
+    value = getattr(exc, "full_detail", None)
+    return value if isinstance(value, str) and value.strip() else None
+
+
 def conversation_id(req: TurnRequest) -> str:
     """The lane key a request runs on: its explicit conversation, else
     ``<channel>:<chat_id>``.
@@ -527,6 +539,7 @@ class Lane:
                 # every other exception here is a crash whose message names
                 # hosts and paths.
                 reported=isinstance(exc, AnswerlessTurnError),
+                full_detail=full_detail_of(exc),
             )
             await self._sink(failed)
             self._payload_reported = True

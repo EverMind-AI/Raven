@@ -1979,10 +1979,11 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
    with an icon and a "Raven" header for runtime notices; a bare quiet line for
    a stop. The card was the bug: a dropped upload got the visual weight of an
    answer, and three failed uploads in a row buried the conversation under
-   panels. So: one line, the same metrics as a tool row, truncated at the
-   column's edge rather than wrapping, and colour as the only difference --
-   clay when something broke and the reader may have to act, faint when the
-   runtime is only reporting its own state. Same red as a failed tool row.
+   panels. So: a closed row is one line, the same metrics as a tool row,
+   truncated at the column's edge rather than wrapping, and colour as the only
+   difference -- clay when something broke and the reader may have to act, faint
+   when the runtime is only reporting its own state. Same red as a failed tool
+   row. An opened row is the grid described below.
 
    center, not baseline: an overflow:hidden child takes its bottom edge as its
    baseline, so baseline alignment padded every row with a phantom descender. */
@@ -1993,10 +1994,22 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
 }
 .tnote.bad { color: var(--clay); }
 .tnote .tx { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* The one action a failed row can offer. Plain text so the row stays a line:
+/* The actions a failed row can offer. Plain text so the row stays a line:
    a bordered button would rebuild the card one corner at a time. */
-.tnote .rt { flex: none; color: inherit; opacity: .75; text-decoration: underline; text-underline-offset: 2px; }
-.tnote .rt:hover { opacity: 1; }
+.tnote .rt, .tnote .transcript-note-more { flex: none; color: inherit; opacity: .75; text-decoration: underline; text-underline-offset: 2px; }
+.tnote .rt:hover, .tnote .transcript-note-more:hover { opacity: 1; }
+/* An opened row is a grid (text, toggle, Retry, slack), not a wrapping flex
+   line: its text is nowrap, so under flex-wrap it took a line to itself whenever
+   it and the actions did not fit, and the toggle just clicked dropped below it.
+   Here the text still shrinks to an ellipsis, the actions stay beside it, and the
+   account takes the row under them, wrapping and scrolling inside it: a body can
+   be one token thousands of characters long. */
+.tnote.open { display: grid; grid-template-columns: minmax(0, max-content) max-content max-content 1fr; }
+.tnote .transcript-note-full {
+  grid-column: 1 / -1; min-width: 0; max-height: 320px; overflow: auto;
+  margin: 2px 0 0; padding: 2px 0 2px 10px; border-left: 2px solid var(--line);
+  font: inherit; color: inherit; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text;
+}
 
 
 /* prose */

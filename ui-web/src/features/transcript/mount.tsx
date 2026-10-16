@@ -133,7 +133,7 @@ export function answerTyped(text: string): { progress(shown: number): void; done
 }
 
 export function note(label: string, detail: string,
-  opts?: { quiet?: boolean; retry?: (() => void) | null } | null): NoteHandle {
+  opts?: { quiet?: boolean; retry?: (() => void) | null; full?: string | null } | null): NoteHandle {
   return store.note(mainLane(), label, detail, opts)
 }
 

@@ -22,6 +22,7 @@ from raven.agent.hook import AgentHook, HookDecision
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import HostWiring, ToolWiring, TurnPolicy
 from raven.agent.loop.recovery import RecoveryLimits
+from raven.contracts.llm_provider import CallRecord
 from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, ToolCallRequest
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import AnswerlessTurnError, Origin, TurnRequest
@@ -443,3 +444,83 @@ async def test_a_cut_streams_canonical_account_survives_retries_after_output(wor
         await agent._process_message(_make_msg("hello"))
 
     assert str(failed.value) == cut
+
+
+@pytest.mark.asyncio
+async def test_a_long_crash_keeps_its_whole_account_on_the_marker(workspace, monkeypatch):
+    """The marker's ``reason`` stays at 200 characters for every reader it has;
+    ``full_detail`` beside it keeps what the cut removed, scrubbed, for a page
+    that lets the reader open the row."""
+    agent = _agent(workspace, DyingProvider([LLMResponse(content="unused", finish_reason="stop")]))
+    secret = "sk-or-v1-" + "b" * 40
+    message = "the engine room flooded: " + "w" * 400 + f" key {secret}"
+
+    async def explode(*args: Any, **kwargs: Any):
+        raise RuntimeError(message)
+
+    monkeypatch.setattr(agent, "_run_agent_loop", explode)
+    with pytest.raises(RuntimeError) as raised:
+        await agent._process_message(_make_msg("hello"))
+
+    ended = _persisted(workspace)[-1]["turn_ended"]
+    assert len(ended["reason"]) == 200 and ended["reason"].endswith("...")
+    assert ended["full_detail"].startswith("RuntimeError: the engine room flooded: " + "w" * 400)
+    assert secret not in ended["full_detail"]
+    assert raised.value.full_detail == ended["full_detail"]
+
+
+@pytest.mark.asyncio
+async def test_a_short_crash_files_no_second_copy(workspace, monkeypatch):
+    agent = _agent(workspace, DyingProvider([LLMResponse(content="unused", finish_reason="stop")]))
+
+    async def explode(*args: Any, **kwargs: Any):
+        raise RuntimeError("the engine room flooded")
+
+    monkeypatch.setattr(agent, "_run_agent_loop", explode)
+    with pytest.raises(RuntimeError):
+        await agent._process_message(_make_msg("hello"))
+
+    assert "full_detail" not in _persisted(workspace)[-1]["turn_ended"]
+
+
+class _RefusedWithABody(LLMProvider):
+    """One final error response, whose call record kept the provider's whole body."""
+
+    _CHAT_RETRY_DELAYS = ()  # the provider's own ladder, exhausted at once
+
+    def __init__(self, content: str, body: str):
+        super().__init__(api_key="test")
+        self._content = content
+        self._body = body
+
+    async def chat(self, *args: Any, **kwargs: Any):
+        return LLMResponse(
+            content=self._content,
+            finish_reason="error",
+            error_classification=ErrorClassification("rate_limit", retryable=False),
+            call_record=CallRecord(http_status=429, body=self._body),
+        )
+
+    async def chat_stream(self, *args: Any, **kwargs: Any):  # pragma: no cover - the non-stream path is under test
+        raise NotImplementedError
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+@pytest.mark.asyncio
+async def test_a_call_the_ladder_gave_up_on_files_the_body_its_record_kept_on_the_marker(workspace):
+    """The long account rides the raised failure, and the except arm that catches
+    it files the marker from what it attaches itself -- so the marker is read
+    back, not the exception's own attribute."""
+    content = "Error calling LLM (rate_limit@openrouter): Provider returned error"
+    body = (
+        '{"error":{"code":429,"metadata":{"raw":"z-ai/glm-5.3-flash is temporarily rate-limited upstream",'
+        '"provider_name":"Z.AI","limit_source":"upstream_provider_shared_pool"}}}'
+    )
+    agent = _agent(workspace, _RefusedWithABody(content, body))
+
+    with pytest.raises(AnswerlessTurnError):
+        await agent._process_message(_make_msg("hello"))
+
+    assert _persisted(workspace)[-1]["turn_ended"]["full_detail"] == f"{content}\n\n{body}"

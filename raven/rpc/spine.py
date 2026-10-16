@@ -522,6 +522,7 @@ class RpcOutlet:
         detail: str = "",
         target: dict[str, str] | None = None,
         turn_id: str = "",
+        full_detail: str = "",
     ) -> None:
         """A turn's failure, tagged with the turn it belongs to when known.
 
@@ -532,12 +533,17 @@ class RpcOutlet:
         its own, and will answer the wrong request. Empty when the caller did not
         know the turn, which a consumer must read as "not mine" rather than as
         "mine".
+
+        ``full_detail`` is the failure's long account beside the bounded
+        ``detail``, sent only when the runner had more to say.
         """
         payload: dict[str, Any] = {"code": code, "message": message, "reason": reason}
         if turn_id:
             payload["turn_id"] = turn_id
         if detail:
             payload["detail"] = detail
+        if full_detail:
+            payload["full_detail"] = full_detail
         if target is not None:
             payload["target"] = target
         await self._emitter.emit(self._subscription(conversation_id, target), {"type": "error", "payload": payload})
@@ -642,6 +648,7 @@ def _make_rpc_sink(
                     # lane slot: the slot may hold a client turn that has not
                     # started yet.
                     turn_id=event.turn_id,
+                    full_detail=event.full_detail or "",
                 )
             return
         if isinstance(event, TurnStarted):

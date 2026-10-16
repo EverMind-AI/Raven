@@ -299,6 +299,10 @@ export interface TranscriptTurnEnded {
    */
   status: string;
   reason?: string;
+  /**
+   * The failure's long account beside the bounded reason, for a reader who expands the row: the runner's own text, credentials scrubbed, capped at 8000 characters. Absent when the bounded text already is the whole account.
+   */
+  full_detail?: string;
 }
 /**
  * Marks an assistant entry the runtime wrote rather than the model.
@@ -1449,6 +1453,10 @@ export interface ErrorEvent {
     message: string;
     reason?: 'cancelled_by_client' | 'internal';
     detail?: string;
+    /**
+     * The failure's long account beside the bounded detail, for a reader who expands the row: the runner's own text, credentials scrubbed, capped at 8000 characters. Absent when the bounded text already is the whole account.
+     */
+    full_detail?: string;
     target?: DirectTarget;
   };
 }

@@ -626,3 +626,60 @@ async def test_scheduler_has_inflight_tracks_running_turn():
     except (asyncio.CancelledError, Exception):
         pass
     await sched.shutdown(grace=0.0)
+
+
+async def test_a_runners_long_account_rides_the_failure():
+    """The kernel cannot build the long form -- it imports no other raven
+    package, so it has nothing to scrub with -- so it copies what the runner
+    put on the exception, and nothing else."""
+
+    class AttachingRunner:
+        async def run(self, req, emit, drain) -> TurnOutcome:
+            exc = RuntimeError("short")
+            exc.full_detail = "RuntimeError: the whole story " + "x" * 500
+            raise exc
+
+    events, sink = _collector()
+    lane = Lane(runner=AttachingRunner(), pools=OriginPools(user=1, system=1), sink=sink, conversation_id="c")
+    await lane.submit(_req())
+    failed = next(e for e in events if isinstance(e, TurnFailed))
+    assert failed.error == "RuntimeError: short"
+    assert failed.full_detail == "RuntimeError: the whole story " + "x" * 500
+
+
+async def test_an_answerless_turn_carries_its_long_account():
+    class ReportingRunner:
+        async def run(self, req, emit, drain) -> TurnOutcome:
+            raise AnswerlessTurnError(
+                "Error calling LLM (rate_limit@openrouter): Provider returned error",
+                full_detail="the provider's whole body",
+            )
+
+    events, sink = _collector()
+    lane = Lane(runner=ReportingRunner(), pools=OriginPools(user=1, system=1), sink=sink, conversation_id="c")
+    await lane.submit(_req())
+    failed = next(e for e in events if isinstance(e, TurnFailed))
+    assert failed.reported is True
+    assert failed.error == "Error calling LLM (rate_limit@openrouter): Provider returned error"
+    assert failed.full_detail == "the provider's whole body"
+
+
+async def test_a_crash_with_no_long_account_carries_none():
+    events, sink = _collector()
+    lane = Lane(runner=FailingRunner(), pools=OriginPools(user=1, system=1), sink=sink, conversation_id="c")
+    await lane.submit(_req())
+    failed = next(e for e in events if isinstance(e, TurnFailed))
+    assert failed.full_detail is None
+
+
+def test_only_a_non_empty_string_counts_as_a_long_account():
+    from raven.spine.scheduler import full_detail_of
+
+    exc = ValueError("boom")
+    assert full_detail_of(exc) is None
+    exc.full_detail = 42
+    assert full_detail_of(exc) is None
+    exc.full_detail = "   "
+    assert full_detail_of(exc) is None
+    exc.full_detail = "the long one"
+    assert full_detail_of(exc) == "the long one"

@@ -413,9 +413,11 @@ export function askAuto(lane: Lane, origin: string, text: string, when?: string 
   })
 }
 
-export function note(lane: Lane, label: string, detail: string, opts?: { quiet?: boolean; retry?: (() => void) | null } | null): NoteHandle {
+export function note(lane: Lane, label: string, detail: string,
+  opts?: { quiet?: boolean; retry?: (() => void) | null; full?: string | null } | null): NoteHandle {
   const seg: NoteData = {
     v: 0, id: nextId(), kind: 'note', label: String(label || ''), detail: String(detail || ''),
+    full: String((opts && opts.full) || ''),
     quiet: !!(opts && opts.quiet), retry: (opts && opts.retry) || null,
   }
   push(lane, seg)
@@ -1726,8 +1728,9 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
       /* Same promise as the live stop, checked the same way: a replayed turn
          whose whole content is this marker has no output above to keep. */
       const halted = turnKept(lane) ? 'gui.halted' : 'gui.halted_bare'
+      const full = stopped ? '' : (m.turn_ended.full_detail || '')
       note(lane, stopped ? t(halted) : failedTurnLabel(),
-        stopped ? '' : (m.turn_ended.reason || ''), { quiet: stopped })
+        stopped ? '' : (m.turn_ended.reason || ''), { quiet: stopped, ...(full ? { full } : {}) })
       return
     }
     if (m.role === 'assistant') {

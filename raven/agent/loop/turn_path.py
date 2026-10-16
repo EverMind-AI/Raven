@@ -81,6 +81,7 @@ from raven.agent.loop._shared import (
     workdir,
 )
 from raven.agent.loop.dead_end import NO_RESPONSE_FALLBACK, dead_reasons
+from raven.agent.loop.failure_text import attach_full_detail, response_failure_text
 from raven.agent.loop.first_call import FirstCallGuard
 from raven.agent.loop.recovery import ContinuationGate, DraftGate, cut_reasoning_head, lower_reasoning_effort
 from raven.agent.tools.registry import call_failed
@@ -802,6 +803,7 @@ class TurnPathMixin:
         # caller that knows whether a tool has already delivered one.
         status = "completed"
         error_detail: str | None = None
+        error_full: str | None = None
 
         # The turn's window bookkeeping: the last billed context size, the retry
         # budgets every shrink draws on, and the picture window. Held here and
@@ -1784,6 +1786,7 @@ class TurnPathMixin:
                     final_content = clean or "Sorry, I encountered an error calling the AI model."
                     status = "error"
                     error_detail = _llm_failure_detail(clean, verdict)
+                    error_full = response_failure_text(clean, response.call_record)
                     break
 
                 # Empty-response recovery: an empty assistant turn would
@@ -2085,6 +2088,7 @@ class TurnPathMixin:
                 messages = self.context.add_assistant_message(messages, final_content)
                 hook_ctx.metadata["turn_end"]["salvaged"] = True
                 error_detail = None
+                error_full = None
 
         if any(any(m.get(k) for k in _TURN_TRANSIENT_KEYS) for m in messages):
             messages = [m for m in messages if not any(m.get(k) for k in _TURN_TRANSIENT_KEYS)]
@@ -2094,7 +2098,7 @@ class TurnPathMixin:
         # run from ``_process_message``); ``outcome.status`` is surfaced so that
         # pipeline can gate on completion.
 
-        outcome = LoopOutcome(status=status, error=error_detail)
+        outcome = LoopOutcome(status=status, error=error_detail, error_full=error_full)
         checkpoint = self._turn_checkpoint()
         if checkpoint is not None:
             # Per-turn snapshot: one commit covering all of this turn's edits,
@@ -2686,7 +2690,7 @@ class TurnPathMixin:
                 answered = isinstance(mt, MessageTool) and mt.sent_in_turn
                 if not answered:
                     if outcome.error:
-                        raise AnswerlessTurnError(outcome.error)
+                        raise AnswerlessTurnError(outcome.error, full_detail=outcome.error_full)
                     if final_content is None:
                         # The other way a turn arrives here with nothing: recovery
                         # switched off, so the empty response was taken at its word
@@ -2712,7 +2716,16 @@ class TurnPathMixin:
             # that rebound `messages` mid-turn leaves `live` on the seed, and the
             # marker would then be filed with none of this turn's work between the
             # question and itself. `all_msgs` is what the healthy path persists.
-            self._save_broken_turn(session, all_msgs, persist_from, None, streamed, status="failed", reason=str(exc))
+            self._save_broken_turn(
+                session,
+                all_msgs,
+                persist_from,
+                None,
+                streamed,
+                status="failed",
+                reason=str(exc),
+                full_detail=attach_full_detail(exc),
+            )
             raise
         except Exception as exc:
             self._save_broken_turn(
@@ -2726,6 +2739,7 @@ class TurnPathMixin:
                 # an arbitrary exception message is filed in a session a reader
                 # and a model both read back.
                 reason=bound_failure_text(str(exc)),
+                full_detail=attach_full_detail(exc),
             )
             raise
         self._stash_recovery(key, outcome)
@@ -2835,6 +2849,7 @@ class TurnPathMixin:
         *,
         status: str,
         reason: str | None = None,
+        full_detail: str | None = None,
         inbound_original: str | None = None,
     ) -> None:
         """Persist what a cancelled or failed turn got as far as producing.
@@ -2854,6 +2869,8 @@ class TurnPathMixin:
           the provider's account for the person diagnosing it, while the text
           the model reads back names the category only (see
           ``_marker_failure``).
+          ``turn_ended.full_detail`` is the long account beside the bounded
+          ``reason``, filed only when there is more to it.
 
         ``received_at`` and ``inbound_original`` describe the turn's question,
         which ``_process_message`` files before the attempt starts and hands
@@ -2905,7 +2922,11 @@ class TurnPathMixin:
             marker: dict[str, Any] = {
                 "role": "assistant",
                 "content": f"(turn {word})",
-                "turn_ended": {"status": status, **({"reason": reason} if reason else {})},
+                "turn_ended": {
+                    "status": status,
+                    **({"reason": reason} if reason else {}),
+                    **({"full_detail": full_detail} if full_detail else {}),
+                },
             }
             tail.append(marker)
             self._save_turn(session, tail, 0, received_at=received_at, inbound_original=inbound_original)

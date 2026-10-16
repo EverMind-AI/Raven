@@ -1121,3 +1121,47 @@ async def test_a_spawned_subagents_rendered_stream_is_retried_only_when_the_depl
     with pytest.raises(ConnectionError):
         await backend.run("build the deck", task_id="t1", workspace=workspace, executor=None, on_delta=_watch)
     assert provider.calls == 1
+
+
+class _RefusedWithABody(LLMProvider):
+    """One error response whose call record kept the provider's whole body."""
+
+    def __init__(self, body: str):
+        super().__init__(api_key="test")
+        self._body = body
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    _CHAT_RETRY_DELAYS = ()  # the provider's own ladder, exhausted at once
+
+    async def chat(self, *args, **kwargs):
+        from raven.contracts.llm_provider import CallRecord
+
+        return LLMResponse(
+            content="Error calling LLM (rate_limit@openrouter): Provider returned error",
+            finish_reason="error",
+            error_classification=ErrorClassification("rate_limit", retryable=False),
+            call_record=CallRecord(http_status=429, body=self._body),
+        )
+
+    async def chat_stream(self, *args, **kwargs):  # pragma: no cover - the non-stream path is under test
+        raise NotImplementedError
+
+
+@pytest.mark.asyncio
+async def test_a_call_the_ladder_gave_up_on_keeps_the_body_its_record_kept(workspace):
+    """The canonical sentence is the bounded report; the body behind it -- which
+    provider refused, from which pool, and what to do about it -- rides the
+    failure as its long account."""
+    body = (
+        '{"error":{"code":429,"metadata":{"raw":"z-ai/glm-5.3-flash is temporarily rate-limited upstream",'
+        '"provider_name":"Z.AI","limit_source":"upstream_provider_shared_pool"}}}'
+    )
+    agent = _agent(workspace, _RefusedWithABody(body), delays=())
+
+    with pytest.raises(AnswerlessTurnError) as failed:
+        await _turn(agent)
+
+    assert str(failed.value) == "Error calling LLM (rate_limit@openrouter): Provider returned error"
+    assert failed.value.full_detail == f"{failed.value}\n\n{body}"

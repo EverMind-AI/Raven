@@ -793,6 +793,8 @@ ran (a queued turn drained by a stop, an inject merged into a turn that did not 
 A `TurnFailed` is `reported` when the runner worded `error` itself (an `AnswerlessTurnError`)
 rather than it being whatever a crash carried — in-process only, so a consumer deciding what to
 show a stranger can quote a report and refuse to quote a crash.
+A `TurnFailed` may also carry `full_detail`, the failure's long account, which the runner builds and
+the lane copies off the exception (see **AnswerlessTurnError**).
 Per-conversation **Lanes** are the unit of both ordering and cancellation. Deliberately
 not a broadcast bus.
 _Avoid_: "the bus" — there is no Bus; "queue" for Lane — Lane is a serial+cancel domain.
@@ -826,6 +828,11 @@ it), and the `turn_ended` marker that says so is filed before the failure leaves
 is worded twice, for its two readers: `turn_ended.reason` keeps the provider's account for whoever is
 diagnosing the failure, while the entry text the model reads back names the failure's category and
 endpoint only — a vendor body is not history the model should spend context on or try to answer.
+Beside that bounded report a failed turn may carry `full_detail`, the same account at length --
+credentials scrubbed, capped at the call record's body ceiling. The runner builds it
+(`agent/loop/failure_text.py`), since the kernel imports nothing to scrub with, and sets it on the
+exception it lets out; the lane copies it onto `TurnFailed.full_detail`, and it is filed on the
+marker as `turn_ended.full_detail`, only when the bounded text left something out.
 _Avoid_: conflating AnswerlessTurnError with `TurnFailed`, the lifecycle event the Spine worker
 emits for any exception a runner lets out, this one included.
 

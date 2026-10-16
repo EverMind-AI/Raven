@@ -398,3 +398,80 @@ async def test_a_stream_that_answered_keeps_no_copy_of_its_own_chunks(monkeypatc
     assert response.call_record is not None
     assert response.call_record.http_status == 200
     assert response.call_record.body is None
+
+
+class _ClientError(Exception):
+    """The shape litellm/openai raise: a one-line message, a status, the parsed body, an empty response."""
+
+    def __init__(self, message: str, body: object, status_code: int = 400) -> None:
+        super().__init__(message)
+        self.body = body
+        self.status_code = status_code
+        self.response = type("R", (), {"text": "", "headers": {}})()
+
+
+def test_an_exception_body_is_read_when_the_response_kept_none():
+    body = {"error": {"message": "stub refusal", "tail": "TAIL-MARKER"}}
+    exc = _ClientError("litellm.BadRequestError: OpenAIException - stub refusal", body)
+    assert call_record.exception_body(exc) == json.dumps(body, ensure_ascii=False, default=str)
+
+
+def test_a_response_text_wins_over_the_parsed_body():
+    exc = _ClientError("short", {"error": {"message": "x"}})
+    exc.response = type("R", (), {"text": "the raw response", "headers": {}})()
+    assert call_record.exception_body(exc) == "the raw response"
+
+
+def test_a_blank_response_text_does_not_hide_the_parsed_body():
+    body = {"error": {"message": "stub refusal", "tail": "TAIL-MARKER"}}
+    exc = _ClientError("short", body)
+    exc.response = type("R", (), {"text": "\n", "headers": {}})()
+    assert call_record.exception_body(exc) == json.dumps(body, ensure_ascii=False, default=str)
+
+
+def test_a_plain_exception_has_no_body():
+    assert call_record.exception_body(ValueError("boom")) is None
+    plain = ValueError("boom")
+    plain.body = {"not": "an http error"}
+    assert call_record.exception_body(plain) is None
+
+
+def test_a_record_built_from_a_client_error_keeps_its_body():
+    body = {"error": {"message": "stub refusal", "tail": "TAIL-MARKER"}}
+    record = call_record.from_exception(
+        _ClientError("litellm.BadRequestError: OpenAIException - stub refusal", body), status=400
+    )
+    assert record.body is not None and "TAIL-MARKER" in record.body
+
+
+def test_a_response_whose_text_cannot_be_read_falls_through_to_the_parsed_body():
+    class _Unread:
+        @property
+        def text(self):
+            raise RuntimeError("the stream was never read")
+
+    body = {"error": {"tail": "TAIL-MARKER"}}
+    exc = _ClientError("short", body)
+    exc.response = _Unread()
+    assert call_record.exception_body(exc) == json.dumps(body, ensure_ascii=False, default=str)
+
+
+def test_a_body_that_cannot_be_serialized_is_read_as_text():
+    body = {("a", "b"): "TAIL-MARKER"}
+    assert call_record.exception_body(_ClientError("short", body)) == str(body)
+
+
+class _UnreadableStatus(Exception):
+    """An exception whose ``status_code`` raises something other than AttributeError when read."""
+
+    @property
+    def status_code(self):
+        raise RuntimeError("the status is unreadable")
+
+
+def test_an_exception_that_cannot_be_read_has_no_body_and_still_gets_a_record():
+    exc = _UnreadableStatus("boom")
+    assert call_record.exception_body(exc) is None
+    record = call_record.from_exception(exc, status=500)
+    assert record.http_status == 500
+    assert record.body == "boom"

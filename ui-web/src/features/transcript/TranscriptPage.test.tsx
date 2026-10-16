@@ -1127,6 +1127,101 @@ describe('transcript island, history', () => {
     openTurns()
     expect(domSnapshot(document.getElementById('stage')!)).toMatchSnapshot()
   })
+
+  it('opens a failed row to the whole account the runner kept', () => {
+    const reason = 'Error calling LLM (rate_limit@openrouter): Provider returned error'
+    const full = `${reason}\n\n{"error":{"metadata":{"limit_source":"upstream_provider_shared_pool"}}}`
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'hello', timestamp: iso(Date.now() - 9000) },
+        {
+          role: 'assistant', text: '(turn failed: rate limited)',
+          turn_ended: { status: 'failed', reason, full_detail: full }, timestamp: iso(Date.now() - 3000),
+        },
+      ])
+    })
+    const row = $$('.tnote')[0] as HTMLElement
+    const toggle = row.querySelector('button.transcript-note-more') as HTMLButtonElement
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(toggle.textContent).toBe('en:gui.transcript.error_expand')
+    expect(row.querySelector('.transcript-note-full')).toBeNull()
+    expect(row.title).toBe(`${mount.failedTurnLabel()} · ${reason}`)
+
+    act(() => { toggle.click() })
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(toggle.textContent).toBe('en:gui.transcript.error_collapse')
+    expect(row.querySelector('.transcript-note-full')?.textContent).toBe(full)
+
+    act(() => { toggle.click() })
+    expect(row.querySelector('.transcript-note-full')).toBeNull()
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(toggle.textContent).toBe('en:gui.transcript.error_expand')
+  })
+
+  it('offers no toggle when the row already says everything', () => {
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'hello', timestamp: iso(Date.now() - 9000) },
+        {
+          role: 'assistant', text: '(turn failed: boom)',
+          turn_ended: { status: 'failed', reason: 'ValueError: boom' }, timestamp: iso(Date.now() - 3000),
+        },
+      ])
+    })
+    expect($$('.tnote')[0]?.querySelector('button.transcript-note-more')).toBeNull()
+  })
+
+  it('opens an older marker to the bounded reason it kept', () => {
+    const reason = `RateLimitError: ${'x'.repeat(180)}...`
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'hello', timestamp: iso(Date.now() - 9000) },
+        {
+          role: 'assistant', text: '(turn failed: rate limited)',
+          turn_ended: { status: 'failed', reason }, timestamp: iso(Date.now() - 3000),
+        },
+      ])
+    })
+    const row = $$('.tnote')[0] as HTMLElement
+    act(() => { (row.querySelector('button.transcript-note-more') as HTMLButtonElement).click() })
+    expect(row.querySelector('.transcript-note-full')?.textContent).toBe(reason)
+  })
+
+  it('draws the live row and the replayed row of one failure alike', () => {
+    const reason = 'Error calling LLM (rate_limit@openrouter): Provider returned error'
+    const full = `${reason}\n\nthe provider's whole body`
+    act(() => { mount.note(mount.failedTurnLabel(), reason, { full }) })
+    const live = $$('.tnote')[0] as HTMLElement
+    act(() => { (live.querySelector('button.transcript-note-more') as HTMLButtonElement).click() })
+    const liveText = [live.querySelector('.tx')?.textContent, live.querySelector('.transcript-note-full')?.textContent]
+
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'hello', timestamp: iso(Date.now() - 9000) },
+        {
+          role: 'assistant', text: '(turn failed: rate limited)',
+          turn_ended: { status: 'failed', reason, full_detail: full }, timestamp: iso(Date.now() - 3000),
+        },
+      ])
+    })
+    /* The last row, whether the replay cleared the live one or drew after it. */
+    const rows = $$('.tnote')
+    const replayed = rows[rows.length - 1] as HTMLElement
+    act(() => { (replayed.querySelector('button.transcript-note-more') as HTMLButtonElement).click() })
+    expect([replayed.querySelector('.tx')?.textContent, replayed.querySelector('.transcript-note-full')?.textContent]).toEqual(liveText)
+  })
+
+  it('keeps each row\'s toggle its own', () => {
+    const full = `first\n\n${'y'.repeat(300)}`
+    act(() => {
+      mount.note(mount.failedTurnLabel(), 'first', { full })
+      mount.note(mount.failedTurnLabel(), 'second', { full: `second\n\n${'z'.repeat(300)}` })
+    })
+    const [one, two] = $$('.tnote') as HTMLElement[]
+    act(() => { (one!.querySelector('button.transcript-note-more') as HTMLButtonElement).click() })
+    expect(one!.querySelector('.transcript-note-full')).not.toBeNull()
+    expect(two!.querySelector('.transcript-note-full')).toBeNull()
+  })
 })
 
 /** Which fold is open, and who decided.

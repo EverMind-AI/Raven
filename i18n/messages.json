@@ -2131,6 +2131,14 @@
       "en": "Yesterday {t}",
       "zh": "昨天 {t}"
     },
+    "gui.transcript.error_expand": {
+      "en": "Show full error",
+      "zh": "展开完整错误"
+    },
+    "gui.transcript.error_collapse": {
+      "en": "Hide",
+      "zh": "收起"
+    },
     "gui.freq.cron": {
       "en": "Custom",
       "zh": "自定义"
