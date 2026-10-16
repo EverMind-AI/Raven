@@ -1409,6 +1409,32 @@ def test_a_receipt_from_before_shared_receipts_still_marks_the_products_text(gro
     assert (partition / ".TOOLS.md.generated.sha256").is_file()
 
 
+def test_an_unwritable_prompt_refuses_the_launch_with_the_reason(grounded, tmp_path, monkeypatch):
+    def unwritable(*_args, **_kwargs):
+        raise PermissionError("read-only partition")
+
+    monkeypatch.setattr(grounded.render, "write_generated", unwritable)
+    with pytest.raises(SystemExit, match="cannot regenerate .*TOOLS.md: read-only partition"):
+        grounded.seed_guide(tmp_path / "part")
+
+
+def test_a_stuck_old_receipt_refuses_the_launch_with_the_reason(grounded, tmp_path, monkeypatch):
+    partition = tmp_path / "part"
+    partition.mkdir()
+    old_receipt = partition / ".TOOLS.md.code-flow.sha256"
+    old_receipt.write_text("0" * 64 + "\n")
+    real_unlink = type(old_receipt).unlink
+
+    def unlink(path, missing_ok=False):
+        if path.name == old_receipt.name:
+            raise PermissionError("immutable file")
+        return real_unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(type(old_receipt), "unlink", unlink)
+    with pytest.raises(SystemExit, match="cannot regenerate .*TOOLS.md: immutable file"):
+        grounded.seed_guide(partition)
+
+
 def test_the_identity_is_regenerated_with_the_operators_local_lines(grounded, tmp_path):
     partition = tmp_path / "part"
     grounded.seed_soul(partition)
