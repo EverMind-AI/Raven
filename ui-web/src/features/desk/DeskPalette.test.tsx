@@ -15,8 +15,8 @@ import * as deliveries from '../workspace/deliveries'
 import * as workspace from '../workspace/store'
 import { DeskPalette } from './DeskPalette'
 import {
-  DESK_ANCHOR_GAP, DESK_COLUMN_FLOOR, DESK_DEFAULT_HEIGHT, DESK_DEFAULT_WIDTH, DESK_DRAG_THRESHOLD,
-  DESK_GEOMETRY_KEY, DESK_LAUNCHER_EDGE, DESK_TEXT_GAP,
+  DESK_ANCHOR_GAP, DESK_COLUMN_FLOOR, DESK_COMPOSER_GAP, DESK_DEFAULT_HEIGHT, DESK_DEFAULT_WIDTH,
+  DESK_DRAG_THRESHOLD, DESK_GEOMETRY_KEY, DESK_LAUNCHER_EDGE, DESK_TEXT_GAP,
 } from './geometry'
 import * as seen from './seen'
 import * as desk from './store'
@@ -1251,13 +1251,24 @@ describe('resizing by the corner grab', () => {
 
   /* How far down a pull goes: to the composer card's bottom edge. happy-dom
      lays nothing out, so the card, the launcher and the palette each have their
-     rectangle stated where the stylesheet would put them. */
-  const composerAt = (bottom: number): void => {
+     rectangle stated where the stylesheet would put them. The card ends at x=600
+     unless told otherwise, clear of a 300px palette hanging from the launcher at
+     974 -- where the reserve puts it in a chat wide enough to spare one. The
+     returned call moves it. */
+  type Spot = { right?: number; bottom?: number }
+  const composerAt = (bottom: number, span: Spot = {}): ((to: Spot) => void) => {
     document.body.insertAdjacentHTML('beforeend', '<div class="chat"><div class="dock"><div class="dock-in"></div></div></div>')
     const card = document.querySelector('.chat > .dock > .dock-in') as HTMLElement
-    card.getBoundingClientRect = (() => ({
-      left: 36, right: 836, top: bottom - 132, bottom, width: 800, height: 132, x: 36, y: bottom - 132,
-    })) as never
+    let at = { right: span.right ?? 600, bottom }
+    const place = (to: Spot): void => {
+      at = { ...at, ...to }
+      const { right, bottom: b } = at
+      card.getBoundingClientRect = (() => ({
+        left: 36, right, top: b - 132, bottom: b, width: right - 36, height: 132, x: 36, y: b - 132,
+      })) as never
+    }
+    place({})
+    return place
   }
   const launcherAt = (bottom: number): void => {
     const button = document.createElement('button')
@@ -1267,7 +1278,7 @@ describe('resizing by the corner grab', () => {
       left: 944, right: 974, top: bottom - 30, bottom, width: 30, height: 30, x: 944, y: bottom - 30,
     })) as never
   }
-  const pull = async (dy: number): Promise<void> => {
+  const pull = async (dy: number, dx = 0): Promise<void> => {
     grab().setPointerCapture = () => {}
     await act(async () => {
       grab().dispatchEvent(new PointerEvent('pointerdown', {
@@ -1275,12 +1286,15 @@ describe('resizing by the corner grab', () => {
       }))
     })
     await act(async () => {
-      window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1, clientX: 500, clientY: 500 + dy }))
+      window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1, clientX: 500 + dx, clientY: 500 + dy }))
     })
     await act(async () => {
-      window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: 500, clientY: 500 + dy }))
+      window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: 500 + dx, clientY: 500 + dy }))
     })
   }
+  /* Under the launcher (bottom 42, so the palette's top is 54) and short of a
+     card whose top is 568. */
+  const shortOfTheCard = `${700 - 132 - DESK_COMPOSER_GAP - (42 + DESK_ANCHOR_GAP)}px`
 
   it('pulls an anchored desk down to the composer card\'s bottom edge and stops there', async () => {
     launcherAt(42)
@@ -1290,6 +1304,33 @@ describe('resizing by the corner grab', () => {
     await pull(1000)
 
     expect(palette()?.style.height).toBe(`${700 - (42 + DESK_ANCHOR_GAP)}px`)
+  })
+
+  it('stops an anchored desk short of a composer card that runs under it', async () => {
+    launcherAt(42)
+    composerAt(700, { right: 836 })
+    await shelf()
+
+    await pull(1000)
+
+    expect(palette()?.style.height).toBe(shortOfTheCard)
+  })
+
+  it('stops short of the card once widened onto it', async () => {
+    /* The column is the palette's own: 250px wide it clears a card ending at
+       x=700, and pulled 50px wider -- leftward, the right edge being pinned --
+       it is over the card. */
+    launcherAt(42)
+    composerAt(700, { right: 700 })
+    localStorage.setItem(DESK_GEOMETRY_KEY, JSON.stringify({ x: 0, y: 54, w: 250, h: 340, detached: false }))
+    await shelf()
+    await pull(1000)
+    expect(palette()?.style.height).toBe(`${700 - (42 + DESK_ANCHOR_GAP)}px`)
+
+    await pull(0, -50)
+
+    expect(palette()?.style.width).toBe('300px')
+    expect(palette()?.style.height).toBe(shortOfTheCard)
   })
 
   it('holds a detached desk\'s top edge when the corner is pulled past the composer', async () => {
@@ -1310,5 +1351,115 @@ describe('resizing by the corner grab', () => {
 
     expect(palette()?.style.top).toBe('300px')
     expect(palette()?.style.height).toBe('400px')
+  })
+
+  it('lets a detached desk reach the card\'s bottom edge over the card itself', async () => {
+    /* Only the anchored palette stops short of the card: a dragged one is where
+       the reader put it. The launcher is there and the card runs under its
+       column, so a palette that asked the anchored question would stop at 502. */
+    launcherAt(42)
+    localStorage.setItem(
+      DESK_GEOMETRY_KEY,
+      JSON.stringify({ x: 40, y: 100, w: 300, h: 300, detached: true }),
+    )
+    composerAt(700, { right: 836 })
+    await shelf()
+    palette()!.getBoundingClientRect = (() => ({
+      left: 40, right: 340, top: 100, bottom: 400, width: 300, height: 300, x: 40, y: 100,
+    })) as never
+
+    await pull(1000)
+
+    expect(palette()?.style.height).toBe('600px')
+  })
+
+  /* The card moves without the palette rendering: it grows upward with a long
+     draft, and slides under the palette or out from under it as the reserve
+     comes and goes. happy-dom's ResizeObserver never calls back, so these drive
+     one that does. */
+  describe('when the composer card moves', () => {
+    const observers: Array<{ cb: ResizeObserverCallback; targets: Element[] }> = []
+    class FakeResizeObserver {
+      private readonly rec: { cb: ResizeObserverCallback; targets: Element[] }
+      constructor(cb: ResizeObserverCallback) {
+        this.rec = { cb, targets: [] }
+        observers.push(this.rec)
+      }
+      observe(el: Element): void { this.rec.targets.push(el) }
+      unobserve(el: Element): void { this.rec.targets = this.rec.targets.filter((x) => x !== el) }
+      disconnect(): void { this.rec.targets = [] }
+    }
+    /* Only what watches the dock hears it: the reserve slides the card by
+       the dock's padding, and the card's own box never changes for it. */
+    const relayout = async (): Promise<void> => {
+      const dock = document.querySelector('.chat > .dock') as Element
+      await act(async () => {
+        for (const o of observers) if (o.targets.includes(dock)) o.cb([], o as unknown as ResizeObserver)
+      })
+    }
+    beforeEach(() => {
+      observers.length = 0
+      vi.stubGlobal('ResizeObserver', FakeResizeObserver)
+    })
+    afterEach(() => { vi.unstubAllGlobals() })
+
+    it('gives the height back when a card that slid under it slides away', async () => {
+      /* Kept apart from the height the reader set, or a visit to the landing
+         page would cost a tall palette its height for good. */
+      launcherAt(42)
+      const place = composerAt(700)
+      await shelf()
+      await pull(1000)
+      expect(palette()?.style.height).toBe(`${700 - (42 + DESK_ANCHOR_GAP)}px`)
+
+      place({ right: 836 })
+      await relayout()
+      expect(palette()?.style.height).toBe(shortOfTheCard)
+
+      place({ right: 600 })
+      await relayout()
+      expect(palette()?.style.height).toBe(`${700 - (42 + DESK_ANCHOR_GAP)}px`)
+    })
+
+    it('resizes from the height it is drawn at, not the one it was set to', async () => {
+      launcherAt(42)
+      const place = composerAt(700)
+      await shelf()
+      await pull(1000)
+      place({ right: 836 })
+      await relayout()
+
+      await pull(-50)
+
+      expect(palette()?.style.height).toBe(`${700 - 132 - DESK_COMPOSER_GAP - (42 + DESK_ANCHOR_GAP) - 50}px`)
+    })
+
+    it('follows the card when the window moves it without resizing the dock', async () => {
+      launcherAt(42)
+      const place = composerAt(700)
+      await shelf()
+      await pull(1000)
+      place({ right: 836 })
+      await relayout()
+
+      place({ bottom: 600 })
+      await act(async () => { window.dispatchEvent(new Event('resize')) })
+
+      expect(palette()?.style.height).toBe(`${600 - 132 - DESK_COMPOSER_GAP - (42 + DESK_ANCHOR_GAP)}px`)
+    })
+
+    it('keeps what it showed when let go short of a card that then moves away', async () => {
+      /* A pull past the stop sets the height the reader saw, not the one the
+         hand went on to: otherwise the palette would grow by itself later. */
+      launcherAt(42)
+      const place = composerAt(700, { right: 836 })
+      await shelf()
+      await pull(1000)
+
+      place({ right: 600 })
+      await relayout()
+
+      expect(palette()?.style.height).toBe(shortOfTheCard)
+    })
   })
 })

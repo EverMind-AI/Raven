@@ -20,6 +20,9 @@ export const DESK_MIN_SIZE = 250
    the composer card's bottom edge however tall the window (`deskBottomLimit`). */
 export const DESK_MAX_WIDTH = 480
 export const DESK_VIEWPORT_GUTTER = 8
+/* How far above the composer card the anchored desk stops when the card runs
+   under its column (`deskBottomLimit`). */
+export const DESK_COMPOSER_GAP = 12
 /* The default is the smallest desk that shows a tab's contents, not the
    smallest one that renders -- it used to be 250x260 against a 250 minimum,
    which left a five-file shelf scrolling: 210px of body for 265px of rows.
@@ -100,12 +103,18 @@ const COLUMN_TRANSITION_DELTA = WORKSPACE_EDGE_GUTTER + COLUMN_GAP
 
 /* The lowest the desk's bottom edge goes: the composer card's own bottom edge,
    so a palette pulled all the way down ends level with the box the reader
-   types in. A dock that is not drawn -- an imported conversation has none -- leaves
-   the window's gutter as the limit, the case `dockLift` reads the same way. */
-export function deskBottomLimit(): number {
+   types in. Asked about a column the card runs under -- the anchored palette's,
+   see `anchoredRoom` -- it is the gap above the card instead: the landing page
+   and a chat too narrow for the reserve leave the card there, where its bottom
+   edge would put the palette on the field and the send button. A dock that is
+   not drawn -- an imported conversation has none -- leaves the window's gutter
+   as the limit, the case `dockLift` reads the same way. */
+export function deskBottomLimit(column?: { left: number; right: number }): number {
   const card = document.querySelector('.chat > .dock > .dock-in')
   if (!card?.getClientRects().length) return window.innerHeight - DESK_VIEWPORT_GUTTER
-  return card.getBoundingClientRect().bottom
+  const rect = card.getBoundingClientRect()
+  const under = column && rect.left < column.right && rect.right > column.left
+  return under ? rect.top - DESK_COMPOSER_GAP : rect.bottom
 }
 
 export function clampGeometry(value: DeskGeometry): DeskGeometry {
@@ -116,7 +125,7 @@ export function clampGeometry(value: DeskGeometry): DeskGeometry {
      wherever the palette was put, so the room is measured from the window's
      top instead: measured from the palette's own top, a downward move would
      shrink the palette rather than stop it. */
-  const top = value.detached ? DESK_VIEWPORT_GUTTER : anchoredTop() ?? value.y
+  const top = value.detached ? DESK_VIEWPORT_GUTTER : anchoredBox(w)?.top ?? value.y
   const h = Math.max(DESK_MIN_SIZE, Math.min(value.h, limit - top))
   return {
     x: Math.max(DESK_VIEWPORT_GUTTER, Math.min(window.innerWidth - w - DESK_VIEWPORT_GUTTER, value.x)),
@@ -132,11 +141,21 @@ function launcher(): HTMLElement | null {
     ?? document.getElementById('wsBtn')
 }
 
-/* Where the anchored desk's top edge sits: the gap below the launcher, the
-   same placement `anchoredGeometry` reads back for the magnet. */
-function anchoredTop(): number | null {
+/* Where the anchored desk sits: the gap below the launcher, right edge flush
+   with it -- the placement `anchoredGeometry` describes. */
+function anchoredBox(w: number): { top: number; left: number; right: number } | null {
   const rect = launcher()?.getBoundingClientRect()
-  return rect ? rect.bottom + DESK_ANCHOR_GAP : null
+  return rect ? { top: rect.bottom + DESK_ANCHOR_GAP, left: rect.right - w, right: rect.right } : null
+}
+
+/* How tall the anchored desk may be drawn at this width as the composer stands
+   now: down to the limit, asked about its own column. Not part of
+   clampGeometry, which settles the height the reader sets: a card that runs
+   under the palette for a while takes only what is drawn, and gives it back
+   when it moves away. */
+export function anchoredRoom(w: number): number {
+  const box = anchoredBox(w)
+  return box ? deskBottomLimit(box) - box.top : Number.POSITIVE_INFINITY
 }
 
 export function defaultGeometry(): DeskGeometry {
@@ -151,8 +170,8 @@ export function defaultGeometry(): DeskGeometry {
    launcher, hanging below it. Two expressions of one placement, so a change to
    either is a change to both. */
 export function anchoredGeometry(value: DeskGeometry): DeskGeometry {
-  const rect = launcher()?.getBoundingClientRect()
-  if (!rect) {
+  const box = anchoredBox(value.w)
+  if (!box) {
     return clampGeometry({
       ...value,
       x: window.innerWidth - value.w - DESK_VIEWPORT_GUTTER,
@@ -162,8 +181,8 @@ export function anchoredGeometry(value: DeskGeometry): DeskGeometry {
   }
   return clampGeometry({
     ...value,
-    x: rect.right - value.w,
-    y: rect.bottom + DESK_ANCHOR_GAP,
+    x: box.left,
+    y: box.top,
     detached: false,
   })
 }

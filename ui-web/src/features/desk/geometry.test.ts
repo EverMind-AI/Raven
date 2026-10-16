@@ -5,9 +5,11 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import {
   anchoredGeometry,
+  anchoredRoom,
   clampGeometry,
   DESK_ANCHOR_GAP,
   DESK_COLUMN_FLOOR,
+  DESK_COMPOSER_GAP,
   DESK_LAUNCHER_EDGE,
   DESK_TEXT_GAP,
   deskReserve,
@@ -40,13 +42,15 @@ function launcher(): number {
 
 /* The composer card, where the stylesheet puts it: the last child of `.dock`,
    which hangs off the chat's floor. happy-dom lays nothing out, so its
-   rectangle is stated. */
-function composer(bottom: number, height = 132): HTMLElement {
+   rectangle is stated. By default it ends at x=600, clear of a 300px palette
+   hanging from the launcher at 974 -- where the reserve puts it in a chat wide
+   enough to spare one. */
+function composer(bottom: number, { height = 132, left = 36, right = 600 } = {}): HTMLElement {
   document.body.insertAdjacentHTML('beforeend', '<div class="chat"><div class="dock"><div class="dock-in"></div></div></div>')
   const card = document.querySelector('.chat > .dock > .dock-in') as HTMLElement
   card.getBoundingClientRect = () => ({
-    left: 36, right: 836, top: bottom - height, bottom,
-    width: 800, height, x: 36, y: bottom - height, toJSON: () => ({}),
+    left, right, top: bottom - height, bottom,
+    width: right - left, height, x: left, y: bottom - height, toJSON: () => ({}),
   }) as DOMRect
   return card
 }
@@ -121,10 +125,30 @@ describe('how far down the desk reaches', () => {
        a card that is not drawn measures as a zero box -- taken as the limit, it
        would hold the palette at its minimum height. */
     launcher()
-    const card = composer(0, 0)
+    const card = composer(0, { height: 0 })
     card.getClientRects = () => ({ length: 0, item: () => null, [Symbol.iterator]: [][Symbol.iterator] }) as unknown as DOMRectList
     const at = clampGeometry({ x: 0, y: 42 + DESK_ANCHOR_GAP, w: 300, h: 5000, detached: false })
     expect(at.h).toBe(window.innerHeight - DESK_VIEWPORT_GUTTER - (42 + DESK_ANCHOR_GAP))
+  })
+
+  it('stops an anchored desk short of a composer card that runs under it', () => {
+    /* The landing page and a chat too narrow for the reserve leave the card
+       running under the palette's column, where reaching the card's bottom edge
+       would put the palette on the field and the send button. */
+    launcher()
+    composer(700, { right: 836 })
+    expect(anchoredRoom(300)).toBe(700 - 132 - DESK_COMPOSER_GAP - (42 + DESK_ANCHOR_GAP))
+  })
+
+  it('asks about the column the palette takes at the width it has', () => {
+    /* From the launcher's right edge at 974: a card ending at x=700 runs under a
+       300px palette, meets a 274px one edge to edge, which is beside it, and
+       stays clear of a 250px one. */
+    launcher()
+    composer(700, { right: 700 })
+    expect(anchoredRoom(300)).toBe(700 - 132 - DESK_COMPOSER_GAP - (42 + DESK_ANCHOR_GAP))
+    expect(anchoredRoom(274)).toBe(700 - (42 + DESK_ANCHOR_GAP))
+    expect(anchoredRoom(250)).toBe(700 - (42 + DESK_ANCHOR_GAP))
   })
 })
 

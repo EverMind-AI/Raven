@@ -1,6 +1,6 @@
 /** Draggable floating navigation palette for workspace content. */
 
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { t } from '../../i18n/t'
 import * as tasksStore from '../tasks/store'
@@ -10,10 +10,12 @@ import { fileKind } from '../workspace/store'
 import * as workspace from '../workspace/store'
 import { DeskIcon } from './DeskIcon'
 import {
+  anchoredRoom,
   clampGeometry,
   defaultGeometry,
   DESK_DRAG_THRESHOLD,
   DESK_GEOMETRY_KEY,
+  DESK_MIN_SIZE,
   deskBottomLimit,
   deskReserve,
   magnetGeometry,
@@ -335,6 +337,35 @@ export function DeskPalette(): JSX.Element | null {
       document.documentElement.style.removeProperty('--desk-reserve')
     }
   }, [shown, geom.detached, geom.w])
+  /* How tall the anchored palette may be drawn as the composer stands now:
+     short of a card that runs under it (`anchoredRoom`). Measured rather than
+     computed once, because the card moves without this component rendering --
+     it grows upward with a long draft, and slides under the palette or out from
+     under it as the reserve comes and goes -- and kept apart from `geom`, so a
+     card in the way for a while takes nothing from the height the reader set.
+     Before paint, or a palette opened over the card would show a frame on it. */
+  const [reach, setReach] = useState(Number.POSITIVE_INFINITY)
+  const reachRef = useRef(reach)
+  useLayoutEffect(() => {
+    const measure = (): void => {
+      reachRef.current = shown && !geom.detached ? anchoredRoom(geom.w) : Number.POSITIVE_INFINITY
+      setReach(reachRef.current)
+    }
+    measure()
+    if (!shown || geom.detached) return
+    /* The dock's box changes whenever the card does -- its padding takes the
+       reserve, its height follows the card -- and the window moves the dock
+       without resizing it. */
+    const dock = document.querySelector('.chat > .dock')
+    const observer = dock ? new ResizeObserver(measure) : null
+    if (dock && observer) observer.observe(dock)
+    window.addEventListener('resize', measure)
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener('resize', measure)
+    }
+  }, [shown, geom.detached, geom.w])
+  const height = Math.max(DESK_MIN_SIZE, Math.min(geom.h, reach))
   useEffect(() => {
     const resize = (): void => setGeom((value) => clampGeometry(value))
     window.addEventListener('resize', resize)
@@ -423,7 +454,7 @@ export function DeskPalette(): JSX.Element | null {
     event.preventDefault()
     event.stopPropagation()
     pointerCleanup.current?.()
-    const start = { pointerX: event.clientX, pointerY: event.clientY, ...geom }
+    const start = { pointerX: event.clientX, pointerY: event.clientY, ...geom, h: height }
     /* Only the top is ever pinned, so the height takes no more than the room
        between that edge and the limit. Left to clampGeometry, a detached palette
        pulled past the limit would make that room by climbing -- its top edge
@@ -450,6 +481,10 @@ export function DeskPalette(): JSX.Element | null {
       if (e && e.pointerId !== pointerId) return
       if (target.hasPointerCapture(pointerId)) target.releasePointerCapture(pointerId)
       controller.abort()
+      /* What the reader sees when they let go is what they set. A pull past
+         the stop above a card would otherwise leave a height the palette grows
+         back to by itself once the card moves away. */
+      setGeom((now) => ({ ...now, h: Math.max(DESK_MIN_SIZE, Math.min(now.h, reachRef.current)) }))
       if (pointerCleanup.current === cleanup) pointerCleanup.current = null
     }
     const cleanup = (): void => finish()
@@ -477,7 +512,7 @@ export function DeskPalette(): JSX.Element | null {
       style={{
         ...(geom.detached ? { left: geom.x, top: geom.y } : {}),
         width: geom.w,
-        height: geom.h,
+        height,
       } as CSSProperties}
     >
       <div
