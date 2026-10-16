@@ -345,6 +345,8 @@ class MirasimAgent:
                 logger.bind(agent_output=True).warning(
                     "Mirasim adapter: no model menu for {} ({})", self.agent, catalog_doc
                 )
+                if self._catalog is not None:
+                    return self._catalog
                 catalog_doc = None
             self._catalog = read_catalog(self.agent, agents_doc, catalog_doc)
             self._catalog_at = time.monotonic()

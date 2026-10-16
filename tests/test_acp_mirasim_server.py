@@ -472,6 +472,18 @@ async def test_a_failed_re_read_keeps_the_menus_in_hand(harness: Harness) -> Non
     assert await harness.agent.catalog(refresh=True) is first
 
 
+async def test_a_failed_catalog_refresh_preserves_the_selected_model_and_route(harness: Harness) -> None:
+    sid = await opened(harness, "platform:opus")
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("first"))
+    first = await harness.agent.catalog()
+    install(harness.tmp_path, "nomenu")
+    assert await harness.agent.catalog(refresh=True) is first
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("second"))
+    assert harness.routes() == []
+    assert "--model=opus" in harness.prompts()[-1]
+    assert "--effort=high" in harness.prompts()[-1]
+
+
 async def test_with_no_menus_in_hand_a_mirasim_that_cannot_list_its_agents_is_refused(tmp_path: Path) -> None:
     broken = Harness(tmp_path, mode="broken")
     assert (await broken.ok("initialize", protocolVersion=1))["agentInfo"]["version"] == "0.0.465"
