@@ -3,8 +3,12 @@
 Three layers, applied in order at add time:
   1. L7 topic_tag dedup — strictest, runs first when caller supplies tag.
   2. Message-equal dedup — byte-identical payload.message + same channel/to.
-  3. Time-window dedup — within 15 min of an existing fire on same channel/to.
-  4. Schedule dedup — same recurring schedule + same channel/to.
+  3. Schedule dedup — same recurring schedule + same channel/to.
+
+Dedup keys on explicit identity only. Nearby fire times are not identity:
+a former 15-minute time-window layer silently dropped a distinct reminder
+whose fire was close to an existing job's (issue #161) and was removed --
+see the tests at the bottom pinning that distinct nearby reminders are kept.
 
 L7 is the load-bearing one for the caregiver-style failure: the LLM
 re-asks for the same daily med reminder across the month with slightly
@@ -182,8 +186,8 @@ def test_schedule_dedup_updates_in_place_once_the_job_has_fired(svc):
     A plain re-add of the same recurring schedule/channel/to carries no
     topic_tag, so it lands on ``_find_duplicate_schedule`` rather than the
     topic_tag branch. Reaching it needs the existing job's ``next_run_at_ms``
-    cleared: with a fire still scheduled, the 15-minute time-window layer above
-    matches first and returns without updating anything. That is the state this
+    cleared: with a fire still scheduled the layer keeps the job's scheduled
+    fire instead of re-enabling or recomputing -- that is the state this
     layer is written for -- see its "already fired or was disabled" comment.
 
     Kept when the flag it was originally written for was retired, because its
@@ -206,3 +210,52 @@ def test_schedule_dedup_updates_in_place_once_the_job_has_fired(svc):
     assert again.enabled is True, "a job that had fired is re-enabled by the update"
     assert again.state.next_run_at_ms is not None, "the recompute has to give it a next fire"
     assert svc.list_jobs()[0].payload.message == "drink water"
+
+
+def test_distinct_nearby_oneshots_are_kept(svc):
+    """Two one-shots for the same recipient ten minutes apart with different
+    messages are distinct reminders, not duplicates (issue #161).
+
+    The removed 15-minute time-window layer returned the first job here, so
+    the second reminder was silently dropped while the caller saw a
+    successful-looking add."""
+    base = 2_000_000_000_000
+    j1 = _add(svc, "prepare the daily brief", CronSchedule(kind="at", at_ms=base))
+    j2 = _add(
+        svc,
+        "review the presentation",
+        CronSchedule(kind="at", at_ms=base + 10 * 60 * 1000),
+    )
+
+    assert j1.id != j2.id, "distinct messages must mint distinct jobs, however close the fires"
+    stored = svc.list_jobs()
+    assert {j.payload.message for j in stored} == {
+        "prepare the daily brief",
+        "review the presentation",
+    }
+
+
+def test_distinct_nearby_cross_kind_reminders_are_kept(svc):
+    """A recurring reminder and a same-fire one-shot with different messages
+    both survive: close fires across kinds are not identity either."""
+    j1 = _add(svc, "take the morning meds", CronSchedule(kind="cron", expr="0 8 * * *"))
+    assert j1.state.next_run_at_ms is not None
+    j2 = _add(
+        svc,
+        "log the morning weight",
+        CronSchedule(kind="at", at_ms=j1.state.next_run_at_ms + 5 * 60 * 1000),
+    )
+
+    assert j1.id != j2.id
+    assert len(svc.list_jobs()) == 2
+
+
+def test_identical_message_oneshot_still_dedups_when_close(svc):
+    """Byte-identical messages still dedup even with fires minutes apart —
+    removing the time-window layer must not weaken the explicit layers."""
+    base = 2_000_000_000_000
+    j1 = _add(svc, "water the plants", CronSchedule(kind="at", at_ms=base))
+    j2 = _add(svc, "water the plants", CronSchedule(kind="at", at_ms=base + 5 * 60 * 1000))
+
+    assert j1.id == j2.id
+    assert len(svc.list_jobs()) == 1
