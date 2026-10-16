@@ -42,6 +42,7 @@ from raven.agent.subagent.probe_state import fingerprint
 from raven.agent.subagent.registry import _row_for
 from raven.config.schema import MCPServerConfig, ThirdPartyAcpSubagentConfig
 from raven.config.update_subagents import reject_unsupported_acp_fields
+from raven.mcp.bridge import unix_sockets_available
 from raven.node import bundle
 from raven.node.client import NodePool
 from raven.ops import remote_path
@@ -396,29 +397,76 @@ async def test_a_connection_that_ends_mid_turn_is_reported_as_it_ended(box, tmp_
         await backend.run("hi", task_id="t1", workspace=tmp_path, executor=None)
 
 
-async def test_granted_mcp_servers_are_withheld_on_the_wire_and_named_in_the_reply(box, tmp_path):
+@pytest.mark.skipif(
+    not unix_sockets_available(), reason="MCP lending rides on unix sockets, which this computer has not"
+)
+async def test_granted_mcp_servers_are_lent_through_the_node_and_named_in_the_reply(box, tmp_path):
     backend = build_third_party_backend(remote_config(mode="echo_blocks"))
     grant = McpGrant(granted=(GrantedServer("pg", "stdio", MCPServerConfig(command="/bin/true")),))
 
     reply = await backend.run("hi", task_id="t1", workspace=tmp_path, executor=None, mcp_grant=grant)
 
-    assert "MCP servers 'pg' were not lent to acp agent 'stub@box'" in reply
+    assert "MCP servers 'pg' were lent to acp agent 'stub@box' through the Raven node on machine 'box'" in reply
     assert "Ran on machine 'Lab box' (box)" in reply
 
 
-# ---- what it is not given ------------------------------------------------------
+_HANDOFF_AGENT = Path(__file__).with_name("mcp_handoff_acp_stub.py")
+_HANDOFF_SERVER = Path(__file__).with_name("mcp_handoff_stub_server.py")
 
 
-def test_mcp_is_not_lent_to_an_agent_on_a_machine_and_the_reply_says_why():
+@pytest.mark.skipif(
+    not unix_sockets_available(), reason="MCP lending rides on unix sockets, which this computer has not"
+)
+async def test_an_mcp_server_the_host_holds_is_reached_from_the_machine_through_its_node(box, tmp_path):
+    """The agent there runs the node's bridge as a stdio server; the call reaches the server here, and its answer goes back."""
+    ledger, receipt = tmp_path / "ledger.jsonl", tmp_path / "receipt.jsonl"
+    upstream = MCPServerConfig(
+        command=sys.executable, args=[str(_HANDOFF_SERVER)], env={"MCP_HANDOFF_LEDGER": str(ledger)}
+    )
+    grant = McpGrant(granted=(GrantedServer("probe", "stdio", upstream),))
+    cfg = remote_config(command=f"{sys.executable} {_HANDOFF_AGENT}", env={"ACP_HANDOFF_RECEIPT": str(receipt)})
+
+    reply = await build_third_party_backend(cfg).run(
+        "marker-42", task_id="t1", workspace=tmp_path, executor=None, mcp_grant=grant
+    )
+
+    assert reply.split("\n\n[raven]")[0] == "MCP_HANDOFF_OK:marker-42", "the tool's answer, through the node"
+    assert "MCP servers 'probe' were lent to acp agent 'stub@box' through the Raven node on machine 'box'" in reply
+    calls = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
+    assert calls == [{"tool": "handoff_probe", "marker": "marker-42"}], "the server ran here, once"
+    (handed,) = [json.loads(line) for line in receipt.read_text(encoding="utf-8").splitlines()]
+    (stanza,) = handed["mcpServers"]
+    assert stanza["name"] == "probe" and stanza["env"] == [] and stanza["command"] == sys.executable
+    assert stanza["args"][:4] == ["-I", "-m", "raven.node", "--mcp"] and stanza["args"][-2:] == ["--server", "probe"]
+    assert stanza["args"][stanza["args"].index("--lend") + 1] == "t1" and "--task" in stanza["args"]
+    assert str(_HANDOFF_SERVER) not in json.dumps(stanza) and ".sock" not in json.dumps(stanza), (
+        "nothing of the server's definition reaches the machine"
+    )
+    root = stanza["args"][stanza["args"].index("--dir") + 1]
+    assert Path(root).is_relative_to(box.home), "the machine's own node directory"
+    listed = subprocess.run(["ps", "-axww", "-o", "pid=,command="], capture_output=True, text=True).stdout
+    assert f"--mcp --dir {root}" not in listed, "no bridge outlives the dispatch"
+
+
+# ---- what it is given, and how ----------------------------------------------------
+
+
+@pytest.mark.skipif(
+    not unix_sockets_available(), reason="MCP lending rides on unix sockets, which this computer has not"
+)
+def test_mcp_is_lent_to_an_agent_on_a_machine_through_its_node_and_the_reply_says_so():
     cfg = remote_config()
     backend = build_third_party_backend(cfg)
     grant = McpGrant(granted=(GrantedServer("pg", "stdio", MCPServerConfig(command="/bin/true")),))
 
-    assert backend._session_mcp_refused
-    note = backend._mcp_note(grant)
-    assert "were not lent" in note and "runs on machine 'box'" in note
-    assert session_mcp_effective(cfg) is False
-    assert _row_for(cfg).injectable.mcps is False
+    assert not backend._session_mcp_refused
+    assert "were lent to acp agent 'stub@box' through the Raven node on machine 'box'" in backend._mcp_note(
+        grant, ("pg",)
+    )
+    assert "carries no MCP streams" in backend._mcp_note(grant, ())
+    assert backend._mcp_note(grant) == "", "a run here says nothing of lending"
+    assert session_mcp_effective(cfg) is True
+    assert _row_for(cfg).injectable.mcps is True
 
 
 def test_the_roster_names_the_machine_and_hands_it_no_paths():
@@ -996,15 +1044,26 @@ def test_the_machine_note_is_kept_whole_inside_the_cap():
     assert probe._on_machine("short", "box") == "short (on machine 'box': any fix is made there)"
 
 
-# ---- one owner for "no session MCP on a machine" ------------------------------------------
+# ---- one owner for "session MCP on a machine" ---------------------------------------------
 
 
-def test_the_one_mcp_predicate_answers_for_a_machine_row_too():
+@pytest.mark.skipif(
+    not unix_sockets_available(), reason="MCP lending rides on unix sockets, which this computer has not"
+)
+def test_the_one_mcp_predicate_answers_for_a_machine_row_too(monkeypatch):
     from raven.agent.subagent.backends import session_mcp_delivered
 
-    assert session_mcp_delivered(session_mcp=True, snapshot=None, machine="box") is False
+    assert session_mcp_delivered(session_mcp=True, snapshot=None, machine="box") is True, "lent through the node"
+    assert session_mcp_delivered(session_mcp=False, snapshot=None, machine="box") is False, (
+        "the peer's own refusal holds"
+    )
     assert session_mcp_delivered(session_mcp=True, snapshot=None, machine="") is True
     assert session_mcp_delivered(session_mcp=True, snapshot=None) is True
+
+    # Without the transport (a Windows host), neither side is promised what the dispatch would withhold.
+    monkeypatch.delattr(asyncio, "start_unix_server", raising=False)
+    assert session_mcp_delivered(session_mcp=True, snapshot=None, machine="box") is False
+    assert session_mcp_delivered(session_mcp=True, snapshot=None) is False
 
 
 # ---- the write doors ------------------------------------------------------------------------
@@ -1038,3 +1097,76 @@ async def test_the_update_door_refuses_lending_keys_to_a_machine_row(box, config
 
 
 # ---- two machines on one disk ---------------------------------------------------------------
+
+
+async def test_a_prompt_that_fails_after_it_went_out_keeps_its_record_for_the_caller_that_reports_the_failure(
+    box, tmp_path, monkeypatch
+):
+    """The failure is the caller's to announce, as a reply is: the record stays until it has, and the next start
+    reads how the task ended off the machine and reports that."""
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    backend = build_third_party_backend(remote_config(mode="dies_mid_turn"))
+
+    with pytest.raises(Exception, match="exit 5"):
+        await backend.run("hi", task_id="t0", workspace=tmp_path, executor=None, session_key="tui:s1")
+    assert remote_runs.pending() == [], "a caller that takes the failure as its own result leaves no record"
+
+    with pytest.raises(Exception, match="exit 5"):
+        await backend.run(
+            "hi", task_id="t1", workspace=tmp_path, executor=None, session_key="tui:s1", reported_by_caller=True
+        )
+    (run,) = remote_runs.pending()
+    assert run.task_id == "t1" and run.prompt_id > 0, "the prompt was out: the record outlives the failure"
+
+    # The next start reads the end off the machine and reports it as the error it is.
+    session_dir = tmp_path / "sessions" / "s1"
+    meta = {"call_id": "n1", "session_key": "tui:s1", "agent": backend.name, "handle": "t1", "task_summary": "say hi"}
+    SpawnRecord.open(session_dir, task_id="t1", task="hi", meta=meta, node_id="n1")
+    manager = _Manager(backend, session_dir)
+    monkeypatch.setattr(resume_remote, "get_registry", lambda: _Registry())
+
+    assert await asyncio.wait_for(resume_remote.resume_remote_runs(manager), timeout=30) == 1
+
+    (said,) = manager.announced
+    assert said["status"] == "error" and "exit 5" in said["result"]
+    assert remote_runs.pending() == []
+
+
+async def test_a_daemon_killed_outright_mid_turn_ends_the_turn_with_the_reason_and_leaves_no_agent(box, tmp_path):
+    """The next daemon brings the task down and says why; the host reads that sentence off the attach instead of a
+    bare exit code, and the agent the killed daemon left behind is gone."""
+    box.nodes._heartbeat_s = 0.1
+    box.nodes._lost_after_s = 1.0
+    box.nodes._backoff_s = (0.2,)
+    backend = build_third_party_backend(remote_config(env={"ACP_STUB_PROMPT_DELAY_S": "20"}))
+    turn = asyncio.ensure_future(backend.run("hi", task_id="t1", workspace=tmp_path, executor=None))
+    deadline = time.monotonic() + 20
+    while box.nodes.status("box").agents != 1:
+        assert time.monotonic() < deadline and not turn.done(), "the agent never started"
+        await asyncio.sleep(0.05)
+    await asyncio.sleep(0.5)
+    agent = _agent_pid()
+    daemon = box.nodes._nodes["box"].hello["pid"]
+    assert _alive(agent) and _alive(daemon)
+
+    os.kill(daemon, signal.SIGKILL)
+
+    with pytest.raises(Exception, match="restarted while the agent ran") as caught:
+        await asyncio.wait_for(turn, timeout=30)
+    assert "exit -1" not in str(caught.value), "the sentence, not the bare lost code"
+    assert box.nodes._nodes["box"].hello["pid"] != daemon, "a new daemon, started by the new ssh"
+    deadline = time.monotonic() + 5
+    while _alive(agent) and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+    assert not _alive(agent), "the agent the killed daemon left behind was ended by the new one"
+
+
+async def test_a_remote_turn_runs_without_lent_mcp_when_the_host_has_no_unix_socket_api(box, tmp_path, monkeypatch):
+    monkeypatch.delattr(asyncio, "start_unix_server", raising=False)
+    monkeypatch.delattr(asyncio, "open_unix_connection", raising=False)
+    backend = build_third_party_backend(remote_config())
+    grant = McpGrant(granted=(GrantedServer("pg", "stdio", MCPServerConfig(command="must-not-start")),))
+    reply = await backend.run("hi", task_id="no-host-socket", workspace=tmp_path, executor=None, mcp_grant=grant)
+    assert reply.split("\n\n[raven]")[0] == "pong"
+    assert "this computer does not support Unix-socket MCP endpoints" in reply
+    assert not box.nodes._lent

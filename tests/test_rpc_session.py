@@ -3821,3 +3821,187 @@ async def test_session_create_refuses_a_harness_a_build_cannot_bind() -> None:
     with pytest.raises(ConfigValidationError) as exc:
         await session_create({"harness": "travel-concierge"})
     assert exc.value.data["field"] == "harness"
+
+
+# ── Imported Conversations through session.* ───────────────────────────
+
+
+def _import_export(tmp_path: Path, **source: object) -> str:
+    from raven.trajectory import imported
+    from tests import imported_package_builders as builders
+
+    package, _ = builders.build_export(tmp_path / f"src-{len(list(tmp_path.glob('src-*')))}")
+    return imported.import_bytes(package.read_bytes(), package.name).conversation.key
+
+
+def _imported_with_record(rows: list[dict]) -> str:
+    import gzip
+    import tarfile
+
+    from raven.trajectory import imported
+    from tests.test_trajectory_imported_package import EXP, _export_entries, _raw
+
+    record = "".join(json.dumps(r) + "\n" for r in rows).encode()
+    entries = _export_entries(extra=[(f"{EXP}/session.jsonl", tarfile.REGTYPE, record)])
+    return imported.import_bytes(gzip.compress(_raw(entries), mtime=0), "record.tar.gz", force=True).conversation.key
+
+
+async def test_session_list_adds_imported_rows_when_asked(tmp_path: Path) -> None:
+    from raven.trajectory import imported
+
+    key = _import_export(tmp_path)
+    rows = (await session_list({"channels": ["tui", "imported"]}))["sessions"]
+    row = next(r for r in rows if r["id"] == key)
+    conversation = imported.get(key)
+    assert row == {
+        "id": key,
+        "message_count": 4,
+        "preview": conversation.title,
+        "last_message_preview": "",
+        "source": "imported",
+        "started_at": datetime.fromisoformat(conversation.imported_at).timestamp(),
+        "updated_at": datetime.fromisoformat(conversation.imported_at).timestamp(),
+        "title": conversation.title,
+        "pinned": False,
+        "running": False,
+        "workdir": None,
+        "imported": {"kind": "export", "source_name": "export.tar.gz"},
+    }
+    assert key not in [r["id"] for r in (await session_list({"channels": ["tui"]}))["sessions"]]
+    assert key not in [r["id"] for r in (await session_list({}))["sessions"]]
+    archived = await session_list({"channels": ["tui", "imported"], "archived": True})
+    assert key not in [r["id"] for r in archived["sessions"]]
+
+
+async def test_session_list_keeps_imported_rows_out_of_the_limit_and_newest_first(tmp_path: Path) -> None:
+    import time
+
+    mgr = SessionManager(load_config().workspace_path)
+    for name in ("tui:one", "tui:two"):
+        session = mgr.get_or_create(name)
+        session.add_message("user", name)
+        mgr.save(session)
+    first = _import_export(tmp_path)
+    time.sleep(0.01)
+    second = _import_export(tmp_path)
+    rows = (await session_list({"channels": ["tui", "imported"], "limit": 1}))["sessions"]
+    assert [r["source"] for r in rows] == ["tui", "imported", "imported"]
+    assert [r["id"] for r in rows if r["source"] == "imported"] == [second, first]
+
+
+async def test_auto_archive_never_touches_an_imported_conversation(tmp_path: Path, monkeypatch) -> None:
+    from raven.trajectory import imported
+
+    key = _import_export(tmp_path)
+    conversation = imported.get(key)
+    meta = dict(conversation.meta, imported_at="2020-01-01T00:00:00+00:00")
+    (conversation.path / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    before = (conversation.path / "meta.json").read_bytes()
+    rows = (await session_list({"channels": ["tui", "imported"]}))["sessions"]
+    assert key in [r["id"] for r in rows]
+    assert (conversation.path / "meta.json").read_bytes() == before
+
+
+async def test_resume_serves_an_imported_conversation_read_only(tmp_path: Path) -> None:
+    from tests import imported_package_builders as builders
+
+    key = _import_export(tmp_path)
+    result = await session_resume({"session_id": key})
+    assert result["session_id"] == key
+    assert result["info"]["read_only"] is True
+    assert result["info"]["title"] == builders.TITLE
+    assert result["info"]["running"] is False
+    _assert_session_info(result["info"])
+    assert [m["text"] for m in result["messages"]] == [
+        builders.FIRST_INPUT,
+        "found three hotels",
+        builders.SECOND_INPUT,
+        "booked",
+    ]
+
+
+@pytest.mark.parametrize("key", ["imported:" + "0" * 32, "imported:../../etc", "imported:"])
+async def test_resume_of_an_unknown_imported_key_creates_nothing(key: str) -> None:
+    from raven.rpc.errors import SessionNotFoundError
+
+    sessions = load_config().workspace_path / "sessions"
+    before = sorted(sessions.rglob("*")) if sessions.exists() else []
+    with pytest.raises(SessionNotFoundError):
+        await session_resume({"session_id": key})
+    after = sorted(sessions.rglob("*")) if sessions.exists() else []
+    assert after == before
+
+
+async def test_an_imported_delivery_is_missing_whatever_this_machine_holds(tmp_path: Path) -> None:
+    from raven.agent.tools.deliverables import DeliverableStore
+
+    present = tmp_path / "report.pdf"
+    present.write_bytes(b"pdf")
+    store = DeliverableStore(tmp_path / "deliverables.json")
+    record = store.register(
+        path=str(present), name="report.pdf", media_type="application/pdf", size=3, conversation="tui:s1"
+    )
+    download = f"/files/download?token={record.token}"
+    assert store.get(record.token) is not None
+    delivery = {
+        "role": "tool",
+        "content": "Delivered files",
+        "metadata": {
+            "raven_delivery": {
+                "message": "Final files",
+                "files": [
+                    {
+                        "name": "report.pdf",
+                        "title": "Report",
+                        "path": str(present),
+                        "size": 3,
+                        "download_path": download,
+                    }
+                ],
+            }
+        },
+    }
+    ordinary = session_module._map_to_wire([delivery], "tui:s1")[0]["metadata"]["raven_delivery"]["files"][0]
+    assert (ordinary["missing"], ordinary["download_path"]) == (False, download)
+
+    key = _imported_with_record([{"_type": "metadata", "metadata": {}}, delivery])
+    files = (await session_resume({"session_id": key}))["messages"][0]["metadata"]["raven_delivery"]["files"]
+    assert files == [
+        {"name": "report.pdf", "title": "Report", "path": str(present), "size": 3, "download_path": "", "missing": True}
+    ]
+
+
+async def test_title_of_an_imported_conversation(tmp_path: Path) -> None:
+    from raven.rpc.errors import InvalidParamsError, SessionNotFoundError, SessionTitleTooLongError
+    from raven.session.title import TITLE_STORAGE_MAX
+    from tests import imported_package_builders as builders
+
+    key = _import_export(tmp_path)
+    assert await session_title({"session_id": key}) == {"title": builders.TITLE, "session_key": key, "pending": False}
+    renamed = await session_title({"session_id": key, "title": "  Hotel   analysis "})
+    assert renamed == {"title": "Hotel analysis", "session_key": key, "pending": False}
+    rows = (await session_list({"channels": ["imported"]}))["sessions"]
+    assert [r["title"] for r in rows if r["id"] == key] == ["Hotel analysis"]
+    with pytest.raises(InvalidParamsError):
+        await session_title({"session_id": key, "title": "   "})
+    with pytest.raises(SessionTitleTooLongError):
+        await session_title({"session_id": key, "title": "x" * (TITLE_STORAGE_MAX + 1)})
+    with pytest.raises(SessionNotFoundError):
+        await session_title({"session_id": "imported:" + "0" * 32, "title": "x"})
+    with pytest.raises(SessionNotFoundError):
+        await session_title({"session_id": "imported:" + "0" * 32})
+
+
+async def test_delete_of_an_imported_conversation(tmp_path: Path) -> None:
+    from raven.trajectory import imported
+    from raven.trajectory import index as tidx
+
+    key = _import_export(tmp_path)
+    state, _ = imported.trajectory_target(key)
+    tidx.indexer_for(state)
+    assert state.resolve() in tidx._INDEXERS
+    assert await session_delete({"session_id": key}) == {"deleted": key, "still_on_disk": False}
+    assert imported.get(key) is None
+    assert not state.exists()
+    assert state.resolve() not in tidx._INDEXERS
+    assert await session_delete({"session_id": key}) == {"deleted": None, "still_on_disk": False}

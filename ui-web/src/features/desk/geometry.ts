@@ -16,8 +16,14 @@ export const DESK_SNAP_DISTANCE = 34
    click, large enough that a click's own jitter is never mistaken for a drag. */
 export const DESK_DRAG_THRESHOLD = 4
 export const DESK_MIN_SIZE = 250
-export const DESK_MAX_SIZE = 480
+/* The width only: the height has no number of its own -- how far down it
+   reaches is the composer card's to say, however tall the window
+   (`deskBottomLimit`). */
+export const DESK_MAX_WIDTH = 480
 export const DESK_VIEWPORT_GUTTER = 8
+/* How far above the composer card the anchored desk stops when the card runs
+   under its column (`deskBottomLimit`). */
+export const DESK_COMPOSER_GAP = 12
 /* The default is the smallest desk that shows a tab's contents, not the
    smallest one that renders -- it used to be 250x260 against a 250 minimum,
    which left a five-file shelf scrolling: 210px of body for 265px of rows.
@@ -57,9 +63,12 @@ export const DESK_COLUMN_FLOOR = 520
  *
  * 330px is the panel's own height, so what it covers is a BAND ACROSS THE TOP of
  * the column -- which is where a short conversation's whole content sits, and
- * where any conversation's does once the reader scrolls back up. It does not
- * reach the composer: the panel ends at y=394 and the composer sits near the
- * bottom of the window, so the two intersect on the x-axis only.
+ * where any conversation's does once the reader scrolls back up. At that height
+ * it does not reach the composer: the panel ends at y=394 and the composer sits
+ * near the bottom of the window, so the two intersect on the x-axis only.
+ * Pulled all the way down, it ends level with the composer card's bottom edge
+ * (`deskBottomLimit`) -- beside the card, because the reserve moves the composer
+ * as well, and short of it where the reserve stands aside.
  *
  * So the chat gives the width up instead, and the column re-centres in what is
  * left. That is what already happens when the workspace column opens (`--wsw`),
@@ -96,12 +105,35 @@ const WORKSPACE_EDGE_GUTTER = 8
 const COLUMN_GAP = 6
 const COLUMN_TRANSITION_DELTA = WORKSPACE_EDGE_GUTTER + COLUMN_GAP
 
+/* The lowest the desk's bottom edge goes: the composer card's own bottom edge,
+   so a palette pulled all the way down ends level with the box the reader
+   types in. Asked about a column the card runs under -- the anchored palette's,
+   see `anchoredRoom` -- it is the gap above the card instead: the landing page
+   and a chat too narrow for the reserve leave the card there, where its bottom
+   edge would put the palette on the field and the send button. A dock that is
+   not drawn -- an imported conversation has none -- leaves the window's gutter
+   as the limit, the case `dockLift` reads the same way. */
+export function deskBottomLimit(column?: { left: number; right: number }): number {
+  const card = document.querySelector('.chat > .dock > .dock-in')
+  if (!card?.getClientRects().length) return window.innerHeight - DESK_VIEWPORT_GUTTER
+  const rect = card.getBoundingClientRect()
+  const under = column && rect.left < column.right && rect.right > column.left
+  return under ? rect.top - DESK_COMPOSER_GAP : rect.bottom
+}
+
 export function clampGeometry(value: DeskGeometry): DeskGeometry {
-  const w = Math.max(DESK_MIN_SIZE, Math.min(DESK_MAX_SIZE, value.w, window.innerWidth - 16))
-  const h = Math.max(DESK_MIN_SIZE, Math.min(DESK_MAX_SIZE, value.h, window.innerHeight - 16))
+  const w = Math.max(DESK_MIN_SIZE, Math.min(DESK_MAX_WIDTH, value.w, window.innerWidth - 16))
+  const limit = deskBottomLimit()
+  /* The height is the room between the top edge and the limit. Anchored, the
+     stylesheet holds that edge under the launcher. Detached, the edge is
+     wherever the palette was put, so the room is measured from the window's
+     top instead: measured from the palette's own top, a downward move would
+     shrink the palette rather than stop it. */
+  const top = value.detached ? DESK_VIEWPORT_GUTTER : anchoredBox(w)?.top ?? value.y
+  const h = Math.max(DESK_MIN_SIZE, Math.min(value.h, limit - top))
   return {
     x: Math.max(DESK_VIEWPORT_GUTTER, Math.min(window.innerWidth - w - DESK_VIEWPORT_GUTTER, value.x)),
-    y: Math.max(DESK_VIEWPORT_GUTTER, Math.min(window.innerHeight - h - DESK_VIEWPORT_GUTTER, value.y)),
+    y: Math.max(DESK_VIEWPORT_GUTTER, Math.min(limit - h, value.y)),
     w,
     h,
     detached: value.detached,
@@ -111,6 +143,23 @@ export function clampGeometry(value: DeskGeometry): DeskGeometry {
 function launcher(): HTMLElement | null {
   return (document.querySelector('.desk-follow-toggle') as HTMLElement | null)
     ?? document.getElementById('wsBtn')
+}
+
+/* Where the anchored desk sits: the gap below the launcher, right edge flush
+   with it -- the placement `anchoredGeometry` describes. */
+function anchoredBox(w: number): { top: number; left: number; right: number } | null {
+  const rect = launcher()?.getBoundingClientRect()
+  return rect ? { top: rect.bottom + DESK_ANCHOR_GAP, left: rect.right - w, right: rect.right } : null
+}
+
+/* How tall the anchored desk may be drawn at this width as the composer stands
+   now: down to the limit, asked about its own column. Not part of
+   clampGeometry, which settles the height the reader sets: a card that runs
+   under the palette for a while takes only what is drawn, and gives it back
+   when it moves away. */
+export function anchoredRoom(w: number): number {
+  const box = anchoredBox(w)
+  return box ? deskBottomLimit(box) - box.top : Number.POSITIVE_INFINITY
 }
 
 export function defaultGeometry(): DeskGeometry {
@@ -125,8 +174,8 @@ export function defaultGeometry(): DeskGeometry {
    launcher, hanging below it. Two expressions of one placement, so a change to
    either is a change to both. */
 export function anchoredGeometry(value: DeskGeometry): DeskGeometry {
-  const rect = launcher()?.getBoundingClientRect()
-  if (!rect) {
+  const box = anchoredBox(value.w)
+  if (!box) {
     return clampGeometry({
       ...value,
       x: window.innerWidth - value.w - DESK_VIEWPORT_GUTTER,
@@ -136,8 +185,8 @@ export function anchoredGeometry(value: DeskGeometry): DeskGeometry {
   }
   return clampGeometry({
     ...value,
-    x: rect.right - value.w,
-    y: rect.bottom + DESK_ANCHOR_GAP,
+    x: box.left,
+    y: box.top,
     detached: false,
   })
 }

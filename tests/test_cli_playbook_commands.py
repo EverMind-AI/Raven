@@ -452,6 +452,7 @@ def test_run_wires_subagent_manager_sandbox_and_workspace_restriction(library, m
     monkeypatch.setattr("raven.providers.factory.make_provider", lambda config: _FakeProvider())
     monkeypatch.setattr("raven.playbook.PlaybookRuntime", _FakeRuntime)
 
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
     from raven.agent.subagent.manager import SubagentManager
 
     captured = {}
@@ -464,6 +465,15 @@ def test_run_wires_subagent_manager_sandbox_and_workspace_restriction(library, m
 
     monkeypatch.setattr(SubagentManager, "__init__", recording_init)
 
+    tool_captured = {}
+    orig_tool_init = SubAgentDagTool.__init__
+
+    def recording_tool_init(self, *args, **kwargs):
+        tool_captured.setdefault("tool", self)
+        return orig_tool_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(SubAgentDagTool, "__init__", recording_tool_init)
+
     r = runner.invoke(app, ["playbook", "run", "audit"])
     assert r.exit_code == 0, r.stdout
 
@@ -473,10 +483,12 @@ def test_run_wires_subagent_manager_sandbox_and_workspace_restriction(library, m
     assert manager._sandbox_config.backend == "none"
     assert manager._sandbox_config.allow_net is False
     assert manager.provider_pool is not None
+    assert tool_captured["tool"]._sandbox_for == manager.sandbox_executor_for
 
 
 def test_stint_driver_wires_subagent_manager_sandbox_and_workspace_restriction(tmp_path, monkeypatch):
     """SubagentManager in _stint_driver receives tools.sandbox and tools.restrict_to_workspace (#798)."""
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
     from raven.agent.subagent.manager import SubagentManager
     from raven.cli.playbook_commands import _stint_driver
     from raven.config.schema import Config, SandboxConfig, ToolsConfig
@@ -500,6 +512,15 @@ def test_stint_driver_wires_subagent_manager_sandbox_and_workspace_restriction(t
 
     monkeypatch.setattr(SubagentManager, "__init__", recording_init)
 
+    tool_captured = {}
+    orig_tool_init = SubAgentDagTool.__init__
+
+    def recording_tool_init(self, *args, **kwargs):
+        tool_captured.setdefault("tool", self)
+        return orig_tool_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(SubAgentDagTool, "__init__", recording_tool_init)
+
     driver = _stint_driver(config, tmp_path)
     assert driver is not None
 
@@ -508,6 +529,7 @@ def test_stint_driver_wires_subagent_manager_sandbox_and_workspace_restriction(t
     assert manager._sandbox_config is not None
     assert manager._sandbox_config.backend == "none"
     assert manager.provider_pool is not None
+    assert tool_captured["tool"]._sandbox_for == manager.sandbox_executor_for
 
 
 def test_run_reports_a_server_waiting_on_authorization_and_does_not_wait_for_it(library, monkeypatch):

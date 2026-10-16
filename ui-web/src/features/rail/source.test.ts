@@ -109,6 +109,27 @@ describe('a listed session as a row', () => {
     })
   })
 
+  it('marks an Imported Conversation by where it came from and keeps its package name', async () => {
+    const { part } = await harness()
+
+    const row = part.rowFrom({
+      id: 'imported:' + 'a'.repeat(32),
+      updated_at: 1_780_000_000,
+      title: 'Trip',
+      preview: 'Trip',
+      message_count: 4,
+      source: 'imported',
+      imported: { kind: 'export', source_name: 'trip.tar.gz' },
+    })
+    expect(row).toMatchObject({ from: 'imported', sourceName: 'trip.tar.gz', title: 'Trip', persisted: true })
+    expect(part.rowFrom({ id: 'tui:a', started_at: 1, source: 'tui' }).sourceName).toBeUndefined()
+  })
+
+  it('asks for the imported channel with every list it reads', async () => {
+    const { SESS_CHANNELS } = await import('./source')
+    expect(SESS_CHANNELS).toEqual(['tui', 'cron', 'imported'])
+  })
+
   it('carries the turn the server says is still in flight', async () => {
     const { part } = await harness()
 

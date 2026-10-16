@@ -405,7 +405,10 @@ async def tunnel(
     computer's loopback, which an ``https`` certificate would not name, and
     that refusal is one sentence given before any ssh starts. ssh's own words,
     which name the address, go to ``ssh_log`` (:func:`ssh_log_path`), and a
-    tunnel that does not open is explained from them (:func:`explain`).
+    tunnel that does not open is explained from them (:func:`explain`). The
+    port here is chosen free and checked again before ssh starts; one taken in
+    between, or one ssh loses the race for, is given up for another
+    (:data:`_TUNNEL_TRIES`), never used with whoever took it.
     """
     parts = urlsplit(url)
     if parts.scheme != "http":
@@ -417,43 +420,116 @@ async def tunnel(
     if not parts.hostname:
         raise RemoteMachineError(f"machine {target.label}: the endpoint's URL names no host to reach from it")
     host, port, key, user = _target(target)
-    local = _free_port()
     # An IPv6 address is bracketed in the forward as it is in the URL, which
     # ``hostname`` gives bare; ssh refuses the bare one.
     far = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
-    forward = f"127.0.0.1:{local}:{far}:{parts.port or 80}"
-    extra = TUNNEL + ("-L", forward, "-E", os.fspath(ssh_log))
-    argv = ssh_argv(host, port, key, user=user, connect_timeout=connect_timeout, extra=extra)
+    # The port here is chosen free and checked free again just before ssh is
+    # started; one taken in between -- by anything on this computer -- is
+    # given up for another, as is one ssh then loses the race for. Without
+    # the check a listener that took the port would answer the readiness
+    # probe below in ssh's place, and the turn's request would go to it.
+    for _ in range(_TUNNEL_TRIES):
+        local = _free_port()
+        if not _still_free(local):
+            continue
+        forward = f"127.0.0.1:{local}:{far}:{parts.port or 80}"
+        extra = TUNNEL + ("-L", forward, "-E", os.fspath(ssh_log))
+        argv = ssh_argv(host, port, key, user=user, connect_timeout=connect_timeout, extra=extra)
+        since = _log_size(ssh_log)
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *argv,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+        except OSError as exc:
+            raise RemoteMachineError(f"machine {target.label}: ssh could not be started: {exc}") from None
+        try:
+            await _tunnel_up(target, proc, local, ssh_log, since, within=connect_timeout + TUNNEL_READY_S)
+        except _PortTakenError:
+            await _end_ssh(proc)
+            continue
+        except BaseException:
+            await _end_ssh(proc)
+            raise
+        try:
+            yield Forwarded(url=urlunsplit(parts._replace(netloc=f"127.0.0.1:{local}")), host=parts.netloc)
+        finally:
+            await _end_ssh(proc)
+        return
+    raise RemoteMachineError(
+        f"machine {target.label}: a port on this computer for the tunnel was taken each of the {_TUNNEL_TRIES} times "
+        "one was chosen; something here takes ports as soon as they are free"
+    )
+
+
+#: How many ports are tried for one tunnel before the turn gives up on this computer.
+_TUNNEL_TRIES = 3
+#: ssh's words when the port chosen here was taken before it could listen (``ExitOnForwardFailure`` then ends it).
+_PORT_TAKEN = re.compile(
+    r"Address already in use|cannot listen to port|Could not request local forwarding", re.IGNORECASE
+)
+
+
+class _PortTakenError(RemoteMachineError):
+    """ssh could not listen on the port chosen here: something on this computer took it first."""
+
+
+def _still_free(port: int) -> bool:
+    """Whether nothing has bound ``port`` on this computer's loopback since it was chosen."""
+    with socket.socket() as sock:
+        try:
+            sock.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+    return True
+
+
+def _log_size(path: str | os.PathLike[str]) -> int:
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *argv,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-    except OSError as exc:
-        raise RemoteMachineError(f"machine {target.label}: ssh could not be started: {exc}") from None
+        return os.path.getsize(path)
+    except OSError:
+        return 0
+
+
+def _log_since(path: str | os.PathLike[str], offset: int, limit: int = 64_000) -> str:
+    """What ssh appended to its log from ``offset`` on: this attempt's words, not an earlier attempt's."""
     try:
-        await _tunnel_up(target, proc, local, ssh_log, within=connect_timeout + TUNNEL_READY_S)
-        yield Forwarded(url=urlunsplit(parts._replace(netloc=f"127.0.0.1:{local}")), host=parts.netloc)
-    finally:
-        if proc.returncode is None:
+        with open(path, "rb") as handle:
+            handle.seek(offset)
+            return handle.read(limit).decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+
+async def _end_ssh(proc: Any) -> None:
+    if proc.returncode is None:
+        with contextlib.suppress(ProcessLookupError):
+            proc.terminate()
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5.0)
+        except asyncio.TimeoutError:
             with contextlib.suppress(ProcessLookupError):
-                proc.terminate()
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
-                with contextlib.suppress(ProcessLookupError):
-                    proc.kill()
-                await proc.wait()
+                proc.kill()
+            await proc.wait()
 
 
-async def _tunnel_up(target: Machine, proc: Any, local: int, log: str | os.PathLike[str], *, within: float) -> None:
-    """Wait for ssh to open the port here, or to end, whichever comes first; an end is explained."""
+async def _tunnel_up(
+    target: Machine, proc: Any, local: int, log: str | os.PathLike[str], since: int, *, within: float
+) -> None:
+    """Wait for ssh to open the port here, or to end, whichever comes first; an end is explained.
+
+    Raises :class:`_PortTakenError` when ssh ended because the port here was taken
+    (its words name only this computer's port), so the caller tries another.
+    """
     deadline = time.monotonic() + within
     while True:
         if proc.returncode is not None:
-            said = explain(target, proc.returncode, read_ssh_log(log))
+            output = _log_since(log, since)
+            if _PORT_TAKEN.search(output):
+                raise _PortTakenError(f"port {local} on this computer was taken before ssh could listen on it")
+            said = explain(target, proc.returncode, output)
             raise RemoteMachineError(said or f"the tunnel to machine {target.label} ended before it was open")
         try:
             _reader, writer = await asyncio.wait_for(asyncio.open_connection("127.0.0.1", local), timeout=0.5)

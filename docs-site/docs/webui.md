@@ -50,5 +50,49 @@ See
 [Trajectory debugging](trajectory-debugging.md#produce-a-reviewed-report) for
 the pipeline behind it.
 
+## Import a conversation
+
+**Import conversation**, in the left menu below New task and Connectors, opens
+a package from another machine (or another Raven home) for reading. Pick the
+file in the browser and it is uploaded to Raven, so this works whether you open
+the WebUI locally or remotely. A file can be up to 100 MiB, and one import runs
+at a time: starting another while one is in progress asks you to try again when
+it finishes.
+
+Three kinds of package can be imported: an export from the three-dot menu, a
+bug report package (from **Report a problem** or
+`raven trajectory report-bug`), and a trajectory report from
+`raven trajectory report`. Any other file is refused with a message saying so.
+A damaged or unsafe package (a path that leaves the package, a link, more data
+unpacked than the limit allows) is refused and leaves nothing behind, and so is
+one whose conversation record is too large to open (over 32 MiB or 50,000
+entries). A package made by a newer Raven asks you to update first.
+
+Imported packages are kept under `imports/` in the Raven home and stay there
+across restarts. They are never added to the workspace's sessions. Importing
+the same package again says it was already imported under its current title,
+and offers **Open existing** or **Import anyway**.
+
+Imported conversations are listed under **Imported**, below Recent; the group
+is hidden while there are none. An export is titled after its original
+conversation (or its first user input when that had no title), a bug report
+package after the first line of its description (or its report id), and a
+trajectory report after its original conversation (or its own id). Hovering a
+row shows the file it came from. Hovering or right-clicking a row offers only
+**Rename** and **Delete**; deleting also removes the copy kept on this machine.
+
+An imported conversation is read-only. It reads like any other conversation,
+and the trajectory view works as usual, including the full model input of a
+long conversation. What differs: there is no input box, the title cannot be
+edited in the chat header (rename it from the rail), replies have no Branch,
+and the three-dot menu and the working-directory tag are not shown. Things a
+package does not carry (a sub-agent's own transcript, attachments and delivered
+files, task-graph runs, generated images) are shown as unavailable rather than
+as errors. The `[REDACTED:...]` placeholders of a bug report package are shown
+as they are.
+
+An export is not redacted, so importing someone else's export gives you its raw
+contents: keep it as private as they should have.
+
 For installation and provider setup, see [Quick Start](quick-start.md).
 For Docker or source deployments, see [Self-Hosting](self-hosting.md).

@@ -15,7 +15,6 @@ import asyncio
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -32,6 +31,7 @@ from raven.rpc.errors import ConfigValidationError
 from raven.rpc.files import UPLOAD_DIR as _UPLOAD_DIR
 from raven.rpc.files import viewer_root as _viewer_root_from
 from raven.rpc.files import workspace_root as _workspace_root
+from raven.rpc.folder_dialog import pick_dir_argv
 from raven.utils.atomic_io import atomic_update
 
 if TYPE_CHECKING:
@@ -2085,36 +2085,6 @@ def _walk_dirs(target: Path, agent_home: Path) -> dict:
     }
 
 
-# The native folder dialog, per host. Each prints the chosen folder on stdout
-# and exits non-zero (macOS) or prints nothing (the other two) when dismissed.
-# Only the first tool found on PATH is offered on Linux, where no dialog ships
-# with every desktop.
-_PICK_DIR_PROMPT = "Choose the folder this conversation will work in"
-
-
-def _pick_dir_argv() -> list[str] | None:
-    """The command that opens this host's folder dialog, or None where none is known."""
-    if sys.platform == "darwin":
-        return ["osascript", "-e", f'POSIX path of (choose folder with prompt "{_PICK_DIR_PROMPT}")']
-    if sys.platform.startswith("win"):
-        return [
-            "powershell",
-            "-NoProfile",
-            "-Command",
-            "Add-Type -AssemblyName System.Windows.Forms;"
-            "$d=New-Object System.Windows.Forms.FolderBrowserDialog;"
-            f"$d.Description='{_PICK_DIR_PROMPT}';"
-            "if($d.ShowDialog() -eq 'OK'){Write-Output $d.SelectedPath}",
-        ]
-    for argv in (
-        ["zenity", "--file-selection", "--directory", f"--title={_PICK_DIR_PROMPT}"],
-        ["kdialog", "--getexistingdirectory", str(Path.home()), "--title", _PICK_DIR_PROMPT],
-    ):
-        if shutil.which(argv[0]):
-            return argv
-    return None
-
-
 async def _run_pick_dir(argv: list[str]) -> str | None:
     """Run the dialog and read the folder back, or None when it was dismissed.
 
@@ -2154,7 +2124,7 @@ async def fs_pick_dir(params: dict, *, agent_loop_factory=None) -> dict:
     from raven.agent.workdir import validate_override
     from raven.config.loader import load_config
 
-    argv = _pick_dir_argv()
+    argv = pick_dir_argv()
     if argv is None:
         raise ConfigValidationError("no folder dialog is available on this host")
     try:

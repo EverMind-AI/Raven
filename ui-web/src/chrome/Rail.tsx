@@ -37,11 +37,12 @@
  * document, so a value it never changes is a value it never writes again.
  */
 
-import { LayoutAlignLeftIcon, PlusSignIcon, Search01Icon, Settings02Icon } from '@hugeicons/core-free-icons'
+import { FileImportIcon, LayoutAlignLeftIcon, PlusSignIcon, Search01Icon, Settings02Icon } from '@hugeicons/core-free-icons'
 import { useSyncExternalStore } from 'react'
 
 import { AgentsGlyph, CubeGlyph, Icon } from '../components/Icon'
 import { RavenMark } from '../components/RavenMark'
+import * as imported from '../features/imported/store'
 import { open as openKnowledge } from '../features/knowledge/store'
 import { open as openSettings } from '../features/settings/store'
 import { t } from '../i18n/t'
@@ -121,7 +122,27 @@ const NAV_ROWS: ReadonlyArray<{
   },
 ]
 
-/* The nav strip: the draft row and the module rows. */
+/* Importing a conversation: not a page you go to, so not one of NAV_ROWS (each
+   of which is a page, and state/pages.ts holds that table to them). Its own
+   button under them, whose action is the imported domain's; while a package is
+   on its way the row names it and takes no second one. */
+function ImportButton(): JSX.Element {
+  const { busy } = useSyncExternalStore(imported.subscribe, imported.get)
+  return (
+    <button
+      className="navi"
+      id="importedBtn"
+      disabled={busy !== null}
+      aria-busy={busy !== null ? true : undefined}
+      onClick={() => imported.pick()}
+    >
+      <Icon icon={FileImportIcon} />
+      <span>{busy !== null ? t('gui.nav.importing', { name: busy }) : t('gui.nav.import')}</span>
+    </button>
+  )
+}
+
+/* The nav strip: the draft row, the module rows, and the import row. */
 function RailNav(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
   return (
@@ -136,6 +157,7 @@ function RailNav(): JSX.Element {
           <span>{t(row.key)}</span>
         </button>
       ))}
+      <ImportButton />
     </nav>
   )
 }

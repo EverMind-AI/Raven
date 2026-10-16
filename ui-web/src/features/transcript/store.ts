@@ -3,8 +3,10 @@ import { actName, argPath, firstErrLine, phraseOf, shortArg, splitMcp, verbIngOf
 import { readMessage } from '../../lib/attachments'
 import { formatDuration } from '../../lib/duration'
 import * as hunks from '../../lib/hunks'
+import { readingImported } from '../../lib/imported'
 import { md } from '../../lib/prose'
 import { ds } from '../../state/sources'
+import { show as toast } from '../../state/toast'
 import { pane } from '../../state/wsPane'
 import * as dagNodes from '../dag/nodes'
 import * as deliveries from '../workspace/deliveries'
@@ -778,6 +780,7 @@ let spawnRoster: Promise<SpawnListRow[]> | null = null
    never the instance. Nothing the card already knows is overwritten -- a live
    card never comes here, and if one did, the event is the fresher word. */
 export function resolveSpawn(lane: Lane, c: CallData): void {
+  if (readingImported()) return
   const node = String(c.args.node_id || c.args.call_id || '')
   if (c.spawnId || (!node && !c.spawnTaskId) || c.spawnAsked) return
   const read = source().spawnList
@@ -989,6 +992,13 @@ function bindRun(call: CallData): void {
  * for a finished run and because a card is re-rendered on every node update. */
 function hydrateDag(lane: Lane, call: CallData): void {
   bindRun(call)
+  /* An imported conversation's runs are on another machine. With no record to
+     read, the nodes the arguments named stay pending forever, so the graph is
+     closed here: a run that ended long ago must not read as still going. */
+  if (readingImported()) {
+    call.graphClosed = true
+    return
+  }
   if (!call.runId || call.asked) return
   const read = source().dagRun
   if (!read) return
@@ -2027,15 +2037,17 @@ export function copyText(text: string): void {
 }
 
 export function branchOf(lane: Lane): ((text: string) => void) | null {
-  if (!lane.main) return null
+  if (!lane.main || readingImported()) return null
   try { return source().branch || null } catch { return null }
 }
 
 export function openDagRun(runId: string): void {
+  if (readingImported()) { toast(t('gui.sess.imported_unavailable')); return }
   try { source().openDagRun?.(runId) } catch { /* no opener wired */ }
 }
 
 export function openSpawn(nodeId: string): void {
+  if (readingImported()) { toast(t('gui.sess.imported_unavailable')); return }
   const src = source()
   if (src.openSpawn) { src.openSpawn(nodeId); return }
   pane().show('agents')

@@ -163,6 +163,7 @@ export interface WorkspaceSource {
      Explorer dialog, zenity -- for the same picker. `path` is absent when the
      dialog was dismissed; `ok` is `fs.dirs`'s judgement of the folder. Only
      worth offering while `hostIsLocal`, since the dialog opens where the
-     gateway runs. */
+     gateway runs, and while the handshake says that host has one
+     (`folder-dialog-v1`). */
   pickDir?(): Promise<DirPick>
 }

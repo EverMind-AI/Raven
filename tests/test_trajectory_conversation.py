@@ -706,6 +706,21 @@ def test_artifact_read_is_bounded_and_rejects_non_regular_files(state, monkeypat
     assert tconv._read_artifact(state, str(fifo)) == (None, "artifact is not a regular file")
 
 
+def test_a_relative_pointer_is_read_against_the_state_directory(state, tmp_path, monkeypatch):
+    target = state / "logs" / "audit-artifacts" / "kind" / "a.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text('{"ok": true}', encoding="utf-8")
+    elsewhere = tmp_path / "cwd"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    assert tconv._read_artifact(state, "logs/audit-artifacts/kind/a.json") == ('{"ok": true}', None)
+    assert tconv._read_artifact(state, str(target)) == ('{"ok": true}', None)
+    (state / "secret.txt").write_text("x", encoding="utf-8")
+    assert tconv._read_artifact(state, "logs/../secret.txt") == (None, "artifact path outside the trace store")
+    assert tconv._read_artifact(state, "../outside.txt") == (None, "artifact path outside the trace store")
+    assert tconv._read_artifact(state, "logs/audit-artifacts/kind/none.json") == (None, "artifact missing")
+
+
 def test_empty_turn_yields_marker_record(state):
     _write_log(state, [_span("t1", "turn", "session.turn", start=1, end=2)])
     records = tconv.attempt_conversation(["t1"], state)

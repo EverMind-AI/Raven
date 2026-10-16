@@ -291,13 +291,43 @@ def _holder(path: Path) -> int | None:
 
 
 def pending() -> list[RemoteRun]:
-    """Every run a process of this Raven left on a machine, oldest first; a record that cannot be read is skipped and named."""
+    """Every run a process of this Raven left on a machine, oldest first.
+
+    A record that is not JSON -- half a write, a disk that filled, bytes
+    that are not UTF-8 -- is set aside once, under a name that says so, and
+    named in the log that once; nothing can be picked up from it, and a
+    start that warned about it every time would be warning about a run
+    nobody reports. One that cannot be opened at all, or that a later
+    version wrote, is left where it is. One bad record never stops the
+    others from being read.
+    """
     out: list[RemoteRun] = []
     for path in sorted(runs_dir().glob("*.json")):
         try:
-            run = RemoteRun.from_json(json.loads(path.read_text(encoding="utf-8")))
-        except (OSError, ValueError) as exc:
+            data = path.read_bytes()
+        except OSError as exc:
             logger.warning("remote run record {} could not be read: {}", path.name, exc)
+            continue
+        try:
+            # The bytes, not a text read: a record that is not UTF-8 fails
+            # here, as not JSON (``UnicodeDecodeError`` is a ``ValueError``),
+            # and is set aside like one, instead of ending the whole scan.
+            run = RemoteRun.from_json(json.loads(data))
+        except ValueError as exc:
+            aside = path.with_name(f"{path.name}.unreadable-{int(time.time())}")
+            try:
+                os.replace(path, aside)
+            except OSError as moving:
+                logger.warning(
+                    "remote run record {} is not JSON ({}) and could not be set aside: {}", path.name, exc, moving
+                )
+                continue
+            logger.warning(
+                "remote run record {} is not JSON ({}); set aside as {}, nothing is picked up from it",
+                path.name,
+                exc,
+                aside.name,
+            )
             continue
         if run is None:
             logger.warning("remote run record {} is not one this version reads; left alone", path.name)

@@ -201,6 +201,7 @@ describe('picking the turns', () => {
     expect(store.exportable('gui:a', true)).toBe(true)
     expect(store.exportable(null, true)).toBe(false)
     expect(store.exportable('gui:a', false)).toBe(false)
+    expect(store.exportable('imported:' + 'a'.repeat(32), true)).toBe(false)
   })
 })
 

@@ -14,9 +14,11 @@
  * `system.hello` is the third source and the coarsest: `server_capabilities`
  * announces "jsonrpc-2.0", "subscriptions" and "cli-dispatch", plus
  * "trajectory-v1" whenever the trajectory policy is on (the default), plus
- * "bugreport-v1" while a bug report receiver is configured, and nothing finer
- * (raven/rpc/methods/system.py), so `absorb()` records it and `serves()`
- * reads it -- and none of the field questions below can be answered from it.
+ * "bugreport-v1" while a bug report receiver is configured, plus
+ * "folder-dialog-v1" while the gateway's host has a folder dialog to open, and
+ * nothing finer (raven/rpc/methods/system.py), so `absorb()` records it and
+ * `serves()` reads it -- and none of the field questions below can be answered
+ * from it.
  */
 
 /** Names a call answered -32601 with. Absent, not merely unusable right now. */
@@ -85,6 +87,15 @@ export const servesTrajectory = (): boolean => serves('trajectory-v1')
  * offers "Report a problem" only where a report can go somewhere.
  */
 export const servesBugReport = (): boolean => serves('bugreport-v1')
+
+/**
+ * The gateway's host has a folder dialog to open: it announces
+ * `folder-dialog-v1` only where `fs.pick_dir` finds one, so the
+ * working-directory picker offers that dialog only where one can come up
+ * (src/state/workdir.ts). An older gateway announces nothing, and the picker
+ * walks its folders instead, which works wherever it runs.
+ */
+export const servesFolderDialog = (): boolean => serves('folder-dialog-v1')
 
 /* ── the eleven version tolerances, each one site's own condition ────── */
 

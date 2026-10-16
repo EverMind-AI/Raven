@@ -40,14 +40,22 @@ from raven.config.loader import drain_migration_notices, load_config, raven_home
 from raven.config.raven import load_raven_config
 from raven.providers.rates import resolve_context_window
 from raven.providers.usage import reported_cost, token_count
-from raven.rpc.errors import ConfigValidationError, SessionTitleTooLongError, TurnInProgressError
+from raven.rpc.errors import (
+    ConfigValidationError,
+    InvalidParamsError,
+    SessionNotFoundError,
+    SessionTitleTooLongError,
+    TurnInProgressError,
+)
 from raven.rpc.methods import turn as turn_module
 from raven.rpc.methods.system import _raven_version
 from raven.session.export import default_export_path, write_transcript
 from raven.session.manager import new_chat_id
 from raven.session.resolve import manager_for
-from raven.session.title import TITLE_STORAGE_MAX
+from raven.session.title import TITLE_STORAGE_MAX, collapse_to_line
 from raven.token_wise.usage_tracker import read_usage_rows, row_root
+from raven.trajectory import imported
+from raven.trajectory import index as trajectory_index
 from raven.updates.update_notice import update_notice
 from raven.utils.tokens import estimate_prompt_tokens
 
@@ -301,7 +309,25 @@ _DAG_RUN_ID_RE = re.compile(r"\bDAG run (\d{8}T\d+Z-[0-9a-f]+)")
 _SPAWN_TASK_ID_RE = re.compile(r"\bstarted \(id: ([0-9a-f]{8})\)")
 
 
-def _map_to_wire(messages: list[dict[str, Any]], session_key: str) -> list[dict[str, Any]]:
+def _delivered_file(item: dict[str, Any], on_disk: bool) -> dict[str, Any]:
+    """One delivered file as the transcript draws it: whether it is still there, and how to fetch it.
+
+    Off this machine's own conversations (``on_disk`` false) the record names a
+    file on whatever machine wrote it, and a path or download token that happens
+    to resolve here belongs to something else: such a file is always missing,
+    and no token travels with it.
+    """
+    if on_disk:
+        return {**item, "missing": not os.path.isfile(str(item.get("path") or ""))}
+    gone = {**item, "missing": True}
+    if "download_path" in gone:
+        gone["download_path"] = ""
+    return gone
+
+
+def _map_to_wire(
+    messages: list[dict[str, Any]], session_key: str, *, deliveries_on_disk: bool = True
+) -> list[dict[str, Any]]:
     """Map stored session messages to the GatewayTranscriptMessage wire shape.
 
     The TS side (``gatewayTypes.ts``) expects ``{role, text?, context?, name?}``.
@@ -344,6 +370,10 @@ def _map_to_wire(messages: list[dict[str, Any]], session_key: str) -> list[dict[
     * ``mid_turn`` — set on a user entry the runtime merged into a turn that was
       already running, so a reload draws it inside that turn rather than opening
       a new one around it.
+
+    ``deliveries_on_disk`` is false for a transcript recorded on another
+    machine (an Imported Conversation): its delivered files are drawn as
+    missing whatever this machine has at their paths (``_delivered_file``).
     """
     out = []
     for m in messages:
@@ -388,12 +418,7 @@ def _map_to_wire(messages: list[dict[str, Any]], session_key: str) -> list[dict[
                     "raven_delivery": {
                         **delivery,
                         "files": [
-                            {
-                                **item,
-                                "missing": not os.path.isfile(str(item.get("path") or "")),
-                            }
-                            if isinstance(item, dict)
-                            else item
+                            _delivered_file(item, deliveries_on_disk) if isinstance(item, dict) else item
                             for item in delivery["files"]
                         ],
                     },
@@ -601,6 +626,8 @@ async def session_resume(
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
     session_key = params.get("session_id")
+    if imported.is_imported_key(session_key):
+        return await _imported_resume(session_key, config)
     # No restore call here: ``_default_session_info`` asks the loop for this
     # session's model, and the loop reads the stored one on first ask. Restoring
     # from this handler covered only the surface that calls it -- a conversation
@@ -794,6 +821,90 @@ def _auto_archive_stale(mgr: Any, entries: list[dict]) -> None:
         entry["metadata"] = {**meta, "archived": True, "archivedBy": "auto"}
 
 
+# ── Imported Conversations ─────────────────────────────────────────────
+#
+# What session.* answers for an imported key: the conversation is served from
+# its own directory under the raven home (raven/trajectory/imported.py) and the
+# SessionManager is never asked about it. Disk work runs in a worker thread.
+
+
+def _imported_row(conversation: imported.ImportedConversation) -> dict[str, Any]:
+    try:
+        at = datetime.fromisoformat(conversation.imported_at).timestamp()
+    except ValueError:
+        at = 0.0
+    return {
+        "id": conversation.key,
+        "message_count": conversation.message_count,
+        "preview": conversation.title,
+        "last_message_preview": "",
+        "source": imported.CHANNEL,
+        "started_at": at,
+        "updated_at": at,
+        "title": conversation.title,
+        "pinned": False,
+        "running": False,
+        "workdir": None,
+        "imported": {"kind": conversation.kind, "source_name": conversation.source_name},
+    }
+
+
+async def _imported_rows() -> list[dict[str, Any]]:
+    conversations = await asyncio.to_thread(imported.list_conversations)
+    return [_imported_row(conversation) for conversation in conversations]
+
+
+async def _imported_resume(key: str, config: "Config") -> dict[str, Any]:
+    conversation = await asyncio.to_thread(imported.get, key)
+    if conversation is None:
+        raise SessionNotFoundError(f"no imported conversation {key!r}")
+    session = await asyncio.to_thread(imported.read_session, key)
+    # No loop and no key: the banner is the configured default's, and nothing
+    # here may ask the SessionManager about a conversation it does not keep.
+    info = await _default_session_info(None, config, None)
+    info["title"] = conversation.title
+    info["read_only"] = True
+    info["running"] = False
+    messages: list[dict[str, Any]] = []
+    if session is not None:
+        _fill_resumed_context(info["usage"], session)
+        messages = _map_to_wire(session.messages, key, deliveries_on_disk=False)
+    return {"session_id": key, "info": info, "messages": messages}
+
+
+async def _imported_title(key: str, new_title: Any) -> dict[str, Any]:
+    if new_title is None:
+        conversation = await asyncio.to_thread(imported.get, key)
+        if conversation is None:
+            raise SessionNotFoundError(f"no imported conversation {key!r}")
+        return {"title": conversation.title, "session_key": key, "pending": False}
+    if not isinstance(new_title, str):
+        raise InvalidParamsError("title: must be a string")
+    cleaned = collapse_to_line(new_title)
+    if not cleaned:
+        raise InvalidParamsError("title: an imported conversation keeps a name; it cannot be emptied")
+    if len(cleaned) > TITLE_STORAGE_MAX:
+        raise SessionTitleTooLongError(
+            f"session title is {len(cleaned)} characters; the maximum is {TITLE_STORAGE_MAX}",
+            data={"limit": TITLE_STORAGE_MAX},
+        )
+    try:
+        renamed = await asyncio.to_thread(imported.rename, key, cleaned)
+    except LookupError:
+        raise SessionNotFoundError(f"no imported conversation {key!r}") from None
+    return {"title": renamed.title, "session_key": key, "pending": False}
+
+
+async def _imported_delete(key: str) -> dict[str, Any]:
+    target = await asyncio.to_thread(imported.trajectory_target, key)
+    if target is None:
+        return {"deleted": None, "still_on_disk": False}
+    removed = await asyncio.to_thread(imported.delete, key)
+    # Back on the event loop, which is the only place the indexer registry is touched.
+    trajectory_index.drop_indexer(target[0])
+    return {"deleted": key if removed else None, "still_on_disk": False}
+
+
 async def session_list(
     params: dict,
     *,
@@ -824,7 +935,10 @@ async def session_list(
     limit = params.get("limit")
     if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0:
         entries = entries[:limit]
-    return {"sessions": [_session_to_list_item(e) for e in entries]}
+    rows = [_session_to_list_item(e) for e in entries]
+    if imported.CHANNEL in channels and not want_archived:
+        rows += await _imported_rows()
+    return {"sessions": rows}
 
 
 async def session_delete(
@@ -841,6 +955,8 @@ async def session_delete(
     a client must keep listing.
     """
     session_key = params.get("session_id", "")
+    if imported.is_imported_key(session_key):
+        return await _imported_delete(session_key)
     removed = False
     still_on_disk = False
     if session_key:
@@ -915,6 +1031,8 @@ async def session_title(
     session_key = params.get("session_id", "")
     if not session_key:
         return {"title": None, "session_key": "", "pending": False}
+    if imported.is_imported_key(session_key):
+        return await _imported_title(session_key, params.get("title"))
     title = params.get("title")
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()

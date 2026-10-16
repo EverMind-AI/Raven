@@ -392,6 +392,22 @@ async def test_a_write_and_an_edit_go_to_the_node_and_come_back_as_the_tool_s_re
     ]
 
 
+async def test_a_write_to_a_path_that_names_no_machine_is_refused_and_no_file_of_that_name_appears_here(
+    registry, pool, tmp_path
+):
+    """Written as remote, registered nowhere: refused in one sentence -- never taken for a relative path here."""
+    tools = _writers(tmp_path)
+
+    written = await tools["write_file"].execute("nobox:/etc/hostname", "one\n")
+    edited = await tools["edit_file"].execute("nobox:/etc/hostname", "one", "two")
+
+    for got in (written, edited):
+        text = got.model_text if isinstance(got, ToolResult) else got
+        assert text.startswith("Error: 'nobox:/etc/hostname' is written as a path on another machine"), text
+    assert pool.calls == []
+    assert not list(tmp_path.rglob("*hostname*")), "nothing of that name was made on this computer"
+
+
 async def test_a_read_s_digest_is_what_the_next_overwrite_expects_and_a_write_forgets_it(registry, pool, tmp_path):
     place = f"{HOME}/raven-work/t1/a.md"
     pool.answer = {"text": "1| one", "sha256": "ab" * 32}
@@ -520,3 +536,18 @@ async def test_a_remote_write_and_edit_through_the_real_node_match_local_ones(re
         "Successfully"
     )
     assert there.read_text(encoding="utf-8") == "four\n"
+
+
+@pytest.mark.slow
+async def test_a_line_longer_than_a_page_reads_the_same_through_the_real_node(real, tmp_path):
+    """The one line over the budget is shown by its head on the machine too, with the same note: the node runs the same tool."""
+    home = str(real.home)
+    (real.home / "raven-work" / "t1" / "bundle.min.js").write_text("x" * 200_000, encoding="utf-8")
+    local = ReadFileTool(workspace=real.home, allowed_dirs=(real.home,), follow_binding=False)
+
+    got = await _tools(tmp_path)["read_file"].execute("box:raven-work/t1/bundle.min.js")
+
+    assert got == await local.execute(f"{home}/raven-work/t1/bundle.min.js")
+    room = ReadFileTool._MAX_CHARS - len("1| ")
+    assert got.startswith("1| " + "x" * room + "\n\n(Line 1 is 200000 characters long; the first ")
+    assert got.endswith("\n\n(End of file — 1 lines total)")

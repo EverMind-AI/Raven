@@ -300,6 +300,10 @@ function SubagentRowLine({
   // fault, and its availability is not the question the roster is asking.
   const glyph = row.kind === 'builtin' ? STATUS_GLYPH.ready : (STATUS_GLYPH[row.probe_status] ?? '?')
   const toggleLabel = switchLabel(row, switchingSince)
+  // A row on a registered machine carries the machine's id as a third field
+  // after the preset, in the column's own `·` grammar: the name is the user's
+  // (`<preset>@<machine>` by default, but renamed at will), so the id is said
+  // here whatever the name. A row that runs here shows nothing more.
   // A test's clock wins if somehow both run: they are guarded separately, so one
   // row can carry a test and a switch at once, and two clocks in one cell would
   // not fit the column.
@@ -317,7 +321,8 @@ function SubagentRowLine({
       <Box flexShrink={0} marginRight={1}>
         <Text bold={selected} color={selected ? t.color.accent : t.color.muted} inverse={selected} wrap="truncate-end">
           {selected ? '▸ ' : '  '}
-          {glyph} {row.name} · {row.preset ?? '-'} {toggleLabel}
+          {glyph} {row.name} · {row.preset ?? '-'}
+          {row.machine ? ` · ${row.machine}` : ''} {toggleLabel}
         </Text>
       </Box>
       {busySince != null ? (

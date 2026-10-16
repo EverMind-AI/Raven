@@ -3,7 +3,10 @@
 What lands there, all under ``<node_dir>/<install name>/`` (``node_dir`` from the
 machine's registry row, ``~/.raven-node`` when it names none): a Python 3.12
 virtualenv, the packages in :data:`raven.node.protocol.REQUIREMENTS` pinned to
-this Raven's own versions, and this Raven's own code (:mod:`raven.node.bundle`).
+this Raven's own versions, this Raven's own code (:mod:`raven.node.bundle`), and
+beside it a record of the version the directory is named by: the code runs from
+``lib/``, not as an installed distribution, so without it the node would read
+no version of its own and name its socket and lock ``0.0.0+unknown-<digest>``.
 Nothing else on the machine changes: no system package, no shell rc file, no
 environment it already had, no file outside ``node_dir``, and a ``node_dir``
 that was there before keeps its mode (only one this makes is made owner-only).
@@ -13,7 +16,11 @@ virtualenv is ``uv venv`` of the machine's own Python 3.12 when it has one,
 else of a Python uv keeps inside ``node_dir``; the packages are ``uv pip
 install``, from the index pip is configured with on the machine when it is
 (``PIP_INDEX_URL``, or ``index-url`` in pip's config files, which uv does
-not read on its own), else from PyPI. A machine without uv gets one under
+not read on its own), else from PyPI. That index reaches uv on the step's
+stdin, as ``UV_DEFAULT_INDEX``, and never on a command line: pip takes a
+sign-in inside the URL, and a command line is readable by every account on
+the machine and, as this computer's ssh argv, by every account here. A
+machine without uv gets one under
 ``node_dir/.uv`` first: uv's installer for one pinned version
 (:data:`UV_VERSION`), fetched with the machine's curl or wget and run as an
 unmanaged install, which writes no receipt under the home directory and
@@ -74,7 +81,8 @@ class Plan:
     fetch: str = ""
     """The machine's curl or wget, with which uv can be fetched when the machine has none."""
     index: str = ""
-    """The package index pip is configured with on the machine, or ``""`` for PyPI."""
+    """The package index pip is configured with on the machine, or ``""`` for PyPI: handed to uv on a step's stdin,
+    never on a command line, and shown only without its sign-in (:func:`_shown_index`)."""
 
     @property
     def uv_from(self) -> str:
@@ -156,6 +164,9 @@ def _vars(node_dir: str, install_name: str) -> str:
     return f'dir={remote.shell_path(node_dir)}; id={shlex.quote(install_name)}; node="$dir/$id"; '
 
 
+#: The steps that run ``uv pip install``: the ones that read the index, when there is one, off their stdin.
+_INDEX_STEPS = frozenset({"packages", "search"})
+
 #: The index pip would install from on the machine, read the way pip reads it
 #: and said as ``INDEX=<url>``: ``PIP_INDEX_URL`` first (the shell checks it),
 #: else ``index-url`` in pip's config files, the user's over the system's
@@ -217,6 +228,17 @@ def plan(machine_id: str, *, node_dir: str | None = None, run: Runner = _run) ->
         key, sep, value = line.strip().partition("=")
         if sep and key in {"PRESENT", "PYTHON", "UV", "FETCH", "FREE_KB", "INDEX"}:
             seen[key] = value.strip()
+    index = seen.get("INDEX", "")
+    try:
+        urlsplit(index).port
+    except ValueError:
+        # pip's configuration is hand-written, and a port there that is not
+        # one is the owner's to correct; uv would refuse the URL as well.
+        raise InstallError(
+            f"the package index pip is configured with on machine {target.label} has a port that is not a number "
+            f"from 0 to 65535 ({_shown_index(index)}); correct index-url in pip's configuration there, or "
+            "PIP_INDEX_URL"
+        ) from None
     free = seen.get("FREE_KB", "")
     return Plan(
         target=target,
@@ -227,7 +249,7 @@ def plan(machine_id: str, *, node_dir: str | None = None, run: Runner = _run) ->
         uv=seen.get("UV", ""),
         free_kb=int(free) if free.isdigit() else None,
         fetch=seen.get("FETCH", ""),
-        index=seen.get("INDEX", ""),
+        index=index,
     )
 
 
@@ -274,22 +296,34 @@ def steps(p: Plan) -> list[tuple[str, str]]:
     python = shlex.quote(p.python) if p.how == "python" else "3.12"
     venv = made + f'{env} "$uv" venv --quiet --python {python} "$node"'
     # The index pip is configured with on the machine, which uv would not
-    # read for itself; without one, uv's default, PyPI.
-    index = f" --default-index {shlex.quote(p.index)}" if p.index else ""
-    pip = f'{env} "$uv" pip install --quiet --python "$node/bin/python"{index}'
+    # read for itself, comes on the step's stdin into UV_DEFAULT_INDEX, the
+    # variable uv reads as --default-index: never a command line, which every
+    # account on the machine can read. A step that finds no line there fails
+    # rather than install from PyPI behind the owner's back. Without an
+    # index, uv's default, PyPI, and nothing is read.
+    take_index = "IFS= read -r UV_DEFAULT_INDEX && export UV_DEFAULT_INDEX && " if p.index else ""
+    pip = f'{env} "$uv" pip install --quiet --python "$node/bin/python"'
     requirements = " ".join(shlex.quote(r) for r in bundle.pinned(protocol.REQUIREMENTS))
-    deps = f"{pip} {requirements}"
+    deps = f"{take_index}{pip} {requirements}"
     # Optional, and never fails the install: the machine's index first (its
     # owner's choice, often a nearby mirror); then the public index too, for
     # a mirror that does not carry it; else the node searches without rg.
     (rg,) = bundle.pinned((protocol.SEARCH_REQUIREMENT,))
     search = (
-        f"{{ {pip} {shlex.quote(rg)} || {pip} --extra-index-url {protocol.PUBLIC_INDEX} {shlex.quote(rg)}; }} "
-        ">/dev/null 2>&1 && echo RG=1 || echo RG=0"
+        f"{take_index}{{ {pip} {shlex.quote(rg)} || {pip} --extra-index-url {protocol.PUBLIC_INDEX} "
+        f"{shlex.quote(rg)}; }} >/dev/null 2>&1 && echo RG=1 || echo RG=0"
     )
+    # The code goes on the virtualenv's path, and beside it a distribution
+    # record naming the version the directory is named by, so the node reads
+    # that version (``raven.__version__``) and names itself as the host named
+    # it. Outside ``lib/raven``, so the digest of the code is the same.
     link = (
-        '"$node/bin/python" -c \'import site, sys; '
-        'open(site.getsitepackages()[0] + "/raven-node.pth", "w").write(sys.argv[1] + "\\n")\' "$node/lib"'
+        '"$node/bin/python" -c \'import os, site, sys; lib, version = sys.argv[1:3]; '
+        'open(site.getsitepackages()[0] + "/raven-node.pth", "w").write(lib + "\\n"); '
+        'meta = os.path.join(lib, "raven-" + version + ".dist-info"); os.makedirs(meta, exist_ok=True); '
+        'open(os.path.join(meta, "METADATA"), "w").write("Metadata-Version: 2.1\\nName: raven\\nVersion: " '
+        '+ version + "\\n")\' '
+        f'"$node/lib" {shlex.quote(_version_of(p.install_name))}'
     )
     out += [
         ("virtualenv", head + venv),
@@ -337,6 +371,8 @@ def install(p: Plan, *, run: Runner = _run, push: Pusher = _push) -> Installed:
         for name, command in steps(p):
             if name == "code":
                 rc, out = push(p.target, command, bundle.tarball())
+            elif name in _INDEX_STEPS and p.index:
+                rc, out = push(p.target, command, p.index.encode("utf-8") + b"\n")
             else:
                 rc, out = run(p.target, command)
             if rc != 0:
@@ -356,16 +392,22 @@ def install(p: Plan, *, run: Runner = _run, push: Pusher = _push) -> Installed:
 
 
 def _shown_index(url: str) -> str:
-    """``url`` as a sentence shows it: the host and the path, with any sign-in in it left out."""
+    """``url`` as a sentence shows it: the host and the path, with any sign-in in it left out.
+
+    Cut from the text after the last ``@`` of the authority, as ``urlsplit``
+    finds the sign-in, and never through ``.port``: a port pip's configuration
+    holds that is not a number would raise, and a sentence about it must
+    still be one sentence.
+    """
     parts = urlsplit(url)
-    if not (parts.username or parts.password):
+    if "@" not in parts.netloc:
         return url
-    host = parts.hostname or ""
-    if ":" in host:
-        host = f"[{host}]"
-    if parts.port:
-        host = f"{host}:{parts.port}"
-    return urlunsplit(parts._replace(netloc=host))
+    return urlunsplit(parts._replace(netloc=parts.netloc.rpartition("@")[2]))
+
+
+def _version_of(install_name: str) -> str:
+    """The version an install name begins with: everything before its digest (``<version>-<digest>``)."""
+    return install_name.rpartition("-")[0] or install_name
 
 
 def _failed(p: Plan, step: str, rc: int, out: str) -> str:

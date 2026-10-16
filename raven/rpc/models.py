@@ -1381,6 +1381,13 @@ TurnEvent = Annotated[
 # ---------------------------------------------------------------------------
 
 
+class SessionListImported(_Strict):
+    """What an Imported Conversation's row says about the package it came from."""
+
+    kind: str = Field(..., description="'export', 'bugreport' or 'report'.")
+    source_name: str = Field(..., description="The file name the package was imported from.")
+
+
 class SessionListItem(_Strict):
     """One row in the session picker (gatewayTypes.ts SessionListItem)."""
 
@@ -1401,11 +1408,20 @@ class SessionListItem(_Strict):
             "session that runs where the policy default puts it. What the rail groups by."
         ),
     )
+    imported: SessionListImported | None = Field(
+        default=None, description="Present only on an Imported Conversation's row (source 'imported')."
+    )
 
 
 class SessionListParams(_Strict):
     limit: int | None = Field(default=None, description="Max sessions to return.")
-    channels: list[str] | None = Field(default=None, description="Session channels to include; defaults to tui.")
+    channels: list[str] | None = Field(
+        default=None,
+        description=(
+            "Session channels to include; defaults to tui. 'imported' adds the Imported Conversations "
+            "to a list of live sessions (never to the archived one)."
+        ),
+    )
     archived: bool | None = Field(
         default=None, description="True lists only archived sessions; absent or false lists the live ones."
     )
@@ -3377,6 +3393,10 @@ class SessionInitInfo(_Strict):
         ),
     )
     running: bool = Field(default=False, description="A turn is in flight on this session right now.")
+    read_only: bool | None = Field(
+        default=None,
+        description="True for an Imported Conversation, which nothing can change; absent on every other session.",
+    )
     running_ms: int | None = Field(
         default=None,
         description=(
@@ -6327,6 +6347,35 @@ class BugReportOkResult(_Strict):
     ok: bool
 
 
+# ---------------------------------------------------------------------------
+# imported.* -- packages read back in as read-only Imported Conversations
+# ---------------------------------------------------------------------------
+
+
+class ImportedUploadParams(_StrictParams):
+    name: str = Field(..., description="The file name the package was picked under; only its last segment is kept.")
+    content_b64: str = Field(..., description="The whole package, base64; at most the upload channel's limit decoded.")
+    force: bool = Field(
+        default=False,
+        description="Import a second copy of a package already imported, instead of answering with that one.",
+    )
+
+
+class ImportedUploadResult(_Strict):
+    status: str = Field(
+        ...,
+        description=(
+            "'imported', or 'duplicate' when the same bytes were imported before; a duplicate writes "
+            "nothing and every other field describes the copy already there."
+        ),
+    )
+    session_key: str = Field(..., description="imported:<id>, the key session.* and trajectory.* take.")
+    title: str
+    kind: str = Field(..., description="'export', 'bugreport' or 'report'.")
+    source_name: str
+    imported_at: str = Field(..., description="When it was imported, ISO 8601 in UTC.")
+
+
 METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     # knowledge.* -- bases and their documents, served by the in-process engine
     "knowledge.status": (KnowledgeStatusParams, KnowledgeStatusResult),
@@ -6479,6 +6528,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "bugreport.upload": (BugReportUploadParams, BugReportOkResult),
     "bugreport.retry_upload": (BugReportRetryParams, BugReportOkResult),
     "bugreport.cancel": (BugReportCancelParams, BugReportOkResult),
+    "imported.upload": (ImportedUploadParams, ImportedUploadResult),
     # the round-trip answer sinks
     "approval.respond": (ApprovalRespondParams, ApprovalRespondResult),
     "approval.revoke": (ApprovalRevokeParams, ApprovalRevokeResult),

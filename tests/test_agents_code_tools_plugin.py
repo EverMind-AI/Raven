@@ -421,6 +421,21 @@ def test_a_long_line_is_cut_the_way_the_description_promises(registry, tmp_path)
     assert "1| " in body and "2| last" in body
 
 
+def test_minified_lines_are_cut_before_the_page_is_counted_so_they_share_one_page(registry, tmp_path):
+    """Fifty lines of 10k characters: cut after trunk's page, a dozen made a
+    page; cut on trunk's hook, before its budget counts them, they all do, each
+    cut once (the cut after the read is only for a page a registered
+    machine's node answered)."""
+    target = tmp_path / "chunks.js"
+    target.write_text("\n".join("x" * 10_000 for _ in range(50)) + "\n")
+    body = _text(_run(registry.execute("read_file", {"file_path": str(target)})))
+    lines = body.split("\n\n")[0].split("\n")
+    assert len(lines) == 50 and lines[0].startswith("1| ") and lines[-1].startswith("50| ")
+    assert lines[0] == "1| " + "x" * 2000 + "... (line truncated to 2000 chars)", "cut once, at the budget"
+    assert body.endswith("(End of file \u2014 50 lines total)")
+    assert "(Line 1 is" not in body
+
+
 def test_a_read_that_failed_does_not_license_an_edit(registry, tmp_path):
     """A model probing for a file that does not exist yet used to have that
     failed read recorded as having seen it; once something else created the
@@ -724,3 +739,54 @@ def test_a_malformed_slice_declines_rather_than_serving_half_a_face(tmp_path):
     )
     assert factories.make_read_file(ctx) is None
     assert factories.make_glob(ctx) is None
+
+
+_MARK = "... (line truncated to 2000 chars)"
+
+
+def test_a_line_whose_own_text_ends_like_the_mark_is_cut_like_any_other(registry, tmp_path):
+    """A 5000-character line ending the way a cut line does came back whole: the
+    pass after the read took the ending for its own mark (found by both
+    reviewers of the first head). Whether a line was cut is decided by where
+    the read ran, never by the line's text."""
+    target = tmp_path / "pasted.txt"
+    target.write_text("x" * (5_000 - len(_MARK)) + _MARK + "\nlast\n")
+    body = _text(_run(registry.execute("read_file", {"file_path": str(target)})))
+    lines = body.split("\n")
+    assert lines[0] == "1| " + "x" * 2000 + _MARK and lines[1] == "2| last"
+
+
+def test_a_page_a_registered_machine_s_node_answered_is_cut_after_the_read(tmp_path, monkeypatch):
+    """The node runs trunk's tool, without this fork's hook, so its page is cut here, line by line, once."""
+    import json
+
+    from raven.ops import remote_path
+
+    rows = [
+        {"id": "box", "display_name": "Lab box", "host": "203.0.113.7", "port": 58717, "user": "worker", "key": "/k"}
+    ]
+    (tmp_path / "connections.json").write_text(json.dumps({"connections": rows}), encoding="utf-8")
+    monkeypatch.setenv("RAVEN_CONNECTIONS", str(tmp_path / "connections.json"))
+    monkeypatch.setattr(remote_path, "_HOMES", {})
+    monkeypatch.setattr(remote_path, "_NODES", None)
+    monkeypatch.setattr(remote_path, "_READ", {})
+    monkeypatch.setattr(
+        "raven.config.loader.load_config", lambda *a, **k: SimpleNamespace(subagents=SimpleNamespace(agents=[]))
+    )
+
+    class Pool:
+        async def home(self, machine_id: str) -> str:
+            return "/home/worker"
+
+        async def call(self, machine_id: str, method: str, params: dict) -> dict:
+            assert method == "fs/read"
+            return {"text": "1| " + "y" * 5_000 + "\n2| last\n\n(End of file — 2 lines total)", "sha256": "ab" * 32}
+
+    remote_path.use_nodes(Pool)
+    read = ReadFileTool(workspace=tmp_path, allowed_dirs=(tmp_path,), follow_binding=False)
+
+    got = _run(read.execute(file_path="box:raven-work/t1/bundle.js"))
+
+    lines = got.split("\n")
+    assert lines[0] == ("1| " + "y" * 5_000)[:2000] + _MARK and lines[1] == "2| last"
+    assert got.endswith("(End of file — 2 lines total)")

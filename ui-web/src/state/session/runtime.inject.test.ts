@@ -20,7 +20,9 @@ type Runtime = typeof import('./runtime')
 
 interface Row { id: string; title?: string }
 
-async function harness({ reject = null as { code?: number; message?: string } | null, draft = false } = {}) {
+async function harness({
+  reject = null as { code?: number; message?: string } | null, draft = false, current = 's1',
+} = {}) {
   const log: unknown[][] = []
   const queue: string[] = []
   const asked: Array<[string, unknown]> = []
@@ -67,7 +69,7 @@ async function harness({ reject = null as { code?: number; message?: string } | 
       'src/lib/duration': { formatDuration: (ms: number) => `${ms}ms` },
       'src/i18n/t': { t: (key: string) => key },
       'src/lib/dom': { $: looseQuery() },
-      'src/lib/session': { current: () => 's1', setCurrent: () => {} },
+      'src/lib/session': { current: () => current, setCurrent: () => {} },
       'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
       'src/state/toast': { show: () => {} },
       'src/state/ctxChip': { set: () => {} },
@@ -302,5 +304,14 @@ describe('the model a message goes out on', () => {
 
     expect(h.sends()).toEqual([{ session_key: 's1', content: 'only the last quarter', busy: 'inject' }])
     expect(used()).toBeNull()
+  })
+})
+
+describe('an imported conversation', () => {
+  it('sends nothing, by any door', async () => {
+    const h = await harness({ current: 'imported:' + 'a'.repeat(32) })
+    h.runtime.send('can I add to it?')
+    await h.tick()
+    expect(h.sends()).toEqual([])
   })
 })

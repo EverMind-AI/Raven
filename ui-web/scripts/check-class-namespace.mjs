@@ -268,6 +268,7 @@ const LEGACY_LOCAL = {
   extAgents: 0,
   export: 0,
   importSync: 0,
+  imported: 0,
   installed: 0,
   /* Down from 14 with the memory section: the page's hero, its own list and
      row classes and the shared drawer's head went with the two-pane frame
@@ -340,6 +341,7 @@ const LEGACY_EXPR = {
   export: 0,
   extAgents: 0,
   importSync: 0,
+  imported: 0,
   installed: 0,
   /* Down from 1 with the initial tile gone: `.pmtile`, written only from
      inside a `className={...}` expression, left with it. */

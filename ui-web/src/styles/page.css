@@ -854,6 +854,9 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    rows looking selected at once. */
 .app[data-page="on"] .sess[aria-current="true"] { background: none; font-weight: 400; }
 .navi svg, .sess svg { flex: none; }
+/* The import row names the file it is sending, and a file name can be any length. */
+#importedBtn span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#importedBtn:disabled { cursor: progress; }
 /* generic: it also rides on the workspace chip in the top bar */
 .bdg {
   font-family: var(--mono); font-size: 10px; font-weight: 600;
@@ -2689,6 +2692,15 @@ textarea:focus, textarea:focus-visible,
 .chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; flex: 1; }
 /* New-task state: no header title, the composer holds the centre line. */
 .chat[data-fresh] #title, .chat[data-fresh] #wdTag { visibility: hidden; }
+/* An imported conversation (state/session/conversation.ts's readOnly): nothing
+   to type into, no folder it runs in, a name changed only on its rail row, and
+   no conversation menu -- the menu's slot kept, so the desk launcher and the
+   trajectory toggle beside it stay where they are. */
+.chat[data-readonly] .dock { display: none; }
+.chat[data-readonly] #wdTag { display: none; }
+.chat[data-readonly] #moreBtn { visibility: hidden; }
+.chat[data-readonly] .top h1 { cursor: default; }
+.chat[data-readonly] .top h1:hover { background: none; }
 /* The trajectory view (features/trajectory/). The scroller is parked, not
    removed: out of the flow at the size it had, invisible and deaf to the
    pointer, so its scroll position survives and the transcript keeps streaming
@@ -5361,10 +5373,11 @@ body:has(#onb:not([hidden])) .mpick { z-index: calc(var(--z-onboarding) + 1); }
    stranded out here by the inset.
 
    Not on `[data-fresh]`. The landing page has no transcript to keep off, and
-   the anchored panel does not reach its composer, which sits mid-screen there.
-   Its composer, wordmark and crows are placed by three rules of their own, so
-   an inset that moves only the composer leaves three different centres on one
-   screen. */
+   its composer needs no room made: an anchored palette pulled down there stops
+   short of the card (features/desk/geometry.ts's `deskBottomLimit`) rather
+   than ending beside it. Its composer, wordmark and crows are placed by three
+   rules of their own, so an inset that moves only the composer leaves three
+   different centres on one screen. */
 .chat:not([data-fresh]) .scroll > *, .chat:not([data-fresh]) .dock {
   transition: translate .19s cubic-bezier(.16, 1, .3, 1),
     max-width .19s cubic-bezier(.16, 1, .3, 1),
@@ -5372,12 +5385,14 @@ body:has(#onb:not([hidden])) .mpick { z-index: calc(var(--z-onboarding) + 1); }
 /* The two centred columns: capped and slid. `.col` holds the scroller's own
    22px of side air, so neither carries a right padding to add this to.
 
-   The composer moves because the column does, not because the panel was on it:
-   the anchored panel ends well above the composer (measured, it does not reach
-   it in a 900px-tall window). But the composer is centred UNDER the column, and
-   a column that slides 162px left over a composer that does not would read as a
-   layout fault. One inset, every container. The composer's own 36px is not the
-   desk's to spend, so its padding adds to it rather than replacing it. */
+   The composer moves because the column does: it is centred UNDER the column,
+   and a column that slides 162px left over a composer that does not would read
+   as a layout fault. At its default height the anchored palette ends well above
+   the composer (measured, it does not reach it in a 900px-tall window); pulled
+   all the way down it ends level with the card's bottom edge, and the same
+   inset is then what keeps the card beside it. One inset, every container. The
+   composer's own 36px is not the desk's to spend, so its padding adds to it
+   rather than replacing it. */
 .chat:not([data-fresh]) .scroll > .col, .chat:not([data-fresh]) .scroll > .flash {
   max-width: min(calc(var(--col) + 72px), calc(100% - var(--desk-reserve, 0px)));
   translate: calc(var(--desk-reserve, 0px) / -2) 0; }
@@ -5444,7 +5459,10 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 :root[data-shell="1"] #deskHost { --desk-launcher-center: calc(var(--tl-row, 38px) / 2); }
 .desk-palette { position: fixed; display: flex; flex-direction: column; min-width: 250px; min-height: 250px;
   z-index: 2;
-  max-width: min(480px, calc(100vw - 16px)); max-height: min(480px, calc(100vh - 16px));
+  /* No height cap but the window's: the inline height is sized against the
+     composer card (features/desk/geometry.ts), and a fixed one here would clip
+     it short of what that allows. */
+  max-width: min(480px, calc(100vw - 16px)); max-height: calc(100vh - 16px);
   overflow: hidden; resize: none; pointer-events: auto; color: var(--text); background: var(--ink);
   border: 1px solid var(--line); border-radius: 10px;
   box-shadow: 0 16px 42px rgba(0, 0, 0, .16), 0 1px 1px rgba(0, 0, 0, .04);
