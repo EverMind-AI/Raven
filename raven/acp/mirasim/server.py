@@ -205,9 +205,11 @@ class Session:
     mcp_names: tuple[str, ...] = ()
     mcp_noted: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    store_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     pending: int = 0
     """Prompts received and not yet answered, the running one included."""
     turn_cancelled: bool = False
+    deleted: bool = False
     running: Invocation | None = None
 
     def binding(self) -> Binding:
@@ -427,9 +429,14 @@ class MirasimAgent:
     async def delete_session(self, params: dict[str, Any]) -> dict[str, Any]:
         session_id = _required_text(params, "sessionId")
         session = self.sessions.pop(session_id, None)
-        if session is not None and session.running is not None:
+        if session is not None:
+            session.deleted = True
             session.turn_cancelled = True
-            await session.running.cancel()
+            if session.running is not None:
+                await session.running.cancel()
+            async with session.store_lock:
+                await asyncio.to_thread(self.store.delete, session_id)
+            return {}
         await asyncio.to_thread(self.store.delete, session_id)
         return {}
 
@@ -460,7 +467,7 @@ class MirasimAgent:
         with _staged_prompt(text) as (prompt_text, staged):
             retried = False
             while True:
-                if session.turn_cancelled:
+                if session.turn_cancelled or session.deleted:
                     return {"stopReason": "cancelled"}
                 model = session.model or catalog.default_model
                 route = catalog.route_for(session.model)
@@ -471,6 +478,8 @@ class MirasimAgent:
                     # A new conversation starts on it, and is on Mirasim's
                     # default when the flag names none.
                     session.route = route
+                if session.turn_cancelled or session.deleted:
+                    return {"stopReason": "cancelled"}
                 invocation = self.cli.start(
                     prompt_args(
                         text=prompt_text,
@@ -532,6 +541,8 @@ class MirasimAgent:
             return True
         session.route = None
         await self._persist(session)
+        if session.turn_cancelled or session.deleted:
+            return False
         invocation = self.cli.start(route_args(key, route))
         session.running = invocation
         try:
@@ -709,10 +720,13 @@ class MirasimAgent:
     async def _persist(self, session: Session) -> None:
         if session.mirasim_key is None:
             return
-        try:
-            await asyncio.to_thread(self.store.put, session.binding())
-        except Exception as exc:  # noqa: BLE001 - a turn that ran is not undone by a failed save
-            logger.warning("Mirasim adapter: could not record session {}: {}", session.id, exc)
+        async with session.store_lock:
+            if session.deleted:
+                return
+            try:
+                await asyncio.to_thread(self.store.put, session.binding())
+            except Exception as exc:  # noqa: BLE001 - a turn that ran is not undone by a failed save
+                logger.warning("Mirasim adapter: could not record session {}: {}", session.id, exc)
 
     def _state(self, session: Session, catalog: AgentCatalog) -> dict[str, Any]:
         state: dict[str, Any] = {}

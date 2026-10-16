@@ -693,6 +693,110 @@ async def test_deleting_a_session_mid_turn_ends_the_turn(harness: Harness) -> No
 
 
 @pytest.mark.slow
+async def test_deleting_a_resumed_session_cannot_recreate_its_record(harness: Harness) -> None:
+    sid = await opened(harness)
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("first"))
+    assert harness.store.get(sid) is not None
+    install(harness.tmp_path, "hang")
+    turn = asyncio.create_task(harness.ok("session/prompt", sessionId=sid, prompt=text("second")))
+    try:
+        async with asyncio.timeout(15):
+            while not (harness.tmp_path / "stub" / "grandchild.pid").exists():
+                await asyncio.sleep(0.05)
+        await harness.ok("session/delete", sessionId=sid)
+        assert await asyncio.wait_for(turn, 10) == {"stopReason": "cancelled"}
+        assert harness.store.get(sid) is None
+        error = await harness.refused("session/load", sessionId=sid, cwd=str(harness.tmp_path))
+        assert error["code"] == RESOURCE_NOT_FOUND
+    finally:
+        await harness.agent.cancel({"sessionId": sid})
+        turn.cancel()
+        await asyncio.gather(turn, return_exceptions=True)
+
+
+async def test_deleting_a_session_does_not_wait_for_a_catalog_read(harness: Harness, monkeypatch) -> None:
+    sid = await opened(harness)
+    catalog = await harness.agent.catalog()
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def reading(**kwargs):
+        entered.set()
+        await release.wait()
+        return catalog
+
+    monkeypatch.setattr(harness.agent, "catalog", reading)
+    turn = asyncio.create_task(harness.ok("session/prompt", sessionId=sid, prompt=text("waiting")))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        await asyncio.wait_for(harness.ok("session/delete", sessionId=sid), 1)
+        assert harness.store.get(sid) is None
+    finally:
+        release.set()
+        await asyncio.wait_for(turn, 5)
+    assert turn.result() == {"stopReason": "cancelled"}
+    assert harness.prompts() == []
+
+
+async def test_deleting_a_session_waits_for_a_store_write_already_in_flight(harness: Harness, monkeypatch) -> None:
+    import threading
+
+    sid = await opened(harness)
+    entered, release = threading.Event(), threading.Event()
+    write = harness.store.put
+
+    def writing(binding):
+        entered.set()
+        assert release.wait(10)
+        write(binding)
+
+    monkeypatch.setattr(harness.store, "put", writing)
+    turn = asyncio.create_task(harness.ok("session/prompt", sessionId=sid, prompt=text("first")))
+    deleting = None
+    try:
+        assert await asyncio.to_thread(entered.wait, 10)
+        deleting = asyncio.create_task(harness.ok("session/delete", sessionId=sid))
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(asyncio.shield(deleting), 0.1)
+    finally:
+        release.set()
+        await asyncio.wait_for(turn, 10)
+        if deleting is not None:
+            await asyncio.wait_for(deleting, 10)
+    assert harness.store.get(sid) is None
+
+
+@pytest.mark.parametrize("switch_route", [False, True])
+async def test_deleting_during_a_route_lookup_starts_no_later_prompt(
+    harness: Harness, monkeypatch, switch_route
+) -> None:
+    import threading
+
+    sid = await opened(harness)
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("first"))
+    if switch_route:
+        await harness.ok("session/set_config_option", sessionId=sid, configId="model", value="platform:opus")
+    entered, release = threading.Event(), threading.Event()
+    read = harness.store.get
+
+    def reading(session_id):
+        entered.set()
+        assert release.wait(10)
+        return read(session_id)
+
+    monkeypatch.setattr(harness.store, "get", reading)
+    turn = asyncio.create_task(harness.ok("session/prompt", sessionId=sid, prompt=text("second")))
+    try:
+        assert await asyncio.to_thread(entered.wait, 10)
+        await asyncio.wait_for(harness.ok("session/delete", sessionId=sid), 1)
+    finally:
+        release.set()
+    assert await asyncio.wait_for(turn, 10) == {"stopReason": "cancelled"}
+    assert len(harness.prompts()) == 1
+    assert harness.routes() == []
+    assert harness.store.get(sid) is None
+
+
+@pytest.mark.slow
 async def test_a_client_that_hangs_up_mid_turn_takes_the_turn_down(tmp_path: Path) -> None:
     import io
 
