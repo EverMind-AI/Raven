@@ -239,7 +239,7 @@ async def machines_add(params: dict) -> dict:
     )
     try:
         connection_add.write_ssh_alias(row)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         detail += f"; its ssh alias was not written to ~/.ssh/config ({exc}), so scp and rsync cannot address it by id"
     return {"ok": True, "detail": detail, "reason": "", "row": _row_out(row)}
 
@@ -355,7 +355,7 @@ async def machines_remove(params: dict) -> dict:
     try:
         if connection_add.remove_ssh_alias(conn_id):
             detail += "; its ssh alias is gone from ~/.ssh/config"
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         detail += f"; its ssh alias could not be removed from ~/.ssh/config ({exc})"
     if transport_of(rows[0]) == SSH:
         await pool.close(conn_id)

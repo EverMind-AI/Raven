@@ -615,18 +615,35 @@ async def test_remove_of_a_local_row_closes_no_link_and_says_nothing_about_a_nod
     assert pool.asked == [] and _rows() == []
 
 
-async def test_remove_says_when_the_alias_could_not_be_removed_and_still_removes_the_row(pool, agents, monkeypatch):
+@pytest.mark.parametrize(
+    "exc", [OSError("read-only file system"), ValueError("the managed 'Host box' block in ~/.ssh/config is incomplete")]
+)
+async def test_remove_says_when_the_alias_could_not_be_removed_and_still_removes_the_row(
+    pool, agents, monkeypatch, exc
+):
     _store(BOX)
 
     def refuse(conn_id):
-        raise OSError("read-only file system")
+        raise exc
 
     monkeypatch.setattr(connection_add, "remove_ssh_alias", refuse)
 
     out = await rpc.machines_remove({"id": "box"})
 
-    assert out["removed"] and "could not be removed from ~/.ssh/config (read-only file system)" in out["detail"]
+    assert out["removed"] and f"could not be removed from ~/.ssh/config ({exc})" in out["detail"]
     assert _rows() == []
+
+
+async def test_add_says_when_the_managed_block_is_incomplete_and_still_registers(pool, reached, monkeypatch):
+    def refuse(row):
+        raise ValueError("the managed 'Host box' block in ~/.ssh/config is incomplete")
+
+    monkeypatch.setattr(connection_add, "write_ssh_alias", refuse)
+
+    out = await rpc.machines_add(FORM)
+
+    assert out["ok"] and "ssh alias was not written to ~/.ssh/config (the managed 'Host box' block" in out["detail"]
+    assert len(_rows()) == 1
 
 
 async def test_remove_reads_a_malformed_agents_section_as_naming_nothing(pool, monkeypatch):

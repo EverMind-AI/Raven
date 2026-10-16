@@ -268,13 +268,32 @@ def write_ssh_alias(row: dict[str, Any]) -> str | None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     text = path.read_text(encoding="utf-8") if path.exists() else ""
     if mark in text:
-        head, _, rest = text.partition(mark)
-        _, _, tail = rest.partition(mark)
+        head, tail = _around_managed_block(text, mark, conn_id)
         text = head.rstrip("\n") + ("\n" if head.strip() else "") + tail.lstrip("\n")
     text = (text.rstrip("\n") + "\n\n" if text.strip() else "") + block + "\n"
     path.write_text(text, encoding="utf-8")
     path.chmod(0o600)
     return conn_id
+
+
+def _around_managed_block(text: str, mark: str, conn_id: str) -> tuple[str, str]:
+    """``text`` before and after the managed block ``mark`` delimits; refuses a block missing a mark.
+
+    The block is the text between two marks. With one mark only -- a block
+    the owner edited or truncated by hand -- there is no block to replace or
+    take out, and treating the rest of the file as the block would write the
+    file back without it (measured 2026-10-16: an unrelated ``Host`` entry
+    after a lone mark vanished on removal). Such a file is left as it is and
+    the owner is told to take the block out by hand.
+    """
+    if text.count(mark) != 2:
+        raise ValueError(
+            f"the managed 'Host {conn_id}' block in ~/.ssh/config is incomplete (one of its two marker lines is "
+            "missing); take it out by hand before adding or removing the machine"
+        )
+    head, _, rest = text.partition(mark)
+    _, _, tail = rest.partition(mark)
+    return head, tail
 
 
 def remove(conn_id: str) -> Path:
@@ -310,18 +329,21 @@ def remove_ssh_alias(conn_id: str) -> bool:
     Only the block between this module's own marks goes (:data:`ALIAS_MARK`);
     everything else in the file is the owner's and is left as it was, as
     :func:`write_ssh_alias` leaves it. A missing file, or one without the
-    block, is nothing to do. An ``OSError`` is the caller's to report as a
-    warning: the alias is a convenience beside the registry, not part of it.
+    block, is nothing to do; a block with one of its two marks missing is
+    left as it is and refused with ``ValueError``
+    (:func:`_around_managed_block`). An ``OSError`` or that refusal is the
+    caller's to report as a warning: the alias is a convenience beside the
+    registry, not part of it.
     """
-    mark = ALIAS_MARK.format(conn_id=str(conn_id or "").strip())
+    conn_id = str(conn_id or "").strip()
+    mark = ALIAS_MARK.format(conn_id=conn_id)
     path = Path(os.path.expanduser("~/.ssh/config"))
     if not path.exists():
         return False
     text = path.read_text(encoding="utf-8")
     if mark not in text:
         return False
-    head, _, rest = text.partition(mark)
-    _, _, tail = rest.partition(mark)
+    head, tail = _around_managed_block(text, mark, conn_id)
     parts = [part for part in (head.rstrip("\n"), tail.lstrip("\n").rstrip("\n")) if part.strip()]
     path.write_text("\n\n".join(parts) + "\n" if parts else "", encoding="utf-8")
     return True

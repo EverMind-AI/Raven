@@ -680,3 +680,27 @@ def test_remove_says_what_it_could_not_do_a_registry_it_cannot_rewrite_an_alias_
     assert out.exit_code == 0, out.output
     assert "ssh alias not removed (read-only file system); take the 'Host box' block out by hand" in said(out)
     assert json.loads(store.read_text(encoding="utf-8"))["connections"] == []
+
+    # A managed block with a mark missing is refused by the alias writer and is a warning here too.
+    _box_row(store)
+
+    def incomplete(conn_id):
+        raise ValueError("the managed 'Host box' block in ~/.ssh/config is incomplete")
+
+    monkeypatch.setattr("raven.cli.ops_connection_commands._remove_ssh_alias", incomplete)
+    out = remove("box", "--yes")
+    assert out.exit_code == 0, out.output
+    assert "ssh alias not removed (the managed 'Host box' block in ~/.ssh/config is incomplete)" in said(out)
+
+
+def test_add_reports_an_incomplete_managed_block_as_a_warning_and_still_writes_the_row(store, reached, monkeypatch):
+    def refuse(row):
+        raise ValueError("the managed 'Host gpu' block in ~/.ssh/config is incomplete")
+
+    monkeypatch.setattr("raven.cli.ops_connection_commands._write_ssh_alias", refuse)
+
+    out = run("add", "--id", "gpu", "--name", "GPU", *SSH, *FULL)
+
+    assert out.exit_code == 0, out.output
+    assert "wrote gpu" in said(out) and "ssh alias not written (the managed 'Host gpu' block" in said(out)
+    assert json.loads(store.read_text(encoding="utf-8"))["connections"][0]["id"] == "gpu"

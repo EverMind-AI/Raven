@@ -198,7 +198,7 @@ class ConnectionAddTool(Tool):
             lines.append(f"Worth telling the owner: {fault}")
         try:
             alias = adder.write_ssh_alias(row)
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             lines.append(f"ssh alias not written ({exc}); transfers will need the address by hand.")
         else:
             if alias:

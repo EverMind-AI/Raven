@@ -361,7 +361,10 @@ raven ops connection remove gpu1
 ```
 
 Takes the machine out of the registry after asking (`--yes` skips the
-question) and removes its managed `Host gpu1` block from `~/.ssh/config`.
+question) and removes its managed `Host gpu1` block from `~/.ssh/config`. A
+block with one of its two marker lines missing (edited by hand) is left as it
+is and named in a warning: take it out yourself. Nothing else in that file is
+touched.
 Refused while a connected agent entry names the machine: such an entry fails
 at its next dispatch, after the spawn has answered that it started, so
 disconnect those entries first (the Agent Hub, or the `subagents.agents`

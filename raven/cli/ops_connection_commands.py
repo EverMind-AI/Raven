@@ -154,7 +154,7 @@ def add(  # noqa: PLR0913 -- one option per field of the row; a dict would hide 
     console.print(f"[green]wrote {row['id']} to {written}[/green]")
     try:
         alias = _write_ssh_alias(row)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         console.print(f"[yellow]ssh alias not written ({exc}); transfers will need the address by hand[/yellow]")
     else:
         if alias:
@@ -304,7 +304,7 @@ def remove_connection(
     try:
         if _remove_ssh_alias(wanted):
             console.print(f"[green]ssh alias '{wanted}' removed from ~/.ssh/config[/green]")
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         console.print(f"[yellow]ssh alias not removed ({exc}); take the 'Host {wanted}' block out by hand[/yellow]")
     console.print(
         "The Raven node installed on it, if any, stays there: remove its node directory on the machine by hand."
