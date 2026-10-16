@@ -52,6 +52,10 @@ def grounded(launcher, tmp_path, monkeypatch):
     monkeypatch.delenv("CODE_SERPER_API_KEY", raising=False)
     monkeypatch.delenv("CODE_JINA_API_KEY", raising=False)
     monkeypatch.delenv("CODE_PROJECT_FILES", raising=False)
+    # Set, not deleted: a deleted switch falls back to the folder's .env, which
+    # a developer's machine may use to turn the conduct or its discipline off.
+    monkeypatch.setenv("CODE_CONDUCT", "on")
+    monkeypatch.setenv("CODE_CONDUCT_DISCIPLINE", "on")
     for retired in (
         "RAVEN_WORKSPACE_ALLOC_BASE",
         "RAVEN_WORKSPACE_ALLOC_REPOS",
@@ -1254,7 +1258,7 @@ def test_the_conduct_and_the_discipline_are_each_switchable(grounded, tmp_path, 
     assert conduct.read_text() == without
 
     # Back on: the composition changes, and a pristine copy follows it.
-    monkeypatch.delenv("CODE_CONDUCT_DISCIPLINE")
+    monkeypatch.setenv("CODE_CONDUCT_DISCIPLINE", "on")
     grounded.seed_conduct(partition, "deepseek/deepseek-v4")
     assert conduct.read_text() == whole
 
@@ -1284,7 +1288,6 @@ def test_an_edited_conduct_is_never_removed_by_the_switch(grounded, tmp_path, mo
     grounded.seed_conduct(partition, "deepseek/deepseek-v4")
     assert conduct.read_text() == "operator tuned"
     # Back on: the product's conduct returns, and the edit survives as a backup.
-    # Set rather than deleted, so the folder's .env cannot decide it.
     monkeypatch.setenv("CODE_CONDUCT", "on")
     grounded.seed_conduct(partition, "deepseek/deepseek-v4")
     assert conduct.read_text() == grounded.render_conduct("deepseek/deepseek-v4")
@@ -1436,12 +1439,11 @@ def test_a_stuck_old_receipt_refuses_the_launch_with_the_reason(grounded, tmp_pa
         grounded.seed_guide(partition)
 
 
-def test_the_operators_local_lines_reach_the_system_prompt(grounded, tmp_path, monkeypatch):
+def test_the_operators_local_lines_reach_the_system_prompt(grounded, tmp_path):
     """Read back where the model reads: the bootstrap files the context builder
     assembles, not the file the launcher wrote."""
     from raven.agent.context import ContextBuilder
 
-    monkeypatch.setenv("CODE_CONDUCT", "on")
     partition = tmp_path / "part"
     profile = partition / "agent_memory" / "profile"
     profile.mkdir(parents=True)
