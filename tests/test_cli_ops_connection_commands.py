@@ -491,14 +491,31 @@ def test_a_directory_chosen_with_dir_is_kept_in_the_registry(node, store):
 def test_the_directory_already_on_record_is_not_written_again(monkeypatch, store):
     node = _Node(monkeypatch, registered="/data/raven-node")
     _box_row(store, node_dir="/data/raven-node")
-    before = store.read_text(encoding="utf-8")
 
     out = install_node("box", "--yes", "--dir", "/data/raven-node")
 
     assert out.exit_code == 0, out.output
     assert node.steps() == ["plan", "install", "hello"]
     assert "Recorded" not in out.output
-    assert store.read_text(encoding="utf-8") == before
+    row = json.loads(store.read_text(encoding="utf-8"))["connections"][0]
+    assert row["node_dir"] == "/data/raven-node"
+    # The one thing the install adds to the row: which node is there now, so
+    # the Agent Hub lists the machine with its node before any link comes up.
+    assert row["node_install"] == "0.2.4-abcdef012345"
+
+
+def test_the_node_put_there_is_noted_on_the_row_and_a_row_it_cannot_go_on_is_a_warning(node, store):
+    """The listing reads the node off the row; a row that cannot take it costs that, not the install."""
+    _box_row(store)
+    out = install_node("box", "--yes")
+    assert out.exit_code == 0, out.output
+    assert json.loads(store.read_text(encoding="utf-8"))["connections"][0]["node_install"] == "0.2.4-abcdef012345"
+
+    store.write_text(json.dumps({"connections": [{"id": "box", "host": "h"}, {"id": "box", "host": "h2"}]}))
+    out = install_node("box", "--yes")
+    assert out.exit_code == 0, out.output
+    assert "could not be noted on the machine's row" in said(out) and "listed 2 times" in said(out)
+    assert node.steps()[-3:] == ["plan", "install", "hello"]
 
 
 def test_a_directory_that_cannot_be_recorded_is_said_after_the_install(node, store):
@@ -552,3 +569,114 @@ def test_install_node_closes_the_live_node_it_asked(monkeypatch, tmp_path):
     assert out.exit_code == 0, out.output
     assert f"The node answers: Python {__import__('platform').python_version()}, code {bundle.digest()}." in said(out)
     assert len(box.launches()) == 1
+
+
+# --- remove ---------------------------------------------------------------------------
+#
+# The write itself is raven.ops.connection_add.remove's (tests/test_ops_connection_add.py);
+# what the command adds is the refusal over agent entries that still name the
+# machine, the question, and saying what stays behind on the machine.
+
+
+def _named(monkeypatch, *names: str, off: tuple[str, ...] = ()) -> None:
+    """The entries naming the machine: ``names`` connected, ``off`` disconnected."""
+    monkeypatch.setattr(
+        "raven.config.update_subagents.agents_on_machine",
+        lambda conn_id, only_enabled=False: list(names) if only_enabled else [*names, *off],
+    )
+
+
+def remove(*args, answer: str | None = None):
+    return CliRunner().invoke(connection_app, ["remove", *args], input=answer)
+
+
+def test_remove_asks_then_takes_the_row_and_its_alias_out_and_says_the_node_stays(store, monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _named(monkeypatch)
+    _box_row(store, display_name="Lab box")
+    from raven.ops.connection_add import write_ssh_alias
+
+    write_ssh_alias(json.loads(store.read_text(encoding="utf-8"))["connections"][0])
+
+    declined = remove("box", answer="n\n")
+    assert declined.exit_code == 1 and "Remove machine 'Lab box' (box)" in said(declined)
+    assert len(json.loads(store.read_text(encoding="utf-8"))["connections"]) == 1
+
+    out = remove("box", answer="y\n")
+
+    assert out.exit_code == 0, out.output
+    assert "removed box from" in said(out) and "ssh alias 'box' removed" in said(out)
+    assert "stays there: remove its node directory on the machine by hand" in said(out)
+    assert json.loads(store.read_text(encoding="utf-8"))["connections"] == []
+    assert "Host box" not in (tmp_path / ".ssh" / "config").read_text(encoding="utf-8")
+
+
+def test_remove_refuses_while_agent_entries_name_the_machine_unless_forced(store, monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _named(monkeypatch, "claude_code@box")
+    _box_row(store)
+
+    out = remove("box", "--yes")
+
+    assert out.exit_code == 1
+    assert "1 connected agent entry names machine 'box': claude_code@box" in said(out)
+    assert "Nothing was changed" in said(out)
+    assert len(json.loads(store.read_text(encoding="utf-8"))["connections"]) == 1
+
+    out = remove("box", "--yes", "--force")
+
+    assert out.exit_code == 0, out.output
+    assert "claude_code@box still names this machine and fail at dispatch" in said(out)
+    assert json.loads(store.read_text(encoding="utf-8"))["connections"] == []
+
+
+def test_remove_is_not_refused_over_a_disconnected_entry_but_names_it(store, monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _named(monkeypatch, off=("codex@box",))
+    _box_row(store)
+
+    out = remove("box", "--yes")
+
+    assert out.exit_code == 0, out.output
+    assert "The disconnected entry codex@box still names this machine and cannot be connected" in said(out)
+    assert json.loads(store.read_text(encoding="utf-8"))["connections"] == []
+
+
+def test_remove_says_when_the_machine_is_not_registered_or_the_file_cannot_be_read(store, monkeypatch):
+    _named(monkeypatch)
+    out = remove("ghost", "--yes")
+    assert out.exit_code == 1 and "machine 'ghost' is not registered" in said(out)
+    store.write_text("{nope", encoding="utf-8")
+    out = remove("box", "--yes")
+    assert out.exit_code == 1 and "not valid JSON" in said(out)
+
+
+def test_remove_says_what_it_could_not_do_a_registry_it_cannot_rewrite_an_alias_it_cannot_drop(
+    store, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from pydantic import ValidationError
+
+    def broken(conn_id, **kw):
+        raise ValidationError.from_exception_data("SubagentsConfig", [])
+
+    # A malformed agents section names no entry that would fail, so nothing is refused over it.
+    monkeypatch.setattr("raven.config.update_subagents.agents_on_machine", broken)
+    store.write_text(json.dumps({"connections": [{"id": "box", "host": "h"}, {"host": "no id"}]}), encoding="utf-8")
+
+    out = remove("box", "--yes")
+
+    assert out.exit_code == 1 and "had no id" in said(out) and "Nothing was changed" in said(out)
+    assert len(json.loads(store.read_text(encoding="utf-8"))["connections"]) == 2
+
+    _box_row(store)
+
+    def refuse(conn_id):
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr("raven.cli.ops_connection_commands._remove_ssh_alias", refuse)
+    out = remove("box", "--yes")
+
+    assert out.exit_code == 0, out.output
+    assert "ssh alias not removed (read-only file system); take the 'Host box' block out by hand" in said(out)
+    assert json.loads(store.read_text(encoding="utf-8"))["connections"] == []

@@ -72,6 +72,19 @@ lists what is wrong with each entry, blocking or advisory, and exits non-zero
 only when no entry is usable: a broken entry beside a usable one still exits
 zero, so read its output rather than its exit code.
 
+### From the Agent Hub
+
+The same registration without a terminal: the Agent Hub's **Machines** tab
+lists the registered machines, and **Register a machine** opens a form for
+the name, id, address, port, user name and private-key path, plus the work
+directories. The page reaches the machine once before writing anything, the
+way the command does, and a machine that does not answer is not recorded;
+the refusal says what kind it was (unreachable, login refused, changed host
+key, no answer in time) and what to do about it. What the page shows
+afterwards is what the machine is -- its name, id, link and node -- never its
+address, user or key path: those travel once, in the form, and are not read
+back.
+
 ## 2. Install the node
 
 ```bash
@@ -110,7 +123,20 @@ installer checks it:
 
 `--dir <path>` keeps the nodes somewhere other than `~/.raven-node`; the path
 is recorded in the registry row, so later commands find it. A machine that
-already has this Raven's node is left as it is.
+already has this Raven's node is left as it is. The node's name is recorded
+on the row as well (`node_install`), which is how the Agent Hub says a machine
+has the node before any link to it is up.
+
+### Installing from the Agent Hub
+
+**Install node** on a machine's card, or in its sheet, runs the same install
+in the background: the card says *Installing the node* until it ends, and the
+sheet keeps how it ended. The sheet's *Install into* field is the command's
+`--dir`. A machine whose node is another Raven's shows *needs updating* and
+offers **Update node**. An agent is connected onto a machine from its preset's
+sheet (*Runs on*), which lists the registered machines, lets only those with
+this Raven's node be picked (the others say why), and takes the working
+directory there for an acp or cli agent.
 
 **Upgrading.** The node runs exactly the code of the Raven that installed it,
 checked by a digest on every connection. After you update Raven on this
@@ -327,6 +353,29 @@ the next time Raven uses another machine; there is no timer, so the last link
 in use stays open until then. The daemon does keep a timer: it leaves after
 10 minutes with no connection and no agent. Neither is an error; the next use
 starts them again.
+
+## 8. Remove a machine
+
+```bash
+raven ops connection remove gpu1
+```
+
+Takes the machine out of the registry after asking (`--yes` skips the
+question) and removes its managed `Host gpu1` block from `~/.ssh/config`.
+Refused while a connected agent entry names the machine: such an entry fails
+at its next dispatch, after the spawn has answered that it started, so
+disconnect those entries first (the Agent Hub, or the `subagents.agents`
+section of the config), or pass `--force` to remove the machine anyway and be
+told which entries are left pointing at nothing. A disconnected entry does not
+stand in the way; it is named, and connecting it again is refused until a
+machine is registered under that id again. Nothing on the machine changes: the node under its `node_dir` stays,
+and removing it is a matter of deleting that directory there by hand.
+
+The Agent Hub's **Remove machine**, in a machine's sheet, does the same after
+a confirmation, and also refuses while agents are running on the machine over
+the link from this computer; wait for them, or stop them, first. A run left on
+the machine by an earlier Raven process ([section 7](#7-disconnects-and-restarts))
+is not picked up once the machine is gone from the registry.
 
 ## Limits and defaults
 

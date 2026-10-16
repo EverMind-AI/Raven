@@ -9,9 +9,10 @@ import * as pageStore from '../../state/page'
 import { resetSources, setSources } from '../../state/sources'
 import { domSnapshot } from '../../test/domSnapshot'
 import { ExtAgentsApp } from './ExtAgentsPage'
+import * as machines from './machines'
 import * as store from './store'
 
-import type { ExtAgentActArgs, ExtAgentRow, ExtAgentsSource } from './types'
+import type { ExtAgentActArgs, ExtAgentRow, ExtAgentsSource, MachineRow, MachinesSource, RegisterForm } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -59,11 +60,60 @@ function row(over: Partial<ExtAgentRow> = {}): ExtAgentRow {
    translator on setTranslator (it returns its key, so tests assert catalogue
    keys, not translations) and a fixture source on sources.extAgents. A write
    can be told to refuse, which is how the refusal states are reached. */
-function install(rows: ExtAgentRow[], over: Partial<ExtAgentsSource> & { refuse?: (op: string) => string | null } = {}) {
+/* A registered machine with every field the row carries; the tests override what they read. */
+function mrow(over: Partial<MachineRow> = {}): MachineRow {
+  return {
+    id: 'box',
+    name: 'Lab box',
+    transport: 'ssh',
+    state: 'off',
+    detail: '',
+    agents: 0,
+    node_version: '',
+    node_current: false,
+    install: { running: false, ok: null, detail: '' },
+    paths: [],
+    problems: [],
+    ...over,
+  }
+}
+
+type MachinesOver = Partial<MachinesSource>
+
+function install(
+  rows: ExtAgentRow[],
+  over: Partial<ExtAgentsSource> & { refuse?: (op: string) => string | null; machines?: MachineRow[]; machinesOver?: MachinesOver } = {},
+) {
   const acts: Array<[string, string, ExtAgentActArgs]> = []
   const loads: boolean[] = []
   const rescans: boolean[] = []
-  const { refuse, ...rest } = over
+  const { refuse, machines: machineRows = [], machinesOver = {}, ...rest } = over
+  /* The machines tab's source: the rows given, every write accepted, and
+     what was asked of it, so a test reads the call rather than the paint. */
+  const mcalls: Array<[string, unknown[]]> = []
+  const machinesSource: MachinesSource = {
+    list: async (refresh, id) => {
+      mcalls.push(['list', [!!refresh, id]])
+      return machineRows.map((r) => ({ ...r }))
+    },
+    add: async (form) => {
+      mcalls.push(['add', [form]])
+      return { ok: true, detail: 'reached', reason: '' }
+    },
+    installNode: async (id, dir) => {
+      mcalls.push(['install', [id, dir]])
+      return { started: true, detail: 'installing' }
+    },
+    doctor: async () => {
+      mcalls.push(['doctor', []])
+      return []
+    },
+    remove: async (id) => {
+      mcalls.push(['remove', [id]])
+      return { removed: true, detail: 'removed', agents: [] }
+    },
+    ...machinesOver,
+  }
   const source: ExtAgentsSource = {
     load: async (probe, rescan) => {
       loads.push(!!probe)
@@ -95,12 +145,12 @@ function install(rows: ExtAgentRow[], over: Partial<ExtAgentsSource> & { refuse?
     confirms.push(title)
     fn()
   })
-  setSources({ extAgents: source })
+  setSources({ extAgents: source, machines: machinesSource })
   document.body.innerHTML =
     '<section id="extAgentsPage"><div id="extAgentsBody"></div></section>' +
     '<aside id="detail" data-open="false"><b id="dTitle">—</b><div id="dBody"></div></aside>' +
     '<div id="menu" data-open="false"></div>'
-  return { source, acts, loads, rescans, toasts, confirms }
+  return { source, acts, loads, rescans, toasts, confirms, mcalls }
 }
 
 async function mount() {
@@ -218,6 +268,7 @@ afterEach(() => {
   cleanup()
   resetSources()
   store._resetForTests()
+  machines._resetForTests()
 })
 
 describe('the tabs', () => {
@@ -233,7 +284,7 @@ describe('the tabs', () => {
       row({ name: 'Raven-PPT', preset: undefined, vendored: true, configured: false, enabled: false, probe_status: 'attention' }),
     ])
     await mount()
-    expect(tabLabels()).toEqual(['gui.filter.all', 'gui.agent.g_on', 'gui.agent.g_avail', 'gui.agent.g_missing'])
+    expect(tabLabels()).toEqual(['gui.filter.all', 'gui.agent.g_on', 'gui.agent.g_avail', 'gui.agent.g_missing', 'gui.machine.g_machines'])
     expect(await namesIn('gui.agent.g_on')).toEqual(['Raven', 'Raven-Code', 'on_one'])
     /* Raven's own first, then the server's order. An endpoint whose probe says
        unreachable is not something to install; a shipped product is never
@@ -243,13 +294,13 @@ describe('the tabs', () => {
     expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).toEqual([
       'Raven', 'Raven-Code', 'on_one', 'Raven-PPT', 'off_one', 'hermes', 'mirothinker', 'codex',
     ])
-    expect(tabs().map((b) => b.querySelector('.extAgents-tn')!.textContent)).toEqual(['8', '3', '4', '1'])
+    expect(tabs().map((b) => b.querySelector('.extAgents-tn')!.textContent)).toEqual(['8', '3', '4', '1', '0'])
   })
 
-  it('always offers All and Connected, and the other two only with cards in them', async () => {
+  it('always offers All, Connected and Machines, and the other two only with cards in them', async () => {
     install([row({ name: 'codex', preset: 'codex', configured: false, enabled: false, probe_status: 'missing' })])
     await mount()
-    expect(tabLabels()).toEqual(['gui.filter.all', 'gui.agent.g_on', 'gui.agent.g_missing'])
+    expect(tabLabels()).toEqual(['gui.filter.all', 'gui.agent.g_on', 'gui.agent.g_missing', 'gui.machine.g_machines'])
     await click(tabNamed('gui.agent.g_on'))
     expect(tabNamed('gui.agent.g_on').querySelector('.extAgents-tn')!.textContent).toBe('0')
     expect(rowsOf()).toEqual([])
@@ -265,7 +316,7 @@ describe('the tabs', () => {
     expect(rowsOf()).toEqual([])
     expect(document.querySelector('.extAgents-empty')!.textContent).toBe('gui.agent.none_avail')
     await click(tabNamed('gui.filter.all'))
-    expect(tabLabels()).toEqual(['gui.filter.all', 'gui.agent.g_on'])
+    expect(tabLabels()).toEqual(['gui.filter.all', 'gui.agent.g_on', 'gui.machine.g_machines'])
   })
 
   it('re-measures availability every time the page opens', async () => {
@@ -476,7 +527,8 @@ describe('connecting', () => {
     expect(document.querySelectorAll('.extAgents-wcard').length).toBe(18)
     expect(document.querySelector('.extAgents-grid')!.getAttribute('aria-busy')).toBe('true')
     expect(document.querySelector('.extAgents-empty')).toBeNull()
-    expect(document.querySelector('.extAgents-tn')).toBeNull()
+    /* The machines tab counts its own rows, which the roster's wait does not cover. */
+    expect(document.querySelectorAll('.extAgents-tn').length).toBe(1)
     expect(document.querySelectorAll('.extAgents-tab .extAgents-wtn').length).toBe(2)
     await act(async () => {
       release()
@@ -1844,5 +1896,254 @@ describe('the model pill', () => {
     expect(acts).toEqual([['toggle', 'Raven-Code', { enabled: false }]])
     await click([...sheet()!.querySelectorAll<HTMLElement>('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
     expect(acts.at(-1)).toEqual(['toggle', 'Raven-Code', { enabled: true }])
+  })
+})
+
+describe('the machines tab', () => {
+  const openMachines = async (): Promise<void> => {
+    await click(tabNamed('gui.machine.g_machines'))
+  }
+  const field = (label: string): HTMLInputElement | HTMLSelectElement | null =>
+    sheet()?.querySelector(`[aria-label="${label}"]`) ?? null
+  const sheetAct = (label: string): HTMLButtonElement | undefined =>
+    [...(sheet()?.querySelectorAll<HTMLButtonElement>('.extAgents-act button') ?? [])].find((b) => b.textContent === label)
+  const note = (): { t: string | null; said: string | null } | null => {
+    const n = sheet()?.querySelector('.extAgents-note')
+    return n ? { t: n.querySelector('.extAgents-note-t')?.textContent ?? null, said: n.querySelector('.extAgents-note-said')?.textContent ?? null } : null
+  }
+  const settle = async (): Promise<void> => {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 15))
+    })
+  }
+
+  it('lists each registered machine with its node and link, then the register card, and counts them', async () => {
+    install([row()], {
+      machines: [
+        mrow({ node_version: '0.2.4', node_current: true, state: 'connected', agents: 2 }),
+        mrow({ id: 'old', name: 'Old box', node_version: '0.2.3', state: 'lost', detail: 'the link went' }),
+        mrow({ id: 'bare', name: 'Bare box' }),
+        mrow({ id: 'here', name: 'This Mac', transport: 'local' }),
+        mrow({ id: 'none', name: 'No node', state: 'error', detail: "no Raven node on machine 'No node' (none); install it with `raven ops connection install-node none`" }),
+      ],
+    })
+    await mount()
+    expect(tabNamed('gui.machine.g_machines').querySelector('.extAgents-tn')!.textContent).toBe('5')
+    await openMachines()
+    expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).toEqual([
+      'Lab box', 'Old box', 'Bare box', 'This Mac', 'No node', 'gui.machine.register',
+    ])
+    expect(lineOf('Lab box')).toBe('boxgui.machine.node_version {"v":"0.2.4"}')
+    expect(lineOf('Old box')).toBe('oldgui.machine.node_stale {"v":"0.2.3"}')
+    expect(lineOf('Bare box')).toBe('baregui.machine.node_none')
+    expect(lineOf('This Mac')).toBe('heregui.machine.node_here')
+    expect(footOf('Lab box')!.k).toBeNull()
+    expect(rowNamed('Lab box').querySelector('.extAgents-foot-say')!.textContent).toBe('gui.machine.state_connected {"n":"2"}')
+    expect(rowNamed('Old box').querySelector('.extAgents-foot-say')!.textContent).toBe('the link went')
+    expect(rowNamed('This Mac').querySelector('.extAgents-foot-say')!.textContent).toBe('gui.machine.transport_local')
+    /* The one error a reader can act on from here is said with what to do. */
+    expect(rowNamed('No node').querySelector('.extAgents-foot-say')!.textContent).toBe(
+      'gui.machine.err_no_node {"said":"no Raven node on machine \'No node\' (none); install it with `raven ops connection install-node none`"}',
+    )
+    expect(ledOf('No node')).toBe('extAgents-led extAgents-led-bad')
+    expect(ledOf('Lab box')).toBe('extAgents-led')
+    expect(ledOf('Old box')).toBe('extAgents-led extAgents-led-warn')
+    expect(ledOf('Bare box')).toBeNull()
+    /* The corner offers the one thing to do: a node to install, or to update; nothing for a current node or this computer. */
+    expect(controlOf('Lab box')).toBe('')
+    expect(buttonOf('Old box')!.textContent).toBe('gui.machine.update')
+    expect(buttonOf('Bare box')!.textContent).toBe('gui.machine.install')
+    expect(controlOf('This Mac')).toBe('')
+  })
+
+  it('says so on an empty registry, and shows a list that could not be read once, on the tab', async () => {
+    install([row()], {
+      machinesOver: {
+        list: async () => {
+          throw { data: { detail: 'the registry is not valid JSON' } }
+        },
+      },
+    })
+    await mount()
+    await openMachines()
+    expect(document.querySelector('.extAgents-empty')!.textContent).toBe('gui.machine.none')
+    expect(document.querySelector('.extAgents-note-t')!.textContent).toBe('gui.machine.load_bad')
+    expect(document.querySelector('.extAgents-note-said')!.textContent).toBe('the registry is not valid JSON')
+  })
+
+  it('installs the node from the card or the sheet, says so until the list says it ended, and keeps a failed end on the card', async () => {
+    const stored = mrow()
+    let listed: MachineRow = stored
+    const { mcalls } = install([row()], { machines: [stored], machinesOver: { list: async () => [{ ...listed }] } })
+    machines._resetForTests(0)
+    await mount()
+    await openMachines()
+    listed = { ...stored, install: { running: true, ok: null, detail: 'looking at the machine' } }
+    await click(buttonOf('Lab box'))
+    expect(mcalls.filter((c) => c[0] === 'install')).toEqual([['install', ['box', undefined]]])
+    await settle()
+    expect(controlOf('Lab box')).toBe(' gui.machine.installing')
+    expect(lineOf('Lab box')).toBe('boxgui.machine.installing')
+    listed = { ...stored, install: { running: false, ok: false, detail: 'installing the Raven node failed at the packages step: exit 1' } }
+    await settle()
+    expect(footOf('Lab box')!.k).toBe('gui.machine.install_bad_said {"said":"installing the Raven node failed at the packages step: exit 1"}')
+    expect(buttonOf('Lab box')!.textContent).toBe('gui.machine.install')
+    /* The sheet says it in a note with what to do, and takes a directory for the next try. */
+    await openSheet('Lab box')
+    expect(note()).toEqual({ t: 'gui.machine.install_bad', said: 'installing the Raven node failed at the packages step: exit 1' })
+    await typeInto(field('gui.machine.f_node_dir'), '/data/raven-node')
+    listed = { ...stored, install: { running: true, ok: null, detail: 'looking at the machine' } }
+    await click(sheetAct('gui.machine.install'))
+    expect(mcalls.filter((c) => c[0] === 'install')[1]).toEqual(['install', ['box', '/data/raven-node']])
+    listed = { ...stored, node_version: '0.2.4', node_current: true, state: 'idle', install: { running: false, ok: true, detail: 'Installed the Raven node' } }
+    await settle()
+    expect(sheetActs()).toEqual(['gui.machine.probe', 'gui.machine.doctor', 'gui.machine.remove_do'])
+    expect(controlOf('Lab box')).toBe('')
+  })
+
+  it('keeps a refused install on the card without polling', async () => {
+    install([row()], { machines: [mrow()], machinesOver: { installNode: async () => ({ started: false, detail: 'an install is already running' }) } })
+    await mount()
+    await openMachines()
+    await click(buttonOf('Lab box'))
+    expect(footOf('Lab box')!.k).toBe('gui.machine.install_bad_said {"said":"an install is already running"}')
+    expect(buttonOf('Lab box')!.textContent).toBe('gui.machine.install')
+  })
+
+  it('registers a machine from the form once every field is typed, explains a refusal by its kind, and opens the new sheet', async () => {
+    const rows: MachineRow[] = []
+    const answers = [
+      { ok: false, detail: 'could not reach the machine: Permission denied (publickey).', reason: 'login' as const },
+      { ok: true, detail: 'reached', reason: '' as const },
+    ]
+    const { mcalls } = install([row()], {
+      machinesOver: {
+        list: async () => rows.map((r) => ({ ...r })),
+        add: async (form) => {
+          mcalls.push(['add', [form]])
+          const answer = answers.shift()!
+          if (answer.ok) rows.push(mrow({ id: form.id, name: form.name, paths: form.paths }))
+          return answer
+        },
+      },
+    })
+    await mount()
+    await openMachines()
+    await click(rowNamed('gui.machine.register'))
+    expect(sheetName()).toBe('gui.machine.register')
+    const go = (): HTMLButtonElement => sheet()!.querySelector<HTMLButtonElement>('.extAgents-act button')!
+    expect(go().disabled).toBe(true)
+    const typed: Array<[string, string]> = [
+      ['gui.machine.f_name', 'GPU box 1'],
+      ['gui.machine.f_id', 'gpu1'],
+      ['gui.machine.f_host', '203.0.113.7'],
+      ['gui.machine.f_user', 'alice'],
+      ['gui.machine.f_key', '~/.ssh/id_gpu1'],
+    ]
+    for (const [label, value] of typed) await typeInto(field(label), value)
+    await typeInto(sheetTextarea(), '/data/alice/projects\n\n /scratch ')
+    expect(go().disabled).toBe(false)
+    await click(go())
+    expect(sheetStatus()).toBe('gui.machine.add_bad')
+    expect(note()).toEqual({ t: 'gui.machine.why_login', said: 'could not reach the machine: Permission denied (publickey).' })
+    expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).toEqual(['gui.machine.register'])
+    await click(go())
+    expect(sheetName()).toBe('GPU box 1')
+    expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).toEqual(['GPU box 1', 'gui.machine.register'])
+    const sent = mcalls.filter((c) => c[0] === 'add').map((c) => c[1][0] as RegisterForm)
+    expect(sent.length).toBe(2)
+    expect(sent[1]).toEqual({ id: 'gpu1', name: 'GPU box 1', host: '203.0.113.7', port: 0, user: 'alice', key: '~/.ssh/id_gpu1', paths: ['/data/alice/projects', '/scratch'] })
+  })
+
+  it('removes a machine from its sheet after asking, keeps a refusal on the row, and closes the sheet once it is gone', async () => {
+    const rows = [mrow({ node_version: '0.2.4', node_current: true, state: 'idle' })]
+    const answers = [
+      { removed: false, detail: "1 agent entry names machine 'Lab box' (box) (claude_code@box); disconnect them first", agents: ['claude_code@box'] },
+      { removed: true, detail: 'removed', agents: [] },
+    ]
+    const { confirms, toasts } = install([row()], {
+      machinesOver: {
+        list: async () => rows.map((r) => ({ ...r })),
+        remove: async () => {
+          const answer = answers.shift()!
+          if (answer.removed) rows.length = 0
+          return answer
+        },
+      },
+    })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    expect(sheetActs()).toEqual(['gui.machine.probe', 'gui.machine.doctor', 'gui.machine.remove_do'])
+    await click(sheetAct('gui.machine.remove_do'))
+    expect(confirms).toEqual(['gui.machine.remove_do'])
+    expect(sheetStatus()).toBe('gui.machine.remove_named {"agents":"claude_code@box"}')
+    expect(footOf('Lab box')!.k).toBe('gui.machine.remove_named {"agents":"claude_code@box"}')
+    expect(toasts).toEqual([])
+    await click(sheetAct('gui.machine.remove_do'))
+    expect(toasts).toEqual(['gui.machine.removed {"name":"Lab box"}'])
+    expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).toEqual(['gui.machine.register'])
+    expect(detail.get().open).toBe(false)
+  })
+
+  it('reaches one machine on request, and asks the doctor for the sheet and the file', async () => {
+    const { mcalls } = install([row()], {
+      machines: [mrow({ problems: ["box: 'key' is missing, so there is no way onto it"] })],
+      machinesOver: {
+        doctor: async () => [
+          { id: '', blocking: false, detail: '1 entry had no id and was skipped.' },
+          { id: 'box', blocking: true, detail: "box: 'key' is missing, so there is no way onto it" },
+          { id: 'box', blocking: false, detail: "box: 'software' is not set" },
+        ],
+      },
+    })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    const problems = (): string | null => [...sheet()!.querySelectorAll('.extAgents-fld')].find((f) => f.querySelector('.extAgents-k')!.textContent === 'gui.machine.problems')!.querySelector('.extAgents-ro')!.textContent
+    expect(problems()).toBe("box: 'key' is missing, so there is no way onto it")
+    await click(sheetAct('gui.machine.probe'))
+    expect(mcalls.filter((c) => c[0] === 'list').at(-1)).toEqual(['list', [true, 'box']])
+    await click(sheetAct('gui.machine.doctor'))
+    expect(problems()).toBe("box: 'key' is missing, so there is no way onto it\nbox: 'software' is not set")
+    expect(document.querySelector('#extAgentsBody .extAgents-note-t')!.textContent).toBe('gui.machine.file_problems')
+    expect(document.querySelector('#extAgentsBody .extAgents-note-said')!.textContent).toBe('1 entry had no id and was skipped.')
+  })
+
+  it("offers a preset the machines with this Raven's node to run on, and connects it there with its directory", async () => {
+    const { acts } = install([row({ name: 'codex', preset: 'codex', kind: 'acp', configured: false, enabled: false, probe_status: 'ready' })], {
+      machines: [
+        mrow({ node_version: '0.2.4', node_current: true }),
+        mrow({ id: 'old', name: 'Old box', node_version: '0.2.3' }),
+        mrow({ id: 'bare', name: 'Bare box' }),
+        mrow({ id: 'here', name: 'This Mac', transport: 'local' }),
+      ],
+    })
+    await mount()
+    await openSheet('codex')
+    const where = field('gui.machine.where') as HTMLSelectElement
+    expect([...where.options].map((o) => [o.value, o.disabled, o.textContent])).toEqual([
+      ['', false, 'gui.machine.where_here'],
+      ['box', false, 'Lab box (box)'],
+      ['old', true, 'Old box (old) - gui.machine.needs_update'],
+      ['bare', true, 'Bare box (bare) - gui.machine.needs_node'],
+    ])
+    expect(field('gui.machine.remote_cwd')).toBeNull()
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(where, 'box')
+      where.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await typeInto(field('gui.machine.remote_cwd'), '~/work')
+    await click(buttonOf('codex'))
+    expect(acts).toEqual([['connect', 'codex', { machine: 'box', remote_cwd: '~/work' }]])
+  })
+
+  it('says a preset runs here when no machine is registered, and draws no directory for an endpoint', async () => {
+    install([row({ name: 'mirothinker', preset: 'mirothinker', kind: 'openai', configured: false, enabled: false, probe_status: 'ready', has_api_key: true })])
+    await mount()
+    await openSheet('mirothinker')
+    const where = field('gui.machine.where') as HTMLSelectElement
+    expect([...where.options].map((o) => o.value)).toEqual([''])
+    expect([...sheet()!.querySelectorAll('.extAgents-about')].map((n) => n.textContent)).toContain('gui.machine.where_none')
   })
 })

@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 240 methods, 136 component schemas.
+// 245 methods, 137 component schemas.
 
 /* eslint-disable */
 /**
@@ -2562,6 +2562,44 @@ export interface BugReportDecision {
   item_id: string;
   action: 'kept' | 'redacted';
 }
+export interface MachineRow {
+  id: string;
+  name: string;
+  transport: 'ssh' | 'local';
+  /**
+   * The link from this computer, as the roster shows it: connected (agents running), idle (a link, no agent), lost (the link is down, agents wait), off (no link), error.
+   */
+  state: 'connected' | 'idle' | 'lost' | 'off' | 'error';
+  /**
+   * One sentence for lost and error; empty otherwise. Never an address.
+   */
+  detail: string;
+  agents: number;
+  /**
+   * The node's Raven version: live while a link is up, else as recorded at its last install or contact from this computer. Absent when none is known.
+   */
+  node_version?: string;
+  /**
+   * Whether the node named by node_version is this Raven's own code, which a dispatch there needs; false when none is known.
+   */
+  node_current: boolean;
+  /**
+   * The last node install asked for from this page: in flight, or how it ended.
+   */
+  install: {
+    running: boolean;
+    /**
+     * How the last install asked for from this page ended; absent while it runs or when none was asked for.
+     */
+    ok?: boolean;
+    detail: string;
+  };
+  paths: string[];
+  /**
+   * What the registry's doctor says about this row, one sentence each; empty when nothing.
+   */
+  problems: string[];
+}
 export interface SessionListParams {
   /**
    * Max sessions to return.
@@ -3279,6 +3317,74 @@ export interface SubagentsInstanceSetModelResult {
      */
     group?: string;
   }[];
+}
+export interface MachinesListParams {
+  refresh?: boolean;
+  id?: string;
+}
+export interface MachinesListResult {
+  rows: MachineRow[];
+}
+export interface MachinesAddParams {
+  id: string;
+  name: string;
+  host: string;
+  port?: number;
+  user: string;
+  key: string;
+  paths?: string[];
+}
+export interface MachinesAddResult {
+  ok: boolean;
+  /**
+   * What the probe found, or why the row was not written. Never an address.
+   */
+  detail: string;
+  /**
+   * Why the row was not written, as a kind the page can explain: the machine could not be reached, refused the login, presented a changed host key, did not answer in time, ssh is missing here, the id is taken, the fields are not usable, or the registry file cannot be changed. Empty when it was written.
+   */
+  reason:
+    | ''
+    | 'unreachable'
+    | 'login'
+    | 'hostkey'
+    | 'timeout'
+    | 'nossh'
+    | 'duplicate'
+    | 'invalid'
+    | 'registry';
+  row?: MachineRow;
+}
+export interface MachinesInstallNodeParams {
+  id: string;
+  node_dir?: string;
+}
+export interface MachinesInstallNodeResult {
+  started: boolean;
+  detail: string;
+}
+export interface MachinesDoctorParams {}
+export interface MachinesDoctorResult {
+  problems: {
+    id: string;
+    blocking: boolean;
+    detail: string;
+  }[];
+}
+export interface MachinesRemoveParams {
+  id: string;
+  force?: boolean;
+}
+export interface MachinesRemoveResult {
+  removed: boolean;
+  /**
+   * What was removed, or why nothing was. Never an address.
+   */
+  detail: string;
+  /**
+   * The agent entries that name the machine: the connected ones to disconnect first when the removal was refused over them; after a removal, the ones left pointing at nothing.
+   */
+  agents: string[];
 }
 export interface SessionSetHarnessParams {
   session_key: string;
@@ -6133,6 +6239,11 @@ export interface RpcMethods {
   'subagents.instance.steer': { params: SubagentsInstanceSteerParams; result: SubagentsInstanceSteerResult };
   'subagents.instance.set_mode': { params: SubagentsInstanceSetModeParams; result: SubagentsInstanceSetModeResult };
   'subagents.instance.set_model': { params: SubagentsInstanceSetModelParams; result: SubagentsInstanceSetModelResult };
+  'machines.list': { params: MachinesListParams; result: MachinesListResult };
+  'machines.add': { params: MachinesAddParams; result: MachinesAddResult };
+  'machines.install_node': { params: MachinesInstallNodeParams; result: MachinesInstallNodeResult };
+  'machines.doctor': { params: MachinesDoctorParams; result: MachinesDoctorResult };
+  'machines.remove': { params: MachinesRemoveParams; result: MachinesRemoveResult };
   'session.set_harness': { params: SessionSetHarnessParams; result: SessionSetHarnessResult };
   'session.set_mode': { params: SessionSetModeParams; result: SessionSetModeResult };
   'session.set_knowledge': { params: SessionSetKnowledgeParams; result: SessionSetKnowledgeResult };
@@ -6416,6 +6527,11 @@ export const RPC_METHODS = [
   "knowledge.folders.rename",
   "knowledge.search",
   "knowledge.status",
+  "machines.add",
+  "machines.doctor",
+  "machines.install_node",
+  "machines.list",
+  "machines.remove",
   "mcp.list",
   "mcp.test",
   "mcp.tools",

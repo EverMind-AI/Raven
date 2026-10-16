@@ -6,6 +6,18 @@ All notable changes to Raven are documented here.
 
 ### Added
 
+- The Agent Hub has a **Machines** tab: the registered machines with the state
+  of each one's link and Raven node, a form that registers one (it reaches the
+  machine first, like `raven ops connection add`, and explains a refusal by
+  its kind), **Install node** / **Update node** run in the background with the
+  card reporting the end, and **Remove machine**. A preset's sheet picks where
+  it runs (*Runs on*) among the machines with this Raven's node, with the
+  working directory there. `raven ops connection remove <id>` is the command
+  behind the removal, and `install-node` now records the node it put on the
+  machine (`node_install` on the row), which is how the tab says a machine has
+  the node before any link is up. New RPC group
+  `machines.{list,add,install_node,doctor,remove}`.
+
 - The bug report review remembers your redaction decisions. Every keep or
   replace answer is stored in `redaction_history.json` under the Raven home
   (hashes and masked samples only), and the next `report-bug` or browser

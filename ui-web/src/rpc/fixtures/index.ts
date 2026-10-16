@@ -33,6 +33,7 @@ import { createFs } from './fs'
 import { createImport } from './import'
 import { createImported } from './imported'
 import { createKnowledge } from './knowledge'
+import { createMachines } from './machines'
 import { createMemory } from './memory'
 import { createModel } from './model'
 import { createPlughub } from './plughub'
@@ -76,6 +77,7 @@ export function demoFixtures(env: FixtureEnv): Fixtures {
     ...createSkillhub(env, ext).fixtures,
     ...createPlughub(env, ext).fixtures,
     ...createSubagents(env).fixtures,
+    ...createMachines(env).fixtures,
     ...createTasks(env).fixtures,
     ...createMemory(env).fixtures,
     ...createFs(env).fixtures,

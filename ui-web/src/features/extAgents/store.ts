@@ -84,6 +84,14 @@ export interface ExtAgentsState {
      say "still not found" rather than nothing. Cleared when the row leaves
      the missing section. */
   stillMissing: string[]
+  /* The machine card open in the shared drawer -- a registry id, or `new` for
+     the register form -- and the agent sheet's twin: at most one of the two
+     is set. */
+  msheet: string | null
+  /* Where the reader wants a preset to run, picked in its sheet before the
+     connect: a machine id (empty for this computer) and, for an acp or cli
+     row, the working directory there. Held like `drafts`, until the add. */
+  wheres: Record<string, { machine: string; remote_cwd: string }>
 }
 
 const store = makeStore<ExtAgentsState>({
@@ -96,6 +104,8 @@ const store = makeStore<ExtAgentsState>({
   failed: {},
   drafts: {},
   stillMissing: [],
+  msheet: null,
+  wheres: {},
 })
 
 export const { get, subscribe, _resetForTests } = store
@@ -259,7 +269,7 @@ export function connectRow(row: ExtAgentRow): void {
   const stage = stageOf(row)
   if (stage === 'add') {
     const description = get().drafts[row.name]
-    void act(row, 'connect', description ? { description } : {})
+    void act(row, 'connect', { ...(description ? { description } : {}), ...whereArgs(row.name) })
   } else if (stage === 'stale') void act(row, 'migrate')
   else void act(row, 'toggle', { enabled: true })
 }
@@ -282,10 +292,25 @@ export async function saveKey(row: ExtAgentRow, api_key: string): Promise<void> 
   if (!api_key) return
   if (!row.configured) {
     const description = get().drafts[row.name]
-    return act(row, 'connect', description ? { api_key, description } : { api_key })
+    return act(row, 'connect', { api_key, ...(description ? { description } : {}), ...whereArgs(row.name) })
   }
   await act(row, 'update', { api_key })
   if (!row.enabled && !get().failed[row.name]) await act(row, 'toggle', { enabled: true })
+}
+
+/* Where a preset will run, as the reader picked it in the sheet: travels with
+   the connect, like `drafts`. Nothing is written for this computer. */
+export const whereOf = (name: string): { machine: string; remote_cwd: string } =>
+  get().wheres[name] || { machine: '', remote_cwd: '' }
+
+export function setWhere(name: string, machine: string, remote_cwd: string): void {
+  set({ wheres: { ...get().wheres, [name]: { machine, remote_cwd } } })
+}
+
+const whereArgs = (name: string): ExtAgentActArgs => {
+  const where = get().wheres[name]
+  if (!where || !where.machine) return {}
+  return where.remote_cwd ? { machine: where.machine, remote_cwd: where.remote_cwd } : { machine: where.machine }
 }
 
 /* What this agent is good at, as the reader words it. A row that exists takes
@@ -404,7 +429,13 @@ export function detailHost(): HTMLDivElement {
 
 export function sheetOpen(row: ExtAgentRow): void {
   detail.open('extAgents')
-  set({ sheet: row.name, epoch: get().epoch + 1 })
+  set({ sheet: row.name, msheet: null, epoch: get().epoch + 1 })
+}
+
+/** The drawer on a machine card (its registry id), or on the register form (`new`). */
+export function machineSheetOpen(id: string): void {
+  detail.open('extAgents')
+  set({ msheet: id, sheet: null, epoch: get().epoch + 1 })
 }
 
 export function closeSheet(): void {
@@ -416,7 +447,7 @@ export function closeSheet(): void {
    the drawer has finished fading, or the card is gone from inside a panel that
    is still on screen. */
 export function sheetDismissed(): void {
-  if (!get().sheet) return
+  if (!get().sheet && !get().msheet) return
   /* Which open this close belongs to. The name cannot answer that: closing a
      card and pressing the same row again inside the fade writes the same string
      back, so the pending drop read it as "still mine" and cleared the card that
@@ -424,7 +455,7 @@ export function sheetDismissed(): void {
      which would read as a reopen and leave the closed card up. */
   const gen = detail.get().gen
   detail.dropAfterFade(
-    () => set({ sheet: null }),
+    () => set({ sheet: null, msheet: null }),
     () => detail.get().gen !== gen,
   )
 }

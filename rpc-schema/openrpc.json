@@ -2999,6 +2999,279 @@
       ]
     },
     {
+      "name": "machines.list",
+      "summary": "Every registered machine with the state of its link and node, as the Agent Hub's machines tab shows them.",
+      "params": [
+        {
+          "name": "refresh",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          },
+          "description": "Reach the machines first: bring each one's link up and ask its node for its version, recording it. Default false reads the live state only."
+        },
+        {
+          "name": "id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          },
+          "description": "With refresh, reach only this machine."
+        }
+      ],
+      "result": {
+        "name": "MachinesListResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "rows"
+          ],
+          "properties": {
+            "rows": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/MachineRow"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "machines.add",
+      "summary": "Register an ssh machine: reach it once with the given login, then write the row and its ssh alias.",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "host",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "port",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "user",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "Path to the private key on this computer; the path is stored, never the key."
+        },
+        {
+          "name": "paths",
+          "required": false,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "description": "Directories on the machine that hold the owner's work; reads under them ask no question."
+        }
+      ],
+      "result": {
+        "name": "MachinesAddResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok",
+            "detail",
+            "reason"
+          ],
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "detail": {
+              "type": "string",
+              "description": "What the probe found, or why the row was not written. Never an address."
+            },
+            "reason": {
+              "type": "string",
+              "enum": [
+                "",
+                "unreachable",
+                "login",
+                "hostkey",
+                "timeout",
+                "nossh",
+                "duplicate",
+                "invalid",
+                "registry"
+              ],
+              "description": "Why the row was not written, as a kind the page can explain: the machine could not be reached, refused the login, presented a changed host key, did not answer in time, ssh is missing here, the id is taken, the fields are not usable, or the registry file cannot be changed. Empty when it was written."
+            },
+            "row": {
+              "$ref": "#/components/schemas/MachineRow"
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ]
+    },
+    {
+      "name": "machines.install_node",
+      "summary": "Put this Raven's node on a registered machine, in the background; machines.list reports the progress and the end.",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "node_dir",
+          "required": false,
+          "schema": {
+            "type": "string"
+          },
+          "description": "Where on the machine to keep Raven nodes; the registry's node_dir, else ~/.raven-node."
+        }
+      ],
+      "result": {
+        "name": "MachinesInstallNodeResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "started",
+            "detail"
+          ],
+          "properties": {
+            "started": {
+              "type": "boolean"
+            },
+            "detail": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "machines.doctor",
+      "summary": "What the registry's doctor says about every row: blocking problems and notes, one sentence each.",
+      "params": [],
+      "result": {
+        "name": "MachinesDoctorResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "problems"
+          ],
+          "properties": {
+            "problems": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "blocking",
+                  "detail"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "blocking": {
+                    "type": "boolean"
+                  },
+                  "detail": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "machines.remove",
+      "summary": "Take a machine out of the registry: its row and its ssh alias go, the link from this computer is closed, and the node installed on it stays there.",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "force",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          },
+          "description": "Remove although connected agent entries name the machine or agents run on it now; those entries then fail at dispatch until they are disconnected or the machine is registered again."
+        }
+      ],
+      "result": {
+        "name": "MachinesRemoveResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "removed",
+            "detail",
+            "agents"
+          ],
+          "properties": {
+            "removed": {
+              "type": "boolean"
+            },
+            "detail": {
+              "type": "string",
+              "description": "What was removed, or why nothing was. Never an address."
+            },
+            "agents": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "The agent entries that name the machine: the connected ones to disconnect first when the removal was refused over them; after a removal, the ones left pointing at nothing."
+            }
+          }
+        }
+      }
+    },
+    {
       "name": "session.set_harness",
       "summary": "Report, bind or unbind the Harness this session runs as. Omitting the harness key reports; a name binds a frozen snapshot of that stored Harness; null unbinds. A window keeps the Harness it was bound to even after the library entry is edited or removed.",
       "params": [
@@ -17825,6 +18098,97 @@
               "kept",
               "redacted"
             ]
+          }
+        }
+      },
+      "MachineRow": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "transport",
+          "state",
+          "detail",
+          "agents",
+          "node_current",
+          "install",
+          "paths",
+          "problems"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "transport": {
+            "type": "string",
+            "enum": [
+              "ssh",
+              "local"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "connected",
+              "idle",
+              "lost",
+              "off",
+              "error"
+            ],
+            "description": "The link from this computer, as the roster shows it: connected (agents running), idle (a link, no agent), lost (the link is down, agents wait), off (no link), error."
+          },
+          "detail": {
+            "type": "string",
+            "description": "One sentence for lost and error; empty otherwise. Never an address."
+          },
+          "agents": {
+            "type": "integer"
+          },
+          "node_version": {
+            "type": "string",
+            "description": "The node's Raven version: live while a link is up, else as recorded at its last install or contact from this computer. Absent when none is known."
+          },
+          "node_current": {
+            "type": "boolean",
+            "description": "Whether the node named by node_version is this Raven's own code, which a dispatch there needs; false when none is known."
+          },
+          "install": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "running",
+              "detail"
+            ],
+            "properties": {
+              "running": {
+                "type": "boolean"
+              },
+              "ok": {
+                "type": "boolean",
+                "description": "How the last install asked for from this page ended; absent while it runs or when none was asked for."
+              },
+              "detail": {
+                "type": "string"
+              }
+            },
+            "description": "The last node install asked for from this page: in flight, or how it ended."
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "problems": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What the registry's doctor says about this row, one sentence each; empty when nothing."
           }
         }
       }

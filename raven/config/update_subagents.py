@@ -329,3 +329,22 @@ __all__ = [
     "set_agents",
     "validate_agents",
 ]
+
+
+def agents_on_machine(machine_id: str, *, only_enabled: bool = False, config_path: Path | None = None) -> list[str]:
+    """The names of the configured agents whose entry names ``machine_id``.
+
+    What taking the machine out of the registry is refused over: a connected
+    (enabled) entry that names a machine no longer registered fails at its
+    next dispatch, after the spawn has answered that it started. A
+    disconnected one dispatches nothing, so ``only_enabled`` leaves it out;
+    the caller still names it, since connecting it again is refused until the
+    machine is registered under that id again. Raises ``ValidationError`` on
+    a malformed section, like :func:`get_agents`.
+    """
+    wanted = str(machine_id or "").strip()
+    return [
+        str(entry.get("name") or "")
+        for entry in get_agents(config_path=config_path)
+        if str(entry.get("machine") or "").strip() == wanted and (entry.get("enabled", True) or not only_enabled)
+    ]

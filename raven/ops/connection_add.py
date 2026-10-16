@@ -222,6 +222,13 @@ def set_fields(conn_id: str, fields: dict[str, Any]) -> Path:
     return path
 
 
+#: The registry field that remembers which Raven node this computer last put on,
+#: or found on, the machine: its install name, ``<version>-<digest>``. Written by
+#: ``install-node`` and by the Agent Hub's list when a link comes up, read by
+#: the listing to say whether the machine has this Raven's node without
+#: reaching it.
+NODE_FIELD = "node_install"
+
 ALIAS_MARK = "# raven connection {conn_id} (managed; rewritten on every add)"
 
 
@@ -268,3 +275,53 @@ def write_ssh_alias(row: dict[str, Any]) -> str | None:
     path.write_text(text, encoding="utf-8")
     path.chmod(0o600)
     return conn_id
+
+
+def remove(conn_id: str) -> Path:
+    """Take every row listed as ``conn_id`` out, keeping every other row as it was.
+
+    The write half of ``raven ops connection remove`` and ``machines.remove``.
+    Refuses on the grounds :func:`write` refuses on -- a file that cannot be
+    read, or one holding entries the reader skips -- and when the id is not
+    listed: a removal that finds nothing is a wrong id, and the caller should
+    hear that rather than see it succeed. Two rows under one id are both this
+    machine's (the doctor names the pair as one defect), so both go.
+    """
+    path = connections.store_path()
+    found = connections.read()
+    if found.state == UNREADABLE:
+        raise ValueError(f"{found.detail}\nFix or move that file before changing it.")
+    if found.detail:
+        raise ValueError(
+            f"{found.detail}\nRemoving a machine here would rewrite the file without them. "
+            "Give those entries an id (or remove them) first."
+        )
+    wanted = str(conn_id or "").strip()
+    kept = [r for r in found.rows if str(r.get("id") or "").strip() != wanted]
+    if len(kept) == len(found.rows):
+        raise ValueError(f"machine {wanted!r} is not listed in {path}")
+    path.write_text(json.dumps({"connections": kept}, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return path
+
+
+def remove_ssh_alias(conn_id: str) -> bool:
+    """Drop the managed ``Host <id>`` block from ``~/.ssh/config``; whether one was there.
+
+    Only the block between this module's own marks goes (:data:`ALIAS_MARK`);
+    everything else in the file is the owner's and is left as it was, as
+    :func:`write_ssh_alias` leaves it. A missing file, or one without the
+    block, is nothing to do. An ``OSError`` is the caller's to report as a
+    warning: the alias is a convenience beside the registry, not part of it.
+    """
+    mark = ALIAS_MARK.format(conn_id=str(conn_id or "").strip())
+    path = Path(os.path.expanduser("~/.ssh/config"))
+    if not path.exists():
+        return False
+    text = path.read_text(encoding="utf-8")
+    if mark not in text:
+        return False
+    head, _, rest = text.partition(mark)
+    _, _, tail = rest.partition(mark)
+    parts = [part for part in (head.rstrip("\n"), tail.lstrip("\n").rstrip("\n")) if part.strip()]
+    path.write_text("\n\n".join(parts) + "\n" if parts else "", encoding="utf-8")
+    return True

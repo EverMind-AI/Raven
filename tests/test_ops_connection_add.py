@@ -422,3 +422,53 @@ def test_set_fields_refuses_rather_than_guess_or_lose_rows(_home, rows, said):
         adder.set_fields("a", {"node_dir": "/x"})
 
     assert path.read_text(encoding="utf-8") == before
+
+
+# --- remove: the write half of `raven ops connection remove` and `machines.remove` ---
+
+
+def test_remove_takes_every_row_under_the_id_out_and_keeps_the_rest_as_written(_home):
+    path = connections.store_path()
+    rows = [{"id": "a", "host": "1", "note": "mine"}, {"id": "b", "host": "2"}, {"id": "a", "host": "3"}]
+    path.write_text(json.dumps({"connections": rows}, indent=2) + "\n", encoding="utf-8")
+
+    assert adder.remove("a") == path
+
+    assert json.loads(path.read_text(encoding="utf-8"))["connections"] == [{"id": "b", "host": "2"}]
+
+
+def test_remove_refuses_an_id_that_is_not_listed_a_file_it_cannot_read_and_entries_it_would_lose(_home):
+    path = connections.store_path()
+    with pytest.raises(ValueError, match="is not listed"):
+        adder.remove("a")
+    path.write_text(json.dumps({"connections": [{"id": "a"}, {"host": "no id"}]}), encoding="utf-8")
+    with pytest.raises(ValueError, match="had no id"):
+        adder.remove("a")
+    assert len(json.loads(path.read_text(encoding="utf-8"))["connections"]) == 2
+    path.write_text("{nope", encoding="utf-8")
+    with pytest.raises(ValueError, match="not valid JSON"):
+        adder.remove("a")
+
+
+def test_remove_ssh_alias_takes_only_the_managed_block_out(_home):
+    cfg = _home / ".ssh" / "config"
+    cfg.parent.mkdir(mode=0o700)
+    owners = "Host mine\n  HostName 10.0.0.1\n"
+    cfg.write_text(owners, encoding="utf-8")
+    adder.write_ssh_alias({"id": "a", "host": "h", "port": 22, "user": "u", "key": "/k"})
+    adder.write_ssh_alias({"id": "b", "host": "h2", "port": 22, "user": "u", "key": "/k"})
+    mark_b = adder.ALIAS_MARK.format(conn_id="b")
+
+    assert adder.remove_ssh_alias("a") is True
+
+    block_b = "\n".join([mark_b, "Host b", "  HostName h2", "  Port 22", "  User u", "  IdentityFile /k", mark_b])
+    assert cfg.read_text(encoding="utf-8") == owners + "\n" + block_b + "\n"
+    assert adder.remove_ssh_alias("a") is False, "a block that is gone is nothing to do"
+    assert adder.remove_ssh_alias("b") is True
+    assert cfg.read_text(encoding="utf-8") == owners
+    adder.write_ssh_alias({"id": "a", "host": "h", "port": 22, "user": "u", "key": "/k"})
+    cfg.write_text(cfg.read_text(encoding="utf-8").removeprefix(owners).lstrip("\n"), encoding="utf-8")
+    assert adder.remove_ssh_alias("a") is True
+    assert cfg.read_text(encoding="utf-8") == "", "a file that held only the block is left empty, not deleted"
+    cfg.unlink()
+    assert adder.remove_ssh_alias("a") is False, "no file is nothing to do"

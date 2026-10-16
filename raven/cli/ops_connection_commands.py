@@ -37,8 +37,10 @@ from rich.table import Table
 # serve the ``ops_connection_add`` tool. Bound here by name so this module's
 # ``add`` reads them as its own globals -- which is also what a test that
 # stands in a reachable machine patches.
+from raven.ops.connection_add import NODE_FIELD, probe
 from raven.ops.connection_add import parse_probe as _parse_probe  # noqa: F401 -- re-export, the tests read it here
-from raven.ops.connection_add import probe
+from raven.ops.connection_add import remove as _remove
+from raven.ops.connection_add import remove_ssh_alias as _remove_ssh_alias
 from raven.ops.connection_add import write as _write
 from raven.ops.connection_add import write_ssh_alias as _write_ssh_alias
 
@@ -244,6 +246,82 @@ def doctor(as_json: bool = typer.Option(False, "--json")) -> None:
     raise typer.Exit(0 if fit else 1)
 
 
+@connection_app.command("remove")
+def remove_connection(
+    conn_id: str = typer.Argument(..., help="The machine's id in the registry."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Remove without asking first."),
+    force: bool = typer.Option(False, "--force", help="Remove although agent entries still name the machine."),
+) -> None:
+    """Take a machine out of the registry. Its ssh alias goes with it; the node installed on it stays there.
+
+    Refused while a connected agent entry names the machine: such an entry
+    fails at its next dispatch, after the spawn has answered that it started,
+    so the entry is disconnected first (the Agent Hub, or the config's
+    ``subagents.agents`` section) -- or ``--force`` removes the machine anyway
+    and says which entries are left pointing at nothing. A disconnected entry
+    does not refuse the removal; it is named, since connecting it again is
+    refused until the machine is registered again. What the install put on the machine is not touched:
+    this computer stops knowing the way there, and ``<node_dir>`` on the
+    machine is the owner's to remove by hand.
+    """
+    from pydantic import ValidationError
+
+    from raven.config.update_subagents import agents_on_machine
+    from raven.ops.connections import read, store_path
+
+    wanted = conn_id.strip()
+    found = read()
+    if found.state == "unreadable":
+        console.print(f"[red]{found.detail}[/red]")
+        raise typer.Exit(1)
+    rows = [r for r in found.rows if str(r.get("id") or "").strip() == wanted]
+    if not rows:
+        console.print(f"[red]machine {wanted!r} is not registered in {store_path()}[/red]")
+        raise typer.Exit(1)
+    name = str(rows[0].get("display_name") or wanted)
+    label = f"{name!r} ({wanted})" if name != wanted else repr(wanted)
+    try:
+        named = agents_on_machine(wanted, only_enabled=True)
+        left = [name for name in agents_on_machine(wanted) if name not in named]
+    except ValidationError:
+        named, left = [], []
+    if named and not force:
+        console.print(
+            f"[red]{len(named)} connected agent entr{'y names' if len(named) == 1 else 'ies name'} machine {label}: "
+            f"{', '.join(named)}.[/red]"
+        )
+        console.print("Disconnect them first, or pass --force to remove the machine anyway. Nothing was changed.")
+        raise typer.Exit(1)
+    if not yes and not typer.confirm(f"Remove machine {label} from the registry?", default=False):
+        raise typer.Exit(1)
+    try:
+        path = _remove(wanted)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        console.print("[red]Nothing was changed.[/red]")
+        raise typer.Exit(1) from None
+    console.print(f"[green]removed {wanted} from {path}[/green]")
+    try:
+        if _remove_ssh_alias(wanted):
+            console.print(f"[green]ssh alias '{wanted}' removed from ~/.ssh/config[/green]")
+    except OSError as exc:
+        console.print(f"[yellow]ssh alias not removed ({exc}); take the 'Host {wanted}' block out by hand[/yellow]")
+    console.print(
+        "The Raven node installed on it, if any, stays there: remove its node directory on the machine by hand."
+    )
+    if named:
+        console.print(
+            f"[yellow]{', '.join(named)} still name{'s' if len(named) == 1 else ''} this machine and "
+            "fail at dispatch until disconnected, or until it is registered again under this id.[/yellow]"
+        )
+    if left:
+        console.print(
+            f"[yellow]The disconnected entr{'y' if len(left) == 1 else 'ies'} {', '.join(left)} still "
+            f"name{'s' if len(left) == 1 else ''} this machine and cannot be connected until it is registered again "
+            "under this id.[/yellow]"
+        )
+
+
 @connection_app.command("install-node")
 def install_node(
     conn_id: str = typer.Argument(..., help="The machine's id in the registry."),
@@ -300,15 +378,26 @@ def install_node(
             console.print(f"[red]{exc}[/red]")
             raise typer.Exit(1) from None
         console.print(f"Removed {len(removed)} other node(s) from {plan.node_dir}: {', '.join(removed) or 'none'}.")
-    if chosen and chosen != str(plan.target.field("node_dir") or "").strip().rstrip("/"):
-        from raven.ops.connection_add import set_fields
+    from raven.ops.connection_add import set_fields
 
+    if chosen and chosen != str(plan.target.field("node_dir") or "").strip().rstrip("/"):
         try:
             set_fields(conn_id, {"node_dir": chosen})
         except ValueError as exc:
             console.print(f"[red]The node is installed, but {chosen} could not be recorded: {exc}[/red]")
             raise typer.Exit(1) from None
         console.print(f"Recorded {chosen} as where machine {plan.target.label} keeps its Raven nodes.")
+    # The node's install name goes on the row too: how a listing says the
+    # machine has this Raven's node without reaching it. A row it cannot go on
+    # costs the listing that knowledge, not the install, so it is a warning.
+    if plan.install_name != str(plan.target.field(NODE_FIELD) or ""):
+        try:
+            set_fields(conn_id, {NODE_FIELD: plan.install_name})
+        except ValueError as exc:
+            console.print(
+                f"[yellow]The node is installed, but could not be noted on the machine's row ({exc}); "
+                "the Agent Hub lists the machine without a node until a link to it comes up.[/yellow]"
+            )
 
     async def answer() -> dict:
         pool = NodePool()

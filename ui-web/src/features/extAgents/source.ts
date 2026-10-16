@@ -18,7 +18,7 @@ import { gateway } from '../../rpc/gateway'
 import { isOwnRow } from './catalogue'
 
 import type { ResultOf } from '../../rpc/generated'
-import type { ExtAgentActArgs, ExtAgentOp, ExtAgentRow, ExtAgentsSource, Remedy } from './types'
+import type { ExtAgentActArgs, ExtAgentOp, ExtAgentRow, ExtAgentsSource, MachineRow, MachinesSource, Remedy } from './types'
 
 /** One agent as `subagents.list` sends it. */
 export type ExtAgentRowWire = ResultOf<'subagents.list'>['rows'][number]
@@ -247,6 +247,8 @@ export const extAgentsSource: ExtAgentsSource = {
         name: a.new_name || undefined,
         description: a.description || undefined,
         api_key: a.api_key || undefined,
+        machine: a.machine || undefined,
+        remote_cwd: a.machine && a.remote_cwd ? a.remote_cwd : undefined,
       })
     } else if (op === 'update') {
       await gateway().call('subagents.update', {
@@ -353,4 +355,60 @@ export function remedyOf(raw: unknown): Remedy | null {
     ...(needs ? { needs } : {}),
     ...(found ? { found } : {}),
   }
+}
+
+/* -- machines: the rpc source ------------------------------------------------
+   `machines.*` is the machine registry behind a page: the same rows `raven ops
+   connection` keeps, with the state of each one's link and node, and none of
+   the way onto it. Mapped through a whitelist like the agent rows above, so a
+   field the contract grows is a field the island does not see until it asks. */
+
+/** One machine as `machines.list` sends it. */
+export type MachineRowWire = ResultOf<'machines.list'>['rows'][number]
+
+export function machineRowOf(r: MachineRowWire): MachineRow {
+  return {
+    id: r.id,
+    name: r.name || r.id,
+    transport: r.transport === 'local' ? 'local' : 'ssh',
+    state: r.state,
+    detail: r.detail || '',
+    agents: r.agents || 0,
+    node_version: r.node_version || '',
+    node_current: !!r.node_current,
+    install: { running: !!r.install?.running, ok: r.install?.ok ?? null, detail: r.install?.detail || '' },
+    paths: Array.isArray(r.paths) ? r.paths.map(String) : [],
+    problems: Array.isArray(r.problems) ? r.problems.map(String) : [],
+  }
+}
+
+export const machinesSource: MachinesSource = {
+  list: async (refresh, id) => {
+    const got = await gateway().call('machines.list', refresh ? { refresh: true, ...(id ? { id } : {}) } : {})
+    return got.rows.map(machineRowOf)
+  },
+  add: async (form) => {
+    const got = await gateway().call('machines.add', {
+      id: form.id,
+      name: form.name,
+      host: form.host,
+      port: form.port || undefined,
+      user: form.user,
+      key: form.key,
+      paths: form.paths.length ? form.paths : undefined,
+    })
+    return { ok: !!got.ok, detail: got.detail || '', reason: got.reason }
+  },
+  installNode: async (id, nodeDir) => {
+    const got = await gateway().call('machines.install_node', nodeDir ? { id, node_dir: nodeDir } : { id })
+    return { started: !!got.started, detail: got.detail || '' }
+  },
+  doctor: async () => {
+    const got = await gateway().call('machines.doctor', {})
+    return got.problems.map((p) => ({ id: p.id || '', blocking: !!p.blocking, detail: p.detail || '' }))
+  },
+  remove: async (id) => {
+    const got = await gateway().call('machines.remove', { id })
+    return { removed: !!got.removed, detail: got.detail || '', agents: Array.isArray(got.agents) ? got.agents.map(String) : [] }
+  },
 }

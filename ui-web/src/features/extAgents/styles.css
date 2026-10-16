@@ -406,3 +406,30 @@
 
 /* The wizard's agents step opens on what connecting buys, in the page's words. */
 .extAgents-lede { margin: 0 0 18px; color: var(--muted); font-size: 13.5px; line-height: 1.55; }
+
+/* ── the machines tab ───────────────────────────────────────────────────────
+   A machine card is an agent card with a glyph for a mark: the same frame,
+   name, dot and corner control, so the grid reads as one. The register card
+   is the one dashed card at the end of the grid. The register form's inputs
+   and the where-select share the framed look of the sheet's other fields. */
+.extAgents-mtile { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 32px; height: 32px; border-radius: 9px; background: var(--raised); color: var(--muted); }
+.extAgents-mtile svg { width: 18px; height: 18px; }
+.extAgents-head .extAgents-mtile { width: 46px; height: 46px; border-radius: 12px; }
+.extAgents-head .extAgents-mtile svg { width: 24px; height: 24px; }
+.extAgents-card-new { flex-direction: row; align-items: center; justify-content: center; gap: 10px; border-style: dashed; background: transparent; color: var(--muted); font: inherit; }
+.extAgents-card-new:hover { color: var(--text); }
+.extAgents-card-new .extAgents-t { font-size: 14px; font-weight: 600; }
+.extAgents-mtile-new { background: transparent; border: 1px dashed var(--line); }
+.extAgents-ctl .extAgents-ctag { display: inline-flex; align-items: center; gap: 5px; }
+.extAgents-fld > .extAgents-in {
+  width: 100%; height: var(--ctl-h); padding: 0 10px; box-sizing: border-box; outline: 0;
+  background: var(--paper); border: 1px solid var(--line); border-radius: var(--ctl-r);
+  font: inherit; font-size: 13px; color: var(--text);
+  transition: border-color .12s ease, box-shadow .12s ease;
+}
+.extAgents-fld > .extAgents-in-mono { font-family: var(--mono); font-size: 12.5px; }
+.extAgents-fld > .extAgents-in:hover { border-color: color-mix(in oklab, var(--line) 50%, var(--muted)); }
+.extAgents-fld > .extAgents-in:focus { border-color: var(--amber); box-shadow: var(--ctl-focus); }
+.extAgents-fld > .extAgents-about { margin-top: 6px; }
+.extAgents-body > .extAgents-about + .extAgents-fld { margin-top: 16px; }
+.extAgents-tabs .extAgents-tabs-end { margin-left: auto; align-self: center; }

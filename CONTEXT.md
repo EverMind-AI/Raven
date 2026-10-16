@@ -405,14 +405,22 @@ of it. The entry names only the machine's id, and the entry's `env` reaches the
 agent on the link, never on a command line. Such an entry is added the way any
 preset is, with `machine` (and
 `remote_cwd`, for an `acp` or `cli` one) on `subagents.add` — from a chat through
-`raven_config`, which lists the usable registered machines; the page's
-add passes no machine yet — refused before anything is spent when
+`raven_config`, which lists the usable registered machines, or from the Agent
+Hub, whose preset sheet picks the machine (*Runs on*) among those with this
+Raven's node — refused before anything is spent when
 the id is not usable or the preset is a built-in agent, and proved by the same
 readiness ping as a local add, run on that machine.
 Registered-machine dispatch, file access and recovery are available without an
 environment switch. An entry without `machine` still runs here. Registration,
 SSH authentication, file permissions and concurrency limits govern remote work;
 listing entries and boot capability backfills do not open machine connections.
+The registry itself is kept from the Agent Hub's **Machines** tab as well
+(`machines.*`, `raven/rpc/methods/machines.py`): list, register (the same probe
+as the command), install the node in the background, doctor, and remove
+(`raven ops connection remove`, refused while a connected agent entry names the machine);
+none of it hands the page an address, an account or a key path, and
+`node_install` on a row is the node the last install or contact found there,
+which is how a listing says a machine has this Raven's node without reaching it.
 _Avoid_: "host" / "server" / "node" (too broad, no link to the
 `ops connection` registry that supplies the rows); "GPU box" (only some are
 GPU hosts, and the term covers any registered compute destination);

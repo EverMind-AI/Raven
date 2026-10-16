@@ -149,6 +149,9 @@ function optionals(schema, value, path, declared, sent) {
    found are carried only by a Node.js agent that quit on an old Node.js; the
    one Qwen Code row here shows its two-step fix instead. */
 const UNSENT = new Set([
+  // machines.add: 1 -- a register the offline library refuses (every id it is
+  // asked for with no fields is one) writes no row, and the row is the write's.
+  'machines.add.row',
   // credential.submit: 1 -- the offline card always saves, and an error is the refusal's alone
   'credential.submit.error',
   // browser.close: 7

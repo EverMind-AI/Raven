@@ -11,6 +11,8 @@ import { defaultProviders as hostProviders, loadDefaultProviders } from '../mode
 import { offered, withCurrent } from '../model/types'
 import { byOf, installOf, isOwnRow } from './catalogue'
 import { badOf, healthOf, kindOf, ledClass, pendingLabel, refusedWrite, shownOf } from './health'
+import { MachineSheet, MachinesGrid, RegisterSheet, WhereField } from './MachineCards'
+import * as machines from './machines'
 import { CardGrid, Spin, Tile, WaitGrid, ago, connect, ordered, refusedLabel } from './Rows'
 import { sectionOf, stageOf } from './source'
 import * as store from './store'
@@ -562,6 +564,7 @@ function StatusLine({ row, shown, s }: { row: ExtAgentRow; shown: Shown; s: ExtA
    the head leaves it room. */
 function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Element {
   const dHost = store.detailHost()
+  const ms = useSyncExternalStore(machines.subscribe, machines.get)
   const keyRef = useRef<HTMLInputElement>(null)
   const [keyTyped, setKeyTyped] = useState(false)
   const shown = shownOf(row, s)
@@ -687,6 +690,11 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
               saved={(!row.configured && !row.vendored && store.draftOf(row.name)) || row.description || ''}
             />
             <ModelPill busy={shown === 'pending'} row={asAsked(row, s)} />
+            {/* Only a preset not yet on the roster picks where it runs -- at
+                the add stage, or at the key stage an openai preset waits in
+                until its key is typed: the machine is written with the add,
+                and a row that exists has its machine on its card. */}
+            {!row.configured && !row.builtin && !row.vendored ? <WhereField ms={ms} row={row} /> : null}
             {keyField ? (
               <label className="extAgents-fld">
                 <span className="extAgents-k">{t('gui.agent.key')}</span>
@@ -710,13 +718,17 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
   )
 }
 
-type Tab = 'all' | Section
+type Tab = 'all' | Section | 'machines'
 
 const TABS: Array<{ tab: Tab; label: string; empty: string }> = [
   { tab: 'all', label: 'gui.filter.all', empty: 'gui.agent.none' },
   { tab: 'on', label: 'gui.agent.g_on', empty: 'gui.agent.none' },
   { tab: 'avail', label: 'gui.agent.g_avail', empty: 'gui.agent.none_avail' },
   { tab: 'missing', label: 'gui.agent.g_missing', empty: 'gui.agent.none_missing' },
+  /* Where the agents may run besides this computer: the registered machines,
+     their links and nodes. Always offered, like All and Connected: a reader
+     with no machine yet is the one the register form is for. */
+  { tab: 'machines', label: 'gui.machine.g_machines', empty: 'gui.machine.none' },
 ]
 
 export function ExtAgentsApp(): JSX.Element {
@@ -724,23 +736,30 @@ export function ExtAgentsApp(): JSX.Element {
   /* The language the page resolved, so a pick repaints this island: every word
      below is a t(key) read at render time (state/lang/store.ts). */
   useSyncExternalStore(lang.subscribe, lang.get)
+  const ms = useSyncExternalStore(machines.subscribe, machines.get)
+  useEffect(() => {
+    void machines.load()
+  }, [])
   const [tab, setTab] = useState<Tab>('all')
   const by = (section: Section): ExtAgentRow[] => ordered(s.rows.filter((row) => sectionOf(row) === section))
-  const rows: Record<Tab, ExtAgentRow[]> = { all: [], on: by('on'), avail: by('avail'), missing: by('missing') }
+  const rows: Record<Section | 'all', ExtAgentRow[]> = { all: [], on: by('on'), avail: by('avail'), missing: by('missing') }
   rows.all = [...rows.on, ...rows.avail, ...rows.missing]
+  const count = (x: Tab): number => (x === 'machines' ? ms.rows.length : rows[x].length)
   const current = TABS.find((x) => x.tab === tab)!
   /* Before the first answer only: a later reload keeps showing the rows it
      has, the way the wizard's step does. */
   const scanning = s.loading && s.rows.length === 0
   const sheetRow = s.sheet ? s.rows.find((x) => x.name === s.sheet) : undefined
+  const machineRow = s.msheet && s.msheet !== 'new' ? ms.rows.find((x) => x.id === s.msheet) : undefined
   return (
     <>
       <HubHead current="agents" />
-      {/* All and Connected are always offered; the other two only with agents in
-          them, or while they are the tab being read -- so connecting the last
-          one leaves the reader on an emptied tab rather than moving them. */}
+      {/* All, Connected and Machines are always offered; the other two only
+          with agents in them, or while they are the tab being read -- so
+          connecting the last one leaves the reader on an emptied tab rather
+          than moving them. */}
       <div className="extAgents-tabs" role="tablist">
-        {TABS.filter((x) => x.tab === 'all' || x.tab === 'on' || x.tab === tab || rows[x.tab].length).map((x) => (
+        {TABS.filter((x) => x.tab === 'all' || x.tab === 'on' || x.tab === 'machines' || x.tab === tab || count(x.tab)).map((x) => (
           <button
             aria-selected={tab === x.tab}
             className="extAgents-tab"
@@ -750,12 +769,23 @@ export function ExtAgentsApp(): JSX.Element {
             type="button"
           >
             {t(x.label)}
-            {scanning ? <span className="extAgents-wbar extAgents-wtn" /> : <span className="extAgents-tn">{String(rows[x.tab].length)}</span>}
+            {scanning && x.tab !== 'machines' ? <span className="extAgents-wbar extAgents-wtn" /> : <span className="extAgents-tn">{String(count(x.tab))}</span>}
           </button>
         ))}
+        {tab === 'machines' ? (
+          <button className="mini extAgents-tabs-end" onClick={() => store.machineSheetOpen('new')} type="button">
+            {t('gui.machine.register')}
+          </button>
+        ) : null}
       </div>
-      {scanning ? <WaitGrid /> : <CardGrid empty={t(current.empty)} rows={rows[tab]} s={s} />}
-      {sheetRow ? <AgentSheet key={`${s.sheet}:${s.epoch}`} row={sheetRow} s={s} /> : null}
+      {tab === 'machines' ? <MachinesGrid ms={ms} /> : scanning ? <WaitGrid /> : <CardGrid empty={t(current.empty)} rows={rows[tab]} s={s} />}
+      {s.msheet === 'new' ? (
+        <RegisterSheet key={`new:${s.epoch}`} ms={ms} />
+      ) : machineRow ? (
+        <MachineSheet key={`${machineRow.id}:${s.epoch}`} ms={ms} row={machineRow} />
+      ) : sheetRow ? (
+        <AgentSheet key={`${s.sheet}:${s.epoch}`} row={sheetRow} s={s} />
+      ) : null}
     </>
   )
 }
