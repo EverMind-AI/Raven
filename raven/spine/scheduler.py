@@ -514,10 +514,10 @@ class Lane:
             self._payload_reported = True
             raise
         except Exception as exc:
-            # The event carries only the exception's class and message to the
-            # front-end, so this is the only place the traceback is ever
-            # recorded — without it a failed turn leaves no trace on the process
-            # side at all.
+            # The event carries the exception's class and message, and the long
+            # account a runner attached, but never its traceback, so this is the
+            # only place the traceback is ever recorded — without it a failed
+            # turn leaves no trace on the process side at all.
             logger.opt(exception=exc).error("Turn failed on {}: {}", self._conversation_id, exc)
             # Unpaired with TurnStarted when the failure came from acquiring the pool
             # or from the sink's own TurnStarted call, both of which sit inside the
