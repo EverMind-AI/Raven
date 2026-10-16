@@ -19,6 +19,7 @@ from loguru import logger
 
 from raven.rpc import LOCAL_CHANNEL
 from raven.rpc.errors import ConfigValidationError
+from raven.rpc.folder_dialog import folder_dialog_available
 from raven.trajectory import policy as trajectory_policy
 
 if TYPE_CHECKING:
@@ -42,6 +43,10 @@ TRAJECTORY_CAPABILITY = "trajectory-v1"
 # Announced while a bug report receiver is configured and its URL is valid, so
 # the page offers "Report a problem" only where an upload can go somewhere.
 BUGREPORT_CAPABILITY = "bugreport-v1"
+# Announced while this host has a folder dialog to open (`fs.pick_dir`), so the
+# page offers that dialog only where one can come up and walks the gateway's
+# folders in the page everywhere else.
+FOLDER_DIALOG_CAPABILITY = "folder-dialog-v1"
 _bugreport_url_warned = False
 
 # Lenient semver: <major>.<minor>.<patch> with optional `-prerelease` / `+build`.
@@ -131,6 +136,8 @@ def server_capabilities() -> list[str]:
         capabilities.append(TRAJECTORY_CAPABILITY)
     if bug_report_receiver_configured():
         capabilities.append(BUGREPORT_CAPABILITY)
+    if folder_dialog_available():
+        capabilities.append(FOLDER_DIALOG_CAPABILITY)
     return capabilities
 
 

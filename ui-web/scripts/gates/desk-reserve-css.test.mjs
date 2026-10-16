@@ -77,9 +77,11 @@ describe('the chat makes room for the anchored desk', () => {
   })
 
   it('moves them together, so the composer stays under the column', () => {
-    /* The panel does not reach the composer -- it ends far above it. The
-       composer moves because it is centred UNDER the column, and a column that
-       slides while the composer does not reads as a layout fault. */
+    /* The composer moves because it is centred UNDER the column, and a column
+       that slides while the composer does not reads as a layout fault. At its
+       default height the palette ends far above the composer; pulled all the
+       way down it ends level with the card's bottom edge, and this inset is
+       then also what keeps the card beside it. */
     const body = rule('.chat:not([data-fresh]) .scroll > *, .chat:not([data-fresh]) .dock')
     expect(body).not.toBeNull()
     const list = /transition:([^;]*)/.exec(body)

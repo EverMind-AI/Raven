@@ -73,7 +73,7 @@ import * as settingsDialog from '../state/settings'
 import { ds, sources } from '../state/sources'
 import { show as toast } from '../state/toast'
 import * as visibility from '../state/visibility'
-import { staged as stagedWorkdir } from '../state/workdir'
+import { redraw as redrawWorkdir, staged as stagedWorkdir } from '../state/workdir'
 import { onReset as onWsReset } from '../state/ws'
 import { installConnectionUI, onReconnect, surface } from './connection'
 import { showUpNote } from './updates'
@@ -353,6 +353,7 @@ export function installPushes(): void {
 /** What has to happen again once a dropped connection is back. */
 async function afterReconnect(): Promise<void> {
   await gateway().call('system.hello', { client_version: '0.1.0', surface: surface() }).catch(() => {})
+  redrawWorkdir()
   await reconnect()
   /* The sheets a question was waiting in are gone with the old socket; the
      questions are not. */

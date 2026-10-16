@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { resetTranslator, setTranslator } from '../i18n/t'
 import { _resetForTests as resetSession, setCurrent } from '../lib/session'
+import { absorb, resetCapabilities } from '../rpc/capabilities'
 import { mountPageRoot } from '../test/pageRoot'
 import { resetSources, setSources } from './sources'
 import * as wd from './workdir'
@@ -55,6 +56,7 @@ function workspace(dirs?: WorkspaceSource['dirs']): void {
 /* The gateway on this desktop, with its folder dialog: the menu's last row
    opens that instead. */
 function desktop(pickDir: WorkspaceSource['pickDir']): void {
+  absorb(['jsonrpc-2.0', 'subscriptions', 'cli-dispatch', 'folder-dialog-v1'])
   setSources({
     workspace: {
       shortPath: (p) => p,
@@ -78,6 +80,7 @@ afterEach(() => {
   wd._resetForTests()
   resetSession()
   resetSources()
+  resetCapabilities()
   resetTranslator()
   document.body.innerHTML = ''
 })
@@ -236,6 +239,26 @@ describe('the workspace a draft picks', () => {
     expect(name()).toBe('chosen')
     expect(pop().dataset.open).toBe('false')
     expect(wd.isPicking()).toBe(false)
+  })
+
+  it('walks the gateway\'s folders instead where the address is this desktop but the host has no dialog', async () => {
+    /* A gateway in a container, or on a headless box reached through a
+       forwarded port, is served at a loopback address all the same: only the
+       handshake can say there is no dialog to open, and asking for one anyway
+       is what used to put "no folder dialog" on the menu. */
+    let asked = 0
+    desktop(async () => { asked += 1; return { path: '/w/chosen', ok: true } })
+    absorb(['jsonrpc-2.0', 'subscriptions', 'cli-dispatch'])
+    openFolders()
+    expect(prows().map((r) => r.querySelector('.nm')?.textContent)).toEqual(['gui.wd.none', 'gui.wd.open_remote'])
+    act(() => byName('gui.wd.open_remote').click())
+    await settle()
+    expect(asked).toBe(0)
+    expect(wd.isPicking()).toBe(false)
+    expect(pop().dataset.open).toBe('true')
+    expect(pop().dataset.view).toBe('browse')
+    expect(pop().querySelector('.chrome-wd-p')?.getAttribute('title')).toBe('/home/me')
+    expect(pop().querySelector('.chrome-wd-err')).toBeNull()
   })
 
   it('leaves the folder alone when the dialog is dismissed, and says nothing', async () => {

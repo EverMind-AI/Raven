@@ -25,17 +25,18 @@
  *
  * The menu's recent folders come from the conversations on the rail, deduped
  * in the rail's own order (latest activity first). Its last row is one of two
- * things: on the reader's own desktop it opens the host's folder dialog
- * (`fs.pick_dir`), because a person choosing a folder already has Finder for
- * that; anywhere else it opens the in-page browser, which walks the gateway's
- * `fs.dirs` through the workspace domain's source, and a folder the engine
- * would refuse (the agent's own data, or an ancestor of it) is shown greyed
- * and explained rather than hidden, because the folders under an ancestor may
- * be perfectly good workspaces.
+ * things: on the reader's own desktop, where that desktop has one, it opens the
+ * host's folder dialog (`fs.pick_dir`), because a person choosing a folder
+ * already has Finder for that; anywhere else it opens the in-page browser,
+ * which walks the gateway's `fs.dirs` through the workspace domain's source,
+ * and a folder the engine would refuse (the agent's own data, or an ancestor
+ * of it) is shown greyed and explained rather than hidden, because the folders
+ * under an ancestor may be perfectly good working directories.
  */
 
 import { t } from '../i18n/t'
 import { current as sessionCurrent } from '../lib/session'
+import { servesFolderDialog } from '../rpc/capabilities'
 import { rows as sessionRows, sess } from './session/rows'
 import { ds } from './sources'
 import { makeStore } from './store'
@@ -219,6 +220,11 @@ export function close(): void {
   set({ ...get(), open: false })
 }
 
+/* The handshake can change the menu's last row without changing this store. */
+export function redraw(): void {
+  if (get().open) store.set({ ...get() })
+}
+
 /* Whether the popover's last row may be pressed: not while the dialog is up. */
 export const isPicking = (): boolean => get().picking
 
@@ -248,13 +254,15 @@ const detailOf = (e: unknown): string => {
 let asking = 0
 
 /* Whether the menu's last row opens the host's own folder dialog (Finder, the
-   Explorer dialog) rather than the in-page walk below: the gateway offers one
-   AND runs on this desktop, so the dialog opens where the reader is. A remote
-   gateway would open it on somebody else's screen. */
+   Explorer dialog) rather than the in-page walk below: the gateway's host has
+   one AND runs on this desktop, so the dialog opens where the reader is. A
+   remote gateway would open it on somebody else's screen. Whether the host has
+   one is the handshake's to say: a gateway in a container, or on a headless
+   box reached through a forwarded port, is served at a loopback address too. */
 export function nativePick(): boolean {
   try {
     const src = ds('workspace')
-    return !!src.pickDir && !!src.hostIsLocal?.()
+    return !!src.pickDir && servesFolderDialog() && !!src.hostIsLocal?.()
   } catch {
     return false
   }
