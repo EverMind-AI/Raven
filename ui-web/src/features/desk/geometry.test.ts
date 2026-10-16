@@ -89,8 +89,8 @@ describe('desk placement', () => {
   })
 })
 
-/* How far down the desk reaches: to the composer card's bottom edge, not to a
- * number. A fixed height ends the palette wherever that number happens to land
+/* How far down the desk reaches: to the composer card, not to a number. A
+ * fixed height ends the palette wherever that number happens to land
  * -- in one reader's window, level with a message bubble and well short of
  * the box they type in.
  */

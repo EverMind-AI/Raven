@@ -16,8 +16,9 @@ export const DESK_SNAP_DISTANCE = 34
    click, large enough that a click's own jitter is never mistaken for a drag. */
 export const DESK_DRAG_THRESHOLD = 4
 export const DESK_MIN_SIZE = 250
-/* The width only: the height has no number of its own, and reaches down to
-   the composer card's bottom edge however tall the window (`deskBottomLimit`). */
+/* The width only: the height has no number of its own -- how far down it
+   reaches is the composer card's to say, however tall the window
+   (`deskBottomLimit`). */
 export const DESK_MAX_WIDTH = 480
 export const DESK_VIEWPORT_GUTTER = 8
 /* How far above the composer card the anchored desk stops when the card runs
@@ -62,9 +63,12 @@ export const DESK_COLUMN_FLOOR = 520
  *
  * 330px is the panel's own height, so what it covers is a BAND ACROSS THE TOP of
  * the column -- which is where a short conversation's whole content sits, and
- * where any conversation's does once the reader scrolls back up. It does not
- * reach the composer: the panel ends at y=394 and the composer sits near the
- * bottom of the window, so the two intersect on the x-axis only.
+ * where any conversation's does once the reader scrolls back up. At that height
+ * it does not reach the composer: the panel ends at y=394 and the composer sits
+ * near the bottom of the window, so the two intersect on the x-axis only.
+ * Pulled all the way down, it ends level with the composer card's bottom edge
+ * (`deskBottomLimit`) -- beside the card, because the reserve moves the composer
+ * as well, and short of it where the reserve stands aside.
  *
  * So the chat gives the width up instead, and the column re-centres in what is
  * left. That is what already happens when the workspace column opens (`--wsw`),

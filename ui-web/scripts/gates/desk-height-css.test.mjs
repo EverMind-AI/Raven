@@ -1,8 +1,8 @@
 /* How tall the stylesheet lets the desk palette be.
  *
  * DeskPalette sets the palette's height inline, and lets it reach down to the
- * composer card's bottom edge (features/desk/geometry.ts) -- in a tall window,
- * well past the 480px the width stops at. The stylesheet's max-height still has
+ * composer card (features/desk/geometry.ts) -- in a tall window, well past the
+ * 480px the width stops at. The stylesheet's max-height still has
  * the last word on what is drawn: a fixed cap there clips the inline height and
  * the palette stops short of the composer, every unit test still green, because
  * happy-dom applies no stylesheet. So the only ceiling pinned here is the
