@@ -658,6 +658,16 @@ def _still_ours(pid: int, command: Any, born: Any) -> bool:
     last one even when the program is the same; a record without the mark
     proves nothing, so its pid is left alone. (The session id would be one
     more mark, but macOS's ``ps`` prints 0 for it.)
+
+    The command is known by the name it was started under or by its
+    arguments, because ``ps`` shows what the pid exec'd into, and argv[0]
+    may not have survived the way there: macOS's ``/usr/bin/python3`` is a
+    stub that execs ``Python.app/Contents/MacOS/Python`` (measured
+    2026-10-16: an orphan under it was read as gone and outlived the daemon
+    that ran it by a minute), and a shebang script shows its interpreter
+    first. The arguments -- the agent's own script, flags and ids -- are
+    passed on as they are. A bare name that execs into another image cannot
+    be told, and is left alone.
     """
     if not isinstance(born, str) or not born:
         return False
@@ -673,10 +683,13 @@ def _still_ours(pid: int, command: Any, born: Any) -> bool:
     if len(parts) < 2 or not parts[0].isdigit() or int(parts[0]) != pid:
         return False
     try:
-        want = shlex.split(str(command or ""))[:1]
+        want = shlex.split(str(command or ""))
     except ValueError:
         return False
-    if not want or os.path.basename(want[0]) not in parts[1]:
+    if not want:
+        return False
+    arguments = " ".join(want[1:])
+    if os.path.basename(want[0]) not in parts[1] and not (arguments and arguments in parts[1]):
         return False
     return _born(pid) == born
 

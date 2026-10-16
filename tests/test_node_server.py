@@ -1190,6 +1190,95 @@ def test_still_ours_says_no_when_ps_fails_or_disagrees_or_the_command_cannot_be_
         sleeper.wait()
 
 
+def test_still_ours_knows_the_agent_by_its_arguments_when_argv0_was_exec_d_into_another_image(monkeypatch):
+    """macOS's ``/usr/bin/python3`` is a stub that execs ``Python.app/Contents/MacOS/Python``: ``ps`` then shows that
+    image as argv[0] and ``python3`` nowhere, while the arguments -- the agent's own script and flags -- are intact.
+    A match on the arguments counts, so a restarted daemon still ends the orphan rather than reporting it gone."""
+    sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True)
+    try:
+        pid = sleeper.pid
+        born = server._born(pid)
+        assert isinstance(born, str) and born
+        shown = {"line": ""}
+        real_run = subprocess.run
+
+        def ps(argv, *a, **k):
+            if "lstart=" in argv:
+                return subprocess.CompletedProcess(argv, 0, stdout=born.removeprefix("lstart:") + "\n", stderr="")
+            if "pgid=,command=" in argv:
+                return subprocess.CompletedProcess(argv, 0, stdout=f"{pid} {shown['line']}\n", stderr="")
+            return real_run(argv, *a, **k)
+
+        monkeypatch.setattr(server.subprocess, "run", ps)
+        image = "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python"
+        shown["line"] = f"{image} /tmp/w/wait.py mark-1 120"
+        assert server._still_ours(pid, "python3 /tmp/w/wait.py mark-1 120", born) is True, (
+            "the arguments are the agent's"
+        )
+        assert server._still_ours(pid, "python3 /tmp/w/wait.py mark-2 120", born) is False, "another agent's arguments"
+        assert server._still_ours(pid, "python3", born) is False, (
+            "a bare name that execs into another image cannot be told"
+        )
+        shown["line"] = (
+            "node /Users/u/.npm/_npx/abc/node_modules/.bin/npx -y @agentclientprotocol/claude-agent-acp@0.81.1"
+        )
+        assert server._still_ours(pid, "npx -y @agentclientprotocol/claude-agent-acp@0.81.1", born) is True, (
+            "a shebang script shows its interpreter first and its own name and arguments after"
+        )
+        shown["line"] = "/usr/bin/perl /tmp/other.pl mark-1 120"
+        assert server._still_ours(pid, "python3 /tmp/w/wait.py mark-1 120", born) is False, "another program"
+        shown["line"] = "python3 /tmp/w/wait.py --changed"
+        assert server._still_ours(pid, "python3 /tmp/w/wait.py mark-1 120", born) is True, (
+            "the name alone still counts, as it always did"
+        )
+    finally:
+        sleeper.kill()
+        sleeper.wait()
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS's python3 stub is the case")
+def test_on_macos_an_agent_started_through_the_system_stub_is_still_ours(tmp_path):
+    """The real thing, on a Mac: an agent started as ``python3 <script>`` through the system stub is recognised by a
+    daemon that comes after, ended, and recorded as ended rather than gone (measured 2026-10-16 on a macOS machine,
+    where the orphan outlived the daemon by over a minute)."""
+    script = tmp_path / "wait.py"
+    script.write_text("import time\ntime.sleep(60)\n", encoding="utf-8")
+    orphan = subprocess.Popen(["/usr/bin/python3", str(script)], start_new_session=True)
+    try:
+        born = server._born(orphan.pid)
+        command = f"python3 {script}"
+        assert server._still_ours(orphan.pid, command, born) is True
+        root = tmp_path / "node"
+        daemon = server.Daemon(root)
+        record = daemon.record_dir("t-mac-orphan")
+        record.mkdir(parents=True)
+        (record / "task.json").write_text(
+            json.dumps(
+                {
+                    "task": "t-mac-orphan",
+                    "state": "running",
+                    "pid": orphan.pid,
+                    "born": born,
+                    "command": command,
+                    "started": 1.0,
+                    "frames": 0,
+                }
+            ),
+            encoding="utf-8",
+        )
+        (record / "frames.jsonl").write_text("", encoding="utf-8")
+        assert daemon.recover() == 1
+        deadline = time.monotonic() + 5
+        while orphan.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert orphan.poll() is not None, "the orphan was ended"
+        assert _record(daemon, "t-mac-orphan")["reason"] == server.RESTARTED_AGENT_ENDED
+    finally:
+        if orphan.poll() is None:
+            orphan.kill()
+        orphan.wait()
+
+
 def test_born_reads_ps_when_proc_has_nothing_to_say(monkeypatch):
     """Off Linux there is no ``/proc``; on Linux one that cannot be read is the same case: ``ps`` gives the start time."""
     import builtins
