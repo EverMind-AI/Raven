@@ -590,6 +590,10 @@ class _Registry:
     async def commit(self, session_key, agent, handle, agent_id, *, kind="cli"):
         self.rows.append(("commit", session_key, agent, handle, agent_id))
 
+    async def bind_if_absent(self, session_key, agent, handle, agent_id, *, kind="cli"):
+        self.rows.append(("bind", session_key, agent, handle, agent_id))
+        return agent_id
+
     async def upsert_spawn(self, session_key, agent, handle, status, agent_id=None):
         self.rows.append(("status", session_key, agent, handle, status))
 

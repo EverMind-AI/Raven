@@ -37,12 +37,20 @@ def logs():
 
 
 class _Registry:
-    def __init__(self) -> None:
+    def __init__(self, bound: str | None = None) -> None:
+        self.bound = bound
         self.committed: list[tuple[str, str, str, str, str]] = []
         self.statuses: list[tuple[str, str, str, str]] = []
 
-    async def commit(self, session_key, agent, handle, agent_id, *, kind="cli"):
+    async def bind_if_absent(self, session_key, agent, handle, agent_id, *, kind="cli"):
+        if self.bound is not None:
+            return self.bound
         self.committed.append((session_key, agent, handle, agent_id, kind))
+        self.bound = agent_id
+        return agent_id
+
+    async def commit(self, session_key, agent, handle, agent_id, *, kind="cli"):
+        raise AssertionError("a pick-up binds where nothing is bound; it never commits over a binding")
 
     async def upsert_spawn(self, session_key, agent, handle, status, agent_id=None):
         self.statuses.append((session_key, agent, handle, status))
@@ -505,3 +513,32 @@ async def test_pending_machine_runs_resume_without_a_debug_switch(tmp_path, monk
     assert manager.announced[0]["status"] == "ok"
     assert manager.announced[0]["result"] == "recovered answer"
     assert remote_runs.pending() == []
+
+
+async def test_a_minted_id_is_bound_only_where_nothing_is_bound_so_a_newer_turn_s_binding_is_kept(
+    tmp_path, monkeypatch
+):
+    """The provisioned twin of the cli pick-up's rule: `_conclude` binds the record's session id where the handle is
+    unbound, and keeps the binding a dispatch made while the pick-up waited on the machine."""
+    kept = _Registry(bound="newer-turn")
+    monkeypatch.setattr(resume_remote, "get_registry", lambda: kept)
+    manager = _Manager(_backend(), tmp_path / "s1")
+    _open_record(tmp_path / "s1")
+
+    assert (
+        await resume_remote._conclude(manager, _run(stateful=True, session_id="minted-X"), "ok", "the answer") is True
+    )
+
+    assert kept.committed == [] and kept.bound == "newer-turn", "the newer binding stays"
+    assert manager.announced[0]["status"] == "ok"
+
+    fresh = _Registry()
+    monkeypatch.setattr(resume_remote, "get_registry", lambda: fresh)
+    _open_record(tmp_path / "s2")
+    assert (
+        await resume_remote._conclude(
+            _Manager(_backend(), tmp_path / "s2"), _run(stateful=True, session_id="minted-X"), "ok", "x"
+        )
+        is True
+    )
+    assert fresh.committed == [("tui:s1", "stub@box", "t1", "minted-X", "acp")], "unbound: the minted id binds"

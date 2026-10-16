@@ -1037,26 +1037,28 @@ def _derived_config(**kw: Any) -> ThirdPartyCliSubagentConfig:
 
 
 class _Recorder:
-    """A registry stand-in: what was committed, under the handle's lock or not, and what a lookup finds."""
+    """A registry stand-in: what a pick-up bound, looked up, and what it found."""
 
     def __init__(self, bound: str | None = None) -> None:
         self.bound = bound
         self.rows: list[tuple[str, ...]] = []
-        self.locked: list[bool] = []
-
-    def _held(self, session_key: str, agent: str, handle: str) -> bool:
-        from raven.agent.subagent import instances
-
-        return instances._handle_owners.get((session_key, agent, handle)) is asyncio.current_task()
+        self.lookups = 0
 
     async def lookup(self, session_key: str, agent: str, handle: str, *, kind: str = "cli") -> str | None:
-        self.locked.append(self._held(session_key, agent, handle))
+        self.lookups += 1
         return self.bound
 
-    async def commit(self, session_key: str, agent: str, handle: str, agent_id: str, *, kind: str = "cli") -> None:
-        self.locked.append(self._held(session_key, agent, handle))
+    async def bind_if_absent(
+        self, session_key: str, agent: str, handle: str, agent_id: str, *, kind: str = "cli"
+    ) -> str:
+        if self.bound is not None:
+            return self.bound
         self.rows.append((session_key, agent, handle, agent_id))
         self.bound = agent_id
+        return agent_id
+
+    async def commit(self, session_key: str, agent: str, handle: str, agent_id: str, *, kind: str = "cli") -> None:
+        raise AssertionError("a pick-up binds where nothing is bound; it never commits over a binding")
 
 
 async def test_a_picked_up_create_binds_the_instance_to_the_session_id_its_output_names(box):
@@ -1072,7 +1074,6 @@ async def test_a_picked_up_create_binds_the_instance_to_the_session_id_its_outpu
     )
     assert picked.status == "ok" and registry.rows == [("tui:s1", "where@box", "t1", "abc123")]
     assert "not resumable" not in picked.reply
-    assert registry.locked == [True, True], "the lookup and the commit both ran under the handle's lock"
 
     registry = _Recorder()
     backend._registry = registry  # type: ignore[attr-defined]
@@ -1107,13 +1108,13 @@ async def test_a_picked_up_stateless_run_binds_nothing_and_warns_of_nothing_as_t
     )
 
     assert with_id.status == "ok" and without.status == "ok"
-    assert registry.rows == [] and registry.locked == [], "nothing bound, nothing looked up"
+    assert registry.rows == [] and registry.lookups == 0, "nothing bound, nothing looked up"
     assert "not resumable" not in with_id.reply and "not resumable" not in without.reply
 
 
 async def test_a_binding_a_dispatch_made_while_the_pick_up_waited_is_kept(box):
-    """The twin of the dispatch path's lookup-run-commit under the lock: a session the newer turn bound while this
-    pick-up waited on the machine is the instance's thread now, and the picked-up create's id does not replace it."""
+    """A session the newer turn bound while this pick-up waited on the machine is the instance's thread now, and the
+    picked-up create's id does not replace it; with no id in the output there is no warning either."""
     backend = build_third_party_backend(_derived_config())
     registry = _Recorder(bound="newer-turn")
     backend._registry = registry  # type: ignore[attr-defined]
@@ -1122,15 +1123,19 @@ async def test_a_binding_a_dispatch_made_while_the_pick_up_waited_is_kept(box):
         _left_run(handle="t1", session_id="", stateful=True),
         pool=_PickUpLink(_left_endpoint("session first", "done", rc=0)),
     )
-
     assert picked.status == "ok" and registry.rows == [] and registry.bound == "newer-turn"
-    assert "not resumable" not in picked.reply, "the instance is resumable, through the newer binding"
-    assert registry.locked == [True], "the lookup that found it ran under the handle's lock"
+    assert "not resumable" not in picked.reply
+
+    picked = await backend.pick_up(
+        _left_run(handle="t1", session_id="", stateful=True), pool=_PickUpLink(_left_endpoint("done", rc=0))
+    )
+    assert picked.status == "ok" and "not resumable" not in picked.reply, "resumable, through the newer binding"
 
 
-async def test_the_pick_up_waits_for_a_dispatch_that_holds_the_handle_and_then_keeps_its_binding(box, tmp_path):
-    """The interleaving itself, with the real registry: the dispatch holds the handle through its own create and
-    commit while the picked-up command is still running; the pick-up's commit comes after and yields to it."""
+async def test_the_pick_up_does_not_wait_for_a_dispatch_holding_the_handle_and_its_binding_still_wins(box, tmp_path):
+    """The interleaving itself, with the real registry: the dispatch holds the handle through its create and
+    commit while the picked-up command ends; the pick-up binds at once -- it waits for no turn, and no run picked
+    up after it does -- and the dispatch's commit, which comes last, is what the handle ends on."""
     from raven.agent.subagent.instances import hold_handle
 
     backend = build_third_party_backend(_derived_config())
@@ -1144,17 +1149,32 @@ async def test_the_pick_up_waits_for_a_dispatch_that_holds_the_handle_and_then_k
     assert not picking.done(), "waiting on the machine's command"
 
     async with hold_handle("tui:s1", "where@box", "t1"):
-        # A dispatch to the same instance: looks up, finds nothing, creates, commits -- under the lock.
+        # A dispatch to the same instance: looks up, finds nothing, creates -- and holds the handle throughout.
         assert await registry.lookup("tui:s1", "where@box", "t1") is None
         endpoint.feed_frame("done", 2)
         endpoint.exited(0)  # the picked-up command ends while the dispatch still holds the handle
-        await asyncio.sleep(0.1)
-        assert not picking.done(), "the pick-up's commit waits for the handle"
-        await registry.commit("tui:s1", "where@box", "t1", "second")
+        picked = await asyncio.wait_for(picking, timeout=5)
+        assert picked.status == "ok", "the pick-up did not wait for the handle"
+        assert await registry.lookup("tui:s1", "where@box", "t1") == "first", "bound where nothing was bound"
+        await registry.commit("tui:s1", "where@box", "t1", "second")  # the dispatch's deferred commit
 
-    picked = await asyncio.wait_for(picking, timeout=5)
-    assert picked.status == "ok" and "not resumable" not in picked.reply
-    assert await registry.lookup("tui:s1", "where@box", "t1") == "second", "the newer turn's binding is kept"
+    assert await registry.lookup("tui:s1", "where@box", "t1") == "second", "the dispatch commits last and wins"
+
+
+async def test_bind_if_absent_binds_once_and_reads_a_status_row_or_another_kind_as_absent(tmp_path):
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+
+    assert await registry.bind_if_absent("tui:s1", "a", "h", "first") == "first"
+    assert await registry.bind_if_absent("tui:s1", "a", "h", "second") == "first", "bound already: the first stays"
+    assert await registry.lookup("tui:s1", "a", "h") == "first"
+
+    await registry.upsert_spawn("tui:s1", "a", "idle-one", "idle")  # a status row with no id
+    assert await registry.bind_if_absent("tui:s1", "a", "idle-one", "x") == "x"
+    assert await registry.lookup("tui:s1", "a", "idle-one") == "x"
+
+    await registry.commit("tui:s1", "a", "other", "acp-sess", kind="acp")
+    assert await registry.bind_if_absent("tui:s1", "a", "other", "cli-sess") == "cli-sess", "another kind: absent"
+    assert await registry.lookup("tui:s1", "a", "other") == "cli-sess"
 
 
 async def test_a_left_cli_run_that_exited_non_zero_is_an_error_with_its_one_line(box):

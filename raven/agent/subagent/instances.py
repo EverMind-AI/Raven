@@ -151,27 +151,55 @@ class InstanceRegistry:
     async def commit(self, session_key: str, agent: str, handle: str, agent_id: str, *, kind: str = "cli") -> None:
         async with self._lock:
             with write_transaction(self._path):
+                self._bind(self._load(), (session_key, agent, handle), agent_id, kind)
+
+    async def bind_if_absent(
+        self, session_key: str, agent: str, handle: str, agent_id: str, *, kind: str = "cli"
+    ) -> str:
+        """Bind ``handle`` to ``agent_id`` unless it is bound already; the id it is bound to after this.
+
+        One step under the registry's own lock, for a writer that must neither
+        replace a binding made meanwhile nor wait for the handle's lock: the
+        pick-up of a run a stopped host left on a machine
+        (``CliAgentBackend._bind_picked_up``, ``resume_remote._conclude``).
+        A dispatch to the same named instance holds ``hold_handle`` across
+        its whole turn and commits last; whichever order the two land in,
+        the handle ends bound to the dispatch's session, and the pick-up
+        never waits for that turn. A row of another ``kind``, or a status row
+        with no id, counts as absent, as :meth:`lookup` reads it.
+        """
+        async with self._lock:
+            with write_transaction(self._path):
                 records = self._load()
                 key = (session_key, agent, handle)
-                now = int(time.time() * 1000)
-                existing = records.get(key) or {}
-                records[key] = {
-                    "kind": kind,
-                    "sessionKey": session_key,
-                    "agent": agent,
-                    "handle": handle,
-                    "agentId": agent_id,
-                    "createdAtMs": existing.get("createdAtMs", now),
-                    "updatedAtMs": now,
-                    **_dag_origin(existing),
-                }
-                try:
-                    self._flush()
-                except OSError as e:  # noqa: BLE001 - persistence is best-effort
-                    logger.warning(
-                        "subagent instance registry write failed (mapping live in-process, will not survive restart): {}",
-                        e,
-                    )
+                rec = records.get(key)
+                if rec and rec.get("kind") == kind and rec.get("agentId"):
+                    return str(rec["agentId"])
+                self._bind(records, key, agent_id, kind)
+                return agent_id
+
+    def _bind(self, records: dict[_Key, dict[str, Any]], key: _Key, agent_id: str, kind: str) -> None:
+        """Write ``key``'s binding into ``records`` and to disk; the caller holds the lock and the transaction."""
+        session_key, agent, handle = key
+        now = int(time.time() * 1000)
+        existing = records.get(key) or {}
+        records[key] = {
+            "kind": kind,
+            "sessionKey": session_key,
+            "agent": agent,
+            "handle": handle,
+            "agentId": agent_id,
+            "createdAtMs": existing.get("createdAtMs", now),
+            "updatedAtMs": now,
+            **_dag_origin(existing),
+        }
+        try:
+            self._flush()
+        except OSError as e:  # noqa: BLE001 - persistence is best-effort
+            logger.warning(
+                "subagent instance registry write failed (mapping live in-process, will not survive restart): {}",
+                e,
+            )
 
     async def upsert_spawn(
         self, session_key: str, agent: str, handle: str, status: str, agent_id: str | None = None

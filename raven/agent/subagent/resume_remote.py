@@ -161,7 +161,11 @@ async def _conclude(manager: Any, run: remote_runs.RemoteRun, status: str, reply
         await manager._finalize_node_claim(run.session_key, record)
     try:
         if ok and run.stateful and run.session_id:
-            await get_registry().commit(run.session_key, run.agent, run.handle, run.session_id, kind=run.kind)
+            # Where nothing is bound yet: a dispatch to the same named
+            # instance that ran while the pick-up waited bound its own
+            # session, and that newer binding stays (``bind_if_absent``;
+            # the derived case is ``CliAgentBackend._bind_picked_up``).
+            await get_registry().bind_if_absent(run.session_key, run.agent, run.handle, run.session_id, kind=run.kind)
         else:
             await get_registry().upsert_spawn(run.session_key, run.agent, run.handle, "completed" if ok else "failed")
     except Exception:  # noqa: BLE001 - the registry row must not keep the result from its reader
