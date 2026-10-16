@@ -89,6 +89,11 @@ def test_a_unc_attachment_retains_its_authority_from_caller_to_parser(monkeypatc
     ],
 )
 def test_an_invalid_file_authority_is_not_looked_up(monkeypatch, authority: str) -> None:
+    """Under Windows conversion any other host becomes a UNC server, so only the authority check stops these."""
+    from nturl2path import url2pathname
+
+    monkeypatch.setattr(server_mod, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(server_mod, "url2pathname", url2pathname)
     monkeypatch.setattr(server_mod, "Path", lambda _: pytest.fail("invalid authority reached the filesystem"))
     uri = f"file://{authority}/share/file.txt"
     text, files = _prompt_input([{"type": "resource_link", "uri": uri}])
@@ -106,6 +111,32 @@ def test_a_windows_authority_cannot_be_replaced_by_a_drive_or_another_host(monke
     monkeypatch.setattr(server_mod, "url2pathname", url2pathname)
     monkeypatch.setattr(server_mod, "Path", lambda _: pytest.fail("a different filesystem target was probed"))
     assert server_mod._local_file(uri) is None
+
+
+def test_a_windows_drive_under_localhost_is_this_machine(monkeypatch) -> None:
+    from nturl2path import url2pathname
+
+    class LocalPath(PureWindowsPath):
+        def is_file(self) -> bool:
+            return True
+
+    monkeypatch.setattr(server_mod, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(server_mod, "url2pathname", url2pathname)
+    monkeypatch.setattr(server_mod, "Path", LocalPath)
+    assert server_mod._local_file("file://LOCALHOST/C:/literal%2520name.txt") == "C:\\literal%20name.txt"
+
+
+def test_a_path_the_converter_refuses_stays_a_link(monkeypatch) -> None:
+    """The Windows converter of Python 3.12 and 3.13 raises ``OSError("Bad URL")`` for a path such as ``/1:/notes.md``."""
+
+    def refuse(path: str) -> str:
+        raise OSError(f"Bad URL: {path}")
+
+    monkeypatch.setattr(server_mod, "url2pathname", refuse)
+    monkeypatch.setattr(server_mod, "Path", lambda _: pytest.fail("a path the converter refused was probed"))
+    uri = "file:///1:/notes.md"
+    text, files = _prompt_input([{"type": "resource_link", "uri": uri}])
+    assert files == [] and uri in text
 
 
 def test_a_remote_file_authority_is_not_a_local_posix_path(monkeypatch) -> None:
