@@ -159,6 +159,17 @@ IDENTITY_SEATS = (
     ("TOOLS.md", Path("TOOLS.md")),
 )
 
+# Every text this wheel has shipped in prompts/, so a seat an older engine
+# wrote before receipts existed is recognised as the engine's own.
+_SHIPPED_PROMPT_DIGESTS = frozenset(
+    {
+        "8dcc0ed76a30fe3f6aab91d47c8bc8994b4152d5902a879d231f03a25c605e9a",
+        "57d56e5374f5c105abf270e5e9d4f15f314bd8cdcd15ca818f3b263501447eba",
+        "fe51bc017ecc69ac6109eb3601fba9fece80c6b7632868438958c23ce25689ce",
+        "57197a8de9ee4637508d8c7c7cb66d51262fda8c6e3284fc6d3672ae74a7d343",
+    }
+)
+
 
 def seed_identity(home: Path) -> list[str]:
     """Write the deck identity into ``home`` and report what changed.
@@ -169,8 +180,11 @@ def seed_identity(home: Path) -> list[str]:
     fork's per-session ``sync_workspace_templates(session.root)`` collapsed to
     once per home. The prompts are this wheel's and are regenerated
     (``write_generated``), so an engine upgrade reaches the model; an
-    operator's own lines go in the seat's ``*.local.md``. The rest of the set
-    is the user's and stays write-if-missing.
+    operator's own lines go in the seat's ``*.local.md``. The home is whatever
+    the locator granted, which need not be this product's -- a host that
+    enables the engine grants its own -- so a seat nothing shows this engine
+    wrote is left alone rather than replaced. The rest of the set is the
+    user's and stays write-if-missing.
 
     A raven older than ``write_generated`` seeds the prompts write-if-missing
     instead, and the log says they will not be refreshed.
@@ -186,7 +200,14 @@ def seed_identity(home: Path) -> list[str]:
         target = home / seat
         text = (prompts / name).read_text(encoding="utf-8")
         if generate is not None:
-            if generate(target, text, notify=lambda message: logger.warning("ppt-engine: %s", message)) == "written":
+            action = generate(
+                target,
+                text,
+                legacy_digests=_SHIPPED_PROMPT_DIGESTS,
+                adopt=False,
+                notify=lambda message: logger.warning("ppt-engine: %s", message),
+            )
+            if action == "written":
                 seeded.append(str(seat))
             continue
         if target.exists():

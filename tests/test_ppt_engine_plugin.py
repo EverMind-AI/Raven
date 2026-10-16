@@ -804,30 +804,81 @@ def test_the_first_turn_seeds_the_deck_identity_into_the_granted_home(tmp_path: 
     assert not (wd / "agent_memory").exists()
 
 
-def test_an_edited_identity_is_backed_up_and_the_wheels_prompt_restored(tmp_path: Path) -> None:
-    """The prompts are the wheel's: an engine upgrade has to reach the model, so
-    a soul tuned in place is copied aside and the carried text written back.
-    The operator's own lines live on in soul.local.md, after the wheel's."""
-    import raven_ppt
-
-    home = tmp_path / "home"
-    seat = home / "agent_memory" / "profile" / "soul.md"
-    seat.parent.mkdir(parents=True)
-    seat.write_text("my own deck voice\n", encoding="utf-8")
-    (seat.parent / "soul.local.md").write_text("Prefer dark themes.\n", encoding="utf-8")
+def _first_turn(home: Path, tmp_path: Path) -> None:
+    """A fresh process's first turn: the per-workspace engine cache starts empty."""
+    plugin_module._SHARED.clear()
     hook = plugin_module.make_hook(_ctx(dict(ENABLED), home))
     wd = tmp_path / "session"
-    wd.mkdir()
+    wd.mkdir(exist_ok=True)
 
     async def run():
         with workdir.bind(wd):
             await hook.before_user_inbound(AgentHookContext(session_key="s", inbound_content="hi there"))
 
     asyncio.run(run())
+
+
+def test_a_seat_the_engine_never_wrote_is_left_alone(tmp_path: Path) -> None:
+    """The home is whatever the locator granted: a host that enables the engine
+    grants its own, and its identity is not the engine's to replace."""
+    home = tmp_path / "home"
+    seat = home / "agent_memory" / "profile" / "soul.md"
+    seat.parent.mkdir(parents=True)
+    seat.write_text("the host's own soul\n", encoding="utf-8")
+    _first_turn(home, tmp_path)
+    assert seat.read_text(encoding="utf-8") == "the host's own soul\n"
+    assert not list(seat.parent.glob("soul.md.bak-*"))
+    assert (home / "TOOLS.md").is_file(), "the missing seats are still filled"
+
+
+def test_an_edited_identity_the_engine_wrote_is_backed_up_and_restored(tmp_path: Path) -> None:
+    """The prompts are the wheel's: an engine upgrade has to reach the model, so
+    a seat this engine wrote and someone then edited is copied aside and the
+    carried text written back, the operator's soul.local.md after it."""
+    import raven_ppt
+
+    home = tmp_path / "home"
+    _first_turn(home, tmp_path)
+    seat = home / "agent_memory" / "profile" / "soul.md"
+    seat.write_text("my own deck voice\n", encoding="utf-8")
+    (seat.parent / "soul.local.md").write_text("Prefer dark themes.\n", encoding="utf-8")
+    _first_turn(home, tmp_path)
     carried = (Path(raven_ppt.__file__).parent / "prompts" / "SOUL.md").read_text(encoding="utf-8")
     assert seat.read_text(encoding="utf-8") == carried.rstrip("\n") + "\n\nPrefer dark themes.\n"
     assert [b.read_text(encoding="utf-8") for b in seat.parent.glob("soul.md.bak-*")] == ["my own deck voice\n"]
-    assert (home / "TOOLS.md").is_file(), "the missing seats are still filled"
+
+
+def test_a_seat_an_older_engine_wrote_is_refreshed_without_a_backup(tmp_path: Path, monkeypatch) -> None:
+    import hashlib
+
+    from raven_ppt.plugin import hook as hook_module
+
+    older = "an older engine's tool guide\n"
+    monkeypatch.setattr(
+        hook_module,
+        "_SHIPPED_PROMPT_DIGESTS",
+        hook_module._SHIPPED_PROMPT_DIGESTS | {hashlib.sha256(older.encode()).hexdigest()},
+    )
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "TOOLS.md").write_text(older, encoding="utf-8")
+    _first_turn(home, tmp_path)
+    assert (home / "TOOLS.md").read_text(encoding="utf-8") != older
+    assert not list(home.glob("TOOLS.md.bak-*"))
+
+
+def test_every_shipped_prompt_is_a_digest_the_next_release_recognises() -> None:
+    """A prompt edited without its digest added would read, to the next release,
+    as a seat this engine never wrote, and that seat would never be refreshed."""
+    import hashlib
+
+    import raven_ppt
+    from raven_ppt.plugin.hook import _SHIPPED_PROMPT_DIGESTS, IDENTITY_SEATS
+
+    prompts = Path(raven_ppt.__file__).parent / "prompts"
+    for name, _seat in IDENTITY_SEATS:
+        text = (prompts / name).read_text(encoding="utf-8")
+        assert hashlib.sha256(text.encode()).hexdigest() in _SHIPPED_PROMPT_DIGESTS, name
 
 
 def test_a_failed_identity_write_is_retried_on_the_next_turn(tmp_path: Path, monkeypatch) -> None:

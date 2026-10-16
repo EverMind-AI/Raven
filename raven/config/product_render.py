@@ -688,6 +688,7 @@ def write_generated(
     product_text: str | None,
     *,
     legacy_digests: Iterable[str] = (),
+    adopt: bool = True,
     notify: Callable[[str], None] | None = None,
 ) -> str:
     """Write the product's current text over ``target``; the action taken.
@@ -704,7 +705,9 @@ def write_generated(
     before receipts existed. A file that is neither -- edited in place, or an
     older release's copy no digest names -- is copied to a ``.bak-*`` file
     first and ``notify`` names the copy, and the target is replaced only once
-    that copy is on disk.
+    that copy is on disk. ``adopt=False`` is for a caller whose directory may
+    not be its own -- a plugin writes into whatever home it is granted: a file
+    the receipt never named and no digest matches is then left as it is.
 
     ``product_text=None`` turns the file off: a file this product wrote is
     removed; an edited one is kept, being the operator's now, and stops being
@@ -751,6 +754,9 @@ def write_generated(
             return action
 
         if current is not None and not ours:
+            if not adopt and not recorded:
+                say(f"left {target} as it is: nothing shows this product wrote it")
+                return "kept"
             backup = _back_up(target, raw or b"")
             # Not "edited": a copy an older release wrote before receipts
             # existed lands here too, and nobody touched that one.
