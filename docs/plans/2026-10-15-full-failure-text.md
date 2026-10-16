@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A failed turn's row on the page expands to the whole failure text (scrubbed, capped), live and on replay, while every 200-character text stays as it is.
+**Goal:** A failed turn's row in the web client expands to the whole failure text (scrubbed, capped), live and on replay, while every 200-character text stays as it is.
 
 **Architecture:** The agent loop builds the long account (`raven/agent/loop/failure_text.py`: unbounded, credentials scrubbed with the call record's scrubber, capped at the call record's body ceiling) and puts it on the exception it lets out as `full_detail`; the kernel lane only copies that string onto `TurnFailed.full_detail`, because `raven/spine` imports no other raven package. The RPC outlet sends it as `ErrorEventPayload.full_detail`, `_save_broken_turn` files it as `turn_ended.full_detail`, and the page's `NoteView` gains an expand toggle that shows it.
 
@@ -16,7 +16,7 @@
 - The long account is scrubbed with `raven/providers/call_record.py`'s scrubber (made public as `scrub_credentials`), then with `raven.security.redact.redact` (the shapes a crash message carries), and capped at `call_record.MAX_BODY_CHARS` (8,000). No new cap constant.
 - `raven/spine` imports no other raven package and stays under `LINE_CEILING = 2_000` lines (`tests/test_kernel_budget.py`; 1,531 at `a71b488e6`).
 - `rpc-schema/openrpc.json` is the contract source; `raven/rpc/models.py` mirrors it by hand; both `src/rpc/generated.ts` files are regenerated, never edited.
-- New page strings: `gui.transcript.error_expand` = en "Show full error" / zh "展开完整错误"; `gui.transcript.error_collapse` = en "Hide" / zh "收起". They live in `i18n/messages.json`; the TUI copy is regenerated.
+- New web client strings: `gui.transcript.error_expand` = en "Show full error" / zh "展开完整错误"; `gui.transcript.error_collapse` = en "Hide" / zh "收起". They live in `i18n/messages.json`; the TUI copy is regenerated.
 - Source language: English for code, comments and docstrings (AGENTS.md 1); CJK only inside `i18n/messages.json` (already a CJK carrier) and the regenerated `ui-tui/src/i18n/messages.generated.ts`.
 - Every new Python file opens with an English module docstring (AGENTS.md 1.1). Comments only where they say why.
 - Python tests run as `uv run --frozen --python 3.12 --all-extras pytest ... -q -p no:randomly`, never bare `pytest` (AGENTS.md 4, 5.4). Vitest runs as `node node_modules/vitest/vitest.mjs run <paths>` from `ui-web/`, never through `npx`.
@@ -25,8 +25,8 @@
 
 ## Review Focus
 
-1. **A body that is one enormous line** (minified JSON, a base64 blob, no spaces): the expanded block must wrap and scroll inside the row, never widen the transcript. Pinned in Task 7 (real page, 6,000-character single-token body, horizontal overflow of `#scroll` must be 0).
-2. **A provider that echoes a credential back** (the request's `Authorization` header, an `sk-...` key) in its error body: the long account must not carry it, while the row still opens. Pinned in Task 2 (unit), Task 3 (marker) and Task 7 (real page).
+1. **A body that is one enormous line** (minified JSON, a base64 blob, no spaces): the expanded block must wrap and scroll inside the row, never widen the transcript. Pinned in Task 7 (the real web client, 6,000-character single-token body, horizontal overflow of `#scroll` must be 0).
+2. **A provider that echoes a credential back** (the request's `Authorization` header, an `sk-...` key) in its error body: the long account must not carry it, while the row still opens. Pinned in Task 2 (unit), Task 3 (marker) and Task 7 (the real web client).
 3. **A session written before this change**: its marker has a 200-character `reason` and no `full_detail`. The row must still open, to the 200 characters it has. Pinned in Task 5.
 4. **A failure the short text already says in full** (`ValueError("boom")`): no toggle, no second copy on the marker. Pinned in Task 2 (`attach_full_detail` returns None) and Task 5 (no toggle).
 5. **The live row and the replayed row of one failure**: same text, same toggle, same expanded content, so a reload changes nothing a reader saw. Pinned in Task 5.
@@ -480,7 +480,7 @@ Append to `tests/test_agent_loop_broken_turn.py`:
 @pytest.mark.asyncio
 async def test_a_long_crash_keeps_its_whole_account_on_the_marker(workspace, monkeypatch):
     """The marker's ``reason`` stays at 200 characters for every reader it has;
-    ``full_detail`` beside it keeps what the cut removed, scrubbed, for a page
+    ``full_detail`` beside it keeps what the cut removed, scrubbed, for a client
     that lets the reader open the row."""
     agent = _agent(workspace, DyingProvider([LLMResponse(content="unused", finish_reason="stop")]))
     secret = "sk-or-v1-" + "b" * 40
@@ -961,7 +961,7 @@ Expected: PASS.
 
 ---
 
-### Task 5: The page opens a failed row
+### Task 5: The web client opens a failed row
 
 **Files:**
 - Modify: `ui-web/src/features/transcript/types.ts:209-217` (`NoteData`), `ui-web/src/features/transcript/types.ts:373` (`HistoryMessage.turn_ended`)
@@ -1339,7 +1339,7 @@ uv run --frozen --python 3.12 --all-extras pytest -q -p no:randomly
 
 Expected: the targeted run passes; the three lint targets exit 0. The full suite is not expected to be green on this box and must not be run with `-x`: at `afdc04f89` it was 2 failed / 25898 passed / 113 skipped in 5m11s, both failures pre-existing (`test_cli_serve_commands.py::TestTheSupervisorsStopOfItsGateway::test_a_stubborn_gateway_is_killed_with_its_group_in_one_step`, the #712 flake, and `test_install_script.py::test_resolve_node_dir_answers_each_case_it_exists_for`), plus the five proxy tests in `tests/test_config_update_providers.py` that fail whenever the box proxy is exported. Compare failing ids against those, not counts; a failing id outside them is this branch's until a run of the same id on a clean `origin/main` worktree fails too. A shutdown fault can report 139 after printing the summary -- read the printed summary, and if it is short of the expected count, re-run that file alone.
 
-- [ ] **Step 3: Run the page and contract gates**
+- [ ] **Step 3: Run the web client and contract gates**
 
 ```bash
 cd ui-web
@@ -1351,7 +1351,7 @@ node ui-tui/scripts/gen-rpc-types.mjs --check
 node ui-tui/scripts/gen-i18n.mjs --check
 ```
 
-Expected: the generators and `tsc` exit 0. The whole-page vitest run includes the gate root (`ui-web/scripts/gates/`), which a `src`-scoped run would miss; two of its files have been red on `main` on this box, and the localStorage cases fail here under node v26 with or without the change. Any other failing file is this branch's until the same file fails on a clean `origin/main` worktree too.
+Expected: the generators and `tsc` exit 0. The whole `ui-web` vitest run includes the gate root (`ui-web/scripts/gates/`), which a `src`-scoped run would miss; two of its files have been red on `main` on this box, and the localStorage cases fail here under node v26 with or without the change. Any other failing file is this branch's until the same file fails on a clean `origin/main` worktree too.
 
 - [ ] **Step 4: Run the repository gates over the uncommitted change**
 
@@ -1366,7 +1366,7 @@ Expected: both scripts exit 0. `HEAD` (a bare revision) diffs the working tree, 
 
 ---
 
-### Task 7: The real page shows it
+### Task 7: The real web client shows it
 
 A throwaway check outside the repository: a local OpenAI-compatible stub that refuses every call with a long body, an isolated `raven web` serving this worktree, and a headless browser.
 
@@ -1377,7 +1377,7 @@ A throwaway check outside the repository: a local OpenAI-compatible stub that re
 - Consumes: the whole branch.
 - Produces: `/tmp/ffx/expanded.png` and a pass/fail line.
 
-- [ ] **Step 1: Build this worktree's page**
+- [ ] **Step 1: Build this worktree's web client**
 
 ```bash
 cd "$WT/ui-web"
@@ -1452,7 +1452,7 @@ cd /tmp/ffx && RAVEN_HOME=/tmp/ffx/home BROWSER=true \
 
 Run it as a background task from `/tmp/ffx` (never from a checkout: `-m` puts the cwd first on `sys.path`). Confirm it serves this worktree: `curl -s -o /dev/null -w '%{size_download}' http://127.0.0.1:18932/` equals `stat -c %s $WT/ui-web/dist/index.html`.
 
-- [ ] **Step 4: Drive the page**
+- [ ] **Step 4: Drive the web client**
 
 ```bash
 cat > /tmp/ffx/drive/check_full_error.py <<'EOF'
@@ -1509,7 +1509,7 @@ Expected: no environ match (other than a just-exited grep) and "ports free". The
 
 ### Task 7a: Carry the body a client library keeps on its exception
 
-Added by controller ruling after Task 7's real-page check failed. With an OpenAI-compatible
+Added by controller ruling after Task 7's real web client check failed. With an OpenAI-compatible
 endpoint that refuses with `{"error": {"message": "stub refusal", ...6 KB more...}}`, litellm
 raises `litellm.BadRequestError` whose `str(exc)` is only `litellm.BadRequestError:
 OpenAIException - stub refusal` (55 chars). The whole parsed body is on `exc.body` (a dict),

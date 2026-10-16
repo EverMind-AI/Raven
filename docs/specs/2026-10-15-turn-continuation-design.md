@@ -6,7 +6,7 @@ Date: 2026-10-15. Status: design approved; Delivery item 1 (the full failure tex
 
 A turn that fails on a model call leaves the reader with two dead ends.
 
-1. **The error cannot be read in full.** The page draws a failed turn as one row,
+1. **The error cannot be read in full.** The web client draws a failed turn as one row,
    `label + firstErrLine(detail, 140)` (`NoteView`, `ui-web/src/features/transcript/TranscriptPage.tsx:1152`),
    with the rest only in a hover title. That title is itself cut: the runtime bounds
    every failure text at 200 characters before it leaves the process
@@ -14,12 +14,12 @@ A turn that fails on a model call leaves the reader with two dead ends.
    `raven/providers/base.py:83`), and the session marker's `turn_ended.reason` is
    bounded the same way. For an OpenRouter 429 this drops exactly the fields that say
    what happened (`provider_name`, `limit_source`, `remedy_hint`). The trace keeps the
-   whole text (the failed `llm.call` span's `status.message`), but nothing on the page
+   whole text (the failed `llm.call` span's `status.message`), but nothing in the web client
    reads it.
 2. **Retry restarts the turn.** The row's retry action is `send(rt.lastAsk)`
    (`ui-web/src/state/session/stages.ts:260`): the question is sent again as a new
    turn, so the transcript carries it twice, the context is assembled from scratch, and
-   the iteration count starts over. It exists only while the page that saw the failure
+   the iteration count starts over. It exists only while the web client that saw the failure
    stays open; a failed turn replayed from the session has no retry at all.
 
 ## Goals
@@ -58,7 +58,7 @@ continuations, `max_continuations`).
 **Continuation seed.** The message list read from that artifact, resolved to full
 messages.
 
-The page's button keeps its existing label, `gui.retry`.
+The web client's button keeps its existing label, `gui.retry`.
 
 ## Why the trace, not the session
 
@@ -91,7 +91,7 @@ Params: `{session_key}`. Result: `{status, turn_id?, reason?}`.
 
 `not_failed` covers every session whose last entry is not a failed-turn marker,
 including one where a newer message followed the failure, so a retry clicked on an old
-row can never inject a go-on message into a later conversation.
+row can never send a go-on message into a later conversation.
 
 Eligibility is decided twice. The handler decides it to answer the client. The lane
 decides it again before the run, and that answer is the authoritative one: a lane runs
@@ -184,7 +184,7 @@ question.
   `partial` entries directly before it, are left out. An unresumed marker is kept, as
   today: the model reads that a turn failed.
 - `session.history` (`raven/rpc/methods/session.py`) already forwards `turn_ended`
-  whole, so the new keys reach the page with no change there.
+  whole, so the new keys reach the web client with no change there.
 
 ### 5. The full failure text
 
@@ -226,10 +226,10 @@ question.
   by `_save_broken_turn`). All three carry it only when it says more than the bounded
   text: a failure the 200 characters already hold whole gets no second copy and no
   toggle.
-- Who sees it: the RPC clients of this runtime (the page, the TUI). A chat channel's
+- Who sees it: the RPC clients of this runtime (the web client, the TUI). A chat channel's
   reply keeps quoting the bounded text, as `TurnFailed.reported` already decides.
 
-### 6. The page (`ui-web`)
+### 6. The web client (`ui-web`)
 
 - **Expand.** `NoteView` gains an expand toggle when the full text is longer than what
   the row shows or spans several lines: a focusable button with `aria-expanded`,
@@ -240,10 +240,10 @@ question.
   opens to the bounded `reason` it kept, when that is longer than the row's line.
 - **Retry.** A failed-turn row is no longer removed when its action is clicked; the
   handler calls `turn.continue`. `continued`: nothing more here (the next point turns
-  the row). `fallback`, or an error from the call (an older gateway without the
-  method): the row loses its action and the page `send()`s the go-on text,
-  `t('gui.turn.go_on')`, which follows `config.language` because the page's language
-  is the gateway's. `refused`: the row loses its action and a toast says
+  the row). `fallback`, or an error from the call (an older Raven gateway without
+  the method): the row loses its action and the web client `send()`s the go-on text,
+  `t('gui.turn.go_on')`, which follows `config.language` because the web client's
+  language is the Raven gateway's. `refused`: the row loses its action and a toast says
   `t('gui.turn.continue_refused')`. The row stays in both cases because the replay
   will show it there: an unresumed marker followed by whatever came next.
 - **Replay.** An unresumed failed marker that is the session's last entry gets the same
@@ -255,12 +255,12 @@ question.
   and a later reload all show the same row), then enters the streaming state without
   drawing a question and without `advanceTurn()`: like a delegated result re-entering
   the conversation, this turn has no user entry, and counting it would put the live
-  workspace turn ahead of the one a reload computes.
-- **Strings** (`i18n/messages.json`, read by the page directly and regenerated into the
-  TUI's copy). The page's key gate (`ui-web/scripts/gates/i18n-keys.test.mjs`) wants a
+  `wsCurrentTurn()` ahead of the one a reload computes.
+- **Strings** (`i18n/messages.json`, read by the web client directly and regenerated into
+  the TUI's copy). The web client's key gate (`ui-web/scripts/gates/i18n-keys.test.mjs`) wants a
   key drawn under `features/transcript/` in the `transcript` namespace; the two
-  `gui.turn.*` keys are said only by `state/session/`, which the gate counts as the
-  page's own layer. The unused `gui.err.detail` pair cannot be reused for the same
+  `gui.turn.*` keys are said only by `state/session/`, a domain of its own to that
+  gate. The unused `gui.err.detail` pair cannot be reused for the same
   reason.
 
   | key | en | zh |
@@ -306,7 +306,7 @@ Backend, `uv run --all-extras pytest`:
 - **Full text.** The bounded `error` is unchanged; `full_detail` is scrubbed, capped,
   and present for a raised model error, a crash and an answerless turn.
 
-Page, `ui-web` vitest: the expand toggle appears only when there is more to show and
+Web client, `ui-web` vitest: the expand toggle appears only when there is more to show and
 keeps `aria-expanded` right; each `turn.continue` outcome; the two replay renderings;
 `message.start` with `continued` draws no question and does not advance the turn.
 

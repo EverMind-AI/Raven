@@ -449,7 +449,7 @@ async def test_a_cut_streams_canonical_account_survives_retries_after_output(wor
 @pytest.mark.asyncio
 async def test_a_long_crash_keeps_its_whole_account_on_the_marker(workspace, monkeypatch):
     """The marker's ``reason`` stays at 200 characters for every reader it has;
-    ``full_detail`` beside it keeps what the cut removed, scrubbed, for a page
+    ``full_detail`` beside it keeps what the cut removed, scrubbed, for a client
     that lets the reader open the row."""
     agent = _agent(workspace, DyingProvider([LLMResponse(content="unused", finish_reason="stop")]))
     secret = "sk-or-v1-" + "b" * 40
