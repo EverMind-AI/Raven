@@ -8,7 +8,10 @@
  *
  * The flag is written on `.chat` by reaching for that element: the column is
  * the chat's own ground, rendered by src/chrome/ChatTop.tsx's neighbours and
- * owned by nobody who could be handed the flag instead.
+ * owned by nobody who could be handed the flag instead. So is `data-readonly`,
+ * the column of an Imported Conversation: set by the session registry as a
+ * switch begins -- before the conversation is even asked for -- and read by the
+ * stylesheet, which takes the composer away and the header's verbs with it.
  */
 
 import { ask as drawAsk, dropSeg, note as drawNote } from '../../features/transcript/mount'
@@ -32,8 +35,10 @@ export const onFresh = fresh.subscribe
 
 /* The empty state is the composer itself, moved to the visual centre -- no
    mark, no facts, no title. `unpitch` lifts the flag again. */
+const column = (): HTMLElement | null => document.querySelector<HTMLElement>('.chat')
+
 export function pitch(): void {
-  const c = document.querySelector('.chat') as HTMLElement | null
+  const c = column()
   if (c) c.dataset.fresh = '1'
   fresh.set(true)
 }
@@ -45,9 +50,17 @@ export function pitch(): void {
    arriving, a stored conversation replaying, and either kind of switch through
    resetView). */
 export function unpitch(): void {
-  const c = document.querySelector('.chat') as HTMLElement | null
+  const c = column()
   if (c) delete c.dataset.fresh
   fresh.set(false)
+}
+
+/** Lay the column out for a conversation nothing on the page may change, or back. */
+export function readOnly(on: boolean): void {
+  const c = column()
+  if (!c) return
+  if (on) c.dataset.readonly = ''
+  else delete c.dataset.readonly
 }
 
 export function _resetFreshForTests(): void {

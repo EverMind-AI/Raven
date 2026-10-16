@@ -5,11 +5,11 @@ run as ``session/prompt`` requests on it, which is the whole difference from the
 cli transport (one process per task). Everything about keeping that process alive
 lives here; deciding when to have one lives in the pool.
 
-Process discipline is copied deliberately from
-:class:`raven.agent.subagent.backends.cli_agent.CliAgentBackend`: own session, pgid
-captured at spawn, ``killpg`` on teardown (``taskkill /T`` by pid where there is
-no ``killpg``). An ACP server that reparents a worker would otherwise survive
-``proc.kill()`` exactly as a ``codex``-style CLI does.
+On POSIX, an agent has its own session, with pgid captured at spawn and
+``killpg`` on teardown. On Windows, a gated launcher joins a kill-on-close
+Job Object before starting the agent, so the whole tree ends even if the host
+dies before teardown. Endpoints supplied without a job retain the
+``taskkill /T`` fallback. An ACP server's workers would otherwise survive ``proc.kill()``.
 
 What a connection runs over is an :class:`Endpoint`: the child's pipes and
 process group for an agent on this computer (:class:`_ProcessEndpoint`), or one
@@ -26,6 +26,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable, Sequence
@@ -34,7 +35,7 @@ from typing import Any, Protocol
 
 from loguru import logger
 
-from raven.acp_client import leftovers, protocol
+from raven.acp_client import leftovers, protocol, windows
 from raven.acp_client.journal import FrameJournal, redact_acp_frame
 from raven.acp_client.protocol import (
     CANCEL_REQUEST_METHOD,
@@ -154,10 +155,11 @@ class Endpoint(Protocol):
 
 
 class _ProcessEndpoint:
-    """A child process on this computer: its pipes, and the process group it leads."""
+    """A local child's pipes and lifetime, owned by a process group or Windows job."""
 
-    def __init__(self, proc: asyncio.subprocess.Process, pgid: int) -> None:
+    def __init__(self, proc: asyncio.subprocess.Process, pgid: int, job: windows.JobObject | None = None) -> None:
         self.proc = proc
+        self._job = job
         # Captured at spawn by the caller, not re-derived here: with
         # start_new_session the launcher's pid doubles as the group's pgid, and
         # once the launcher exits its pid can be recycled onto an unrelated
@@ -193,7 +195,10 @@ class _ProcessEndpoint:
         return await self.proc.stderr.readline()
 
     async def end(self) -> None:
-        await _end(self._pgid, self.proc)
+        if self._job is not None:
+            self._job.close()
+        else:
+            await _end(self._pgid, self.proc)
 
     async def wait(self) -> int | None:
         return await self.proc.wait()
@@ -210,6 +215,8 @@ class _ProcessEndpoint:
         ``RuntimeError`` traceback the user can do nothing about. Closing it
         here is the only point at which that is still a no-op.
         """
+        if self._job is not None:
+            self._job.close()
         transport = getattr(self.proc, "_transport", None)
         if transport is not None:
             try:
@@ -417,27 +424,31 @@ class AcpClient:
         # stdio -- so a batch file may stand in for the program here.
         argv = resolve_program(argv, child_env, batch_files=True)
         # The agent's own argv, for what this logs and reports: the spawned one
-        # may lead with the parent-death wrapper.
+        # may lead with the wrapper that ties the agent to this host.
         program_argv = argv
         argv = leftovers.bind_to_host(argv, child_env, cwd)
+        job = None
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *argv,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=cwd,
-                env=child_env,
-                start_new_session=True,
-                limit=_READER_LIMIT,
-            )
+            spawn_options = {
+                "stdin": asyncio.subprocess.PIPE,
+                "stdout": asyncio.subprocess.PIPE,
+                "stderr": asyncio.subprocess.PIPE,
+                "cwd": cwd,
+                "env": child_env,
+                "start_new_session": True,
+                "limit": _READER_LIMIT,
+            }
+            if sys.platform == "win32":
+                proc, job = await windows.launch(argv, **spawn_options)
+            else:
+                proc = await asyncio.create_subprocess_exec(*argv, **spawn_options)
         except (OSError, ValueError) as exc:
             raise AcpConnectionError(f"acp agent {name!r}: cannot start {program_argv[0]!r}: {exc}") from exc
         leftovers.record(proc.pid, name)
 
         client = cls(
             name=name,
-            endpoint=_ProcessEndpoint(proc, proc.pid),
+            endpoint=_ProcessEndpoint(proc, proc.pid, job),
             on_request=on_request,
             on_notification=on_notification,
             journal=journal,
@@ -497,7 +508,7 @@ class AcpClient:
         return self._reader_task is None or not self._reader_task.done()
 
     async def close(self) -> None:
-        """Kill the whole process group and stop reading. Idempotent.
+        """End the agent's process tree and stop reading. Idempotent.
 
         Bounded from the inside, not by its caller: a ``close`` cancelled from
         outside stops before releasing the subprocess transport, whose
@@ -630,8 +641,12 @@ class AcpClient:
         *,
         timeout: float | None = None,
         cancel_session: str | None = None,
+        sent: Callable[[int], None] | None = None,
     ) -> Any:
         """Send a request and await its result.
+
+        ``sent`` hears the request's id as it goes out: what a run on a
+        machine records, so a process after this one can await the answer.
 
         Raises :class:`AcpRemoteError` if the agent answers with an error,
         :class:`AcpTimeoutError` on budget expiry, :class:`AcpConnectionError` if
@@ -667,6 +682,8 @@ class AcpClient:
         self._request_sessions[request_id] = (params or {}).get("sessionId") if isinstance(params, dict) else None
         self._request_methods[request_id] = method
         try:
+            if sent is not None:
+                sent(request_id)
             await self._send(protocol.request(request_id, method, params))
             if timeout is None:
                 return await asyncio.shield(future)
@@ -679,6 +696,51 @@ class AcpClient:
             if cancel_session is not None:
                 await self._cancel_turn(cancel_session, future)
             raise
+        finally:
+            self._pending.pop(request_id, None)
+            self._request_sessions.pop(request_id, None)
+            self._request_methods.pop(request_id, None)
+
+    @property
+    def endpoint(self) -> Endpoint:
+        """What this connection runs over: a child process here, or a channel to an agent on a machine."""
+        return self._endpoint
+
+    @property
+    def next_request_id(self) -> int:
+        """The id the next request from here carries."""
+        return self._next_id + 1
+
+    def continue_ids_from(self, next_id: int) -> None:
+        """Carry request ids on from ``next_id``: for a connection taken over from a process that used the ones before it."""
+        self._next_id = max(self._next_id, int(next_id) - 1)
+
+    async def await_response(
+        self, request_id: int, *, method: str, session: str | None = None, timeout: float | None = None
+    ) -> Any:
+        """The answer to a request another process of this Raven sent on this connection: awaited, never sent.
+
+        What a run picked up after a restart waits on: the ``session/prompt``
+        the process before this one sent, whose answer the agent still owes.
+        Raises as :meth:`request` does.
+        """
+        if not self.alive:
+            if self._closed:
+                raise AcpConnectionError(f"acp agent {self.name!r}: connection is not open")
+            await self._settle_exit()
+            raise self._ended_error()
+        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+        self._pending[request_id] = future
+        self._request_sessions[request_id] = session
+        self._request_methods[request_id] = method
+        try:
+            if timeout is None:
+                return await asyncio.shield(future)
+            return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
+        except asyncio.TimeoutError:
+            raise AcpTimeoutError(
+                f"acp agent {self.name!r}: {method} timed out after {timeout}s", method=method
+            ) from None
         finally:
             self._pending.pop(request_id, None)
             self._request_sessions.pop(request_id, None)
@@ -738,11 +800,28 @@ class AcpClient:
         this codebase cancels once and then gathers -- the same property
         ``CliAgentBackend._kill_process_group`` relies on to await the child.
         """
+        if getattr(self._endpoint, "stays", False):
+            # This process is stopping and the agent stays with its machine's
+            # daemon: the turn goes on there, and the next process picks it up.
+            return
         try:
             await self.notify("session/cancel", {"sessionId": session_id})
         except Exception:  # noqa: BLE001 - a connection already gone has nothing to settle
             return
         if is_draining():
+            return
+        if getattr(self._endpoint, "offline", False):
+            # The agent is on a machine whose link is down: the cancel waits
+            # with the endpoint for the next link, and no settlement can
+            # arrive before then. The budget would only hold the caller; the
+            # session is unsettled, as one that outlived the budget is.
+            self._unsettled_cancels.add(session_id)
+            logger.info(
+                "acp agent {!r}: session {!r} was cancelled while its machine's link is down; the cancel goes with "
+                "the next link",
+                self.name,
+                session_id,
+            )
             return
         done, _ = await asyncio.wait({future}, timeout=_CANCEL_SETTLE_S)
         if done:
@@ -810,6 +889,12 @@ class AcpClient:
                 if self._journal is not None:
                     self._journal.note("in", frame=frame, session=self._frame_session(frame))
                 await self._dispatch(frame)
+                # Told after the frame is dealt with, so what an endpoint
+                # records as read is what was read: a channel to a machine
+                # keeps the count a later attach goes on from.
+                consumed = getattr(self._endpoint, "consumed", None)
+                if consumed is not None:
+                    consumed()
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - the loop must not die silently

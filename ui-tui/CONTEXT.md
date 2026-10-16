@@ -208,7 +208,9 @@ preset there is read-only, since there is nothing to configure until the binary 
 configured agent whose binary went missing keeps every action, so a broken one can still
 be edited or removed. Every kind that launches a command is filed that way - `cli` and
 `acp` alike - while an openai row is placed on whether it was saved, so a preset needing
-just an api key stays directly addable. The one `builtin` row answers to no action at all:
+just an api key stays directly addable. A **Discovered agent** is on the agent table
+without being configured, so it is filed and switched with the configured agents, never
+as an un-added preset. The one `builtin` row answers to no action at all:
 it is this process, so there is nothing to test or delete, and its switch belongs to the
 package rather than to config - it renders `[core]` where the others carry one, and fills
 its status column with its description, having no probe to report. It edits

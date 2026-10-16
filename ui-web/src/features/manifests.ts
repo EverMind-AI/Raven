@@ -33,7 +33,10 @@ import { manifest as connections } from './connections/manifest'
 import { manifest as cron } from './cron/manifest'
 import { manifest as dag } from './dag/manifest'
 import { manifest as desk } from './desk/manifest'
+/* `export` is a reserved word, so this one binding is not the directory's name. */
+import { manifest as exportDomain } from './export/manifest'
 import { manifest as extAgents } from './extAgents/manifest'
+import { manifest as imported } from './imported/manifest'
 import { manifest as importSync } from './importSync/manifest'
 import { manifest as installed } from './installed/manifest'
 import { manifest as knowledge } from './knowledge/manifest'
@@ -75,7 +78,7 @@ export interface DomainManifest {
   readonly cssPrefix?: string
 }
 
-/** The twenty, alphabetically: nothing reads them in an order. */
+/** The twenty-two, alphabetically: nothing reads them in an order. */
 export const MANIFESTS: readonly DomainManifest[] = [
   browser,
   composer,
@@ -83,7 +86,9 @@ export const MANIFESTS: readonly DomainManifest[] = [
   cron,
   dag,
   desk,
+  exportDomain,
   extAgents,
+  imported,
   importSync,
   installed,
   knowledge,

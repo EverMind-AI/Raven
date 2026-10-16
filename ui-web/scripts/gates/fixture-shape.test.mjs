@@ -171,17 +171,20 @@ const UNSENT = new Set([
   'browser.watch.can_back', 'browser.watch.can_forward', 'browser.watch.error', 'browser.watch.headful', 'browser.watch.loading', 'browser.watch.title', 'browser.watch.url', 'browser.watch.vh', 'browser.watch.vw', 'browser.watch.watching',
   // channels.qr: 2
   'channels.qr.qr', 'channels.qr.qr_text',
-  // subagents.list / subagents.probe: 1 each -- the machine an acp row runs on; the
-  // library's rows all run on this computer, where the server sends null.
-  'subagents.list.rows[].machine', 'subagents.probe.rows[].machine',
   // config.set: 5 -- the model-switch group, which the offline library does not
   // model: its gateway always has a loop, so there is no restart to report.
   'config.set.applies_to_session', 'config.set.needs_restart', 'config.set.scope', 'config.set.session_id', 'config.set.value',
-  // trajectory.*: 5 -- one recorded turn, served whole: no second page to point
+  // trajectory.*: 6 -- one recorded turn, served whole: no second page to point
   // at, no index failure to report, and the probed block (the tool's own
-  // key-values) was read in full, so it carries no reason.
+  // key-values) was read in full, so it carries no reason. The demo export is
+  // done the moment it is asked for, and an error is a failed export's alone.
   'trajectory.list.next_cursor', 'trajectory.list.index_state.failure', 'trajectory.changes.index_state.failure',
-  'trajectory.block.next_cursor', 'trajectory.block.reason',
+  'trajectory.block.next_cursor', 'trajectory.block.reason', 'trajectory.export_status.error',
+  // bugreport.status: 5 -- probed while the demo report waits for decisions:
+  // nothing has failed, been frozen, landed or uploaded yet, and the history
+  // read cleanly, so it has no warning to give.
+  'bugreport.status.error', 'bugreport.status.history.warning', 'bugreport.status.receipt',
+  'bugreport.status.record_dir', 'bugreport.status.summary',
   // cron.list: 4
   'cron.list.jobs[].at_ms', 'cron.list.jobs[].every_ms', 'cron.list.jobs[].last_error', 'cron.list.jobs[].tz',
   // cron.save: 4
@@ -259,6 +262,8 @@ const UNSENT = new Set([
   'subagents.test.cancelled', 'subagents.test.reply',
   // system.hello: 1
   'system.hello.platform',
+  // session.compress / session.create: 1 each -- only resuming an Imported Conversation sets read_only
+  'session.compress.info.read_only', 'session.create.info.read_only',
 ])
 
 describe('the offline fixture library', () => {
@@ -296,8 +301,10 @@ describe('the offline fixture library', () => {
     /* The rows one call answers differently per argument, so a field sent for
        the second conversation counts as sent. The three `k` rows are the
        scheduled ones, and the only place the library sends `origin` and
-       `delegated` -- the two entries a reader never types. */
-    for (const session_id of ['a', 'b', 'g', 'k1', 'k2', 'k3']) await walk('session.resume', { session_id })
+       `delegated` -- the two entries a reader never types; the imported one is
+       the only place it sends `read_only`. */
+    const { IMPORTED_DEMO } = await import('../../src/rpc/fixtures/sessions.ts')
+    for (const session_id of ['a', 'b', 'g', 'k1', 'k2', 'k3', IMPORTED_DEMO]) await walk('session.resume', { session_id })
     const unsent = [...declared].filter((at) => !sent.has(at)).sort()
     expect(unsent.filter((at) => !UNSENT.has(at)), 'send the field, or add it to UNSENT under its method')
       .toEqual([])

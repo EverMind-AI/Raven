@@ -21,6 +21,16 @@ frame the host last read (``agent/attach``). Ending a task ends its whole
 process tree, the commands the agent put in the background or in a session
 of its own included. Only ``--stdio`` ties the agents to the connection.
 
+An MCP server the host lends an agent here is reached through this daemon:
+the agent runs the install's bridge (``python -I -m raven.node --mcp``) as a
+stdio server, the bridge connects to the socket and opens a *stream* for its
+task, and the daemon relays the pieces of each frame between the bridge and
+the host holding the task (``mcp/open``, ``mcp/frame``, ``mcp/close``),
+keeping nothing. Which task a bridge is, the daemon tells by the process that
+connected: its parent chain reaches the agent the daemon started, and every
+task here runs as this one user, so nothing a bridge says or holds could tell
+them apart. A stream ends with either end, or with the task.
+
 Deliberately small. It imports the file tools and nothing that talks to a
 model, reads a config or opens a network port, so a machine needs Python
 3.12 and the packages in :data:`raven.node.protocol.REQUIREMENTS` beside
@@ -45,7 +55,9 @@ import re
 import shlex
 import shutil
 import signal
+import socket
 import stat as filemode
+import struct
 import subprocess
 import sys
 import tempfile
@@ -476,18 +488,26 @@ def capture_login_env() -> dict[str, str]:
     return captured
 
 
-def _descendants(pid: int) -> list[int]:
-    """Every process under ``pid`` by parent chain, as ``ps`` sees them now."""
+def _process_table() -> dict[int, int]:
+    """Every process on this machine by its parent, as ``ps`` sees them now; empty when ``ps`` cannot be asked."""
     ps = shutil.which("ps") or "/bin/ps"
     try:
         done = subprocess.run([ps, "-A", "-o", "pid=,ppid="], capture_output=True, text=True, timeout=5)
     except (OSError, subprocess.SubprocessError):
-        return []
-    children: dict[int, list[int]] = {}
+        return {}
+    table: dict[int, int] = {}
     for line in done.stdout.splitlines():
         parts = line.split()
         if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
-            children.setdefault(int(parts[1]), []).append(int(parts[0]))
+            table[int(parts[0])] = int(parts[1])
+    return table
+
+
+def _descendants(pid: int) -> list[int]:
+    """Every process under ``pid`` by parent chain, as ``ps`` sees them now."""
+    children: dict[int, list[int]] = {}
+    for child, parent in _process_table().items():
+        children.setdefault(parent, []).append(child)
     out: list[int] = []
     stack = [pid]
     while stack:
@@ -532,6 +552,34 @@ def _end_tree(pid: int) -> None:
 #: daemon's own log under ``log/``.
 RUN_DIR, TASKS_DIR, LOG_DIR = "run", "tasks", "log"
 
+
+def task_record_dir(root: Path, task_id: str) -> Path:
+    """Where the daemon under ``root`` keeps the record of ``task_id``: its frames, its stderr, its state."""
+    return root / TASKS_DIR / task_id
+
+
+def _peer_pid(sock: Any) -> int | None:
+    """The pid of the process at the other end of a unix socket, as the system reports it; ``None`` where it does not.
+
+    What tells one task's bridge from another's. Not anything the bridge
+    says or holds: every task here runs as this one user, so any of them
+    could say a name or read a file. The process that connected is the
+    system's word, and its parent chain leads to the agent the daemon
+    started (:meth:`Daemon.task_of`). macOS answers ``LOCAL_PEERPID``, Linux
+    ``SO_PEERCRED``; a system that answers neither opens no stream.
+    """
+    try:
+        if sys.platform == "darwin":
+            (pid,) = struct.unpack("i", sock.getsockopt(0, 0x002, 4))  # SOL_LOCAL, LOCAL_PEERPID
+        elif hasattr(socket, "SO_PEERCRED"):
+            pid, _uid, _gid = struct.unpack("3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+        else:
+            return None
+    except (OSError, ValueError, AttributeError, struct.error):
+        return None
+    return pid if pid > 0 else None
+
+
 #: How long a daemon with no connection and no running task waits before it
 #: leaves; the next relay starts it again.
 IDLE_EXIT_S = 600.0
@@ -539,6 +587,120 @@ _IDLE_CHECK_S = 15.0
 #: What a task's record says its agent ended with when the daemon that ran it
 #: went first: the host reads it the way it reads a lost link.
 LOST_RC = -1
+
+#: What a task's record says, as ``reason``, when the daemon that ran it went
+#: first: the host hands the sentence on as the agent's end.
+RESTARTED_AGENT_ENDED = (
+    "the Raven node on this machine was restarted while the agent ran; nothing could read the agent's output "
+    "any more, so it was ended"
+)
+RESTARTED_AGENT_GONE = "the Raven node on this machine was restarted while the agent ran, and the agent is gone"
+
+_PR_SET_PDEATHSIG = 1
+_PRCTL: Any = None
+if sys.platform == "linux":
+    try:
+        import ctypes
+
+        _PRCTL = ctypes.CDLL(None, use_errno=True).prctl
+    except (OSError, AttributeError):  # pragma: no cover - a libc without prctl
+        _PRCTL = None
+
+
+def _sign_death_pact() -> None:
+    """In the child between fork and exec: one libc call, nothing imported, nothing locked."""
+    _PRCTL(_PR_SET_PDEATHSIG, int(signal.SIGTERM), 0, 0, 0)  # pragma: no cover - runs in the forked child
+
+
+def _death_pact() -> dict[str, Any]:
+    """How an agent is tied to the daemon's life on Linux: ``preexec_fn`` for its start, or nothing elsewhere.
+
+    A daemon killed outright (``kill -9``) leaves its agents writing to pipes
+    nobody reads, under a record that still says ``running``. On Linux the
+    agent is told the moment the daemon's thread is gone (``PR_SET_PDEATHSIG``,
+    a SIGTERM, the signal a cancel sends first); everywhere the next daemon
+    ends what is left and says so (:meth:`Daemon.recover`). ``preexec_fn``
+    runs in the forked child: the daemon's only other thread is the one that
+    captured the login environment, idle by the time any agent starts.
+    """
+    return {"preexec_fn": _sign_death_pact} if _PRCTL is not None else {}
+
+
+def _born(pid: int) -> str | None:
+    """A mark of when ``pid`` started: the same for the same process, another for a later one given its number.
+
+    Linux's start tick from ``/proc`` where there is one; elsewhere the start
+    time ``ps`` prints, to the second. ``None`` when neither can be read.
+    """
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as handle:
+            # The fields after the parenthesised name: state first, the start tick 20th.
+            after_name = handle.read().rpartition(")")[2].split()
+        return f"tick:{int(after_name[19])}"
+    except (OSError, IndexError, ValueError):
+        pass
+    ps = shutil.which("ps") or "/bin/ps"
+    try:
+        done = subprocess.run([ps, "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    text = " ".join(done.stdout.split())
+    return f"lstart:{text}" if done.returncode == 0 and text else None
+
+
+def _still_ours(pid: int, command: Any, born: Any) -> bool:
+    """Whether ``pid`` is still the agent a record names.
+
+    Three marks, all required: alive and the leader of its own process group
+    (as every agent is started, in a session of its own), running the
+    command the record says, and started when the record says (``born``,
+    :func:`_born`). A pid that has moved on to another process fails the
+    last one even when the program is the same; a record without the mark
+    proves nothing, so its pid is left alone. (The session id would be one
+    more mark, but macOS's ``ps`` prints 0 for it.)
+    """
+    if not isinstance(born, str) or not born:
+        return False
+    ps = shutil.which("ps") or "/bin/ps"
+    try:
+        done = subprocess.run([ps, "-o", "pgid=,command=", "-p", str(pid)], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    lines = [line for line in done.stdout.splitlines() if line.strip()]
+    if done.returncode != 0 or not lines:
+        return False
+    parts = lines[-1].split(None, 1)
+    if len(parts) < 2 or not parts[0].isdigit() or int(parts[0]) != pid:
+        return False
+    try:
+        want = shlex.split(str(command or ""))[:1]
+    except ValueError:
+        return False
+    if not want or os.path.basename(want[0]) not in parts[1]:
+        return False
+    return _born(pid) == born
+
+
+def _lose_record(record: Path, info: dict[str, Any]) -> dict[str, Any]:
+    """``info``, a record left at ``running`` by a daemon that is gone, brought to ``lost``: written, with why.
+
+    The agent it names may still be alive -- an orphan of a daemon that was
+    killed outright, writing to a pipe nobody reads -- and is ended the way a
+    cancel ends it, when the pid is still the process it was started as
+    (:func:`_still_ours`); a pid that has moved on is left alone.
+    """
+    pid = info.get("pid")
+    ended = (
+        isinstance(pid, int) and not isinstance(pid, bool) and _still_ours(pid, info.get("command"), info.get("born"))
+    )
+    if ended:
+        _end_tree(pid)
+    info["state"], info["rc"] = "lost", LOST_RC
+    info["ended"] = info.get("ended") or time.time()
+    info["reason"] = RESTARTED_AGENT_ENDED if ended else RESTARTED_AGENT_GONE
+    _write_json(record / "task.json", info)
+    return info
+
 
 _TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@-]{0,119}$")
 
@@ -656,6 +818,33 @@ class _StreamOut:
                 self._out.flush()
 
 
+class _Stream:
+    """One MCP connection of an agent on this machine to a server the host holds, carried on the host's link.
+
+    The bridge the agent spawned is one end -- a connection of its own to the
+    daemon's socket, carrying this stream and nothing else -- and the host
+    holding the task is the other. The daemon relays the pieces of each
+    frame as they come (``mcp/frame``) and keeps nothing: a stream outlives
+    neither end, nor the task.
+    """
+
+    def __init__(self, stream_id: int, task: _Task, bridge: Node, host: Node, server: str, lend: str) -> None:
+        self.id = stream_id
+        self.task = task
+        self.bridge = bridge
+        self.host = host
+        self.server = server
+        self.lend = lend
+
+    def other(self, node: Node) -> Node | None:
+        """The end that is not ``node``; ``None`` for a connection that is neither end."""
+        if node is self.bridge:
+            return self.host
+        if node is self.host:
+            return self.bridge
+        return None
+
+
 class _Task:
     """One agent the daemon started for a host, under the host's task id; it outlives the connection that asked.
 
@@ -676,10 +865,13 @@ class _Task:
         self.command = command
         self.cwd = cwd
         self.started = time.time()
+        self.born = _born(proc.pid)
+        """When the agent started, as :func:`_born` marks it: what a later daemon checks before ending its pid."""
         self.ended: float | None = None
         self.rc: int | None = None
         self.frames = 0
         self.subscriber: tuple[Node, int] | None = None
+        self.streams: dict[int, _Stream] = {}
         self._send_lock = asyncio.Lock()
         self._frames_file = own_file(record / "frames.jsonl")
         self._stderr_file = own_file(record / "stderr.log")
@@ -700,6 +892,7 @@ class _Task:
             "command": self.command,
             "cwd": self.cwd,
             "pid": self.proc.pid,
+            "born": self.born,
             "state": state,
             "rc": self.rc,
             "started": self.started,
@@ -780,6 +973,7 @@ class _Task:
                 self.subscriber = None
                 node.channels.pop(channel, None)
                 await self._tell(node, protocol.AGENT_EXIT, {"channel": channel, "rc": rc})
+        await self.daemon.end_streams(self, "the agent ended")
         self.daemon.touch()
 
     async def attach(self, node: Node, channel: int, after: int) -> dict[str, Any]:
@@ -874,6 +1068,9 @@ class Daemon:
         self.tasks: dict[str, _Task] = {}
         self._starting: set[str] = set()
         """The task ids whose launch is under way: they take a place before their task is registered."""
+        self.streams: dict[int, _Stream] = {}
+        """The MCP streams open on this machine, by id, across every task."""
+        self._next_stream = 1
         self.connections: set[Node] = set()
         self._env: dict[str, str] | None = None
         self._env_lock = asyncio.Lock()
@@ -894,7 +1091,86 @@ class Daemon:
         return [task for task in self.tasks.values() if task.rc is None]
 
     def record_dir(self, task_id: str) -> Path:
-        return self.root / TASKS_DIR / task_id
+        return task_record_dir(self.root, task_id)
+
+    def task_of(self, pid: int) -> _Task | None:
+        """The running task whose agent ``pid`` is, or is under, by the parent chain the system shows now; else ``None``.
+
+        A task's agent is the process the daemon started, in a session of
+        its own, and what the agent starts -- its bridges among it -- is
+        under it. Followed up from ``pid`` to the top: above the daemon no
+        task is found, and a daemon run in the process that asks (the tests)
+        is a step on the way.
+        """
+        running = {task.proc.pid: task for task in self.running()}
+        table = _process_table()
+        seen: set[int] = set()
+        current: int | None = pid
+        while current is not None and current > 1 and current not in seen:
+            if (task := running.get(current)) is not None:
+                return task
+            seen.add(current)
+            current = table.get(current)
+        return None
+
+    def open_stream(self, bridge: Node, params: dict[str, Any]) -> _Stream:
+        """A stream for ``bridge``, on the task it is a process of, to the host holding that task; refused by code otherwise.
+
+        Which task that is, the daemon tells by the process that connected
+        (:func:`_peer_pid`, :meth:`task_of`) and by nothing the bridge says
+        or holds; the task the bridge names has to be that one.
+        """
+        task_id = _task_id(params)
+        server, lend = params.get("server"), params.get("lend")
+        if not all(isinstance(v, str) and v for v in (server, lend)):
+            raise _RefusedError(_INVALID_PARAMS, "server and lend must be non-empty strings")
+        task = self.tasks.get(task_id)
+        if task is None or task.rc is not None:
+            raise _RefusedError(protocol.STREAM_REFUSED, f"task {task_id!r} is not running on this machine")
+        if bridge.peer is None:
+            raise _RefusedError(
+                protocol.STREAM_REFUSED, "this system does not say which process a bridge is, so no stream is opened"
+            )
+        owner = self.task_of(bridge.peer)
+        if owner is None:
+            raise _RefusedError(protocol.STREAM_REFUSED, "the connection is not a process of any task on this machine")
+        if owner is not task:
+            raise _RefusedError(
+                protocol.STREAM_REFUSED, f"the connection is a process of task {owner.id!r}, not {task_id!r}"
+            )
+        if task.subscriber is None:
+            raise _RefusedError(protocol.STREAM_REFUSED, f"no host holds task {task_id!r} right now")
+        if len(task.streams) >= protocol.MAX_STREAMS:
+            raise _RefusedError(
+                protocol.STREAM_REFUSED, f"task {task_id!r} has {protocol.MAX_STREAMS} MCP streams open already"
+            )
+        stream = _Stream(self._next_stream, task, bridge, task.subscriber[0], str(server), str(lend))
+        self._next_stream += 1
+        task.streams[stream.id] = stream
+        self.streams[stream.id] = stream
+        self.touch()
+        return stream
+
+    def drop_stream(self, stream: _Stream) -> None:
+        self.streams.pop(stream.id, None)
+        stream.task.streams.pop(stream.id, None)
+
+    async def close_stream(self, stream: _Stream, reason: str, *, by: Node | None) -> None:
+        """``stream`` is over, said by ``by`` or by nobody: the other end is told, and the bridge's connection hung up."""
+        self.drop_stream(stream)
+        for end in (stream.host, stream.bridge):
+            if end is by:
+                continue
+            with contextlib.suppress(ConnectionError, OSError, ValueError):
+                await end.notify(protocol.MCP_CLOSE, {"stream": stream.id, "task": stream.task.id, "reason": reason})
+        if by is not stream.bridge:
+            stream.bridge.hang_up()
+        self.touch()
+
+    async def end_streams(self, task: _Task, reason: str) -> None:
+        """Every stream of ``task`` is over: the agent ended, or the host's link did."""
+        for stream in list(task.streams.values()):
+            await self.close_stream(stream, reason, by=None)
 
     async def launch(self, node: Node, channel: int, params: dict[str, Any]) -> _Task:
         task_id = _task_id(params)
@@ -932,6 +1208,7 @@ class Daemon:
                     stderr=asyncio.subprocess.PIPE,
                     start_new_session=True,
                     limit=_AGENT_LINE_LIMIT,
+                    **_death_pact(),
                 )
             except OSError as exc:
                 raise _RefusedError(_INTERNAL_ERROR, f"could not start {argv[0]!r}: {exc.strerror or exc}") from None
@@ -953,15 +1230,43 @@ class Daemon:
         if info is None:
             raise _RefusedError(protocol.UNKNOWN_TASK, f"no task {task_id!r} is running or recorded on this machine")
         if info.get("state") == "running":
-            # The daemon that ran it is gone, and the agent with it: the
-            # record says so from now on, so no host reads a run that ended
-            # as one still going.
-            info["state"], info["rc"], info["ended"] = "lost", LOST_RC, info.get("ended") or time.time()
-            _write_json(record / "task.json", info)
+            # The daemon that ran it is gone: the agent, if it is still alive
+            # as that daemon's orphan, is ended, and the record says so from
+            # now on, so no host reads a run that ended as one still going.
+            info = _lose_record(record, info)
         replayed = await _replay(record, node, channel, after)
         rc = info.get("rc") if isinstance(info.get("rc"), int) else LOST_RC
-        await node.notify(protocol.AGENT_EXIT, {"channel": channel, "rc": rc})
-        return {"pid": info.get("pid"), "frames": info.get("frames"), "replayed": replayed, "rc": rc}
+        ended: dict[str, Any] = {"channel": channel, "rc": rc}
+        answer: dict[str, Any] = {"pid": info.get("pid"), "frames": info.get("frames"), "replayed": replayed, "rc": rc}
+        if isinstance(info.get("reason"), str) and info["reason"]:
+            # The node's own sentence for an end it did not watch; the host
+            # hands it on in place of the bare exit code.
+            ended["reason"] = answer["reason"] = info["reason"]
+        await node.notify(protocol.AGENT_EXIT, ended)
+        return answer
+
+    def recover(self) -> int:
+        """The records the daemon before this one left at ``running``, brought to ``lost``; how many.
+
+        Run once at start, before any connection: an agent a killed daemon
+        left behind is ended now, not when a host next asks after it, and a
+        host that asks reads the same record either way (:meth:`attach`).
+        """
+        found = 0
+        tasks_dir = self.root / TASKS_DIR
+        for record in sorted(tasks_dir.iterdir()) if tasks_dir.is_dir() else []:
+            if record.name in self.tasks or not record.is_dir():
+                continue
+            info = _read_record(record)
+            if info is not None and info.get("state") == "running":
+                _lose_record(record, info)
+                found += 1
+        if found:
+            print(
+                f"raven node: {found} task(s) the daemon before this one left running were ended and recorded as lost",
+                file=sys.stderr,
+            )
+        return found
 
     def list_tasks(self) -> list[dict[str, Any]]:
         """Every task this machine knows: the running ones, and the records of finished ones."""
@@ -1025,10 +1330,17 @@ class Node:
     an ephemeral daemon in a temporary directory, whose agents end with it.
     """
 
-    def __init__(self, out: BinaryIO | asyncio.StreamWriter, daemon: Daemon | None = None) -> None:
+    def __init__(
+        self, out: BinaryIO | asyncio.StreamWriter, daemon: Daemon | None = None, *, peer: int | None = None
+    ) -> None:
         self._out = _StreamOut(out)
         self.daemon = daemon or Daemon(Path(tempfile.mkdtemp(prefix="raven-node-")), ephemeral=True)
         self.channels: dict[int, _Task] = {}
+        self.peer = peer
+        """The pid of the process at the other end, as the system reported it at the socket (:func:`_peer_pid`): what
+        says which task a bridge is. ``None`` over stdio, and where the system does not say."""
+        self.stream: _Stream | None = None
+        """The one stream this connection carries, when it is a bridge's rather than a host's."""
         self.stopping = False
         self.stopped = asyncio.Event()
         self.daemon.connections.add(self)
@@ -1059,13 +1371,68 @@ class Node:
             out.close()
 
     async def detach_all(self) -> None:
-        """This connection is over: its tasks go on, held by nobody until the next connection attaches."""
+        """This connection is over: its tasks go on, held by nobody until the next connection attaches.
+
+        Its streams do not: a host's link that ends takes every stream it
+        carried with it (the bridges are hung up, their agents see the server
+        end), and a bridge that ends tells the host its stream is over.
+        """
         for channel, task in list(self.channels.items()):
             if task.subscriber is not None and task.subscriber[0] is self:
                 task.subscriber = None
         self.channels.clear()
+        for stream in [s for s in self.daemon.streams.values() if s.host is self]:
+            await self.daemon.close_stream(stream, "the host's link ended", by=self)
+        if self.stream is not None and self.stream.id in self.daemon.streams:
+            await self.daemon.close_stream(self.stream, "the bridge ended", by=self)
+        self.stream = None
         self.daemon.connections.discard(self)
         self.daemon.touch()
+
+    async def mcp_open(self, params: dict[str, Any]) -> dict[str, Any]:
+        """A bridge opens its one stream: checked by the daemon, told to the host, answered with the stream's id."""
+        if self.stream is not None:
+            raise _RefusedError(_INVALID_PARAMS, "this connection carries a stream already")
+        stream = self.daemon.open_stream(self, params)
+        self.stream = stream
+        try:
+            await stream.host.notify(
+                protocol.MCP_OPEN,
+                {"task": stream.task.id, "stream": stream.id, "server": stream.server, "lend": stream.lend},
+            )
+        except (ConnectionError, OSError, ValueError):
+            self.daemon.drop_stream(stream)
+            self.stream = None
+            raise _RefusedError(protocol.STREAM_REFUSED, "the host holding this task could not be told") from None
+        return {"stream": stream.id}
+
+    async def mcp_frame(self, params: dict[str, Any]) -> None:
+        """One piece of a frame, from either end of a stream, handed to the other as it is."""
+        stream = self._stream_of(params)
+        other = stream.other(self) if stream is not None else None
+        text = params.get("text")
+        if stream is None or other is None or not isinstance(text, str):
+            return
+        try:
+            await other.notify(
+                protocol.MCP_FRAME, {"stream": stream.id, "text": text, "end": bool(params.get("end", True))}
+            )
+        except (ConnectionError, OSError, ValueError):
+            await self.daemon.close_stream(stream, "the other end of the stream is gone", by=other)
+        self.daemon.touch()
+
+    async def mcp_close(self, params: dict[str, Any]) -> None:
+        stream = self._stream_of(params)
+        if stream is None or stream.other(self) is None:
+            return
+        reason = params.get("reason")
+        await self.daemon.close_stream(stream, reason if isinstance(reason, str) else "closed", by=self)
+
+    def _stream_of(self, params: dict[str, Any]) -> _Stream | None:
+        stream_id = params.get("stream")
+        if not isinstance(stream_id, int) or isinstance(stream_id, bool):
+            return None
+        return self.daemon.streams.get(stream_id)
 
     def _channel(self, params: dict[str, Any], *, free: bool) -> int:
         channel = _number(params, "channel")
@@ -1084,6 +1451,12 @@ class Node:
         answer = await _hello(params)
         answer["mode"] = "stdio" if self.daemon.ephemeral else "daemon"
         answer["tasks"] = len(self.daemon.running())
+        if not self.daemon.ephemeral:
+            # What an agent here runs as a stdio MCP server to reach a server
+            # the host lends it: this install's own bridge, which the host
+            # names by task, dispatch and server (`mcp/open`). A stdio node
+            # has no socket for a bridge to reach, so it offers none.
+            answer["bridge"] = [sys.executable, "-I", "-m", "raven.node", "--mcp", "--dir", str(self.daemon.root)]
         return answer
 
     async def launch(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -1238,6 +1611,9 @@ def _node_handlers(node: Node) -> dict[str, Callable[[dict[str, Any]], Awaitable
         protocol.AGENT_CANCEL: node.cancel,
         protocol.AGENT_CLOSE: node.close,
         protocol.TASK_LIST: node.tasks,
+        protocol.MCP_OPEN: node.mcp_open,
+        protocol.MCP_FRAME: node.mcp_frame,
+        protocol.MCP_CLOSE: node.mcp_close,
         protocol.PROBE_AGENT: node.probe_agent,
         protocol.SHUTDOWN: node.shutdown,
     }
@@ -1302,10 +1678,14 @@ async def _serve_one(node: Node, text: bytes) -> None:
 
 
 async def serve(
-    reader: asyncio.StreamReader, out: BinaryIO | asyncio.StreamWriter, daemon: Daemon | None = None
+    reader: asyncio.StreamReader,
+    out: BinaryIO | asyncio.StreamWriter,
+    daemon: Daemon | None = None,
+    *,
+    peer: int | None = None,
 ) -> None:
     """Answer one host until it hangs up or says shutdown; then its tasks are left running, or ended (stdio)."""
-    node = Node(out, daemon)
+    node = Node(out, daemon, peer=peer)
     answering: set[asyncio.Task[None]] = set()
     stopped = asyncio.ensure_future(node.stopped.wait())
     try:
@@ -1363,7 +1743,7 @@ def run_stdio() -> int:
 
 async def _connection(daemon: Daemon, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
     try:
-        await serve(reader, writer, daemon)
+        await serve(reader, writer, daemon, peer=_peer_pid(writer.get_extra_info("socket")))
     finally:
         with contextlib.suppress(OSError, ConnectionError):
             writer.close()
@@ -1396,6 +1776,7 @@ async def run_daemon_async(root: Path, *, idle_s: float = IDLE_EXIT_S) -> int:
     pid_path(root).write_text(str(os.getpid()), encoding="utf-8")
     daemon = Daemon(root)
     daemon.sweep()
+    daemon.recover()
     server = await asyncio.start_unix_server(partial(_connection, daemon), path=str(sock), limit=_LINE_LIMIT)
     os.chmod(sock, 0o600)
     stop = asyncio.Event()

@@ -1488,6 +1488,10 @@ class WiringMixin:
                 announce_exception=self.subagents.announce_dag_exception,
                 adopt=self.subagents.adopt_background_run,
                 charge=self.subagents.charge_dag_run,
+                # The manager's own sandbox builder, so a graph node's exec
+                # runs in the VM its tools.sandbox configured rather than on
+                # the host -- the silent fallback the sandbox docs disown.
+                sandbox_for=self.subagents.sandbox_executor_for,
                 ask=self._confirm_graph,
                 control_reachable=self.dag_control_reachable,
                 control_advert=self.dag_control_advert,
@@ -1762,6 +1766,9 @@ class WiringMixin:
             announce_exception=self.subagents.announce_dag_exception,
             adopt=self.subagents.adopt_background_run,
             charge=self.subagents.charge_dag_run,
+            # Same manager hooks as the registered tool: the sandbox builder
+            # above, for the same reason -- a stored graph's nodes exec too.
+            sandbox_for=self.subagents.sandbox_executor_for,
             ask=self._confirm_graph,
             # Same manager hooks as the registered tool (see the docstring above):
             # a playbook step is an ordinary DAG node, so it is judged on the same

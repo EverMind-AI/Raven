@@ -40,6 +40,7 @@ from raven.config.schema import (
     ThirdPartyOpenAISubagentConfig,
 )
 from raven.contracts.memory import Memory
+from raven.contracts.subagent_backend import SubagentActionAbortedError
 from raven.providers.base import LLMResponse, ToolCallRequest
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.sandbox import ExecResult, SandboxExecutor
@@ -108,6 +109,35 @@ def _make_manager(max_concurrent: int) -> SubagentManager:
         workspace=Path("/tmp"),
         max_concurrent=max_concurrent,
     )
+
+
+def test_a_graph_nodes_executor_comes_from_the_spawn_paths_own_builder(monkeypatch, tmp_path: Path) -> None:
+    """The graph executor builder is the spawn paths' single source of truth:
+    the config, owned-id set, home mount and sandbox dir a node's VM is built
+    with are the ones a spawn's VM is, so the two dispatch routes cannot drift
+    back apart once a node execs sandboxed."""
+    from raven.agent.subagent import manager as manager_module
+    from raven.config.paths import get_sandbox_dir
+    from raven.sandbox.config import SandboxConfig
+
+    config = SandboxConfig(backend="none")
+    mgr = SubagentManager(provider=_StubProvider(), workspace=tmp_path, sandbox_config=config)
+    sentinel = object()
+    captured: dict[str, Any] = {}
+
+    def fake_build(cfg, workspace, owned_ids, extra_volumes, *, sandbox_dir):
+        captured.update(
+            cfg=cfg, workspace=workspace, owned_ids=owned_ids, extra_volumes=extra_volumes, sandbox_dir=sandbox_dir
+        )
+        return sentinel
+
+    monkeypatch.setattr(manager_module, "build_executor", fake_build)
+    assert mgr.sandbox_executor_for(tmp_path) is sentinel
+    assert captured["cfg"] is config
+    assert captured["workspace"] == tmp_path
+    assert captured["owned_ids"] is mgr._owned_ids
+    assert captured["extra_volumes"] == mgr._home_volume(tmp_path)
+    assert captured["sandbox_dir"] is get_sandbox_dir
 
 
 class _MissingMcpSource:
@@ -190,6 +220,7 @@ def test_registry_late_binds_mcp_sources_across_hot_apply() -> None:
     assert second is not None and second is not first and second.mcp_source is source
 
 
+@pytest.mark.usefixtures("unix_socket_host")
 def test_registry_derives_mcp_injection_from_each_transport_contract() -> None:
     registry = AgentRegistry()
     registry.apply(
@@ -1254,6 +1285,69 @@ def _spawn_origin(agent: str | None, instance: str | None) -> dict[str, Any]:
         "instance": instance,
         "handle": instance or "abcd1234",
     }
+
+
+async def test_a_run_s_record_on_its_machine_goes_once_its_announce_was_taken_and_stays_when_it_was_refused(
+    monkeypatch, tmp_path
+) -> None:
+    """The backend leaves the run's record with the reply (`reported_by_caller`); the manager forgets it after the
+    announce, or, when the draining scheduler refused the announce, keeps it with what the next start's announce needs."""
+    from raven.acp_client import remote_runs
+
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    told: list[bool] = []
+
+    class _OnMachine:
+        streams = False
+
+        async def run(self, task: str, *, task_id: str, reported_by_caller: bool = False, **_: Any) -> str:
+            told.append(reported_by_caller)
+            remote_runs.record(
+                remote_runs.RemoteRun(
+                    machine="box",
+                    task=f"stub@box-{task_id}",
+                    agent="stub@box",
+                    session_key="tui:s1",
+                    handle=task_id,
+                    task_id=task_id,
+                    session_id="s",
+                    prompt_id=3,
+                    next_id=4,
+                    initialize={},
+                    launch_key="k",
+                    config_key="c",
+                    session_cwd="/w",
+                    stateful=False,
+                )
+            )
+            return "what it found"
+
+    manager = SubagentManager(provider=_StubProvider(), workspace=tmp_path)
+    monkeypatch.setattr(manager, "_resolve_backend", lambda agent: _OnMachine())
+    taken = True
+
+    async def _announce(*_a: Any, **_k: Any) -> bool:
+        return taken
+
+    monkeypatch.setattr(manager, "_announce_result", _announce)
+    origin = {"channel": "tui", "chat_id": "s1", "session_key": "tui:s1", "agent": "stub@box"}
+
+    await manager._run_subagent_inner(
+        "t1", "find it", "find", dict(origin), _DummyExecutor(), manager.provider, manager.model
+    )
+
+    assert told == [True], "the backend is told the reply is reported here"
+    assert remote_runs.pending() == [], "announced: the record is gone"
+
+    taken = False
+    await manager._run_subagent_inner(
+        "t2", "find it", "find", dict(origin), _DummyExecutor(), manager.provider, manager.model
+    )
+
+    (kept,) = remote_runs.pending()
+    assert (kept.task_id, kept.task_summary, kept.origin["session_key"]) == ("t2", "find", "tui:s1"), (
+        "refused: kept for the next start, with what its announce needs"
+    )
 
 
 async def test_announcement_carries_the_instance_handle() -> None:
@@ -5178,3 +5272,190 @@ def test_a_prefix_that_names_no_section_is_left_to_the_pool_to_derive() -> None:
     mgr.registry.backend("local")._pin()
 
     assert asked == [("deepseek-ai/DeepSeek-V3", None), ("mylocal/m", "mylocal")]
+
+
+async def test_a_dispatch_left_running_on_its_machine_when_the_host_stops_is_neither_finished_nor_announced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Shutdown cancels every run; one on a machine goes on under its daemon, and the next host picks it up."""
+    from raven.acp_client import remote_runs
+    from raven.agent.subagent.history import nodes_root
+    from raven.agent.subagent.spawn_tool import SpawnTool
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+    from raven.session.manager import SessionManager
+
+    home = tmp_path / "home"
+    submitted: list[Any] = []
+    mgr = SubagentManager(
+        provider=_StubProvider(),
+        workspace=home,
+        session_dir=lambda key: SessionManager(home).session_dir(key),
+        max_concurrent=2,
+        agents=[ThirdPartyCliSubagentConfig(name="Remote", command="cat {prompt_file}")],
+    )
+    mgr.set_submit(submitted.append)
+    finalized: list[str] = []
+
+    async def finalize(session_key: Any, record: Any) -> None:
+        finalized.append(record.node_id)
+
+    monkeypatch.setattr(mgr, "_finalize_node_claim", finalize)
+    started = asyncio.Event()
+
+    class _OnMachine:
+        async def run(self, task: str, **kwargs: Any) -> str:
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                # What the acp backend does for a run on a machine while the host is leaving.
+                remote_runs.mark_left(kwargs["task_id"])
+                raise
+            return "never"
+
+    mgr.registry._backends["Remote"] = _OnMachine()
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _DummyExecutor())
+    tool = SpawnTool(manager=mgr)
+    tool.set_context("cli", "direct", "cli:direct")
+    await tool.execute(node_id="r1", task_summary="Run on the machine", task="Go.", subagent="Remote")
+    await asyncio.wait_for(started.wait(), timeout=5)
+
+    assert await mgr.cancel_all(reason="the gateway stopped") == 1
+
+    nodes = nodes_root(SessionManager(home).session_dir("cli:direct"))
+    meta = json.loads((nodes / "r1.meta.json").read_text(encoding="utf-8"))
+    assert meta["status"] == "running" and "ended_at_ms" not in meta, (
+        "the record stays open for the host that picks it up"
+    )
+    assert not (nodes / "r1.out.md").exists() and not (nodes / "r1.error.md").exists()
+    assert submitted == [] and finalized == [], "nothing is announced or closed here"
+
+
+async def test_a_dispatch_left_on_its_machine_has_its_origin_and_summary_added_to_its_record_for_the_next_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What the next host's announce needs and the backend never had: written when this host learns the run was left."""
+    from raven.acp_client import remote_runs
+    from raven.agent.subagent.spawn_tool import SpawnTool
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+    from raven.session.manager import SessionManager
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("RAVEN_HOME", str(home))
+    mgr = SubagentManager(
+        provider=_StubProvider(),
+        workspace=home,
+        session_dir=lambda key: SessionManager(home).session_dir(key),
+        max_concurrent=2,
+        agents=[ThirdPartyCliSubagentConfig(name="Remote", command="cat {prompt_file}")],
+    )
+    mgr.set_submit(lambda request: None)
+    started = asyncio.Event()
+
+    class _OnMachine:
+        async def run(self, task: str, *, task_id: str, authored_task: str | None = None, **kwargs: Any) -> str:
+            remote_runs.record(
+                remote_runs.RemoteRun(
+                    kind="cli",
+                    machine="box",
+                    task=f"remote-{task_id}",
+                    agent="Remote",
+                    session_key=kwargs["session_key"],
+                    handle=kwargs.get("instance") or task_id,
+                    task_id=task_id,
+                    session_id="",
+                    prompt_id=0,
+                    next_id=0,
+                    initialize=None,
+                    launch_key="",
+                    config_key="",
+                    session_cwd="/root/raven-work/x",
+                    stateful=False,
+                    authored_task=authored_task or "",
+                )
+            )
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                remote_runs.mark_left(task_id)
+                raise
+            return "never"
+
+    mgr.registry._backends["Remote"] = _OnMachine()
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _DummyExecutor())
+    tool = SpawnTool(manager=mgr)
+    tool.set_context("cli", "direct", "cli:direct")
+    await tool.execute(node_id="r1", task_summary="Run on the machine", task="Go.", subagent="Remote")
+    await asyncio.wait_for(started.wait(), timeout=5)
+
+    assert await mgr.cancel_all(reason="the gateway stopped") == 1
+
+    (run,) = remote_runs.pending()
+    assert run.task_summary == "Run on the machine" and run.authored_task == "Go."
+    assert run.origin["node_id"] == "r1" and run.origin["session_key"] == "cli:direct"
+    assert run.origin["authored_task"] == "Go." and run.origin["handle"] == run.task_id, (
+        "no instance: the handle is the dispatch"
+    )
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("the agent went away"), SubagentActionAbortedError("stopped")])
+async def test_a_failed_run_s_record_on_its_machine_stays_when_the_draining_scheduler_refuses_its_announce(
+    monkeypatch, tmp_path, failure
+) -> None:
+    """The failure case of the reply case above: the backend left the record (its prompt was out), the announce of the
+    error was refused, so the record stays for the next start to report; an announce that was taken forgets it.
+    Both error branches, the plain failure and the terminal safety decision."""
+    from raven.acp_client import remote_runs
+
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+
+    class _FailsThere:
+        streams = False
+
+        async def run(self, task: str, *, task_id: str, reported_by_caller: bool = False, **_: Any) -> str:
+            remote_runs.record(
+                remote_runs.RemoteRun(
+                    machine="box",
+                    task=f"stub@box-{task_id}",
+                    agent="stub@box",
+                    session_key="tui:s1",
+                    handle=task_id,
+                    task_id=task_id,
+                    session_id="s",
+                    prompt_id=3,
+                    next_id=4,
+                    initialize={},
+                    launch_key="k",
+                    config_key="c",
+                    session_cwd="/w",
+                    stateful=False,
+                )
+            )
+            raise failure
+
+    manager = SubagentManager(provider=_StubProvider(), workspace=tmp_path)
+    monkeypatch.setattr(manager, "_resolve_backend", lambda agent: _FailsThere())
+    taken = False
+
+    async def _announce(*_a: Any, **_k: Any) -> bool:
+        return taken
+
+    monkeypatch.setattr(manager, "_announce_result", _announce)
+    origin = {"channel": "tui", "chat_id": "s1", "session_key": "tui:s1", "agent": "stub@box"}
+
+    await manager._run_subagent_inner(
+        "t1", "find it", "find", dict(origin), _DummyExecutor(), manager.provider, manager.model
+    )
+
+    (kept,) = remote_runs.pending()
+    assert (kept.task_id, kept.task_summary, kept.origin["session_key"]) == ("t1", "find", "tui:s1"), (
+        "refused: the failure waits for the next start, with what its announce needs"
+    )
+
+    taken = True
+    await manager._run_subagent_inner(
+        "t2", "find it", "find", dict(origin), _DummyExecutor(), manager.provider, manager.model
+    )
+
+    assert [run.task_id for run in remote_runs.pending()] == ["t1"], "announced: t2's record is gone"

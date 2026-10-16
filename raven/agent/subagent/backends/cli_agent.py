@@ -21,6 +21,12 @@ closed after it -- and its output lines come back on the link and are read as
 a local run's are. Nothing of this computer goes with it: not its login shell,
 not its working directory, not the files that came with the task, which are
 named to it by address.
+
+While this computer stops, a run on a machine is left with the machine's
+daemon and its record with this computer (:mod:`raven.acp_client.remote_runs`),
+and the next process reads the command's whole output off the daemon and
+reports it (``pick_up``, through :mod:`raven.agent.subagent.resume_remote`),
+as an acp entry's turn is picked up.
 """
 
 from __future__ import annotations
@@ -38,7 +44,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -194,6 +200,22 @@ class _OnMachine:
     """The run's directory under the entry's root, made there and resolved to an absolute path."""
     link: Any
     """The machine's node pool: the launch, the prompt file, the frames and the end."""
+    skey: str = ""
+    """The dispatch's session key, for the run's record (:mod:`raven.acp_client.remote_runs`)."""
+    handle: str = ""
+    """The dispatch's handle, for the record."""
+    authored_task: str = ""
+    """The task as the dispatching model wrote it, for the record: what an announce after a restart quotes."""
+    reported_by_caller: bool = False
+    """Whether the caller reports the reply itself and forgets the record then (``remote_runs.forget_dispatch``):
+    the record outlives the command's output; otherwise it goes with it."""
+
+
+def _untrack(tracker: Any, *, keep: bool) -> None:
+    """The run's record on this computer goes with a command that ended here, or stays: for the next process, or
+    for the caller that reports the output (``_OnMachine.reported_by_caller``)."""
+    if tracker is not None:
+        tracker.close(keep=keep)
 
 
 class CliAgentBackend:
@@ -661,6 +683,9 @@ class CliAgentBackend:
             )
         except remote_path.NodeCallError as exc:
             raise RuntimeError(f"CLI agent {self.name!r}: {exc}") from None
+        # The run's record on this computer: for the process after this one
+        # to pick up, should this one stop while the command runs.
+        tracker = self._track_on_machine(endpoint, placed, task_id=task_id, agent_id=agent_id)
         out_lines: list[str] = []
         err_lines: list[str] = []
         publish_out_line = self._line_publisher(on_delta)
@@ -692,13 +717,35 @@ class CliAgentBackend:
         try:
             rc = await asyncio.wait_for(drive(), timeout=self.timeout) if self.timeout is not None else await drive()
         except asyncio.TimeoutError:
+            # Ended on the machine; the record stays for the caller that
+            # reports the failure, as it does for the output (below), so a
+            # host that stops before the announce still reports the end.
             await endpoint.end()
+            _untrack(tracker, keep=placed.reported_by_caller)
             raise CliAgentTimeoutError(f"CLI agent {self.name!r} timed out after {self.timeout}s") from None
-        except BaseException:
-            # A cancel, or a delta sink that raised: either way nothing may
-            # be left running on the machine. See ``_kill_process_group``.
+        except asyncio.CancelledError:
+            # While this process stops, the command stays with the machine's
+            # daemon (``ChannelEndpoint.end``) and its record with this
+            # computer, for the next process to pick up, and the manager
+            # reads the dispatch as left, not cancelled. Any other cancel
+            # ends the command there. See ``_kill_process_group``.
+            left = tracker is not None and bool(getattr(endpoint, "stays", False))
             await endpoint.end()
+            if left:
+                from raven.acp_client import remote_runs
+
+                remote_runs.mark_left(task_id)
+            _untrack(tracker, keep=left)
             raise
+        except BaseException:
+            # A delta sink that raised: nothing may be left running on the
+            # machine.
+            await endpoint.end()
+            _untrack(tracker, keep=False)
+            raise
+        # The output is the reply: a caller that reports it keeps the record
+        # until it has, so a host that stops in between reads the output again.
+        _untrack(tracker, keep=placed.reported_by_caller)
         if (why := endpoint.ended()) is not None:
             raise RuntimeError(f"CLI agent {self.name!r}: {why}")
         stdout = "".join(f"{line}\n" for line in out_lines)
@@ -771,6 +818,11 @@ class CliAgentBackend:
         authored_task: str | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
         media: Sequence[Media] = (),
+        # Whether the caller reports the reply itself (the manager's announce)
+        # and removes the run's record on its machine then
+        # (`remote_runs.forget_dispatch`); otherwise the record goes as this
+        # returns. Read on a machine only: a command here leaves no record.
+        reported_by_caller: bool = False,
     ) -> str:
         # A path here means nothing on another machine: the files that came
         # with the task are named to an agent there by address instead, once
@@ -830,6 +882,8 @@ class CliAgentBackend:
                         runtime_env=runtime_env,
                         mcp_file=mcp_path,
                         media=media,
+                        authored_task=authored_task,
+                        reported_by_caller=reported_by_caller,
                     )
                     for note in filter(None, (self._withheld_note(grant), grant.note_text())):
                         notice = f"\n\n[raven] {note}."
@@ -897,6 +951,8 @@ class CliAgentBackend:
         runtime_env: dict[str, str] | None = None,
         mcp_file: str | None = None,
         media: Sequence[Media] = (),
+        authored_task: str | None = None,
+        reported_by_caller: bool = False,
     ) -> str:
         skey = session_key or "default"
         if self.machine:
@@ -910,6 +966,8 @@ class CliAgentBackend:
                 on_delta=on_delta,
                 notice_sink=notice_sink,
                 media=media,
+                authored_task=authored_task,
+                reported_by_caller=reported_by_caller,
             )
         cwd = self.cwd or str(workspace)
         # Here rather than beside either launch: this lane sees nothing of what
@@ -947,6 +1005,8 @@ class CliAgentBackend:
         on_delta: Callable[[str], Awaitable[None]] | None,
         notice_sink: Callable[[str], Awaitable[None]] | None,
         media: Sequence[Media],
+        authored_task: str | None = None,
+        reported_by_caller: bool = False,
     ) -> str:
         """The run on the entry's machine: placed there first, with the task's files named by address.
 
@@ -957,7 +1017,13 @@ class CliAgentBackend:
         """
         from raven.acp_client import remote
 
-        placed = await self._on_machine(handle)
+        placed = replace(
+            await self._on_machine(handle),
+            skey=skey,
+            handle=handle,
+            authored_task=authored_task or "",
+            reported_by_caller=reported_by_caller,
+        )
         # Nothing is carried to the machine: the files that come with the
         # task are named to the agent by address, and it looks for them there.
         if note := remote.files_note(media, placed.target):
@@ -1144,6 +1210,198 @@ class CliAgentBackend:
             placed=placed,
         )
 
+    def _transcript(self, stdout: str) -> tuple[str | None, str | None]:
+        """The session id and the reply the command's transcript carries, by its format; ``None`` each when it has none."""
+        if self.transcript_format == "codex_jsonl":
+            return parse_codex_jsonl(stdout)
+        if self.transcript_format == "claude_stream_json":
+            jsonl_id, jsonl_reply, is_error = parse_claude_stream_json(stdout)
+            # Claude does not reliably exit non-zero under -p, so the exit code
+            # check is not enough on its own.
+            if is_error:
+                raise CliAgentReportedError(
+                    f"CLI agent {self.name!r} reported an error: {(jsonl_reply or stdout).strip()[-2000:]}"
+                )
+            return jsonl_id, jsonl_reply
+        if self.transcript_format == "openclaw_json":
+            return parse_openclaw_json(stdout)
+        if self.transcript_format == "opencode_json":
+            return parse_opencode_json(stdout)
+        return None, None
+
+    def _reply_from(self, stdout: str, stderr: str, parsed: str | None) -> str:
+        """The answer in what the command wrote: the transcript's reply when its format gives one, else the matched or whole stdout.
+
+        stderr is a log lane, not part of the answer: it streams to the live
+        console and rides in the attempts record, and folding it into a
+        successful reply is what forced quiet launchers to bury their
+        progress in files instead of logging it. It still stands in when
+        stdout said nothing at all -- an answerless run's stderr is the only
+        account it left.
+        """
+        if parsed is not None:
+            return parsed.strip()
+        if self._output_re is not None and (m := self._output_re.search(stdout)) is not None:
+            return m.group(1).strip()
+        return stdout.strip() or stderr.strip()
+
+    def _track_on_machine(self, endpoint: Any, placed: _OnMachine, *, task_id: str, agent_id: str | None) -> Any:
+        """The record of this run on its machine (``remote_runs.Tracker``), or ``None`` for an endpoint that is not a node's.
+
+        A cli run's reply is the whole of its output, read from the start,
+        so the record never moves past frame 0: the pick-up replays every
+        line (``pick_up``). The session id is the agent id the launch minted,
+        when it minted one; an id derived from the output is not known here,
+        and the pick-up reads it off the output it replays (``_bind_picked_up``).
+        """
+        from raven.acp_client import remote_runs
+
+        task = getattr(endpoint, "task", None)
+        if not isinstance(task, str):
+            return None
+        run = remote_runs.RemoteRun(
+            kind="cli",
+            machine=self.machine or "",
+            task=task,
+            agent=self.name,
+            session_key=placed.skey,
+            handle=placed.handle,
+            task_id=task_id,
+            session_id=agent_id or "",
+            prompt_id=0,
+            next_id=0,
+            initialize=None,
+            launch_key="",
+            config_key="",
+            session_cwd=placed.session_cwd,
+            stateful=self.is_stateful,
+            authored_task=placed.authored_task,
+        )
+        try:
+            return remote_runs.Tracker(run)
+        except OSError as exc:
+            logger.warning(
+                "CLI agent {!r}: the run on machine {} could not be recorded: {}", self.name, self.machine, exc
+            )
+            return None
+
+    async def pick_up(self, run: Any, *, pool: Any = None) -> Any:
+        """The output the command in ``run`` owes, read off its machine after this computer restarted; or why there is none.
+
+        What :mod:`raven.agent.subagent.resume_remote` asks of a cli entry for
+        a run a process before this one left on the machine
+        (:class:`raven.acp_client.remote_runs.RemoteRun`, kind ``cli``). The
+        machine's daemon replays every line the command wrote and hands the
+        rest over as it comes -- a cli run's reply is the whole of its
+        output, read from the start -- and the exit code ends it, as a run
+        here ends (``_exec_there``). Raises
+        :class:`raven.acp_client.remote_pickup.UnreachableError` when the
+        machine cannot be asked, or this computer stops under the pick-up,
+        so the record stays for a later start; every other outcome is a
+        ``PickedUp``, and the record is the caller's to remove.
+        """
+        from raven.acp_client import remote
+        from raven.acp_client.remote_pickup import PICKED_UP_NOTE, PickedUp, UnreachableError
+        from raven.ops import remote_path
+
+        link = pool if pool is not None else remote_path.nodes()
+        if link is None:
+            raise UnreachableError(
+                f"this process does not reach registered machines, so the run on machine {run.machine} waits"
+            )
+        try:
+            target = remote.machine(run.machine)
+        except remote.RemoteMachineError as exc:
+            return PickedUp("error", f"the run of {run.agent!r} cannot be picked up: {exc}")
+        try:
+            rows = await link.tasks(run.machine)
+        except remote_path.NodeCallError as exc:
+            raise UnreachableError(str(exc)) from None
+        if not any(row.get("task") == run.task for row in rows):
+            return PickedUp(
+                "error",
+                f"machine {target.label} no longer has the run of {run.agent!r} (task {run.task}); "
+                "its record there was removed, or the machine's node directory was",
+            )
+        try:
+            endpoint, _attached = await link.attach(run.machine, run.task, name=run.agent, after=0)
+        except remote_path.NodeCallError as exc:
+            if exc.reason in ("unknown_task", None) and "no longer runs" in str(exc):
+                return PickedUp("error", str(exc))
+            raise UnreachableError(str(exc)) from None
+        out_lines: list[str] = []
+        err_lines: list[str] = []
+
+        async def read_out() -> None:
+            while raw := await endpoint.readline():
+                out_lines.append(raw.decode("utf-8", "replace").rstrip("\n"))
+
+        async def read_err() -> None:
+            while raw := await endpoint.readerr():
+                err_lines.append(raw.decode("utf-8", "replace").rstrip("\n"))
+
+        try:
+            await asyncio.gather(read_out(), read_err())
+            rc = await endpoint.wait()
+        except BaseException:
+            await endpoint.end()
+            raise
+        if (why := endpoint.ended()) is not None:
+            if remote.leaving():
+                raise UnreachableError(
+                    f"this computer stopped while the run of {run.agent!r} on machine {target.label} was being "
+                    "picked up; it waits for the next start"
+                )
+            return PickedUp(
+                "error", f"the run of {run.agent!r} on machine {target.label} ended while this computer was away: {why}"
+            )
+        stdout = "".join(f"{line}\n" for line in out_lines)
+        stderr = "".join(f"{line}\n" for line in err_lines)
+        if rc != 0:
+            said = _human_failure(stdout, stderr)
+            return PickedUp("error", f"CLI agent {run.agent!r} exited {rc}" + (f": {said}" if said else ""))
+        try:
+            jsonl_id, parsed = self._transcript(stdout)
+        except CliAgentReportedError as exc:
+            return PickedUp("error", str(exc))
+        warning = await self._bind_picked_up(run, jsonl_id, stdout, stderr)
+        output = await clamp_output(
+            self._reply_from(stdout, stderr, parsed), self.max_output_chars, agent=self.name, reserved=warning
+        )
+        return PickedUp(
+            "ok",
+            output + f"\n\n[raven] Ran on machine {target.label}, in {remote.shown(target, run.session_cwd)}, "
+            f"{PICKED_UP_NOTE}; the files it wrote are there, not on this computer." + warning,
+        )
+
+    async def _bind_picked_up(self, run: Any, jsonl_id: str | None, stdout: str, stderr: str) -> str:
+        """Bind the instance a picked-up create left unbound to the session id its output names; the warning when none.
+
+        The dispatch that started the command ran ``_attempt``'s deferred
+        commit only on its own return; a host that stopped first never got
+        there, and the record carries no id for a ``derived`` entry (the
+        launch minted none). Read here the way ``_attempt`` reads it --
+        the transcript's id, else the pattern over stdout then stderr -- so
+        the next dispatch to the handle resumes this session instead of
+        opening a fresh one. Nothing for a minted id (bound at the launch)
+        or a stateless run.
+        """
+        if run.session_id or not run.handle or self.id_source != "derived":
+            return ""
+        agent_id = jsonl_id
+        if agent_id is None and self._session_id_re is not None:
+            for stream in (stdout, stderr):
+                if (m := self._session_id_re.search(stream)) is not None:
+                    agent_id = m.group(1)
+                    break
+        if agent_id is None:
+            return (
+                "\n\n[raven] Warning: no session id could be extracted from the create "
+                "output, so this instance is not resumable. Use a new handle to recreate."
+            )
+        await self._registry.commit(run.session_key, self.name, run.handle, agent_id)
+        return ""
+
     async def _attempt(
         self,
         task: str,
@@ -1180,22 +1438,7 @@ class CliAgentBackend:
                 mcp_file=mcp_file,
             )
 
-        jsonl_id: str | None = None
-        jsonl_reply: str | None = None
-        if self.transcript_format == "codex_jsonl":
-            jsonl_id, jsonl_reply = parse_codex_jsonl(stdout)
-        elif self.transcript_format == "claude_stream_json":
-            jsonl_id, jsonl_reply, is_error = parse_claude_stream_json(stdout)
-            # Claude does not reliably exit non-zero under -p, so the exit code
-            # check above is not enough on its own.
-            if is_error:
-                raise CliAgentReportedError(
-                    f"CLI agent {self.name!r} reported an error: {(jsonl_reply or stdout).strip()[-2000:]}"
-                )
-        elif self.transcript_format == "openclaw_json":
-            jsonl_id, jsonl_reply = parse_openclaw_json(stdout)
-        elif self.transcript_format == "opencode_json":
-            jsonl_id, jsonl_reply = parse_opencode_json(stdout)
+        jsonl_id, jsonl_reply = self._transcript(stdout)
 
         if created and self.id_source == "derived":
             if jsonl_id is not None:
@@ -1214,18 +1457,7 @@ class CliAgentBackend:
         if created and agent_id is not None:
             await self._registry.commit(skey, self.name, handle, agent_id)
 
-        if jsonl_reply is not None:
-            output = jsonl_reply.strip()
-        elif self._output_re is not None and (m := self._output_re.search(stdout)) is not None:
-            output = m.group(1).strip()
-        else:
-            # stderr is a log lane, not part of the answer: it streams to the
-            # live console and rides in the attempts record, and folding it
-            # into a successful reply is what forced quiet launchers to bury
-            # their progress in files instead of logging it. It still stands
-            # in when stdout said nothing at all -- an answerless run's stderr
-            # is the only account it left.
-            output = stdout.strip() or stderr.strip()
+        output = self._reply_from(stdout, stderr, jsonl_reply)
 
         warning = None
         if created and self.id_source == "derived" and agent_id is None:

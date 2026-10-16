@@ -35,13 +35,19 @@
  *   - #wsGrip, which has no interior at all, so nothing portals into it.
  */
 
+import { MoreVerticalIcon } from '@hugeicons/core-free-icons'
 import { useSyncExternalStore } from 'react'
 
+import { Icon } from '../components/Icon'
 import { RavenMark } from '../components/RavenMark'
+import * as exportWizard from '../features/export/store'
 import { rename as renameSession } from '../features/rail/store'
 import * as trajectory from '../features/trajectory/store'
 import { t } from '../i18n/t'
+import { readingImported } from '../lib/imported'
+import { servesBugReport } from '../rpc/capabilities'
 import * as lang from '../state/lang'
+import { show as showMenu } from '../state/menu'
 import { Banner } from './Banner'
 import { WorkdirTag } from './WorkdirTag'
 
@@ -82,15 +88,52 @@ function Header(): JSX.Element {
         </svg>
         <span className="bdg" id="wsBdg" hidden>2</span>
       </button>
+      <MoreButton />
     </>
   )
 }
 
+/* The conversation's menu, in the corner slot: always rendered, so the slot
+   beside it -- the panel toggle's, where the desk launcher stands -- never
+   moves with the conversation, and disabled while there is nothing the menu
+   could act on. Whether there is reads the trajectory store, as the toggle
+   beside it does, through the export domain's own predicate. The rows are the
+   shared context menu's, placed under the button: Export always, and Report a
+   problem while the gateway announces a bug report receiver. */
+function MoreButton(): JSX.Element {
+  const state = useSyncExternalStore(trajectory.subscribe, trajectory.get)
+  const key = state.sessionKey
+  const offered = exportWizard.exportable(key, trajectory.available(state))
+  return (
+    <button
+      className="ghost-ic tipdn"
+      id="moreBtn"
+      aria-haspopup="menu"
+      data-tip={lang.attr('gui.export.more')}
+      aria-label={lang.attr('gui.export.more')}
+      disabled={!offered}
+      onClick={(e) => {
+        if (!offered || key === null) return
+        e.stopPropagation()
+        const r = e.currentTarget.getBoundingClientRect()
+        showMenu(r.left, r.bottom + 4, [
+          { label: t('gui.export.menu_export'), fn: () => exportWizard.open('export', key) },
+          ...(servesBugReport()
+            ? [{ label: t('gui.export.menu_report'), fn: () => exportWizard.open('report', key) }]
+            : []),
+        ])
+      }}
+    >
+      <Icon icon={MoreVerticalIcon} size={15} stroke={1.8} />
+    </button>
+  )
+}
+
 /* The switch between the conversation and its trajectory, left of the panel
-   toggle: the corner slot is the panel toggle's, and the desk launcher stands
-   in that same slot (fixed at the window's edge, `#wsBtn` hidden under
-   `.desk-ready`), so anything placed after it is covered the moment a desk is
-   up. Rendered only while the trajectory store says the view may be
+   toggle: the corner slot is the conversation menu's (`#moreBtn`), and the
+   desk launcher stands in the panel toggle's slot beside it (fixed one slot in
+   from the window's edge, `#wsBtn` hidden under `.desk-ready`), so anything
+   placed between the two is covered the moment a desk is up. Rendered only while the trajectory store says the view may be
    offered -- the gateway serves it, it is on, a conversation with content is
    open -- so the served header carries no trace of it, and the words come
    through the catalogue because they change with the view. The store is read
@@ -157,7 +200,7 @@ export function ChatTop(): JSX.Element {
     <>
       <div
         className="top"
-        onClick={(e) => { if ((e.target as Element).closest('#title')) renameSession() }}
+        onClick={(e) => { if ((e.target as Element).closest('#title') && !readingImported()) renameSession() }}
       >
         <Header />
       </div>

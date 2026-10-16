@@ -295,6 +295,19 @@ describe('a card', () => {
     expect(lineOf('moved')).toBe('gui.agent.kind_acp · gui.agent.tag_stale')
   })
 
+  it('says which registered machine a card runs on, ahead of the line about it, and nothing on one that runs here', async () => {
+    install([row({ name: 'claude_code' }), row({ name: 'claude_code@ravenx2', machine: 'ravenx2' })])
+    await mount()
+    expect(rowNamed('claude_code').querySelector('.extAgents-mc')).toBeNull()
+    const chip = rowNamed('claude_code@ravenx2').querySelector('.extAgents-one .extAgents-mc')!
+    expect(chip.textContent).toBe('ravenx2')
+    expect(chip.getAttribute('title')).toBe('gui.agent.on_machine {"id":"ravenx2"}')
+    /* The id leads the line about the agent, not the name row: a card is too
+       narrow to carry both the name and the machine whole up there. */
+    expect(rowNamed('claude_code@ravenx2').querySelector('.extAgents-nm .extAgents-mc')).toBeNull()
+    expect(lineOf('claude_code@ravenx2')).toMatch(/gui\.agent\.short_claude_code$/)
+  })
+
   it('carries a corner control only for connect and install, none once connected', async () => {
     install([
       row({ name: 'Raven', preset: undefined, kind: 'builtin', builtin: true, configured: false, probe_status: 'unknown' }),
@@ -1813,9 +1826,23 @@ describe('the model pill', () => {
     const { acts } = install([row({ name: 'Raven-Code', preset: undefined, kind: 'acp', vendored: true, configured: false, own: true })])
     await mount()
     await openSheet('Raven-Code')
-    /* Part of Raven, so testable but never disconnected. */
-    expect(sheetActs()).toEqual(['gui.agent.test_label'])
-    await click(sheet()!.querySelectorAll('.extAgents-act button')[0])
+    expect(sheetActs()).toEqual(['gui.agent.disconnect', 'gui.agent.test_label'])
+    await click(sheet()!.querySelectorAll('.extAgents-act button')[1])
     expect(acts.map((a) => a.slice(0, 2))).toEqual([['test', 'Raven-Code']])
+  })
+
+  /* Part of Raven, and still the reader's to take off the roster: a shipped folder
+     is switched off by a row the server writes for it, and back on by removing
+     that row, exactly as any other agent is switched. Whether it was written
+     into config by an installer or found under `agents/` is storage, and the
+     verbs do not change with it. Only the built-in loop has no switch. */
+  it('disconnects a discovered agent, and connects it back', async () => {
+    const { acts } = install([row({ name: 'Raven-Code', preset: undefined, kind: 'acp', vendored: true, configured: false, own: true })])
+    await mount()
+    await openSheet('Raven-Code')
+    await click([...sheet()!.querySelectorAll<HTMLElement>('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.disconnect'))
+    expect(acts).toEqual([['toggle', 'Raven-Code', { enabled: false }]])
+    await click([...sheet()!.querySelectorAll<HTMLElement>('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
+    expect(acts.at(-1)).toEqual(['toggle', 'Raven-Code', { enabled: true }])
   })
 })

@@ -5,8 +5,10 @@
 daemon, starting it when none is up -- what the host runs over ssh;
 ``--stdio`` serves the host on stdin and stdout directly, with agents that
 end when the host hangs up (tests, and a machine with no socket to spare);
-``--version`` prints what the host checks before using a node: the protocol
-and the digest of this code.
+``--mcp --dir D --task T --lend L --server S`` is what an agent the daemon
+started spawns as a stdio MCP server, to reach a server the host lends it
+(:mod:`raven.node.bridge`); ``--version`` prints what the host checks before
+using a node: the protocol and the digest of this code.
 """
 
 from __future__ import annotations
@@ -23,9 +25,13 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--stdio", action="store_true", help="serve JSON-RPC on stdin and stdout; agents end with it")
     group.add_argument("--serve", action="store_true", help="run the daemon under --dir until idle or stopped")
     group.add_argument("--attach", action="store_true", help="bridge stdin and stdout to the daemon under --dir")
+    group.add_argument("--mcp", action="store_true", help="carry one MCP stream for --task to the host, via the daemon")
     group.add_argument("--version", action="store_true", help="print the protocol and the code digest as JSON")
     parser.add_argument("--dir", help="the node directory on this machine (run/, tasks/, log/ live under it)")
     parser.add_argument("--idle", type=float, default=None, help="seconds a daemon stays with nothing to do")
+    parser.add_argument("--task", help="--mcp: the task on this machine the stream belongs to")
+    parser.add_argument("--lend", help="--mcp: the host's dispatch the server was lent to")
+    parser.add_argument("--server", help="--mcp: the name of the server the host lent")
     args = parser.parse_args(argv)
     if args.version:
         from raven.node import bundle, protocol
@@ -37,8 +43,14 @@ def main(argv: list[str] | None = None) -> int:
 
         return run_stdio()
     if not args.dir:
-        parser.error("--serve and --attach need --dir")
+        parser.error("--serve, --attach and --mcp need --dir")
     root = Path(args.dir).expanduser()
+    if args.mcp:
+        if not (args.task and args.lend and args.server):
+            parser.error("--mcp needs --task, --lend and --server")
+        from raven.node.bridge import run_mcp
+
+        return run_mcp(root, task=args.task, lend=args.lend, server_name=args.server)
     if args.serve:
         from raven.node.server import IDLE_EXIT_S, run_daemon
 

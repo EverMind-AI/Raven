@@ -30,7 +30,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Session channels to include; defaults to tui."
+            "description": "Session channels to include; defaults to tui. 'imported' adds the Imported Conversations to a list of live sessions (never to the archived one)."
           }
         },
         {
@@ -2155,7 +2155,7 @@
         {
           "name": "machine",
           "required": false,
-          "description": "A registered machine, by its id in the machine registry: an acp or cli preset's command is started there by the machine's Raven node and signed in there; an openai preset's endpoint is reached from that machine through an ssh tunnel. The row's name defaults to <preset>@<machine>. Refused for a built-in agent, and unless the machine lane is on and the machine is registered and usable.",
+          "description": "A registered machine, by its id in the machine registry: an acp or cli preset's command is started there by the machine's Raven node and signed in there; an openai preset's endpoint is reached from that machine through an ssh tunnel. The row's name defaults to <preset>@<machine>. Refused for a built-in agent, and unless the machine is registered and usable.",
           "schema": {
             "type": "string"
           }
@@ -10918,6 +10918,737 @@
           }
         }
       }
+    },
+    {
+      "name": "trajectory.turns",
+      "summary": "A session's main-line turns, in start order, for picking which to export or report.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "The session whose turns to read."
+        }
+      ],
+      "result": {
+        "name": "TrajectoryTurnsResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "title",
+            "turns"
+          ],
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "The session's title; empty when it has none."
+            },
+            "turns": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/TrajectoryTurn"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "trajectory.export",
+      "summary": "Validate a selection of turns and start exporting them; an invalid selection is refused with invalid_params naming each turn.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "The session the turns belong to."
+        },
+        {
+          "name": "trace_ids",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "description": "The trace ids of the main-line turns to export."
+        },
+        {
+          "name": "file_name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "The download name; cleaned to a basename ending in .tar.gz."
+        }
+      ],
+      "result": {
+        "name": "TrajectoryExportResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "job_id"
+          ],
+          "properties": {
+            "job_id": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "trajectory.export_status",
+      "summary": "Where an export job stands; a finished one carries its download URL.",
+      "params": [
+        {
+          "name": "job_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "The id trajectory.export returned."
+        }
+      ],
+      "result": {
+        "name": "TrajectoryExportStatusResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "job_id",
+            "state",
+            "phase",
+            "file_name"
+          ],
+          "properties": {
+            "job_id": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "running",
+                "done",
+                "failed",
+                "cancelled"
+              ]
+            },
+            "phase": {
+              "type": "string",
+              "enum": [
+                "collecting",
+                "writing",
+                "done"
+              ]
+            },
+            "file_name": {
+              "type": "string"
+            },
+            "download_url": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Same-origin path that downloads the package; set once done."
+            },
+            "size_bytes": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "counts": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": false,
+              "required": [
+                "spans",
+                "artifacts",
+                "messages"
+              ],
+              "properties": {
+                "spans": {
+                  "type": "integer"
+                },
+                "artifacts": {
+                  "type": "integer"
+                },
+                "messages": {
+                  "type": "integer"
+                }
+              },
+              "description": "How many span records, artifacts and message blobs the package holds; set once done."
+            },
+            "error": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Why the job failed; set only when it did."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "trajectory.export_cancel",
+      "summary": "Stop a running export, or discard a finished package and its download token.",
+      "params": [
+        {
+          "name": "job_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "The id trajectory.export returned."
+        }
+      ],
+      "result": {
+        "name": "TrajectoryExportCancelResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok"
+          ],
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "bugreport.start",
+      "summary": "Validate the problem fields and the turn selection, then start collecting a bug report; an invalid selection is refused with invalid_params naming each turn.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "The session the turns belong to."
+        },
+        {
+          "name": "trace_ids",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "description": "The trace ids of the main-line turns to report."
+        },
+        {
+          "name": "problem",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/BugReportProblem"
+          }
+        }
+      ],
+      "result": {
+        "name": "BugReportStartResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "report_id"
+          ],
+          "properties": {
+            "report_id": {
+              "type": "string",
+              "description": "The Report Session's handle; the bug report id appears in bugreport.status once collected."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "bugreport.status",
+      "summary": "Where a bug report stands: its phase, the items to decide, the summary and the receipt.",
+      "params": [
+        {
+          "name": "report_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "The handle bugreport.start returned."
+        }
+      ],
+      "result": {
+        "name": "BugReportStatusResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "report_id",
+            "phase",
+            "history"
+          ],
+          "properties": {
+            "report_id": {
+              "type": "string"
+            },
+            "bug_report_id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The br-* id, once the snapshot is collected."
+            },
+            "phase": {
+              "type": "string",
+              "enum": [
+                "collecting",
+                "deciding",
+                "finishing",
+                "ready",
+                "uploading",
+                "uploaded",
+                "upload_failed",
+                "failed",
+                "cancelled"
+              ]
+            },
+            "error": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": false,
+              "required": [
+                "message",
+                "retryable"
+              ],
+              "properties": {
+                "message": {
+                  "type": "string"
+                },
+                "retryable": {
+                  "type": "boolean"
+                },
+                "status": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "description": "Why the last step failed; retryable says whether retry_upload may help."
+            },
+            "history": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "state",
+                "auto_kept",
+                "auto_redacted"
+              ],
+              "properties": {
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "on",
+                    "off",
+                    "corrupt",
+                    "unavailable"
+                  ]
+                },
+                "auto_kept": {
+                  "type": "integer"
+                },
+                "auto_redacted": {
+                  "type": "integer"
+                },
+                "warning": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            },
+            "items": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/components/schemas/BugReportItem"
+              },
+              "description": "The items still to decide, set only while deciding; confirmed items first."
+            },
+            "summary": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": false,
+              "required": [
+                "classification",
+                "warnings",
+                "auto_replaced",
+                "kept",
+                "redacted",
+                "acknowledged",
+                "completeness"
+              ],
+              "properties": {
+                "classification": {
+                  "type": "string",
+                  "enum": [
+                    "clean",
+                    "needs_review"
+                  ]
+                },
+                "warnings": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "size_bytes": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "auto_replaced": {
+                  "type": "integer"
+                },
+                "kept": {
+                  "type": "integer"
+                },
+                "redacted": {
+                  "type": "integer"
+                },
+                "acknowledged": {
+                  "type": "integer"
+                },
+                "completeness": {
+                  "type": "string"
+                }
+              },
+              "description": "What will ship, set once the report is frozen."
+            },
+            "receipt": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": false,
+              "required": [
+                "receipt_id",
+                "duplicate"
+              ],
+              "properties": {
+                "receipt_id": {
+                  "type": "string"
+                },
+                "duplicate": {
+                  "type": "boolean"
+                }
+              }
+            },
+            "record_dir": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Where the landed record and package stay on this machine."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "bugreport.item",
+      "summary": "One item's contexts, grouped by identical text and capped, with the hit positions to highlight.",
+      "params": [
+        {
+          "name": "report_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "The handle bugreport.start returned."
+        },
+        {
+          "name": "item_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      ],
+      "result": {
+        "name": "BugReportItemResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "groups",
+            "total_groups"
+          ],
+          "properties": {
+            "groups": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/BugReportContextGroup"
+              }
+            },
+            "total_groups": {
+              "type": "integer"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "bugreport.decide",
+      "summary": "Decide every remaining item; linked items that disagree are refused with review_conflict.",
+      "params": [
+        {
+          "name": "report_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "The handle bugreport.start returned."
+        },
+        {
+          "name": "decisions",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BugReportDecision"
+            }
+          },
+          "description": "One decision per remaining suspected item."
+        },
+        {
+          "name": "acknowledged",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "description": "Every remaining confirmed item, acknowledged."
+        }
+      ],
+      "result": {
+        "name": "BugReportOkResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok"
+          ],
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "bugreport.upload",
+      "summary": "Package and upload a frozen report; one that needs review needs the risk accepted.",
+      "params": [
+        {
+          "name": "report_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "The handle bugreport.start returned."
+        },
+        {
+          "name": "risk_accepted",
+          "required": true,
+          "schema": {
+            "type": "boolean"
+          }
+        }
+      ],
+      "result": {
+        "name": "BugReportOkResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok"
+          ],
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "bugreport.retry_upload",
+      "summary": "Retry a failed upload when the failure said it may help.",
+      "params": [
+        {
+          "name": "report_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "The handle bugreport.start returned."
+        }
+      ],
+      "result": {
+        "name": "BugReportOkResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok"
+          ],
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "bugreport.cancel",
+      "summary": "Stop a bug report; one that has not landed is removed, a landed record stays.",
+      "params": [
+        {
+          "name": "report_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "The handle bugreport.start returned."
+        }
+      ],
+      "result": {
+        "name": "BugReportOkResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok"
+          ],
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "imported.upload",
+      "summary": "Import a Trajectory Export, Bug Report Package or Trajectory Report as a read-only Imported Conversation; the same bytes imported before answer with that copy and write nothing, unless force asks for a second one.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "The file name the package was picked under; only its last segment is kept."
+        },
+        {
+          "name": "content_b64",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "The whole package, base64; at most the upload channel's limit decoded."
+        },
+        {
+          "name": "force",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          },
+          "description": "Import a second copy of a package already imported, instead of answering with that one."
+        }
+      ],
+      "result": {
+        "name": "ImportedUploadResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "session_key",
+            "title",
+            "kind",
+            "source_name",
+            "imported_at"
+          ],
+          "properties": {
+            "status": {
+              "type": "string",
+              "description": "'imported', or 'duplicate' when the same bytes were imported before; a duplicate writes nothing and every other field describes the copy already there."
+            },
+            "session_key": {
+              "type": "string",
+              "description": "imported:<id>, the key session.* and trajectory.* take."
+            },
+            "title": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "description": "'export', 'bugreport' or 'report'."
+            },
+            "source_name": {
+              "type": "string"
+            },
+            "imported_at": {
+              "type": "string",
+              "description": "When it was imported, ISO 8601 in UTC."
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/ImportedPackageInvalid"
+        },
+        {
+          "$ref": "#/components/errors/ImportedBusy"
+        }
+      ]
     }
   ],
   "components": {
@@ -11121,6 +11852,10 @@
           "running": {
             "type": "boolean",
             "description": "A turn is in flight on this session right now."
+          },
+          "read_only": {
+            "type": "boolean",
+            "description": "True for an Imported Conversation, which nothing can change; absent on every other session."
           },
           "running_ms": {
             "type": [
@@ -12452,6 +13187,25 @@
           "workdir": {
             "type": "string",
             "description": "The directory this session was pinned to when it was created, absolute; absent for a session that runs where the policy default puts it. What the rail groups by."
+          },
+          "imported": {
+            "type": "object",
+            "description": "Present only on an Imported Conversation's row (source 'imported').",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "source_name"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "description": "'export', 'bugreport' or 'report'."
+              },
+              "source_name": {
+                "type": "string",
+                "description": "The file name the package was imported from."
+              }
+            }
           }
         }
       },
@@ -16883,6 +17637,196 @@
             ]
           }
         }
+      },
+      "TrajectoryTurn": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "trace_id",
+          "number",
+          "start",
+          "input_preview",
+          "in_progress"
+        ],
+        "properties": {
+          "trace_id": {
+            "type": "string"
+          },
+          "number": {
+            "type": "integer",
+            "description": "1-based position among the session's main-line turns."
+          },
+          "start": {
+            "type": "string"
+          },
+          "input_preview": {
+            "type": "string"
+          },
+          "in_progress": {
+            "type": "boolean",
+            "description": "The latest turn, still running; it cannot be selected."
+          }
+        }
+      },
+      "BugReportProblem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "description"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "expected": {
+            "type": "string"
+          },
+          "actual": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "",
+              "low",
+              "medium",
+              "high",
+              "critical"
+            ]
+          },
+          "steps": {
+            "type": "string"
+          },
+          "reporter": {
+            "type": "string"
+          }
+        }
+      },
+      "BugReportItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "kind",
+          "category",
+          "value",
+          "masked_sample",
+          "count",
+          "sources",
+          "linked"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "suspected",
+              "confirmed"
+            ]
+          },
+          "category": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string",
+            "description": "The value in full, for the reader to decide on; a confirmed item, replaced whatever the reader says, shows its replacement."
+          },
+          "masked_sample": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "label",
+                "count"
+              ],
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "linked": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "hint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "kept",
+              "redacted",
+              null
+            ],
+            "description": "A remembered decision the history could not apply on its own."
+          }
+        }
+      },
+      "BugReportContextGroup": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "label",
+          "text",
+          "spans",
+          "count"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "spans": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              }
+            }
+          },
+          "count": {
+            "type": "integer"
+          }
+        }
+      },
+      "BugReportDecision": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "item_id",
+          "action"
+        ],
+        "properties": {
+          "item_id": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "kept",
+              "redacted"
+            ]
+          }
+        }
       }
     },
     "errors": {
@@ -16969,6 +17913,38 @@
       "RevisionChanged": {
         "code": -32023,
         "message": "revision_changed"
+      },
+      "TrajectoryTaskNotFound": {
+        "code": -32024,
+        "message": "trajectory_task_not_found"
+      },
+      "TrajectoryTaskLimit": {
+        "code": -32025,
+        "message": "trajectory_task_limit"
+      },
+      "BugReportUnavailable": {
+        "code": -32026,
+        "message": "bugreport_unavailable"
+      },
+      "ReviewConflict": {
+        "code": -32027,
+        "message": "review_conflict"
+      },
+      "BugReportState": {
+        "code": -32028,
+        "message": "bugreport_state"
+      },
+      "ImportedReadOnly": {
+        "code": -32029,
+        "message": "imported_read_only"
+      },
+      "ImportedPackageInvalid": {
+        "code": -32030,
+        "message": "imported_package_invalid"
+      },
+      "ImportedBusy": {
+        "code": -32031,
+        "message": "imported_busy"
       }
     }
   }

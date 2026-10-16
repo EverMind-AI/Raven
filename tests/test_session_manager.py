@@ -750,6 +750,42 @@ def test_set_delete_observers_replaces_the_whole_tuple(tmp_path: Path):
     assert len(log) == 2
 
 
+def test_read_session_file_reads_a_transcript_outside_the_store(tmp_path: Path):
+    path = tmp_path / "elsewhere" / "session.jsonl"
+    assert manager_mod.read_session_file(path, "imported:x") is None
+    path.parent.mkdir()
+    rows = [
+        {"_type": "metadata", "metadata": {"title": "first"}},
+        {"role": "user", "content": "hi"},
+        {"_type": "metadata", "metadata": {"title": "second"}, "last_consolidated": 1},
+        {"role": "assistant", "content": "hello"},
+    ]
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows) + '{"role": "user", "cont', encoding="utf-8")
+    session = manager_mod.read_session_file(path, "imported:x")
+    assert session is not None
+    assert session.key == "imported:x"
+    assert session.metadata == {"title": "second"}
+    assert session.last_consolidated == 1
+    assert [m["content"] for m in session.messages] == ["hi", "hello"]
+    path.write_text('{"_type": "metadata", "created_at": "not a date"}\n', encoding="utf-8")
+    assert manager_mod.read_session_file(path, "imported:x") is None
+
+
+def test_the_store_refuses_to_keep_an_imported_conversation(tmp_path: Path):
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create("imported:" + "a" * 32)
+    session.add_message("user", "hi")
+    with pytest.raises(ValueError, match="imported conversation"):
+        mgr.save(session)
+    with pytest.raises(ValueError, match="imported conversation"):
+        mgr.fork("imported:" + "a" * 32)
+    assert not mgr.sessions_dir.exists() or not any(mgr.sessions_dir.rglob("*.jsonl"))
+    other = mgr.get_or_create("tui:imported")
+    other.add_message("user", "hi")
+    mgr.save(other)
+    assert mgr.session_path("tui:imported").is_file()
+
+
 def test_peek_returns_cached_session_without_extra_load(tmp_path: Path):
     """peek() returns the cached Session when already in memory."""
     mgr = SessionManager(tmp_path)

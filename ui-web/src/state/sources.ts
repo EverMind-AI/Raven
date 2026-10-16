@@ -18,7 +18,9 @@ import type { BrowserSource } from '../features/browser/types'
 import type { ComposerSource } from '../features/composer/types'
 import type { ConnectionsSource } from '../features/connections/types'
 import type { CronSource } from '../features/cron/types'
+import type { ExportSource } from '../features/export/types'
 import type { ExtAgentsSource } from '../features/extAgents/types'
+import type { ImportedSource } from '../features/imported/types'
 import type { ImportSyncSource } from '../features/importSync/types'
 import type { KnowledgeSource } from '../features/knowledge/types'
 import type { MemorySource } from '../features/memory/types'
@@ -52,8 +54,10 @@ export interface Sources {
   connections: ConnectionsSource
   knowledge: KnowledgeSource
   cron: CronSource
+  export: ExportSource
   extAgents: ExtAgentsSource
   importSync: ImportSyncSource
+  imported: ImportedSource
   memory: MemorySource
   model: ModelSource
   onboard: OnboardSource

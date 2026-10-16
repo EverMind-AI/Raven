@@ -20,6 +20,13 @@ that comes back attaches each agent again by its task id, from the frame the
 host last read, and the turn goes on as if nothing had happened. Only a task
 the machine no longer knows ends an endpoint with the sentence that says so.
 
+An MCP server the host lends an agent on the machine is carried on the link
+too: the agent runs the node's bridge as a stdio server, the daemon tells this
+side a stream opened (``mcp/open``). This side checks the authenticated task
+against the task bound to the dispatch's grant (:meth:`NodePool.lend`), then
+connects to its endpoint here and pumps the frames both ways in pieces (``mcp/frame``),
+and the stream ends with the dispatch, the link or either end.
+
 Before a node is used, ``node/hello`` has to show the same protocol and the
 same code as this Raven (:func:`raven.node.bundle.digest`): a node that differs
 would answer a file call differently from the tool it stands in for. Every
@@ -31,11 +38,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import hashlib
 import os
 import time
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
@@ -46,6 +54,7 @@ from loguru import logger
 from raven.acp_client import remote
 from raven.acp_client.client import AcpClient
 from raven.acp_client.protocol import AcpConnectionError, AcpError, AcpRemoteError, AcpTimeoutError
+from raven.mcp.bridge import iter_raw_frames, unix_sockets_available
 from raven.node import bundle, protocol
 from raven.ops import remote_path
 
@@ -174,7 +183,12 @@ class ChannelEndpoint:
         self.pid: int | None = None
         self.received = 0
         """How many of the agent's frames reached here: where an attach goes on from."""
-        self._frames: asyncio.Queue[bytes | None] = asyncio.Queue()
+        self.watchers: list[Callable[[int], None]] = []
+        """Told, after each frame the connection has dealt with, how many it has read: what a record of the
+        run keeps until its prompt is out, so a process that comes after this one attaches from there and reads
+        the turn whole (:mod:`raven.acp_client.remote_runs`)."""
+        self._handing = 0
+        self._frames: asyncio.Queue[tuple[int, bytes] | None] = asyncio.Queue()
         self._stderr: asyncio.Queue[bytes | None] = asyncio.Queue()
         self._rc: int | None = None
         self._lost: str | None = None
@@ -198,6 +212,19 @@ class ChannelEndpoint:
     def detached(self) -> str | None:
         """Why the endpoint is waiting for its link, or ``None`` while it has one."""
         return self._detached
+
+    @property
+    def stays(self) -> bool:
+        """Whether the agent stays with its machine when this endpoint is ended: this process is stopping."""
+        return remote.leaving()
+
+    def consumed(self) -> None:
+        """The connection has dealt with the frame last handed over: the watchers hear how many it has read."""
+        for watcher in list(self.watchers):
+            try:
+                watcher(self._handing)
+            except Exception as exc:  # noqa: BLE001 - a record that cannot be kept must not stop the frames
+                logger.warning("raven node: a watcher of {} failed: {}", self.describe(), exc)
 
     async def write(self, data: bytes) -> None:
         if self.returncode is not None:
@@ -239,7 +266,10 @@ class ChannelEndpoint:
     async def readline(self) -> bytes:
         """The next line the agent wrote, with its line break, as a pipe gives it; ``b""`` once the agent is gone."""
         item = await self._frames.get()
-        return b"" if item is None else item
+        if item is None:
+            return b""
+        self._handing, line = item
+        return line
 
     async def readerr(self) -> bytes:
         item = await self._stderr.get()
@@ -248,12 +278,20 @@ class ChannelEndpoint:
     async def end(self) -> None:
         """End the agent and what it started, through the node; while the link is down, as soon as it is back.
 
+        Not while this process is stopping (:func:`raven.acp_client.remote.leave_agents_running`):
+        then the agent stays with the machine's daemon, this end is only the
+        endpoint's, and the run is picked up by the next process.
+
         Wanted until delivered: a link that dies under the request, or that
         has died and not been said so yet, keeps the cancel for the next
         link, and only the node's answer settles it -- the cancel taken, or
         nothing there to cancel.
         """
         if self.returncode is not None:
+            return
+        if self.stays:
+            self._lost = f"left running on {self.describe()}: this computer stopped"
+            self._settle()
             return
         self._cancel_wanted = True
         if self._detached is not None or not self._link.alive:
@@ -284,17 +322,28 @@ class ChannelEndpoint:
     def feed_frame(self, line: Any, n: Any = None) -> None:
         if isinstance(line, str) and not self._done.is_set():
             self.received = n if isinstance(n, int) and not isinstance(n, bool) else self.received + 1
-            self._frames.put_nowait(line.encode("utf-8") + b"\n")
+            self._frames.put_nowait((self.received, line.encode("utf-8") + b"\n"))
 
     def feed_stderr(self, text: Any) -> None:
         if isinstance(text, str) and not self._done.is_set():
             self._stderr.put_nowait(text.encode("utf-8") + b"\n")
 
-    def exited(self, rc: Any) -> None:
+    def exited(self, rc: Any, reason: Any = None) -> None:
         if self._done.is_set():
             return
         self._rc = rc if isinstance(rc, int) and not isinstance(rc, bool) else LOST_RC
+        if isinstance(reason, str) and reason:
+            # The node's own sentence for an end it did not watch -- a daemon
+            # restarted under the agent (``raven.node.server.Daemon.recover``)
+            # -- handed on in place of the bare exit code, as a lost link's is.
+            self._lost = reason
         self._settle()
+
+    @property
+    def offline(self) -> bool:
+        """Whether nothing sent now reaches the agent: its link is known to be gone, or this endpoint is parked
+        for the next one. What a caller that would wait for the agent's answer reads first."""
+        return self._detached is not None or not self._link.alive
 
     def lost(self, reason: str) -> None:
         if self._done.is_set():
@@ -329,6 +378,33 @@ class ChannelEndpoint:
         self._done.set()
 
 
+class _HostStream:
+    """The host's end of one MCP stream: the connection into the endpoint it opened for the server, and the pump out of it.
+
+    What the bridge on the machine is to the agent, this is to the endpoint:
+    the pieces off the link are put together and written into the socket,
+    and every frame the socket yields goes out as pieces. A stream is the
+    dispatch's (``lend``), so it ends with the dispatch's endpoints.
+    """
+
+    def __init__(self, stream_id: int, lend: str, server: str, writer: asyncio.StreamWriter) -> None:
+        self.id = stream_id
+        self.lend = lend
+        self.server = server
+        self.writer = writer
+        self.pump: asyncio.Task[None] | None = None
+        self.parts: list[str] = []
+        self.size = 0
+
+
+@dataclass
+class _LentServers:
+    """Host endpoints granted by one dispatch to one daemon-authenticated agent task."""
+
+    task: str
+    paths: dict[str, str]
+
+
 @dataclass
 class _Node:
     client: AcpClient
@@ -342,6 +418,8 @@ class _Node:
     """Requests on their way to the node, not yet answered: use, to the idle close, as much as an answer is."""
     heartbeat: asyncio.Task[None] | None = None
     next_channel: int = 1
+    streams: dict[int, _HostStream] = field(default_factory=dict)
+    """The MCP streams open on this link, by the daemon's id for them."""
 
     @property
     def home(self) -> str:
@@ -363,6 +441,8 @@ class NodePool:
         self._nodes: dict[str, _Node] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._errors: dict[str, str] = {}
+        self._lent: dict[str, dict[str, _LentServers]] = {}
+        """Per machine and dispatch, endpoints bound to the agent task the host actually launched."""
         self._reconnects: dict[str, asyncio.Task[None]] = {}
         self._parked: dict[str, list[ChannelEndpoint]] = {}
         """The endpoints waiting for a machine's link to come back, by machine."""
@@ -528,6 +608,51 @@ class NodePool:
         logger.info("acp agent {!r}: started on {}", name, endpoint.describe())
         return endpoint
 
+    async def attach(
+        self, machine_id: str, task: str, *, name: str, after: int = 0
+    ) -> tuple[ChannelEndpoint, dict[str, Any]]:
+        """``task`` on the machine, onto a channel of its link, from the frame past the ``after``-th.
+
+        What a process that comes after the one that started the agent uses
+        to pick the run up: the daemon replays the frames past the record's
+        count -- the turn whole, from where its prompt went out -- and hands
+        the rest over as it comes, or, for a task that has ended, replays its
+        record and says so. The endpoint returned is what an
+        :class:`AcpClient` runs over; the answer says the pid, the frames
+        and the exit code (``None`` while the agent runs).
+        """
+        node = await self._acquire(machine_id)
+        label = node.target.label
+        channel = node.next_channel
+        node.next_channel += 1
+        endpoint = ChannelEndpoint(node.client, channel, target=node.target, agent=name, task=task)
+        endpoint.received = after
+        node.channels[channel] = endpoint
+        params = {"channel": channel, "task": task, "after": after}
+        try:
+            answer = await node.client.request(protocol.AGENT_ATTACH, params, timeout=_ATTACH_TIMEOUT_S)
+        except AcpRemoteError as exc:
+            node.channels.pop(channel, None)
+            raise NodeError(
+                f"machine {label} no longer runs {name!r} (task {task}): {exc.message}", reason=_REASONS.get(exc.code)
+            ) from None
+        except AcpTimeoutError:
+            node.channels.pop(channel, None)
+            said = f"the Raven node on machine {label} did not answer {protocol.AGENT_ATTACH}"
+            await self._lost(machine_id, node, said)
+            raise NodeError(said) from None
+        except AcpConnectionError as exc:
+            node.channels.pop(channel, None)
+            said = self._ended(node.target, node.log, exc)
+            await self._lost(machine_id, node, said)
+            raise NodeError(said) from None
+        answer = answer if isinstance(answer, dict) else {}
+        if isinstance(answer.get("pid"), int):
+            endpoint.pid = answer["pid"]
+        node.used = time.monotonic()
+        logger.info("acp agent {!r}: picked up on {} from frame {}", name, endpoint.describe(), after)
+        return endpoint, answer
+
     def status(self, machine_id: str) -> MachineStatus:
         """The link's state, with no round trip: for a listing."""
         node = self._nodes.get(machine_id)
@@ -553,6 +678,142 @@ class NodePool:
     async def close(self, machine_id: str) -> None:
         self._stop_reconnect(machine_id)
         await self._drop(machine_id)
+
+    # --- MCP lent across the link -----------------------------------------------------
+
+    def lend(self, machine_id: str, lend: str, paths: Mapping[str, str], *, task: str) -> None:
+        """The host's endpoints for dispatch ``lend`` on the machine: by server name, the socket a stream of it pumps into.
+
+        Said before the agent is handed the bridge stanzas, so a bridge that
+        opens at once finds its server. The endpoints themselves are the
+        caller's (``raven.mcp.endpoint``); this is the pairing table. ``task``
+        is taken from the acquired agent's endpoint, never from its bridge.
+        """
+        if not isinstance(task, str) or not task:
+            raise ValueError("an MCP grant must name its agent task")
+        self._lent.setdefault(machine_id, {})[lend] = _LentServers(task, dict(paths))
+
+    async def unlend(self, machine_id: str, lend: str) -> None:
+        """The dispatch is over: its pairing is forgotten, and the streams on it ended, the bridges told."""
+        self._lent.get(machine_id, {}).pop(lend, None)
+        node = self._nodes.get(machine_id)
+        if node is None:
+            return
+        for stream in [s for s in node.streams.values() if s.lend == lend]:
+            await self._end_stream(node, stream, "the dispatch ended", tell=True)
+
+    async def bridge_argv(self, machine_id: str) -> list[str] | None:
+        """What an agent on the machine runs as a stdio MCP server to reach a host endpoint; ``None`` from a node with no daemon."""
+        node = await self._acquire(machine_id)
+        argv = node.hello.get("bridge")
+        return [str(part) for part in argv] if isinstance(argv, list) and argv else None
+
+    async def _on_stream(self, machine_id: str, method: str, params: dict[str, Any]) -> None:
+        """One ``mcp/*`` notification off the link: a stream opened, a piece of a frame, or a stream over."""
+        node = self._nodes.get(machine_id)
+        stream_id = params.get("stream")
+        if node is None or not isinstance(stream_id, int) or isinstance(stream_id, bool):
+            return
+        if method == protocol.MCP_OPEN:
+            await self._open_stream(node, stream_id, params)
+            return
+        stream = node.streams.get(stream_id)
+        if stream is None:
+            return
+        if method == protocol.MCP_CLOSE:
+            await self._end_stream(node, stream, "closed by the machine", tell=False)
+            return
+        text = params.get("text")
+        if not isinstance(text, str):
+            return
+        stream.parts.append(text)
+        stream.size += len(text)
+        if stream.size > protocol.MCP_MAX_FRAME:
+            await self._end_stream(node, stream, f"a frame exceeds {protocol.MCP_MAX_FRAME} bytes", tell=True)
+            return
+        if not params.get("end", True):
+            return
+        frame = "".join(stream.parts).encode("utf-8")
+        stream.parts, stream.size = [], 0
+        try:
+            stream.writer.write(frame + b"\n")
+            await stream.writer.drain()
+        except (ConnectionError, OSError):
+            await self._end_stream(node, stream, "the host's endpoint closed", tell=True)
+
+    async def _open_stream(self, node: _Node, stream_id: int, params: dict[str, Any]) -> None:
+        lend, server, task = params.get("lend"), params.get("server"), params.get("task")
+        granted = self._lent.get(node.target.id, {}).get(str(lend))
+        # The daemon authenticates the task; the bridge chooses lend/server.
+        # Those names cannot authorize access to another task's host endpoint.
+        path = granted.paths.get(str(server)) if granted is not None and granted.task == task else None
+        if path is None:
+            await self._tell(
+                node, protocol.MCP_CLOSE, {"stream": stream_id, "reason": f"server {server!r} is not lent to that run"}
+            )
+            return
+        if not unix_sockets_available():
+            await self._tell(
+                node,
+                protocol.MCP_CLOSE,
+                {"stream": stream_id, "reason": "the host does not support Unix-socket MCP endpoints"},
+            )
+            return
+        try:
+            reader, writer = await asyncio.open_unix_connection(path)
+        except OSError as exc:
+            await self._tell(
+                node,
+                protocol.MCP_CLOSE,
+                {"stream": stream_id, "reason": f"the host's endpoint for {server!r} is gone: {exc}"},
+            )
+            return
+        # An unlend or a replaced link can run while the socket is opening.
+        # Never register a stream under an authorization that ended meanwhile.
+        if (
+            self._lent.get(node.target.id, {}).get(str(lend)) is not granted
+            or self._nodes.get(node.target.id) is not node
+            or not node.client.alive
+        ):
+            writer.close()
+            with contextlib.suppress(ConnectionError, OSError):
+                await writer.wait_closed()
+            await self._tell(node, protocol.MCP_CLOSE, {"stream": stream_id, "reason": "the dispatch or link ended"})
+            return
+        stream = _HostStream(stream_id, str(lend), str(server), writer)
+        node.streams[stream_id] = stream
+        stream.pump = asyncio.create_task(self._pump_out(node, stream, reader), name=f"mcp-stream-{stream_id}")
+
+    async def _pump_out(self, node: _Node, stream: _HostStream, reader: asyncio.StreamReader) -> None:
+        """Every frame the endpoint yields, out on the link in pieces; its end, or a frame too large, ends the stream."""
+        reason = "the host's endpoint closed"
+        try:
+            async for frame in iter_raw_frames(reader, max_frame_bytes=protocol.MCP_MAX_FRAME):
+                for text, end in protocol.pieces(frame):
+                    await node.client.notify(protocol.MCP_FRAME, {"stream": stream.id, "text": text, "end": end})
+        except ValueError as exc:
+            reason = str(exc)
+        except (AcpConnectionError, ConnectionError, OSError):
+            # The link is gone: its streams go with it, and nothing can be told.
+            node.streams.pop(stream.id, None)
+            stream.writer.close()
+            return
+        if node.streams.get(stream.id) is stream:
+            await self._end_stream(node, stream, reason, tell=True)
+
+    async def _end_stream(self, node: _Node, stream: _HostStream, reason: str, *, tell: bool) -> None:
+        node.streams.pop(stream.id, None)
+        if stream.pump is not None and stream.pump is not asyncio.current_task():
+            stream.pump.cancel()
+        with contextlib.suppress(OSError, ConnectionError):
+            stream.writer.close()
+        if tell:
+            await self._tell(node, protocol.MCP_CLOSE, {"stream": stream.id, "reason": reason})
+
+    @staticmethod
+    async def _tell(node: _Node, method: str, params: dict[str, Any]) -> None:
+        with contextlib.suppress(AcpConnectionError, ConnectionError, OSError, ValueError):
+            await node.client.notify(method, params)
 
     async def close_all(self) -> None:
         """Close every link. The agents on the machines run on under their daemons."""
@@ -648,7 +909,7 @@ class NodePool:
                 # Fixed rather than any caller's workspace: the ssh needs none.
                 cwd=str(Path.home()),
                 env={},
-                on_notification=partial(self._notified, channels),
+                on_notification=partial(self._notified, channels, machine_id),
             )
         except AcpConnectionError as exc:
             raise NodeError(f"could not start ssh to machine {target.label}: {exc}") from None
@@ -674,8 +935,13 @@ class NodePool:
         remote_path.remember_home(target.id, node.home)
         return node
 
-    async def _notified(self, channels: dict[int, ChannelEndpoint], method: str, params: dict[str, Any]) -> None:
-        """One notification off the link, handed to the channel it names."""
+    async def _notified(
+        self, channels: dict[int, ChannelEndpoint], machine_id: str, method: str, params: dict[str, Any]
+    ) -> None:
+        """One notification off the link, handed to the channel it names -- or to the stream, for ``mcp/*``."""
+        if method in (protocol.MCP_OPEN, protocol.MCP_FRAME, protocol.MCP_CLOSE):
+            await self._on_stream(machine_id, method, params)
+            return
         channel = params.get("channel")
         endpoint = channels.get(channel) if isinstance(channel, int) and not isinstance(channel, bool) else None
         if endpoint is None:
@@ -687,7 +953,7 @@ class NodePool:
             endpoint.feed_stderr(params.get("text"))
         elif method == protocol.AGENT_EXIT:
             channels.pop(channel, None)
-            endpoint.exited(params.get("rc"))
+            endpoint.exited(params.get("rc"), params.get("reason"))
 
     async def _heartbeat(self, machine_id: str, node: _Node) -> None:
         """Ping the node until one ping goes unanswered; then the link is lost."""
@@ -849,6 +1115,10 @@ class NodePool:
                 endpoint.detach(reason)
                 self._parked.setdefault(machine_id, []).append(endpoint)
         node.channels.clear()
+        # The streams go with the link: the daemon hangs the bridges up on
+        # its side, and the endpoints here see their connections end.
+        for stream in list(node.streams.values()):
+            await self._end_stream(node, stream, "the link ended", tell=False)
         await node.client.close()
 
     async def _close_idle(self, *, keep: str) -> None:

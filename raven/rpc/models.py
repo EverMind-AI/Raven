@@ -20,13 +20,16 @@ from pydantic import BaseModel, ConfigDict, Field
 # Re-usable model config.  ``extra="forbid"`` makes Pydantic emit
 # ``additionalProperties: false`` in the generated JSON Schema, matching the
 # OpenRPC schema's explicit ``additionalProperties: false`` on every object.
+# ``defer_build`` builds each model's validator on its first use: a host
+# validates only the methods its clients call, and building all of them at
+# import held about 6 MiB for the life of the process.
 # ---------------------------------------------------------------------------
 
 
 class _Strict(BaseModel):
     """Base class for all RPC models — forbids extra fields by default."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", defer_build=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1378,6 +1381,13 @@ TurnEvent = Annotated[
 # ---------------------------------------------------------------------------
 
 
+class SessionListImported(_Strict):
+    """What an Imported Conversation's row says about the package it came from."""
+
+    kind: str = Field(..., description="'export', 'bugreport' or 'report'.")
+    source_name: str = Field(..., description="The file name the package was imported from.")
+
+
 class SessionListItem(_Strict):
     """One row in the session picker (gatewayTypes.ts SessionListItem)."""
 
@@ -1398,11 +1408,20 @@ class SessionListItem(_Strict):
             "session that runs where the policy default puts it. What the rail groups by."
         ),
     )
+    imported: SessionListImported | None = Field(
+        default=None, description="Present only on an Imported Conversation's row (source 'imported')."
+    )
 
 
 class SessionListParams(_Strict):
     limit: int | None = Field(default=None, description="Max sessions to return.")
-    channels: list[str] | None = Field(default=None, description="Session channels to include; defaults to tui.")
+    channels: list[str] | None = Field(
+        default=None,
+        description=(
+            "Session channels to include; defaults to tui. 'imported' adds the Imported Conversations "
+            "to a list of live sessions (never to the archived one)."
+        ),
+    )
     archived: bool | None = Field(
         default=None, description="True lists only archived sessions; absent or false lists the live ones."
     )
@@ -2669,7 +2688,7 @@ class SubagentsAddParams(_Strict):
             "A registered machine, by its id in the machine registry: an acp or cli preset's command is started "
             "there by the machine's Raven node and signed in there; an openai preset's endpoint is reached from "
             "that machine through an ssh tunnel. The row's name defaults to <preset>@<machine>. Refused for a "
-            "built-in agent, and unless the machine lane is on and the machine is registered and usable."
+            "built-in agent, and unless the machine is registered and usable."
         ),
     )
     remote_cwd: str | None = Field(
@@ -3374,6 +3393,10 @@ class SessionInitInfo(_Strict):
         ),
     )
     running: bool = Field(default=False, description="A turn is in flight on this session right now.")
+    read_only: bool | None = Field(
+        default=None,
+        description="True for an Imported Conversation, which nothing can change; absent on every other session.",
+    )
     running_ms: int | None = Field(
         default=None,
         description=(
@@ -6134,6 +6157,225 @@ class TrajectoryBlockResult(_Strict):
     truncated: bool
 
 
+class TrajectoryTurnsParams(_StrictParams):
+    session_key: str
+
+
+class TrajectoryTurn(_Strict):
+    """One main-line turn of a session; see raven/trajectory/selection.py."""
+
+    trace_id: str
+    number: int
+    start: str
+    input_preview: str
+    in_progress: bool
+
+
+class TrajectoryTurnsResult(_Strict):
+    title: str
+    turns: list[TrajectoryTurn]
+
+
+class TrajectoryExportParams(_StrictParams):
+    session_key: str
+    trace_ids: list[str]
+    file_name: str
+
+
+class TrajectoryExportResult(_Strict):
+    job_id: str
+
+
+class TrajectoryExportStatusParams(_StrictParams):
+    job_id: str
+
+
+class TrajectoryExportCounts(_Strict):
+    spans: int
+    artifacts: int
+    messages: int
+
+
+class TrajectoryExportStatusResult(_Strict):
+    job_id: str
+    state: Literal["running", "done", "failed", "cancelled"]
+    phase: Literal["collecting", "writing", "done"]
+    file_name: str
+    download_url: str | None = None
+    size_bytes: int | None = None
+    counts: TrajectoryExportCounts | None = None
+    error: str | None = None
+
+
+class TrajectoryExportCancelParams(_StrictParams):
+    job_id: str
+
+
+class TrajectoryExportCancelResult(_Strict):
+    ok: bool
+
+
+class BugReportProblem(_Strict):
+    description: str
+    expected: str = ""
+    actual: str = ""
+    severity: Literal["", "low", "medium", "high", "critical"] = ""
+    steps: str = ""
+    reporter: str = ""
+
+
+class BugReportStartParams(_StrictParams):
+    session_key: str
+    trace_ids: list[str]
+    problem: BugReportProblem
+
+
+class BugReportStartResult(_Strict):
+    report_id: str
+
+
+class BugReportStatusParams(_StrictParams):
+    report_id: str
+
+
+class BugReportFailure(_Strict):
+    message: str
+    retryable: bool
+    status: int | None = None
+
+
+class BugReportHistory(_Strict):
+    state: Literal["on", "off", "corrupt", "unavailable"]
+    auto_kept: int
+    auto_redacted: int
+    warning: str | None = None
+
+
+class BugReportSource(_Strict):
+    label: str
+    count: int
+
+
+class BugReportItem(_Strict):
+    """One Review Item still to decide: the value in full, which is what the reader
+    decides on, and its masked sample. A confirmed item, replaced whatever the
+    reader says, has no value of its own and shows its replacement."""
+
+    id: str
+    kind: Literal["suspected", "confirmed"]
+    category: str
+    value: str
+    masked_sample: str
+    count: int
+    sources: list[BugReportSource]
+    linked: list[str]
+    hint: Literal["kept", "redacted"] | None = None
+
+
+class BugReportSummary(_Strict):
+    classification: Literal["clean", "needs_review"]
+    warnings: list[str]
+    size_bytes: int | None = None
+    auto_replaced: int
+    kept: int
+    redacted: int
+    acknowledged: int
+    completeness: str
+
+
+class BugReportReceipt(_Strict):
+    receipt_id: str
+    duplicate: bool
+
+
+class BugReportStatusResult(_Strict):
+    report_id: str
+    bug_report_id: str | None = None
+    phase: Literal[
+        "collecting", "deciding", "finishing", "ready", "uploading", "uploaded", "upload_failed", "failed", "cancelled"
+    ]
+    error: BugReportFailure | None = None
+    history: BugReportHistory
+    items: list[BugReportItem] | None = None
+    summary: BugReportSummary | None = None
+    receipt: BugReportReceipt | None = None
+    record_dir: str | None = None
+
+
+class BugReportItemParams(_StrictParams):
+    report_id: str
+    item_id: str
+
+
+class BugReportContextGroup(_Strict):
+    label: str
+    text: str
+    spans: list[list[int]]
+    count: int
+
+
+class BugReportItemResult(_Strict):
+    groups: list[BugReportContextGroup]
+    total_groups: int
+
+
+class BugReportDecision(_Strict):
+    item_id: str
+    action: Literal["kept", "redacted"]
+
+
+class BugReportDecideParams(_StrictParams):
+    report_id: str
+    decisions: list[BugReportDecision]
+    acknowledged: list[str]
+
+
+class BugReportUploadParams(_StrictParams):
+    report_id: str
+    risk_accepted: bool
+
+
+class BugReportRetryParams(_StrictParams):
+    report_id: str
+
+
+class BugReportCancelParams(_StrictParams):
+    report_id: str
+
+
+class BugReportOkResult(_Strict):
+    ok: bool
+
+
+# ---------------------------------------------------------------------------
+# imported.* -- packages read back in as read-only Imported Conversations
+# ---------------------------------------------------------------------------
+
+
+class ImportedUploadParams(_StrictParams):
+    name: str = Field(..., description="The file name the package was picked under; only its last segment is kept.")
+    content_b64: str = Field(..., description="The whole package, base64; at most the upload channel's limit decoded.")
+    force: bool = Field(
+        default=False,
+        description="Import a second copy of a package already imported, instead of answering with that one.",
+    )
+
+
+class ImportedUploadResult(_Strict):
+    status: str = Field(
+        ...,
+        description=(
+            "'imported', or 'duplicate' when the same bytes were imported before; a duplicate writes "
+            "nothing and every other field describes the copy already there."
+        ),
+    )
+    session_key: str = Field(..., description="imported:<id>, the key session.* and trajectory.* take.")
+    title: str
+    kind: str = Field(..., description="'export', 'bugreport' or 'report'.")
+    source_name: str
+    imported_at: str = Field(..., description="When it was imported, ISO 8601 in UTC.")
+
+
 METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     # knowledge.* -- bases and their documents, served by the in-process engine
     "knowledge.status": (KnowledgeStatusParams, KnowledgeStatusResult),
@@ -6274,6 +6516,19 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "trajectory.changes": (TrajectoryChangesParams, TrajectoryChangesResult),
     "trajectory.detail": (TrajectoryDetailParams, TrajectoryDetailResult),
     "trajectory.block": (TrajectoryBlockParams, TrajectoryBlockResult),
+    "trajectory.turns": (TrajectoryTurnsParams, TrajectoryTurnsResult),
+    "trajectory.export": (TrajectoryExportParams, TrajectoryExportResult),
+    "trajectory.export_status": (TrajectoryExportStatusParams, TrajectoryExportStatusResult),
+    "trajectory.export_cancel": (TrajectoryExportCancelParams, TrajectoryExportCancelResult),
+    # bugreport.* -- the web page's bug report, held as a Report Session
+    "bugreport.start": (BugReportStartParams, BugReportStartResult),
+    "bugreport.status": (BugReportStatusParams, BugReportStatusResult),
+    "bugreport.item": (BugReportItemParams, BugReportItemResult),
+    "bugreport.decide": (BugReportDecideParams, BugReportOkResult),
+    "bugreport.upload": (BugReportUploadParams, BugReportOkResult),
+    "bugreport.retry_upload": (BugReportRetryParams, BugReportOkResult),
+    "bugreport.cancel": (BugReportCancelParams, BugReportOkResult),
+    "imported.upload": (ImportedUploadParams, ImportedUploadResult),
     # the round-trip answer sinks
     "approval.respond": (ApprovalRespondParams, ApprovalRespondResult),
     "approval.revoke": (ApprovalRevokeParams, ApprovalRevokeResult),

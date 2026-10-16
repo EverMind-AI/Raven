@@ -34,12 +34,6 @@ ROW = {
 }
 
 
-@pytest.fixture(autouse=True)
-def _lane_on(monkeypatch: pytest.MonkeyPatch) -> None:
-    """These tests are about reaching a machine; the switch that allows it is tested on its own."""
-    monkeypatch.setenv("RAVEN_DEBUG_MACHINES", "1")
-
-
 def _registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rows: list | str) -> None:
     path = tmp_path / "connections.json"
     path.write_text(rows if isinstance(rows, str) else json.dumps({"connections": rows}), encoding="utf-8")
@@ -418,31 +412,18 @@ def test_what_is_sent_is_one_quoted_sh_line_with_csh_s_history_character_escaped
     assert remote.posix("echo a!b") == "exec /bin/sh -c 'echo; echo a'\\!'b'"
 
 
-# --- the lane is debug-only ------------------------------------------------------------
+# --- registered machines ---------------------------------------------------------------
 
 
-def test_with_the_lane_off_a_machine_is_refused_before_the_registry_is_read(tmp_path, monkeypatch):
+@pytest.mark.parametrize("value", [None, "0", "1"])
+def test_a_registered_machine_needs_no_debug_switch(tmp_path, monkeypatch, value):
     _registry(tmp_path, monkeypatch, [ROW])
-    monkeypatch.delenv("RAVEN_DEBUG_MACHINES")
-    monkeypatch.setattr(remote.connections, "read", lambda: pytest.fail("the registry was read"))
-
-    with pytest.raises(RemoteMachineError) as caught:
-        remote.machine("box")
-
-    assert str(caught.value) == (
-        "machine 'box': the machine lane is debug-only and off; start raven with RAVEN_DEBUG_MACHINES=1 "
-        "to use agents and files on registered machines"
-    )
-
-
-@pytest.mark.parametrize("value", ["1", "true", "YES", " on "])
-def test_the_lane_switch_reads_the_usual_spellings(monkeypatch, value):
-    from raven.home import machine_lane_enabled
-
-    monkeypatch.setenv("RAVEN_DEBUG_MACHINES", value)
-    assert machine_lane_enabled()
-    monkeypatch.setenv("RAVEN_DEBUG_MACHINES", "0")
-    assert not machine_lane_enabled()
+    if value is None:
+        monkeypatch.delenv("RAVEN_DEBUG_MACHINES", raising=False)
+    else:
+        monkeypatch.setenv("RAVEN_DEBUG_MACHINES", value)
+    target = remote.machine("box")
+    assert target.id == "box" and target.display_name == "Lab box"
 
 
 # --- one command, and a file sent ----------------------------------------------------

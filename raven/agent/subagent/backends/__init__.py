@@ -19,6 +19,7 @@ from raven.agent.subagent.backends.openai_api import OpenAIApiBackend
 from raven.agent.subagent.backends.raven_loop import RavenLoopBackend, build_subagent_prompt
 from raven.agent.subagent.presets import lendable_keys, session_mcp_for
 from raven.contracts.subagent_backend import SubagentActionAbortedError, SubagentBackend
+from raven.mcp.bridge import unix_sockets_available
 
 
 class AgentMeta(NamedTuple):
@@ -228,11 +229,15 @@ def session_mcp_delivered(*, session_mcp: bool, snapshot: Any, machine: str | No
     :func:`~raven.agent.subagent.presets.session_mcp_for`; ``snapshot`` carries
     the transitional half. Both are spelled out in
     ``AcpAgentBackend._session_mcp_refused``, which is the reader for why each
-    exists and why only one of them is temporary. ``machine`` is the third
-    reason, and not the peer's: the host's servers are reached through a
-    socket on this computer, which an agent on another machine cannot open.
+    exists and why only one of them is temporary. The servers reach the agent
+    over unix sockets on this computer whichever side it runs on -- a row here
+    connects its bridge to the endpoint's socket, a row on a ``machine`` has
+    the node carry its frames to that same socket -- so a host without that
+    transport (Windows) delivers none, and this says so for both: the turn
+    goes on without MCP and its reply explains the limitation, and the roster
+    does not advertise what a dispatch would withhold.
     """
-    if machine:
+    if not unix_sockets_available():
         return False
     if not session_mcp:
         return False

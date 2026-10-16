@@ -137,11 +137,13 @@ def _read_artifact(state: Path, path: str, limit: int = _ARTIFACT_LIMIT) -> tupl
     Reads at most ``limit + 1`` bytes — the cap bounds actual I/O and memory,
     not just the returned text, because the pointer may name any file under
     ``logs/`` (a rotated multi-GB log included). Non-regular files (a FIFO
-    would block the read) are rejected outright.
+    would block the read) are rejected outright. A relative pointer is read
+    against ``state``: an Imported Conversation's store records them that way
+    so it still reads after the raven home moves.
     """
     try:
         logs_root = (state / "logs").resolve()
-        target = Path(path).resolve()
+        target = (state / path).resolve()
         if not target.is_relative_to(logs_root):
             return None, "artifact path outside the trace store"
         if target.exists() and not target.is_file():

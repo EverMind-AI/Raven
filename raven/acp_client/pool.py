@@ -528,6 +528,55 @@ class AcpConnectionPool:
             held[bkey] = connection
             return connection
 
+    async def adopt(
+        self,
+        *,
+        name: str,
+        endpoint: Any,
+        initialize: Any,
+        launch: str,
+        config: str,
+        next_id: int,
+    ) -> tuple[_Connection, bool]:
+        """A connection over an agent a process before this one started on a machine and left running there.
+
+        No handshake: the agent answered ``initialize`` to that process, and
+        its answer comes with the run's record. Request ids go on from
+        ``next_id``, past the ones that process used, so a frame the daemon
+        replays answers nothing sent from here. Held under the name for later
+        dispatches, as a connection started here would be -- unless one of
+        the name is already live, in which case this one serves the pick-up
+        only and the second value says so.
+        """
+        async with self._lock_for(name):
+            router = _SessionRouter(name)
+            elicitors = _SessionElicitors(name)
+            responders = _SessionResponders(name)
+            journal = open_journal(name)
+            answering = request_dispatcher(name, router.dispatch, elicitors=elicitors)
+            notifying = notification_dispatcher(name, router.dispatch, responders=responders)
+            client = AcpClient.over(
+                endpoint, name=name, on_request=answering, on_notification=notifying, journal=journal
+            )
+            client.continue_ids_from(next_id)
+            connection = _Connection(
+                client,
+                router,
+                elicitors,
+                responders,
+                launch,
+                initialize,
+                handshake_bytes=journal.offset if journal is not None else 0,
+                config=config,
+            )
+            held = self._connections.setdefault(name, {})
+            bkey = _binding_key(None)
+            existing = held.get(bkey)
+            if existing is not None and existing.alive:
+                return connection, False
+            held[bkey] = connection
+            return connection, True
+
     async def drop(self, name: str) -> None:
         """Close and forget one agent's connections, if any."""
         async with self._lock_for(name):

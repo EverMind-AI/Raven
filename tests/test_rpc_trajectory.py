@@ -167,12 +167,12 @@ async def _list_all(dispatcher: Dispatcher) -> tuple[list[dict], dict]:
 
 async def test_state_is_always_answerable_and_reports_policy(monkeypatch):
     dispatcher = _dispatcher()
-    off = await _call(dispatcher, "trajectory.state", {})
-    TrajectoryStateResult.model_validate(off["result"])
-    assert off["result"] == {"enabled": False, "policy_revision": 0, "recording_enabled": True}
-    tpol.arm(True)
     on = await _call(dispatcher, "trajectory.state", {})
-    assert on["result"]["enabled"] is True and on["result"]["policy_revision"] == 1
+    TrajectoryStateResult.model_validate(on["result"])
+    assert on["result"] == {"enabled": True, "policy_revision": 0, "recording_enabled": True}
+    tpol.arm(False)
+    off = await _call(dispatcher, "trajectory.state", {})
+    assert off["result"]["enabled"] is False and off["result"]["policy_revision"] == 1
     monkeypatch.setenv("RAVEN_TRACING", "0")
     assert (await _call(dispatcher, "trajectory.state", {}))["result"]["recording_enabled"] is False
 
@@ -188,6 +188,7 @@ async def test_the_state_poll_lets_go_of_indexes_nobody_reads(monkeypatch):
 
 
 async def test_data_methods_refuse_when_disabled():
+    tpol.arm(False)
     dispatcher = _dispatcher()
     calls = {
         "trajectory.list": {"session_key": SESSION},
@@ -543,8 +544,112 @@ async def test_health_reports_the_trajectory_view_flag():
 
     gateway = WsGateway()
     request = make_mocked_request("GET", "/health")
-    off = json.loads((await gateway.handle_health(request)).text)
-    assert off["service"] == "raven-serve" and off["trajectory_view"] is False
-    tpol.arm(True)
     on = json.loads((await gateway.handle_health(request)).text)
-    assert on["trajectory_view"] is True and on["ok"] is True
+    assert on["service"] == "raven-serve" and on["trajectory_view"] is True and on["ok"] is True
+    tpol.arm(False)
+    off = json.loads((await gateway.handle_health(request)).text)
+    assert off["trajectory_view"] is False
+
+
+# ── Imported Conversations ────────────────────────────────────────────
+
+
+async def _imported_entries(dispatcher: Dispatcher, key: str) -> tuple[list[dict], dict]:
+    for _ in range(50):
+        first = await _call(dispatcher, "trajectory.list", {"session_key": key, "limit": 2})
+        assert "result" in first, first
+        if first["result"]["index_state"]["phase"] == "ready":
+            break
+        await asyncio.sleep(0.35)
+    entries = list(first["result"]["entries"])
+    cursor = first["result"]["next_cursor"]
+    while cursor:
+        page = await _call(dispatcher, "trajectory.list", {"session_key": key, "cursor": cursor, "limit": 2})
+        entries += page["result"]["entries"]
+        cursor = page["result"]["next_cursor"]
+    return entries, first["result"]
+
+
+async def _all_messages(dispatcher: Dispatcher, key: str, entry: dict, epoch: str) -> list[dict]:
+    params = {
+        "session_key": key,
+        "entry_id": entry["entry_id"],
+        "entry_revision": entry["revision"],
+        "epoch": epoch,
+        "block_id": "messages",
+    }
+    body = (await _call(dispatcher, "trajectory.block", params))["result"]
+    assert body["availability"] == "available" and not body["truncated"], body
+    items = list(body["data"]["items"])
+    while body["next_cursor"]:
+        body = (await _call(dispatcher, "trajectory.block", {**params, "cursor": body["next_cursor"]}))["result"]
+        items += body["data"]["items"]
+    return items
+
+
+async def test_an_imported_export_reads_through_its_own_store(tmp_path):
+    from raven.trajectory import imported
+    from tests import imported_package_builders as builders
+
+    tpol.arm(True)
+    package, source = builders.build_export(tmp_path / "src", long_input=True)
+    key = imported.import_bytes(package.read_bytes(), package.name).conversation.key
+    dispatcher = _dispatcher()
+    entries, first = await _imported_entries(dispatcher, key)
+    assert {e["turn_number"] for e in entries if e["origin"] == "main"} == {1, 3}
+    assert any(e["origin"] == "subagent" for e in entries)
+    changes = await _call(
+        dispatcher, "trajectory.changes", {"session_key": key, "epoch": first["epoch"], "after_revision": 0}
+    )
+    assert "result" in changes, changes
+    llm = next(e for e in entries if e["kind"] == "llm.input" and e["turn_number"] == 1)
+    detail = (await _call(dispatcher, "trajectory.detail", {"session_key": key, "entry_id": llm["entry_id"]}))["result"]
+    assert detail["session_key"] == key
+    blocks = {b["id"]: b["availability"] for b in detail["blocks"]}
+    assert blocks["messages"] == blocks["system"] == blocks["prompt"] == "available"
+    assert await _all_messages(dispatcher, key, llm, first["epoch"]) == source.first_call
+
+
+async def test_an_imported_bug_report_reads_its_long_conversation_whole(tmp_path):
+    from raven.trajectory import imported
+    from tests import imported_package_builders as builders
+
+    tpol.arm(True)
+    package, source = builders.build_bug_report(tmp_path / "src", long_input=True)
+    key = imported.import_bytes(package.read_bytes(), package.name).conversation.key
+    dispatcher = _dispatcher()
+    entries, first = await _imported_entries(dispatcher, key)
+    llm = next(e for e in entries if e["kind"] == "llm.input")
+    assert await _all_messages(dispatcher, key, llm, first["epoch"]) == source.first_call
+
+
+async def test_an_unknown_imported_key_is_not_found():
+    tpol.arm(True)
+    dispatcher = _dispatcher()
+    for key in ("imported:" + "0" * 32, "imported:../x"):
+        response = await _call(dispatcher, "trajectory.list", {"session_key": key})
+        assert _error_code(response) == -32001
+
+
+async def test_an_import_whose_spans_name_no_session_lists_nothing(tmp_path):
+    import gzip
+
+    from raven.trajectory import imported
+    from tests.test_trajectory_imported_package import ATT, _raw, _report_tree
+
+    tpol.arm(True)
+    spans = (json.dumps(_span("t", "s", "session.turn", attrs={"session.key": None})) + "\n").encode()
+    manifest = {"format_version": 1, "attempt_id": ATT, "session_key": None}
+    data = gzip.compress(_raw(_report_tree(manifest=manifest, spans=spans)), mtime=0)
+    conversation = imported.import_bytes(data, "r.tar.gz").conversation
+    assert conversation.original_session_key is None
+    entries, _ = await _imported_entries(_dispatcher(), conversation.key)
+    assert entries == []
+
+
+async def test_the_state_poll_lets_go_of_idle_imported_indexes(tmp_path, monkeypatch):
+    calls: list[bool] = []
+    monkeypatch.setattr(tidx, "evict_idle_all", lambda: calls.append(True))
+    tpol.arm(True)
+    await _call(_dispatcher(), "trajectory.state", {})
+    assert calls == [True]

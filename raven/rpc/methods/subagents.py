@@ -200,7 +200,6 @@ async def _rows(*, probe: bool = True) -> list[dict]:
     # because "configured" drives the delete button and a seed row cannot be
     # deleted: not writing one is what "use the default" means.
     from raven.agent.subagent.builtin_agents import (
-        canonical_agent_name,
         is_builtin_agent_name,
         merge_builtin_seeds,
     )
@@ -244,17 +243,27 @@ async def _rows(*, probe: bool = True) -> list[dict]:
         # shows the roster the model reads, and this row is not on it.
         and not getattr(c, "hidden", False)
     ]
-    configured_names = {canonical_agent_name(getattr(c, "name", "")) for c in configured}
+    # The discovered names a stored row redefines, told apart from the switch's
+    # own row the way the switch itself tells them (`_is_switch_row`).
+    discovered_entries = {getattr(c, "name", ""): c.model_dump(by_alias=True) for c in discovered}
+    redefined = {
+        e.get("name")
+        for e in configured_raw
+        if e.get("name") in discovered_entries and not _is_switch_row(e, discovered_entries[e.get("name")])
+    }
 
     entries: list[tuple[Any, str]] = [(c, "builtin") for c in builtin_cfgs]
     # A discovered row is reported as its own source, not as "config": there is no
     # config entry to delete, and the delete button reads ``configured``. Removing
     # one means removing its folder. A row the user has also written by hand is
-    # theirs, so it keeps the config source and its delete button.
+    # theirs, so it keeps the config source and its delete button. The row the
+    # switch writes is not one: listed as config, a switched-off folder offered a
+    # delete that puts it back on the roster past the enable gate, and its Test
+    # ran that row's empty command.
     # "vendored" is the wire name for a discovered row (the clients and the
     # schema read it); renaming it is a schema change, not a refactor.
     entries += [
-        (c, "config" if getattr(c, "name", "") in configured_names else "vendored")
+        (c, "config" if getattr(c, "name", "") in redefined else "vendored")
         if getattr(c, "name", "") in discovered_names
         else (c, "config")
         for c in external
@@ -535,7 +544,7 @@ def _refuse_unless_it_can_run_there(entry: dict, machine: str, *, remote_cwd: st
     with it rather than written and ignored. A built-in agent is Raven's own
     loop in this process and runs on no other machine. The machine is judged
     the way a dispatch judges it (:func:`raven.acp_client.remote.machine`):
-    the lane on, the row registered and usable -- each refusal one sentence,
+    the row registered and usable -- each refusal one sentence,
     with no address in it.
     """
     from raven.acp_client import remote
@@ -737,13 +746,20 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
             )
     else:
         target = next((e for e in entries if e.get("name") == name), None)
-    materialized_discovered = target is None
-    if target is None:
-        from raven.agent.subagent.vendored_agents import discover_product_rows
-
-        discovered = next((cfg for cfg in discover_product_rows() if getattr(cfg, "name", None) == name), None)
-        if discovered is not None:
-            target = discovered.model_dump(by_alias=True)
+    shipped = _discovered_entry(str(name or ""))
+    # The switch's own row carries the switch alone -- the table reads only its
+    # flag -- so an edit written there reached nothing, and a rename moved the
+    # switch off its folder, which put the agent back on the roster past the
+    # enable gate. The folder's entry takes the edit instead, as it does when
+    # there is no row at all, and keeps the switch's "no".
+    switch = target if target is not None and shipped is not None and _is_switch_row(target, shipped) else None
+    materialized_discovered = target is None or switch is not None
+    if switch is not None:
+        target = {**shipped, "enabled": bool(switch.get("enabled", False))}
+        entries = [target if e is switch else e for e in entries]
+    elif target is None:
+        if shipped is not None:
+            target = dict(shipped)
             entries.append(target)
         elif is_builtin_agent_name(name or ""):
             # A built-in row has no config entry until its first edit -- writing
@@ -874,6 +890,11 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
                         data={"field": "model", "name": name},
                     )
                 target["model"] = stored
+    # A form saves every field it shows, so an edit can leave a folder's entry as
+    # it found it, and a stored copy would then outlive the manifest it was taken
+    # from. What is stored -- the switch, or nothing -- stands.
+    if materialized_discovered and shipped is not None and _is_switch_row(target, shipped):
+        return {"updated": True, "name": target["name"]}
     # A credential or a model swapped under a row that is already on is a
     # connect nobody gated: the row goes on serving dispatches with something
     # nothing has tried, and the first real task is what discovers the typo. So
@@ -961,6 +982,11 @@ def _is_switch_row(stored: dict, discovered: dict) -> bool:
         return True
     drop = {"enabled", "switchOnly", "switch_only"}
     return {k: v for k, v in stored.items() if k not in drop} == {k: v for k, v in discovered.items() if k not in drop}
+
+
+def _switch_row(name: str, discovered: dict) -> dict:
+    """The stored "no" of a discovered folder: its name, its kind and the flag."""
+    return {"name": name, "kind": discovered.get("kind", "cli"), "enabled": False, "command": "", "switchOnly": True}
 
 
 def _discovered_entry(name: str) -> dict | None:
@@ -1174,9 +1200,7 @@ def _resolve_toggle(entries: list[dict], name: Any, enabled: bool) -> tuple[list
         # that had moved on. This row declares no launcher because it defines
         # nothing; the folder still defines the agent, and the merge reads only
         # the flag from here.
-        entries.append(
-            {"name": name, "kind": discovered.get("kind", "cli"), "enabled": enabled, "command": "", "switchOnly": True}
-        )
+        entries.append(_switch_row(name, discovered))
     elif enabled and discovered is None and "command" in target and not str(target["command"] or "").strip():
         # Asked to enable a row that names no launcher and no folder: there is
         # nothing to start, so the switch answers what is true rather than
@@ -1229,9 +1253,30 @@ async def subagents_toggle(params: dict, *, agent_loop_factory: "AgentLoopFactor
 
 
 async def subagents_remove(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
-    """Delete one entry. Reports `removed: false` for a name that was not there."""
+    """Delete one entry. Reports `removed: false` for a name that was not there.
+
+    A discovered folder's row that is off leaves its "no" behind as the switch's
+    own row: without the row the folder defines the agent again, and dropping
+    the flag with it put the agent back on the roster past the enable gate. The
+    switch's row is no definition to delete, so removing one removes nothing.
+    """
+    name = params.get("name", "")
     try:
-        removed = remove_agent(params.get("name", ""), config_path=get_config_path())
+        entries = get_agents(config_path=get_config_path())
+    except ValidationError as exc:
+        _raise_config_error(exc)
+    stored = next((e for e in entries if e.get("name") == name), None)
+    shipped = _discovered_entry(str(name or "")) if stored is not None and not stored.get("enabled", True) else None
+    try:
+        if shipped is None:
+            removed = remove_agent(name, config_path=get_config_path())
+        elif _is_switch_row(stored, shipped):
+            removed = False
+        else:
+            set_agents(
+                [_switch_row(name, shipped) if e is stored else e for e in entries], config_path=get_config_path()
+            )
+            removed = True
     except (ValueError, ValidationError) as exc:
         _raise_config_error(exc)
     if removed:

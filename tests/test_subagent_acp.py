@@ -3213,7 +3213,7 @@ def _without_killpg(monkeypatch: pytest.MonkeyPatch) -> list[tuple[list[str], in
     return ran
 
 
-async def test_close_without_killpg_ends_the_tree_through_taskkill(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_close_without_killpg_ends_the_tree(monkeypatch: pytest.MonkeyPatch) -> None:
     """Windows has no ``os.killpg``, and calling it raised before any teardown ran.
 
     The connection was left marked closed with its process, its read loops and
@@ -3232,7 +3232,10 @@ async def test_close_without_killpg_ends_the_tree_through_taskkill(monkeypatch: 
 
         await client.close()
 
-        assert ran == [(["/T", "/F", "/PID", str(proc.pid)], 0)]
+        if sys.platform == "win32":
+            assert ran == [], "the Job Object owns the native Windows tree"
+        else:
+            assert ran == [(["/T", "/F", "/PID", str(proc.pid)], 0)]
         assert proc.returncode is not None, "close must stop the launcher"
         assert client.closed and not client.alive
     finally:

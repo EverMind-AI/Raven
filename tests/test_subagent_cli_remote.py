@@ -62,6 +62,14 @@ if mode == "denied":
 if mode == "silent":
     import time
     time.sleep(30)
+if mode in ("port_taken", "port_taken_once"):
+    # ssh's words when something took the port here first; with ExitOnForwardFailure it then ends.
+    if mode == "port_taken_once":
+        open(os.path.join(here, "mode"), "w").write("ok")
+    open(log, "a").write("bind [127.0.0.1]:1: Address already in use\\n")
+    open(log, "a").write("channel_setup_fwd_listener_tcpip: cannot listen to port: 1\\n")
+    open(log, "a").write("Could not request local forwarding.\\n")
+    sys.exit(255)
 if "-N" not in args or "-L" not in args:
     sys.stderr.write("this stand-in only forwards\\n")
     sys.exit(2)
@@ -296,6 +304,25 @@ async def test_a_timeout_ends_the_agent_s_whole_process_tree_on_the_machine(box,
 
     pid = int((box.home / "raven-work" / "slow" / "pid.txt").read_text(encoding="utf-8"))
     await _until(lambda: _gone(pid))
+
+
+async def test_a_timed_out_command_keeps_its_record_for_the_caller_that_reports_the_failure(box, tmp_path, monkeypatch):
+    """As for the output: the failure is the caller's to announce, and the record waits until it has."""
+    from raven.acp_client import remote_runs
+
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    cfg = cli_config("sh -c 'exec sleep 30'", timeout=1)
+
+    with pytest.raises(CliAgentTimeoutError):
+        await _run(cfg, "hi", tmp_path, session_key="tui:s1", reported_by_caller=True)
+    (run,) = remote_runs.pending()
+    assert (run.kind, run.task_id) == ("cli", "t1"), "the record outlives the failure, for the manager to forget"
+
+    with pytest.raises(CliAgentTimeoutError):
+        await _run(cfg, "hi", tmp_path, task_id="t2", session_key="tui:s1")
+    assert [r.task_id for r in remote_runs.pending()] == ["t1"], (
+        "a caller that takes the failure as its own leaves none"
+    )
 
 
 async def test_a_cancel_ends_the_agent_s_whole_process_tree_on_the_machine(box, tmp_path):
@@ -599,8 +626,66 @@ async def test_a_tunnel_that_never_opens_is_given_up_on_in_one_sentence(forwardi
     with pytest.raises(remote.RemoteMachineError, match="machine 'Lab box' \\(box\\) did not open the tunnel within"):
         async with remote.tunnel(target, "http://localhost:1/v1", ssh_log=tmp_path / "t.log", connect_timeout=0):
             pass
+    await _until(lambda: (forwarding.bin / "tunnel.pid").exists())  # a loaded machine starts the stand-in late
     pid = int((forwarding.bin / "tunnel.pid").read_text(encoding="utf-8"))
     await _until(lambda: _gone(pid))  # the ssh that never opened it is ended
+
+
+async def test_a_port_taken_after_it_was_chosen_is_given_up_for_another_before_any_ssh(
+    forwarding, tmp_path, monkeypatch
+):
+    """A listener that took the port would answer the readiness probe in ssh's place and get the turn's request:
+    the port is checked again just before ssh starts, and a taken one costs no ssh."""
+    import socket
+
+    from raven.acp_client import remote
+
+    squatter = socket.socket()
+    squatter.bind(("127.0.0.1", 0))
+    squatter.listen()
+    squatter.setblocking(False)
+    taken = squatter.getsockname()[1]
+    chosen = iter([taken, remote._free_port()])
+    monkeypatch.setattr(remote, "_free_port", lambda: next(chosen))
+    target = remote.machine("box")
+    try:
+        async with remote.tunnel(target, "http://localhost:1/v1", ssh_log=tmp_path / "t.log", connect_timeout=0) as fwd:
+            assert fwd.url.startswith("http://127.0.0.1:") and not fwd.url.startswith(f"http://127.0.0.1:{taken}/")
+            with pytest.raises(BlockingIOError):
+                squatter.accept()
+    finally:
+        squatter.close()
+    forwards = [argv[argv.index("-L") + 1] for argv in forwarding.calls() if "-L" in argv]
+    assert len(forwards) == 1 and not forwards[0].startswith(f"127.0.0.1:{taken}:"), "one ssh, on the other port"
+
+
+async def test_a_port_ssh_lost_the_race_for_is_given_up_for_another(forwarding, tmp_path):
+    from raven.acp_client import remote
+
+    forwarding.mode("port_taken_once")
+    target = remote.machine("box")
+
+    async with remote.tunnel(target, "http://localhost:1/v1", ssh_log=tmp_path / "t.log", connect_timeout=0) as fwd:
+        assert fwd.url.startswith("http://127.0.0.1:")
+
+    forwards = [argv[argv.index("-L") + 1] for argv in forwarding.calls() if "-L" in argv]
+    assert len(forwards) == 2 and forwards[0] != forwards[1], "the second ssh listened on another port"
+
+
+async def test_ports_taken_every_time_end_the_turn_in_one_sentence_about_this_computer(forwarding, tmp_path):
+    from raven.acp_client import remote
+
+    forwarding.mode("port_taken")
+    target = remote.machine("box")
+
+    with pytest.raises(
+        remote.RemoteMachineError, match="a port on this computer for the tunnel was taken each of the 3"
+    ) as caught:
+        async with remote.tunnel(target, "http://localhost:1/v1", ssh_log=tmp_path / "t.log", connect_timeout=0):
+            pass
+
+    assert HOST not in str(caught.value) and str(PORT) not in str(caught.value)
+    assert len([argv for argv in forwarding.calls() if "-L" in argv]) == 3
 
 
 async def test_a_tunnel_names_what_it_cannot_do_before_any_ssh(box, tmp_path, monkeypatch):
@@ -679,25 +764,19 @@ def test_an_openai_row_drops_a_remote_cwd_with_a_warning_and_the_write_door_refu
         reject_unsupported_openai_fields([row])
 
 
-def test_with_the_lane_off_a_cli_machine_row_stays_off_the_table(box, monkeypatch):
+def test_machine_and_local_cli_rows_are_on_the_table_without_a_debug_switch(box, monkeypatch):
+    monkeypatch.delenv("RAVEN_DEBUG_MACHINES", raising=False)
     registry = AgentRegistry(build_builtin=lambda row, narrowed: ("backend", row.name))
     local = ThirdPartyCliSubagentConfig(name="here", command="cat")
-
-    monkeypatch.delenv("RAVEN_DEBUG_MACHINES", raising=False)
     registry.apply([cli_config("cat"), local])
-    assert "where@box" not in registry.names() and "here" in registry.names()
-
-    monkeypatch.setenv("RAVEN_DEBUG_MACHINES", "1")
-    registry.apply([cli_config("cat"), local])
-    assert "where@box" in registry.names()
-
-
-async def test_with_the_lane_off_a_cli_dispatch_says_so_and_reaches_nothing(box, monkeypatch, tmp_path):
-    monkeypatch.delenv("RAVEN_DEBUG_MACHINES", raising=False)
-
-    with pytest.raises(RuntimeError, match="the machine lane is debug-only and off"):
-        await _run(cli_config("cat"), "hi", tmp_path)
+    assert "where@box" in registry.names() and "here" in registry.names()
     assert box.calls() == []
+
+
+async def test_a_cli_dispatch_needs_no_debug_switch(box, monkeypatch, tmp_path):
+    monkeypatch.delenv("RAVEN_DEBUG_MACHINES", raising=False)
+    reply = await _run(cli_config("cat"), "hi", tmp_path)
+    assert reply.startswith("hi") and "Ran on machine" in reply
 
 
 async def test_the_announce_names_a_cli_row_s_directory_on_the_machine(box):
@@ -710,3 +789,381 @@ async def test_the_announce_names_a_cli_row_s_directory_on_the_machine(box):
     mgr = SubagentManager(provider=_Provider(), workspace=Path("/tmp"), agents=[cli_config("cat")])
 
     assert mgr._machine_workdir("where@box", "reviewer") == ("box", "~/raven-work/reviewer")
+
+
+async def test_a_cli_run_left_on_the_machine_when_this_computer_stops_is_picked_up_by_the_next_start(
+    box, tmp_path, monkeypatch
+):
+    """The command goes on under the machine's daemon when this process stops; the next one reads its output and reports it."""
+    from raven.acp_client import remote, remote_runs
+    from raven.agent.subagent import resume_remote
+    from raven.agent.subagent.history import SpawnRecord, nodes_root
+    from tests.test_subagent_acp_remote import _Manager, _Registry
+
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    backend = build_third_party_backend(cli_config("sh -c 'echo $$ > pid.txt; sleep 2; echo done; cat'"))
+    turn = asyncio.ensure_future(
+        backend.run(
+            "hi",
+            task_id="t1",
+            workspace=tmp_path,
+            executor=None,
+            session_key="tui:s1",
+            instance="left",
+            authored_task="say done {{ ref:notes.md }}",
+        )
+    )
+    pid_file = box.home / "raven-work" / "left" / "pid.txt"
+    await _until(pid_file.exists)
+    pid = int(pid_file.read_text(encoding="utf-8"))
+    (run,) = remote_runs.pending()
+    assert (run.kind, run.machine, run.agent, run.session_key, run.handle, run.task_id) == (
+        "cli",
+        "box",
+        "where@box",
+        "tui:s1",
+        "left",
+        "t1",
+    )
+    assert run.authored_task == "say done {{ ref:notes.md }}" and run.stateful is False
+
+    # This computer stops: the turn is cancelled the way the shutdown does it, then the links are closed.
+    remote.leave_agents_running()
+    try:
+        turn.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await turn
+        assert remote_runs.was_left("t1"), "the manager would read this dispatch as left, not cancelled"
+        await box.nodes.close_all()
+    finally:
+        remote.staying()
+    assert not _gone(pid), "the command stays with the machine's daemon"
+    assert [kept.task for kept in remote_runs.pending()] == [run.task]
+
+    # The next start: the dispatch's record is still open under its session, as the manager leaves one.
+    session_dir = tmp_path / "sessions" / "s1"
+    meta = {
+        "call_id": "n1",
+        "session_key": "tui:s1",
+        "agent": backend.name,
+        "handle": "left",
+        "task_summary": "say done",
+    }
+    SpawnRecord.open(session_dir, task_id="t1", task="hi", meta=meta, node_id="n1")
+    manager = _Manager(backend, session_dir)
+    registry = _Registry()
+    monkeypatch.setattr(resume_remote, "get_registry", lambda: registry)
+
+    assert await asyncio.wait_for(resume_remote.resume_remote_runs(manager), timeout=30) == 1
+
+    (said,) = manager.announced
+    assert said["status"] == "ok" and said["task_id"] == "t1" and said["origin"]["chat_id"] == "s1"
+    assert said["result"].split("\n\n[raven]")[0] == "done\nhi", "the command's whole output, read after the restart"
+    assert (
+        "picked up after this computer restarted" in said["result"]
+        and "Ran on machine 'Lab box' (box)" in said["result"]
+    )
+    meta_back = json.loads((nodes_root(session_dir) / "n1.meta.json").read_text(encoding="utf-8"))
+    assert meta_back["status"] == "completed" and manager.finalized == ["n1"]
+    assert registry.rows == [("status", "tui:s1", "where@box", "left", "completed")]
+    assert remote_runs.pending() == []
+    await _until(lambda: _gone(pid))
+
+
+async def test_a_cancel_while_this_computer_goes_on_ends_the_command_and_keeps_no_record(box, tmp_path, monkeypatch):
+    from raven.acp_client import remote_runs
+
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    turn = asyncio.ensure_future(
+        _run(cli_config("sh -c 'echo $$ > pid.txt; exec sleep 30'"), "hi", tmp_path, instance="gone")
+    )
+    pid_file = box.home / "raven-work" / "gone" / "pid.txt"
+    await _until(pid_file.exists)
+    pid = int(pid_file.read_text(encoding="utf-8"))
+    assert [run.kind for run in remote_runs.pending()] == ["cli"], "recorded while it runs"
+
+    turn.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await turn
+
+    await _until(lambda: _gone(pid))
+    assert remote_runs.pending() == [] and not remote_runs.was_left("t1")
+
+
+async def test_a_command_that_ends_here_leaves_no_record(box, tmp_path, monkeypatch):
+    from raven.acp_client import remote_runs
+
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+
+    head, _ = _split(await _run(cli_config("cat"), "hi", tmp_path))
+
+    assert head == "hi" and remote_runs.pending() == []
+
+
+async def test_a_reply_the_caller_reports_keeps_the_command_s_record_and_a_host_that_stops_before_the_announce_reads_it_again(
+    box, tmp_path, monkeypatch
+):
+    """The manager announces the output after the backend returns it: the record stays until then, and the next start reads the whole output again."""
+    from raven.acp_client import remote_runs
+    from raven.agent.subagent import resume_remote
+    from raven.agent.subagent.history import SpawnRecord
+    from tests.test_subagent_acp_remote import _Manager, _Registry
+
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    backend = build_third_party_backend(cli_config("sh -c 'echo done; cat'"))
+
+    head, _ = _split(
+        await backend.run(
+            "hi",
+            task_id="t1",
+            workspace=tmp_path,
+            executor=None,
+            session_key="tui:s1",
+            instance="kept",
+            reported_by_caller=True,
+        )
+    )
+
+    assert head == "done\nhi"
+    (run,) = remote_runs.pending()
+    assert (run.kind, run.task_id, run.received) == ("cli", "t1", 0), (
+        "the record outlives the output, for the manager to forget"
+    )
+
+    # This computer stops between the output and its announce.
+    await box.nodes.close_all()
+    session_dir = tmp_path / "sessions" / "s1"
+    meta = {
+        "call_id": "n1",
+        "session_key": "tui:s1",
+        "agent": backend.name,
+        "handle": "kept",
+        "task_summary": "say done",
+    }
+    SpawnRecord.open(session_dir, task_id="t1", task="hi", meta=meta, node_id="n1")
+    manager = _Manager(backend, session_dir)
+    monkeypatch.setattr(resume_remote, "get_registry", lambda: _Registry())
+
+    assert await asyncio.wait_for(resume_remote.resume_remote_runs(manager), timeout=30) == 1
+
+    (said,) = manager.announced
+    assert said["status"] == "ok" and said["result"].split("\n\n[raven]")[0] == "done\nhi", (
+        "the whole output, read again"
+    )
+    assert remote_runs.pending() == []
+
+
+class _PickUpLink:
+    """A node pool with one task, whose attach hands over ``endpoint``: what a pick-up reads a left run off."""
+
+    def __init__(self, endpoint: Any, *, rows: Any = None, refuse: Exception | None = None) -> None:
+        self.endpoint = endpoint
+        self.rows = rows if rows is not None else [{"task": "where@box-1", "state": "running"}]
+        self.refuse = refuse
+        self.attached: list[tuple[str, str, int]] = []
+
+    async def tasks(self, machine_id: str) -> list[dict[str, Any]]:
+        if isinstance(self.rows, Exception):
+            raise self.rows
+        return self.rows
+
+    async def attach(self, machine_id: str, task: str, *, name: str, after: int = 0) -> tuple[Any, dict[str, Any]]:
+        if self.refuse is not None:
+            raise self.refuse
+        self.attached.append((machine_id, task, after))
+        return self.endpoint, {"pid": 7, "frames": 2, "replayed": 2, "rc": None}
+
+
+def _left_run(**kw: Any) -> Any:
+    from raven.acp_client import remote_runs
+
+    fields: dict[str, Any] = dict(
+        kind="cli",
+        machine="box",
+        task="where@box-1",
+        agent="where@box",
+        session_key="tui:s1",
+        handle="t1",
+        task_id="t1",
+        session_id="",
+        prompt_id=0,
+        next_id=0,
+        initialize=None,
+        launch_key="",
+        config_key="",
+        session_cwd="/home/worker/raven-work/t1",
+        stateful=False,
+    )
+    fields.update(kw)
+    return remote_runs.RemoteRun(**fields)
+
+
+def _left_endpoint(*lines: str, rc: int | None = 0, lost: str | None = None) -> Any:
+    """The channel a pick-up is handed, already fed what the daemon replays: ``lines``, then the exit or the loss."""
+    from raven.acp_client import remote
+    from raven.node.client import ChannelEndpoint
+
+    endpoint = ChannelEndpoint(_Link(), 1, target=remote.machine("box"), agent="where@box", task="where@box-1")  # type: ignore[arg-type]
+    for n, line in enumerate(lines, 1):
+        endpoint.feed_frame(line, n)
+    if lost is not None:
+        endpoint.lost(lost)
+    elif rc is not None:
+        endpoint.exited(rc)
+    return endpoint
+
+
+async def test_a_left_cli_run_is_read_whole_off_the_daemon_and_its_exit_ends_it(box):
+    """The pick-up replays every line from the first, the exit code ends it, and the reply closes with the machine note."""
+    from raven.acp_client import remote_resume
+
+    link = _PickUpLink(_left_endpoint("done", "hi", rc=0))
+
+    picked = await build_third_party_backend(cli_config("cat")).pick_up(_left_run(), pool=link)
+
+    assert picked.status == "ok" and picked.reply.split("\n\n[raven]")[0] == "done\nhi"
+    assert link.attached == [("box", "where@box-1", 0)], (
+        "from the first line: a cli run's reply is the whole of its output"
+    )
+    assert remote_resume.PICKED_UP_NOTE in picked.reply and f"scp://worker@{HOST}:{PORT}//home/worker" in picked.reply
+
+
+async def test_a_picked_up_create_binds_the_instance_to_the_session_id_its_output_names(box):
+    """The dispatch's deferred commit never ran (this computer stopped first): the pick-up reads the id the way the
+    dispatch would have and binds the handle, so the next turn to it resumes this session."""
+    cfg = cli_config(
+        "sh -c 'cat'", id_source="derived", session_id_pattern=r"session (\S+)", resume_command="sh -c 'cat' {agent_id}"
+    )
+    backend = build_third_party_backend(cfg)
+    rows: list[tuple[str, ...]] = []
+
+    class _Recorder:
+        async def commit(self, session_key: str, agent: str, handle: str, agent_id: str, *, kind: str = "cli") -> None:
+            rows.append((session_key, agent, handle, agent_id))
+
+    backend._registry = _Recorder()  # type: ignore[attr-defined]
+
+    picked = await backend.pick_up(
+        _left_run(handle="t1", session_id=""), pool=_PickUpLink(_left_endpoint("session abc123", "done", rc=0))
+    )
+    assert picked.status == "ok" and rows == [("tui:s1", "where@box", "t1", "abc123")]
+    assert "not resumable" not in picked.reply
+
+    rows.clear()
+    picked = await backend.pick_up(
+        _left_run(handle="t1", session_id=""), pool=_PickUpLink(_left_endpoint("done", rc=0))
+    )
+    assert picked.status == "ok" and rows == [] and "not resumable" in picked.reply, "no id in the output: said so"
+
+    picked = await backend.pick_up(
+        _left_run(handle="t1", session_id="bound-before"), pool=_PickUpLink(_left_endpoint("session zzz", "done", rc=0))
+    )
+    assert picked.status == "ok" and rows == [], "a run that resumed a bound session binds nothing"
+
+
+async def test_a_left_cli_run_that_exited_non_zero_is_an_error_with_its_one_line(box):
+    picked = await build_third_party_backend(cli_config("cat")).pick_up(
+        _left_run(), pool=_PickUpLink(_left_endpoint("token expired", rc=3))
+    )
+
+    assert picked.status == "error" and picked.reply == "CLI agent 'where@box' exited 3: token expired"
+
+
+async def test_a_left_cli_run_the_machine_cannot_be_asked_about_waits_for_a_later_start(box, monkeypatch):
+    from raven.acp_client import remote_resume
+    from raven.ops import remote_path
+
+    backend = build_third_party_backend(cli_config("cat"))
+    monkeypatch.setattr(remote_path, "_NODES", None)
+    with pytest.raises(remote_resume.UnreachableError, match="does not reach registered machines"):
+        await backend.pick_up(_left_run())
+    down = _PickUpLink(_left_endpoint(), rows=remote_path.NodeCallError("the link to machine 'Lab box' (box) is down"))
+    with pytest.raises(remote_resume.UnreachableError, match="is down"):
+        await backend.pick_up(_left_run(), pool=down)
+    silent = _PickUpLink(
+        _left_endpoint(), refuse=remote_path.NodeCallError("the Raven node did not answer agent/attach")
+    )
+    with pytest.raises(remote_resume.UnreachableError, match="did not answer"):
+        await backend.pick_up(_left_run(), pool=silent)
+
+
+async def test_a_left_cli_run_the_machine_no_longer_has_or_an_unregistered_machine_is_an_error_in_one_sentence(box):
+    from raven.ops import remote_path
+
+    backend = build_third_party_backend(cli_config("cat"))
+    gone = _PickUpLink(_left_endpoint(), rows=[])
+    picked = await backend.pick_up(_left_run(), pool=gone)
+    assert picked.status == "error" and "no longer has the run of 'where@box'" in picked.reply and gone.attached == []
+
+    refused = _PickUpLink(
+        _left_endpoint(),
+        refuse=remote_path.NodeCallError(
+            "machine 'Lab box' (box) no longer runs 'where@box' (task where@box-1)", reason="unknown_task"
+        ),
+    )
+    picked = await backend.pick_up(_left_run(), pool=refused)
+    assert picked.status == "error" and "no longer runs" in picked.reply
+
+    picked = await backend.pick_up(_left_run(machine="elsewhere"), pool=gone)
+    assert picked.status == "error" and "is not registered" in picked.reply
+
+
+async def test_a_left_cli_run_whose_link_goes_is_said_so_or_kept_while_this_computer_is_leaving(box):
+    from raven.acp_client import remote, remote_resume
+
+    backend = build_third_party_backend(cli_config("cat"))
+    picked = await backend.pick_up(_left_run(), pool=_PickUpLink(_left_endpoint("partial", lost="the link went")))
+    assert picked.status == "error" and "ended while this computer was away: the link went" in picked.reply
+
+    remote.leave_agents_running()
+    try:
+        with pytest.raises(remote_resume.UnreachableError, match="stopped while the run of 'where@box'"):
+            await backend.pick_up(
+                _left_run(), pool=_PickUpLink(_left_endpoint("partial", lost="left running: this computer stopped"))
+            )
+    finally:
+        remote.staying()
+
+
+async def test_the_tunnel_s_helpers_read_nothing_from_a_missing_log_and_kill_an_ssh_that_ignores_terminate(tmp_path):
+    from raven.acp_client import remote
+
+    assert remote._log_since(tmp_path / "absent.log", 0) == ""
+    assert remote._log_size(tmp_path / "absent.log") == 0
+
+    class _Stubborn:
+        """An ssh whose terminate changes nothing; only kill ends it."""
+
+        def __init__(self) -> None:
+            self.returncode: int | None = None
+            self.signals: list[str] = []
+
+        def terminate(self) -> None:
+            self.signals.append("terminate")
+
+        def kill(self) -> None:
+            self.signals.append("kill")
+            self.returncode = -9
+
+        async def wait(self) -> int:
+            while self.returncode is None:
+                await asyncio.sleep(0.01)
+            return self.returncode
+
+    proc = _Stubborn()
+    waits = iter([asyncio.TimeoutError(), None])
+
+    async def wait_for(awaitable, timeout):  # noqa: ANN001 - the shape asyncio.wait_for has
+        outcome = next(waits)
+        if outcome is not None:
+            awaitable.close()
+            raise outcome
+        return await awaitable
+
+    original = remote.asyncio.wait_for
+    remote.asyncio.wait_for = wait_for  # type: ignore[assignment]
+    try:
+        await remote._end_ssh(proc)
+    finally:
+        remote.asyncio.wait_for = original  # type: ignore[assignment]
+    assert proc.signals == ["terminate", "kill"] and proc.returncode == -9

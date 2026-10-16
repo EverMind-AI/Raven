@@ -182,7 +182,7 @@ def started(monkeypatch) -> list[int]:
     regression through.
     """
     ports: list[int] = []
-    monkeypatch.setattr(serve_commands, "_run", lambda port, open_browser, dev=False: ports.append(port))
+    monkeypatch.setattr(serve_commands, "_run", lambda port, open_browser: ports.append(port))
     return ports
 
 
@@ -190,7 +190,7 @@ def started(monkeypatch) -> list[int]:
 def foregrounded(monkeypatch) -> list[int]:
     """Every engine `web --foreground` launched as its own process."""
     ports: list[int] = []
-    monkeypatch.setattr(serve_commands, "_run_foreground", lambda port, dev=False: ports.append(port))
+    monkeypatch.setattr(serve_commands, "_run_foreground", lambda port: ports.append(port))
     return ports
 
 
@@ -289,7 +289,7 @@ class TestAttaching:
 def supervised(monkeypatch) -> list[int]:
     """Every port a supervisor was left behind on, instead of leaving one."""
     ports: list[int] = []
-    monkeypatch.setattr(serve_commands, "_spawn_supervisor", lambda port, dev=False: ports.append(port))
+    monkeypatch.setattr(serve_commands, "_spawn_supervisor", lambda port: ports.append(port))
     return ports
 
 
@@ -836,23 +836,21 @@ class TestTheSupervisor:
         assert launched and launched[0][:4] == [sys.executable, "-P", "-m", "raven"]
         assert "--supervise" in launched[0]
 
-    def test_a_dev_page_is_supervised_and_brought_back_with_its_view(self, home: Path, instant, monkeypatch) -> None:
+    def test_a_supervised_page_is_brought_back_without_dev(self, home: Path, instant, monkeypatch) -> None:
         import subprocess
 
         argv = self._run(monkeypatch, [1, 0])
-        serve_commands._supervise(18999, dev=True)
-        assert len(argv) == 2 and all(run[-1] == "--dev" for run in argv)
+        serve_commands._supervise(18999)
+        assert len(argv) == 2 and all("--dev" not in run for run in argv)
 
         launched: list[list[str]] = []
         monkeypatch.setattr(subprocess, "Popen", lambda argv, **_k: launched.append(list(argv)))
-        serve_commands._spawn_supervisor(18999, dev=True)
         serve_commands._spawn_supervisor(18999)
-        assert launched[0][-1] == "--dev" and "--dev" not in launched[1]
+        assert "--dev" not in launched[0]
 
     @pytest.mark.parametrize("held", [True, False])
-    def test_the_gateway_command_carries_dev_whichever_engine_it_runs(self, monkeypatch, held: bool) -> None:
+    def test_the_gateway_argv_never_carries_dev(self, monkeypatch, held: bool) -> None:
         monkeypatch.setattr(serve_commands, "_gateway_holds_the_lock", lambda: held)
-        assert serve_commands._gateway_argv(18999, dev=True)[-1] == "--dev"
         assert "--dev" not in serve_commands._gateway_argv(18999)
 
     def test_it_supervises_the_engine_that_has_the_channel_adapters(self) -> None:
@@ -899,7 +897,7 @@ class TestTheSupervisor:
 
         monkeypatch.setattr(subprocess, "Popen", _fake_popen)
         monkeypatch.setattr(serve_commands, "_refuse_incomplete_install", lambda: None)
-        monkeypatch.setattr(serve_commands, "_gateway_argv", lambda port, dev=False: ["engine", str(port)])
+        monkeypatch.setattr(serve_commands, "_gateway_argv", lambda port: ["engine", str(port)])
         monkeypatch.setattr(serve_commands, "_await_attach", lambda *_a, **_k: "http://127.0.0.1:18999/auth#z")
 
         serve_commands._run_foreground(18999)
@@ -948,7 +946,7 @@ class TestTheSupervisor:
         said: list[str] = []
         monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: _DeadChild())
         monkeypatch.setattr(serve_commands, "_refuse_incomplete_install", lambda: None)
-        monkeypatch.setattr(serve_commands, "_gateway_argv", lambda port, dev=False: ["engine", str(port)])
+        monkeypatch.setattr(serve_commands, "_gateway_argv", lambda port: ["engine", str(port)])
         monkeypatch.setattr(serve_commands, "_read_serve_state", lambda: None)
         monkeypatch.setattr(serve_commands.typer, "echo", lambda message="", **_k: said.append(str(message)))
 
@@ -1803,7 +1801,7 @@ class TestTheSupervisorCleansUpOnTheSignalThatStopsIt:
         state = home / "web.json"
         script = (
             "from raven.cli import serve_commands as s\n"
-            "s._gateway_argv = lambda p, dev=False: ['sleep', '600']\n"
+            "s._gateway_argv = lambda p: ['sleep', '600']\n"
             "s._bound_port_of = lambda p: None\n"
             "s._supervise(18999)\n"
         )
@@ -1848,7 +1846,7 @@ class TestTheSupervisorCleansUpOnTheSignalThatStopsIt:
         script = (
             "import time\n"
             "from raven.cli import serve_commands as s\n"
-            "s._gateway_argv = lambda p, dev=False: ['sleep', '600']\n"
+            "s._gateway_argv = lambda p: ['sleep', '600']\n"
             "s._bound_port_of = lambda p: None\n"
             "_recorded = s._write_web_state\n"
             "def _linger(port):\n"
@@ -2441,7 +2439,7 @@ class TestStoppingARealTree:
         script = (
             "import sys\n"
             "from raven.cli import serve_commands as sc\n"
-            f"sc._gateway_argv = lambda port, dev=False: [sys.executable, '-c', {_STUBBORN!r}, {str(home)!r}]\n"
+            f"sc._gateway_argv = lambda port: [sys.executable, '-c', {_STUBBORN!r}, {str(home)!r}]\n"
             "sc._CHILD_STOP_S = 2.0\n"
             "sc._supervise(18999)\n"
         )
@@ -2472,7 +2470,7 @@ class TestStoppingARealTree:
         script = (
             "import sys\n"
             "from raven.cli import serve_commands as sc\n"
-            f"sc._gateway_argv = lambda port, dev=False: [sys.executable, '-c', {_STUBBORN!r}, {str(home)!r}]\n"
+            f"sc._gateway_argv = lambda port: [sys.executable, '-c', {_STUBBORN!r}, {str(home)!r}]\n"
             "sc._CHILD_STOP_S = 0.5\n"
             "sc._supervise(18999)\n"
         )
@@ -2512,7 +2510,7 @@ class TestStoppingARealTree:
         script = (
             "import sys\n"
             "from raven.cli import serve_commands as sc\n"
-            f"sc._gateway_argv = lambda port, dev=False: [sys.executable, '-c', {_STUBBORN_WITH_CHILD!r}, {str(home)!r}, {gateway!r}]\n"
+            f"sc._gateway_argv = lambda port: [sys.executable, '-c', {_STUBBORN_WITH_CHILD!r}, {str(home)!r}, {gateway!r}]\n"
             "sc._CHILD_STOP_S = 0.5\n"
             "sc._supervise(18999)\n"
         )
@@ -2775,19 +2773,17 @@ class TestAStopThatLosesItsTarget:
         assert "could not stop" not in capsys.readouterr().out
 
 
-class TestTheDevFlag:
-    """`--dev` has to reach the process that serves the page, and a page must
-    not be opened against a service that cannot do what the flag asked for."""
+class TestTrajectoryViewByDefault:
+    """No launch shape carries `--dev`: the trajectory view is served by default,
+    so nothing has to reach the child, and attaching opens the page as it is."""
 
-    def test_the_child_argv_carries_the_flag_in_both_shapes(self, monkeypatch) -> None:
+    def test_the_child_argv_carries_no_flag_in_either_shape(self, monkeypatch) -> None:
         monkeypatch.setattr(serve_commands, "_gateway_holds_the_lock", lambda: False)
-        assert serve_commands._gateway_argv(18999, dev=True)[-3:] == ["--page-port", "18999", "--dev"]
-        assert "--dev" not in serve_commands._gateway_argv(18999)
+        assert serve_commands._gateway_argv(18999)[-2:] == ["--page-port", "18999"]
         monkeypatch.setattr(serve_commands, "_gateway_holds_the_lock", lambda: True)
-        assert serve_commands._gateway_argv(18999, dev=True)[-3:] == ["--port", "18999", "--dev"]
-        assert "--dev" not in serve_commands._gateway_argv(18999, dev=False)
+        assert serve_commands._gateway_argv(18999)[-2:] == ["--port", "18999"]
 
-    def test_the_supervisor_and_the_foreground_child_carry_the_flag(self, home: Path, monkeypatch) -> None:
+    def test_the_supervisor_and_the_foreground_child_carry_no_flag(self, home: Path, monkeypatch) -> None:
         import subprocess
 
         argvs: list[list[str]] = []
@@ -2806,111 +2802,28 @@ class TestTheDevFlag:
             return _Proc()
 
         monkeypatch.setattr(subprocess, "Popen", record)
-        serve_commands._spawn_supervisor(18999, dev=True)
-        assert argvs[-1][-4:] == ["--supervise", "--port", "18999", "--dev"]
         serve_commands._spawn_supervisor(18999)
-        assert "--dev" not in argvs[-1]
+        assert argvs[-1][-3:] == ["--supervise", "--port", "18999"]
         monkeypatch.setattr(serve_commands, "_refuse_incomplete_install", lambda *_a, **_k: None)
         monkeypatch.setattr(serve_commands, "_gateway_holds_the_lock", lambda: False)
         monkeypatch.setattr(serve_commands, "_await_attach", lambda *_a, **_k: None)
-        serve_commands._run_foreground(18999, dev=True)
-        assert argvs[-1][-3:] == ["--page-port", "18999", "--dev"]
+        serve_commands._run_foreground(18999)
+        assert argvs[-1][-2:] == ["--page-port", "18999"]
 
-    def test_health_facts_ask_the_host_in_the_url(self, monkeypatch) -> None:
-        asked: list[str] = []
+    def test_the_health_probe_that_served_the_flag_is_gone(self) -> None:
+        for name in ("_check_attached", "_health_facts", "_health"):
+            assert not hasattr(serve_commands, name), name
 
-        async def fake_health(base: str):
-            asked.append(base)
-            return {"trajectory_view": True}
-
-        monkeypatch.setattr(serve_commands, "_health", fake_health)
-        assert serve_commands._health_facts("http://127.0.0.1:18799/auth#x") == {"trajectory_view": True}
-        assert asked == ["http://127.0.0.1:18799"]
-
-    @pytest.mark.parametrize(
-        "dev, facts, refused, noted",
-        [
-            (True, {"trajectory_view": False}, True, False),
-            (True, {}, True, False),
-            (True, None, False, False),
-            (True, {"trajectory_view": True}, False, False),
-            (False, {"trajectory_view": True}, False, True),
-            (False, {"trajectory_view": False}, False, False),
-            (False, None, False, False),
-        ],
-    )
-    def test_attaching_checks_the_running_service(
-        self,
-        home: Path,
-        a_built_page,
-        opened: list[str],
-        supervised: list[int],
-        monkeypatch,
-        capsys,
-        dev,
-        facts,
-        refused,
-        noted,
-    ) -> None:
-        stopped: list[bool] = []
-        monkeypatch.setattr(serve_commands, "_attached_url", lambda: "http://127.0.0.1:31337/auth#abc")
-        monkeypatch.setattr(serve_commands, "_health_facts", lambda url: facts)
-        monkeypatch.setattr(serve_commands, "_stop_resident", lambda: stopped.append(True) or True)
-        if refused:
-            with pytest.raises(typer.Exit) as excinfo:
-                serve_commands._web(port=18999, dev=dev)
-            assert excinfo.value.exit_code == 1
-            assert opened == [] and supervised == [] and stopped == []
-            assert "raven web --stop" in capsys.readouterr().out
-        else:
-            serve_commands._web(port=18999, dev=dev)
-            assert opened == ["http://127.0.0.1:31337/auth#abc"] and stopped == []
-            out = capsys.readouterr().out
-            assert ("trajectory view enabled" in out) is noted
-            # An unreadable health answer is not a "no": the page opens, with a warning when --dev asked.
-            assert ("could not read http://127.0.0.1:31337/health" in out) is (dev and facts is None)
-
-    def test_a_recovering_supervisor_without_the_view_is_refused_too(
+    def test_attaching_opens_the_running_service_as_it_is(
         self, home: Path, a_built_page, opened: list[str], supervised: list[int], monkeypatch, capsys
     ) -> None:
-        """First probe fails, an old supervisor is alive, its gateway comes back
-        without the view: the user asked for --dev, so the page is not opened
-        and nothing is stopped or started."""
-        stopped: list[bool] = []
-        monkeypatch.setattr(serve_commands, "_attached_url", lambda: None)
-        monkeypatch.setattr(serve_commands, "_read_web_state", lambda: 4242)
-        monkeypatch.setattr(serve_commands, "_await_attach", lambda *_a, **_k: "http://127.0.0.1:18999/auth#z")
-        monkeypatch.setattr(serve_commands, "_health_facts", lambda url: {"trajectory_view": False})
-        monkeypatch.setattr(serve_commands, "_stop_resident", lambda: stopped.append(True) or True)
-        with pytest.raises(typer.Exit) as excinfo:
-            serve_commands._web(port=18999, dev=True)
-        assert excinfo.value.exit_code == 1
-        assert opened == [] and supervised == [] and stopped == []
-        assert "raven web --stop" in capsys.readouterr().out
+        monkeypatch.setattr(serve_commands, "_attached_url", lambda: "http://127.0.0.1:31337/auth#abc")
+        serve_commands._web(port=18999)
+        assert opened == ["http://127.0.0.1:31337/auth#abc"] and supervised == []
+        assert "trajectory" not in capsys.readouterr().out
 
-    def test_a_fresh_launch_with_the_flag_supervises_with_the_flag(
-        self, home: Path, a_built_page, opened: list[str], monkeypatch
-    ) -> None:
-        spawned: list[tuple[int, bool]] = []
-        monkeypatch.setattr(serve_commands, "_attached_url", lambda: None)
-        monkeypatch.setattr(serve_commands, "_read_web_state", lambda: None)
-        monkeypatch.setattr(serve_commands, "_read_serve_pid", lambda: None)
-        monkeypatch.setattr(serve_commands, "_spawn_supervisor", lambda port, dev=False: spawned.append((port, dev)))
-        monkeypatch.setattr(serve_commands, "_await_attach", lambda *_a, **_k: "http://127.0.0.1:18999/auth#z")
-        monkeypatch.setattr(serve_commands, "_health_facts", lambda url: {"trajectory_view": True})
-        serve_commands._web(port=18999, dev=True)
-        assert spawned == [(18999, True)] and opened == ["http://127.0.0.1:18999/auth#z"]
-
-    def test_the_supervise_branch_forwards_the_flag(self, home: Path, a_built_page, monkeypatch) -> None:
-        seen: list[tuple[int, bool]] = []
-        monkeypatch.setattr(serve_commands, "_supervise", lambda port, dev=False: seen.append((port, dev)))
-        serve_commands._web(port=18999, supervise=True, dev=True)
-        assert seen == [(18999, True)]
-
-    def test_the_foreground_wait_checks_the_service_but_keeps_the_child(self, home: Path, monkeypatch, capsys) -> None:
+    def test_the_foreground_child_opens_the_page_once_it_is_up(self, home: Path, monkeypatch) -> None:
         import subprocess
-
-        waited: list[bool] = []
 
         class _Proc:
             returncode = 0
@@ -2919,56 +2832,223 @@ class TestTheDevFlag:
                 return None
 
             def wait(self):
-                waited.append(True)
                 return 0
 
         monkeypatch.setattr(subprocess, "Popen", lambda argv, **_k: _Proc())
         monkeypatch.setattr(serve_commands, "_refuse_incomplete_install", lambda *_a, **_k: None)
         monkeypatch.setattr(serve_commands, "_gateway_holds_the_lock", lambda: False)
         monkeypatch.setattr(serve_commands, "_await_attach", lambda *_a, **_k: "http://127.0.0.1:18999/auth#z")
-        monkeypatch.setattr(serve_commands, "_health_facts", lambda url: {"trajectory_view": False})
         opened: list[str] = []
         monkeypatch.setattr(serve_commands, "_open", lambda url: opened.append(url))
-        with pytest.raises(typer.Exit):
-            serve_commands._run_foreground(18999, dev=True)
-        assert opened == [] and waited == [True]
-        assert "raven web --stop" in capsys.readouterr().out
+        serve_commands._run_foreground(18999)
+        assert opened == ["http://127.0.0.1:18999/auth#z"]
 
-    def test_serve_arms_the_policy_before_serving(self, monkeypatch) -> None:
+    def test_serve_leaves_the_default_policy_alone(self, monkeypatch) -> None:
         from raven.trajectory import policy
 
         policy._reset_for_tests()
+        armed: list[bool] = []
+        monkeypatch.setattr(policy, "arm", lambda enabled: armed.append(enabled))
         monkeypatch.setattr(serve_commands, "_refuse_incomplete_install", lambda *_a, **_k: None)
         monkeypatch.setattr(serve_commands.bounded_asyncio, "run", lambda coro: coro.close())
         try:
-            serve_commands._run(18999, False, dev=True)
-            assert policy.current().enabled() is True
             serve_commands._run(18999, False)
-            assert policy.current().enabled() is False
+            assert policy.current().enabled() is True and policy.current().revision == 0
+            assert armed == []
         finally:
             policy._reset_for_tests()
 
 
-@pytest.mark.parametrize(("argv", "dev"), [(["web", "--dev"], True), (["web"], False)])
-def test_the_web_command_hands_dev_on(monkeypatch, argv: list[str], dev: bool) -> None:
+@pytest.mark.parametrize("command", ["web", "serve"])
+def test_the_page_commands_reject_dev(monkeypatch, command: str) -> None:
     from typer.testing import CliRunner
 
     from raven.cli.commands import app
 
-    seen: list[bool] = []
-    monkeypatch.setattr(serve_commands, "_web", lambda port, **kw: seen.append(kw.get("dev")))
-    assert CliRunner().invoke(app, argv).exit_code == 0
-    assert seen == [dev]
-
-
-@pytest.mark.parametrize(("argv", "dev"), [(["serve", "--dev"], True), (["serve"], False)])
-def test_the_serve_command_hands_dev_on(monkeypatch, argv: list[str], dev: bool) -> None:
-    from typer.testing import CliRunner
-
-    from raven.cli.commands import app
-
-    seen: list[bool] = []
+    started: list[str] = []
+    monkeypatch.setattr(serve_commands, "_web", lambda *a, **k: started.append("web"))
+    monkeypatch.setattr(serve_commands, "_run", lambda *a, **k: started.append("run"))
     monkeypatch.setattr(serve_commands, "_gateway_hosted_page", lambda: None)
-    monkeypatch.setattr(serve_commands, "_run", lambda port, open_browser, dev=False: seen.append(dev))
-    assert CliRunner().invoke(app, argv).exit_code == 0
-    assert seen == [dev]
+    result = CliRunner(mix_stderr=False).invoke(app, [command, "--dev"])
+    assert result.exit_code == 2
+    assert "No such option" in result.stderr
+    assert started == []
+
+
+def test_the_web_command_hands_its_options_on(monkeypatch) -> None:
+    from typer.testing import CliRunner
+
+    from raven.cli.commands import app
+
+    seen: list[tuple[tuple, dict]] = []
+    monkeypatch.setattr(serve_commands, "_web", lambda *a, **kw: seen.append((a, kw)))
+    assert CliRunner().invoke(app, ["web"]).exit_code == 0
+    assert seen == [((18792,), {"foreground": False, "stop": False, "supervise": False})]
+
+
+def test_the_serve_command_hands_its_options_on(monkeypatch) -> None:
+    from typer.testing import CliRunner
+
+    from raven.cli.commands import app
+
+    seen: list[tuple] = []
+    monkeypatch.setattr(serve_commands, "_gateway_hosted_page", lambda: None)
+    monkeypatch.setattr(serve_commands, "_run", lambda *a, **kw: seen.append((a, kw)))
+    assert CliRunner().invoke(app, ["serve"]).exit_code == 0
+    assert seen == [((18792, False), {})]
+
+
+class TestTheSupervisorStartsWithoutTheCommandTable:
+    """`raven web` leaves its supervisor running for as long as the page is up, and
+    the supervisor only restarts the gateway. The entry point hands the argv both
+    launchers start it with straight to ``_web``, so the command table is never
+    imported for it; any other argv is still parsed by the table."""
+
+    ARGV = ["web", "--supervise", "--port", "18999"]
+    CALL = ((18999,), {"foreground": False, "stop": False, "supervise": True})
+
+    @pytest.fixture
+    def web_calls(self, monkeypatch) -> list[tuple[tuple, dict]]:
+        seen: list[tuple[tuple, dict]] = []
+        monkeypatch.setattr(serve_commands, "_web", lambda *a, **kw: seen.append((a, kw)))
+        return seen
+
+    def test_it_calls_web_the_way_the_command_does(self, web_calls) -> None:
+        from typer.testing import CliRunner
+
+        from raven.cli.commands import app
+
+        assert CliRunner().invoke(app, self.ARGV).exit_code == 0
+        assert serve_commands.supervise_from_argv(self.ARGV) is True
+
+        assert web_calls == [self.CALL, self.CALL]
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["web", "--supervise"],
+            ["web", "--supervise", "--port"],
+            ["web", "--supervise", "--port", "x"],
+            ["web", "--supervise", "--port", "-1"],
+            # A superscript two passes str.isdigit, and int() refuses it.
+            ["web", "--supervise", "--port", chr(0xB2)],
+            ["web", "--supervise", "--port=18999"],
+            ["web", "--supervise", "--port", "18999", "--foreground"],
+            ["web", "--port", "18999", "--supervise"],
+            ["serve", "--supervise", "--port", "18999"],
+        ],
+    )
+    def test_any_other_argv_is_left_to_the_command_table(self, web_calls, argv: list[str]) -> None:
+        assert serve_commands.supervise_from_argv(argv) is False
+        assert web_calls == []
+
+    @pytest.mark.parametrize("code", [1, 3])
+    def test_a_refusal_ends_the_process_with_the_code_the_command_would(self, monkeypatch, code: int) -> None:
+        from typer.testing import CliRunner
+
+        from raven.cli.commands import app
+
+        def refuse(*_a, **_kw):
+            raise typer.Exit(code)
+
+        monkeypatch.setattr(serve_commands, "_web", refuse)
+
+        assert CliRunner().invoke(app, self.ARGV).exit_code == code
+        with pytest.raises(SystemExit) as ended:
+            serve_commands.supervise_from_argv(self.ARGV)
+        assert ended.value.code == code
+
+    @staticmethod
+    def _launch_on(platform: str, argv: list[str], monkeypatch, *, switchable: bool = True) -> list[tuple]:
+        """Run the entry point with stdout and stderr in an ANSI code page, recording how
+        both streams and ``PYTHONIOENCODING`` stood when the process was handed over."""
+        import io
+        import os
+
+        from raven.cli import commands, entry
+        from raven.security import tls
+
+        class Stream:
+            encoding = "cp1252"
+            reconfigured: dict | None = None
+
+            def reconfigure(self, **kwargs) -> None:
+                if not switchable:
+                    raise io.UnsupportedOperation("reconfigure")
+                self.reconfigured = kwargs
+
+        out, err = Stream(), Stream()
+        seen: list[tuple] = []
+
+        def handed_over(*_a, **_kw) -> None:
+            seen.append((out.reconfigured, err.reconfigured, os.environ.get("PYTHONIOENCODING")))
+
+        monkeypatch.setattr(tls, "use_system_ca", lambda: None)
+        monkeypatch.setattr(serve_commands, "_web", handed_over)
+        monkeypatch.setattr(commands, "run", handed_over)
+        monkeypatch.delenv("PYTHONIOENCODING", raising=False)
+        monkeypatch.setattr(sys, "argv", ["raven", *argv])
+        monkeypatch.setattr(sys, "stdout", out)
+        monkeypatch.setattr(sys, "stderr", err)
+        monkeypatch.setattr(sys, "platform", platform)
+        entry.run()
+        return seen
+
+    @pytest.mark.parametrize("argv", [ARGV, ["status"]], ids=["the supervisor", "a command"])
+    def test_on_windows_every_launch_writes_its_streams_in_utf8(self, monkeypatch, argv: list[str]) -> None:
+        """The supervisor's stdout and stderr are ``web.log``, which its gateway writes in
+        UTF-8, and the gateway it starts inherits ``PYTHONIOENCODING``. The command table
+        set both as it was imported, and the supervisor no longer imports it."""
+        utf8 = {"encoding": "utf-8", "errors": "replace"}
+
+        assert self._launch_on("win32", argv, monkeypatch) == [(utf8, utf8, "utf-8")]
+
+    def test_a_stream_that_cannot_switch_leaves_the_launch_standing(self, monkeypatch) -> None:
+        assert self._launch_on("win32", self.ARGV, monkeypatch, switchable=False) == [(None, None, "utf-8")]
+
+    def test_elsewhere_the_streams_are_left_as_they_are(self, monkeypatch) -> None:
+        assert self._launch_on("linux", self.ARGV, monkeypatch) == [(None, None, None)]
+
+    def test_raven_web_starts_it_with_that_argv(self, home: Path, web_calls, monkeypatch) -> None:
+        import subprocess
+
+        launched: list[list[str]] = []
+        monkeypatch.setattr(subprocess, "Popen", lambda argv, **_kw: launched.append(list(argv)))
+
+        serve_commands._spawn_supervisor(18999)
+
+        assert launched[0][:4] == [sys.executable, "-P", "-m", "raven"]
+        assert serve_commands.supervise_from_argv(launched[0][4:]) is True
+        assert web_calls == [self.CALL]
+
+    @pytest.mark.slow
+    def test_that_launch_never_imports_the_command_table(self, tmp_path: Path) -> None:
+        """Checked in a fresh interpreter: ``sys.modules`` is process-wide, and this one
+        imported the table long ago."""
+        import os
+        import subprocess
+
+        probe = (
+            "import sys\n"
+            "from raven.cli import entry, serve_commands\n"
+            "seen = []\n"
+            "serve_commands._web = lambda *a, **kw: seen.append((a, kw))\n"
+            "sys.argv = ['raven', 'web', '--supervise', '--port', '18999']\n"
+            "try:\n"
+            "    entry.run()\n"
+            "except SystemExit:\n"
+            "    pass\n"
+            "print('calls:', seen)\n"
+            "print('command table imported:', 'raven.cli.commands' in sys.modules)\n"
+        )
+        done = subprocess.run(
+            [sys.executable, "-P", "-c", probe],
+            env={**os.environ, "RAVEN_HOME": str(tmp_path / "home")},
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+        assert f"calls: {[self.CALL]}" in done.stdout, done.stdout + done.stderr
+        assert "command table imported: False" in done.stdout, done.stdout + done.stderr

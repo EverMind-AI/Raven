@@ -35,10 +35,14 @@ if TYPE_CHECKING:
 SERVER_VERSION = "0.1.0"
 SCHEMA_VERSION = "0.1.0"
 SERVER_CAPABILITIES = ["jsonrpc-2.0", "subscriptions", "cli-dispatch"]
-# Announced only by a process launched with --dev. The policy is armed once at
-# launch, so a page that does not see it at the handshake has nothing to ask
-# the trajectory surface, and a normal launch never polls it.
+# Announced while the trajectory policy is on, which it is by default. A page
+# reads the announcement at the handshake only, so one that does not see it
+# there has nothing to ask the trajectory surface and never polls it.
 TRAJECTORY_CAPABILITY = "trajectory-v1"
+# Announced while a bug report receiver is configured and its URL is valid, so
+# the page offers "Report a problem" only where an upload can go somewhere.
+BUGREPORT_CAPABILITY = "bugreport-v1"
+_bugreport_url_warned = False
 
 # Lenient semver: <major>.<minor>.<patch> with optional `-prerelease` / `+build`.
 _SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
@@ -125,7 +129,23 @@ def server_capabilities() -> list[str]:
     capabilities = list(SERVER_CAPABILITIES)
     if trajectory_policy.current().enabled():
         capabilities.append(TRAJECTORY_CAPABILITY)
+    if bug_report_receiver_configured():
+        capabilities.append(BUGREPORT_CAPABILITY)
     return capabilities
+
+
+def bug_report_receiver_configured() -> bool:
+    """A non-empty, valid upload URL; an invalid one is logged once per process."""
+    global _bugreport_url_warned
+    from raven.trajectory.upload import UploadConfigError, resolve_upload_url
+
+    try:
+        return bool(resolve_upload_url())
+    except UploadConfigError as exc:
+        if not _bugreport_url_warned:
+            _bugreport_url_warned = True
+            logger.warning("bug reports are off: {}", exc)
+        return False
 
 
 async def system_ping(params: dict) -> dict:
@@ -291,9 +311,6 @@ async def system_upgrade(params: dict) -> dict:
             parent_pid = SERVE.supervisor_pid or parent_pid
         else:
             relaunch = [str(raven_bin), "serve", "--port", str(SERVE.port)]
-        if trajectory_policy.current().enabled():
-            # The flag lives in this process only; the relaunched one must be told again.
-            relaunch.append("--dev")
         # Same port, same credentials: the browser reconnects to the origin it
         # already has and presents the cookie it already holds, so it stays
         # signed in across the restart instead of hitting an auth wall. Both

@@ -114,6 +114,11 @@ function ConfirmSheet(): JSX.Element {
         <div className="body" id="cfBody">{s.body}</div>
         <footer>
           <button className="btn" id="cfNo" hidden={s.tone === 'notice'} onClick={cancel}>{t('gui.cancel')}</button>
+          {/* Only while a question offers a second way ahead, so the sheet the
+              page is served with is the one it always was. */}
+          {s.alt !== null ? (
+            <button className="btn" id="cfAlt" onClick={() => confirm.answerAlt()}>{s.alt}</button>
+          ) : null}
           <button className={YES_CLASS[s.tone]} id="cfYes" onClick={() => confirm.answer(true)}>{s.label ?? 'Confirm'}</button>
         </footer>
       </div>
@@ -210,6 +215,30 @@ function SettingsModal(): JSX.Element {
           <div className="spanels" id="cronBody" data-for="cron" />
           <div className="spanels" id="memoryBody" data-for="memory" />
         </div>
+      </div>
+    </div>
+  )
+}
+
+/* The export wizard's dialog (features/export/): the frame only -- the veil and
+   the box -- with #exportBody for the island to draw the wizard into. The
+   island raises the veil and owns the close button, which is what Escape
+   clicks (state/escapeOrder.ts). A click on the scrim does nothing: the
+   wizard holds the reader's choices and may hold a running job, and losing
+   both to a stray click costs more than one way fewer to close it. */
+function ExportVeil(): JSX.Element {
+  useSyncExternalStore(lang.subscribe, lang.get)
+  return (
+    <div className="veil" id="exportVeil" data-open="false">
+      <div
+        className="chrome-export-modal"
+        id="exportModal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={lang.attr('gui.export.dialog')}
+        tabIndex={-1}
+      >
+        <div className="chrome-export-body" id="exportBody" />
       </div>
     </div>
   )
@@ -348,6 +377,7 @@ export function App(): JSX.Element {
       {PAGES.map((page) => <ModulePage key={page.id} page={page} />)}
       <DetailPanel />
       <SettingsModal />
+      <ExportVeil />
       <ConfirmSheet />
       <div className="menu" id="menu" data-open="false" role="menu" />
       <div className="toasts" id="toasts" aria-live="polite" />

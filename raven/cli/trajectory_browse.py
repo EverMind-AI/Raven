@@ -60,10 +60,8 @@ Control flow contracts:
 from __future__ import annotations
 
 import logging
-import re
 import shutil
 import sys
-from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -1188,60 +1186,23 @@ def _print_packaging_failure(report_id: str, reason: str, *, retryable: bool) ->
         console.print("  entry — retrying will not re-collect the trajectory.")
 
 
-# Reasons whose content the review screen already presents as items (the
-# remaining reasons are the warning lines the screen must still show).
-_REVIEW_ITEM_REASON_PREFIXES = ("residual scan flagged", "the original trajectory contained")
-
-_REVIEW_CONTEXT_WINDOW = 200
-_REVIEW_WHOLE_LINE_LIMIT = 300
+_REVIEW_ITEM_REASON_PREFIXES = treview.REVIEW_ITEM_REASON_PREFIXES
+_REVIEW_CONTEXT_WINDOW = treview.CONTEXT_WINDOW
+_REVIEW_WHOLE_LINE_LIMIT = treview.WHOLE_LINE_LIMIT
 _REVIEW_CONTEXT_GROUP_LIMIT = 5
 _REVIEW_PATHS_NOTE = "Paths are relative to the trajectory snapshot inside the package."
 
 
 def _review_warnings(reasons: list[str]) -> list[str]:
-    return [reason for reason in reasons if not reason.startswith(_REVIEW_ITEM_REASON_PREFIXES)]
+    return treview.review_warnings(reasons)
 
 
 def _occurrence_display(occurrence: dict[str, Any]) -> tuple[str, list[tuple[int, int]]]:
-    """(rendered context, highlight spans) for one occurrence.
-
-    Short lines render whole with every hit of the value highlighted (two
-    hits on one line must not lose their positions to display-text dedup);
-    long lines get a window centered on this occurrence, so hits at other
-    positions naturally render as distinct texts.
-    """
-    line, start, end = occurrence["line"], occurrence["start"], occurrence["end"]
-    token = line[start:end]
-    stripped = line.strip()
-    if len(stripped) <= _REVIEW_WHOLE_LINE_LIMIT:
-        offset = line.find(stripped) if stripped else 0
-        spans = [(m.start(), m.end()) for m in re.finditer(re.escape(token), stripped)] if token else []
-        return stripped, spans or [(max(0, start - offset), max(0, end - offset))]
-    lo = max(0, start - _REVIEW_CONTEXT_WINDOW)
-    hi = min(len(line), end + _REVIEW_CONTEXT_WINDOW)
-    prefix = "..." if lo else ""
-    suffix = "..." if hi < len(line) else ""
-    text = prefix + line[lo:hi] + suffix
-    return text, [(len(prefix) + start - lo, len(prefix) + end - lo)]
+    return treview.occurrence_display(occurrence)
 
 
 def _grouped_occurrences(item: Any) -> list[dict[str, Any]]:
-    groups: list[dict[str, Any]] = []
-    by_text: dict[str, dict[str, Any]] = {}
-    for occurrence in item.occurrences:
-        text, spans = _occurrence_display(occurrence)
-        group = by_text.get(text)
-        if group is None:
-            group = {"text": text, "spans": [], "occurrences": []}
-            by_text[text] = group
-            groups.append(group)
-        # Two windows on a long line can render the same text from different
-        # hit positions; every occurrence's spans must survive the merge.
-        for span in spans:
-            if span not in group["spans"]:
-                group["spans"].append(span)
-        group["occurrences"].append(occurrence)
-    return groups
+    return treview.grouped_occurrences(item)[0]
 
 
 def _print_context_text(group: dict[str, Any]) -> None:
@@ -1555,7 +1516,7 @@ def _ask_problem_fields(questionary: Any, style: Any) -> dict[str, str]:
 
 def _decision_tally(decisions: list[dict[str, Any]]) -> str:
     """`N decision(s) complete — X kept, Y redacted, Z acknowledged` (hit kinds only)."""
-    tally = Counter(entry.get("action") for entry in decisions)
+    tally = treview.decision_counts(decisions)
     breakdown = ", ".join(
         f"{tally[action]} {action}" for action in ("kept", "redacted", "acknowledged") if tally[action]
     )

@@ -1830,7 +1830,7 @@ async def test_a_refused_add_on_a_machine_sends_the_user_to_that_machine_and_run
 
 
 @pytest.mark.asyncio
-async def test_describe_names_the_registered_machines_only_while_the_lane_is_on(config_file, tmp_path, monkeypatch):
+async def test_describe_names_registered_machines_without_a_debug_switch(config_file, tmp_path, monkeypatch):
     from raven.ops import connections
 
     registry = tmp_path / "connections.json"
@@ -1857,9 +1857,6 @@ async def test_describe_names_the_registered_machines_only_while_the_lane_is_on(
     tool.set_rpc_caller(Calls({"subagents.list": {"rows": []}}))
 
     monkeypatch.delenv("RAVEN_DEBUG_MACHINES", raising=False)
-    assert "machines a preset can be added on" not in await _run(tool, action="describe", path="subagents")
-
-    monkeypatch.setenv("RAVEN_DEBUG_MACHINES", "1")
     said = await _run(tool, action="describe", path="subagents")
     line = next(ln for ln in said.splitlines() if ln.strip().startswith("machines a preset can be added on"))
     assert line.split("on:", 1)[1].split("--", 1)[0].strip() == "ravenx2 (RavenX 2)", "the local row is no machine"

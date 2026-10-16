@@ -574,6 +574,14 @@ EXPECTED_ERROR_CODES = {
     -32021: "entry_not_found",
     -32022: "cursor_expired",
     -32023: "revision_changed",
+    -32024: "trajectory_task_not_found",
+    -32025: "trajectory_task_limit",
+    -32026: "bugreport_unavailable",
+    -32027: "review_conflict",
+    -32028: "bugreport_state",
+    -32029: "imported_read_only",
+    -32030: "imported_package_invalid",
+    -32031: "imported_busy",
 }
 
 
@@ -595,3 +603,35 @@ def test_error_codes_match_spec(schema: dict[str, Any]) -> None:
         f"  in-schema: {sorted(declared.items())}\n"
         f"  expected:  {sorted(EXPECTED_ERROR_CODES.items())}"
     )
+
+
+@pytest.mark.slow
+def test_a_model_is_built_when_first_used_not_at_import(tmp_path: Path) -> None:
+    """A host validates only the methods its clients call, so each validator waits
+    for its first use rather than all of them being built and held for the life of
+    the process. Checked in a fresh interpreter, where no model has been used yet."""
+    import subprocess
+    import sys
+
+    probe = (
+        "import pydantic\n"
+        "from raven.rpc import models\n"
+        "classes = [c for c in vars(models).values()\n"
+        "           if isinstance(c, type) and issubclass(c, pydantic.BaseModel) and c.__module__ == models.__name__]\n"
+        "print('models:', len(classes) > 0)\n"
+        "print('built at import:', [c.__name__ for c in classes if c.__pydantic_complete__][:5])\n"
+        "params = models.SessionListParams.model_validate({'limit': 3})\n"
+        "print('first use:', params.limit, models.SessionListParams.__pydantic_complete__)\n"
+        "try:\n"
+        "    models.SessionListParams.model_validate({'unexpected': 1})\n"
+        "except pydantic.ValidationError as exc:\n"
+        "    print('refused:', exc.errors()[0]['type'])\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-P", "-c", probe], cwd=tmp_path, capture_output=True, text=True, timeout=120
+    )
+
+    assert "models: True" in done.stdout, done.stdout + done.stderr
+    assert "built at import: []" in done.stdout, done.stdout + done.stderr
+    assert "first use: 3 True" in done.stdout, done.stdout + done.stderr
+    assert "refused: extra_forbidden" in done.stdout, done.stdout + done.stderr

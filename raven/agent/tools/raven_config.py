@@ -310,12 +310,9 @@ def _menu_line(row: dict[str, Any], model: str) -> list[str]:
 
 
 def _machines_line() -> str | None:
-    """The registered machines a preset can be added on, while the machine lane is on; else nothing."""
-    from raven.home import machine_lane_enabled
+    """The usable registered machines a preset can be added on, or nothing when none are registered."""
     from raven.ops import connections
 
-    if not machine_lane_enabled():
-        return None
     try:
         rows = connections.usable(connections.load())
     except (OSError, ValueError):

@@ -50,6 +50,11 @@ div.app
             path
             path
         span
+      button#importedBtn.navi
+        svg
+          path
+          path
+        span
     div#findBox.find
       span.ic
         svg
@@ -87,6 +92,9 @@ div.app
               rect
               path
             span#wsBdg.bdg
+          button#moreBtn.ghost-ic.tipdn
+            svg
+              path
         div#scroll.scroll
           div#bannerHost
           div#flash.flash

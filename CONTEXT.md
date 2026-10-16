@@ -358,8 +358,12 @@ call can write is presentation or policy, and a row that is off is left to the s
 Every kind but `builtin` is pinged, that one being this process, with no backend to
 reach.
 Not deletable through config — removing one means removing its folder, or setting
-`"enabled": false` in its own `subagent.json`. On the RPC wire the row source is still
-spelled `vendored`; renaming that is a schema change.
+`"enabled": false` in its own `subagent.json`. Switched off it stays one: the row
+`subagents.toggle` writes carries only the switch, so it is neither a definition nor a
+config entry to delete. An edit stores the folder's entry with the change as an
+override, a switched-off one staying off, and removing an override that is off leaves
+the switch behind. On the RPC wire the row source is still spelled `vendored`;
+renaming that is a schema change.
 _Avoid_: "product" / "product agent" — the retired category word (the ruling keeps
 *agent* for the thing, *harness* for the mechanism it rides, *subagent* for the
 protocol seat); code-level `product_*` spellings stay as API surface, prose does not
@@ -401,10 +405,14 @@ of it. The entry names only the machine's id, and the entry's `env` reaches the
 agent on the link, never on a command line. Such an entry is added the way any
 preset is, with `machine` (and
 `remote_cwd`, for an `acp` or `cli` one) on `subagents.add` — from a chat through
-`raven_config`, which lists the registered machines while the lane is on; the page's
-add passes no machine yet — refused before anything is spent when the lane is off,
+`raven_config`, which lists the usable registered machines; the page's
+add passes no machine yet — refused before anything is spent when
 the id is not usable or the preset is a built-in agent, and proved by the same
 readiness ping as a local add, run on that machine.
+Registered-machine dispatch, file access and recovery are available without an
+environment switch. An entry without `machine` still runs here. Registration,
+SSH authentication, file permissions and concurrency limits govern remote work;
+listing entries and boot capability backfills do not open machine connections.
 _Avoid_: "host" / "server" / "node" (too broad, no link to the
 `ops connection` registry that supplies the rows); "GPU box" (only some are
 GPU hosts, and the term covers any registered compute destination);
@@ -439,8 +447,33 @@ named by the code's version and digest -- its install name, `bundle.install_name
 host keeps at most one live link per machine and watches it with a heartbeat
 (`raven/node/client.py`): a link silent for 15 s is lost, the agents on it wait, and the
 link is tried again on a backoff for as long as any waits; a link that comes back attaches
-each agent again by its task id. Only `--stdio` (tests, a fallback) ties the agents to the
-connection.
+each agent again by its task id. A turn running on a machine when this computer stops is
+left with the daemon (`remote.leave_agents_running()`), remembered while in flight in
+`<raven home>/machines/runs/` (`raven/acp_client/remote_runs.py`), and picked up by the
+next start (`raven/agent/subagent/resume_remote.py`): attached from the frame its prompt
+went out after, so the turn is read again whole (a cli entry's command from its first line,
+its whole output being the reply), its reply read off the machine and announced into the
+conversation that asked -- the task quoted as the model wrote it, the record removed only
+once the announce was taken. A turn that returned here, or whose prompt went out and failed,
+keeps its record the same way until the manager's announce of the reply or the failure was
+taken (`remote_runs.forget_dispatch`), so a host that stops between the two reads the outcome
+again; a record that is not JSON, or not UTF-8, is set aside once under a name that says so,
+and never stops the other records from being read. A daemon killed
+outright ends what it leaves behind at its next start (`Daemon.recover`; on Linux the agent
+also goes with the daemon, `PR_SET_PDEATHSIG`) and says so on the task's exit (`reason`),
+which the host hands on in place of a bare exit code. An MCP server the
+host lends an agent there is carried on the same link: the agent runs the install's bridge
+(`python -I -m raven.node --mcp`) as a stdio server, the daemon relays its frames as a stream
+(`mcp/open`, `mcp/frame`, `mcp/close`; which task a bridge is, the daemon tells by the process
+that connected, whose parent chain reaches the agent it started, so no task can claim another's),
+and the host pumps them into the endpoint it opened on its own side (`raven/node/bridge.py`,
+`NodePool.lend`). The host binds each dispatch's endpoints to the acquired agent's task
+and checks that binding against the daemon-authenticated task before connecting, and again
+after the connection opens. A bridge's dispatch/server names alone grant no access.
+The server's definition and keys stay here. On a host without Unix-socket endpoint
+support, remote MCP is withheld, the task still runs and its reply explains why; the
+roster does not advertise that capability. Only
+`--stdio` (tests, a fallback) ties the agents to the connection.
 _Avoid_: "node" alone (a DAG node is a `run_subagent_dag` step, and the Machine
 entry already rules the bare word out for a computer); "node id" for the install
 name (a **Node id** is a delegated task's address); "agent" or "server" (it
@@ -2063,6 +2096,25 @@ attribute, which read paths keep resolving; new spans never carry it
 (`attempt.id` is a reserved attribute key stripped by `raven/tracing/spans.py`).
 _Avoid_: "run id" / "task id" — neither is bound to span records.
 
+**Main-line Turn** (`raven/trajectory/selection.py`):
+A `session.turn` root recorded under a session's key that no other trace dispatched
+(it carries no `trace.dispatched_in_trace_id`). It is the unit the web page's
+export and bug report select by; selecting one brings along every trace it
+dispatched -- sub-agents, their own sub-agents, follow-up turns reporting back --
+resolved through those links. A main-line turn counts as in progress only when it
+is the session's latest, its record is still only a checkpoint, and the session is
+answering right now; a checkpoint left behind by a process that died is selectable.
+_Avoid_: selecting a dispatched trace as a turn of its own.
+
+**Turn Trace Mark** (`raven/agent/loop/turn_path.py`):
+The `trace_id` stored on a turn's opening user message while tracing is on, naming
+the trace of that turn's `session.turn` span. Cutting a session record down to
+selected turns uses it to find each turn's messages; messages written before the
+mark existed are matched by the turn's input text inside the turn's time window,
+only where the record's order leaves one possible turn, and a turn that cannot be
+matched with certainty keeps its trajectory only. The mark never reaches
+a model request (history is read through field whitelists).
+
 **Attempt Definition** (`raven/trajectory/store.py`):
 The mutable sidecar record in `attempts.json` (trace state dir) mapping a minted
 `att-*` id to its member trace ids plus the historical ids it absorbed (`aliases`),
@@ -2100,6 +2152,39 @@ becomes a labelled placeholder at its own index and its sha1 is listed under the
 manifest's `missing_messages`. Bundling declares the trajectory corpus, so the id is
 auto-pinned.
 _Avoid_: "archive" — that names the tracing store's rotated-log directory.
+
+**Trajectory Export** (`raven/trajectory/export.py`):
+The `tar.gz` the web page's "Export" downloads for chosen Main-line Turns of one
+session: `<export-id>/export.json` (`schema: "raven_trajectory_export"` plus a
+`format_version`, the selected turns and dispatched traces, counts, and what is
+missing) + `spans.jsonl` + the session record cut to those turns + `artifacts/` at
+their store-relative paths + the Message Blobs their v2 shells reference. It is the
+input contract `web-traj-import` reads, so its layout and manifest change only with
+the version. Unlike a Trajectory Bundle it is selected by turn rather than by
+Attempt, keeps v2 shells as shells, carries only the selected turns' messages and
+pins nothing; unlike a Bug Report Package its content is neither redacted nor
+trimmed, and it travels only from the local gateway to the browser, fetched by a
+one-hour token (`raven/trajectory/export_jobs.py`).
+_Avoid_: calling it a bundle or a report.
+
+**Imported Conversation** (`raven/trajectory/imported.py`, `raven/trajectory/imported_package.py`):
+A Trajectory Export, Bug Report Package or Trajectory Report read back in and kept
+as a read-only conversation, addressed as `imported:<id>` (32 lowercase hex). Each
+lives in its own `<raven home>/imports/<id>/`: `meta.json` (`schema:
+"raven_imported_conversation"`, the kind, the source file name and sha256, the
+title, where it came from), `package/` (the package as unpacked, a report's inner
+bundle expanded in place), `state/` (a trace store the trajectory index and detail
+layer read unchanged: the span log copied, every artifact pointer rewritten
+relative to `state/` or set to null when the package does not carry the file, and a
+bundle's v1 model inputs split back into v2 shells so a long conversation reads
+whole) and `session.jsonl` when the package carried a session record. Every layer
+of the archive is walked once under one shared byte and member budget
+(`package_check.walk_archive`); an import is built in `imports/.staging/` and
+renamed into place whole. It never enters the SessionManager or
+`<workspace>/sessions/`, so no session picker, sweep or delivery target can see it.
+_Avoid_: "import" alone — that is the cold-start import of another tool's memory
+(`raven/importer/`, `import.*`); "archive" — session archiving and the tracing
+store's rotated logs.
 
 **Message Blob** (`raven/tracing/artifact_v2.py`):
 One model-input message stored once, at
@@ -2159,7 +2244,10 @@ path-sanitized problem metadata, merged redaction summary with
 `risk_accepted`, environment, content manifest) plus an embedded Trajectory
 Report. Its entire content is frozen under the report's `snapshot/export/`
 before the user confirms, so a packaging retry reuses the approved bytes and
-never re-collects.
+never re-collects. A report the web page files for chosen turns carries a
+synthetic attempt, `sel-<12 hex>` of the selected trace ids, whose
+`member_traces` are those turns and every trace they dispatched; the receiver
+reads it like any other.
 _Avoid_: confusing it with the Trajectory Report it embeds — the Package wraps
 one and adds the problem metadata envelope.
 
@@ -2198,9 +2286,33 @@ up, never overwritten in place, before the next save. The bug report review
 records the human decisions once the decision set is valid; decisions made by
 the blanket `--keep-findings` / `--redact-findings` flags are neither replayed
 over nor recorded, `--review-all` asks again, and
-`RAVEN_BUGREPORT_REDACTION_HISTORY=off` disables it.
+`RAVEN_BUGREPORT_REDACTION_HISTORY=off` disables it. The web page's bug report
+records every value it showed with the final decision, source `web` -- the
+default "keep" and the bulk buttons included -- because the page puts each
+value in front of the reader; that differs from the CLI's blanket flags on
+purpose.
 _Avoid_: "memory" (the agent memory engine), "cache" (it is an authoritative
 record, never evicted automatically).
+
+**Report Session** (`raven/trajectory/report_session.py`):
+One web bug report in progress, held in the gateway's memory between the page's
+requests: the preparation, the Review Items with their plain values, what the
+Redaction History decided, and the phase (`collecting`, `deciding`, `finishing`,
+`ready`, `uploading`, `uploaded`, `upload_failed`, `failed`, `cancelled`). It lives
+from `bugreport.start` until the report fails, is uploaded, is cancelled, sits
+idle for thirty minutes, or the gateway stops. At most two are held at once, each
+until its worker thread has cleaned up and exited; a failed or uploaded one then
+drops its plain values and leaves only its last status, readable for ten minutes.
+The worker checks for a cancel after every step and starts nothing further, so a
+report cancelled while it was packaging is never sent. Cancelling or failing
+before the report landed removes its staging, after it landed the Bug Report
+Record stays for `raven trajectory upload-bug-report`. While it waits on the
+decisions, its status carries each remaining value in full beside its masked
+sample, since the value is what the reader decides on (a private key, replaced
+whatever the reader says, is carried only as its replacement); the contexts a
+decision needs come one item at a time. No other phase carries a value.
+_Avoid_: calling it the record -- the Bug Report Record is the file that lands on
+disk.
 
 **Bug Report Receiver** (`raven/trajectory/receiver.py`):
 The standalone HTTP service that takes Bug Report Packages in: it validates each
@@ -2783,33 +2895,46 @@ An ACP agent process group whose launching host is no longer running. An ACP age
 session of its own, so it gets none of the signals sent to its host's process group or
 terminal, and while the host lives only `AcpClient.close` ends it; a host that dies before its
 teardown can leave its agents' groups running with nobody on the other end of their pipes. On
-Linux the agent starts through an exec wrapper (`_WRAPPER`) that arms `PR_SET_PDEATHSIG`, so
-where the signal is armed and survives the exec (a set-id or file-capability binary clears it)
-its direct process ends when the thread that launched it does, which for an agent launched
-from the host's event loop is when the host dies. Every host records the ACP agent groups it
+Linux and macOS the agent starts through an exec wrapper (`_WRAPPERS`) that ties it to its host.
+On Linux it arms `PR_SET_PDEATHSIG`, so where the signal is armed and survives the exec (a
+set-id or file-capability binary clears it) its direct process ends when the thread that
+launched it does, which for an agent launched from the host's event loop is when the host dies.
+On macOS, which has no such signal, it leaves a watcher in the agent's group, adopted by
+launchd and holding none of the agent's descriptors, that waits on the host process's exit with
+kqueue and then ends the whole group - while the agent leads that group, as every launch has it
+do. Every Linux and macOS host records the ACP agent groups it
 launched in a file of its own under `acp-launches/` in the config file's directory
 (`<raven home>` unless `--config` moves it), and the first launch in any process ends the
 groups recorded by hosts that have since died, in the same boot and PID namespace, and only
 where a surviving member still carries the dead host's mark and, while the leader still runs,
 its start time matches the record - the group number alone can have been handed out again. Not
-covered: anything but Linux, a group whose record was never written (its host died first, the
+covered by the Linux and macOS sweep: other platforms, a group whose record was never written
+(its host died first, the
 write failed, or its leader had already exited when the record was taken), and agents started
 by a Raven older than the records.
+
+On Windows, each locally launched ACP connection owns an unnamed, non-inheritable Job Object with
+`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. A launcher waits for one byte on stdin before starting
+the agent; the host sends it only after assigning the launcher to the job. Host death before
+assignment closes stdin, so no agent starts. After assignment, host death or closing the
+connection closes the job's only handle, ending its processes and descendants even if the
+original launcher has already exited.
 _Avoid_: "orphaned" - in POSIX terms every agent group is an orphaned process group from the
 moment it starts, since its session does not hold the host; and the DAG vocabulary rules the
 word out for a released run.
 
 **Launch mark** (`raven/acp_client/leftovers.py`):
 `RAVEN_ACP_HOST` in a launched agent's environment, naming the host that launched it as
-`<host pid>-<host start ticks>`, the stem of that host's launch record. Every process the
+`<host pid>-<host start time>` (clock ticks since boot on Linux, microseconds since the epoch on
+macOS), the stem of that host's launch record. Every process the
 agent starts inherits it unless it is started with a fresh environment, so after the host dies
 a sweep can tell a group made of that host's agents and what they started from an unrelated
 group that happens to hold the same number. A process whose environment this user cannot read
-counts as carrying none (any other read error keeps the record for a later sweep), and a group
+(on macOS that includes every platform binary, such as `/bin/sh`) counts as carrying none (any other read error keeps the record for a later sweep), and a group
 none of whose surviving processes carries the mark is left running - which is what remains
 when the agent exits after starting its children without it.
 _Avoid_: a security token - it is an identifier, not a secret; its parts are world-readable in
-`/proc/<pid>/stat`.
+`/proc/<pid>/stat` and, on macOS, through `sysctl`.
 
 **Instance Log** (`raven/agent/subagent/instance_log.py`):
 One sub-agent instance's own conversation, for the whole conversation that owns it, at

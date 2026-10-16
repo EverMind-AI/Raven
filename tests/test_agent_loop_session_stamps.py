@@ -5,7 +5,9 @@ appends raw dicts via the ``Session.record`` choke point. These tests drive
 the real loop path (stubbed LLM) and assert the JSONL lines on disk carry a
 ``timestamp`` and no longer carry the dropped per-message ``received_at`` /
 ``turn_id`` — pinning the simplified stamping contract at the level that
-reproduces a real TUI/CLI turn.
+reproduces a real TUI/CLI turn. The one per-turn stamp is the Turn Trace Mark:
+the ``trace_id`` of the turn's ``session.turn`` span, on its opening user
+message only.
 """
 
 from __future__ import annotations
@@ -30,6 +32,8 @@ from raven.sandbox import ExecResult, SandboxExecutor
 from raven.spine.events import ToolEvent, ToolPhase
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
+from raven.tracing import config as tracing_config
+from raven.tracing import trace
 
 
 class StubProvider(LLMProvider):
@@ -105,6 +109,143 @@ async def test_persisted_messages_carry_timestamp_not_turn_fields(workspace):
         assert m.get("timestamp"), f"missing timestamp: {m}"
         assert "received_at" not in m, f"received_at should be dropped: {m}"
         assert "turn_id" not in m, f"turn_id should be dropped: {m}"
+
+
+def _turn_trace_ids() -> list[str]:
+    """The trace ids of every ``session.turn`` span recorded so far, in write order."""
+    log = tracing_config.state_dir() / "logs" / "audit-spans.log"
+    ids: list[str] = []
+    for line in log.read_text(encoding="utf-8").splitlines():
+        record = json.loads(line)
+        if record.get("name") == "session.turn" and record["traceId"] not in ids:
+            ids.append(record["traceId"])
+    return ids
+
+
+@pytest.mark.asyncio
+async def test_the_opening_user_message_carries_its_turns_trace_id(workspace):
+    agent = _make_agent(workspace)
+    await agent._process_message(_make_msg("first"))
+    await agent._process_message(_make_msg("second"))
+
+    msgs = _persisted_messages(workspace)
+    users = [m for m in msgs if m.get("role") == "user"]
+    assert [m["trace_id"] for m in users] == _turn_trace_ids()
+    assert all(m["trace_id"].startswith("trace-") for m in users)
+    assert not any("trace_id" in m for m in msgs if m.get("role") != "user")
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_turn_marks_its_question_but_not_its_closing_marker(workspace):
+    class Cancelling(StubProvider):
+        async def chat(self, *args, **kwargs):
+            raise asyncio.CancelledError()
+
+    agent = AgentLoop(
+        provider=Cancelling(),
+        workspace=workspace,
+        model="stub",
+        policy=TurnPolicy(max_iterations=2),
+        tools=ToolWiring(restrict_to_workspace=True),
+    )
+    with pytest.raises(asyncio.CancelledError):
+        await agent._process_message(_make_msg("do the thing"))
+
+    msgs = _persisted_messages(workspace)
+    question = next(m for m in msgs if m.get("role") == "user")
+    assert question["trace_id"] == _turn_trace_ids()[0]
+    marker = msgs[-1]
+    assert marker.get("turn_ended", {}).get("status") == "cancelled"
+    assert "trace_id" not in marker
+
+
+@pytest.mark.asyncio
+async def test_a_clarifying_question_marks_the_message_it_answers(workspace, monkeypatch):
+    """The personalization flow files the inbound itself and returns early;
+    that entry is the turn's opening message and carries the same mark."""
+    import raven.agent.personalizer as personalizer_mod
+
+    class _AskingPersonalizer:
+        def __init__(self, *a, **k):
+            pass
+
+        async def classify(self, content, history=None):
+            return {"needs_clarification": True, "domain": "travel"}
+
+        async def generate_question(self, content, domain):
+            return "Which city?"
+
+    monkeypatch.setattr(personalizer_mod, "Personalizer", _AskingPersonalizer)
+    agent = _make_agent(workspace)
+    agent.configure_personalization(True)
+
+    out = await agent._process_message(_make_msg("book me a hotel"))
+    assert out == ("Which city?", [])
+
+    msgs = _persisted_messages(workspace)
+    assert [m["role"] for m in msgs] == ["user", "assistant"]
+    assert msgs[0]["trace_id"] == _turn_trace_ids()[0]
+    assert "trace_id" not in msgs[1]
+
+
+@pytest.mark.asyncio
+async def test_no_mark_is_written_while_tracing_is_off(workspace, monkeypatch):
+    monkeypatch.setenv("RAVEN_TRACING", "0")
+    agent = _make_agent(workspace)
+    await agent._process_message(_make_msg("hello"))
+
+    assert not any("trace_id" in m for m in _persisted_messages(workspace))
+
+
+@pytest.mark.asyncio
+async def test_a_turn_run_with_tracing_off_inside_another_turn_takes_no_mark_from_it(workspace, monkeypatch):
+    """Off, ``instrument`` leaves the current-span slot alone, so it still holds
+    the enclosing turn's span; that trace must not be stamped on this turn."""
+    agent = _make_agent(workspace)
+
+    @trace.instrument("session.turn", root=True)
+    async def enclosing() -> str | None:
+        monkeypatch.setenv("RAVEN_TRACING", "0")
+        await agent._process_message(_make_msg("inner"))
+        return trace.current_span().trace_id
+
+    outer_trace = await enclosing()
+    assert outer_trace
+    msgs = _persisted_messages(workspace)
+    assert msgs and not any("trace_id" in m for m in msgs)
+
+
+def test_the_turn_trace_id_helper_names_only_the_turn_span_it_runs_inside(monkeypatch):
+    from raven.agent.loop.turn_path import _turn_trace_id
+
+    seen: dict[str, str | None] = {}
+
+    @trace.instrument("tool.call")
+    def inside_a_tool() -> None:
+        seen["tool"] = _turn_trace_id()
+
+    @trace.instrument("session.turn", root=True)
+    def inside_a_turn() -> None:
+        seen["turn"] = _turn_trace_id()
+        seen["turn_span"] = trace.current_span().trace_id
+        inside_a_tool()
+        monkeypatch.setenv("RAVEN_TRACING", "0")
+        seen["off"] = _turn_trace_id()
+
+    inside_a_turn()
+    assert seen["turn"] == seen["turn_span"] and seen["turn"]
+    assert seen["tool"] is None
+    assert seen["off"] is None
+
+
+@pytest.mark.asyncio
+async def test_the_mark_stays_out_of_the_model_history(workspace):
+    agent = _make_agent(workspace)
+    await agent._process_message(_make_msg("hello"))
+
+    session = agent.sessions.get_or_create("tui:chat1")
+    assert any("trace_id" in m for m in session.messages)
+    assert not any("trace_id" in m for m in session.get_history())
 
 
 @pytest.mark.asyncio

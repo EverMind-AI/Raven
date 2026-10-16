@@ -168,8 +168,8 @@ name = "aiohttp-socks"
 version = "0.11.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "aiohttp" },
-    { name = "python-socks" },
+    { name = "aiohttp", marker = "sys_platform != 'win32'" },
+    { name = "python-socks", marker = "sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1f/cc/e5bbd54f76bd56291522251e47267b645dac76327b2657ade9545e30522c/aiohttp_socks-0.11.0.tar.gz", hash = "sha256:0afe51638527c79077e4bd6e57052c87c4824233d6e20bb061c53766421b10f0", size = 11196, upload-time = "2025-12-09T13:35:52.564Z" }
 wheels = [
@@ -181,9 +181,9 @@ name = "aiologic"
 version = "0.17.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "sniffio" },
-    { name = "typing-extensions" },
-    { name = "wrapt" },
+    { name = "sniffio", marker = "python_full_version < '3.14'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "wrapt", marker = "python_full_version < '3.14'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f1/7a/d51f2fde1e8ae8a83431f8e97b7a71e9358cdb1d4d2ce6be387fa44d68de/aiologic-0.17.1.tar.gz", hash = "sha256:2e1b93b9e88ced318c2a63ad7b382688f40cbfe40e3d42258d49dc9c5aea179d", size = 252354, upload-time = "2026-06-27T20:41:33.25Z" }
 wheels = [
@@ -838,8 +838,8 @@ name = "culsans"
 version = "0.11.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "aiologic" },
-    { name = "typing-extensions" },
+    { name = "aiologic", marker = "python_full_version < '3.14'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/d9/e3/49afa1bc180e0d28008ec6bcdf82a4072d1c7a41032b5b759b60814ca4b0/culsans-0.11.0.tar.gz", hash = "sha256:0b43d0d05dce6106293d114c86e3fb4bfc63088cfe8ff08ed3fe36891447fe33", size = 107546, upload-time = "2025-12-31T23:15:38.196Z" }
 wheels = [
@@ -1099,7 +1099,7 @@ wheels = [
 
 [[package]]
 name = "everos"
-version = "1.4.1"
+version = "1.4.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiosqlite" },
@@ -1135,9 +1135,9 @@ dependencies = [
     { name = "watchdog" },
     { name = "watchfiles" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/44/80/94306884989e117e3686837fb79c83e060a70c4259aa0122b837fde00e65/everos-1.4.1.tar.gz", hash = "sha256:e4512e89b384c324de590d8a8844cdb6e8c46a3f5a9d08acf3b8263e9fa57375", size = 1901870, upload-time = "2026-09-24T10:32:56.415Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ed/6d/34f2a5b0620ab7654e550c13b36acf28c69ba60e8b534eca2a14209a0d0a/everos-1.4.2.tar.gz", hash = "sha256:d032fba2a09aece98ebf1ba81449af46dd2031277c07bf4cc9253134ffc4b5ba", size = 1931163, upload-time = "2026-10-14T13:42:45.685Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/24/dc/c41d8c7461e48b1fac7333545a3f05e2035393201cde22019e8394a5ab83/everos-1.4.1-py3-none-any.whl", hash = "sha256:1643d25198ad65078c1c5ed66d20a0bc4b7236034887bfd290c25f6a1f47f833", size = 695021, upload-time = "2026-09-24T10:32:54.249Z" },
+    { url = "https://files.pythonhosted.org/packages/bb/11/8b303ea6e97d97929142fa26df5dcc145b725b571208142e7f4012bdd003/everos-1.4.2-py3-none-any.whl", hash = "sha256:1c55e43a73e117bad78106b3fbd501ef2330b3d0921351c64395621fe6e4a05d", size = 703787, upload-time = "2026-10-14T13:42:43.958Z" },
 ]
 
 [package.optional-dependencies]
@@ -1162,7 +1162,7 @@ requires-dist = [
 
 [[package]]
 name = "everos-memory"
-version = "1.4.0"
+version = "1.4.2"
 source = { editable = "plugins-dist/everos-memory" }
 dependencies = [
     { name = "everos", extra = ["multimodal"] },
@@ -1174,7 +1174,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "everos", extras = ["multimodal"], specifier = "==1.4.1" },
+    { name = "everos", extras = ["multimodal"], specifier = "==1.4.2" },
     { name = "httpx", specifier = ">=0.28.0,<1.0.0" },
     { name = "loguru", specifier = ">=0.7.3,<1.0.0" },
     { name = "raven", editable = "." },
@@ -1658,8 +1658,8 @@ name = "h2"
 version = "4.4.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "hpack" },
-    { name = "hyperframe" },
+    { name = "hpack", marker = "sys_platform != 'win32'" },
+    { name = "hyperframe", marker = "sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e7/85/7c366e69d84c17bb778fe41419e1fbcce3033d5b7ce29bbffff0a98b859f/h2-4.4.1.tar.gz", hash = "sha256:4e866ffb1a869ae14dd9b5e6beb5c24a13da0495ad72b65925ded182521c1516", size = 2157281, upload-time = "2026-08-03T11:45:09.509Z" }
 wheels = [
@@ -2535,14 +2535,14 @@ name = "matrix-nio"
 version = "0.25.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "aiofiles" },
-    { name = "aiohttp" },
-    { name = "aiohttp-socks" },
-    { name = "h11" },
-    { name = "h2" },
-    { name = "jsonschema" },
-    { name = "pycryptodome" },
-    { name = "unpaddedbase64" },
+    { name = "aiofiles", marker = "sys_platform != 'win32'" },
+    { name = "aiohttp", marker = "sys_platform != 'win32'" },
+    { name = "aiohttp-socks", marker = "sys_platform != 'win32'" },
+    { name = "h11", marker = "sys_platform != 'win32'" },
+    { name = "h2", marker = "sys_platform != 'win32'" },
+    { name = "jsonschema", marker = "sys_platform != 'win32'" },
+    { name = "pycryptodome", marker = "sys_platform != 'win32'" },
+    { name = "unpaddedbase64", marker = "sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/33/50/c20129fd6f0e1aad3510feefd3229427fc8163a111f3911ed834e414116b/matrix_nio-0.25.2.tar.gz", hash = "sha256:8ef8180c374e12368e5c83a692abfb3bab8d71efcd17c5560b5c40c9b6f2f600", size = 155480, upload-time = "2024-10-04T07:51:41.62Z" }
 wheels = [

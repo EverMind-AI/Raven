@@ -49,11 +49,11 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
 
 from raven import __version__
 from raven.tracing import config as tracing_config
-from raven.trajectory.bundle import BUNDLE_FORMAT_VERSION, collect_bundle
+from raven.trajectory.bundle import BUNDLE_FORMAT_VERSION, _session_source, collect_bundle, write_bundle_tree
 from raven.trajectory.errors import BugReportError as BugReportError
 from raven.trajectory.errors import PreparationError as PreparationError
 from raven.trajectory.redact import KnownSecret, RedactionReport, _variants, collect_known_secrets, redact_bundle
@@ -64,7 +64,9 @@ from raven.trajectory.sanitize import (
     scan_absolute_paths,
     tree_digest,
 )
+from raven.trajectory.selection import SelectionPlan, collect_selection, cut_session_record, traces_present
 from raven.trajectory.store import member_traces
+from raven.trajectory.verdict import read_verdicts
 
 if TYPE_CHECKING:
     from raven.trajectory.review import ReviewDecision, ReviewItem
@@ -538,6 +540,7 @@ class ExportPreparation:
     package_metadata: dict[str, Any] | None = None
     source_digest: str = ""
     export_digest: str = ""
+    selected_traces: tuple[str, ...] = ()
 
     @property
     def snapshot_dir(self) -> Path:
@@ -617,6 +620,99 @@ def prepare_trajectory(
         raise
 
 
+def selection_attempt_id(selected: Sequence[str]) -> str:
+    """The synthetic attempt id of a turn selection: stable for the same set of traces."""
+    return "sel-" + hashlib.sha1(",".join(sorted(set(selected))).encode("utf-8")).hexdigest()[:12]
+
+
+def prepare_selection(
+    plan: SelectionPlan,
+    *,
+    workspace: Path | None = None,
+    session_path: Path | None = None,
+    config_path: Path | None = None,
+    state_dir: Path | None = None,
+) -> ExportPreparation:
+    """Collect and redact a snapshot of selected turns, as :func:`prepare_trajectory` does for an attempt.
+
+    ``plan`` is what :func:`raven.trajectory.selection.plan_selection`
+    validated, so a turn still running cannot get here. The turns and the
+    traces they dispatched are written in the bundle layout under a synthetic
+    attempt (:func:`selection_attempt_id`), with the session record cut to
+    those turns (read from ``session_path``, by default the session's file
+    under ``workspace``); nothing is pinned and no attempt is defined. A selected turn
+    whose spans were purged since the plan was made is a
+    :class:`StaleAttemptError`.
+    """
+    if not isinstance(plan, SelectionPlan):
+        raise TypeError("prepare_selection takes the SelectionPlan that plan_selection returned")
+    resolved_state = (state_dir or tracing_config.state_dir()).resolve()
+    root = bugreports_root(resolved_state)
+    staging_root = root / STAGING_DIR
+    staging_root.mkdir(parents=True, exist_ok=True)
+    report_id = new_report_id(root)
+    staging_dir = staging_root / report_id
+    snapshot_dir = staging_dir / "snapshot"
+    snapshot_dir.mkdir(parents=True)
+
+    try:
+        try:
+            chosen = collect_selection(plan, state_dir=resolved_state)
+        except LookupError as exc:
+            raise StaleAttemptError("the selected turns changed while the report was being prepared") from exc
+        attempt_id = selection_attempt_id(plan.selected)
+        source = session_path if session_path is not None else _session_source(plan.session_key, workspace)
+        cut = cut_session_record(source, plan, state_dir=resolved_state)
+        bundle_dir = snapshot_dir / "bundle" / attempt_id
+        bundle_dir.mkdir(parents=True)
+
+        def write_session(target: Path, _session_key: str | None) -> bool:
+            if not cut.included:
+                return False
+            target.write_text(cut.jsonl(), encoding="utf-8")
+            return True
+
+        manifest = write_bundle_tree(
+            bundle_dir,
+            chosen.spans,
+            attempt_id=attempt_id,
+            state_dir=resolved_state,
+            write_session=write_session,
+            verdicts=read_verdicts(resolved_state, attempt_ids=plan.closure),
+            session_key=plan.session_key,
+            confine=(resolved_state / "logs" / "audit-artifacts").resolve(),
+        )
+
+        secrets, config_loaded = collect_known_secrets(config_path)
+        report = redact_bundle(bundle_dir, snapshot_dir / "redacted" / attempt_id, secrets=secrets)
+        report.config_loaded = config_loaded
+        classification, reasons = classify_redaction(report)
+
+        return ExportPreparation(
+            report_id=report_id,
+            state_dir=resolved_state,
+            staging_dir=staging_dir,
+            attempt_id=attempt_id,
+            session_key=plan.session_key,
+            member_traces=_bundle_traces(bundle_dir),
+            merged_definition=False,
+            manifest=manifest,
+            secrets=secrets,
+            config_loaded=config_loaded,
+            roots=_local_roots(workspace, config_path, resolved_state),
+            trajectory_report=report,
+            classification=classification,
+            config_path=config_path,
+            reasons=reasons,
+            selected_traces=tuple(plan.selected),
+        )
+    except BaseException as exc:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        if isinstance(exc, (OSError, tarfile.TarError)):
+            raise PreparationError(str(exc) or exc.__class__.__name__) from exc
+        raise
+
+
 def _definition_ids(state_dir: Path) -> set[str]:
     from raven.trajectory.store import definitions
 
@@ -636,7 +732,18 @@ def _bundle_traces(bundle_dir: Path) -> tuple[str, ...]:
     return tuple(sorted(traces))
 
 
-def freeze_export(
+@dataclass
+class ReviewStage:
+    """What :func:`stage_review` leaves for :func:`finish_export`: the items to decide and their context."""
+
+    items: list["ReviewItem"]
+    reasons: list[str]
+    raw_fields: dict[str, str]
+    environment: dict[str, str]
+    require_review: bool
+
+
+def stage_review(
     prep: ExportPreparation,
     *,
     description: str,
@@ -645,22 +752,17 @@ def freeze_export(
     severity: str = "",
     steps: str = "",
     reporter: str = "",
-    decide: Callable[[list["ReviewItem"], list[str]], list["ReviewDecision"]] | None = None,
-) -> ExportPreparation:
-    """Freeze the complete deliverable under ``snapshot/export/``.
+) -> ReviewStage:
+    """Redact the problem fields beside the trajectory and build the Review Items.
 
     The user fields go through the same redaction as the trajectory (written
     as ``problem.<field>`` files and redacted with the same known secrets, so
-    residual findings carry that name). When the merged findings yield review
-    items, ``decide`` is called with them (plus the current reasons, for the
-    warning lines) and its decisions are applied to the redacted trees before
-    anything downstream reads them — a caller without a ``decide`` cannot
-    freeze such a report (silent shipping is not a fallback). Then path
-    sanitization, the completeness probe (over the post-decision tree), the
-    embedded tarball, and the canonical ``bugreport.json`` are produced,
-    asserted clean, and digested — the confirmation screen and every later
-    packaging run use exactly these bytes.
+    residual findings carry that name). The returned items are what the user
+    decides before :func:`finish_export` may freeze the report; a preparation
+    is staged once.
     """
+    if prep.problem_report is not None:
+        raise BugReportError("this report has already been staged")
     description = description.strip()
     if not description:
         raise ValueError("a problem description is required")
@@ -690,8 +792,9 @@ def freeze_export(
         prep.problem_report = problem_report
 
         # Pre-classification carries the reasons the review screen shows as
-        # warning lines; the authoritative classification is recomputed below
-        # once the completeness reasons have been through the same pipeline.
+        # warning lines; the authoritative classification is recomputed by
+        # finish_export once the completeness reasons have been through the
+        # same pipeline.
         require_review = _policy_review_enabled()
         classification, reasons = classify_redaction(
             prep.trajectory_report, problem_report, require_review=require_review
@@ -702,12 +805,40 @@ def freeze_export(
         from raven.trajectory import review as _review
 
         items = _review.build_review_items([prep.trajectory_report, problem_report])
+    except (OSError, tarfile.TarError) as exc:
+        raise PreparationError(str(exc) or exc.__class__.__name__) from exc
+    return ReviewStage(
+        items=list(items),
+        reasons=list(reasons),
+        raw_fields=raw_fields,
+        environment=environment,
+        require_review=require_review,
+    )
+
+
+def finish_export(
+    prep: ExportPreparation, stage: ReviewStage, decisions: "Sequence[ReviewDecision]"
+) -> ExportPreparation:
+    """Apply the decisions and freeze the complete deliverable under ``snapshot/export/``.
+
+    The decisions are validated and applied to the redacted trees before
+    anything downstream reads them. Then path sanitization, the completeness
+    probe (over the post-decision tree), the embedded tarball, and the
+    canonical ``bugreport.json`` are produced, asserted clean, and digested --
+    the confirmation screen and every later packaging run use exactly these
+    bytes.
+    """
+    from raven.trajectory import review as _review
+
+    items = stage.items
+    if not items and decisions:
+        raise BugReportError("decisions were given for a report without review items")
+    problem_report = prep.problem_report
+    if problem_report is None:
+        raise BugReportError("this report has not been staged")
+
+    try:
         if items:
-            if decide is None:
-                raise BugReportError("this report carries review items but no decide callback was provided")
-            decisions = decide(list(items), list(reasons))
-            # The interactive callers validate before returning (re-asking on
-            # conflicts); a defect that slips through here is a caller bug.
             _review.validate_review_decisions(items, decisions)
             outcome = _review.apply_review_decisions(items, decisions, reports=[prep.trajectory_report, problem_report])
             prep.secrets = list(prep.secrets) + outcome.user_secrets
@@ -721,8 +852,10 @@ def freeze_export(
             text = source.read_text(encoding="utf-8") if written and source.is_file() else ""
             return sanitize_text(text, prep.roots)
 
-        redacted_fields = {name: _redacted_value(f"problem.{name}", bool(value)) for name, value in raw_fields.items()}
-        prep.environment = {key: _redacted_value(f"environment.{key}", True) for key in environment}
+        redacted_fields = {
+            name: _redacted_value(f"problem.{name}", bool(value)) for name, value in stage.raw_fields.items()
+        }
+        prep.environment = {key: _redacted_value(f"environment.{key}", True) for key in stage.environment}
         prep.reporter = redacted_fields.pop("reporter")
         prep.problem = redacted_fields
 
@@ -736,7 +869,7 @@ def freeze_export(
         meta_report = _redact_completeness_reasons(prep)
 
         reports = [prep.trajectory_report, problem_report] + ([meta_report] if meta_report else [])
-        classification, reasons = classify_redaction(*reports, require_review=require_review)
+        classification, reasons = classify_redaction(*reports, require_review=stage.require_review)
         if items:
             replaced = sum(1 for entry in prep.user_decisions if entry["action"] == "redacted")
             if replaced:
@@ -763,6 +896,44 @@ def freeze_export(
         return prep
     except (OSError, tarfile.TarError) as exc:
         raise PreparationError(str(exc) or exc.__class__.__name__) from exc
+
+
+def freeze_export(
+    prep: ExportPreparation,
+    *,
+    description: str,
+    expected: str = "",
+    actual: str = "",
+    severity: str = "",
+    steps: str = "",
+    reporter: str = "",
+    decide: Callable[[list["ReviewItem"], list[str]], list["ReviewDecision"]] | None = None,
+) -> ExportPreparation:
+    """Freeze the complete deliverable under ``snapshot/export/``.
+
+    :func:`stage_review` and :func:`finish_export` in one call: when the
+    merged findings yield review items, ``decide`` is called with them (plus
+    the current reasons, for the warning lines) and its decisions are applied
+    before anything downstream reads the trees -- a caller without a
+    ``decide`` cannot freeze such a report (silent shipping is not a
+    fallback). The interactive callers validate before returning (re-asking
+    on conflicts); a defect that slips through is a caller bug.
+    """
+    stage = stage_review(
+        prep,
+        description=description,
+        expected=expected,
+        actual=actual,
+        severity=severity,
+        steps=steps,
+        reporter=reporter,
+    )
+    decisions: list[ReviewDecision] = []
+    if stage.items:
+        if decide is None:
+            raise BugReportError("this report carries review items but no decide callback was provided")
+        decisions = decide(list(stage.items), list(stage.reasons))
+    return finish_export(prep, stage, decisions)
 
 
 def _evaluate_completeness_safely(prep: ExportPreparation, redacted_dir: Path) -> tuple[str, list[str]]:
@@ -943,9 +1114,15 @@ def confirm_and_package(prep: ExportPreparation, *, state_dir: Path | None = Non
     :class:`PackagingError`.
     """
     resolved_state = (state_dir or prep.state_dir).resolve()
-    current = member_traces(prep.attempt_id, resolved_state)
-    if current is None or set(current) != set(prep.member_traces):
-        raise StaleAttemptError("the attempt changed while the report was being prepared")
+    if prep.selected_traces:
+        # A synthetic attempt has no definition to change under it; what can
+        # change is the store losing a selected turn.
+        if traces_present(prep.selected_traces, state_dir=resolved_state) != set(prep.selected_traces):
+            raise StaleAttemptError("a selected turn is gone from the trace store")
+    else:
+        current = member_traces(prep.attempt_id, resolved_state)
+        if current is None or set(current) != set(prep.member_traces):
+            raise StaleAttemptError("the attempt changed while the report was being prepared")
 
     record_dir = bugreports_root(resolved_state) / prep.report_id
     try:
@@ -1138,6 +1315,7 @@ __all__ = [
     "PackagingError",
     "PreparationError",
     "RECORD_FILE",
+    "ReviewStage",
     "RECORD_SCHEMA",
     "SCHEMA_VERSION",
     "SEVERITIES",
@@ -1149,13 +1327,17 @@ __all__ = [
     "classify_redaction",
     "cleanup_stale_staging",
     "confirm_and_package",
+    "finish_export",
     "freeze_export",
     "list_reports",
     "load_record",
     "new_report_id",
+    "prepare_selection",
     "prepare_trajectory",
     "recover_interrupted",
     "reports_for_attempt",
     "retry_packaging",
     "save_record",
+    "selection_attempt_id",
+    "stage_review",
 ]

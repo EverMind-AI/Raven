@@ -511,3 +511,14 @@ describe('where a tab lands', () => {
     expect(landing(['s1', 's2'])).toBe('s2')
   })
 })
+
+describe('an imported conversation', () => {
+  it('reads back no run and no window: they were on the machine that recorded it', async () => {
+    const KEY = 'imported:' + 'a'.repeat(32)
+    await resume(KEY, ['run-7'])
+    expect(readRuns).toEqual([])
+    expect(paneIds()).toEqual([])
+    await resume('s1', ['run-7'])
+    expect(readRuns).toEqual(['run-7'])
+  })
+})

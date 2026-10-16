@@ -35,7 +35,6 @@ def registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     path = tmp_path / "connections.json"
     path.write_text(json.dumps({"connections": ROWS}), encoding="utf-8")
     monkeypatch.setenv("RAVEN_CONNECTIONS", str(path))
-    monkeypatch.setenv("RAVEN_DEBUG_MACHINES", "1")
     monkeypatch.setattr(remote_path, "_HOMES", {})
     monkeypatch.setattr(
         "raven.config.loader.load_config",
@@ -66,11 +65,13 @@ def test_a_remote_read_is_free_in_the_roots_and_asks_elsewhere(tool, path, tier)
     assert default_tier(tool, {"path": path}) is tier
 
 
-def test_with_the_lane_off_a_read_is_tiered_as_it_always_was(monkeypatch):
-    monkeypatch.delenv("RAVEN_DEBUG_MACHINES")
-
-    assert default_tier("read_file", {"path": "box:.ssh/id_rsa"}) is Tier.ALLOW
-    assert session_keys("read_file", {"path": "box:.ssh/id_rsa"}) != session_keys("read_file", {"path": "box:.ssh/x"})
+def test_remote_permissions_apply_without_a_debug_switch(monkeypatch):
+    monkeypatch.delenv("RAVEN_DEBUG_MACHINES", raising=False)
+    assert default_tier("read_file", {"path": "box:.ssh/id_rsa"}) is Tier.ASK
+    assert default_tier("write_file", {"path": "box:raven-work/report.md", "content": "x"}) is Tier.ASK
+    assert session_keys("read_file", {"path": "box:.ssh/id_rsa"}) == session_keys(
+        "read_file", {"path": "box:.ssh/config"}
+    )
 
 
 def test_an_absolute_path_reads_freely_once_the_machine_s_home_is_known():

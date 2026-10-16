@@ -11,6 +11,7 @@ import { useSyncExternalStore } from 'react'
 
 import { t } from '../../i18n/t'
 import * as lang from '../../state/lang'
+import { isOwnRow } from './catalogue'
 import { SectionBlock, Spin, ordered } from './Rows'
 import { wizardSection } from './source'
 import * as store from './store'
@@ -27,11 +28,12 @@ export function AgentsStepBody(): JSX.Element {
      keeps showing those rows rather than replacing them with the scan
      placeholder. */
   const scanning = s.loading && s.rows.length === 0
-  /* Raven's shipped specialists are a group of their own: they come with
-     Raven, so "connected" and "available" are not things they are. */
-  const shipped = ordered(s.rows.filter((row) => row.vendored && wizardSection(row) !== null))
-  const avail = ordered(s.rows.filter((row) => !row.vendored && wizardSection(row) === 'avail'))
-  const on = ordered(s.rows.filter((row) => !row.vendored && wizardSection(row) === 'on'))
+  /* Raven's shipped specialists are a group of their own, however this
+     install registered each: they come with Raven, so "connected" and
+     "available" are not things they are. */
+  const shipped = ordered(s.rows.filter((row) => isOwnRow(row) && wizardSection(row) !== null))
+  const avail = ordered(s.rows.filter((row) => !isOwnRow(row) && wizardSection(row) === 'avail'))
+  const on = ordered(s.rows.filter((row) => !isOwnRow(row) && wizardSection(row) === 'on'))
   /* Nothing of the reader's own to connect: said, rather than a section that
      holds only Raven's shipped agents and reads as if those were what was found. */
   const none = !scanning && store.found().length === 0

@@ -7,6 +7,26 @@ tasks and stateful agent instances; they are different things.
 Set up agents first with [Agent Integrations](agent-integrations.md). This page
 covers using them, not installing their transports.
 
+## Work on a registered machine
+
+An agent entry that names a `machine` runs on that registered machine, works
+there and leaves its files there; entries without one run locally as before.
+[Working on Registered Machines](machines.md) walks through registering the
+machine, installing its node, configuring the entry, and what to expect when
+the connection drops.
+
+On hosts with Unix-socket support, remote ACP agents can use the MCP servers
+granted to their entry through the Raven node. Server definitions and credentials
+stay on the host, as do tool restrictions and sandbox rules. The node tells which
+task a bridge belongs to by the process that opened it, and the host checks that
+task against the grant; another task cannot select a grant by name.
+
+On Windows hosts, remote MCP lending is currently withheld because the host
+endpoint transport requires Unix sockets. The remote task still runs and its
+reply explains that MCP was not provided. CLI agents on machines also continue
+without lent MCP. A host restart recovers the task result but does not restore
+its previous MCP connections.
+
 ## Choose a collaboration shape
 
 | Need | Use | Completion evidence |

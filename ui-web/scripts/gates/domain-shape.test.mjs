@@ -48,6 +48,7 @@ const NAMES = {}
 const NO_ROOT = {
   composer: 'the dock is chrome (src/chrome/Dock.tsx); what this domain renders are the sheets above it',
   dag: 'a card in the transcript; the run state behind it renders nothing (features/dag/mount.ts)',
+  imported: 'the import button is chrome (src/chrome/Rail.tsx) and the rows are the rail\'s; this domain renders nothing of its own',
   installed: 'no island at all: the capability tabs and the settings dialog draw its rows',
   transcript: 'one root per conversation lane rather than one per page (features/transcript/mount.tsx)',
 }

@@ -15,6 +15,7 @@ import io
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -1000,6 +1001,7 @@ async def test_a_blank_line_an_agent_prints_is_forwarded_recorded_and_replayed(t
 
     assert [(f["line"], f["n"]) for f in first.notified(protocol.AGENT_FRAME)] == [("a", 1), ("", 2), ("b", 3)]
     assert (daemon.record_dir("t-blank") / "frames.jsonl").read_bytes() == b"a\n\nb\n"
+    assert isinstance(_record(daemon, "t-blank")["born"], str), "the record carries when the agent started"
 
     second = _Conn(daemon)
     await second.ask(protocol.AGENT_ATTACH, {"channel": 5, "task": "t-blank", "after": 1}, request_id=2)
@@ -1077,8 +1079,176 @@ async def test_a_record_left_running_by_a_daemon_that_died_is_read_as_lost(tmp_p
     attached = await conn.ask(protocol.AGENT_ATTACH, {"channel": 1, "task": "t-gone"})
 
     assert attached["result"]["rc"] == server.LOST_RC and attached["result"]["replayed"] == 1
-    assert conn.notified(protocol.AGENT_EXIT) == [{"channel": 1, "rc": server.LOST_RC}]
-    assert _record(daemon, "t-gone")["state"] == "lost"
+    assert attached["result"]["reason"] == server.RESTARTED_AGENT_GONE, "pid 1 is not the agent: it was already gone"
+    assert conn.notified(protocol.AGENT_EXIT) == [
+        {"channel": 1, "rc": server.LOST_RC, "reason": server.RESTARTED_AGENT_GONE}
+    ]
+    assert (
+        _record(daemon, "t-gone")["state"] == "lost"
+        and _record(daemon, "t-gone")["reason"] == server.RESTARTED_AGENT_GONE
+    )
+
+
+async def test_recover_ends_the_agent_a_killed_daemon_left_behind_and_the_record_says_why(tmp_path):
+    """A daemon killed outright leaves its agents writing to pipes nobody reads: the next daemon ends them at its
+    start, records why, and a host that asks after the task reads that sentence instead of a bare exit code."""
+    root = tmp_path / "node"
+    orphan = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
+    daemon = server.Daemon(root)
+    record = daemon.record_dir("t-orphan")
+    record.mkdir(parents=True)
+    (record / "task.json").write_text(
+        json.dumps(
+            {
+                "task": "t-orphan",
+                "state": "running",
+                "pid": orphan.pid,
+                "born": server._born(orphan.pid),
+                "command": f"{sys.executable} -c 'import time; time.sleep(60)'",
+                "started": 1.0,
+                "frames": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (record / "frames.jsonl").write_text("", encoding="utf-8")
+    try:
+        assert daemon.recover() == 1
+        deadline = time.monotonic() + 5
+        while orphan.poll() is None and time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
+        assert orphan.poll() is not None, "the orphan was ended"
+        info = _record(daemon, "t-orphan")
+        assert (info["state"], info["rc"], info["reason"]) == ("lost", server.LOST_RC, server.RESTARTED_AGENT_ENDED)
+        conn = _Conn(daemon)
+        attached = await conn.ask(protocol.AGENT_ATTACH, {"channel": 1, "task": "t-orphan"})
+        assert attached["result"]["reason"] == server.RESTARTED_AGENT_ENDED
+        assert conn.notified(protocol.AGENT_EXIT) == [
+            {"channel": 1, "rc": server.LOST_RC, "reason": server.RESTARTED_AGENT_ENDED}
+        ]
+        assert daemon.recover() == 0, "once: a lost record is not brought down again"
+    finally:
+        if orphan.poll() is None:
+            orphan.kill()
+        orphan.wait()
+
+
+def test_a_record_whose_pid_moved_on_to_another_process_is_left_alone(tmp_path):
+    """The pid of a record names another program now: nothing is signalled, the record says the agent is gone."""
+    root = tmp_path / "node"
+    daemon = server.Daemon(root)
+    record = daemon.record_dir("t-reused")
+    record.mkdir(parents=True)
+    (record / "task.json").write_text(
+        json.dumps(
+            {
+                "task": "t-reused",
+                "state": "running",
+                "pid": os.getpid(),
+                "command": "some-agent-that-is-not-this-test --serve",
+                "started": 1.0,
+                "frames": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert (
+        server._still_ours(os.getpid(), "some-agent-that-is-not-this-test --serve", server._born(os.getpid())) is False
+    )
+    assert daemon.recover() == 1
+    assert _record(daemon, "t-reused")["reason"] == server.RESTARTED_AGENT_GONE
+
+
+def test_still_ours_says_no_when_ps_fails_or_disagrees_or_the_command_cannot_be_read(monkeypatch):
+    """Every doubt reads as "not the agent": a pid nothing can be said about is left alone."""
+    sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True)
+    try:
+        command = f"{sys.executable} -c 'import time; time.sleep(30)'"
+        born = server._born(sleeper.pid)
+        assert isinstance(born, str) and born == server._born(sleeper.pid), "the mark is the same twice over"
+        assert server._still_ours(sleeper.pid, command, born) is True, "a session leader, the command, the mark"
+        assert server._still_ours(sleeper.pid, command, "tick:1") is False, "the same program, started another time"
+        assert server._still_ours(sleeper.pid, command, None) is False, "a record without the mark proves nothing"
+        assert server._still_ours(sleeper.pid, "sh -c 'an unbalanced quote", born) is False, (
+            "a command shlex cannot read"
+        )
+        assert server._still_ours(sleeper.pid, "", born) is False, "no command recorded: nothing to match"
+
+        def failing(*_a, **_k):
+            raise OSError("no ps here")
+
+        monkeypatch.setattr(server.subprocess, "run", failing)
+        assert server._still_ours(sleeper.pid, command, born) is False, "ps cannot be run"
+        assert server._born(sleeper.pid) is None or sys.platform == "linux", "no ps, no mark (off Linux)"
+
+        monkeypatch.setattr(
+            server.subprocess, "run", lambda *_a, **_k: subprocess.CompletedProcess([], 1, stdout="", stderr="")
+        )
+        assert server._still_ours(sleeper.pid, command, born) is False, "ps names no such process"
+    finally:
+        sleeper.kill()
+        sleeper.wait()
+
+
+def test_born_reads_ps_when_proc_has_nothing_to_say(monkeypatch):
+    """Off Linux there is no ``/proc``; on Linux one that cannot be read is the same case: ``ps`` gives the start time."""
+    import builtins
+
+    real_open = builtins.open
+
+    def no_proc(path, *args, **kwargs):
+        if str(path).startswith("/proc/"):
+            raise OSError("no proc here")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", no_proc)
+    sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True)
+    try:
+        born = server._born(sleeper.pid)
+        assert isinstance(born, str) and born.startswith("lstart:") and born == server._born(sleeper.pid)
+    finally:
+        sleeper.kill()
+        sleeper.wait()
+    assert server._born(2**22 + 12345) is None, "a pid nothing runs under: no mark at all"
+
+
+def test_recover_passes_over_what_is_not_a_record_directory(tmp_path):
+    daemon = server.Daemon(tmp_path / "node")
+    (tmp_path / "node" / server.TASKS_DIR / "stray.txt").write_text("not a record", encoding="utf-8")
+    assert daemon.recover() == 0
+    assert (tmp_path / "node" / server.TASKS_DIR / "stray.txt").exists(), "left where it was"
+
+
+def test_the_death_pact_is_signed_on_linux_only():
+    pact = server._death_pact()
+    if sys.platform == "linux":
+        assert pact["preexec_fn"] is server._sign_death_pact
+    else:
+        assert pact == {}
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="PR_SET_PDEATHSIG is Linux's")
+async def test_on_linux_an_agent_goes_when_its_daemon_is_killed_outright(tmp_path):
+    """The pact end to end: a parent that starts a sleeper the daemon's way is killed with SIGKILL; the sleeper goes."""
+    script = tmp_path / "parent.py"
+    script.write_text(
+        "import subprocess, sys, time\n"
+        "from raven.node import server\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], "
+        "start_new_session=True, **server._death_pact())\n"
+        "print(child.pid, flush=True)\n"
+        "time.sleep(60)\n",
+        encoding="utf-8",
+    )
+    parent = await asyncio.create_subprocess_exec(sys.executable, str(script), stdout=asyncio.subprocess.PIPE)
+    assert parent.stdout is not None
+    child_pid = int((await asyncio.wait_for(parent.stdout.readline(), timeout=20)).strip())
+    parent.kill()
+    await parent.wait()
+    deadline = time.monotonic() + 5
+    while not _gone(child_pid) and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+    assert _gone(child_pid), "the sleeper went with the parent"
 
 
 @pytest.mark.parametrize(
@@ -1158,7 +1328,7 @@ async def test_a_task_s_records_are_its_owner_s_alone(tmp_path, agent):
             "task.json": 0o600,
             "frames.jsonl": 0o600,
             "stderr.log": 0o600,
-        }, "the frames hold the agent's output as it was"
+        }, "the frames hold the agent's output as it was, and the token opens its MCP streams"
     finally:
         daemon.tasks["t-own"].end()
         await daemon.tasks["t-own"].proc.wait()
@@ -1435,3 +1605,317 @@ async def test_a_launch_in_progress_counts_toward_the_limit(tmp_path, agent, mon
     assert len(host.node.daemon.running()) == 1
     await host.ask(protocol.AGENT_CANCEL, {"channel": 1}, request_id=3)
     await host.until(lambda: host.node.daemon.running() == [])
+
+
+# ---- MCP lent across the link: streams -------------------------------------------
+
+
+class _Peer:
+    """One connection to a shared daemon, as the host's or a bridge's: every line the daemon wrote to it, decoded.
+
+    ``peer`` is what the system says at the socket: the pid of the process
+    that connected, which is how the daemon tells whose bridge it is.
+    """
+
+    def __init__(self, daemon: server.Daemon, *, peer: int | None = None) -> None:
+        self.out = io.BytesIO()
+        self.node = server.Node(self.out, daemon, peer=peer)
+
+    def frames(self) -> list[dict[str, Any]]:
+        return [json.loads(line) for line in self.out.getvalue().splitlines() if line.strip()]
+
+    def notified(self, method: str) -> list[dict[str, Any]]:
+        return [frame["params"] for frame in self.frames() if frame.get("method") == method]
+
+    async def ask(self, method: str, params: dict[str, Any], request_id: int = 1) -> dict[str, Any]:
+        answer = await server.handle(
+            {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}, self.node
+        )
+        assert answer is not None
+        return answer
+
+    async def tell(self, method: str, params: dict[str, Any]) -> None:
+        assert await server.handle({"jsonrpc": "2.0", "method": method, "params": params}, self.node) is None
+
+    async def until(self, check: Any, *, timeout: float = 10.0) -> None:
+        deadline = time.monotonic() + timeout
+        while not check():
+            assert time.monotonic() < deadline, "did not happen in time"
+            await asyncio.sleep(0.02)
+
+
+@pytest.fixture
+def lineage(monkeypatch):
+    """The process table as the daemon reads it, made up: which pid is under which, by parent."""
+    table: dict[int, int] = {}
+    monkeypatch.setattr(server, "_process_table", lambda: dict(table))
+    return table
+
+
+async def _launched(
+    daemon: server.Daemon, host: _Peer, tmp_path: Path, task: str = "agent@box-1", *, channel: int = 1
+) -> int:
+    """An agent of the host's on the daemon, under ``task``: its pid, which every bridge of the task is under."""
+    started = await host.ask(
+        protocol.AGENT_LAUNCH, {"channel": channel, "task": task, "command": "sleep 30", "cwd": str(tmp_path)}
+    )
+    assert started["result"]["task"] == task
+    return started["result"]["pid"]
+
+
+def _bridge(daemon: server.Daemon, lineage: dict[int, int], *, under: int) -> _Peer:
+    """A bridge's connection, from a process the daemon's process table puts under ``under``."""
+    pid = 900_000 + len(lineage)
+    lineage[pid] = under
+    return _Peer(daemon, peer=pid)
+
+
+def _opening(*, task: str = "agent@box-1", server_name: str = "pg", lend: str = "d1") -> dict[str, Any]:
+    return {"task": task, "server": server_name, "lend": lend}
+
+
+@pytest.fixture
+async def daemon(tmp_path: Path):
+    d = server.Daemon(tmp_path / "node")
+    yield d
+    await d.end_all()
+
+
+async def test_hello_names_the_bridge_an_agent_runs_to_reach_a_lent_server_and_a_stdio_node_names_none(tmp_path):
+    with_daemon = server.Node(io.BytesIO(), server.Daemon(tmp_path / "node"))
+    answer = await with_daemon.hello({"protocol": protocol.PROTOCOL})
+    assert answer["bridge"] == [sys.executable, "-I", "-m", "raven.node", "--mcp", "--dir", str(tmp_path / "node")]
+    assert "bridge" not in await server.Node(io.BytesIO()).hello({"protocol": protocol.PROTOCOL})
+
+
+@pytest.mark.slow
+async def test_a_stream_is_opened_for_a_process_under_the_task_s_agent_as_the_system_shows_it(tmp_path, daemon):
+    """The real process table: a child of the agent the daemon started may open the task's stream; this test may not."""
+    host = _Peer(daemon)
+    started = await host.ask(
+        protocol.AGENT_LAUNCH,
+        {"channel": 1, "task": "agent@box-1", "command": "sh -c 'sleep 30; true'", "cwd": str(tmp_path)},
+    )
+    agent = started["result"]["pid"]
+    await host.until(lambda: server._descendants(agent))
+    (child,) = server._descendants(agent)
+
+    assert daemon.task_of(child) is daemon.tasks["agent@box-1"] and daemon.task_of(agent) is daemon.tasks["agent@box-1"]
+    assert daemon.task_of(os.getpid()) is None, "the daemon's own process, and everything above it, is no task's"
+    opened = await _Peer(daemon, peer=child).ask(protocol.MCP_OPEN, _opening())
+    assert opened["result"] == {"stream": 1}
+    stranger = await _Peer(daemon, peer=os.getpid()).ask(protocol.MCP_OPEN, _opening())
+    assert stranger["error"]["code"] == protocol.STREAM_REFUSED
+    assert stranger["error"]["message"] == "the connection is not a process of any task on this machine"
+
+
+@pytest.mark.slow
+def test_the_peer_of_a_socket_is_the_process_that_connected_and_nothing_where_the_system_does_not_say(monkeypatch):
+    left, right = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        assert server._peer_pid(left) == os.getpid() == server._peer_pid(right)
+    finally:
+        left.close()
+        right.close()
+
+    class _Mute:
+        def getsockopt(self, *args: Any) -> bytes:
+            raise OSError("not a socket")
+
+    assert server._peer_pid(_Mute()) is None
+    monkeypatch.setattr(server.sys, "platform", "sunos5")
+    monkeypatch.delattr(server.socket, "SO_PEERCRED", raising=False)
+    assert server._peer_pid(left) is None, "a system that answers neither question places no bridge"
+
+
+@pytest.mark.slow
+async def test_a_task_is_found_up_the_parent_chain_only_and_a_chain_that_loops_or_ends_finds_none(
+    tmp_path, daemon, lineage
+):
+    host = _Peer(daemon)
+    agent = await _launched(daemon, host, tmp_path)
+    task = daemon.tasks["agent@box-1"]
+    lineage.update({agent: 1, 7001: agent, 7002: 7001, 7003: 7004, 7004: 7003, 7005: 1})
+
+    assert daemon.task_of(agent) is task, "the agent itself"
+    assert daemon.task_of(7002) is task, "two steps under it"
+    assert daemon.task_of(7003) is None and daemon.task_of(7005) is None and daemon.task_of(0) is None
+    assert daemon.task_of(1) is None, "init is nobody's agent"
+    lineage.clear()
+    assert daemon.task_of(agent) is task, "with no table to read, the agent's own process still is"
+    assert daemon.task_of(7001) is None, "and nothing under it can be placed"
+    await host.ask(protocol.AGENT_CANCEL, {"channel": 1}, request_id=2)
+    await host.until(lambda: host.notified(protocol.AGENT_EXIT))
+    assert daemon.task_of(agent) is None, "a task that ended is no task"
+
+
+@pytest.mark.slow
+async def test_a_stream_is_refused_for_a_process_of_another_task_of_no_task_or_one_the_system_cannot_place(
+    tmp_path, daemon, lineage
+):
+    host = _Peer(daemon)
+    mine = await _launched(daemon, host, tmp_path)
+    theirs = await _launched(daemon, host, tmp_path, "agent@box-2", channel=2)
+
+    other = await _bridge(daemon, lineage, under=theirs).ask(protocol.MCP_OPEN, _opening())
+    assert other["error"]["code"] == protocol.STREAM_REFUSED
+    assert other["error"]["message"] == "the connection is a process of task 'agent@box-2', not 'agent@box-1'"
+    nobody = await _Peer(daemon, peer=424242).ask(protocol.MCP_OPEN, _opening())
+    assert (
+        nobody["error"]["code"] == protocol.STREAM_REFUSED and "not a process of any task" in nobody["error"]["message"]
+    )
+    unplaced = await _Peer(daemon, peer=None).ask(protocol.MCP_OPEN, _opening())
+    assert unplaced["error"]["code"] == protocol.STREAM_REFUSED
+    assert unplaced["error"]["message"] == "this system does not say which process a bridge is, so no stream is opened"
+    unknown = await _bridge(daemon, lineage, under=mine).ask(protocol.MCP_OPEN, _opening(task="nobody@box-9"))
+    assert unknown["error"]["code"] == protocol.STREAM_REFUSED and "not running" in unknown["error"]["message"]
+    assert host.notified(protocol.MCP_OPEN) == [], "a refused stream is not told to the host"
+
+    bridge = _bridge(daemon, lineage, under=mine)
+    opened = await bridge.ask(protocol.MCP_OPEN, _opening())
+
+    assert opened["result"] == {"stream": 1}
+    assert host.notified(protocol.MCP_OPEN) == [{"task": "agent@box-1", "stream": 1, "server": "pg", "lend": "d1"}]
+    again = await bridge.ask(protocol.MCP_OPEN, _opening(), request_id=2)
+    assert again["error"]["code"] == -32602 and "already" in again["error"]["message"], "one stream per bridge"
+
+    # The other task's own bridge opens its own stream beside it, told to the host as that task's.
+    own = await _bridge(daemon, lineage, under=theirs).ask(protocol.MCP_OPEN, _opening(task="agent@box-2"))
+    assert own["result"] == {"stream": 2}
+    assert host.notified(protocol.MCP_OPEN)[-1] == {"task": "agent@box-2", "stream": 2, "server": "pg", "lend": "d1"}
+    assert [s.task.id for s in daemon.streams.values()] == ["agent@box-1", "agent@box-2"]
+
+
+@pytest.mark.slow
+async def test_a_stream_needs_a_host_holding_the_task_and_a_task_holds_a_bounded_number(tmp_path, daemon, lineage):
+    host = _Peer(daemon)
+    agent = await _launched(daemon, host, tmp_path)
+    await host.node.detach_all()
+    refused = await _bridge(daemon, lineage, under=agent).ask(protocol.MCP_OPEN, _opening())
+    assert refused["error"]["code"] == protocol.STREAM_REFUSED and "no host holds" in refused["error"]["message"]
+
+    back = _Peer(daemon)
+    await back.ask(protocol.AGENT_ATTACH, {"channel": 1, "task": "agent@box-1", "after": 0})
+    bridges = [_bridge(daemon, lineage, under=agent) for _ in range(protocol.MAX_STREAMS + 1)]
+    answers = [await b.ask(protocol.MCP_OPEN, _opening(server_name=f"s{i}")) for i, b in enumerate(bridges)]
+
+    assert all("result" in a for a in answers[: protocol.MAX_STREAMS])
+    assert answers[-1]["error"]["code"] == protocol.STREAM_REFUSED and "open already" in answers[-1]["error"]["message"]
+    assert len(daemon.tasks["agent@box-1"].streams) == protocol.MAX_STREAMS
+
+
+@pytest.mark.slow
+async def test_the_pieces_of_a_frame_cross_the_daemon_both_ways_as_they_are(tmp_path, daemon, lineage):
+    host = _Peer(daemon)
+    agent = await _launched(daemon, host, tmp_path)
+    bridge = _bridge(daemon, lineage, under=agent)
+    stream = (await bridge.ask(protocol.MCP_OPEN, _opening()))["result"]["stream"]
+
+    await bridge.tell(protocol.MCP_FRAME, {"stream": stream, "text": '{"jsonrpc":"2.0","id":1,', "end": False})
+    await bridge.tell(protocol.MCP_FRAME, {"stream": stream, "text": '"method":"tools/list"}', "end": True})
+    await host.tell(protocol.MCP_FRAME, {"stream": stream, "text": '{"jsonrpc":"2.0","id":1,"result":{}}', "end": True})
+
+    assert host.notified(protocol.MCP_FRAME) == [
+        {"stream": stream, "text": '{"jsonrpc":"2.0","id":1,', "end": False},
+        {"stream": stream, "text": '"method":"tools/list"}', "end": True},
+    ]
+    assert bridge.notified(protocol.MCP_FRAME) == [
+        {"stream": stream, "text": '{"jsonrpc":"2.0","id":1,"result":{}}', "end": True}
+    ]
+    stranger = _Peer(daemon)
+    await stranger.tell(protocol.MCP_FRAME, {"stream": stream, "text": "x", "end": True})
+    assert len(host.notified(protocol.MCP_FRAME)) == 2 and len(bridge.notified(protocol.MCP_FRAME)) == 1, (
+        "a connection that is neither end carries nothing"
+    )
+
+
+@pytest.mark.slow
+async def test_a_stream_ends_with_either_end_or_the_agent_and_the_other_end_is_told(tmp_path, daemon, lineage):
+    host = _Peer(daemon)
+    agent = await _launched(daemon, host, tmp_path)
+
+    # The bridge closes: the host hears it, the stream is gone.
+    bridge = _bridge(daemon, lineage, under=agent)
+    first = (await bridge.ask(protocol.MCP_OPEN, _opening()))["result"]["stream"]
+    await bridge.tell(protocol.MCP_CLOSE, {"stream": first, "reason": "the agent closed the server"})
+    assert host.notified(protocol.MCP_CLOSE) == [
+        {"stream": first, "task": "agent@box-1", "reason": "the agent closed the server"}
+    ]
+    assert first not in daemon.streams and daemon.tasks["agent@box-1"].streams == {}
+
+    # The host closes: the bridge hears it.
+    bridge = _bridge(daemon, lineage, under=agent)
+    second = (await bridge.ask(protocol.MCP_OPEN, _opening()))["result"]["stream"]
+    await host.tell(protocol.MCP_CLOSE, {"stream": second, "reason": "the dispatch ended"})
+    assert bridge.notified(protocol.MCP_CLOSE) == [
+        {"stream": second, "task": "agent@box-1", "reason": "the dispatch ended"}
+    ]
+
+    # The bridge's connection ends without a word: the host is told.
+    bridge = _bridge(daemon, lineage, under=agent)
+    third = (await bridge.ask(protocol.MCP_OPEN, _opening()))["result"]["stream"]
+    await bridge.node.detach_all()
+    assert host.notified(protocol.MCP_CLOSE)[-1] == {
+        "stream": third,
+        "task": "agent@box-1",
+        "reason": "the bridge ended",
+    }
+
+    # The host's link ends: its streams go, the bridges are told.
+    bridge = _bridge(daemon, lineage, under=agent)
+    fourth = (await bridge.ask(protocol.MCP_OPEN, _opening()))["result"]["stream"]
+    await host.node.detach_all()
+    assert bridge.notified(protocol.MCP_CLOSE) == [
+        {"stream": fourth, "task": "agent@box-1", "reason": "the host's link ended"}
+    ]
+    assert daemon.streams == {}
+
+    # The agent ends: the streams of its task end with it.
+    back = _Peer(daemon)
+    await back.ask(protocol.AGENT_ATTACH, {"channel": 1, "task": "agent@box-1", "after": 0})
+    bridge = _bridge(daemon, lineage, under=agent)
+    fifth = (await bridge.ask(protocol.MCP_OPEN, _opening()))["result"]["stream"]
+    await back.ask(protocol.AGENT_CANCEL, {"channel": 1}, request_id=2)
+    await back.until(lambda: back.notified(protocol.AGENT_EXIT))
+    await back.until(lambda: bridge.notified(protocol.MCP_CLOSE))
+    assert bridge.notified(protocol.MCP_CLOSE) == [
+        {"stream": fifth, "task": "agent@box-1", "reason": "the agent ended"}
+    ]
+    assert daemon.streams == {}
+
+
+async def test_a_stream_is_refused_when_its_opening_is_malformed_or_the_host_cannot_be_told(tmp_path, daemon, lineage):
+    host = _Peer(daemon)
+    agent = await _launched(daemon, host, tmp_path)
+    bridge = _bridge(daemon, lineage, under=agent)
+
+    bare = await bridge.ask(protocol.MCP_OPEN, {"task": "agent@box-1", "server": "", "lend": "d1"})
+    assert bare["error"]["code"] == -32602 and "non-empty strings" in bare["error"]["message"]
+
+    host.out.close()  # the host's way out is gone, and nobody has noticed yet
+    untold = await bridge.ask(protocol.MCP_OPEN, _opening(), request_id=2)
+
+    assert untold["error"]["code"] == protocol.STREAM_REFUSED and "could not be told" in untold["error"]["message"]
+    assert daemon.streams == {} and bridge.node.stream is None and daemon.tasks["agent@box-1"].streams == {}
+
+
+async def test_a_frame_for_an_end_that_is_gone_closes_the_stream_while_a_stranger_s_close_or_an_odd_frame_does_nothing(
+    tmp_path, daemon, lineage
+):
+    host = _Peer(daemon)
+    agent = await _launched(daemon, host, tmp_path)
+    bridge = _bridge(daemon, lineage, under=agent)
+    stream = (await bridge.ask(protocol.MCP_OPEN, _opening()))["result"]["stream"]
+
+    await bridge.tell(protocol.MCP_FRAME, {"stream": stream, "text": 5, "end": True})
+    await bridge.tell(protocol.MCP_FRAME, {"stream": True, "text": "x", "end": True})
+    await _Peer(daemon).tell(protocol.MCP_CLOSE, {"stream": stream, "reason": "not mine to close"})
+    assert host.notified(protocol.MCP_FRAME) == [] and stream in daemon.streams
+
+    host.out.close()
+    await bridge.tell(protocol.MCP_FRAME, {"stream": stream, "text": "x", "end": True})
+
+    assert stream not in daemon.streams
+    assert bridge.notified(protocol.MCP_CLOSE) == [
+        {"stream": stream, "task": "agent@box-1", "reason": "the other end of the stream is gone"}
+    ]

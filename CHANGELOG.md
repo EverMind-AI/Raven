@@ -73,6 +73,18 @@ All notable changes to Raven are documented here.
 
 ### Changed
 
+- Memory runs on EverOS 1.4.2, which fixes what a memory server that stays up
+  for days ran into: a LanceDB index reader leaked file descriptors until
+  searches took seconds, an interactive search queued behind the cascade's
+  background embedding (vector search p50 46 s under three concurrent
+  writers, 0.60 s now), and a cascade pass sent one embedding request per
+  entry instead of one per file. The derived index also repairs itself on the
+  first start after the upgrade: EverOS re-reconciles every indexed markdown
+  file against the index once, re-embedding only the rows that are missing,
+  and a healthy index pays one read pass and no embedding. Markdown is the
+  source either way and was never affected. A server left running from the
+  older version is restarted, as it has been since the pin moved to 1.4.1.
+
 - Research reports are written for a reader rather than for a grader. The
   report opens with the answer as a blockquote, with no label or bold lead-in
   before it, stated first and then why it
@@ -249,6 +261,21 @@ All notable changes to Raven are documented here.
   from the session's mode overlay.
 
 ### Fixed
+
+- A task on a registered machine ends the way it ended, whatever happened on
+  either side. A Raven node killed outright (`kill -9`) used to leave its
+  agents running with nobody reading them and the host reading a bare
+  `exit -1`; the next daemon now ends what was left, records why, and the host
+  hands that sentence on (on Linux the agent also goes with the daemon). A
+  failed remote run whose announce the draining scheduler refused used to
+  vanish; its record now stays, like a reply's, for the next start to report.
+  A cli run picked up after a restart now binds its instance to the session
+  id in its output, so the next turn resumes it. A cancel while the machine's
+  link is down no longer waits out the settle budget. An openai row's tunnel
+  gives a local port that was taken in between up for another instead of
+  sending the request to whoever took it. A run record that is not JSON, or not
+  UTF-8, is set aside once instead of being warned about at every start, and
+  never stops the other records from being read.
 
 - A backslash typed into a bug report's description or steps (a literal
   `\n` standing in for a line break, or a regular expression such as `\d+`)

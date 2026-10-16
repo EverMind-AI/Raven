@@ -6,11 +6,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { loadPart } from '../../../scripts/module-harness.mjs'
 
-interface Row { id: string; title: string }
+interface Row { id: string; title: string; from?: string }
 
-async function harness(answer: Record<string, unknown>) {
+async function harness(answer: Record<string, unknown>, start: Row[] = [{ id: 'tui:1', title: 'a task' }]) {
   const log: unknown[][] = []
-  const rows: Row[] = [{ id: 'tui:1', title: 'a task' }]
+  const rows: Row[] = [...start]
   await loadPart(() => import('./wire'), {
     fakes: {
       'src/i18n/t': { t: (key: string, vars?: unknown) => (vars ? `${key} ${JSON.stringify(vars)}` : key) },
@@ -20,11 +20,14 @@ async function harness(answer: Record<string, unknown>) {
           log.push(['setArchived', id, archived])
           return answer
         },
-        deleteSession: async () => ({}),
+        deleteSession: async (id: string) => {
+          log.push(['delete', id])
+          return { deleted: id, still_on_disk: false }
+        },
       },
       'src/state/session/rows': {
         rows: () => rows,
-        replace: () => {},
+        replace: (next: Row[]) => { rows.splice(0, rows.length, ...next) },
         open: () => {},
       },
       'src/features/rail/store': {
@@ -45,7 +48,7 @@ async function harness(answer: Record<string, unknown>) {
     },
   })
   const wire = await import('./wire')
-  return { wire, log }
+  return { wire, log, rows }
 }
 
 afterEach(() => { vi.restoreAllMocks() })
@@ -67,5 +70,19 @@ describe('archiving from the rail', () => {
     expect(h.log).toContainEqual(['setArchived', 'tui:1', true])
     expect(h.log.some((c) => c[0] === 'toast' && String(c[1]).startsWith('gui.sess.archive_failed'))).toBe(true)
     expect(h.log.some((c) => c[0] === 'left')).toBe(false)
+  })
+})
+
+describe('deleting everything from the settings page', () => {
+  it('leaves the Imported Conversations alone and counts only what it was asked to delete', async () => {
+    const h = await harness({}, [
+      { id: 'tui:1', title: 'a task' },
+      { id: 'imported:1', title: 'a bug report', from: 'imported' },
+      { id: 'tui:2', title: 'another task' },
+    ])
+    await h.wire.deleteAll()
+    expect(h.log.filter((c) => c[0] === 'delete')).toEqual([['delete', 'tui:1'], ['delete', 'tui:2']])
+    expect(h.rows.map((r) => r.id)).toEqual(['imported:1'])
+    expect(h.log).toContainEqual(['toast', 'gui.set.dat.del_done {"n":2}'])
   })
 })

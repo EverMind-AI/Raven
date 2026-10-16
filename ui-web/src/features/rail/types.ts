@@ -18,6 +18,9 @@ export interface SessRow {
      absent for one that runs where the policy default puts it. The rail groups
      on it: pinned to a folder, or not. */
   workdir?: string | null
+  /* An Imported Conversation's package file name (`from === 'imported'`), said
+     in the row's tooltip under its title. */
+  sourceName?: string
   /* A title is being generated for this row, so the row shows a placeholder
      where the title goes. Client state only: nothing on the wire carries it,
      and a reload of a session already named simply never sets it. */

@@ -1260,49 +1260,41 @@ def test_an_explicit_node_env_is_left_alone(monkeypatch: pytest.MonkeyPatch) -> 
     assert tui_commands.child_env()["NODE_ENV"] == "development"
 
 
-def test_bare_raven_dev_reaches_the_web_launcher(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_bare_raven_opens_the_page_without_arguments(monkeypatch: pytest.MonkeyPatch) -> None:
     from typer.testing import CliRunner
 
     from raven.cli import commands, serve_commands
+    from raven.rpc.transports.ws import DEFAULT_PORT
 
-    opened: list[tuple[int, bool]] = []
+    opened: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
     monkeypatch.setattr(commands, "_can_open_a_browser", lambda: True)
-    monkeypatch.setattr(serve_commands, "_web", lambda port, **kwargs: opened.append((port, kwargs.get("dev", False))))
+    monkeypatch.setattr(serve_commands, "_web", lambda *args, **kwargs: opened.append((args, kwargs)))
 
-    r = CliRunner(mix_stderr=False).invoke(commands.app, ["--dev"])
+    r = CliRunner(mix_stderr=False).invoke(commands.app, [])
 
     assert r.exit_code == 0, r.output
-    assert opened == [(serve_commands.DEFAULT_PORT if hasattr(serve_commands, "DEFAULT_PORT") else 18792, True)]
+    assert opened == [((DEFAULT_PORT,), {})]
 
 
-@pytest.mark.parametrize(
-    ("argv", "says"),
-    [
-        (["--dev", "web"], "raven web --dev"),
-        (["--dev", "serve"], "raven serve --dev"),
-        (["--dev", "gateway"], "raven gateway --dev"),
-        (["--dev", "tui"], "bare `raven` only"),
-    ],
-)
-def test_root_dev_ahead_of_a_subcommand_is_refused_with_the_right_form(
-    monkeypatch: pytest.MonkeyPatch, argv: list[str], says: str
-) -> None:
+@pytest.mark.parametrize("argv", [["--dev"], ["--dev", "web"], ["--dev", "tui"]])
+def test_bare_raven_rejects_dev(monkeypatch: pytest.MonkeyPatch, argv: list[str]) -> None:
     from typer.testing import CliRunner
 
     from raven.cli import commands, serve_commands, tui_commands
 
     started: list[str] = []
+    monkeypatch.setattr(commands, "_can_open_a_browser", lambda: True)
     monkeypatch.setattr(serve_commands, "_web", lambda *a, **k: started.append("web"))
     monkeypatch.setattr(tui_commands, "tui", lambda *a, **k: started.append("tui"))
 
     r = CliRunner(mix_stderr=False).invoke(commands.app, argv)
 
     assert r.exit_code == 2
-    assert says in " ".join(r.stderr.replace("\u2502", " ").split())
+    assert "No such option" in r.stderr
     assert started == []
 
 
-def test_bare_raven_dev_without_a_browser_keeps_the_tui_flag_plain(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_bare_raven_without_a_browser_starts_the_tui_plainly(monkeypatch: pytest.MonkeyPatch) -> None:
     from typer.testing import CliRunner
 
     from raven.cli import commands, tui_commands
@@ -1315,11 +1307,11 @@ def test_bare_raven_dev_without_a_browser_keeps_the_tui_flag_plain(monkeypatch: 
     monkeypatch.setattr(tui_commands, "tui", recorder)
     monkeypatch.setattr(commands, "_can_open_a_browser", lambda: False)
 
-    r = CliRunner(mix_stderr=False).invoke(commands.app, ["--dev"])
+    r = CliRunner(mix_stderr=False).invoke(commands.app, [])
 
     assert r.exit_code == 0, r.output
     assert received["dev"] is False
-    assert "--dev is ignored" in r.output
+    assert "--dev" not in r.output
 
 
 async def test_the_terminal_host_starts_the_heap_trimmer(monkeypatch: pytest.MonkeyPatch, rpc_server_deps) -> None:
@@ -1330,3 +1322,31 @@ async def test_the_terminal_host_starts_the_heap_trimmer(monkeypatch: pytest.Mon
     await _run_until_done_with_immediate_proc_done(monkeypatch, rpc_server_deps)
 
     assert started == [1]
+
+
+async def test_the_tui_host_leaves_the_agents_on_machines_running_at_exit_and_picks_them_up_at_start(
+    monkeypatch: pytest.MonkeyPatch, rpc_server_deps
+) -> None:
+    """As the gateway and the served page do: the stop says the agents stay before it cancels, the start schedules the pick-up."""
+    from raven.acp_client import remote
+
+    ctx = rpc_server_deps
+    leaving_at_cancel: list[bool] = []
+
+    async def cancel_all(**kwargs: Any) -> int:
+        leaving_at_cancel.append(remote.leaving())
+        return 0
+
+    ctx["agent_loop"].subagents.cancel_all = cancel_all
+    scheduled: list[Any] = []
+    monkeypatch.setattr(
+        "raven.agent.subagent.resume_remote.schedule_remote_resume",
+        lambda subagents: scheduled.append(subagents) or None,
+    )
+    try:
+        await _run_until_done_with_immediate_proc_done(monkeypatch, ctx)
+    finally:
+        remote.staying()
+
+    assert leaving_at_cancel == [True], "said before the cancel, so a run on a machine is left, not ended"
+    assert scheduled == [ctx["agent_loop"].subagents]

@@ -1187,15 +1187,43 @@ class TrajectoryIndexer:
         return slot.index
 
 
-_INDEXERS: dict[Path, TrajectoryIndexer] = {}
+# Indexers of state directories other than this process's own trace store --
+# an Imported Conversation's -- kept at once. Each holds up to MAX_SESSIONS
+# session indexes, so without a bound every conversation opened stays resident.
+MAX_FOREIGN_INDEXERS = 4
+
+# Read and written on the event loop only, like every caller of the functions below.
+_INDEXERS: OrderedDict[Path, TrajectoryIndexer] = OrderedDict()
+
+
+def _own_store() -> Path:
+    return tracing_config.state_dir().resolve()
 
 
 def indexer_for(state_dir: Path | None = None) -> TrajectoryIndexer:
-    base = (state_dir if state_dir is not None else tracing_config.state_dir()).resolve()
+    own = _own_store()
+    base = state_dir.resolve() if state_dir is not None else own
     indexer = _INDEXERS.get(base)
     if indexer is None:
         indexer = _INDEXERS[base] = TrajectoryIndexer(base)
+    _INDEXERS.move_to_end(base)
+    foreign = [path for path in _INDEXERS if path != own]
+    for path in foreign[: max(0, len(foreign) - MAX_FOREIGN_INDEXERS)]:
+        del _INDEXERS[path]
     return indexer
+
+
+def evict_idle_all() -> None:
+    """Let go of idle session indexes everywhere, then of every foreign indexer left with none."""
+    own = _own_store()
+    for path, indexer in list(_INDEXERS.items()):
+        indexer.evict_idle()
+        if path != own and not indexer._slots:
+            del _INDEXERS[path]
+
+
+def drop_indexer(state_dir: Path) -> None:
+    _INDEXERS.pop(state_dir.resolve(), None)
 
 
 def _reset_for_tests() -> None:
@@ -1214,6 +1242,9 @@ __all__ = [
     "ScanBudget",
     "SessionIndex",
     "SpanLogScanner",
+    "MAX_FOREIGN_INDEXERS",
     "TrajectoryIndexer",
+    "drop_indexer",
+    "evict_idle_all",
     "indexer_for",
 ]

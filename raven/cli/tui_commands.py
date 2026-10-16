@@ -446,6 +446,13 @@ async def _run_rpc_server_until_done(
         )
         # Subagent result re-injection submits a SUBAGENT-origin turn.
         agent_loop.subagents.set_submit(turn_scheduler.submit)
+        # The runs a process before this one left on registered machines are
+        # picked up and reported to their conversations, as the gateway and
+        # the served page do; after the submit is wired, so the announce has
+        # a spine to go to.
+        from raven.agent.subagent.resume_remote import schedule_remote_resume
+
+        schedule_remote_resume(agent_loop.subagents)
         # Cron reminders run as CRON turns through the scheduler; the wrapper fans
         # the reply out as cron.delivered to every session. on_job must be wired
         # before cron.start() so an immediately-firing job has its callback.
@@ -571,7 +578,11 @@ async def _run_rpc_server_until_done(
         # bounded wait, where the drain costs its whole budget.
         try:
             from raven.acp_client.client import begin_drain
+            from raven.acp_client.remote import leave_agents_running
 
+            # The agents on registered machines stay with their daemons (see
+            # the gateway's shutdown): the next process picks their runs up.
+            leave_agents_running()
             begin_drain()
             if agent_loop is not None:
                 await agent_loop.subagents.cancel_all(reason="the TUI exited")

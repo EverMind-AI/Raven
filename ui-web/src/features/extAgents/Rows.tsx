@@ -46,6 +46,24 @@ function Led({ health, shown }: { health: Health; shown: Shown }): JSX.Element |
 const tooltip = (health: Health, shown: Shown): string | undefined =>
   health.tone === 'none' || (health.from === 'test' && shown !== 'on') ? undefined : health.label
 
+const MACHINE = 'M4 5.5h16v9.5H4zM9.5 19h5M12 15.5V19'
+
+/* Where the row runs, when not here: the registered machine's id in a chip
+   after the name. The name is the user's -- `<preset>@<machine>` by default,
+   but renamed at will -- so the chip is the one place the machine is always
+   said. After the name on a row, which is wide; on a card, where the name
+   row is a quarter of the page, it leads the line under the name instead.
+   Nothing on a row that runs on this computer. */
+function MachineTag({ row }: { row: ExtAgentRow }): JSX.Element | null {
+  if (!row.machine) return null
+  return (
+    <span className="extAgents-mc" title={t('gui.agent.on_machine', { id: row.machine })}>
+      <Glyph d={MACHINE} />
+      {row.machine}
+    </span>
+  )
+}
+
 export function Tile({ row }: { row: ExtAgentRow }): JSX.Element {
   const own = isOwnRow(row)
   return (
@@ -286,8 +304,10 @@ function RowControl({ row, s, shown }: { row: ExtAgentRow; s: ExtAgentsState; sh
     )
   }
   if (shown === 'on') {
-    /* Raven's shipped specialists are part of Raven: never disconnected. */
-    if (row.builtin || row.vendored) return null
+    /* The built-in loop alone has no switch: an unnamed spawn and a dag node
+       with no sub-agent dispatch to it. Raven's shipped specialists switch off
+       like any other agent; coming with Raven does not keep one on the roster. */
+    if (row.builtin) return null
     return (
       <button className="mini" onClick={() => store.disconnectRow(row)}>
         {t('gui.agent.disconnect')}
@@ -341,6 +361,7 @@ function AgentRow({
         <div className="extAgents-nm" title={tooltip(health, shown)}>
           <Led health={health} shown={shown} />
           <span className="extAgents-t">{row.name}</span>
+          <MachineTag row={row} />
         </div>
         {shown === 'pending' ? (
           <div className="extAgents-one extAgents-one-work">
@@ -425,7 +446,10 @@ function AgentCard({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Ele
           <CardControl row={row} shown={shown} verdict={verdict} />
         </div>
       </div>
-      <div className="extAgents-one">{oneLine(row)}</div>
+      <div className="extAgents-one">
+        <MachineTag row={row} />
+        {oneLine(row)}
+      </div>
       <div className="extAgents-foot-slot">
         <Foot v={verdict} />
       </div>

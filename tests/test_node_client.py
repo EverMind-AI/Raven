@@ -19,10 +19,13 @@ import asyncio
 import hashlib
 import json
 import os
+import shutil
 import signal
 import sys
+import tempfile
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -129,8 +132,6 @@ class Machine:
         self.registry = root / "connections.json"
         self.rows(rows or [row()])
         monkeypatch.setenv("RAVEN_CONNECTIONS", str(self.registry))
-        # The lane is debug-only; these tests are about what it does when on.
-        monkeypatch.setenv("RAVEN_DEBUG_MACHINES", "1")
         path = f"{self.bin}{os.pathsep}{os.environ.get('PATH', '/usr/bin:/bin')}"
         monkeypatch.setattr(backend_env, "_LOGIN_ENV", {**os.environ, "PATH": path})
         monkeypatch.setattr("raven.config.paths.get_logs_dir", lambda: root / "logs")
@@ -370,16 +371,13 @@ async def test_a_call_that_runs_out_of_time_closes_the_node(box, pool):
     assert pool.status("box").state == "error"
 
 
-async def test_with_the_lane_off_no_node_is_started(box, pool, monkeypatch):
+@pytest.mark.slow
+async def test_a_node_starts_without_a_debug_switch(box, pool, monkeypatch):
     box.node()
-    monkeypatch.delenv("RAVEN_DEBUG_MACHINES")
-
-    with pytest.raises(
-        NodeError, match="the machine lane is debug-only and off; start raven with RAVEN_DEBUG_MACHINES=1"
-    ):
-        await pool.hello("box")
-
-    assert box.launches() == [] and pool.live() == []
+    monkeypatch.delenv("RAVEN_DEBUG_MACHINES", raising=False)
+    hello = await pool.hello("box")
+    assert hello["protocol"] == protocol.PROTOCOL
+    assert len(box.launches()) == 1
 
 
 async def test_a_machine_that_is_not_registered_is_refused_before_any_ssh(box, pool):
@@ -660,6 +658,65 @@ async def test_closing_the_link_on_purpose_leaves_the_agent_on_the_machine_for_t
     await pool.call("box", protocol.AGENT_CANCEL, {"channel": 9})
     await _until(lambda: _gone(agent))
     await client.close()
+
+
+@pytest.mark.slow
+async def test_while_this_computer_is_leaving_the_endpoint_s_end_leaves_the_agent_with_the_machine(box, pool):
+    """The host is stopping: closing the connection ends the endpoint only, and the daemon keeps the agent."""
+    box.node()
+    endpoint = await pool.open_channel("box", name="echo@box", command=box.agent(), cwd="~", env={})
+    client = AcpClient.over(endpoint, name="echo@box")
+    assert await client.request("ping", {}, timeout=10) == {"echo": {}}
+    agent = endpoint.pid
+
+    remote.leave_agents_running()
+    try:
+        await client.close()
+    finally:
+        remote.staying()
+
+    assert endpoint.returncode == node_client.LOST_RC and "left running on task" in (endpoint.ended() or "")
+    await asyncio.sleep(0.3)
+    assert not _gone(agent), "the agent stays with the daemon"
+    assert [(row["task"], row["state"]) for row in await pool.tasks("box")] == [(endpoint.task, "running")]
+    picked, answer = await pool.attach("box", endpoint.task, name="echo@box", after=endpoint.received)
+    assert answer["pid"] == agent and answer["rc"] is None
+    await picked.end()
+    await _until(lambda: _gone(agent))
+
+
+@pytest.mark.slow
+async def test_a_task_is_picked_up_from_the_frame_last_read_and_the_watchers_hear_each_frame_dealt_with(box, pool):
+    box.node()
+    endpoint = await pool.open_channel("box", name="echo@box", command=box.agent(), cwd="~", env={})
+    heard: list[int] = []
+    endpoint.watchers.append(heard.append)
+    client = AcpClient.over(endpoint, name="echo@box")
+    await client.request("ping", {"n": 1}, timeout=10)
+    await client.request("ping", {"n": 2}, timeout=10)
+    await asyncio.sleep(0.05)
+    assert heard == [1, 2] and endpoint.received == 2
+    agent = endpoint.pid
+    await pool.close("box")
+
+    picked, answer = await pool.attach("box", endpoint.task, name="echo@box", after=2)
+
+    assert answer["pid"] == agent and answer["replayed"] == 0 and answer["rc"] is None
+    again = AcpClient.over(picked, name="echo@box")
+    again.continue_ids_from(100)
+    assert await again.request("ping", {"n": 3}, timeout=10) == {"echo": {"n": 3}}
+    assert picked.received == 3, "numbered on from the frames the first link read"
+    await again.close()
+    await _until(lambda: _gone(agent))
+    await client.close()
+
+
+@pytest.mark.slow
+async def test_picking_up_a_task_the_machine_does_not_know_is_one_sentence(box, pool):
+    box.node()
+
+    with pytest.raises(NodeError, match=r"machine 'Lab box' \(box\) no longer runs 'echo@box' \(task nothing-here\)"):
+        await pool.attach("box", "nothing-here", name="echo@box")
 
 
 # --- a live node's calls, with the connection stood in for -------------------------
@@ -1105,6 +1162,48 @@ async def test_an_attach_the_link_cannot_carry_parks_every_waiting_endpoint_agai
     await pool.close_all()
 
 
+async def test_a_pick_up_the_machine_refuses_or_cannot_carry_is_one_sentence_each(tmp_path):
+    pool = NodePool(backoff_s=())
+    gone = AcpRemoteError(protocol.AGENT_ATTACH, protocol.UNKNOWN_TASK, "no task 't' is running or recorded")
+    _live(pool, tmp_path, "box", raises=gone)
+    with pytest.raises(NodeError, match=r"machine 'Lab box' \(box\) no longer runs 'echo@box' \(task t\): no task"):
+        await pool.attach("box", "t", name="echo@box")
+    assert pool._nodes["box"].channels == {}, "the channel opened for it is closed again"
+
+    slow = _live(pool, tmp_path, "slow", raises=AcpTimeoutError("no answer", method=protocol.AGENT_ATTACH))
+    with pytest.raises(NodeError, match=r"did not answer agent/attach"):
+        await pool.attach("slow", "t", name="echo@box")
+    assert not slow.alive, "a link that does not answer is lost"
+
+    dead = _live(pool, tmp_path, "dead", raises=AcpConnectionError("connection ended (exit 255)"))
+    with pytest.raises(NodeError, match=r"machine 'Lab box' \(dead\)"):
+        await pool.attach("dead", "t", name="echo@box")
+    assert not dead.alive
+    await pool.close_all()
+
+
+async def test_a_watcher_that_fails_is_named_and_the_frames_go_on(tmp_path):
+    from loguru import logger
+
+    endpoint = ChannelEndpoint(_Client(), 1, target=_box(), agent="echo@box")  # type: ignore[arg-type]
+    heard: list[int] = []
+
+    def bad(n: int) -> None:
+        raise RuntimeError("no disk")
+
+    endpoint.watchers.extend([bad, heard.append])
+    records: list[str] = []
+    sink = logger.add(lambda message: records.append(message.record["message"]), level="WARNING")
+    try:
+        endpoint.feed_frame('{"jsonrpc":"2.0","id":1,"result":{}}', 1)
+        assert await endpoint.readline() == b'{"jsonrpc":"2.0","id":1,"result":{}}\n'
+        endpoint.consumed()
+    finally:
+        logger.remove(sink)
+
+    assert heard == [1] and any("a watcher of task" in message and "no disk" in message for message in records)
+
+
 # --- a link replaced by an ordinary call brings its agents along ------------------------
 
 
@@ -1230,3 +1329,305 @@ async def test_a_cancel_the_node_refuses_is_not_wanted_any_more(tmp_path):
     await endpoint.end()
 
     assert not endpoint._cancel_wanted, "the node answered: there is nothing there to cancel"
+
+
+async def test_an_exit_the_node_explains_reads_as_its_reason_and_the_lost_code():
+    """A daemon restarted under the agent says so on the exit: the endpoint hands the sentence on in place of a bare code."""
+    reason = "the Raven node on this machine was restarted while the agent ran, and the agent is gone"
+    endpoint = ChannelEndpoint(_Client(), 1, target=_box(), agent="echo@box")  # type: ignore[arg-type]
+    endpoint.exited(node_client.LOST_RC, reason)
+
+    assert await endpoint.wait() == node_client.LOST_RC and endpoint.ended() == reason
+
+    plain = ChannelEndpoint(_Client(), 2, target=_box(), agent="echo@box")  # type: ignore[arg-type]
+    plain.exited(0, "")
+    assert await plain.wait() == 0 and plain.ended() is None, "no reason given: a plain exit, as before"
+
+
+async def test_an_endpoint_is_offline_once_parked_or_once_its_link_is_dead():
+    endpoint = ChannelEndpoint(_Client(), 1, target=_box(), agent="echo@box")  # type: ignore[arg-type]
+    assert endpoint.offline is False
+    endpoint.detach("the link went")
+    assert endpoint.offline is True
+
+    dead = _Client()
+    other = ChannelEndpoint(dead, 2, target=_box(), agent="echo@box")  # type: ignore[arg-type]
+    dead.alive = False
+    assert other.offline is True, "gone and not yet said so by the heartbeat: nothing sent now arrives"
+
+
+async def test_a_cancel_while_the_link_is_down_does_not_wait_the_settle_budget(monkeypatch):
+    """The cancel rides with the parked endpoint to the next link; the caller is not held for a settlement that cannot come."""
+    from raven.acp_client import client as client_mod
+
+    monkeypatch.setattr(client_mod, "_CANCEL_SETTLE_S", 30.0)
+    endpoint = ChannelEndpoint(_Client(), 1, target=_box(), agent="echo@box")  # type: ignore[arg-type]
+    client = AcpClient.over(endpoint, name="echo@box")
+    try:
+        endpoint.detach("the link went")
+        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+        started = time.monotonic()
+        await asyncio.wait_for(client._cancel_turn("s1", future), timeout=5)
+
+        assert time.monotonic() - started < 1.0, "no settle wait on a link known to be down"
+        assert client.take_unsettled_cancel("s1") is True, "the turn may still run on the machine: not reused"
+        held = [params.get("line", "") for method, params in endpoint._pending if method == protocol.AGENT_FRAME]
+        assert any("session/cancel" in line for line in held), "the cancel itself waits for the next link"
+    finally:
+        await client.close()
+
+
+# ---- MCP streams lent across the link ------------------------------------------------------------
+
+
+async def _endpoint(name: str = "pg") -> tuple[str, list[bytes], Any]:
+    """A unix socket standing in for a host endpoint: every line it is sent, and the writers back to each stream.
+
+    In a directory of its own under the system's temporary one, short enough
+    for a socket's path, which pytest's is not on every system.
+    """
+    if not callable(getattr(asyncio, "start_unix_server", None)):
+        pytest.skip("this endpoint fixture needs a Unix-socket host")
+    base = Path(tempfile.mkdtemp(prefix="raven-ep-"))
+    path = str(base / f"{name}.sock")
+    got: list[bytes] = []
+    writers: list[asyncio.StreamWriter] = []
+
+    async def serve(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        writers.append(writer)
+        while line := await reader.readline():
+            got.append(line)
+
+    listening = await asyncio.start_unix_server(serve, path=path)
+
+    def close() -> None:
+        listening.close()
+        shutil.rmtree(base, ignore_errors=True)
+
+    return path, got, SimpleNamespace(base=base, writers=writers, close=close)
+
+
+def _told(client: _Client, method: str) -> list[dict[str, Any]]:
+    return [params for said, params in client.said if said == method]
+
+
+async def test_a_lent_server_s_stream_is_pumped_into_its_endpoint_and_the_endpoint_s_frames_go_out_in_pieces(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(protocol, "MCP_CHUNK", 4)
+    pool = NodePool()
+    client = _live(pool, tmp_path)
+    node = pool._nodes["box"]
+    path, got, endpoint = await _endpoint()
+    try:
+        pool.lend("box", "d1", {"pg": path}, task="agent")
+        await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 1, "task": "agent", "lend": "d1", "server": "pg"})
+        assert list(node.streams) == [1]
+
+        # The machine's pieces make one line into the endpoint.
+        await pool._on_stream("box", protocol.MCP_FRAME, {"stream": 1, "text": "abc", "end": False})
+        await pool._on_stream("box", protocol.MCP_FRAME, {"stream": 1, "text": "def", "end": True})
+        await _until(lambda: got == [b"abcdef\n"])
+
+        # The endpoint's line goes out in pieces, the last marked.
+        endpoint.writers[0].write(b"123456\n")
+        await endpoint.writers[0].drain()
+        await _until(lambda: len(_told(client, protocol.MCP_FRAME)) == 2)
+        assert _told(client, protocol.MCP_FRAME) == [
+            {"stream": 1, "text": "1234", "end": False},
+            {"stream": 1, "text": "56", "end": True},
+        ]
+
+        # What is no stream's business is dropped.
+        await pool._on_stream("nobody", protocol.MCP_FRAME, {"stream": 1, "text": "x", "end": True})
+        await pool._on_stream("box", protocol.MCP_FRAME, {"stream": True, "text": "x", "end": True})
+        await pool._on_stream("box", protocol.MCP_FRAME, {"stream": 9, "text": "x", "end": True})
+        await pool._on_stream("box", protocol.MCP_FRAME, {"stream": 1, "text": 5, "end": True})
+        await asyncio.sleep(0.05)
+        assert got == [b"abcdef\n"]
+
+        # The machine closes it: nothing is told back.
+        await pool._on_stream("box", protocol.MCP_CLOSE, {"stream": 1, "reason": "the agent closed the server"})
+        assert node.streams == {} and _told(client, protocol.MCP_CLOSE) == []
+    finally:
+        endpoint.close()
+
+
+async def test_a_stream_the_host_cannot_serve_is_closed_with_the_reason_and_the_link_s_end_takes_the_rest(
+    tmp_path, monkeypatch
+):
+    pool = NodePool()
+    client = _live(pool, tmp_path)
+    node = pool._nodes["box"]
+    path, got, endpoint = await _endpoint()
+    try:
+        await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 1, "task": "agent", "lend": "d1", "server": "pg"})
+        assert _told(client, protocol.MCP_CLOSE) == [{"stream": 1, "reason": "server 'pg' is not lent to that run"}]
+        pool.lend("box", "d1", {"pg": str(endpoint.base / "gone.sock")}, task="agent")
+        await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 2, "task": "agent", "lend": "d1", "server": "pg"})
+        gone = _told(client, protocol.MCP_CLOSE)[-1]
+        assert gone["stream"] == 2 and gone["reason"].startswith("the host's endpoint for 'pg' is gone: ")
+        assert node.streams == {}
+
+        pool.lend("box", "d1", {"pg": path}, task="agent")
+        monkeypatch.setattr(protocol, "MCP_MAX_FRAME", 8)
+        # The machine's frame past the cap.
+        await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 3, "task": "agent", "lend": "d1", "server": "pg"})
+        await pool._on_stream("box", protocol.MCP_FRAME, {"stream": 3, "text": "123456789", "end": False})
+        assert 3 not in node.streams
+        assert _told(client, protocol.MCP_CLOSE)[-1] == {"stream": 3, "reason": "a frame exceeds 8 bytes"}
+        # The endpoint's frame past the cap.
+        await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 4, "task": "agent", "lend": "d1", "server": "pg"})
+        await _until(lambda: len(endpoint.writers) == 2)
+        endpoint.writers[-1].write(b"0123456789\n")
+        await endpoint.writers[-1].drain()
+        await _until(lambda: 4 not in node.streams)
+        assert _told(client, protocol.MCP_CLOSE)[-1] == {"stream": 4, "reason": "frame exceeds 8 bytes"}
+        monkeypatch.setattr(protocol, "MCP_MAX_FRAME", 32 * 1024 * 1024)
+
+        # The endpoint closed under the host's write.
+        await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 5, "task": "agent", "lend": "d1", "server": "pg"})
+        stream = node.streams[5]
+        real, stream.writer = (
+            stream.writer,
+            SimpleNamespace(
+                write=lambda data: (_ for _ in ()).throw(ConnectionResetError("closed")), close=lambda: None
+            ),
+        )
+        await pool._on_stream("box", protocol.MCP_FRAME, {"stream": 5, "text": "x", "end": True})
+        real.close()
+        assert 5 not in node.streams
+        assert _told(client, protocol.MCP_CLOSE)[-1] == {"stream": 5, "reason": "the host's endpoint closed"}
+
+        # The link is gone while the endpoint speaks: the stream goes, and nothing can be told.
+        await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 6, "task": "agent", "lend": "d1", "server": "pg"})
+        told_before = len(client.said)
+
+        async def dead(method: str, params: dict[str, Any]) -> None:
+            raise AcpConnectionError("the link is gone")
+
+        client.notify = dead  # type: ignore[method-assign]
+        await _until(lambda: len(endpoint.writers) == 4)
+        endpoint.writers[-1].write(b"hello\n")
+        await endpoint.writers[-1].drain()
+        await _until(lambda: 6 not in node.streams)
+        assert len(client.said) == told_before
+        client.notify = _Client.notify.__get__(client)  # type: ignore[method-assign]
+
+        # The dispatch ends: its streams are told; another dispatch's stay. A machine with no link is nothing to unlend.
+        await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 7, "task": "agent", "lend": "d1", "server": "pg"})
+        pool.lend("box", "d2", {"pg": path}, task="agent")
+        await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 8, "task": "agent", "lend": "d2", "server": "pg"})
+        await pool.unlend("box", "d1")
+        assert list(node.streams) == [8]
+        assert _told(client, protocol.MCP_CLOSE)[-1] == {"stream": 7, "reason": "the dispatch ended"}
+        await pool.unlend("nobody", "d1")
+
+        # The link's end takes the rest, with no word down a link that is gone.
+        await pool._drop("box")
+        assert node.streams == {} and _told(client, protocol.MCP_CLOSE)[-1]["stream"] == 7
+    finally:
+        endpoint.close()
+
+
+async def test_the_bridge_argv_is_the_node_s_own_and_a_node_without_a_daemon_names_none(tmp_path):
+    pool = NodePool()
+    _live(pool, tmp_path)
+    assert await pool.bridge_argv("box") is None
+
+    pool._nodes["box"].hello["bridge"] = ["/opt/node/bin/python", "-I", "-m", "raven.node", "--mcp", "--dir", "/n"]
+
+    assert await pool.bridge_argv("box") == ["/opt/node/bin/python", "-I", "-m", "raven.node", "--mcp", "--dir", "/n"]
+
+
+async def test_an_mcp_stream_cannot_claim_another_tasks_lend(tmp_path):
+    pool = NodePool()
+    client = _live(pool, tmp_path)
+    node = pool._nodes["box"]
+    path, got, endpoint = await _endpoint()
+    try:
+        pool.lend("box", "victim-dispatch", {"pg": path}, task="victim")
+        pool.lend("box", "own-dispatch", {"pg": path}, task="attacker")
+        await pool._on_stream(
+            "box", protocol.MCP_OPEN, {"stream": 1, "task": "attacker", "lend": "victim-dispatch", "server": "pg"}
+        )
+        assert 1 not in node.streams, "a valid task must not select a different task's host endpoint"
+        assert not endpoint.writers and not got, "authorization precedes the host connection"
+        await pool._on_stream(
+            "box", protocol.MCP_OPEN, {"stream": 2, "task": "attacker", "lend": "own-dispatch", "server": "pg"}
+        )
+        assert 2 in node.streams, "the same authenticated task may open its own grant"
+        await pool.unlend("box", "own-dispatch")
+    finally:
+        await pool._drop("box")
+        endpoint.close()
+
+
+async def test_an_mcp_stream_without_a_task_is_refused_before_connecting(tmp_path, monkeypatch):
+    pool = NodePool()
+    client = _live(pool, tmp_path)
+    pool.lend("box", "d1", {"pg": "/unused"}, task="agent")
+
+    async def connected(*args, **kwargs):
+        pytest.fail("a missing task reached the connection")
+
+    monkeypatch.setattr(asyncio, "open_unix_connection", connected, raising=False)
+    await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 1, "lend": "d1", "server": "pg"})
+    assert _told(client, protocol.MCP_CLOSE)
+
+
+@pytest.mark.parametrize("change", ["unlend", "replace", "link"])
+async def test_an_mcp_connection_opening_after_its_authorization_ended_is_discarded(tmp_path, monkeypatch, change):
+    pool = NodePool()
+    client = _live(pool, tmp_path)
+    node = pool._nodes["box"]
+    pool.lend("box", "d1", {"pg": "/endpoint"}, task="agent")
+    entered, resume = asyncio.Event(), asyncio.Event()
+    closed = []
+
+    async def waited():
+        pass
+
+    writer = SimpleNamespace(close=lambda: closed.append(True), wait_closed=waited)
+
+    async def opening(path):
+        assert path == "/endpoint"
+        entered.set()
+        await resume.wait()
+        return asyncio.StreamReader(), writer
+
+    monkeypatch.setattr(asyncio, "open_unix_connection", opening, raising=False)
+    monkeypatch.setattr(node_client, "unix_sockets_available", lambda: True)
+    waiting = asyncio.create_task(
+        pool._on_stream("box", protocol.MCP_OPEN, {"stream": 1, "task": "agent", "lend": "d1", "server": "pg"})
+    )
+    await asyncio.wait_for(entered.wait(), 2)
+    if change == "unlend":
+        await pool.unlend("box", "d1")
+    elif change == "replace":
+        pool.lend("box", "d1", {"pg": "/other"}, task="other-agent")
+    else:
+        _live(pool, tmp_path)
+    resume.set()
+    await waiting
+    assert closed and node.streams == {}
+    assert _told(client, protocol.MCP_CLOSE)[-1]["reason"] == "the dispatch or link ended"
+
+
+async def test_a_host_without_unix_sockets_refuses_a_stream_in_one_sentence(tmp_path, monkeypatch):
+    pool = NodePool()
+    client = _live(pool, tmp_path)
+    pool.lend("box", "d1", {"pg": "/unused"}, task="agent")
+    monkeypatch.delattr(asyncio, "open_unix_connection", raising=False)
+    await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 1, "task": "agent", "lend": "d1", "server": "pg"})
+    assert _told(client, protocol.MCP_CLOSE) == [
+        {"stream": 1, "reason": "the host does not support Unix-socket MCP endpoints"}
+    ]
+    assert not pool._nodes["box"].streams
+
+
+def test_lending_requires_a_nonempty_task():
+    pool = NodePool()
+    with pytest.raises(ValueError, match="agent task"):
+        pool.lend("box", "d1", {"pg": "/unused"}, task="")
+    assert pool._lent == {}

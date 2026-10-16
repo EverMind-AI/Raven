@@ -127,6 +127,31 @@ beforeEach(() => {
 })
 
 describe('NewInstancePicker', () => {
+  it('says which registered machine an agent runs on, after its kind, and nothing for one that runs here', async () => {
+    const h = mount([
+      agent({ description: 'coding', kind: 'acp', name: 'claude_code' }),
+      agent({ description: 'coding', kind: 'acp', machine: 'ravenx2', name: 'claude_code@ravenx2' })
+    ])
+    await waitFor(h.frame, 'claude_code@ravenx2')
+    expect(h.frame()).toContain('1. claude_code acp coding')
+    expect(h.frame()).toContain('2. claude_code@ravenx2 acp · ravenx2 coding')
+  })
+
+  it('keeps a long name whole beside a long description instead of wrapping it onto a second line', async () => {
+    // The default name of an agent on a machine is `<preset>@<machine>`, long
+    // enough that a box left to shrink would fold it under the description.
+    const h = mount([
+      agent({
+        description: 'Claude Code CLI - strong general coding / agent tasks, run on the machine.',
+        kind: 'acp',
+        machine: 'ravenx2',
+        name: 'claude_code@ravenx2'
+      })
+    ])
+    await waitFor(h.frame, 'Claude Code CLI')
+    expect(h.frame()).toContain('1. claude_code@ravenx2 acp · ravenx2 Claude Code CLI')
+  })
+
   it('offers only agents a direct chat can actually address', async () => {
     // `chat` refuses a stateless agent outright, and a disabled one is not on
     // the roster at all -- offering either is offering a refusal.

@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from raven.rpc.methods._stubs import register_stub_methods
 from raven.rpc.methods.approval import register_approval_methods
 from raven.rpc.methods.browser import register_browser_methods
+from raven.rpc.methods.bugreport import register_bugreport_methods
 from raven.rpc.methods.cli_dispatch import register_cli_methods
 from raven.rpc.methods.clipboard import register_clipboard_methods
 from raven.rpc.methods.command_dispatch import register_command_dispatch_methods
@@ -27,6 +28,7 @@ from raven.rpc.methods.console import register_console_methods
 from raven.rpc.methods.dag import register_dag_methods
 from raven.rpc.methods.delegation import register_delegation_methods
 from raven.rpc.methods.import_sync import register_import_methods
+from raven.rpc.methods.imported import register_imported_methods
 from raven.rpc.methods.input import register_input_methods
 from raven.rpc.methods.instances import register_instance_methods
 from raven.rpc.methods.knowledge import register_knowledge_methods
@@ -48,6 +50,7 @@ from raven.rpc.methods.system import register_system_methods
 from raven.rpc.methods.tasks import register_tasks_methods
 from raven.rpc.methods.terminal import register_terminal_methods
 from raven.rpc.methods.trajectory import register_trajectory_methods
+from raven.rpc.methods.trajectory_export import register_trajectory_export_methods
 from raven.rpc.methods.turn import (
     register_session_interrupt_method,
     register_turn_methods,
@@ -239,6 +242,10 @@ def register_aligned_methods_except_system(
     # transcript writer that would give it anything to list.)
     register_memory_methods(dispatcher)
     register_trajectory_methods(dispatcher)
+    register_trajectory_export_methods(dispatcher, agent_loop_factory=agent_loop_factory)
+    register_bugreport_methods(dispatcher, agent_loop_factory=agent_loop_factory)
+    # imported.* plus the guard that keeps every write off an Imported Conversation.
+    register_imported_methods(dispatcher)
     register_knowledge_methods(dispatcher)
     # playbooks.* -- read-only view of the two-layer playbook library, so the
     # page can list what is stored and read one whole spec. Registered

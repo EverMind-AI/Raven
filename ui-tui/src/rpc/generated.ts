@@ -198,6 +198,10 @@ export interface SessionInitInfo {
    */
   running?: boolean;
   /**
+   * True for an Imported Conversation, which nothing can change; absent on every other session.
+   */
+  read_only?: boolean;
+  /**
    * How long the turn in flight has been running, in milliseconds, measured on the server; null when nothing is running or the question carries no readable stamp. The elapsed rather than the stamp it was measured from: that stamp is a server wall clock, and a client in another timezone reading it against its own clock gets the offset between the two back as the turn's age.
    */
   running_ms?: number | null;
@@ -890,6 +894,19 @@ export interface SessionListItem {
    * The directory this session was pinned to when it was created, absolute; absent for a session that runs where the policy default puts it. What the rail groups by.
    */
   workdir?: string;
+  /**
+   * Present only on an Imported Conversation's row (source 'imported').
+   */
+  imported?: {
+    /**
+     * 'export', 'bugreport' or 'report'.
+     */
+    kind: string;
+    /**
+     * The file name the package was imported from.
+     */
+    source_name: string;
+  };
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -3035,6 +3052,77 @@ export interface TrajectoryBlockDescriptor {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TrajectoryTurn".
+ */
+export interface TrajectoryTurn {
+  trace_id: string;
+  /**
+   * 1-based position among the session's main-line turns.
+   */
+  number: number;
+  start: string;
+  input_preview: string;
+  /**
+   * The latest turn, still running; it cannot be selected.
+   */
+  in_progress: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugReportProblem".
+ */
+export interface BugReportProblem {
+  description: string;
+  expected?: string;
+  actual?: string;
+  severity?: '' | 'low' | 'medium' | 'high' | 'critical';
+  steps?: string;
+  reporter?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugReportItem".
+ */
+export interface BugReportItem {
+  id: string;
+  kind: 'suspected' | 'confirmed';
+  category: string;
+  /**
+   * The value in full, for the reader to decide on; a confirmed item, replaced whatever the reader says, shows its replacement.
+   */
+  value: string;
+  masked_sample: string;
+  count: number;
+  sources: {
+    label: string;
+    count: number;
+  }[];
+  linked: string[];
+  /**
+   * A remembered decision the history could not apply on its own.
+   */
+  hint?: 'kept' | 'redacted' | null;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugReportContextGroup".
+ */
+export interface BugReportContextGroup {
+  label: string;
+  text: string;
+  spans: number[][];
+  count: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugReportDecision".
+ */
+export interface BugReportDecision {
+  item_id: string;
+  action: 'kept' | 'redacted';
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "SessionListParams".
  */
 export interface SessionListParams {
@@ -3043,7 +3131,7 @@ export interface SessionListParams {
    */
   limit?: number;
   /**
-   * Session channels to include; defaults to tui.
+   * Session channels to include; defaults to tui. 'imported' adds the Imported Conversations to a list of live sessions (never to the archived one).
    */
   channels?: string[];
   /**
@@ -7733,6 +7821,282 @@ export interface TrajectoryBlockResult {
   total_items?: number | null;
   integrity: string[];
   truncated: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TrajectoryTurnsParams".
+ */
+export interface TrajectoryTurnsParams {
+  session_key: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TrajectoryTurnsResult".
+ */
+export interface TrajectoryTurnsResult {
+  /**
+   * The session's title; empty when it has none.
+   */
+  title: string;
+  turns: TrajectoryTurn[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TrajectoryExportParams".
+ */
+export interface TrajectoryExportParams {
+  session_key: string;
+  trace_ids: string[];
+  file_name: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TrajectoryExportResult".
+ */
+export interface TrajectoryExportResult {
+  job_id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TrajectoryExportStatusParams".
+ */
+export interface TrajectoryExportStatusParams {
+  job_id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TrajectoryExportStatusResult".
+ */
+export interface TrajectoryExportStatusResult {
+  job_id: string;
+  state: 'running' | 'done' | 'failed' | 'cancelled';
+  phase: 'collecting' | 'writing' | 'done';
+  file_name: string;
+  /**
+   * Same-origin path that downloads the package; set once done.
+   */
+  download_url?: string | null;
+  size_bytes?: number | null;
+  /**
+   * How many span records, artifacts and message blobs the package holds; set once done.
+   */
+  counts?: {
+    spans: number;
+    artifacts: number;
+    messages: number;
+  } | null;
+  /**
+   * Why the job failed; set only when it did.
+   */
+  error?: string | null;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TrajectoryExportCancelParams".
+ */
+export interface TrajectoryExportCancelParams {
+  job_id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TrajectoryExportCancelResult".
+ */
+export interface TrajectoryExportCancelResult {
+  ok: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugreportStartParams".
+ */
+export interface BugreportStartParams {
+  session_key: string;
+  trace_ids: string[];
+  problem: BugReportProblem;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugreportStartResult".
+ */
+export interface BugreportStartResult {
+  /**
+   * The Report Session's handle; the bug report id appears in bugreport.status once collected.
+   */
+  report_id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugreportStatusParams".
+ */
+export interface BugreportStatusParams {
+  report_id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugreportStatusResult".
+ */
+export interface BugreportStatusResult {
+  report_id: string;
+  /**
+   * The br-* id, once the snapshot is collected.
+   */
+  bug_report_id?: string | null;
+  phase:
+    | 'collecting'
+    | 'deciding'
+    | 'finishing'
+    | 'ready'
+    | 'uploading'
+    | 'uploaded'
+    | 'upload_failed'
+    | 'failed'
+    | 'cancelled';
+  /**
+   * Why the last step failed; retryable says whether retry_upload may help.
+   */
+  error?: {
+    message: string;
+    retryable: boolean;
+    status?: number | null;
+  } | null;
+  history: {
+    state: 'on' | 'off' | 'corrupt' | 'unavailable';
+    auto_kept: number;
+    auto_redacted: number;
+    warning?: string | null;
+  };
+  /**
+   * The items still to decide, set only while deciding; confirmed items first.
+   */
+  items?: BugReportItem[] | null;
+  /**
+   * What will ship, set once the report is frozen.
+   */
+  summary?: {
+    classification: 'clean' | 'needs_review';
+    warnings: string[];
+    size_bytes?: number | null;
+    auto_replaced: number;
+    kept: number;
+    redacted: number;
+    acknowledged: number;
+    completeness: string;
+  } | null;
+  receipt?: {
+    receipt_id: string;
+    duplicate: boolean;
+  } | null;
+  /**
+   * Where the landed record and package stay on this machine.
+   */
+  record_dir?: string | null;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugreportItemParams".
+ */
+export interface BugreportItemParams {
+  report_id: string;
+  item_id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugreportItemResult".
+ */
+export interface BugreportItemResult {
+  groups: BugReportContextGroup[];
+  total_groups: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugreportDecideParams".
+ */
+export interface BugreportDecideParams {
+  report_id: string;
+  decisions: BugReportDecision[];
+  acknowledged: string[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugreportDecideResult".
+ */
+export interface BugreportDecideResult {
+  ok: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugreportUploadParams".
+ */
+export interface BugreportUploadParams {
+  report_id: string;
+  risk_accepted: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugreportUploadResult".
+ */
+export interface BugreportUploadResult {
+  ok: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugreportRetryUploadParams".
+ */
+export interface BugreportRetryUploadParams {
+  report_id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugreportRetryUploadResult".
+ */
+export interface BugreportRetryUploadResult {
+  ok: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugreportCancelParams".
+ */
+export interface BugreportCancelParams {
+  report_id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugreportCancelResult".
+ */
+export interface BugreportCancelResult {
+  ok: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ImportedUploadParams".
+ */
+export interface ImportedUploadParams {
+  name: string;
+  content_b64: string;
+  force?: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ImportedUploadResult".
+ */
+export interface ImportedUploadResult {
+  /**
+   * 'imported', or 'duplicate' when the same bytes were imported before; a duplicate writes nothing and every other field describes the copy already there.
+   */
+  status: string;
+  /**
+   * imported:<id>, the key session.* and trajectory.* take.
+   */
+  session_key: string;
+  title: string;
+  /**
+   * 'export', 'bugreport' or 'report'.
+   */
+  kind: string;
+  source_name: string;
+  /**
+   * When it was imported, ISO 8601 in UTC.
+   */
+  imported_at: string;
 }
 
 // ---- Schema-name aliases for structurally-deduplicated types ----

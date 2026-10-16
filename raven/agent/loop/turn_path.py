@@ -99,6 +99,7 @@ from raven.spine.events import bound_failure_text
 from raven.spine.turn import AnswerlessTurnError
 from raven.token_wise import usage_context
 from raven.token_wise.turn_spend import TurnSpend
+from raven.tracing import config as tracing_config
 from raven.utils.tokens import estimate_message_tokens
 
 if TYPE_CHECKING:
@@ -331,6 +332,21 @@ def _file_unanswered(messages: list[dict]) -> None:
             return
     text, notice = filing
     messages.append({"role": "assistant", "content": text, _NOTICE_KEY: notice})
+
+
+def _turn_trace_id() -> str | None:
+    """The trace id of the ``session.turn`` span this code runs directly inside.
+
+    With tracing off, ``instrument`` calls the turn without opening a span or
+    touching the current-span slot, so the slot may still hold the span of
+    the turn that dispatched this one; the switch is checked first for that.
+    """
+    if not tracing_config.enabled():
+        return None
+    span = trace.current_span()
+    if isinstance(span, trace.Span) and span.name == "session.turn" and span.trace_id:
+        return span.trace_id
+    return None
 
 
 class TurnPathMixin:
@@ -2137,6 +2153,9 @@ class TurnPathMixin:
         # stamped at turn END, so without this the whole turn shares one clock
         # read and a restored transcript cannot say how long the turn took.
         turn_received_at = self._now_fn().isoformat()
+        # Taken before any awaited work: this is the turn's own span, which the
+        # opening user entry is stored against.
+        turn_trace_id = _turn_trace_id()
 
         channel = req.source.channel
         sender_id = req.source.sender_id
@@ -2287,7 +2306,7 @@ class TurnPathMixin:
                     )
                     if _question:
                         _ts = _dt.now().isoformat()
-                        self._record_inbound(session, content, origin, _ts)
+                        self._record_inbound(session, content, origin, _ts, trace_id=turn_trace_id)
                         session.record({"role": "assistant", "content": _question, "timestamp": _ts})
                         session.pending_clarification = {
                             "original_message": content,
@@ -2335,7 +2354,7 @@ class TurnPathMixin:
                     if _question:
                         # Write the original request and the clarifying question into history to keep the conversation coherent.
                         _ts = _dt.now().isoformat()
-                        self._record_inbound(session, content, origin, _ts)
+                        self._record_inbound(session, content, origin, _ts, trace_id=turn_trace_id)
                         session.record({"role": "assistant", "content": _question, "timestamp": _ts})
 
                         # Save the pending state so the next message can resume it.
@@ -2462,6 +2481,7 @@ class TurnPathMixin:
             turn_start_idx,
             received_at=turn_received_at,
             inbound_original=inbound_original,
+            trace_id=turn_trace_id,
         )
         self.sessions.save(session)
         # Where the three writes that close the turn start from. The question is
@@ -2893,7 +2913,15 @@ class TurnPathMixin:
         except Exception:  # noqa: BLE001 - see docstring
             logger.opt(exception=True).warning("could not persist the broken turn for {}", session.key)
 
-    def _record_inbound(self, session: Session, content: str, origin: "Origin | None", timestamp: str) -> None:
+    def _record_inbound(
+        self,
+        session: Session,
+        content: str,
+        origin: "Origin | None",
+        timestamp: str,
+        *,
+        trace_id: str | None = None,
+    ) -> None:
         """Persist the inbound entry of a turn that answers before ``_save_turn``.
 
         The personalization flow can reply with a clarifying question and return,
@@ -2909,6 +2937,8 @@ class TurnPathMixin:
         entry: dict[str, Any] = {"role": "user", "content": content, "timestamp": timestamp}
         if mark := _runtime_origin(origin):
             entry["origin"] = mark
+        if trace_id:
+            entry["trace_id"] = trace_id
         session.record(entry)
 
     def _maybe_annotate_tail(self, session: Session, prev_len: int) -> None:
@@ -3027,6 +3057,7 @@ class TurnPathMixin:
         *,
         inbound_original: str | None = None,
         received_at: str | None = None,
+        trace_id: str | None = None,
     ) -> None:
         """Save new-turn messages into session, truncating large tool results.
 
@@ -3035,7 +3066,8 @@ class TurnPathMixin:
         writes run after work that took time, so stamping every entry "now"
         would give the user message and the final answer the same timestamp --
         and a restored transcript reads the gap between those two as the turn's
-        duration.
+        duration. ``trace_id`` travels with it and marks the same entry, so a
+        selection of turns can find each turn's messages in the record.
         """
         # Both exits that persist a turn come through here, so a question noted
         # on the turn is filed once whichever exit runs. The early inbound write
@@ -3053,6 +3085,8 @@ class TurnPathMixin:
             role, content = entry.get("role"), entry.get("content")
             if first_user_pending and role == "user":
                 entry.setdefault("timestamp", received_at)
+                if trace_id:
+                    entry["trace_id"] = trace_id
                 first_user_pending = False
             if entry.get("_recovery_synthetic"):
                 continue  # #1a synthetic recovery nudge — never persist scaffolding

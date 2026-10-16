@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import io
 import json
 import tarfile
 import tracemalloc
@@ -546,3 +547,54 @@ def test_should_stop_is_polled_on_every_read(tmp_path):
 
 def test_should_stop_that_never_fires_changes_nothing(tmp_path):
     assert inspect_package(_package(tmp_path), should_stop=lambda: False).report_id == ROOT
+
+
+# --- walk_archive ------------------------------------------------------------
+
+
+def _walk(raw, **kw):
+    seen = []
+
+    def visit(member, handle):
+        seen.append((member.name, member.is_dir, member.size, handle.read(2) if handle is not None else None))
+
+    kw.setdefault("max_output", 2**20)
+    kw.setdefault("max_read", 64 * 1024)
+    kw.setdefault("max_members", 100)
+    return pcheck.walk_archive(io.BytesIO(gzip.compress(raw)), visit=visit, **kw), seen
+
+
+def test_walk_archive_hands_over_members_and_drains_what_a_visit_leaves():
+    raw = _tar([("root", tarfile.DIRTYPE, b""), ("root/a", tarfile.REGTYPE, b"hello world")])
+    stats, seen = _walk(raw)
+    assert seen == [("root", True, 0, None), ("root/a", False, 11, b"he")]
+    assert stats.members == 2
+    assert stats.unpacked_bytes == len(raw)
+
+
+def test_walk_archive_counts_padding_after_the_end_marker():
+    raw = _tar([("root/a", tarfile.REGTYPE, b"x")])
+    stats, _ = _walk(raw + b"\0" * 4096)
+    assert stats.unpacked_bytes == len(raw) + 4096
+
+
+def test_walk_archive_bounds_members_and_volume():
+    raw = _tar([(f"root/{i}", tarfile.REGTYPE, b"x") for i in range(5)])
+    with pytest.raises(PackageError) as exc:
+        _walk(raw, max_members=3)
+    assert exc.value.code == pcheck.CODE_TOO_MANY_MEMBERS
+    with pytest.raises(PackageError) as exc:
+        _walk(_tar([("root/a", tarfile.REGTYPE, b"x" * 5000)]), max_output=4096)
+    assert exc.value.code == pcheck.CODE_UNPACKED_TOO_LARGE
+
+
+def test_walk_archive_stops_when_asked():
+    with pytest.raises(pcheck.InspectionStoppedError):
+        _walk(_tar([("root/a", tarfile.REGTYPE, b"x")]), should_stop=lambda: True)
+
+
+def test_walk_archive_refuses_a_member_shorter_than_declared():
+    raw = _header("root/a", 4096) + b"x" * 100
+    with pytest.raises(PackageError) as exc:
+        _walk(raw)
+    assert exc.value.code == pcheck.CODE_NOT_GZIP_TAR

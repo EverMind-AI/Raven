@@ -65,4 +65,12 @@ describe('the dock lift', () => {
     dockLift()
     expect(lift()).toBe('100px')
   })
+
+  it('lifts nothing when the dock is not drawn, as on an imported conversation', () => {
+    const dock = document.querySelector('.dock') as HTMLElement
+    box(dock, 0, 0)
+    dock.getClientRects = () => ({ length: 0, item: () => null, [Symbol.iterator]: [][Symbol.iterator] }) as unknown as DOMRectList
+    dockLift()
+    expect(lift()).toBe('0px')
+  })
 })

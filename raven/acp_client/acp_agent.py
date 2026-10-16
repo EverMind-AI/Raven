@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from raven.acp_client import remote
+from raven.acp_client import remote, remote_runs
 from raven.acp_client.acp_dialects import AcpDialect, ToolCall, content_texts, dialect_for
 from raven.acp_client.ask_user import AskUserResponder, clarify_responder
 from raven.acp_client.capabilities import (
@@ -76,6 +76,7 @@ from raven.agent.tools.snapshot import take as take_snapshot
 from raven.contracts.subagent_backend import SubagentActionAbortedError
 from raven.contracts.tool import FileChange
 from raven.home import subagent_role_env
+from raven.mcp.bridge import unix_sockets_available
 from raven.mcp.endpoint import McpEndpoints, bridge_command
 from raven.ops import remote_path
 from raven.spine.message import Media
@@ -119,6 +120,14 @@ def _uploads_root() -> Path | None:
         return Path(load_config().workspace_path)
     except Exception:
         return None
+
+
+@dataclass(frozen=True)
+class _Lent:
+    """A machine row's endpoints, opened here and paired on the link: the stanzas are rendered once the agent's task is known."""
+
+    paths: dict[str, str]
+    """By server name, the socket of the endpoint opened for this dispatch."""
 
 
 @dataclass(frozen=True)
@@ -1374,24 +1383,41 @@ class AcpAgentBackend:
 
         return not session_mcp_delivered(session_mcp=self.session_mcp, snapshot=self._snapshot, machine=self.machine)
 
-    def _mcp_note(self, grant: McpGrant) -> str:
-        """Every secret-free reason this dispatch's MCP is degraded.
+    def _mcp_note(self, grant: McpGrant, lent: tuple[str, ...] | None = None) -> str:
+        """Every secret-free reason this dispatch's MCP is degraded, and on a machine, how it was delivered.
 
         The withholding decided here is not a ``McpGrant`` reason, so it is
         joined onto ``note_text`` rather than routed through it -- a grant whose
         servers all resolved cleanly still owes the user this sentence, because a
         sub-agent that silently received no servers looks exactly like one nobody
-        configured.
+        configured. ``lent`` is what a run on a machine was handed through the
+        machine's node (``None`` for a run here): the names, or none when the
+        node carries no streams.
         """
         notes = []
-        if self._session_mcp_refused and grant.granted:
+        unsupported_host = not unix_sockets_available()
+        if unsupported_host and grant.granted:
             names = ", ".join(repr(server.name) for server in grant.granted)
-            if self.machine:
+            where = f" on machine {self.machine!r}" if self.machine else ""
+            notes.append(
+                f"MCP servers {names} were not delivered to acp agent {self.name!r}{where}: this computer does "
+                "not support Unix-socket MCP endpoints; the task ran without those servers"
+            )
+        elif lent is not None and grant.granted and self.machine:
+            names = ", ".join(repr(server.name) for server in grant.granted)
+            if lent:
                 notes.append(
-                    f"MCP servers {names} were not lent to acp agent {self.name!r}: it runs on machine "
-                    f"{self.machine!r}, and the host's servers are reached through a socket on this computer"
+                    f"MCP servers {names} were lent to acp agent {self.name!r} through the Raven node on machine "
+                    f"{self.machine!r}: the servers themselves run here"
                 )
-            elif not self.session_mcp:
+            else:
+                notes.append(
+                    f"MCP servers {names} were not lent to acp agent {self.name!r}: the Raven node on machine "
+                    f"{self.machine!r} carries no MCP streams (it serves without a daemon)"
+                )
+        if self._session_mcp_refused and grant.granted and not unsupported_host:
+            names = ", ".join(repr(server.name) for server in grant.granted)
+            if not self.session_mcp:
                 notes.append(
                     f"MCP servers {names} were withheld because acp agent {self.name!r} is configured as not "
                     f"keeping one session's servers to that session (sessionMcp: false); raven pools one "
@@ -1427,8 +1453,17 @@ class AcpAgentBackend:
             raise
 
     @asynccontextmanager
-    async def _mcp_endpoints(self, node_id: str, grant: McpGrant) -> AsyncIterator[list[dict[str, Any]]]:
-        """The bridge stanzas for one dispatch, live for exactly as long as it runs.
+    async def _mcp_endpoints(
+        self, node_id: str, grant: McpGrant, launched: _OnMachine | None = None
+    ) -> AsyncIterator[list[dict[str, Any]] | _Lent]:
+        """The bridge stanzas for one dispatch, live for exactly as long as it runs; on a machine, the endpoints to pair.
+
+        ``launched`` is the dispatch's place on its machine, when it has one:
+        the endpoints are opened here all the same, and what is yielded is
+        :class:`_Lent`; ``_lent_stanzas`` binds the endpoints to the acquired
+        agent's task before handing its bridge to the session. On a computer
+        without unix sockets (Windows) nothing is opened for either side, the
+        agent runs without the servers, and :meth:`_mcp_note` says so.
 
         ``node_id`` is this dispatch's identity -- a DAG node's id, a spawn's
         task id -- because reaping is per node and not per run: a graph of a
@@ -1445,6 +1480,9 @@ class AcpAgentBackend:
         PATH at all, and the ask itself is a thread hop: :meth:`_adapter_path`
         can run the login shell, and this runs inside the dispatch's own turn.
         """
+        if not unix_sockets_available():
+            yield []
+            return
         # Both of these come off the host's MCP source: the executor so a bridged
         # stdio server is spawned inside the sandbox the host configured rather
         # than on the host, and the deny set so a tool the host switched off is
@@ -1459,8 +1497,10 @@ class AcpAgentBackend:
             if not grant.granted:
                 yield []
                 return
-            argv = bridge_command(path=await asyncio.to_thread(self._adapter_path))
-            if argv is None or self._session_mcp_refused:
+            # On a machine the agent runs the node's bridge, not this
+            # computer's: no raven need be on the adapter's PATH there.
+            argv = None if launched is not None else bridge_command(path=await asyncio.to_thread(self._adapter_path))
+            if (argv is None and launched is None) or self._session_mcp_refused:
                 if self._session_mcp_refused:
                     # Two independent reasons reach here and they call for
                     # different actions, so they must not share a sentence: one
@@ -1471,9 +1511,7 @@ class AcpAgentBackend:
                         "acp agent {!r}: withholding {} MCP server(s); {}",
                         self.name,
                         len(grant.granted),
-                        f"it runs on machine {self.machine!r}"
-                        if self.machine
-                        else "configured as not keeping a session's servers to that session (sessionMcp: false)"
+                        "configured as not keeping a session's servers to that session (sessionMcp: false)"
                         if not self.session_mcp
                         else f"a raven build with no {SESSION_MCP_CAPABILITY} declaration",
                     )
@@ -1490,13 +1528,50 @@ class AcpAgentBackend:
                 )
                 for server in grant.granted
             }
-            yield grant.with_endpoints(paths).for_acp(argv)
+            if launched is None:
+                yield grant.with_endpoints(paths).for_acp(argv or [])
+                return
+            try:
+                yield _Lent(paths)
+            finally:
+                await launched.link.unlend(launched.target.id, node_id)
         finally:
             # Through close(), never by closing the listeners here: it also
             # cancels the in-flight relays, and without that wait_closed blocks
             # for as long as the sub-agent keeps its bridge open -- which is
             # exactly this moment.
             await endpoints.close(node_id)
+
+    async def _lent_stanzas(
+        self, endpoints: list[dict[str, Any]] | _Lent, launched: _OnMachine | None, client: Any, node_id: str
+    ) -> tuple[list[dict[str, Any]], tuple[str, ...] | None]:
+        """The stanzas ``session/new`` carries, and on a machine the names lent: the node's bridge, once per server.
+
+        Here, the stanzas as opened. On a machine, each server is one stdio
+        stanza running the machine's own bridge (``node/hello`` says its argv),
+        named by the agent's task there, this dispatch (what the host pairs
+        the stream with) and the server; nothing of the server's definition is
+        in it. A node that offers no bridge -- one serving without a daemon --
+        gets no stanzas, and the reply says so (``_mcp_note``).
+        """
+        if not isinstance(endpoints, _Lent):
+            return endpoints, None
+        if launched is None or not endpoints.paths:
+            return [], ()
+        argv = await launched.link.bridge_argv(launched.target.id)
+        task = getattr(getattr(client, "endpoint", None), "task", None)
+        if argv is None or not isinstance(task, str) or not task:
+            return [], ()
+        launched.link.lend(launched.target.id, node_id, endpoints.paths, task=task)
+        return [
+            {
+                "name": name,
+                "command": argv[0],
+                "args": [*argv[1:], "--task", task, "--lend", node_id, "--server", name],
+                "env": [],
+            }
+            for name in endpoints.paths
+        ], tuple(endpoints.paths)
 
     @property
     def is_stateful(self) -> bool:
@@ -1536,6 +1611,11 @@ class AcpAgentBackend:
         authored_task: str | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
         media: Sequence[Media] = (),
+        # Whether the caller reports the reply itself (the manager's announce)
+        # and removes the run's record on its machine then
+        # (`remote_runs.forget_dispatch`); otherwise the record goes as this
+        # returns, as for a caller that takes the reply as its own result.
+        reported_by_caller: bool = False,
     ) -> str:
         # The parent binding is forwarded when the pooled ACP worker launches.
         # Without this, a long-lived worker keeps the provider/model captured
@@ -1569,7 +1649,8 @@ class AcpAgentBackend:
             sent_text = f"{task}\n\n{note}"
         started = time.monotonic()
         grant = mcp_grant if mcp_grant is not None else await self.resolve_mcp_grant_async(mcps)
-        async with self._mcp_endpoints(task_id, grant) as mcp_servers:
+        lent: tuple[str, ...] | None = None
+        async with self._mcp_endpoints(task_id, grant, launched) as endpoints:
             with (
                 external_agent_span(agent=self.name, transport="acp", task_id=task_id, instance=handle) as span,
                 self._annotate_mcp_failure(grant),
@@ -1626,6 +1707,9 @@ class AcpAgentBackend:
                     launcher=launched.launcher if launched is not None else None,
                 )
                 client = connection.client
+                # On a machine, rendered only now: the stanzas name the
+                # agent's task there, which the launch just settled.
+                mcp_servers, lent = await self._lent_stanzas(endpoints, launched, client, task_id)
                 # Marked after acquire, so a call's range covers its own traffic and
                 # not the handshake of a connection it merely inherited. The pool
                 # records where that handshake ends, and it is carried alongside so a
@@ -1658,6 +1742,23 @@ class AcpAgentBackend:
                         }
                     )
                 record_session(span, session_id=session_id, resumed=resumed)
+                # A run on a machine is remembered here while it is in flight,
+                # so a process after this one can pick it up where this one
+                # left it (remote_runs): removed when the turn ends here, kept
+                # when this process stops and leaves the agent to the machine.
+                tracker = (
+                    self._track_on_machine(
+                        client,
+                        connection,
+                        session_id=session_id,
+                        skey=skey,
+                        handle=handle,
+                        task_id=task_id,
+                        session_cwd=session_cwd,
+                    )
+                    if launched is not None
+                    else None
+                )
 
                 # Snapshotted before the prompt so the error below names what this
                 # turn ran into rather than what the connection has ever refused.
@@ -1700,6 +1801,7 @@ class AcpAgentBackend:
                     connection.responders.attach(session_id, responder)
                     if self.can_steer or steer_offered(connection.initialize):
                         activity.offer_steer(collector._run, self._steerer(client, session_id))
+                    answered = False
                     try:
                         result = await client.request(
                             "session/prompt",
@@ -1719,8 +1821,15 @@ class AcpAgentBackend:
                             },
                             timeout=_prompt_deadline(self.timeout),
                             cancel_session=session_id,
+                            sent=tracker.prompt_sent if tracker is not None else None,
                         )
+                        answered = True
                     except asyncio.CancelledError:
+                        if tracker is not None and remote.leaving():
+                            # This process is stopping: the turn goes on under
+                            # the machine's daemon, and the manager reads this
+                            # dispatch as left, not cancelled.
+                            remote_runs.mark_left(task_id)
                         # An UNSETTLED cancel means the turn outlived its cancel
                         # budget, so it is still running on the agent while this lock
                         # is about to be released -- prompting the same session again
@@ -1752,6 +1861,22 @@ class AcpAgentBackend:
                         record_frames(span, cancelled)
                         raise
                     finally:
+                        if tracker is not None:
+                            # The record goes with a turn that ended here before
+                            # its prompt was out. It stays while this process
+                            # leaves the turn running, and, for a caller that
+                            # reports the outcome and forgets the record then
+                            # (`remote_runs.forget_dispatch`), with the reply or
+                            # with the failure of a prompt that went out: a host
+                            # that stops between either and its announce has no
+                            # other way back to the run, and the machine's record
+                            # of the task says how it ended.
+                            self._untrack(
+                                client,
+                                tracker,
+                                keep=remote.leaving()
+                                or (reported_by_caller and (answered or tracker.run.prompt_id > 0)),
+                            )
                         activity.offer_steer(collector._run, None)
                         connection.router.detach(session_id, collector)
                         connection.elicitors.detach(session_id, elicitor)
@@ -1824,7 +1949,7 @@ class AcpAgentBackend:
                     await self._registry.commit(skey, self.name, handle, session_id, kind="acp")
 
                 reply = await self._finished(collector.reply, stop_reason=stop_reason, span=span, sink=on_delta)
-                notes = [self._mcp_note(grant)]
+                notes = [self._mcp_note(grant, lent)]
                 if launched is not None:
                     # Where to find what it made: the caller's workspace line names
                     # this computer, and what it wrote is there, by address --
@@ -1878,6 +2003,60 @@ class AcpAgentBackend:
                 raise AcpConnectionError(f"acp agent {self.name!r}: {exc}") from None
 
         return _OnMachine(target=target, root=root, session_cwd=session_cwd, since=since, link=link, launcher=launcher)
+
+    def _track_on_machine(
+        self,
+        client: Any,
+        connection: Any,
+        *,
+        session_id: str,
+        skey: str,
+        handle: str,
+        task_id: str,
+        session_cwd: str,
+    ) -> remote_runs.Tracker | None:
+        """The record of this turn on its machine, kept current until the prompt is out (``remote_runs.Tracker``)."""
+        endpoint = client.endpoint
+        task = getattr(endpoint, "task", None)
+        watchers = getattr(endpoint, "watchers", None)
+        if not isinstance(task, str) or watchers is None:
+            return None
+        run = remote_runs.RemoteRun(
+            machine=self.machine or "",
+            task=task,
+            agent=self.name,
+            session_key=skey,
+            handle=handle,
+            task_id=task_id,
+            session_id=session_id,
+            prompt_id=0,
+            next_id=client.next_request_id,
+            initialize=connection.initialize,
+            launch_key=connection.launch_key,
+            config_key=connection.config_key,
+            session_cwd=session_cwd,
+            stateful=self.is_stateful,
+            received=int(getattr(endpoint, "received", 0) or 0),
+        )
+        try:
+            tracker = remote_runs.Tracker(run)
+        except OSError as exc:
+            logger.warning(
+                "acp agent {!r}: the run on machine {} could not be recorded: {}", self.name, self.machine, exc
+            )
+            return None
+        watchers.append(tracker.received)
+        return tracker
+
+    @staticmethod
+    def _untrack(client: Any, tracker: remote_runs.Tracker, *, keep: bool) -> None:
+        watchers = getattr(client.endpoint, "watchers", None)
+        if watchers is not None:
+            try:
+                watchers.remove(tracker.received)
+            except ValueError:
+                pass
+        tracker.close(keep=keep)
 
     @property
     def can_steer(self) -> bool:

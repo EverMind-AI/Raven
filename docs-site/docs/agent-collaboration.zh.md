@@ -5,6 +5,21 @@ Raven 同时提供委派任务与有状态 Agent 实例，两者不是一回事�
 
 先按[Agent 集成](agent-integrations.md)完成配置。本页介绍如何协作，不介绍传输安装。
 
+## 在登记机器上工作 { #work-on-a-registered-machine }
+
+配置了 `machine` 的 Agent 会在那台登记机器上运行，在那里工作，文件也留在那里；
+没有配置的 Agent 仍像以前一样在本机运行。登记机器、安装节点、配置条目，以及断线时会
+发生什么，见[在登记机器上工作](machines.md)。
+
+本机支持 Unix socket 时，远端 ACP Agent 可通过 Raven 节点使用配置授权给它的
+MCP 服务器。服务器定义、凭据、工具限制和沙箱规则仍在本机；节点按发起连接的
+进程判定每条流属于哪个任务，本机再核对该任务与授权的对应关系，别的任务不能凭
+授权名称冒用。
+
+Windows 宿主目前不借出远端 MCP，因为本机端点依赖 Unix socket。远端任务仍会
+运行，回复会说明没有提供 MCP。机器上的 CLI Agent 也暂不借用 MCP；本机重启后
+可以接回任务结果，但不会恢复之前的 MCP 连接。
+
 ## 选择协作形式 { #choose-a-collaboration-shape }
 
 | 需求 | 方式 | 完成证据 |

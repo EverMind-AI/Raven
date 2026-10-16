@@ -136,7 +136,7 @@ describe('/mode', () => {
 
   it('shows a refused mode to the user rather than dropping it', async () => {
     // The refusal names what the agent does offer, and it has to reach the
-    // surface on screen: a silent drop leaves the next turn at the old effort
+    // surface on screen: a silent drop leaves the next turn on the old mode
     // with the user believing the new one is in force. `guardedErr` would have
     // written it to the main conversation, which a direct chat does not render.
     enterDirect('Researcher', 'h1')
@@ -232,7 +232,7 @@ describe('/mode', () => {
     await settle()
 
     const out = h.main.join('\n')
-    expect(out.match(/Raven's own effort/g) ?? []).toHaveLength(1)
+    expect(out.match(/Raven itself runs the same/g) ?? []).toHaveLength(1)
     expect(out).toContain('Faster and cheaper, for small, well-defined tasks.')
   })
 

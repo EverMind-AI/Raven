@@ -4,6 +4,7 @@ import { SEND, SEND_PX, SEND_STROKE } from '../../components/Ico'
 import { t } from '../../i18n/t'
 import * as attachmentCache from '../../lib/attachmentCache'
 import { formatDuration } from '../../lib/duration'
+import { readingImported } from '../../lib/imported'
 import { IMG_EXT } from '../../lib/pictureExt'
 import { current as currentSession } from '../../lib/session'
 import { draw as plusDraw } from '../../state/plus'
@@ -254,6 +255,13 @@ export function dockLift(): void {
   const chat = document.querySelector<HTMLElement>('.chat')
   const dock = document.querySelector<HTMLElement>('.dock')
   if (!chat || !dock) return
+  /* A dock that is not drawn -- an imported conversation's column has none --
+     lifts nothing. Measured as it is below, its zero box would read as a dock
+     the height of the whole column, and the transcript would fade out under it. */
+  if (!dock.getClientRects().length) {
+    if (chat.style.getPropertyValue('--lift') !== '0px') chat.style.setProperty('--lift', '0px')
+    return
+  }
   /* Measured against what the reader SEES, not the dock's box: the dock carries
      padding and an empty hint strip under the field, and offsetting against
      those parks the pill a finger's width above the composer for no reason. */
@@ -682,6 +690,7 @@ export const slashSelected = (): SlashCmd | undefined => get().slashRows[get().s
 /* ── sending ──────────────────────────────────────────────────────────── */
 
 export function fireSend(): void {
+  if (readingImported()) return
   const ta = field()
   const v = ta ? ta.value.trim() : ''
   if (!v && !hasAtts()) return

@@ -150,7 +150,7 @@ Switching to it parks the scroller (`#scroll[data-parked]`: out of the flow,
 hidden, its size and scroll position kept) rather than unmounting it, so the
 transcript goes on streaming underneath and comes back exactly where it was.
 The header's toggle (`#trajBtn`) appears only when the gateway announced
-`trajectory-v1` (only a gateway launched with `--dev` does), `trajectory.state` says the view is on, a conversation is open
+`trajectory-v1` (every gateway does while its trajectory policy is on, which is the default), `trajectory.state` says the view is on, a conversation is open
 and that conversation is not in its empty state (`state/session/conversation.ts`'s
 flag); the store's `available` is that one condition. Picking a row opens the
 details pane beside the list (`features/trajectory/detailStore.ts`): a descriptor
@@ -398,7 +398,7 @@ vocabulary a card is the drawer's content.
 
 **Escape order**:
 The ordered table in `src/state/escapeOrder.ts` (`ESCAPE_ORDER`, of
-`EscapeLayer`): eleven layers that can be on screen at once, and which one an
+`EscapeLayer`): fifteen layers that can be on screen at once, and which one an
 Escape takes back. A table rather than a
 stack, because each entry answers "am I open" when the key arrives -- the
 channel dialog opens over the entries page and closes first, while the shared
@@ -407,6 +407,63 @@ docked sheets register run ahead of it. Approval and credential cards consume
 Escape after denying or skipping, leaving the turn running. A later Escape
 reaches the normal close order and stops a running turn only when no higher
 layer is open.
+
+**Export Wizard**:
+The dialog `#exportVeil` holds (`src/App.tsx` renders the veil, the box and the
+empty `#exportBody`), drawn by `features/export/` and opened from the header's
+conversation menu (`#moreBtn` in `src/chrome/ChatTop.tsx`, the corner slot,
+with the desk launcher one slot in over `#wsBtn`). A flow is a sequence of
+pages: the export is the turn picker, then the export page; the bug report
+(offered while the handshake carries `bugreport-v1`) is the picker, the
+problem, the decisions and the upload. The picker drops out when the
+conversation has a single finished turn, and the decisions are marked skipped
+when the Redaction History or a clean snapshot leaves nothing to decide. The
+export runs as a gateway job (`trajectory.export`) the page follows through
+`trajectory.export_status` and downloads with the job's link; the report is a
+Report Session the page follows through `bugreport.status`, which carries the
+values to decide in full only while it waits on the decisions -- the
+decisions page lists those values and nothing else, and an item's contexts
+come one at a time (`bugreport.item`), their hit spans counted in code points. The close button and Escape both
+cancel, asking first while a job is under way or a report is started and not
+over, and closing cancels the report (`bugreport.cancel`) whatever its phase.
+Every answer is checked against the wizard's `epoch` and the job or report it
+was asked about: a start that lands after its wizard closed has its job or
+report cancelled on arrival, and a status query, or a report step whose
+answer is lost, keeps the same job or report and asks its status rather than
+starting or sending again. `exportable` is the one place that says whether the
+conversation on screen may be exported, and the menu button is disabled
+exactly when it says no.
+_Avoid_: "report dialog" for the bug report -- it is this wizard on another
+flow, not a dialog of its own.
+
+**Imported Conversation** (page side; the runtime term is in `../CONTEXT.md`):
+A package read back in, shown read-only. The rail's `#importedBtn`
+(`src/chrome/Rail.tsx`, under the module rows) opens a file dialog through the
+`imported` domain's store, which holds one claim from reading the file to
+dealing with the answer: while it is held the button names the file and takes
+no second one, and the second copy a duplicate offers goes through the same
+claim. A package over the upload limit is refused before it is read; the bytes
+ride `imported.upload` as one frame. A duplicate raises the confirm sheet with
+its second answer (`#cfAlt`): open the copy already imported, or import
+another. The rows are the rail's: `session.list` returns them for the
+`imported` channel (`from === 'imported'`), the Imported group draws them after
+Recent and only while there is one, and each offers rename -- on the row, never
+in the conversation's header -- and delete, and nothing else. The settings
+page's delete-all leaves them alone.
+Opened, one is read-only. The session registry sets `.chat[data-readonly]`
+(`state/session/conversation.ts`'s `readOnly`) as a switch begins, before
+`session.resume` answers, from the key's own prefix (`lib/imported.ts`); the
+stylesheet then takes away the composer dock, the workdir tag and the
+conversation menu (its slot kept), and the name stops being a rename control.
+Sending, branching, the header editor and exporting refuse in their own code
+too. What the package does not carry degrades quietly instead of failing: a
+graph card reads no run record and shows no node count, an agent card asks
+for no roster, a task pane or a file does not open (a notice says why),
+pictures show their names without a request, delivered files are missing,
+and the desk puts back nothing. A package with no session record gets a quiet
+note instead of the empty state, so its trajectory toggle stays.
+_Avoid_: "import" alone -- the `importSync` domain and `#importRow` are the
+cold-start import of another tool's memory.
 
 **Menu**:
 `src/state/menu.ts` plus `<ContextMenu/>` (`src/App.tsx`) -- the one context

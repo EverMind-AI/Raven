@@ -28,6 +28,16 @@ const STATUS_GLYPH: Record<SubagentRow['probe_status'], string> = {
 }
 
 /**
+ * An un-added preset: neither written into config nor a discovered agent -- one
+ * of raven's own agents found under `agents/`. That second kind is on the agent
+ * table without being configured (`configured` is false for it) and is
+ * switched like any other agent: `subagents.toggle` writes a switch-only row for
+ * "off" and drops it for "on". Nor is the built-in loop one.
+ */
+export const isUnaddedPreset = (row: SubagentRow): boolean =>
+  !row.configured && !row.vendored && row.kind !== 'builtin'
+
+/**
  * Row-flattening and offset computation, pulled out as a pure function so the
  * concatenation order and the index-to-row mapping are unit-testable without
  * rendering anything or sending a keystroke. `flat` is what `idx` indexes
@@ -56,9 +66,14 @@ const STATUS_GLYPH: Record<SubagentRow['probe_status'], string> = {
  * where a keyless preset is in fact addable. `probe_detail` on the row still
  * reports the missing key, so the state stays visible either way.
  *
+ * A discovered agent (`vendored`, one of raven's own agents under `agents/`)
+ * is `configured: false` as well -- it has no config row until it is switched
+ * off -- yet it is on the agent table, so it is filed with the installed agents,
+ * never as an un-added preset.
+ *
  * Stated as one predicate so the three sections are visibly exhaustive and
  * disjoint: `uninstalled` is its exact complement, and `installed`/`presets`
- * split the rest on `configured`. No row can fall out of every section.
+ * split the rest on `isUnaddedPreset`. No row can fall out of every section.
  */
 export function flattenSubagentRows(rows: SubagentRow[]): FlattenedSubagentRows {
   // A built-in agent is this process; an openai row always has an endpoint to
@@ -66,9 +81,9 @@ export function flattenSubagentRows(rows: SubagentRow[]): FlattenedSubagentRows 
   // test is the probe-derived `group`, not the kind.
   const isBuiltin = (r: SubagentRow) => r.kind === 'builtin'
   const hasSomethingToRun = (r: SubagentRow) => isBuiltin(r) || r.kind === 'openai' || r.group === 'installed'
-  const installed = rows.filter(r => (r.configured || isBuiltin(r)) && hasSomethingToRun(r))
+  const installed = rows.filter(r => !isUnaddedPreset(r) && hasSomethingToRun(r))
   const uninstalled = rows.filter(r => !hasSomethingToRun(r))
-  const presets = rows.filter(r => !r.configured && !isBuiltin(r) && hasSomethingToRun(r))
+  const presets = rows.filter(r => isUnaddedPreset(r) && hasSomethingToRun(r))
 
   return {
     flat: [...installed, ...uninstalled, ...presets],
@@ -258,8 +273,9 @@ export function switchLabel(row: SubagentRow, switchingSince: number | undefined
     return '[core]'
   }
 
-  // `[new]` means "not added yet", which a built-in row never is.
-  if (!row.configured) {
+  // `[new]` means "not added yet", which a built-in row never is, nor an agent
+  // raven ships.
+  if (isUnaddedPreset(row)) {
     return '[new]'
   }
 
@@ -284,6 +300,10 @@ function SubagentRowLine({
   // fault, and its availability is not the question the roster is asking.
   const glyph = row.kind === 'builtin' ? STATUS_GLYPH.ready : (STATUS_GLYPH[row.probe_status] ?? '?')
   const toggleLabel = switchLabel(row, switchingSince)
+  // A row on a registered machine carries the machine's id as a third field
+  // after the preset, in the column's own `·` grammar: the name is the user's
+  // (`<preset>@<machine>` by default, but renamed at will), so the id is said
+  // here whatever the name. A row that runs here shows nothing more.
   // A test's clock wins if somehow both run: they are guarded separately, so one
   // row can carry a test and a switch at once, and two clocks in one cell would
   // not fit the column.
@@ -301,7 +321,8 @@ function SubagentRowLine({
       <Box flexShrink={0} marginRight={1}>
         <Text bold={selected} color={selected ? t.color.accent : t.color.muted} inverse={selected} wrap="truncate-end">
           {selected ? '▸ ' : '  '}
-          {glyph} {row.name} · {row.preset ?? '-'} {toggleLabel}
+          {glyph} {row.name} · {row.preset ?? '-'}
+          {row.machine ? ` · ${row.machine}` : ''} {toggleLabel}
         </Text>
       </Box>
       {busySince != null ? (
@@ -611,7 +632,7 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
   const { items: visibleLines, offset } = windowItems(lines, selectedLine, VISIBLE)
 
   const toggle = (row: SubagentRow) => {
-    if (!row.configured) {
+    if (isUnaddedPreset(row)) {
       setErr(`${row.name} is only a preset - press Enter to add it before it can be toggled`)
 
       return
@@ -660,7 +681,7 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
 
     gw.request<SubagentsTestResult>('subagents.test', {
       name: row.name,
-      source: row.configured ? 'config' : 'preset'
+      source: row.vendored ? 'vendored' : row.configured ? 'config' : 'preset'
     })
       .then(r => {
         setErr(r && r.ok === false && !r.cancelled ? r.detail : '')
@@ -687,7 +708,7 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
   }
 
   const openForm = (row: SubagentRow) => {
-    setFormMode(row.configured ? 'edit' : 'add')
+    setFormMode(row.configured || row.vendored ? 'edit' : 'add')
     setNameInput(row.name)
     setDescInput(row.description)
     // A stored key is never echoed back, masked or not: the field opens

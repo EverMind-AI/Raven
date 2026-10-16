@@ -125,6 +125,12 @@ describe('one agent row', () => {
   })
 
   /* A field this mapper does not name is a field the island never sees. */
+  it('carries the registered machine a row runs on, and null for one that runs here or a server that predates the field', () => {
+    expect(extAgentRowOf(wire({ machine: 'ravenx2' })).machine).toBe('ravenx2')
+    expect(extAgentRowOf(wire({})).machine).toBeNull()
+    expect(extAgentRowOf(wire({ machine: '' })).machine).toBeNull()
+  })
+
   it('is a whitelist, so an unnamed field does not reach the page', () => {
     const row = extAgentRowOf(wire({ command: ['codex', '--json'] } as Partial<ExtAgentRowWire>))
     expect(row).not.toHaveProperty('command')
@@ -417,6 +423,14 @@ describe('the wizard step sections', () => {
     ['a preset mid-build on an older server', { configured: false, enabled: false, building: true, probe_status: 'ready' }, 'avail', null, false],
     ['a configured agent switched on', { configured: true, enabled: true, probe_status: 'ready' }, 'on', 'on', true],
     ['a configured agent switched off', { configured: true, enabled: false, probe_status: 'ready' }, 'avail', 'avail', true],
+    ["a config row of Raven's own", { configured: true, enabled: true, own: true, probe_status: 'ready' }, 'on', 'on', false],
+    [
+      "one of Raven's own agents registered as a config row, known by its name",
+      { name: 'Raven-Oncall', configured: true, enabled: false, probe_status: 'ready' },
+      'avail',
+      'avail',
+      false,
+    ],
     [
       'a configured agent off with its preset moved to another transport',
       { configured: true, enabled: false, probe_status: 'ready', upgrade_to: 'acp' },
