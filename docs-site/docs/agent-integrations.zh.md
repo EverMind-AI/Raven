@@ -252,7 +252,8 @@ HTTP 后端没有本地文件访问，应传有界内容而不是宿主路径。
 `agent.md`，以及 `TOOLS.md`）每次启动都会按当前版本和配置重新生成，直接修改不会保留。
 自己的内容请写进同目录的 `*.local.md`（例如 `agent_memory/profile/agent.local.md`），
 下次启动时会接在产品文本之后。只放仍然需要的内容：旧版本的文本可能与当前规则冲突。
-被直接修改过的文件会在覆盖前保存为 `<name>.bak-<时间>-<pid>`，launcher 日志会写明备份位置。
+被直接修改过的文件、或旧版本留下的文件，会在覆盖前保存为 `<name>.bak-<时间>-<pid>`，launcher
+日志会写明备份位置。备份不会被自动删除。
 
 ## 安全与排障 { #security-and-troubleshooting }
 

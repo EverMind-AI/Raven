@@ -194,9 +194,12 @@ Agent vocabulary:
   operator's own lines go in the file's `*.local.md` sibling (`agent.local.md`
   beside `agent_memory/profile/agent.md`, `soul.local.md` beside `soul.md`,
   `TOOLS.local.md` beside `TOOLS.md`), appended after the product text at the
-  next launch; keep only the lines still needed there. A file edited in place
-  is copied to `<name>.bak-<time>-<pid>` before it is replaced, and the
-  launcher's log names the copy. Two processes of one product share these
+  next launch; keep only the lines still needed there. A file that does not
+  hold the text the product last wrote -- edited in place, or left by an
+  older release before receipts existed -- is copied to
+  `<name>.bak-<time>-<pid>` before it is replaced, and the launcher's log
+  names the copy. Backups are never deleted for you: remove one once what you
+  need from it is in the `*.local.md` file. Two processes of one product share these
   files, so a launch can change what an older process still running reads
   next turn. Rolling back the code does not roll back the files: stop the
   product's processes, delete each file whose `.<name>.generated.sha256`

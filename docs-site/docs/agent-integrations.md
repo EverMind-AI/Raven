@@ -299,9 +299,10 @@ from the release and its config on every launch, so editing them in place
 does not last. Put your own lines in the sibling `*.local.md` file
 (`agent_memory/profile/agent.local.md`, for example); the next launch appends
 it after the product text. Copy in only what you still need: text from an
-older release can contradict the current one. A file that was edited in place
-is saved as `<name>.bak-<time>-<pid>` before it is replaced, and the launcher
-log names the copy.
+older release can contradict the current one. A file that was edited in place,
+or that an older release left behind, is saved as `<name>.bak-<time>-<pid>`
+before it is replaced, and the launcher log names the copy. Backups are not
+deleted for you.
 
 ## Security and troubleshooting
 

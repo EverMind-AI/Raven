@@ -601,6 +601,7 @@ def test_an_edited_file_is_backed_up_before_it_is_regenerated(tmp_path):
     [backup] = _backups(target)
     assert backup.read_bytes() == b"operator tuned\r\n", "the backup is the edited bytes, untranslated"
     assert str(backup) in said[0] and "agent.local.md" in said[0]
+    assert "or left by an older release" in said[0], "an unrecognised copy is not claimed to be an edit"
     assert render.write_generated(target, "v2", notify=said.append) == "unchanged"
     assert len(said) == 1 and len(_backups(target)) == 1, "a regenerated file is the product's again"
 
@@ -665,7 +666,7 @@ def test_turning_a_generated_file_off_removes_only_what_the_product_wrote(tmp_pa
     edited.write_text("operator tuned")
     assert render.write_generated(edited, None, notify=said.append) == "kept"
     assert edited.read_text() == "operator tuned" and not _receipt(edited).exists()
-    assert "edited in place" in said[-1]
+    assert "no longer holds the text this product wrote" in said[-1]
 
     foreign = tmp_path / "foreign.md"
     foreign.write_text("a template someone else wrote")
