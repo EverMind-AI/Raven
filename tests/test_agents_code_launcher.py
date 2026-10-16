@@ -1435,6 +1435,28 @@ def test_a_stuck_old_receipt_refuses_the_launch_with_the_reason(grounded, tmp_pa
         grounded.seed_guide(partition)
 
 
+def test_the_operators_local_lines_reach_the_system_prompt(grounded, tmp_path):
+    """Read back where the model reads: the bootstrap files the context builder
+    assembles, not the file the launcher wrote."""
+    from raven.agent.context import ContextBuilder
+
+    partition = tmp_path / "part"
+    profile = partition / "agent_memory" / "profile"
+    profile.mkdir(parents=True)
+    (profile / "agent.local.md").write_text("Run the linter before every commit.")
+    (partition / "TOOLS.local.md").write_text("The staging database is read-only.")
+    grounded.seed_guide(partition)
+    grounded.seed_soul(partition)
+    grounded.seed_conduct(partition, "deepseek/deepseek-v4")
+    (profile / "soul.md").write_text("an edit outside the local file")
+    grounded.seed_soul(partition)
+    system = ContextBuilder(partition).build_system_prompt()
+    assert "Run the linter before every commit." in system
+    assert "The staging database is read-only." in system
+    assert "## Tool usage policy" in system, "the product conduct is there too"
+    assert "an edit outside the local file" not in system
+
+
 def test_the_identity_is_regenerated_with_the_operators_local_lines(grounded, tmp_path):
     partition = tmp_path / "part"
     grounded.seed_soul(partition)
