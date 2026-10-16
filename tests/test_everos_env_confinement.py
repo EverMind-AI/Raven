@@ -136,6 +136,30 @@ def test_the_block_puts_the_process_back_when_the_block_raises() -> None:
     assert cf._BOUND_HERE == bound_before
 
 
+def test_the_block_restores_the_set_it_began_with_whatever_the_attribute_holds_when_it_ends() -> None:
+    """A test that binds and then swaps the set must not hand the next test the keys it bound.
+
+    ``monkeypatch``'s undo runs after an autouse fixture's teardown when a fixture set up earlier asked for
+    ``monkeypatch`` (the root conftest's ``_isolate_tracing_state_dir`` does, and autouse fixtures of one
+    conftest are set up in name order), so at the block's end the attribute holds the swapped-in set and the
+    module's own, with everything bound into it, is about to be put back by ``monkeypatch``. The block has to
+    restore the object it began with, contents and binding, not whichever object the attribute holds by then.
+    """
+    original = cf._BOUND_HERE
+    before = set(original)
+    later = pytest.MonkeyPatch()  # undone only after the block, as pytest's own is in this suite
+    try:
+        with confined_everos_binding():
+            cf.bind_roles_here()  # writes into the module's own set
+            later.setattr(cf, "_BOUND_HERE", set())  # then swaps the attribute
+            assert cf._BOUND_HERE == set() and original, "the binding landed in the module's own set, now swapped out"
+        assert cf._BOUND_HERE is original, "the block binds the attribute back to the object it began with"
+        assert set(original) == before, "and that object's contents are what they were"
+    finally:
+        later.undo()
+    assert cf._BOUND_HERE is original and set(original) == before, "and monkeypatch's later undo changes nothing"
+
+
 def test_forgetting_leaves_nothing_exported_and_puts_it_back_after(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("EVEROS_RERANK__MODEL", "exported-by-the-operator")
     monkeypatch.setenv(_PROVENANCE, "EVEROS_RERANK__MODEL")

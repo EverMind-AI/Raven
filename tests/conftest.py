@@ -1066,8 +1066,9 @@ def _no_leaked_everos_binding() -> Iterator[None]:
     settings test reading a saved endpoint was told the environment outranks
     it (``role_is_env_managed``) and refused the write, in one shard and not
     in another. Tests that assert on the binding read it inside their own
-    run; ``tests/_everos_env.py`` says what goes back and why the set's
-    contents rather than the object.
+    run; ``tests/_everos_env.py`` says what goes back, and why the set is put
+    back as the object the test began with rather than whichever object the
+    attribute holds at teardown.
     """
     from tests._everos_env import confined_everos_binding
 

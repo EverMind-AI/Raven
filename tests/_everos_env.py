@@ -16,10 +16,16 @@ write, in one shard and not in another.
 
 Three things go back together, because the readers read them together: the
 ``EVEROS_*`` variables (the binding, and ``EVEROS_ROOT``), the provenance
-variable, and the *contents* of the provenance set. The contents rather than
-the object: a test that swapped the object with ``monkeypatch`` has the
-module's own put back before an autouse fixture's teardown runs, and that is
-the one whose contents then matter.
+variable, and the provenance set -- restored as the object the block began
+with, its contents and the attribute's binding to it. Not whichever object the
+attribute holds when the block ends: a test may bind into the module's own set
+and then swap the attribute with ``monkeypatch``, and ``monkeypatch``'s undo
+runs after an autouse fixture's teardown when a fixture set up earlier asked
+for it (the root conftest's ``_isolate_tracing_state_dir`` does; autouse
+fixtures of one conftest are set up in name order). Restoring only what the
+attribute held then would clean the swapped-in set, about to be dropped, and
+leave the module's own to come back with everything bound into it (measured
+2026-10-16: the next test saw twelve keys).
 """
 
 from __future__ import annotations
@@ -40,17 +46,24 @@ def is_binding(name: str) -> bool:
 
 @contextlib.contextmanager
 def confined_everos_binding() -> Iterator[None]:
-    """Everything a binding changes, as it was when the block began, once the block ends -- exception or not."""
+    """Everything a binding changes, as it was when the block began, once the block ends -- exception or not.
+
+    The provenance set goes back as the object the block began with, whatever
+    the attribute holds by then (see the module docstring): that object's
+    contents, and the attribute bound to it again.
+    """
     before = {key: value for key, value in os.environ.items() if is_binding(key)}
-    bound = set(cf._BOUND_HERE)
+    original = cf._BOUND_HERE
+    bound = set(original)
     try:
         yield
     finally:
         for key in [key for key in os.environ if is_binding(key) and key not in before]:
             del os.environ[key]
         os.environ.update(before)
-        cf._BOUND_HERE.clear()
-        cf._BOUND_HERE.update(bound)
+        original.clear()
+        original.update(bound)
+        cf._BOUND_HERE = original
 
 
 def forget_everos_binding(monkeypatch: pytest.MonkeyPatch) -> None:
