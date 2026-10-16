@@ -839,7 +839,9 @@ def test_prompts_another_product_generated_are_not_taken_for_the_engines(tmp_pat
 
     from raven_ppt.plugin.hook import IDENTITY_SEATS
 
-    monkeypatch.delenv("CODE_CONDUCT", raising=False)
+    # Set, not deleted: the launcher falls back to its folder's .env, which a
+    # developer's machine may use to switch the conduct off.
+    monkeypatch.setenv("CODE_CONDUCT", "on")
     run_py = Path(__file__).resolve().parent.parent / "agents" / "raven-code" / "run.py"
     spec = importlib.util.spec_from_file_location("agents_code_run_for_ppt", run_py)
     code = importlib.util.module_from_spec(spec)
