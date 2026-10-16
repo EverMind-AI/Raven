@@ -220,6 +220,11 @@ export function close(): void {
   set({ ...get(), open: false })
 }
 
+/* The handshake can change the menu's last row without changing this store. */
+export function redraw(): void {
+  if (get().open) store.set({ ...get() })
+}
+
 /* Whether the popover's last row may be pressed: not while the dialog is up. */
 export const isPicking = (): boolean => get().picking
 

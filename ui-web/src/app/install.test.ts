@@ -4,9 +4,11 @@
  * openByNode and its five live-event consumers (state/session/stages.ts used
  * to import features/tasks/store.ts directly for these), and the session
  * pointer's own reload (features/tasks/store.ts's writes are guarded by the
- * session key, so something has to ask again once it changes).
+ * session key, so something has to ask again once it changes). The folder
+ * menu also has to redraw after a new handshake changes the picker it offers.
  */
 
+import { act } from 'react'
 import { describe, expect, it } from 'vitest'
 
 import { fakeGateway, loadPart, looseQuery } from '../../scripts/module-harness.mjs'
@@ -16,6 +18,8 @@ import type { Sources } from '../state/sources'
 
 type Install = typeof import('./install')
 type Session = typeof import('../lib/session')
+
+;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 async function harness(fakes: Record<string, Record<string, unknown>> = {}) {
   const wiring = await loadPart(() => import('./install'), {
@@ -142,6 +146,77 @@ describe('the session-pointer reload (installActions)', () => {
 
     expect(asked).toContain('s1')
     _resetForTests()
+  })
+})
+
+describe('the working-directory menu after reconnect', () => {
+  it.each([false, true])('updates an open menu when the next gateway has a dialog: %s', async (hasDialog) => {
+    let reconnect = (): void => { throw new Error('reconnect callback was not installed') }
+    const wiring = await harness({
+      'src/app/connection': { onReconnect: (fn: () => void) => { reconnect = fn } },
+      'src/features/installed/source': { loadExt: async () => {} },
+      'src/features/importSync/store': { refresh: async () => {} },
+    })
+    const { setSources } = await import('../state/sources')
+    const { workspaceSource } = await import('../features/workspace/source')
+    const { absorb } = await import('../rpc/capabilities')
+    const { FixtureTransport } = await import('../rpc/fixtureTransport')
+    const { setGateway } = await import('../rpc/gateway')
+    const { setTranslator, resetTranslator } = await import('../i18n/t')
+    const { mountPageRoot } = await import('../test/pageRoot')
+    const wd = await import('../state/workdir')
+    const poll = await import('../features/trajectory/poll')
+    const tasks = await import('../features/tasks/store')
+    tasks.set({ ...tasks.get(), loaded: true })
+    let answerHello = (): void => { throw new Error('handshake was not requested') }
+    const transport = new FixtureTransport({
+      'system.hello': () => new Promise((resolve) => {
+        answerHello = () => resolve({
+          server_version: '0.1.0', server_capabilities: hasDialog ? ['folder-dialog-v1'] : [],
+          session: { default_channel: 'tui', default_session_key: 'tui:default' },
+        })
+      }),
+      'fs.dirs': { path: '/home/me', parent: '/home', home: '/home/me', ok: true, entries: [] },
+      'fs.pick_dir': { path: '/w/chosen', ok: true },
+    })
+    setGateway(transport)
+    setSources({
+      composer: { slash: [], meter: () => '', slashName: () => '', slashHelp: () => '', send: () => {}, stop: () => {} },
+      workspace: { ...workspaceSource, hostIsLocal: () => true },
+      rail: { snapshot: () => ({ rows: [], cur: null, busy: false }), replace: () => {}, open: () => {} },
+    })
+    setTranslator((key) => key)
+    absorb(hasDialog ? [] : ['folder-dialog-v1'])
+    let unmount = (): void => {}
+    act(() => { unmount = mountPageRoot() })
+    try {
+      act(() => wiring.installActions())
+      act(() => { wd.pick('/w/staged'); wd.open() })
+      const before = wd.get()
+      const button = (): HTMLButtonElement => document.querySelector('#wdPop .chrome-wd-open')!
+      const oldLabel = hasDialog ? 'gui.wd.open_remote' : 'gui.wd.open'
+      expect(button().textContent).toBe(oldLabel)
+
+      act(() => reconnect())
+      expect(button().textContent).toBe(oldLabel)
+      await act(async () => { answerHello(); await Promise.resolve(); await Promise.resolve() })
+
+      expect(button().textContent).toBe(hasDialog ? 'gui.wd.open' : 'gui.wd.open_remote')
+      expect(wd.get()).toEqual(before)
+      expect(wd.staged()).toBe('/w/staged')
+      await act(async () => { button().click(); await Promise.resolve(); await Promise.resolve() })
+      expect(transport.calls.filter(({ method }) => method.startsWith('fs.'))).toEqual([
+        { method: hasDialog ? 'fs.pick_dir' : 'fs.dirs', params: {} },
+      ])
+      expect(hasDialog ? wd.staged() : wd.get().listing?.path).toBe(hasDialog ? '/w/chosen' : '/home/me')
+    } finally {
+      act(() => unmount())
+      poll._resetForTests()
+      wd._resetForTests()
+      setGateway(null)
+      resetTranslator()
+      document.body.innerHTML = ''
+    }
   })
 })
 
