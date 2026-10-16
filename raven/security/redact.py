@@ -118,6 +118,34 @@ _TRUNCATED_SECRETS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(--(?:token|password|api-key|secret|with-token)[= ])([^\s\"']++)\Z", re.IGNORECASE),
 )
 
+#: How much of the text's end the tail patterns read. A tail pattern's value group
+#: runs to ``\Z`` and admits no whitespace, so what it matches lies in the text's
+#: last run of non-whitespace characters; the label in front of that value is the
+#: only part that may sit further back (``Authorization`` and its whitespace), and
+#: its length is bounded by the label names themselves. Reading the whole text
+#: instead made the cost quadratic: ``sub`` retries at every position, and a
+#: credential-shaped run that ends before other text made each retry walk the rest
+#: of it again -- 32,000 characters of ``--token=`` cost 0.86 seconds of CPU and
+#: 262,000 cost tens of seconds, on the event loop inside a failing turn. A long
+#: run of its own is still read whole, which is what keeps a truncated token
+#: hidden. Measured after: 0.003 s for the failure path, 0.012-0.040 s for a
+#: 262,000-character scan cut, whatever the run reads.
+_TAIL_LABEL_CHARS = 64
+_FINAL_RUN = re.compile(r"(\s+)(\S*+)\Z")
+
+
+def _tail_region(text: str) -> str:
+    """The end of ``text`` that a tail pattern can match in.
+
+    The last non-whitespace run, and room behind it for the label a pattern names:
+    ``Authorization:`` plus the optional scheme is the longest, under 64
+    characters. A text that is one run with no whitespace in it is returned whole.
+    """
+    final = _FINAL_RUN.search(text)
+    if final is None:
+        return text
+    return text[max(0, final.start(2) - _TAIL_LABEL_CHARS) :]
+
 
 def redact(text: str, *, truncated: bool = False) -> str:
     """Return ``text`` with every recognised credential replaced.
@@ -134,8 +162,11 @@ def redact(text: str, *, truncated: bool = False) -> str:
     if scan_cut:
         text = text[:MAX_SCAN_CHARS]
     if truncated or scan_cut:
+        keep = len(text) - len(_tail_region(text))
+        tail = text[keep:]
         for pattern in _TRUNCATED_SECRETS:
-            text = pattern.sub(lambda m: m.group(1) + REPLACEMENT, text)
+            tail = pattern.sub(lambda m: m.group(1) + REPLACEMENT, tail)
+        text = text[:keep] + tail
     for _, pattern in _PATTERNS:
         text = pattern.sub(lambda m: m.group(1) + REPLACEMENT, text)
     if scan_cut:

@@ -201,7 +201,13 @@ question.
   backtracking, and JWT matching starts only at token boundaries. Known truncation
   is passed into the scrubber so incomplete JWTs, vendor tokens, URL passwords and
   labelled credential tails are removed even without their normal minimum length
-  or closing delimiter. Ordinary unlabelled diagnostic text is preserved.
+  or closing delimiter. Those tail patterns are applied to the text's last
+  non-whitespace run plus the label room in front of it, not to the whole text:
+  their value groups run to the end of the input, so retrying them at every
+  position made a credential-shaped run that ends before other text cost its own
+  length squared -- 32,000 characters of `--token=` was 0.86 seconds of CPU inside
+  a failing turn, and 262,000 was tens of seconds. Ordinary unlabelled diagnostic
+  text is preserved.
   The long text is the scrubbed one; the 200-character texts keep the wording they had,
   unscrubbed, so a credential inside a short crash message makes the opened text differ
   from the row only by its redaction.

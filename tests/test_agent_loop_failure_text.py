@@ -283,8 +283,16 @@ def test_a_client_body_loses_its_private_key_before_the_record_is_capped():
 @pytest.mark.production_timing
 @pytest.mark.parametrize(
     "tail",
-    ["Authorization:" + " " * 32000 + "!", "eyJ" * 10000 + "!"],
-    ids=["authorization-whitespace", "jwt-prefixes"],
+    [
+        "Authorization:" + " " * 32000 + "!",
+        "eyJ" * 10000 + "!",
+        # A credential-shaped run that ends before the cut, with other text after
+        # it: the tail patterns retry at every position in the run, so each of
+        # those attempts walks it again.
+        "--token=" * 3900 + " " + "x" * 1500,
+        "pwd=" * 7800 + " " + "x" * 1500,
+    ],
+    ids=["authorization-whitespace", "jwt-prefixes", "cli-flag-run", "named-secret-run"],
 )
 def test_detail_processing_does_not_hold_the_event_loop_for_seconds(tail):
     exc = RuntimeError("diagnostic " * 25 + tail)
