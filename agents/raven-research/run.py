@@ -240,7 +240,7 @@ def write_generated(target: Path, text: Callable[[], str]) -> None:
         log(f"[run] {target.name}: this raven predates regenerated prompts; seeded once, never refreshed")
         return
     try:
-        generate(target, text(), notify=lambda message: log(f"[run] {message}"))
+        generate(target, text(), owner=PRODUCT, notify=lambda message: log(f"[run] {message}"))
     except (OSError, UnicodeDecodeError) as exc:
         raise SystemExit(f"error: cannot regenerate {target}: {exc}") from exc
 

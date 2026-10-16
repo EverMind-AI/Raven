@@ -657,6 +657,24 @@ def _text_digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _read_receipt(receipt: Path) -> dict[str, set[str]]:
+    """Each writer named in ``receipt`` and the digests it recorded; empty when unreadable."""
+    try:
+        lines = receipt.read_text(encoding="ascii").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return {}
+    writers: dict[str, set[str]] = {}
+    for line in lines:
+        parts = line.split()
+        if len(parts) == 2:
+            writers.setdefault(parts[0], set()).add(parts[1])
+    return writers
+
+
+def _receipt_text(owner: str, digests: Iterable[str]) -> str:
+    return "".join(f"{owner} {digest}\n" for digest in sorted(digests))
+
+
 def _back_up(target: Path, raw: bytes) -> Path:
     """Copy ``raw`` beside ``target`` under a name no earlier backup holds.
 
@@ -687,6 +705,7 @@ def write_generated(
     target: Path,
     product_text: str | None,
     *,
+    owner: str,
     legacy_digests: Iterable[str] = (),
     adopt: bool = True,
     notify: Callable[[str], None] | None = None,
@@ -700,18 +719,20 @@ def write_generated(
     appended after the product text.
 
     Whether the file on disk is the product's is read off a receipt beside it
-    holding the digest of the last text written, so a file another binding's
-    launch rewrote is still recognised. ``legacy_digests`` names texts written
-    before receipts existed. A file that is neither -- edited in place, or an
-    older release's copy no digest names -- is copied to a ``.bak-*`` file
-    first and ``notify`` names the copy, and the target is replaced only once
-    that copy is on disk. ``adopt=False`` is for a caller whose directory may
-    not be its own -- a plugin writes into whatever home it is granted: a file
-    the receipt never named and no digest matches is then left as it is.
+    naming ``owner`` and the digest of the last text it wrote, so a file
+    another binding's launch rewrote is still recognised, and one another
+    product wrote into the same home is not taken for this one's.
+    ``legacy_digests`` names texts written before receipts existed. A file
+    that is neither -- edited in place, another product's, or an older
+    release's copy no digest names -- is copied to a ``.bak-*`` file first and
+    ``notify`` names the copy, and the target is replaced only once that copy
+    is on disk. ``adopt=False`` is for a caller whose directory may not be its
+    own -- a plugin writes into whatever home it is granted: a file this
+    owner's receipt never named and no digest matches is then left as it is.
 
     ``product_text=None`` turns the file off: a file this product wrote is
     removed; an edited one is kept, being the operator's now, and stops being
-    tracked.
+    tracked; another product's file and receipt are left alone.
 
     Returns ``"written"``, ``"unchanged"``, ``"removed"``, ``"kept"`` or
     ``"absent"``. Raises ``OSError`` or ``UnicodeDecodeError`` when a file
@@ -719,6 +740,8 @@ def write_generated(
     lands, and whatever text a failure leaves in the target, the receipt
     still names it.
     """
+    if not owner or any(char.isspace() for char in owner):
+        raise ValueError(f"owner must be one word, not {owner!r}")
     say = notify or (lambda _message: None)
     receipt = _generated_receipt(target)
     local = local_addendum(target)
@@ -727,10 +750,8 @@ def write_generated(
         # Line endings folded the way read_text folds them, so a copy written
         # with CRLF before seeds pinned newline="" still matches its digest.
         current = None if raw is None else raw.decode("utf-8", errors="replace").replace("\r\n", "\n")
-        try:
-            recorded = set(receipt.read_text(encoding="ascii").split())
-        except (OSError, UnicodeDecodeError):
-            recorded = set()
+        writers = _read_receipt(receipt)
+        recorded = writers.get(owner, set())
         wanted = product_text
         if wanted is not None and local.is_file():
             addendum = local.read_text(encoding="utf-8").strip("\n")
@@ -750,7 +771,8 @@ def write_generated(
                 if recorded:
                     say(f"kept {target}: it no longer holds the text this product wrote, and it is turned off")
                 action = "kept"
-            receipt.unlink(missing_ok=True)
+            if recorded or action == "removed":
+                receipt.unlink(missing_ok=True)
             return action
 
         if current is not None and not ours:
@@ -758,17 +780,21 @@ def write_generated(
                 say(f"left {target} as it is: nothing shows this product wrote it")
                 return "kept"
             backup = _back_up(target, raw or b"")
-            # Not "edited": a copy an older release wrote before receipts
-            # existed lands here too, and nobody touched that one.
+            held = _text_digest(current)
+            writer = next((name for name, digests in writers.items() if held in digests), None)
+            # Not "edited" unless nothing else explains it: a copy an older
+            # release wrote before receipts existed lands here too, and so
+            # does another product's file, and nobody touched either.
+            cause = f"it holds what {writer} wrote" if writer else "it was edited in place, or left by an older release"
             say(
-                f"{target} does not hold the text this product last wrote (edited in place, or "
-                f"left by an older release); backed up to {backup}. It is regenerated on every "
-                f"launch: keep only the lines you still need in {local}"
+                f"{target} does not hold the text this product last wrote ({cause}); backed up "
+                f"to {backup}. It is regenerated on every launch: keep only the lines you still "
+                f"need in {local}"
             )
         digest = _text_digest(wanted)
         if current == wanted:
-            if recorded != {digest}:
-                atomic_replace(receipt, digest + "\n", newline="")
+            if writers != {owner: {digest}}:
+                atomic_replace(receipt, _receipt_text(owner, {digest}), newline="")
             return "unchanged"
         # Two files cannot change in one step, so the receipt names both texts
         # while the target changes: a failure between the steps leaves a
@@ -776,10 +802,10 @@ def write_generated(
         # The old text is safe to name even when it was an edit -- its
         # backup is already on disk.
         pending = {digest} if current is None else {digest, _text_digest(current)}
-        atomic_replace(receipt, "".join(f"{d}\n" for d in sorted(pending)), newline="")
+        atomic_replace(receipt, _receipt_text(owner, pending), newline="")
         atomic_replace(target, wanted, newline="")
         if pending != {digest}:
-            atomic_replace(receipt, digest + "\n", newline="")
+            atomic_replace(receipt, _receipt_text(owner, {digest}), newline="")
         return "written"
 
 

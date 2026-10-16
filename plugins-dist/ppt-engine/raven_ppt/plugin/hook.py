@@ -203,6 +203,7 @@ def seed_identity(home: Path) -> list[str]:
             action = generate(
                 target,
                 text,
+                owner="ppt-engine",
                 legacy_digests=_SHIPPED_PROMPT_DIGESTS,
                 adopt=False,
                 notify=lambda message: logger.warning("ppt-engine: %s", message),

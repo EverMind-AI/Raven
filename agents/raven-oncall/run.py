@@ -156,7 +156,7 @@ def seed_guide(workspace: Path) -> None:
         log(f"[run] {target.name}: this raven predates regenerated prompts; seeded once, never refreshed")
         return
     try:
-        generate(target, _guide_text(), notify=lambda message: log(f"[run] {message}"))
+        generate(target, _guide_text(), owner=PRODUCT, notify=lambda message: log(f"[run] {message}"))
     except (OSError, UnicodeDecodeError) as exc:
         raise SystemExit(f"error: cannot regenerate {target}: {exc}") from exc
 
