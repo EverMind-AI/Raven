@@ -1284,7 +1284,8 @@ def test_an_edited_conduct_is_never_removed_by_the_switch(grounded, tmp_path, mo
     grounded.seed_conduct(partition, "deepseek/deepseek-v4")
     assert conduct.read_text() == "operator tuned"
     # Back on: the product's conduct returns, and the edit survives as a backup.
-    monkeypatch.delenv("CODE_CONDUCT")
+    # Set rather than deleted, so the folder's .env cannot decide it.
+    monkeypatch.setenv("CODE_CONDUCT", "on")
     grounded.seed_conduct(partition, "deepseek/deepseek-v4")
     assert conduct.read_text() == grounded.render_conduct("deepseek/deepseek-v4")
     assert [b.read_text() for b in conduct.parent.glob("agent.md.bak-*")] == ["operator tuned"]
@@ -1435,11 +1436,12 @@ def test_a_stuck_old_receipt_refuses_the_launch_with_the_reason(grounded, tmp_pa
         grounded.seed_guide(partition)
 
 
-def test_the_operators_local_lines_reach_the_system_prompt(grounded, tmp_path):
+def test_the_operators_local_lines_reach_the_system_prompt(grounded, tmp_path, monkeypatch):
     """Read back where the model reads: the bootstrap files the context builder
     assembles, not the file the launcher wrote."""
     from raven.agent.context import ContextBuilder
 
+    monkeypatch.setenv("CODE_CONDUCT", "on")
     partition = tmp_path / "part"
     profile = partition / "agent_memory" / "profile"
     profile.mkdir(parents=True)
