@@ -17,8 +17,12 @@ Three claims are pinned here, and the third is the one most worth a test:
 
 from __future__ import annotations
 
+import random
+import time
+
 import pytest
 
+import raven.security.redact as redact_module
 from raven.security.redact import MAX_SCAN_CHARS, REPLACEMENT, pattern_names, redact, redact_value
 
 
@@ -193,6 +197,78 @@ class TestTheLimits:
         assert redact(preview) == f'PEM_HEADER = "{head}{REPLACEMENT}'
         closed = preview.replace(f'{head}"', f'{head}"\nbody\n-----END PRIVATE KEY-----')
         assert "def load" in redact(closed)
+
+    @pytest.mark.production_timing
+    @pytest.mark.parametrize(
+        ("head", "unit", "stop", "size"),
+        [
+            ("", ".sk-", "!x", 64_000),
+            ("", "pwd=", ",x", 32_000),
+            ("", "--token=", "'x", 32_000),
+            ("", " ", "x y", 32_000),
+            ("Authorization:", " ", "abcde", 32_000),
+        ],
+        ids=["prefix-run", "named-secret-run", "cli-flag-run", "whitespace-gap", "label-gap"],
+    )
+    def test_a_cut_tail_is_found_in_time_linear_in_the_text(self, head, unit, stop, size):
+        """A run of label-shaped text that something stops before the end, and no
+        whitespace to split it: each tail pattern used to retry at every position
+        of the run and walk on to the stop. A long gap before the last two words
+        did the same to a search for the final run, and a label's own gap is read
+        whole however wide it is."""
+        text = head + unit * (size // len(unit)) + stop
+        start = time.thread_time()
+        redact(text, truncated=True)
+        assert time.thread_time() - start < 0.5
+
+    def test_each_tail_search_starts_where_the_whole_text_search_would_find_it(self):
+        """The claim that keeps the cut-tail pass linear, checked against the search it replaced.
+
+        A tail search starts behind the run of its value's characters that ends
+        the text, the label's gap, scheme word and gap, and room for its name.
+        That is safe only while no match can begin earlier, so the generated texts
+        put every label, quote, separator, scheme and gap width in front of a cut.
+        """
+
+        def whole_text(text: str) -> str:
+            for pattern, _value in redact_module._TRUNCATED_SECRETS:
+                text = pattern.sub(lambda m: m.group(1) + REPLACEMENT, text)
+            return text
+
+        # One long value per pattern: a run longer than the label room, which a
+        # value class narrower than the pattern's own would stop short of.
+        tails = ["eyJ", "x.sk-", "pwd=", '"password": "', "Authorization: Bearer ", "--token ", "https://user:"]
+        for tail in tails:
+            for lead in ("", "x " * 300, "pwd=" * 100 + ","):
+                text = lead + tail + "aZ9" * 140
+                assert REPLACEMENT in whole_text(text), text
+                assert redact_module._redact_cut_tail(text) == whole_text(text), text
+
+        rng = random.Random(978)
+        heads = ["password", "PWD", "api_key", "auth", "token", "Authorization", "Proxy-Authorization"]
+        heads += ["--token", "--with-token", "https://user", "sk-", "ghp_", "eyJ", "AKIA", "xoxb-"]
+        noise = ["sk-", ".sk-", "pwd=", "--token=", "://", ":", "@", "/", "!", ",", "'", '"', " ", "\n", "x", "Z9"]
+        for _ in range(3000):
+            text = "".join(rng.choice(noise) for _ in range(rng.randint(0, 12)))
+            for part in (heads, ["", '"', "'"], None, ["", ":", "=", " "], None, ["", '"', "Bearer ", "basic  "]):
+                text += " " * rng.choice([0, 0, 1, 2, 63, 64, 65, 300]) if part is None else rng.choice(part)
+            text += "".join(rng.choice("aZ9._-~+/=:!,;@") for _ in range(rng.randint(0, 9)))
+            text += "".join(rng.choice(noise) for _ in range(rng.choice([0, 0, 0, 1, 3])))
+            assert redact_module._redact_cut_tail(text) == whole_text(text), text
+
+    @pytest.mark.parametrize("gap", [64, 65, 10_000])
+    def test_a_short_cut_value_is_a_tail_however_wide_its_label_gap(self, gap):
+        """The search start walks back over a label's gap rather than assuming its
+        width, so a short value a cut ended is removed behind a gap of any width."""
+        spaces = " " * gap
+        for text in (
+            "Authorization:" + spaces + "abcde",
+            '"password":' + spaces + '"abc',
+            "Proxy-Authorization:" + spaces + "Basic" + spaces + "ab",
+        ):
+            result = redact(text, truncated=True)
+            assert result.endswith(REPLACEMENT), text[:40]
+            assert result.startswith(text[: text.index(spaces)])
 
     def test_a_huge_string_is_truncated_rather_than_scanned(self):
         """Titles and previews reach here, not file bodies; a half-scanned string

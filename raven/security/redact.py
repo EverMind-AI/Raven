@@ -98,53 +98,79 @@ MAX_SCAN_CHARS = 256 * 1024
 
 # At a known cut, a token may be too short for the ordinary patterns or have
 # lost a closing delimiter. Keep ordinary unlabelled text, but remove a tail
-# whose label or prefix already identifies it as a credential.
-_TRUNCATED_SECRETS: tuple[re.Pattern[str], ...] = (
-    re.compile(
-        r"()(?<![A-Za-z0-9_-])((?:sk-|gh[pousr]_|glpat-|xox[abposr]-|AIza|A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA|eyJ)"
-        r"[A-Za-z0-9_.-]*+)\Z"
+# whose label or prefix already identifies it as a credential. Each pattern is
+# paired with the characters its value is made of, which say where its search
+# can start (_tail_search_start).
+_TRUNCATED_SECRETS: tuple[tuple[re.Pattern[str], re.Pattern[str]], ...] = (
+    (
+        re.compile(
+            r"()(?<![A-Za-z0-9_-])((?:sk-|gh[pousr]_|glpat-|xox[abposr]-|AIza|A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA|eyJ)"
+            r"[A-Za-z0-9_.-]*+)\Z"
+        ),
+        re.compile(r"[A-Za-z0-9_.-]*+"),
     ),
-    re.compile(r"(://[^\s/:@]++:)([^\s/@]++)\Z"),
-    re.compile(
-        r"((?:api[_-]?key|secret|token|password|passwd|pwd|credential|private[_-]?key|access[_-]?key|auth)"
-        r"[\"']?\s*+[:=]\s*+[\"']?)([^\s\"',;&|)]++)\Z",
-        re.IGNORECASE,
+    (re.compile(r"(://[^\s/:@]++:)([^\s/@]++)\Z"), re.compile(r"[^\s/@]*+")),
+    (
+        re.compile(
+            r"((?:api[_-]?key|secret|token|password|passwd|pwd|credential|private[_-]?key|access[_-]?key|auth)"
+            r"[\"']?\s*+[:=]\s*+[\"']?)([^\s\"',;&|)]++)\Z",
+            re.IGNORECASE,
+        ),
+        re.compile(r"[^\s\"',;&|)]*+"),
     ),
-    re.compile(
-        r"((?:Proxy-)?Authorization[\"']?\s*+[:=]\s*+[\"']?(?:(?:Bearer|Basic|Token)\s++)?)"
-        r"([\w\-.~+/=]++)\Z",
-        re.IGNORECASE,
+    (
+        re.compile(
+            r"((?:Proxy-)?Authorization[\"']?\s*+[:=]\s*+[\"']?(?:(?:Bearer|Basic|Token)\s++)?)"
+            r"([\w\-.~+/=]++)\Z",
+            re.IGNORECASE,
+        ),
+        re.compile(r"[\w\-.~+/=]*+"),
     ),
-    re.compile(r"(--(?:token|password|api-key|secret|with-token)[= ])([^\s\"']++)\Z", re.IGNORECASE),
+    (
+        re.compile(r"(--(?:token|password|api-key|secret|with-token)[= ])([^\s\"']++)\Z", re.IGNORECASE),
+        re.compile(r"[^\s\"']*+"),
+    ),
 )
 
-#: How much of the text's end the tail patterns read. A tail pattern's value group
-#: runs to ``\Z`` and admits no whitespace, so what it matches lies in the text's
-#: last run of non-whitespace characters; the label in front of that value is the
-#: only part that may sit further back (``Authorization`` and its whitespace), and
-#: its length is bounded by the label names themselves. Reading the whole text
-#: instead made the cost quadratic: ``sub`` retries at every position, and a
-#: credential-shaped run that ends before other text made each retry walk the rest
-#: of it again -- 32,000 characters of ``--token=`` cost 0.86 seconds of CPU and
-#: 262,000 cost tens of seconds, on the event loop inside a failing turn. A long
-#: run of its own is still read whole, which is what keeps a truncated token
-#: hidden. Measured after: 0.003 s for the failure path, 0.012-0.040 s for a
-#: 262,000-character scan cut, whatever the run reads.
-_TAIL_LABEL_CHARS = 64
-_FINAL_RUN = re.compile(r"(\s+)(\S*+)\Z")
+# What may stand between a label's name and its value: quotes, whitespace, a
+# colon or an equals sign, and the scheme word an Authorization label can carry.
+_LABEL_GAP = re.compile(r"[\s\"':=]*+")
+_LABEL_SCHEME = re.compile(r"[A-Za-z]{0,6}+")
+# Room for the name itself; the longest, Proxy-Authorization, is 19 characters.
+_LABEL_NAME_CHARS = 32
 
 
-def _tail_region(text: str) -> str:
-    """The end of ``text`` that a tail pattern can match in.
+def _tail_search_start(text: str, value: re.Pattern[str]) -> int:
+    """The earliest position a tail pattern's match can begin at in ``text``.
 
-    The last non-whitespace run, and room behind it for the label a pattern names:
-    ``Authorization:`` plus the optional scheme is the longest, under 64
-    characters. A text that is one run with no whitespace in it is returned whole.
+    The match's value is the run of ``value``'s characters that ends the text, or
+    lies inside it; its label's name ends where the gap, scheme word and gap in
+    front of that run do. Each step matches the reversed text from where the last
+    one stopped, so the walk reads those characters once, however wide a gap is.
     """
-    final = _FINAL_RUN.search(text)
-    if final is None:
-        return text
-    return text[max(0, final.start(2) - _TAIL_LABEL_CHARS) :]
+    reverse = text[::-1]
+    end = value.match(reverse).end()
+    for step in (_LABEL_GAP, _LABEL_SCHEME, _LABEL_GAP):
+        end = step.match(reverse, end).end()
+    return max(0, len(text) - end - _LABEL_NAME_CHARS)
+
+
+def _redact_cut_tail(text: str) -> str:
+    """``text`` with a credential that ends it replaced, for a text a cut ended.
+
+    Each search starts where its match can (:func:`_tail_search_start`), and finds
+    the match a search of the whole text finds. ``re.sub`` over the whole text
+    retries every position instead, and a tail pattern's value runs to the end, so
+    each retry before the final run walks on to the character that stops it:
+    64,000 characters of ``pwd=`` ending in a comma take 10.8 seconds. A regex
+    search for where that run starts retries every position too, 32 seconds for
+    31,000 spaces before the last two words of a failure.
+    """
+    for pattern, value in _TRUNCATED_SECRETS:
+        found = pattern.search(text, _tail_search_start(text, value))
+        if found is not None:
+            text = text[: found.start()] + found.group(1) + REPLACEMENT
+    return text
 
 
 def redact(text: str, *, truncated: bool = False) -> str:
@@ -162,11 +188,7 @@ def redact(text: str, *, truncated: bool = False) -> str:
     if scan_cut:
         text = text[:MAX_SCAN_CHARS]
     if truncated or scan_cut:
-        keep = len(text) - len(_tail_region(text))
-        tail = text[keep:]
-        for pattern in _TRUNCATED_SECRETS:
-            tail = pattern.sub(lambda m: m.group(1) + REPLACEMENT, tail)
-        text = text[:keep] + tail
+        text = _redact_cut_tail(text)
     for _, pattern in _PATTERNS:
         text = pattern.sub(lambda m: m.group(1) + REPLACEMENT, text)
     if scan_cut:

@@ -203,13 +203,16 @@ question.
   glued to a word (`/verify-eyJ...`) is what that trade gives up. Known truncation
   is passed into the scrubber so incomplete JWTs, vendor tokens, URL passwords and
   labelled credential tails are removed even without their normal minimum length
-  or closing delimiter. Those tail patterns are applied to the text's last
-  non-whitespace run plus the label room in front of it, not to the whole text:
-  their value groups run to the end of the input, so retrying them at every
-  position made a credential-shaped run that ends before other text cost its own
-  length squared -- 32,000 characters of `--token=` was 0.86 seconds of CPU inside
-  a failing turn, and 262,000 was tens of seconds. Ordinary unlabelled diagnostic
-  text is preserved.
+  or closing delimiter. Each tail pattern's search starts behind the run of its
+  own value's characters that ends the text, the label's gap and scheme word, and
+  room for the label's name, rather than at the start: the value runs to the end
+  of the input, so retrying the pattern at every position makes label-shaped text
+  cost its length squared -- 64,000 characters of `pwd=` ending in a comma take
+  10.8 seconds, and a regex search for the run's start costs the same on a long
+  gap, 32 seconds for 31,000 spaces inside a failing turn. That start is found by
+  matching the reversed text step by step, which reads a gap of any width once,
+  so the search finds exactly what a whole-text search finds. Ordinary
+  unlabelled diagnostic text is preserved.
   The long text is the scrubbed one; the 200-character texts keep the wording they had,
   unscrubbed, so a credential inside a short crash message makes the opened text differ
   from the row only by its redaction.

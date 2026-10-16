@@ -291,8 +291,19 @@ def test_a_client_body_loses_its_private_key_before_the_record_is_capped():
         # those attempts walks it again.
         "--token=" * 3900 + " " + "x" * 1500,
         "pwd=" * 7800 + " " + "x" * 1500,
+        # The same run stopped by a comma rather than a space, and a long gap
+        # before the last two words: the window cut keeps both inside it.
+        "pwd=" * 7800 + "," + "x" * 2000,
+        " " * 16000 + "x y" + "z" * 17000,
     ],
-    ids=["authorization-whitespace", "jwt-prefixes", "cli-flag-run", "named-secret-run"],
+    ids=[
+        "authorization-whitespace",
+        "jwt-prefixes",
+        "cli-flag-run",
+        "named-secret-run",
+        "unspaced-named-secret-run",
+        "whitespace-gap",
+    ],
 )
 def test_detail_processing_does_not_hold_the_event_loop_for_seconds(tail):
     exc = RuntimeError("diagnostic " * 25 + tail)
