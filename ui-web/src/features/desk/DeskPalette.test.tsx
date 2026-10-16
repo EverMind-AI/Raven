@@ -15,7 +15,7 @@ import * as deliveries from '../workspace/deliveries'
 import * as workspace from '../workspace/store'
 import { DeskPalette } from './DeskPalette'
 import {
-  DESK_COLUMN_FLOOR, DESK_DEFAULT_HEIGHT, DESK_DEFAULT_WIDTH, DESK_DRAG_THRESHOLD,
+  DESK_ANCHOR_GAP, DESK_COLUMN_FLOOR, DESK_DEFAULT_HEIGHT, DESK_DEFAULT_WIDTH, DESK_DRAG_THRESHOLD,
   DESK_GEOMETRY_KEY, DESK_LAUNCHER_EDGE, DESK_TEXT_GAP,
 } from './geometry'
 import * as seen from './seen'
@@ -1247,5 +1247,68 @@ describe('resizing by the corner grab', () => {
     await act(async () => {
       window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: 500, clientY: 520 }))
     })
+  })
+
+  /* How far down a pull goes: to the composer card's bottom edge. happy-dom
+     lays nothing out, so the card, the launcher and the palette each have their
+     rectangle stated where the stylesheet would put them. */
+  const composerAt = (bottom: number): void => {
+    document.body.insertAdjacentHTML('beforeend', '<div class="chat"><div class="dock"><div class="dock-in"></div></div></div>')
+    const card = document.querySelector('.chat > .dock > .dock-in') as HTMLElement
+    card.getBoundingClientRect = (() => ({
+      left: 36, right: 836, top: bottom - 132, bottom, width: 800, height: 132, x: 36, y: bottom - 132,
+    })) as never
+  }
+  const launcherAt = (bottom: number): void => {
+    const button = document.createElement('button')
+    button.className = 'desk-follow-toggle'
+    document.body.append(button)
+    button.getBoundingClientRect = (() => ({
+      left: 944, right: 974, top: bottom - 30, bottom, width: 30, height: 30, x: 944, y: bottom - 30,
+    })) as never
+  }
+  const pull = async (dy: number): Promise<void> => {
+    grab().setPointerCapture = () => {}
+    await act(async () => {
+      grab().dispatchEvent(new PointerEvent('pointerdown', {
+        bubbles: true, cancelable: true, pointerId: 1, clientX: 500, clientY: 500,
+      }))
+    })
+    await act(async () => {
+      window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1, clientX: 500, clientY: 500 + dy }))
+    })
+    await act(async () => {
+      window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: 500, clientY: 500 + dy }))
+    })
+  }
+
+  it('pulls an anchored desk down to the composer card\'s bottom edge and stops there', async () => {
+    launcherAt(42)
+    composerAt(700)
+    await shelf()
+
+    await pull(1000)
+
+    expect(palette()?.style.height).toBe(`${700 - (42 + DESK_ANCHOR_GAP)}px`)
+  })
+
+  it('holds a detached desk\'s top edge when the corner is pulled past the composer', async () => {
+    /* The limit is met by the bottom edge stopping, not by the palette climbing:
+       a top edge that runs from a hand pulling down is the opposite of what the
+       corner is for. */
+    localStorage.setItem(
+      DESK_GEOMETRY_KEY,
+      JSON.stringify({ x: 40, y: 300, w: 300, h: 300, detached: true }),
+    )
+    composerAt(700)
+    await shelf()
+    palette()!.getBoundingClientRect = (() => ({
+      left: 40, right: 340, top: 300, bottom: 600, width: 300, height: 300, x: 40, y: 300,
+    })) as never
+
+    await pull(600)
+
+    expect(palette()?.style.top).toBe('300px')
+    expect(palette()?.style.height).toBe('400px')
   })
 })

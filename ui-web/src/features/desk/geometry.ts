@@ -16,7 +16,9 @@ export const DESK_SNAP_DISTANCE = 34
    click, large enough that a click's own jitter is never mistaken for a drag. */
 export const DESK_DRAG_THRESHOLD = 4
 export const DESK_MIN_SIZE = 250
-export const DESK_MAX_SIZE = 480
+/* The width only: the height has no number of its own, and reaches down to
+   the composer card's bottom edge however tall the window (`deskBottomLimit`). */
+export const DESK_MAX_WIDTH = 480
 export const DESK_VIEWPORT_GUTTER = 8
 /* The default is the smallest desk that shows a tab's contents, not the
    smallest one that renders -- it used to be 250x260 against a 250 minimum,
@@ -96,12 +98,29 @@ const WORKSPACE_EDGE_GUTTER = 8
 const COLUMN_GAP = 6
 const COLUMN_TRANSITION_DELTA = WORKSPACE_EDGE_GUTTER + COLUMN_GAP
 
+/* The lowest the desk's bottom edge goes: the composer card's own bottom edge,
+   so a palette pulled all the way down ends level with the box the reader
+   types in. A dock that is not drawn -- an imported conversation has none -- leaves
+   the window's gutter as the limit, the case `dockLift` reads the same way. */
+export function deskBottomLimit(): number {
+  const card = document.querySelector('.chat > .dock > .dock-in')
+  if (!card?.getClientRects().length) return window.innerHeight - DESK_VIEWPORT_GUTTER
+  return card.getBoundingClientRect().bottom
+}
+
 export function clampGeometry(value: DeskGeometry): DeskGeometry {
-  const w = Math.max(DESK_MIN_SIZE, Math.min(DESK_MAX_SIZE, value.w, window.innerWidth - 16))
-  const h = Math.max(DESK_MIN_SIZE, Math.min(DESK_MAX_SIZE, value.h, window.innerHeight - 16))
+  const w = Math.max(DESK_MIN_SIZE, Math.min(DESK_MAX_WIDTH, value.w, window.innerWidth - 16))
+  const limit = deskBottomLimit()
+  /* The height is the room between the top edge and the limit. Anchored, the
+     stylesheet holds that edge under the launcher. Detached, the edge is
+     wherever the palette was put, so the room is measured from the window's
+     top instead: measured from the palette's own top, a downward move would
+     shrink the palette rather than stop it. */
+  const top = value.detached ? DESK_VIEWPORT_GUTTER : anchoredTop() ?? value.y
+  const h = Math.max(DESK_MIN_SIZE, Math.min(value.h, limit - top))
   return {
     x: Math.max(DESK_VIEWPORT_GUTTER, Math.min(window.innerWidth - w - DESK_VIEWPORT_GUTTER, value.x)),
-    y: Math.max(DESK_VIEWPORT_GUTTER, Math.min(window.innerHeight - h - DESK_VIEWPORT_GUTTER, value.y)),
+    y: Math.max(DESK_VIEWPORT_GUTTER, Math.min(limit - h, value.y)),
     w,
     h,
     detached: value.detached,
@@ -111,6 +130,13 @@ export function clampGeometry(value: DeskGeometry): DeskGeometry {
 function launcher(): HTMLElement | null {
   return (document.querySelector('.desk-follow-toggle') as HTMLElement | null)
     ?? document.getElementById('wsBtn')
+}
+
+/* Where the anchored desk's top edge sits: the gap below the launcher, the
+   same placement `anchoredGeometry` reads back for the magnet. */
+function anchoredTop(): number | null {
+  const rect = launcher()?.getBoundingClientRect()
+  return rect ? rect.bottom + DESK_ANCHOR_GAP : null
 }
 
 export function defaultGeometry(): DeskGeometry {

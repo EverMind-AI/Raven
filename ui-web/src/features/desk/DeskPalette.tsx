@@ -14,6 +14,7 @@ import {
   defaultGeometry,
   DESK_DRAG_THRESHOLD,
   DESK_GEOMETRY_KEY,
+  deskBottomLimit,
   deskReserve,
   magnetGeometry,
 } from './geometry'
@@ -423,6 +424,12 @@ export function DeskPalette(): JSX.Element | null {
     event.stopPropagation()
     pointerCleanup.current?.()
     const start = { pointerX: event.clientX, pointerY: event.clientY, ...geom }
+    /* Only the top is ever pinned, so the height takes no more than the room
+       between that edge and the limit. Left to clampGeometry, a detached palette
+       pulled past the limit would make that room by climbing -- its top edge
+       running from a hand that is pulling down. */
+    const top = event.currentTarget.closest('.desk-palette')?.getBoundingClientRect().top ?? geom.y
+    const room = deskBottomLimit() - top
     const target = event.currentTarget
     const pointerId = event.pointerId
     const controller = new AbortController()
@@ -436,7 +443,7 @@ export function DeskPalette(): JSX.Element | null {
            a rightward drag has to shrink it instead. Detached has no pinned
            edge, so the hand's own direction is the width's. */
         w: start.w + (start.detached ? 1 : -1) * (e.clientX - start.pointerX),
-        h: start.h + e.clientY - start.pointerY,
+        h: Math.min(start.h + e.clientY - start.pointerY, room),
       }))
     }
     const finish = (e?: globalThis.PointerEvent): void => {

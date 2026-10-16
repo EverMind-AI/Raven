@@ -5456,7 +5456,10 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 :root[data-shell="1"] #deskHost { --desk-launcher-center: calc(var(--tl-row, 38px) / 2); }
 .desk-palette { position: fixed; display: flex; flex-direction: column; min-width: 250px; min-height: 250px;
   z-index: 2;
-  max-width: min(480px, calc(100vw - 16px)); max-height: min(480px, calc(100vh - 16px));
+  /* No height cap but the window's: the inline height is sized to reach the
+     composer card's bottom edge (features/desk/geometry.ts), and a fixed one
+     here would clip it short of that. */
+  max-width: min(480px, calc(100vw - 16px)); max-height: calc(100vh - 16px);
   overflow: hidden; resize: none; pointer-events: auto; color: var(--text); background: var(--ink);
   border: 1px solid var(--line); border-radius: 10px;
   box-shadow: 0 16px 42px rgba(0, 0, 0, .16), 0 1px 1px rgba(0, 0, 0, .04);
