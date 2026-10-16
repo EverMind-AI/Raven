@@ -659,21 +659,28 @@ def _still_ours(pid: int, command: Any, born: Any) -> bool:
     proves nothing, so its pid is left alone. (The session id would be one
     more mark, but macOS's ``ps`` prints 0 for it.)
 
-    The command is known by the name it was started under or by its
-    arguments, because ``ps`` shows what the pid exec'd into, and argv[0]
-    may not have survived the way there: macOS's ``/usr/bin/python3`` is a
-    stub that execs ``Python.app/Contents/MacOS/Python`` (measured
-    2026-10-16: an orphan under it was read as gone and outlived the daemon
-    that ran it by a minute), and a shebang script shows its interpreter
-    first. The arguments -- the agent's own script, flags and ids -- are
-    passed on as they are. A bare name that execs into another image cannot
-    be told, and is left alone.
+    The command is known by the name it was started under, or by its
+    positional arguments in order, because ``ps`` shows the line the process
+    has now, and the start of it may not have survived the way there:
+    macOS's ``/usr/bin/python3`` is a stub that execs
+    ``Python.app/Contents/MacOS/Python`` (measured 2026-10-16: an orphan
+    under it was read as gone and outlived the daemon that ran it by a
+    minute), and npm's ``npx`` retitles itself ``npm exec <spec>`` (measured
+    the same day: ``npx -y`` left neither word in the line). What such a
+    program keeps is what it was asked to run -- the script, the package,
+    the ids -- while a flag like ``-y`` is the first thing it consumes, so
+    the flags are left out of the mark. A bare name that execs into another
+    image cannot be told, and is left alone. ``-ww``, because procps cuts
+    the column to ``COLUMNS`` even into a pipe, and the arguments sit at the
+    end of the line.
     """
     if not isinstance(born, str) or not born:
         return False
     ps = shutil.which("ps") or "/bin/ps"
     try:
-        done = subprocess.run([ps, "-o", "pgid=,command=", "-p", str(pid)], capture_output=True, text=True, timeout=5)
+        done = subprocess.run(
+            [ps, "-ww", "-o", "pgid=,command=", "-p", str(pid)], capture_output=True, text=True, timeout=5
+        )
     except (OSError, subprocess.SubprocessError):
         return False
     lines = [line for line in done.stdout.splitlines() if line.strip()]
@@ -688,10 +695,23 @@ def _still_ours(pid: int, command: Any, born: Any) -> bool:
         return False
     if not want:
         return False
-    arguments = " ".join(want[1:])
-    if os.path.basename(want[0]) not in parts[1] and not (arguments and arguments in parts[1]):
+    if os.path.basename(want[0]) not in parts[1] and not _positionals_in(parts[1], want[1:]):
         return False
     return _born(pid) == born
+
+
+def _positionals_in(line: str, arguments: list[str]) -> bool:
+    """Whether every argument that is not a flag appears in ``line``, in the order it was given; never for none."""
+    positional = [word for word in arguments if word and not word.startswith("-")]
+    if not positional:
+        return False
+    at = 0
+    for word in positional:
+        found = line.find(word, at)
+        if found < 0:
+            return False
+        at = found + len(word)
+    return True
 
 
 def _lose_record(record: Path, info: dict[str, Any]) -> dict[str, Any]:

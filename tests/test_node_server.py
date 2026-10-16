@@ -1192,20 +1192,24 @@ def test_still_ours_says_no_when_ps_fails_or_disagrees_or_the_command_cannot_be_
 
 def test_still_ours_knows_the_agent_by_its_arguments_when_argv0_was_exec_d_into_another_image(monkeypatch):
     """macOS's ``/usr/bin/python3`` is a stub that execs ``Python.app/Contents/MacOS/Python``: ``ps`` then shows that
-    image as argv[0] and ``python3`` nowhere, while the arguments -- the agent's own script and flags -- are intact.
-    A match on the arguments counts, so a restarted daemon still ends the orphan rather than reporting it gone."""
+    image as argv[0] and ``python3`` nowhere, while the arguments -- the agent's own script and ids -- are intact;
+    npm's ``npx`` retitles itself ``npm exec <spec>``, keeping the package and dropping its own name and flags. A
+    match on the positional arguments counts, so a restarted daemon still ends the orphan rather than reporting
+    it gone."""
     sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True)
     try:
         pid = sleeper.pid
         born = server._born(pid)
         assert isinstance(born, str) and born
         shown = {"line": ""}
+        seen: list[list[str]] = []
         real_run = subprocess.run
 
         def ps(argv, *a, **k):
             if "lstart=" in argv:
                 return subprocess.CompletedProcess(argv, 0, stdout=born.removeprefix("lstart:") + "\n", stderr="")
             if "pgid=,command=" in argv:
+                seen.append(list(argv))
                 return subprocess.CompletedProcess(argv, 0, stdout=f"{pid} {shown['line']}\n", stderr="")
             return real_run(argv, *a, **k)
 
@@ -1219,11 +1223,23 @@ def test_still_ours_knows_the_agent_by_its_arguments_when_argv0_was_exec_d_into_
         assert server._still_ours(pid, "python3", born) is False, (
             "a bare name that execs into another image cannot be told"
         )
-        shown["line"] = (
-            "node /Users/u/.npm/_npx/abc/node_modules/.bin/npx -y @agentclientprotocol/claude-agent-acp@0.81.1"
-        )
+        assert all("-ww" in argv for argv in seen), "the line is read whole, whatever COLUMNS says"
+        # npm's npx retitles itself: neither "npx" nor "-y" is in the line, the package it was asked to run is
+        # (measured 2026-10-16 on macOS, npm 10.9.8: ``npm exec @agentclientprotocol/claude-agent-acp@0.81.1``)
+        shown["line"] = "npm exec @agentclientprotocol/claude-agent-acp@0.81.1   "
         assert server._still_ours(pid, "npx -y @agentclientprotocol/claude-agent-acp@0.81.1", born) is True, (
-            "a shebang script shows its interpreter first and its own name and arguments after"
+            "the package is what npx kept of its arguments; the flag it consumed is not asked for"
+        )
+        assert server._still_ours(pid, "npx -y @agentclientprotocol/codex-acp@1.13.1", born) is False, (
+            "another package under the same retitled name"
+        )
+        shown["line"] = "/usr/bin/python3 /tmp/w/wait.py 120 mark-1"
+        assert server._still_ours(pid, "python3 /tmp/w/wait.py mark-1 120", born) is True, (
+            "the name alone still counts even when the arguments are out of order"
+        )
+        shown["line"] = "/opt/Python.app/Python /tmp/w/wait.py 120 mark-1"
+        assert server._still_ours(pid, "python3 /tmp/w/wait.py mark-1 120", born) is False, (
+            "the positional arguments count in their order"
         )
         shown["line"] = "/usr/bin/perl /tmp/other.pl mark-1 120"
         assert server._still_ours(pid, "python3 /tmp/w/wait.py mark-1 120", born) is False, "another program"
