@@ -130,6 +130,49 @@ describe('the confirm dialog', () => {
     expect(el('cfNo').hidden).toBe(false)
   })
 
+  it('offers a second answer only while a question has one, between cancel and yes', () => {
+    render()
+    expect(document.getElementById('cfAlt')).toBeNull()
+    const seen: string[] = []
+    confirm.ask('Already imported', 'As Trip.', 'Open existing', () => seen.push(`yes:${veil()}`), 'primary', {
+      label: 'Import anyway',
+      fn: () => seen.push(`alt:${veil()}`),
+    })
+    const order = Array.from(el('cfYes').parentElement!.querySelectorAll('button')).map((b) => b.id)
+    expect(order).toEqual(['cfNo', 'cfAlt', 'cfYes'])
+    expect(text('cfAlt')).toBe('Import anyway')
+    expect(el('cfAlt').className).toBe('btn')
+    expect(document.activeElement).toBe(el('cfNo'))
+    el('cfAlt').click()
+    expect(seen).toEqual(['alt:false'])
+    /* Like the question's words, the button stays in the markup under the
+       lowered veil; the next question that offers one answer takes it away. */
+    confirm.ask('Delete this?', '', 'Delete', () => {})
+    expect(document.getElementById('cfAlt')).toBeNull()
+  })
+
+  it('runs only the answer that was given', () => {
+    render()
+    const seen: string[] = []
+    const ask = (): void =>
+      confirm.ask('Already imported', '', 'Open existing', () => seen.push('yes'), 'primary', {
+        label: 'Import anyway',
+        fn: () => seen.push('alt'),
+      })
+    ask()
+    el('cfYes').click()
+    ask()
+    el('cfNo').click()
+    ask()
+    confirm.answerAlt()
+    confirm.answerAlt()
+    expect(seen).toEqual(['yes', 'alt'])
+    confirm.ask('Delete this?', '', 'Delete', () => seen.push('delete'))
+    expect(confirm.get().alt).toBeNull()
+    confirm.answerAlt()
+    expect(seen).toEqual(['yes', 'alt'])
+  })
+
   it('does not throw on a page without the sheet', () => {
     document.body.innerHTML = ''
     expect(() => confirm.ask('t', 'b', 'l', () => {})).not.toThrow()

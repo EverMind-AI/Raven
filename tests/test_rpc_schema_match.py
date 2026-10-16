@@ -579,6 +579,9 @@ EXPECTED_ERROR_CODES = {
     -32026: "bugreport_unavailable",
     -32027: "review_conflict",
     -32028: "bugreport_state",
+    -32029: "imported_read_only",
+    -32030: "imported_package_invalid",
+    -32031: "imported_busy",
 }
 
 

@@ -32,6 +32,7 @@ import { currentTurn as wsCurrentTurn } from '../../features/workspace/store'
 import { t } from '../../i18n/t'
 import { $ } from '../../lib/dom'
 import { formatDuration as dur } from '../../lib/duration'
+import { isImportedKey } from '../../lib/imported'
 import { show as ntfPush } from '../../lib/notifications'
 import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/session'
 import { hasNamingFlag, hasTurnDuration } from '../../rpc/capabilities'
@@ -263,6 +264,9 @@ export function sendMidTurn(text: string): void {
 
 /** Send, into the turn that is running or as one of its own. */
 export function send(text: string): void {
+  /* Every way of sending ends here, the ones that skip the composer's own
+     button included; an imported conversation takes none of them. */
+  if (isImportedKey(sessionCurrent())) return
   /* There is no turn to merge into until the conversation exists. A draft's
      first message is still being turned into one -- `registryIsDraft` is
      already false while `promoting` runs its staged writes -- so a second

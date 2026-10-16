@@ -40,6 +40,7 @@ from raven.config.schema import (
     ThirdPartyOpenAISubagentConfig,
 )
 from raven.contracts.memory import Memory
+from raven.contracts.subagent_backend import SubagentActionAbortedError
 from raven.providers.base import LLMResponse, ToolCallRequest
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.sandbox import ExecResult, SandboxExecutor
@@ -5396,3 +5397,65 @@ async def test_a_dispatch_left_on_its_machine_has_its_origin_and_summary_added_t
     assert run.origin["authored_task"] == "Go." and run.origin["handle"] == run.task_id, (
         "no instance: the handle is the dispatch"
     )
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("the agent went away"), SubagentActionAbortedError("stopped")])
+async def test_a_failed_run_s_record_on_its_machine_stays_when_the_draining_scheduler_refuses_its_announce(
+    monkeypatch, tmp_path, failure
+) -> None:
+    """The failure case of the reply case above: the backend left the record (its prompt was out), the announce of the
+    error was refused, so the record stays for the next start to report; an announce that was taken forgets it.
+    Both error branches, the plain failure and the terminal safety decision."""
+    from raven.acp_client import remote_runs
+
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+
+    class _FailsThere:
+        streams = False
+
+        async def run(self, task: str, *, task_id: str, reported_by_caller: bool = False, **_: Any) -> str:
+            remote_runs.record(
+                remote_runs.RemoteRun(
+                    machine="box",
+                    task=f"stub@box-{task_id}",
+                    agent="stub@box",
+                    session_key="tui:s1",
+                    handle=task_id,
+                    task_id=task_id,
+                    session_id="s",
+                    prompt_id=3,
+                    next_id=4,
+                    initialize={},
+                    launch_key="k",
+                    config_key="c",
+                    session_cwd="/w",
+                    stateful=False,
+                )
+            )
+            raise failure
+
+    manager = SubagentManager(provider=_StubProvider(), workspace=tmp_path)
+    monkeypatch.setattr(manager, "_resolve_backend", lambda agent: _FailsThere())
+    taken = False
+
+    async def _announce(*_a: Any, **_k: Any) -> bool:
+        return taken
+
+    monkeypatch.setattr(manager, "_announce_result", _announce)
+    origin = {"channel": "tui", "chat_id": "s1", "session_key": "tui:s1", "agent": "stub@box"}
+
+    await manager._run_subagent_inner(
+        "t1", "find it", "find", dict(origin), _DummyExecutor(), manager.provider, manager.model
+    )
+
+    (kept,) = remote_runs.pending()
+    assert (kept.task_id, kept.task_summary, kept.origin["session_key"]) == ("t1", "find", "tui:s1"), (
+        "refused: the failure waits for the next start, with what its announce needs"
+    )
+
+    taken = True
+    await manager._run_subagent_inner(
+        "t2", "find it", "find", dict(origin), _DummyExecutor(), manager.provider, manager.model
+    )
+
+    assert [run.task_id for run in remote_runs.pending()] == ["t1"], "announced: t2's record is gone"

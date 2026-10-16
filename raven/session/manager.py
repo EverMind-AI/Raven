@@ -27,6 +27,18 @@ from raven.utils.paths import ensure_dir, safe_filename, safe_path_segment
 # front of every human-facing picker.
 SUBAGENT_CHANNEL = "sub"
 
+# Key prefix of an Imported Conversation (raven/trajectory/imported.py). Those
+# live under the raven home, never in this store: a save under this channel is
+# refused, so nothing that resolves a key to a file here can give an imported
+# conversation a writable twin that pickers, sweeps and delivery targets see.
+IMPORTED_CHANNEL = "imported"
+
+
+def _refuse_imported(key: str) -> None:
+    if key.partition(":")[0] == IMPORTED_CHANNEL:
+        raise ValueError(f"{key!r} is an imported conversation; the session store does not keep it")
+
+
 # How many sessions a manager keeps loaded once nothing else holds them. Soft:
 # a session with unsaved state is never dropped from the cache, and one a caller
 # still holds stays reachable through ``SessionManager._held`` whatever this says.
@@ -372,6 +384,66 @@ def _saved_time(value: Any) -> datetime | None:
         # it once moved to local time.
         return parsed.astimezone().replace(tzinfo=None) if parsed.tzinfo is not None else parsed
     except (ValueError, OverflowError, OSError):
+        return None
+
+
+def read_session_file(path: Path, key: str) -> Session | None:
+    """The session stored in the transcript at ``path``, read as ``key``.
+
+    None when the file is absent or cannot be read. Public because a transcript
+    kept outside the session store -- an Imported Conversation's -- is read by
+    the same rules: metadata records are appended per save and the last one
+    wins.
+    """
+    if not path.exists():
+        return None
+
+    try:
+        messages = []
+        metadata = {}
+        created_at = None
+        updated_at = None
+        last_consolidated = 0
+        pending_clarification = None
+
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    # Partial trailing line from a crashed append.
+                    logger.debug("Skipping undecodable line in session {}", key)
+                    continue
+
+                # Metadata records are appended per save; last one wins.
+                if data.get("_type") == "metadata":
+                    metadata = data.get("metadata", {})
+                    created_at = datetime.fromisoformat(data["created_at"]) if data.get("created_at") else None
+                    updated_at = data.get("updated_at")
+                    last_consolidated = data.get("last_consolidated", 0)
+                    pending_clarification = data.get("pending_clarification")
+                else:
+                    messages.append(data)
+
+        session = Session(
+            key=key,
+            messages=messages,
+            created_at=created_at or datetime.now(),
+            updated_at=_saved_time(updated_at) or datetime.now(),
+            metadata=metadata,
+            last_consolidated=last_consolidated,
+            pending_clarification=pending_clarification,
+        )
+        session._persisted_count = len(messages)
+        session._file_stamp = _stamp(path)
+        session._persisted_metadata = dict(metadata)
+        return session
+    except Exception as e:
+        logger.warning("Failed to load session {}: {}", key, e)
         return None
 
 
@@ -753,57 +825,7 @@ class SessionManager:
 
     def _load(self, key: str) -> Session | None:
         """Load a session from disk."""
-        path = self.session_path(key)
-        if not path.exists():
-            return None
-
-        try:
-            messages = []
-            metadata = {}
-            created_at = None
-            updated_at = None
-            last_consolidated = 0
-            pending_clarification = None
-
-            with open(path, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-
-                    try:
-                        data = json.loads(line)
-                    except json.JSONDecodeError:
-                        # Partial trailing line from a crashed append.
-                        logger.debug("Skipping undecodable line in session {}", key)
-                        continue
-
-                    # Metadata records are appended per save; last one wins.
-                    if data.get("_type") == "metadata":
-                        metadata = data.get("metadata", {})
-                        created_at = datetime.fromisoformat(data["created_at"]) if data.get("created_at") else None
-                        updated_at = data.get("updated_at")
-                        last_consolidated = data.get("last_consolidated", 0)
-                        pending_clarification = data.get("pending_clarification")
-                    else:
-                        messages.append(data)
-
-            session = Session(
-                key=key,
-                messages=messages,
-                created_at=created_at or datetime.now(),
-                updated_at=_saved_time(updated_at) or datetime.now(),
-                metadata=metadata,
-                last_consolidated=last_consolidated,
-                pending_clarification=pending_clarification,
-            )
-            session._persisted_count = len(messages)
-            session._file_stamp = _stamp(path)
-            session._persisted_metadata = dict(metadata)
-            return session
-        except Exception as e:
-            logger.warning("Failed to load session {}: {}", key, e)
-            return None
+        return read_session_file(self.session_path(key), key)
 
     def append_metadata_patch(self, key: str, patch: dict[str, Any]) -> bool:
         """Fold ``patch`` into a session's metadata by appending one record.
@@ -864,6 +886,7 @@ class SessionManager:
         name with ``(fork)`` after it, which is a name for the fork rather than
         for what it was forked from.
         """
+        _refuse_imported(session.key)
         path = self.session_path(session.key)
 
         if not session.metadata.get("title") and not session.metadata.get("parent_session_id"):
@@ -1036,6 +1059,7 @@ class SessionManager:
         Returns the persisted child, or None when the source does not exist or
         has zero messages (a fork of an empty session has no value).
         """
+        _refuse_imported(source_key)
         source = self.peek(source_key)
         if source is None or not source.messages:
             return None

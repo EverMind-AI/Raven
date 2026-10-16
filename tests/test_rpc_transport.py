@@ -1022,3 +1022,52 @@ async def test_a_socket_that_will_not_close_does_not_stop_the_others() -> None:
 
     assert fine.closed_with == WSCloseCode.GOING_AWAY
     assert broken not in gateway._sockets
+
+
+# ---------------------------------------------------------------------------
+# Imported Conversations
+# ---------------------------------------------------------------------------
+
+
+async def test_file_refuses_a_path_an_imported_transcript_names(gateway_client, tmp_path, monkeypatch) -> None:
+    from raven.rpc.methods import console
+
+    gateway, client = gateway_client
+    roots: list[str] = []
+    real_root = console._workspace_root
+    monkeypatch.setattr(console, "_workspace_root", lambda loop, key: roots.append(key) or real_root(loop, key))
+    gateway.agent_loop_factory = lambda: None
+    target = tmp_path / "here.txt"
+    target.write_text("this machine's file", encoding="utf-8")
+    token = {"X-Raven-Token": gateway.session_token}
+    refused = await client.get("/file", params={"path": str(target), "session": "imported:" + "a" * 32}, headers=token)
+    assert refused.status == 404
+    assert roots == []
+    await client.get("/file", params={"path": str(target), "session": "tui:x"}, headers=token)
+    assert roots == ["tui:x"], "an ordinary session still resolves its own root"
+
+
+async def test_the_app_sweeps_import_staging_and_stops_the_runner(tmp_path, monkeypatch) -> None:
+    import os
+    import time
+
+    from raven.trajectory import imported
+
+    root = imported.imports_root()
+    stale = root / imported.STAGING_DIR / "stale"
+    stale.mkdir(parents=True)
+    long_ago = time.time() - 2 * 24 * 3600
+    os.utime(stale, (long_ago, long_ago))
+    trash = root / f"{imported.TRASH_PREFIX}{'b' * 32}"
+    trash.mkdir()
+    stopped: list[float] = []
+    monkeypatch.setattr(imported.RUNNER, "stop", lambda timeout: stopped.append(timeout) or True)
+
+    gateway = WsGateway()
+    client = TestClient(TestServer(build_app(gateway, None)))
+    await client.start_server()
+    try:
+        assert not stale.exists() and not trash.exists()
+    finally:
+        await client.close()
+    assert stopped == [30]

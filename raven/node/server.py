@@ -588,6 +588,120 @@ _IDLE_CHECK_S = 15.0
 #: went first: the host reads it the way it reads a lost link.
 LOST_RC = -1
 
+#: What a task's record says, as ``reason``, when the daemon that ran it went
+#: first: the host hands the sentence on as the agent's end.
+RESTARTED_AGENT_ENDED = (
+    "the Raven node on this machine was restarted while the agent ran; nothing could read the agent's output "
+    "any more, so it was ended"
+)
+RESTARTED_AGENT_GONE = "the Raven node on this machine was restarted while the agent ran, and the agent is gone"
+
+_PR_SET_PDEATHSIG = 1
+_PRCTL: Any = None
+if sys.platform == "linux":
+    try:
+        import ctypes
+
+        _PRCTL = ctypes.CDLL(None, use_errno=True).prctl
+    except (OSError, AttributeError):  # pragma: no cover - a libc without prctl
+        _PRCTL = None
+
+
+def _sign_death_pact() -> None:
+    """In the child between fork and exec: one libc call, nothing imported, nothing locked."""
+    _PRCTL(_PR_SET_PDEATHSIG, int(signal.SIGTERM), 0, 0, 0)  # pragma: no cover - runs in the forked child
+
+
+def _death_pact() -> dict[str, Any]:
+    """How an agent is tied to the daemon's life on Linux: ``preexec_fn`` for its start, or nothing elsewhere.
+
+    A daemon killed outright (``kill -9``) leaves its agents writing to pipes
+    nobody reads, under a record that still says ``running``. On Linux the
+    agent is told the moment the daemon's thread is gone (``PR_SET_PDEATHSIG``,
+    a SIGTERM, the signal a cancel sends first); everywhere the next daemon
+    ends what is left and says so (:meth:`Daemon.recover`). ``preexec_fn``
+    runs in the forked child: the daemon's only other thread is the one that
+    captured the login environment, idle by the time any agent starts.
+    """
+    return {"preexec_fn": _sign_death_pact} if _PRCTL is not None else {}
+
+
+def _born(pid: int) -> str | None:
+    """A mark of when ``pid`` started: the same for the same process, another for a later one given its number.
+
+    Linux's start tick from ``/proc`` where there is one; elsewhere the start
+    time ``ps`` prints, to the second. ``None`` when neither can be read.
+    """
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as handle:
+            # The fields after the parenthesised name: state first, the start tick 20th.
+            after_name = handle.read().rpartition(")")[2].split()
+        return f"tick:{int(after_name[19])}"
+    except (OSError, IndexError, ValueError):
+        pass
+    ps = shutil.which("ps") or "/bin/ps"
+    try:
+        done = subprocess.run([ps, "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    text = " ".join(done.stdout.split())
+    return f"lstart:{text}" if done.returncode == 0 and text else None
+
+
+def _still_ours(pid: int, command: Any, born: Any) -> bool:
+    """Whether ``pid`` is still the agent a record names.
+
+    Three marks, all required: alive and the leader of its own process group
+    (as every agent is started, in a session of its own), running the
+    command the record says, and started when the record says (``born``,
+    :func:`_born`). A pid that has moved on to another process fails the
+    last one even when the program is the same; a record without the mark
+    proves nothing, so its pid is left alone. (The session id would be one
+    more mark, but macOS's ``ps`` prints 0 for it.)
+    """
+    if not isinstance(born, str) or not born:
+        return False
+    ps = shutil.which("ps") or "/bin/ps"
+    try:
+        done = subprocess.run([ps, "-o", "pgid=,command=", "-p", str(pid)], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    lines = [line for line in done.stdout.splitlines() if line.strip()]
+    if done.returncode != 0 or not lines:
+        return False
+    parts = lines[-1].split(None, 1)
+    if len(parts) < 2 or not parts[0].isdigit() or int(parts[0]) != pid:
+        return False
+    try:
+        want = shlex.split(str(command or ""))[:1]
+    except ValueError:
+        return False
+    if not want or os.path.basename(want[0]) not in parts[1]:
+        return False
+    return _born(pid) == born
+
+
+def _lose_record(record: Path, info: dict[str, Any]) -> dict[str, Any]:
+    """``info``, a record left at ``running`` by a daemon that is gone, brought to ``lost``: written, with why.
+
+    The agent it names may still be alive -- an orphan of a daemon that was
+    killed outright, writing to a pipe nobody reads -- and is ended the way a
+    cancel ends it, when the pid is still the process it was started as
+    (:func:`_still_ours`); a pid that has moved on is left alone.
+    """
+    pid = info.get("pid")
+    ended = (
+        isinstance(pid, int) and not isinstance(pid, bool) and _still_ours(pid, info.get("command"), info.get("born"))
+    )
+    if ended:
+        _end_tree(pid)
+    info["state"], info["rc"] = "lost", LOST_RC
+    info["ended"] = info.get("ended") or time.time()
+    info["reason"] = RESTARTED_AGENT_ENDED if ended else RESTARTED_AGENT_GONE
+    _write_json(record / "task.json", info)
+    return info
+
+
 _TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@-]{0,119}$")
 
 
@@ -751,6 +865,8 @@ class _Task:
         self.command = command
         self.cwd = cwd
         self.started = time.time()
+        self.born = _born(proc.pid)
+        """When the agent started, as :func:`_born` marks it: what a later daemon checks before ending its pid."""
         self.ended: float | None = None
         self.rc: int | None = None
         self.frames = 0
@@ -776,6 +892,7 @@ class _Task:
             "command": self.command,
             "cwd": self.cwd,
             "pid": self.proc.pid,
+            "born": self.born,
             "state": state,
             "rc": self.rc,
             "started": self.started,
@@ -1091,6 +1208,7 @@ class Daemon:
                     stderr=asyncio.subprocess.PIPE,
                     start_new_session=True,
                     limit=_AGENT_LINE_LIMIT,
+                    **_death_pact(),
                 )
             except OSError as exc:
                 raise _RefusedError(_INTERNAL_ERROR, f"could not start {argv[0]!r}: {exc.strerror or exc}") from None
@@ -1112,15 +1230,43 @@ class Daemon:
         if info is None:
             raise _RefusedError(protocol.UNKNOWN_TASK, f"no task {task_id!r} is running or recorded on this machine")
         if info.get("state") == "running":
-            # The daemon that ran it is gone, and the agent with it: the
-            # record says so from now on, so no host reads a run that ended
-            # as one still going.
-            info["state"], info["rc"], info["ended"] = "lost", LOST_RC, info.get("ended") or time.time()
-            _write_json(record / "task.json", info)
+            # The daemon that ran it is gone: the agent, if it is still alive
+            # as that daemon's orphan, is ended, and the record says so from
+            # now on, so no host reads a run that ended as one still going.
+            info = _lose_record(record, info)
         replayed = await _replay(record, node, channel, after)
         rc = info.get("rc") if isinstance(info.get("rc"), int) else LOST_RC
-        await node.notify(protocol.AGENT_EXIT, {"channel": channel, "rc": rc})
-        return {"pid": info.get("pid"), "frames": info.get("frames"), "replayed": replayed, "rc": rc}
+        ended: dict[str, Any] = {"channel": channel, "rc": rc}
+        answer: dict[str, Any] = {"pid": info.get("pid"), "frames": info.get("frames"), "replayed": replayed, "rc": rc}
+        if isinstance(info.get("reason"), str) and info["reason"]:
+            # The node's own sentence for an end it did not watch; the host
+            # hands it on in place of the bare exit code.
+            ended["reason"] = answer["reason"] = info["reason"]
+        await node.notify(protocol.AGENT_EXIT, ended)
+        return answer
+
+    def recover(self) -> int:
+        """The records the daemon before this one left at ``running``, brought to ``lost``; how many.
+
+        Run once at start, before any connection: an agent a killed daemon
+        left behind is ended now, not when a host next asks after it, and a
+        host that asks reads the same record either way (:meth:`attach`).
+        """
+        found = 0
+        tasks_dir = self.root / TASKS_DIR
+        for record in sorted(tasks_dir.iterdir()) if tasks_dir.is_dir() else []:
+            if record.name in self.tasks or not record.is_dir():
+                continue
+            info = _read_record(record)
+            if info is not None and info.get("state") == "running":
+                _lose_record(record, info)
+                found += 1
+        if found:
+            print(
+                f"raven node: {found} task(s) the daemon before this one left running were ended and recorded as lost",
+                file=sys.stderr,
+            )
+        return found
 
     def list_tasks(self) -> list[dict[str, Any]]:
         """Every task this machine knows: the running ones, and the records of finished ones."""
@@ -1630,6 +1776,7 @@ async def run_daemon_async(root: Path, *, idle_s: float = IDLE_EXIT_S) -> int:
     pid_path(root).write_text(str(os.getpid()), encoding="utf-8")
     daemon = Daemon(root)
     daemon.sweep()
+    daemon.recover()
     server = await asyncio.start_unix_server(partial(_connection, daemon), path=str(sock), limit=_LINE_LIMIT)
     os.chmod(sock, 0o600)
     stop = asyncio.Event()

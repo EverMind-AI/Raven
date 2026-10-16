@@ -1001,6 +1001,7 @@ async def test_a_blank_line_an_agent_prints_is_forwarded_recorded_and_replayed(t
 
     assert [(f["line"], f["n"]) for f in first.notified(protocol.AGENT_FRAME)] == [("a", 1), ("", 2), ("b", 3)]
     assert (daemon.record_dir("t-blank") / "frames.jsonl").read_bytes() == b"a\n\nb\n"
+    assert isinstance(_record(daemon, "t-blank")["born"], str), "the record carries when the agent started"
 
     second = _Conn(daemon)
     await second.ask(protocol.AGENT_ATTACH, {"channel": 5, "task": "t-blank", "after": 1}, request_id=2)
@@ -1078,8 +1079,176 @@ async def test_a_record_left_running_by_a_daemon_that_died_is_read_as_lost(tmp_p
     attached = await conn.ask(protocol.AGENT_ATTACH, {"channel": 1, "task": "t-gone"})
 
     assert attached["result"]["rc"] == server.LOST_RC and attached["result"]["replayed"] == 1
-    assert conn.notified(protocol.AGENT_EXIT) == [{"channel": 1, "rc": server.LOST_RC}]
-    assert _record(daemon, "t-gone")["state"] == "lost"
+    assert attached["result"]["reason"] == server.RESTARTED_AGENT_GONE, "pid 1 is not the agent: it was already gone"
+    assert conn.notified(protocol.AGENT_EXIT) == [
+        {"channel": 1, "rc": server.LOST_RC, "reason": server.RESTARTED_AGENT_GONE}
+    ]
+    assert (
+        _record(daemon, "t-gone")["state"] == "lost"
+        and _record(daemon, "t-gone")["reason"] == server.RESTARTED_AGENT_GONE
+    )
+
+
+async def test_recover_ends_the_agent_a_killed_daemon_left_behind_and_the_record_says_why(tmp_path):
+    """A daemon killed outright leaves its agents writing to pipes nobody reads: the next daemon ends them at its
+    start, records why, and a host that asks after the task reads that sentence instead of a bare exit code."""
+    root = tmp_path / "node"
+    orphan = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
+    daemon = server.Daemon(root)
+    record = daemon.record_dir("t-orphan")
+    record.mkdir(parents=True)
+    (record / "task.json").write_text(
+        json.dumps(
+            {
+                "task": "t-orphan",
+                "state": "running",
+                "pid": orphan.pid,
+                "born": server._born(orphan.pid),
+                "command": f"{sys.executable} -c 'import time; time.sleep(60)'",
+                "started": 1.0,
+                "frames": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (record / "frames.jsonl").write_text("", encoding="utf-8")
+    try:
+        assert daemon.recover() == 1
+        deadline = time.monotonic() + 5
+        while orphan.poll() is None and time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
+        assert orphan.poll() is not None, "the orphan was ended"
+        info = _record(daemon, "t-orphan")
+        assert (info["state"], info["rc"], info["reason"]) == ("lost", server.LOST_RC, server.RESTARTED_AGENT_ENDED)
+        conn = _Conn(daemon)
+        attached = await conn.ask(protocol.AGENT_ATTACH, {"channel": 1, "task": "t-orphan"})
+        assert attached["result"]["reason"] == server.RESTARTED_AGENT_ENDED
+        assert conn.notified(protocol.AGENT_EXIT) == [
+            {"channel": 1, "rc": server.LOST_RC, "reason": server.RESTARTED_AGENT_ENDED}
+        ]
+        assert daemon.recover() == 0, "once: a lost record is not brought down again"
+    finally:
+        if orphan.poll() is None:
+            orphan.kill()
+        orphan.wait()
+
+
+def test_a_record_whose_pid_moved_on_to_another_process_is_left_alone(tmp_path):
+    """The pid of a record names another program now: nothing is signalled, the record says the agent is gone."""
+    root = tmp_path / "node"
+    daemon = server.Daemon(root)
+    record = daemon.record_dir("t-reused")
+    record.mkdir(parents=True)
+    (record / "task.json").write_text(
+        json.dumps(
+            {
+                "task": "t-reused",
+                "state": "running",
+                "pid": os.getpid(),
+                "command": "some-agent-that-is-not-this-test --serve",
+                "started": 1.0,
+                "frames": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert (
+        server._still_ours(os.getpid(), "some-agent-that-is-not-this-test --serve", server._born(os.getpid())) is False
+    )
+    assert daemon.recover() == 1
+    assert _record(daemon, "t-reused")["reason"] == server.RESTARTED_AGENT_GONE
+
+
+def test_still_ours_says_no_when_ps_fails_or_disagrees_or_the_command_cannot_be_read(monkeypatch):
+    """Every doubt reads as "not the agent": a pid nothing can be said about is left alone."""
+    sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True)
+    try:
+        command = f"{sys.executable} -c 'import time; time.sleep(30)'"
+        born = server._born(sleeper.pid)
+        assert isinstance(born, str) and born == server._born(sleeper.pid), "the mark is the same twice over"
+        assert server._still_ours(sleeper.pid, command, born) is True, "a session leader, the command, the mark"
+        assert server._still_ours(sleeper.pid, command, "tick:1") is False, "the same program, started another time"
+        assert server._still_ours(sleeper.pid, command, None) is False, "a record without the mark proves nothing"
+        assert server._still_ours(sleeper.pid, "sh -c 'an unbalanced quote", born) is False, (
+            "a command shlex cannot read"
+        )
+        assert server._still_ours(sleeper.pid, "", born) is False, "no command recorded: nothing to match"
+
+        def failing(*_a, **_k):
+            raise OSError("no ps here")
+
+        monkeypatch.setattr(server.subprocess, "run", failing)
+        assert server._still_ours(sleeper.pid, command, born) is False, "ps cannot be run"
+        assert server._born(sleeper.pid) is None or sys.platform == "linux", "no ps, no mark (off Linux)"
+
+        monkeypatch.setattr(
+            server.subprocess, "run", lambda *_a, **_k: subprocess.CompletedProcess([], 1, stdout="", stderr="")
+        )
+        assert server._still_ours(sleeper.pid, command, born) is False, "ps names no such process"
+    finally:
+        sleeper.kill()
+        sleeper.wait()
+
+
+def test_born_reads_ps_when_proc_has_nothing_to_say(monkeypatch):
+    """Off Linux there is no ``/proc``; on Linux one that cannot be read is the same case: ``ps`` gives the start time."""
+    import builtins
+
+    real_open = builtins.open
+
+    def no_proc(path, *args, **kwargs):
+        if str(path).startswith("/proc/"):
+            raise OSError("no proc here")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", no_proc)
+    sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True)
+    try:
+        born = server._born(sleeper.pid)
+        assert isinstance(born, str) and born.startswith("lstart:") and born == server._born(sleeper.pid)
+    finally:
+        sleeper.kill()
+        sleeper.wait()
+    assert server._born(2**22 + 12345) is None, "a pid nothing runs under: no mark at all"
+
+
+def test_recover_passes_over_what_is_not_a_record_directory(tmp_path):
+    daemon = server.Daemon(tmp_path / "node")
+    (tmp_path / "node" / server.TASKS_DIR / "stray.txt").write_text("not a record", encoding="utf-8")
+    assert daemon.recover() == 0
+    assert (tmp_path / "node" / server.TASKS_DIR / "stray.txt").exists(), "left where it was"
+
+
+def test_the_death_pact_is_signed_on_linux_only():
+    pact = server._death_pact()
+    if sys.platform == "linux":
+        assert pact["preexec_fn"] is server._sign_death_pact
+    else:
+        assert pact == {}
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="PR_SET_PDEATHSIG is Linux's")
+async def test_on_linux_an_agent_goes_when_its_daemon_is_killed_outright(tmp_path):
+    """The pact end to end: a parent that starts a sleeper the daemon's way is killed with SIGKILL; the sleeper goes."""
+    script = tmp_path / "parent.py"
+    script.write_text(
+        "import subprocess, sys, time\n"
+        "from raven.node import server\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], "
+        "start_new_session=True, **server._death_pact())\n"
+        "print(child.pid, flush=True)\n"
+        "time.sleep(60)\n",
+        encoding="utf-8",
+    )
+    parent = await asyncio.create_subprocess_exec(sys.executable, str(script), stdout=asyncio.subprocess.PIPE)
+    assert parent.stdout is not None
+    child_pid = int((await asyncio.wait_for(parent.stdout.readline(), timeout=20)).strip())
+    parent.kill()
+    await parent.wait()
+    deadline = time.monotonic() + 5
+    while not _gone(child_pid) and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+    assert _gone(child_pid), "the sleeper went with the parent"
 
 
 @pytest.mark.parametrize(

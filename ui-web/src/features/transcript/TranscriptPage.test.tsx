@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { setTranslator } from '../../i18n/t'
 import { I18N } from '../../i18n/t'
 import * as attachmentCache from '../../lib/attachmentCache'
+import { _resetForTests as resetSession, setCurrent } from '../../lib/session'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
 import { hold as holdHost } from '../../state/session/hosts'
@@ -4191,5 +4192,96 @@ describe('transcript island, a shut body is not built', () => {
     expect($$('.wkin .dtl')).toHaveLength(0)
     openRows()
     expect($$('.wkin .dtl')).toHaveLength(1)
+  })
+})
+
+/* An imported conversation is read on a machine that has none of its runs,
+   files or instances: nothing here asks this gateway for them, and nothing
+   offers to change the conversation. */
+describe('transcript island, an imported conversation', () => {
+  const KEY = 'imported:' + 'a'.repeat(32)
+
+  beforeEach(() => { setCurrent(KEY) })
+  afterEach(() => { resetSession() })
+
+  function readDagCard(): HTMLElement {
+    act(() => {
+      const st = mount.step()
+      st.tool('run_subagent_dag', { task_summary: 'a graph', nodes: [{ id: 'alpha' }, { id: 'beta' }] })
+        .done(true, 'DAG run run-7: 2 nodes done', 30)
+      st.tool('run', { cmd: 'ls' }).done(true, 'ok', 5)
+      st.seal()
+    })
+    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    const row = $$('.wkin .wrow')[0] as HTMLElement
+    act(() => { row.click() })
+    return row.nextElementSibling as HTMLElement
+  }
+
+  it('offers no branch under an answer, and the same answer offers one elsewhere', () => {
+    const turn = [
+      { role: 'user' as const, text: 'why did it fail' },
+      { role: 'assistant' as const, text: 'the token had expired' },
+    ]
+    const branches = (): Element[] => [...document.querySelectorAll('.ansfoot .acts button')]
+      .filter((b) => b.getAttribute('aria-label') === 'en:gui.answer.branch')
+    wire({ branch: () => {} })
+    act(() => { mount.history(turn) })
+    expect(branches()).toHaveLength(0)
+    expect(store.branchOf({ main: true } as never)).toBeNull()
+    setCurrent('tui:a')
+    wire({ branch: () => {} })
+    act(() => { mount.history(turn) })
+    expect(branches().length).toBeGreaterThan(0)
+  })
+
+  it('reads no run record, and does not draw a finished run as still going', async () => {
+    const reads: string[] = []
+    const doors: string[] = []
+    wire({
+      dagRun: (runId: string) => { reads.push(runId); return Promise.resolve({ files: [] }) },
+      openDagRun: (runId: string) => { doors.push(runId) },
+    })
+    const card = readDagCard()
+    await act(async () => { await Promise.resolve() })
+    expect(reads).toEqual([])
+    /* The nodes the arguments named are still pending, and nothing will ever say
+       otherwise: the graph reads as closed, not as running. */
+    expect(store._dagCallsForTests()[0]!.nodes.map((n) => n.status)).toEqual(['pending', 'pending'])
+    expect(card.querySelector('.dot')?.className).toBe('dot ok')
+    expect(card.querySelector('.v.gov')).toBeNull()
+    expect([...card.querySelectorAll('.k')].map((k) => k.textContent)).not.toContain('en:gui.deleg.d_nodes')
+  })
+
+  it('opens no task pane for a run or an agent', () => {
+    const doors: string[] = []
+    wire({ openDagRun: (id: string) => { doors.push(`dag:${id}`) }, openSpawn: (id: string) => { doors.push(`spawn:${id}`) } })
+    store.openDagRun('run-7')
+    store.openSpawn('read_docs')
+    expect(doors).toEqual([])
+  })
+
+  it('asks for no agent roster', async () => {
+    const asked: string[] = []
+    wire({ spawnList: async () => { asked.push('list'); return [] } })
+    act(() => {
+      const st = mount.step()
+      st.tool('spawn', { agent: 'raven-code', task: 'read the docs', node_id: 'read_docs' }).done(true, 'started', 3)
+      st.tool('run', { cmd: 'ls' }).done(true, 'ok', 5)
+      st.seal()
+    })
+    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    act(() => { ($$('.wkin .wrow')[0] as HTMLElement).click() })
+    await act(async () => { await Promise.resolve() })
+    expect(asked).toEqual([])
+  })
+
+  it('draws a picture by its name without asking this gateway for it', () => {
+    wire()
+    act(() => {
+      mount.history([{ role: 'user', text: `look\n\n${ATT_NOTE}\n- uploads/shot.png` }])
+    })
+    expect($('.turn.me .shot')).toBeNull()
+    expect($('.turn.me .achip .nm')?.textContent).toBe('shot.png')
   })
 })

@@ -1331,6 +1331,52 @@ async def test_a_cancel_the_node_refuses_is_not_wanted_any_more(tmp_path):
     assert not endpoint._cancel_wanted, "the node answered: there is nothing there to cancel"
 
 
+async def test_an_exit_the_node_explains_reads_as_its_reason_and_the_lost_code():
+    """A daemon restarted under the agent says so on the exit: the endpoint hands the sentence on in place of a bare code."""
+    reason = "the Raven node on this machine was restarted while the agent ran, and the agent is gone"
+    endpoint = ChannelEndpoint(_Client(), 1, target=_box(), agent="echo@box")  # type: ignore[arg-type]
+    endpoint.exited(node_client.LOST_RC, reason)
+
+    assert await endpoint.wait() == node_client.LOST_RC and endpoint.ended() == reason
+
+    plain = ChannelEndpoint(_Client(), 2, target=_box(), agent="echo@box")  # type: ignore[arg-type]
+    plain.exited(0, "")
+    assert await plain.wait() == 0 and plain.ended() is None, "no reason given: a plain exit, as before"
+
+
+async def test_an_endpoint_is_offline_once_parked_or_once_its_link_is_dead():
+    endpoint = ChannelEndpoint(_Client(), 1, target=_box(), agent="echo@box")  # type: ignore[arg-type]
+    assert endpoint.offline is False
+    endpoint.detach("the link went")
+    assert endpoint.offline is True
+
+    dead = _Client()
+    other = ChannelEndpoint(dead, 2, target=_box(), agent="echo@box")  # type: ignore[arg-type]
+    dead.alive = False
+    assert other.offline is True, "gone and not yet said so by the heartbeat: nothing sent now arrives"
+
+
+async def test_a_cancel_while_the_link_is_down_does_not_wait_the_settle_budget(monkeypatch):
+    """The cancel rides with the parked endpoint to the next link; the caller is not held for a settlement that cannot come."""
+    from raven.acp_client import client as client_mod
+
+    monkeypatch.setattr(client_mod, "_CANCEL_SETTLE_S", 30.0)
+    endpoint = ChannelEndpoint(_Client(), 1, target=_box(), agent="echo@box")  # type: ignore[arg-type]
+    client = AcpClient.over(endpoint, name="echo@box")
+    try:
+        endpoint.detach("the link went")
+        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+        started = time.monotonic()
+        await asyncio.wait_for(client._cancel_turn("s1", future), timeout=5)
+
+        assert time.monotonic() - started < 1.0, "no settle wait on a link known to be down"
+        assert client.take_unsettled_cancel("s1") is True, "the turn may still run on the machine: not reused"
+        held = [params.get("line", "") for method, params in endpoint._pending if method == protocol.AGENT_FRAME]
+        assert any("session/cancel" in line for line in held), "the cancel itself waits for the next link"
+    finally:
+        await client.close()
+
+
 # ---- MCP streams lent across the link ------------------------------------------------------------
 
 

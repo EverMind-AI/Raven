@@ -19,10 +19,20 @@ Code table (server-defined range -32000..-32099):
 | -32014 | cli_command_timeout           | cli.dispatch 30s timeout         |
 | -32015 | not_dispatch_compatible       | interactive Rich widget rejected |
 | -32017 | subagent_not_found            | subagent name unknown            |
+| -32018 | session_title_too_long        | title past the storage ceiling   |
+| -32019 | subagent_not_ready            | subagent not yet usable          |
 | -32020 | trajectory_disabled           | trajectory view not enabled here |
 | -32021 | entry_not_found               | trajectory entry / block unknown |
 | -32022 | cursor_expired                | trajectory page cursor stale     |
 | -32023 | revision_changed              | trajectory entry moved on        |
+| -32024 | trajectory_task_not_found     | export job unknown or expired    |
+| -32025 | trajectory_task_limit         | too many export jobs at once     |
+| -32026 | bugreport_unavailable         | no bug report receiver here      |
+| -32027 | review_conflict               | review decisions out of date     |
+| -32028 | bugreport_state               | report not in a state for this   |
+| -32029 | imported_read_only            | imported conversation is fixed   |
+| -32030 | imported_package_invalid      | package refused; data.reason     |
+| -32031 | imported_busy                 | another import is running        |
 
 JSON-RPC pre-defined codes (-32700/-32600/-32601) are emitted directly by the
 dispatcher and have no dedicated exception class.
@@ -214,6 +224,21 @@ class BugReportStateError(RpcError):
     MESSAGE = "bugreport_state"
 
 
+class ImportedReadOnlyError(RpcError):
+    CODE = -32029
+    MESSAGE = "imported_read_only"
+
+
+class ImportedPackageError(RpcError):
+    CODE = -32030
+    MESSAGE = "imported_package_invalid"
+
+
+class ImportedBusyError(RpcError):
+    CODE = -32031
+    MESSAGE = "imported_busy"
+
+
 # JSON-RPC pre-defined ``invalid_params`` (-32602). Class added for the same
 # reason as the one below: a handler that validates its own params answers the
 # caller with the code for a bad request, instead of letting the pydantic
@@ -272,6 +297,9 @@ JSONRPC_ERROR_REGISTRY: dict[int, type[RpcError]] = {
         BugReportUnavailableError,
         ReviewConflictRpcError,
         BugReportStateError,
+        ImportedReadOnlyError,
+        ImportedPackageError,
+        ImportedBusyError,
         InvalidParamsError,
         InternalError,
     )
@@ -307,6 +335,9 @@ __all__ = [
     "BugReportUnavailableError",
     "ReviewConflictRpcError",
     "BugReportStateError",
+    "ImportedReadOnlyError",
+    "ImportedPackageError",
+    "ImportedBusyError",
     "InvalidParamsError",
     "InternalError",
     "JSONRPC_ERROR_REGISTRY",

@@ -717,8 +717,11 @@ class CliAgentBackend:
         try:
             rc = await asyncio.wait_for(drive(), timeout=self.timeout) if self.timeout is not None else await drive()
         except asyncio.TimeoutError:
+            # Ended on the machine; the record stays for the caller that
+            # reports the failure, as it does for the output (below), so a
+            # host that stops before the announce still reports the end.
             await endpoint.end()
-            _untrack(tracker, keep=False)
+            _untrack(tracker, keep=placed.reported_by_caller)
             raise CliAgentTimeoutError(f"CLI agent {self.name!r} timed out after {self.timeout}s") from None
         except asyncio.CancelledError:
             # While this process stops, the command stays with the machine's
@@ -1248,7 +1251,8 @@ class CliAgentBackend:
         A cli run's reply is the whole of its output, read from the start,
         so the record never moves past frame 0: the pick-up replays every
         line (``pick_up``). The session id is the agent id the launch minted,
-        when it minted one; an id derived from the output is not known here.
+        when it minted one; an id derived from the output is not known here,
+        and the pick-up reads it off the output it replays (``_bind_picked_up``).
         """
         from raven.acp_client import remote_runs
 
@@ -1357,15 +1361,46 @@ class CliAgentBackend:
             said = _human_failure(stdout, stderr)
             return PickedUp("error", f"CLI agent {run.agent!r} exited {rc}" + (f": {said}" if said else ""))
         try:
-            _jsonl_id, parsed = self._transcript(stdout)
+            jsonl_id, parsed = self._transcript(stdout)
         except CliAgentReportedError as exc:
             return PickedUp("error", str(exc))
-        output = await clamp_output(self._reply_from(stdout, stderr, parsed), self.max_output_chars, agent=self.name)
+        warning = await self._bind_picked_up(run, jsonl_id, stdout, stderr)
+        output = await clamp_output(
+            self._reply_from(stdout, stderr, parsed), self.max_output_chars, agent=self.name, reserved=warning
+        )
         return PickedUp(
             "ok",
             output + f"\n\n[raven] Ran on machine {target.label}, in {remote.shown(target, run.session_cwd)}, "
-            f"{PICKED_UP_NOTE}; the files it wrote are there, not on this computer.",
+            f"{PICKED_UP_NOTE}; the files it wrote are there, not on this computer." + warning,
         )
+
+    async def _bind_picked_up(self, run: Any, jsonl_id: str | None, stdout: str, stderr: str) -> str:
+        """Bind the instance a picked-up create left unbound to the session id its output names; the warning when none.
+
+        The dispatch that started the command ran ``_attempt``'s deferred
+        commit only on its own return; a host that stopped first never got
+        there, and the record carries no id for a ``derived`` entry (the
+        launch minted none). Read here the way ``_attempt`` reads it --
+        the transcript's id, else the pattern over stdout then stderr -- so
+        the next dispatch to the handle resumes this session instead of
+        opening a fresh one. Nothing for a minted id (bound at the launch)
+        or a stateless run.
+        """
+        if run.session_id or not run.handle or self.id_source != "derived":
+            return ""
+        agent_id = jsonl_id
+        if agent_id is None and self._session_id_re is not None:
+            for stream in (stdout, stderr):
+                if (m := self._session_id_re.search(stream)) is not None:
+                    agent_id = m.group(1)
+                    break
+        if agent_id is None:
+            return (
+                "\n\n[raven] Warning: no session id could be extracted from the create "
+                "output, so this instance is not resumable. Use a new handle to recreate."
+            )
+        await self._registry.commit(run.session_key, self.name, run.handle, agent_id)
+        return ""
 
     async def _attempt(
         self,

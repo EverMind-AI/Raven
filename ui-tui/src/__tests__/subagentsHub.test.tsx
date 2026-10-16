@@ -772,6 +772,22 @@ describe('SubagentsHub', () => {
     h.unmount()
   })
 
+  it('says which registered machine a row runs on, after its preset, and nothing on a row that runs here', async () => {
+    const there: SubagentRow = {
+      ...CODER_ROW,
+      machine: 'ravenx2',
+      name: 'Coder@ravenx2',
+      probe_detail: "runs on machine 'RavenX 2' (ravenx2); it ran and replied"
+    }
+    const h = mount({ rows: [CODER_ROW, there] })
+    await waitForFrame(h, 'Coder@ravenx2')
+
+    expect(h.frame()).toContain('Coder · claude_code [on ] installed at /usr/bin/claude')
+    expect(h.frame()).toContain('Coder@ravenx2 · claude_code · ravenx2 [on ] runs on machine')
+
+    h.unmount()
+  })
+
   it('omits a section header when it has no rows', async () => {
     const h = mount({ rows: ROWS.filter(r => r.configured) })
     await waitForFrame(h, 'Coder')

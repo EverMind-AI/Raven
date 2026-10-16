@@ -27,6 +27,7 @@ import { wsSetRoot } from '../../features/workspace/source'
 import { loadDeliveries } from '../../features/workspace/store'
 import { t } from '../../i18n/t'
 import { $ } from '../../lib/dom'
+import { isImportedKey } from '../../lib/imported'
 import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/session'
 import { gateway } from '../../rpc/gateway'
 import { draw as drawBanner } from '../banner'
@@ -36,7 +37,7 @@ import { load as loadTier } from '../tier'
 import { show as toast } from '../toast'
 import { clearStaged as clearStagedWorkdir } from '../workdir'
 import { reset as wsReset, setOpen as setWs } from '../ws'
-import { pitch, unpitch } from './conversation'
+import { noteRow, pitch, readOnly, unpitch } from './conversation'
 import { dropAll as dropHeldHosts } from './hosts'
 import { park, resume as resumeInPlace } from './residency'
 import { refreshDag, resume as resumeConversation } from './resume'
@@ -264,6 +265,7 @@ export function switchToDraft(): void {
   const rt = draft()
   adoptRuntime(rt)
   resetView(rt)
+  readOnly(false)
   sessionSet(null)
   // A draft runs the configured default, so leaving a conversation for one has
   // to read that default back or the chip keeps claiming the model of the
@@ -318,6 +320,9 @@ export async function switchTo(s: SessRow, turnOver = false): Promise<void> {
   if (row && (row.status === 'done' || row.status === 'ask')) row.status = null
   markNewCurrent()
   resetView(rt)
+  /* Before the conversation is asked for: the composer must not stand there for
+     the length of a round trip on a conversation it can never send to. */
+  readOnly(isImportedKey(s.id))
   $('#title')!.textContent = plainTitle(s.title)
   // A kept turn resumes in place of a disk reload: the transcript on disk does
   // not have the still-streaming content, the lane this conversation kept does.
@@ -402,6 +407,10 @@ export async function switchTo(s: SessRow, turnOver = false): Promise<void> {
          tool name and its result but not the call arguments, so this recovers
          the changed paths and counts the rest -- see wsOnHistory. */
       wsOnHistory(r.messages)
+    } else if (isImportedKey(s.id)) {
+      /* Not the empty state: a package with no session record still has a
+         trajectory, and the empty state is what takes the toggle to it away. */
+      noteRow(t('gui.sess.imported_no_transcript'), '', { quiet: true })
     } else pitch()
     /* After the replay, because the replay is the better answer where it has
        one: a manifest on a stored turn knows which turn delivered the file, and

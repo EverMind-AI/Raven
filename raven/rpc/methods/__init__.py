@@ -28,6 +28,7 @@ from raven.rpc.methods.console import register_console_methods
 from raven.rpc.methods.dag import register_dag_methods
 from raven.rpc.methods.delegation import register_delegation_methods
 from raven.rpc.methods.import_sync import register_import_methods
+from raven.rpc.methods.imported import register_imported_methods
 from raven.rpc.methods.input import register_input_methods
 from raven.rpc.methods.instances import register_instance_methods
 from raven.rpc.methods.knowledge import register_knowledge_methods
@@ -243,6 +244,8 @@ def register_aligned_methods_except_system(
     register_trajectory_methods(dispatcher)
     register_trajectory_export_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_bugreport_methods(dispatcher, agent_loop_factory=agent_loop_factory)
+    # imported.* plus the guard that keeps every write off an Imported Conversation.
+    register_imported_methods(dispatcher)
     register_knowledge_methods(dispatcher)
     # playbooks.* -- read-only view of the two-layer playbook library, so the
     # page can list what is stored and read one whole spec. Registered

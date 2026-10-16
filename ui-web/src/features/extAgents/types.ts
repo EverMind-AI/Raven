@@ -30,6 +30,11 @@ export interface ExtAgentRow {
   name: string
   preset?: string
   kind: ExtAgentKind | string
+  /* The registered machine the row runs on (an openai row: reaches its
+     endpoint from), by its id in the machine registry; null for a row that
+     runs here, and absent from a server that predates it. Shown as a chip
+     after the name: the name is the user's and need not say. */
+  machine?: string | null
   configured: boolean
   /* A built-in agent is this process. It has no row to write, which is why
      `configured` is false on one and why the connect paths below leave it out:

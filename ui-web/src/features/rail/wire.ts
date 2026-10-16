@@ -124,9 +124,12 @@ export async function archive(s: SessRow): Promise<void> {
   }
 }
 
+/* The settings page's "delete everything" is about the workspace's own
+   conversations. An Imported Conversation lives under the raven home and is
+   removed from its own row, so it is neither deleted here nor counted. */
 export async function deleteAll(): Promise<void> {
   const gone: string[] = []
-  for (const s of sessionRows().slice() as SessRow[]) {
+  for (const s of (sessionRows() as SessRow[]).filter((row) => row.from !== 'imported')) {
     try {
       /* A refusal is a SUCCESSFUL response, not a rejection: `session.delete`
        answers `{deleted: null, still_on_disk: true}` for a removal the
@@ -149,8 +152,9 @@ export async function deleteAll(): Promise<void> {
   sessionSet(null)
   switchToDraft()
   redrawSettings()
-  toast(sessionRows().length
-    ? t('gui.set.dat.del_partial', { n: gone.length, left: sessionRows().length })
+  const left = (sessionRows() as SessRow[]).filter((row) => row.from !== 'imported').length
+  toast(left
+    ? t('gui.set.dat.del_partial', { n: gone.length, left })
     : t('gui.set.dat.del_done', { n: gone.length }))
 }
 

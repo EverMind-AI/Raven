@@ -9,6 +9,7 @@ import { FileBadge, FileMark, Icon } from '../../components/Icon'
 import { t } from '../../i18n/t'
 import * as attachmentCache from '../../lib/attachmentCache'
 import { copy } from '../../lib/clipboard'
+import { readingImported } from '../../lib/imported'
 import { useTick } from '../../lib/tick'
 import * as lightbox from '../../state/lightbox'
 import { open as openChip } from '../../state/proseChips'
@@ -350,7 +351,9 @@ function mediaResult(res: string): MediaResult | null {
    name rather than to a broken-image glyph. */
 function GeneratedShot({ path }: { path: string }): ReactElement {
   const [ready, setReady] = useState(false)
-  const [gone, setGone] = useState(false)
+  /* An imported conversation's files are on the machine that recorded it: its
+     name, without asking this gateway for a file it cannot have. */
+  const [gone, setGone] = useState(readingImported)
   const src = fileURL(path)
   const name = path.split('/').pop() || path
   if (gone) {
@@ -616,7 +619,7 @@ const DelegRow = memo(function DelegRow({ lane, c }: { lane: Lane; c: CallData }
       <div key={key + 'v'} className={key === 'state' && state === 'bad' ? 'v err' : 'v'}>{v}</div>
     ))
   }
-  kv('task', t('gui.deleg.d_task'), c.label || String(a.prompt_template || a.task || '').slice(0, 160), true)
+  kv('task', t('gui.deleg.d_task'), c.label || String(a.prompt_template || a.task || '').slice(0, 160), !readingImported())
   kv('agent', t('gui.deleg.d_agent'), <span className="who">{who}</span>)
   /* `c.res` is the DISPATCH's result, so it is never the run's error. On a spawn
      whose run failed it reads `Subagent [...] started`, and beside the failure
@@ -754,7 +757,8 @@ const DagCard = memo(function DagCard({ lane, c }: { lane: Lane; c: CallData }):
        the fact a reader watching a live graph actually wants. */
     if (left) bits.push(t('gui.deleg.dag_left', { n: String(left) }))
   }
-  const nodeLine = bits.join(' · ')
+  /* Without the run's record the node states are unknown, not pending: no count. */
+  const nodeLine = readingImported() ? '' : bits.join(' · ')
   const agents = [...new Set(nodes.map((n) => n.subagent).filter(Boolean))]
   const openTask = (): void => store.openDagRun(c.runId as string)
   const grid: ReactNode[] = []
@@ -792,7 +796,7 @@ const DagCard = memo(function DagCard({ lane, c }: { lane: Lane; c: CallData }):
      on `c.runTitle` would leave both without a way onto the desk. The generic
      word stands in until then, not `c.label`: for a playbook load that is the
      playbook's name, which has its own row two lines down. */
-  if (c.runTitle || c.runId) kv('task', t('gui.deleg.d_task'), c.runTitle || t('gui.deleg.dag_title'), !!c.runId)
+  if (c.runTitle || c.runId) kv('task', t('gui.deleg.d_task'), c.runTitle || t('gui.deleg.dag_title'), !!c.runId && !readingImported())
   kv('scale', t('gui.deleg.d_scale'),
     [shape, ...(agents.length ? [agents.join(' · ')] : [])].filter(Boolean).join(' · ')
     || c.runTitle || c.label || t('gui.deleg.dag_title'))
@@ -978,7 +982,7 @@ const StepView = memo(function StepView({ lane, seg }: { lane: Lane; seg: StepDa
  * composer attaches the file it names rather than a second copy of its bytes.
  */
 function AskShot({ path, live }: { path: string; live: boolean }): ReactElement {
-  const [gone, setGone] = useState(false)
+  const [gone, setGone] = useState(readingImported)
   const name = String(path).split('/').pop() || String(path)
   const src = attachmentCache.get(String(path)) || fileURL(String(path))
   if (gone) {

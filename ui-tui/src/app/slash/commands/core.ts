@@ -324,7 +324,7 @@ export const coreCommands: SlashCommand[] = [
   },
 
   {
-    help: 'show or change the effort tier -- of this conversation, or of the subagent you are chatting with',
+    help: 'show or change the mode -- of this conversation, or of the subagent you are chatting with',
     name: 'mode',
     usage: '/mode [<id> | default]   -- default/reset/clear return to the default',
     run: (arg, ctx) => {
@@ -404,7 +404,7 @@ export const coreCommands: SlashCommand[] = [
             // surface draws the control -- this one.
             const scope = active
               ? null
-              : "Raven's own effort is the same in every tier; this is what it asks of its subagents."
+              : 'Raven itself runs the same in every mode; this is what it asks of its subagents.'
             ctx.transcript.sys(
               [
                 first,

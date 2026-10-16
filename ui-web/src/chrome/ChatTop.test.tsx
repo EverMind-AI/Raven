@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as exportWizard from '../features/export/store'
 import * as rail from '../features/rail/store'
 import * as trajectory from '../features/trajectory/store'
+import { _resetForTests as resetSession, setCurrent } from '../lib/session'
 import { absorb, resetCapabilities } from '../rpc/capabilities'
 import * as lang from '../state/lang'
 import * as menu from '../state/menu'
@@ -160,6 +161,17 @@ describe('the chat column chrome', () => {
       el('title').click()
     })
     expect(renames.n).toBe(2)
+  })
+
+  it('does not rename an imported conversation from its name', () => {
+    render()
+    setCurrent('imported:' + 'a'.repeat(32))
+    act(() => { el('title').click() })
+    expect(renames.n).toBe(0)
+    setCurrent('tui:a')
+    act(() => { el('title').click() })
+    expect(renames.n).toBe(1)
+    resetSession()
   })
 })
 
@@ -311,6 +323,21 @@ describe('the chat column chrome and the trajectory view', () => {
     expect(more().disabled).toBe(true)
     act(() => { more().click() })
     expect(menu.get().items).toEqual([])
+  })
+
+  it('disables the menu on an imported conversation however much it holds', async () => {
+    render()
+    const more = (): HTMLButtonElement => el('moreBtn') as HTMLButtonElement
+    absorb(['trajectory-v1'])
+    trajectory.install()
+    await act(async () => { await trajectory.refreshState() })
+    act(() => { trajectory.sessionChanged('imported:' + 'a'.repeat(32)) })
+    act(() => { unpitch() })
+    expect(trajectory.available()).toBe(true)
+    expect(more().disabled).toBe(true)
+    expect(el('trajBtn')).toBeTruthy()
+    act(() => { trajectory.sessionChanged('gui:a') })
+    expect(more().disabled).toBe(false)
   })
 
   it('raises one Export row under the button, and the row opens the wizard on this conversation', async () => {

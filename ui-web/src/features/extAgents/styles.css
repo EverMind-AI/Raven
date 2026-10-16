@@ -65,6 +65,19 @@
    light gold and amber are a shade apart, and the pulse is off under
    prefers-reduced-motion. The sheet's smaller dot stays solid. */
 .extAgents-nm .extAgents-led-warn { background: var(--paper); box-shadow: inset 0 0 0 1.5px var(--gold); }
+/* Where a row runs, when not here: the registered machine's id in a chip
+   after the name, in the mono face the ops pages show ids in. The chip keeps
+   its width and the name ellipsizes, so the machine is never the part cut. */
+.extAgents-mc {
+  flex: none; display: inline-flex; align-items: center; gap: 4px; max-width: 45%;
+  font-family: var(--mono); font-size: 10.5px; line-height: 16px; color: var(--muted);
+  background: var(--surface); border: 1px solid var(--line-soft); border-radius: 5px; padding: 0 6px 0 5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.extAgents-mc svg { width: 11px; height: 11px; flex: none; }
+/* On a card the chip is inline in the clamped line, with a gap before the
+   sentence; vertical-align keeps it on the text's baseline. */
+.extAgents-card .extAgents-mc { display: inline-flex; vertical-align: -3px; margin-right: 6px; max-width: 60%; }
 .extAgents-one { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
 .extAgents-one-work { font-family: var(--mono); font-size: 11.5px; color: var(--amber); display: flex; align-items: center; gap: 6px; }
 

@@ -114,6 +114,11 @@ function ConfirmSheet(): JSX.Element {
         <div className="body" id="cfBody">{s.body}</div>
         <footer>
           <button className="btn" id="cfNo" hidden={s.tone === 'notice'} onClick={cancel}>{t('gui.cancel')}</button>
+          {/* Only while a question offers a second way ahead, so the sheet the
+              page is served with is the one it always was. */}
+          {s.alt !== null ? (
+            <button className="btn" id="cfAlt" onClick={() => confirm.answerAlt()}>{s.alt}</button>
+          ) : null}
           <button className={YES_CLASS[s.tone]} id="cfYes" onClick={() => confirm.answer(true)}>{s.label ?? 'Confirm'}</button>
         </footer>
       </div>

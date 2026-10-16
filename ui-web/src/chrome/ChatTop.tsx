@@ -44,6 +44,7 @@ import * as exportWizard from '../features/export/store'
 import { rename as renameSession } from '../features/rail/store'
 import * as trajectory from '../features/trajectory/store'
 import { t } from '../i18n/t'
+import { readingImported } from '../lib/imported'
 import { servesBugReport } from '../rpc/capabilities'
 import * as lang from '../state/lang'
 import { show as showMenu } from '../state/menu'
@@ -199,7 +200,7 @@ export function ChatTop(): JSX.Element {
     <>
       <div
         className="top"
-        onClick={(e) => { if ((e.target as Element).closest('#title')) renameSession() }}
+        onClick={(e) => { if ((e.target as Element).closest('#title') && !readingImported()) renameSession() }}
       >
         <Header />
       </div>

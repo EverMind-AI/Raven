@@ -1940,7 +1940,7 @@ class SubagentManager:
                 )
                 logger.info("Subagent [{}] stopped on a terminal safety decision", task_id)
                 record.finish(status="aborted", output=ABORTED_ACTION_RESULT, activity=did)
-                await self._announce_result(
+                taken = await self._announce_result(
                     task_id,
                     task_summary,
                     task,
@@ -1949,6 +1949,7 @@ class SubagentManager:
                     "error",
                     record_path=str(record.file("out.md")),
                 )
+                announced = taken is not False
             except Exception as e:
                 await _write_spawn_status(session_key, agent, handle, "failed")
                 self._emit_status(
@@ -1957,9 +1958,13 @@ class SubagentManager:
                 error_msg = f"Error: {str(e)}"
                 logger.error("Subagent [{}] failed: {}", task_id, e)
                 record.finish(status="failed", error=error_msg, activity=did)
-                await self._announce_result(
+                # As for a reply: a failure the draining scheduler refused to
+                # announce keeps the run's record on its machine, when the
+                # backend left one, for the next start to report.
+                taken = await self._announce_result(
                     task_id, task_summary, task, error_msg, origin, "error", record_path=str(record.file("out.md"))
                 )
+                announced = taken is not False
             finally:
                 # Every terminal outcome, including the cancelled one: an id
                 # left at `running` is one no later task can reference and

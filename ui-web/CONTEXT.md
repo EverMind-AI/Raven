@@ -436,6 +436,35 @@ exactly when it says no.
 _Avoid_: "report dialog" for the bug report -- it is this wizard on another
 flow, not a dialog of its own.
 
+**Imported Conversation** (page side; the runtime term is in `../CONTEXT.md`):
+A package read back in, shown read-only. The rail's `#importedBtn`
+(`src/chrome/Rail.tsx`, under the module rows) opens a file dialog through the
+`imported` domain's store, which holds one claim from reading the file to
+dealing with the answer: while it is held the button names the file and takes
+no second one, and the second copy a duplicate offers goes through the same
+claim. A package over the upload limit is refused before it is read; the bytes
+ride `imported.upload` as one frame. A duplicate raises the confirm sheet with
+its second answer (`#cfAlt`): open the copy already imported, or import
+another. The rows are the rail's: `session.list` returns them for the
+`imported` channel (`from === 'imported'`), the Imported group draws them after
+Recent and only while there is one, and each offers rename -- on the row, never
+in the conversation's header -- and delete, and nothing else. The settings
+page's delete-all leaves them alone.
+Opened, one is read-only. The session registry sets `.chat[data-readonly]`
+(`state/session/conversation.ts`'s `readOnly`) as a switch begins, before
+`session.resume` answers, from the key's own prefix (`lib/imported.ts`); the
+stylesheet then takes away the composer dock, the workdir tag and the
+conversation menu (its slot kept), and the name stops being a rename control.
+Sending, branching, the header editor and exporting refuse in their own code
+too. What the package does not carry degrades quietly instead of failing: a
+graph card reads no run record and shows no node count, an agent card asks
+for no roster, a task pane or a file does not open (a notice says why),
+pictures show their names without a request, delivered files are missing,
+and the desk puts back nothing. A package with no session record gets a quiet
+note instead of the empty state, so its trajectory toggle stays.
+_Avoid_: "import" alone -- the `importSync` domain and `#importRow` are the
+cold-start import of another tool's memory.
+
 **Menu**:
 `src/state/menu.ts` plus `<ContextMenu/>` (`src/App.tsx`) -- the one context
 menu the whole page shares: a single standing `div#menu`, with the rows of

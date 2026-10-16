@@ -163,15 +163,24 @@ export function NewInstancePicker({ gw, onCancel, onCreated, sessionKey, t }: Ne
               {selected ? '▸ ' : '  '}
             </Text>
 
-            <Box width={26}>
-              <Text bold={selected} color={selected ? t.color.accent : t.color.muted} inverse={selected}>
+            {/* Fixed columns: a box shrinks by default, and a long name -- the
+                default `<preset>@<machine>` is one -- would otherwise be squeezed
+                by the description and wrap onto a second screen line. */}
+            <Box flexShrink={0} width={26}>
+              <Text bold={selected} color={selected ? t.color.accent : t.color.muted} inverse={selected} wrap="truncate-end">
                 {String(i + 1).padStart(2)}. {row.name}
               </Text>
             </Box>
 
-            <Box width={20}>
-              <Text bold={selected} color={selected ? t.color.accent : t.color.muted} inverse={selected}>
+            <Box flexShrink={0} width={20}>
+              <Text
+                bold={selected}
+                color={selected ? t.color.accent : t.color.muted}
+                inverse={selected}
+                wrap="truncate-end"
+              >
                 {row.kind}
+                {row.machine ? ` · ${row.machine}` : ''}
                 {open ? ` · ${open} open` : ''}
               </Text>
             </Box>

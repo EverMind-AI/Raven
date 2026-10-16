@@ -29,6 +29,9 @@ from raven.rpc.errors import (
 )
 
 Handler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
+# Runs before every registered handler with the method name and its params;
+# raising an RpcError refuses the call exactly as the handler would have.
+Guard = Callable[[str, dict[str, Any]], None]
 
 
 class Dispatcher:
@@ -42,6 +45,7 @@ class Dispatcher:
 
     def __init__(self) -> None:
         self._handlers: dict[str, Handler] = {}
+        self._guards: list[Guard] = []
 
     def register(self, method: str, handler: Handler) -> None:
         if not inspect.iscoroutinefunction(handler):
@@ -52,6 +56,10 @@ class Dispatcher:
 
     def methods(self) -> list[str]:
         return sorted(self._handlers)
+
+    def add_guard(self, guard: Guard) -> None:
+        """Check every call before its handler: one place for a rule no handler may forget."""
+        self._guards.append(guard)
 
     async def dispatch(self, frame: dict[str, Any]) -> dict[str, Any]:
         """Validate frame, route to handler, wrap result/error per JSON-RPC 2.0.
@@ -100,6 +108,8 @@ class Dispatcher:
 
         # ----- Dispatch -------------------------------------------------------------
         try:
+            for guard in self._guards:
+                guard(method, params)
             result = await handler(params)
         except RpcError as exc:
             err_payload: dict[str, Any] = {

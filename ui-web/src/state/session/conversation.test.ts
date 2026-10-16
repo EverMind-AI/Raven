@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { _resetFreshForTests, isFresh, onFresh, pitch, unpitch } from './conversation'
+import { _resetFreshForTests, isFresh, onFresh, pitch, readOnly, unpitch } from './conversation'
 
 beforeEach(() => {
   _resetFreshForTests()
@@ -32,5 +32,24 @@ describe('the empty-state flag', () => {
     off()
     unpitch()
     expect(seen).toEqual([false, true])
+  })
+})
+
+describe('the read-only flag', () => {
+  it('lays the column out read-only and back, apart from the empty state', () => {
+    const chat = document.querySelector('.chat') as HTMLElement
+    readOnly(true)
+    expect(chat.dataset.readonly).toBe('')
+    expect(isFresh()).toBe(true)
+    unpitch()
+    expect(chat.dataset.readonly).toBe('')
+    readOnly(false)
+    expect(chat.dataset.readonly).toBeUndefined()
+    expect(chat.dataset.fresh).toBeUndefined()
+  })
+
+  it('does nothing on a page without the column', () => {
+    document.body.innerHTML = ''
+    expect(() => readOnly(true)).not.toThrow()
   })
 })

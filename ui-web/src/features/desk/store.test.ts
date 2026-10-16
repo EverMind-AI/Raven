@@ -9,6 +9,7 @@ import * as confirmStore from '../../state/confirm'
 import * as escapeOrder from '../../state/escapeOrder'
 import * as pageStore from '../../state/page'
 import { resetSources, setSources } from '../../state/sources'
+import * as toastStore from '../../state/toast'
 import { installWsPane } from '../../test/wsPaneHarness'
 import * as agents from '../subagents/store'
 import * as tasksStore from '../tasks/store'
@@ -1326,5 +1327,18 @@ describe('opening a change that has no patch to show', () => {
     desk.openDeskDiff(await tasksStore.fileDiffChange(task, task.nodes[0]!, task.nodes[0]!.files[0]!))
 
     expect(desk.get().panes.map((p) => p.id)).toEqual(['diff:task:spawn:t1:n1:/w/out.md:0'])
+  })
+})
+
+describe('an imported conversation', () => {
+  it('opens no file, and says the files are elsewhere', () => {
+    const toasts = vi.spyOn(toastStore, 'show').mockImplementation(() => {})
+    setCurrent('imported:' + 'a'.repeat(32))
+    desk.openDeskFile('/workspace/a.ts')
+    expect(desk.get().panes).toEqual([])
+    expect(toasts).toHaveBeenCalledTimes(1)
+    setCurrent('s1')
+    desk.openDeskFile('/workspace/a.ts')
+    expect(desk.get().panes.map((p) => p.id)).toEqual(['file:/workspace/a.ts'])
   })
 })

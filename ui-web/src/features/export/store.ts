@@ -26,6 +26,7 @@
  */
 
 import { t } from '../../i18n/t'
+import { isImportedKey } from '../../lib/imported'
 import * as confirm from '../../state/confirm'
 import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
@@ -263,8 +264,9 @@ export function editProblem<K extends keyof ProblemDraft>(field: K, value: Probl
   if (ready !== store.get().problemReady) set({ problemReady: ready })
 }
 
-/** Whether the conversation on screen may be exported. */
-export const exportable = (sessionKey: string | null, offered: boolean): boolean => offered && sessionKey !== null
+/** Whether the conversation on screen may be exported; an imported one is read here, never sent on. */
+export const exportable = (sessionKey: string | null, offered: boolean): boolean =>
+  offered && sessionKey !== null && !isImportedKey(sessionKey)
 
 export const terminal = (job: Job | null): boolean => {
   const state = job?.status?.state

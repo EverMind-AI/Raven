@@ -305,6 +305,12 @@ def _permission_input() -> dict:
 
 def handle_prompt(request_id, params) -> None:
     session_id = params.get("sessionId") or "stub-session-1"
+    if MODE == "dies_mid_turn":
+        # Half an answer, then the process is gone: the prompt went out and
+        # fails on the client side with the connection, not with a reply.
+        update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "half"}})
+        sys.stdout.flush()
+        os._exit(5)
     if MODE == "echo_blocks":
         # Answer with what the prompt carried, block by block, so a test can see
         # the attachments the client put beside the text.

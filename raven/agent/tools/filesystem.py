@@ -324,6 +324,16 @@ class ReadFileTool(_FsTool):
             ],
         )
 
+    def _cut_line(self, line: str) -> str:
+        """One line of a page, as it is numbered: whole, here.
+
+        A tool with a budget per line cuts it here, before the page's budget
+        counts it, so a page of minified lines holds its lines and the page
+        that shows the head of one over-long line is never its answer
+        (Raven-Code's read cuts to 2000 characters with a mark).
+        """
+        return line
+
     async def execute(self, path: str, offset: int = 1, limit: int | None = None, **kwargs: Any) -> str | ToolResult:
         # A file on a registered machine is read there, by its Raven node.
         if (remote := await remote_files.answer("read_file", path, {"offset": offset, "limit": limit})) is not None:
@@ -373,11 +383,12 @@ class ReadFileTool(_FsTool):
 
             # Strict, as the whole-file decode was: a byte that is not UTF-8
             # on the page refuses the read with the codec's own sentence.
-            lines = [raw.decode("utf-8") for raw in raw_page]
+            lines = [self._cut_line(raw.decode("utf-8")) for raw in raw_page]
             end = start + len(lines)
             numbered = [f"{start + i + 1}| {line}" for i, line in enumerate(lines)]
             result = "\n".join(numbered)
 
+            note = ""
             if len(result) > self._MAX_CHARS:
                 trimmed, chars = [], 0
                 for line in numbered:
@@ -385,8 +396,27 @@ class ReadFileTool(_FsTool):
                     if chars > self._MAX_CHARS:
                         break
                     trimmed.append(line)
+                if not trimmed:
+                    # The page's first line is over the budget by itself (a
+                    # minified script, a one-line JSON, a long CSV row): whole
+                    # lines within the budget left nothing, and the footer
+                    # sent the reader back to this very line, for ever
+                    # (measured 2026-10-15: "Showing lines 1-0 of 1. Use
+                    # offset=1"). Its head is shown instead, and the rest is
+                    # said to be out of offset's reach, since offset moves by
+                    # lines. The break the budget counts makes a line that
+                    # just fits land here too; it is shown whole, unremarked.
+                    prefix = f"{start + 1}| "
+                    room = max(self._MAX_CHARS - len(prefix), 0)
+                    trimmed = [prefix + lines[0][:room]]
+                    if len(lines[0]) > room:
+                        note = (
+                            f"\n\n(Line {start + 1} is {len(lines[0])} characters long; the first {room} are shown. "
+                            "offset moves by lines and cannot reach the rest of it: grep tells whether a piece is "
+                            "in it, and a shell command that cuts by bytes, such as cut -c, shows another stretch.)"
+                        )
                 end = start + len(trimmed)
-                result = "\n".join(trimmed)
+                result = "\n".join(trimmed) + note
 
             if end < total:
                 result += f"\n\n(Showing lines {offset}-{end} of {total}. Use offset={end + 1} to continue.)"
