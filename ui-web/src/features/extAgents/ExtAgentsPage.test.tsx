@@ -307,6 +307,26 @@ describe('the Mirasim family card', () => {
     expect(tabNamed('gui.filter.all').querySelector('.extAgents-tn')!.textContent).toBe('1')
   })
 
+  it('opens installation and recheck for a missing family member', async () => {
+    const all = members().map((member) => ({ ...member, probe_status: 'missing', probe_missing: 'mirasim' }))
+    const { acts, rescans } = install(all)
+    await mount()
+    await click(family())
+    const member = pickNamed('codex-Mirasim')
+    expect(member.querySelector('.extAgents-pickgo')!.textContent).toBe('gui.agent.go_install')
+    expect(member.querySelector('.extAgents-pm')).toBe(null)
+    await click(member.querySelector<HTMLElement>('.extAgents-pickgo')!)
+    expect(acts).toEqual([])
+    expect(document.querySelector('.extAgents-inst a')!.getAttribute('href')).toBe('https://mirasim.ai/download')
+    const recheck = document.querySelector<HTMLButtonElement>('.extAgents-act button')!
+    expect(recheck.textContent).toBe('gui.agent.recheck')
+    all.forEach((entry) => { entry.probe_status = 'ready' })
+    await click(recheck)
+    expect(rescans.at(-1)).toBe(true)
+    expect(document.querySelector('.extAgents-inst')).toBe(null)
+    expect(document.querySelector('.extAgents-act')!.textContent).toContain('gui.agent.connect')
+  })
+
   it('connects the agent picked out of it, and only then draws its card', async () => {
     const { acts } = install(members())
     await mount()

@@ -742,6 +742,7 @@ function PickRow({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Eleme
      empty picker. */
   const menuless = !provs.length
   const busy = !!s.joining[row.name]
+  const missing = sectionOf(row) === 'missing'
   const failed = s.failed[row.name]
   const shown = pick ? shownModel({ ...row, model: pick }) : null
   /* The sheet's own pill states: no frame when there is nothing to pick, locked
@@ -767,7 +768,7 @@ function PickRow({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Eleme
             {line}
           </span>
         </div>
-        <div className="extAgents-pickpill">
+        {missing ? null : <div className="extAgents-pickpill">
           <span className={cls}>
             <button
               aria-expanded={open}
@@ -783,7 +784,7 @@ function PickRow({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Eleme
               {menuless ? null : <span className="extAgents-mch">{'⌄'}</span>}
             </button>
           </span>
-        </div>
+        </div>}
         <button
           className="extAgents-pickgo mini go"
           disabled={busy}
@@ -791,15 +792,16 @@ function PickRow({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Eleme
             /* The row is the picker's anchor, so a press on its own button is not
                "outside" the picker and would leave it open over a running connect. */
             setOpen(false)
-            void store.pickAndConnect(row)
+            if (missing) store.sheetOpen(row)
+            else void store.pickAndConnect(row)
           }}
           type="button"
         >
           {busy ? <Spin /> : null}
-          {t(busy ? pendingLabel(row, s) : 'gui.agent.connect')}
+          {t(busy ? pendingLabel(row, s) : missing ? 'gui.agent.go_install' : 'gui.agent.connect')}
         </button>
       </div>
-      {open ? (
+      {open && !missing ? (
         <ModelPicker
           anchor={rowEl.current}
           allowTyped={false}
