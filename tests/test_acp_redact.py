@@ -162,6 +162,38 @@ class TestTheLimits:
         text = "ordinary diagnostic " + "x" * 1000
         assert redact(text, truncated=True) == text
 
+    def test_a_jwt_is_matched_only_where_a_token_can_start(self):
+        """The boundary the JWT pattern trades coverage for.
+
+        ``eyJ`` is three characters a base64 body contains by chance, so an
+        unbounded pattern spent its time at every one of them -- 21 seconds of
+        CPU on a 256,000-character body of them. Matching only at a token
+        boundary removes that, and costs the one shape where a real token is
+        glued to a word: ``/verify-eyJ...`` is published whole. The loss stops
+        there; a separator of any kind, or the start of the text, still matches.
+        """
+        jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
+
+        assert redact(f"/verify-{jwt}") == f"/verify-{jwt}"
+        assert REPLACEMENT in redact(f"token={jwt}")
+        assert REPLACEMENT in redact(f"Bearer {jwt}")
+        assert REPLACEMENT in redact(jwt)
+
+    def test_a_pem_header_without_its_end_keeps_nothing_after_it(self):
+        """A preview that quotes the header as text loses what it showed below it.
+
+        The trade-off the missing-END rule buys: a key whose closing armour a cut
+        removed cannot be told from a header a person is talking about, and
+        leaving the body in would publish the key. It reaches every surface this
+        module scrubs, not only a failure record.
+        """
+        head = "-----BEGIN " + "PRIVATE KEY-----"
+        preview = f'PEM_HEADER = "{head}"\ndef load(path):\n    return parse(open(path).read())\n'
+
+        assert redact(preview) == f'PEM_HEADER = "{head}{REPLACEMENT}'
+        closed = preview.replace(f'{head}"', f'{head}"\nbody\n-----END PRIVATE KEY-----')
+        assert "def load" in redact(closed)
+
     def test_a_huge_string_is_truncated_rather_than_scanned(self):
         """Titles and previews reach here, not file bodies; a half-scanned string
         is worse than an honestly shortened one."""

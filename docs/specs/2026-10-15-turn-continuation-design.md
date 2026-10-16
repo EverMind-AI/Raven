@@ -198,7 +198,9 @@ question.
   without closing armour is scrubbed through the end of that window, since a prior
   replacement can move a cut fragment inside the output cap. Call records use both
   scrubbers before their own body cap. Authorization whitespace is consumed without
-  backtracking, and JWT matching starts only at token boundaries. Known truncation
+  backtracking, and JWT matching starts only at token boundaries -- matching `eyJ`
+  anywhere cost 21 seconds of CPU on a 256,000-character body of it, and a token
+  glued to a word (`/verify-eyJ...`) is what that trade gives up. Known truncation
   is passed into the scrubber so incomplete JWTs, vendor tokens, URL passwords and
   labelled credential tails are removed even without their normal minimum length
   or closing delimiter. Those tail patterns are applied to the text's last
