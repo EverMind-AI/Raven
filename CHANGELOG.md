@@ -270,7 +270,8 @@ All notable changes to Raven are documented here.
   failed remote run whose announce the draining scheduler refused used to
   vanish; its record now stays, like a reply's, for the next start to report.
   A cli run picked up after a restart now binds its instance to the session
-  id in its output, so the next turn resumes it. A cancel while the machine's
+  id in its output, so the next turn resumes it; a stateless run binds
+  nothing, and a binding a dispatch made while the pick-up waited is kept. A cancel while the machine's
   link is down no longer waits out the settle budget. An openai row's tunnel
   gives a local port that was taken in between up for another instead of
   sending the request to whoever took it. A run record that is not JSON, or not

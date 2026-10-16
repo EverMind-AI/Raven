@@ -1384,9 +1384,20 @@ class CliAgentBackend:
         the transcript's id, else the pattern over stdout then stderr -- so
         the next dispatch to the handle resumes this session instead of
         opening a fresh one. Nothing for a minted id (bound at the launch)
-        or a stateless run.
+        or a stateless run -- the record's ``stateful`` says which, as the
+        handle cannot: every run carries one (``instance`` or ``task_id``),
+        and a stateless entry may declare ``idSource: derived`` too, which
+        the dispatch path then reads nothing from and binds nothing with.
+
+        Bound the way the dispatch path binds (``run``): under the handle's
+        lock, after a lookup. A dispatch to the same named instance while
+        this pick-up waited on the machine's command looked the handle up,
+        found nothing, and bound the session it created; that binding is
+        the newer turn's thread and is kept, this one's session left
+        unbound, where committing over it would have moved the instance
+        back to a session the newer turn never saw.
         """
-        if run.session_id or not run.handle or self.id_source != "derived":
+        if run.session_id or not run.stateful or self.id_source != "derived":
             return ""
         agent_id = jsonl_id
         if agent_id is None and self._session_id_re is not None:
@@ -1394,12 +1405,15 @@ class CliAgentBackend:
                 if (m := self._session_id_re.search(stream)) is not None:
                     agent_id = m.group(1)
                     break
-        if agent_id is None:
-            return (
-                "\n\n[raven] Warning: no session id could be extracted from the create "
-                "output, so this instance is not resumable. Use a new handle to recreate."
-            )
-        await self._registry.commit(run.session_key, self.name, run.handle, agent_id)
+        async with hold_handle(run.session_key, self.name, run.handle):
+            if await self._registry.lookup(run.session_key, self.name, run.handle) is not None:
+                return ""
+            if agent_id is None:
+                return (
+                    "\n\n[raven] Warning: no session id could be extracted from the create "
+                    "output, so this instance is not resumable. Use a new handle to recreate."
+                )
+            await self._registry.commit(run.session_key, self.name, run.handle, agent_id)
         return ""
 
     async def _attempt(

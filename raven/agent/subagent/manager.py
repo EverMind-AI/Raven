@@ -1805,9 +1805,10 @@ class SubagentManager:
         # the same question.
         cancelled = False
         left = False
-        # Whether the reply reached the conversation: only a refused announce
-        # of a run that returned says no, and the run's record on its machine
-        # then stays for the next start to report.
+        # Whether the outcome reached the conversation: only an announce the
+        # draining scheduler refused says no -- of a reply, or of a failure
+        # -- and the run's record on its machine then stays for the next
+        # start to report.
         announced = True
         # The record's own id, not its directory's name: the artifacts are a
         # filename prefix in the shared node root now, so the directory names
@@ -1976,7 +1977,8 @@ class SubagentManager:
                 if not left:
                     await self._finalize_node_claim(session_key, record)
                     # The run's record on its machine, when the backend left
-                    # one with the reply: gone once the announce was taken. An
+                    # one -- with the reply, or with the failure of a prompt
+                    # that went out: gone once the announce was taken. An
                     # announce the draining scheduler refused leaves it, with
                     # what the announce after a restart needs, for the next
                     # start to report (raven.agent.subagent.resume_remote).
