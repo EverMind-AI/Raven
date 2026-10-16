@@ -20,6 +20,7 @@ from raven.ops import connection_add, connections
 from raven.rpc.errors import ConfigValidationError
 from raven.rpc.methods import machines as rpc
 from raven.rpc.models import METHOD_MODELS
+from tests._home import point_home
 
 
 def _check(method: str, payload: dict) -> None:
@@ -44,7 +45,7 @@ SECRETS = ("203.0.113.7", "alice", "id_box")
 
 @pytest.fixture(autouse=True)
 def _home(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
+    point_home(monkeypatch, tmp_path)
     monkeypatch.setattr(connections, "store_path", lambda: tmp_path / "connections.json")
     rpc._INSTALLS.clear()
     yield tmp_path

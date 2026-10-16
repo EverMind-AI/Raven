@@ -21,6 +21,7 @@ from typer.testing import CliRunner
 
 from raven.cli.ops_connection_commands import connection_app
 from raven.ops import connections
+from tests._home import point_home
 
 FULL = [
     "--non-interactive",
@@ -242,8 +243,7 @@ def test_the_probe_counts_the_cards_and_writes_a_device_line_admission_can_read(
 
 @pytest.fixture
 def home(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path / "fakehome"))
-    return tmp_path / "fakehome"
+    return point_home(monkeypatch, tmp_path / "fakehome")
 
 
 def test_adding_an_ssh_machine_writes_a_host_alias(store, reached, home):
@@ -591,7 +591,7 @@ def remove(*args, answer: str | None = None):
 
 
 def test_remove_asks_then_takes_the_row_and_its_alias_out_and_says_the_node_stays(store, monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
+    point_home(monkeypatch, tmp_path)
     _named(monkeypatch)
     _box_row(store, display_name="Lab box")
     from raven.ops.connection_add import write_ssh_alias
@@ -612,7 +612,7 @@ def test_remove_asks_then_takes_the_row_and_its_alias_out_and_says_the_node_stay
 
 
 def test_remove_refuses_while_agent_entries_name_the_machine_unless_forced(store, monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
+    point_home(monkeypatch, tmp_path)
     _named(monkeypatch, "claude_code@box")
     _box_row(store)
 
@@ -631,7 +631,7 @@ def test_remove_refuses_while_agent_entries_name_the_machine_unless_forced(store
 
 
 def test_remove_is_not_refused_over_a_disconnected_entry_but_names_it(store, monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
+    point_home(monkeypatch, tmp_path)
     _named(monkeypatch, off=("codex@box",))
     _box_row(store)
 
@@ -654,7 +654,7 @@ def test_remove_says_when_the_machine_is_not_registered_or_the_file_cannot_be_re
 def test_remove_says_what_it_could_not_do_a_registry_it_cannot_rewrite_an_alias_it_cannot_drop(
     store, monkeypatch, tmp_path
 ):
-    monkeypatch.setenv("HOME", str(tmp_path))
+    point_home(monkeypatch, tmp_path)
     from pydantic import ValidationError
 
     def broken(conn_id, **kw):

@@ -20,6 +20,7 @@ import pytest
 from raven.agent.tools.connection_add import ConnectionAddTool
 from raven.ops import connection_add as adder
 from raven.ops import connections
+from tests._home import point_home
 
 # Taken before the autouse fixture below replaces it for every test.
 _REAL_STORE_PATH = connections.store_path
@@ -27,7 +28,7 @@ _REAL_STORE_PATH = connections.store_path
 
 @pytest.fixture(autouse=True)
 def _home(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
+    point_home(monkeypatch, tmp_path)
     monkeypatch.setattr(connections, "store_path", lambda: tmp_path / "connections.json")
     return tmp_path
 
@@ -448,6 +449,17 @@ def test_remove_refuses_an_id_that_is_not_listed_a_file_it_cannot_read_and_entri
     path.write_text("{nope", encoding="utf-8")
     with pytest.raises(ValueError, match="not valid JSON"):
         adder.remove("a")
+
+
+def test_the_fixture_s_home_is_what_the_alias_helpers_open_on_windows_as_on_posix(_home):
+    """``write_ssh_alias`` and ``remove_ssh_alias`` find ``~/.ssh/config`` through ``os.path.expanduser``, which on
+    Windows reads ``USERPROFILE`` and not ``HOME``: a fixture that moved only ``HOME`` left a native Windows run
+    writing the operator's own config. Pinned with both path flavours, on every platform."""
+    import ntpath
+    import posixpath
+
+    assert ntpath.expanduser("~") == str(_home), "the Windows reading of ~"
+    assert posixpath.expanduser("~") == str(_home), "the POSIX reading of ~"
 
 
 def test_remove_ssh_alias_takes_only_the_managed_block_out(_home):
