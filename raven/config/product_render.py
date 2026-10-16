@@ -701,9 +701,10 @@ def write_generated(
     Whether the file on disk is the product's is read off a receipt beside it
     holding the digest of the last text written, so a file another binding's
     launch rewrote is still recognised. ``legacy_digests`` names texts written
-    before receipts existed. A file that is neither was edited in place: it is
-    copied to a ``.bak-*`` file first and ``notify`` names the copy, and the
-    target is replaced only once that copy is on disk.
+    before receipts existed. A file that is neither -- edited in place, or an
+    older release's copy no digest names -- is copied to a ``.bak-*`` file
+    first and ``notify`` names the copy, and the target is replaced only once
+    that copy is on disk.
 
     ``product_text=None`` turns the file off: a file this product wrote is
     removed; an edited one is kept, being the operator's now, and stops being
@@ -744,16 +745,19 @@ def write_generated(
                 action = "removed"
             else:
                 if recorded:
-                    say(f"kept {target}: it was edited in place, and it is turned off")
+                    say(f"kept {target}: it no longer holds the text this product wrote, and it is turned off")
                 action = "kept"
             receipt.unlink(missing_ok=True)
             return action
 
         if current is not None and not ours:
             backup = _back_up(target, raw or b"")
+            # Not "edited": a copy an older release wrote before receipts
+            # existed lands here too, and nobody touched that one.
             say(
-                f"{target} was edited in place; backed up to {backup}. It is regenerated on "
-                f"every launch: keep only the lines you still need in {local}"
+                f"{target} does not hold the text this product last wrote (edited in place, or "
+                f"left by an older release); backed up to {backup}. It is regenerated on every "
+                f"launch: keep only the lines you still need in {local}"
             )
         digest = _text_digest(wanted)
         if current == wanted:
