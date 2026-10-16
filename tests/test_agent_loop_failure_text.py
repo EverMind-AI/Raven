@@ -38,6 +38,17 @@ def test_a_credential_in_the_account_is_scrubbed():
     assert REPLACEMENT in text
 
 
+def test_a_json_quoted_authorization_value_in_a_body_is_scrubbed():
+    """A provider can echo the request's headers back as JSON. A token with no
+    vendor shape is caught only by the call record's body scrubber, which reads a
+    JSON-quoted ``Authorization`` value; ``redact`` alone passes it through."""
+    token = "gw_" + "q7" * 20
+    body = '{"error": {"message": "unauthorized", "headers": {"Authorization": "Bearer ' + token + '"}}}'
+    text = full_failure_text(f"401 from the gateway\n\n{body}")
+    assert token not in text
+    assert REPLACEMENT in text
+
+
 def test_the_account_is_capped_at_the_call_record_body_ceiling():
     text = full_failure_text("y" * (MAX_BODY_CHARS * 2))
     assert len(text) == MAX_BODY_CHARS
