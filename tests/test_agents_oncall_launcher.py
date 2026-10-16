@@ -103,12 +103,28 @@ def test_the_seeded_guide_is_the_trunk_template_plus_the_section(grounded, tmp_p
     assert seeded == (base.rstrip("\n") + "\n\n" + section).encode("utf-8")
 
 
-def test_the_guide_is_seeded_once_and_never_overwritten(grounded, tmp_path):
+def test_the_guide_is_regenerated_and_an_edit_is_backed_up(grounded, tmp_path):
     grounded.render_config(RUN_PY.parent / "config.json")
     guide = tmp_path / "home" / "subagent_sessions" / "raven-oncall" / "acp" / "TOOLS.md"
+    shipped = guide.read_bytes()
     guide.write_text("operator tuned")
     grounded.render_config(RUN_PY.parent / "config.json")
-    assert guide.read_text() == "operator tuned"
+    assert guide.read_bytes() == shipped
+    assert [b.read_text() for b in guide.parent.glob("TOOLS.md.bak-*")] == ["operator tuned"]
+
+
+def test_the_guide_follows_the_installed_template(grounded, tmp_path, monkeypatch):
+    """Half the guide is the installed raven's TOOLS.md template, so a raven
+    upgrade has to reach it without anyone deleting the file."""
+    grounded.render_config(RUN_PY.parent / "config.json")
+    guide = tmp_path / "home" / "subagent_sessions" / "raven-oncall" / "acp" / "TOOLS.md"
+    monkeypatch.setattr(grounded, "_guide_text", lambda: "newer template\n\nsection\n")
+    grounded.render_config(RUN_PY.parent / "config.json")
+    assert guide.read_text() == "newer template\n\nsection\n"
+    assert not list(guide.parent.glob("TOOLS.md.bak-*"))
+    (guide.parent / "TOOLS.local.md").write_text("Never restart the lab router.")
+    grounded.render_config(RUN_PY.parent / "config.json")
+    assert guide.read_text() == "newer template\n\nsection\n\nNever restart the lab router.\n"
 
 
 def test_the_engine_home_is_never_inside_the_configured_host_home(grounded, tmp_path):

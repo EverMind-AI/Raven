@@ -7,8 +7,8 @@ launcher repeats is here -- reading a setting from the process environment
 with a ``.env`` fallback, merging declared secret slots, inheriting the
 host's LLM block when the product has no key of its own, pinning a state
 root under the host's home and an engine home OUTSIDE it (the home lives in
-the raven data directory, the work stays where the work is), seeding a
-workspace file once, assembling the
+the raven data directory, the work stays where the work is), regenerating a
+product-owned workspace file on every launch, assembling the
 ``acp.modes`` catalogue from overlay files, sweeping stale renders by pid
 liveness, and writing the rendered copy owner-only with the host's deny
 rules merged in.
@@ -30,15 +30,19 @@ requirement.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import os
 import re
+import stat
+import time
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from raven.config.raven import MEMORY_BACKEND_DISTRIBUTIONS, SHIPPED_DEFAULT_BACKEND
 from raven.contracts.path_policy import CONFIG_FILENAME, WORKSPACE_DEFAULT_SENTINEL
 from raven.home import raven_home
+from raven.utils.atomic_io import atomic_replace, write_transaction
 from raven.utils.paths import safe_path_segment
 from raven.utils.pid import pid_alive
 
@@ -626,16 +630,147 @@ def product_acp_home(product: str, *, override: str | None = None) -> Path:
 def seed_once(target: Path, render: Callable[[], str]) -> bool:
     """Write ``render()`` to ``target`` unless it already exists.
 
-    Once is the contract: the workspace copy is the live one afterwards, and
-    a product update must not silently overwrite what an operator tuned in
-    place. The render is not evaluated when the target exists. Returns
-    whether it wrote.
+    Once is the contract: the workspace copy is the live one afterwards. That
+    suits a file the operator owns from then on; text the product owns -- an
+    identity or a contract the product's gates enforce -- goes through
+    :func:`write_generated`, or a later release ships gates against a prompt
+    nobody refreshed. The render is not evaluated when the target exists.
+    Returns whether it wrote.
     """
     if target.exists():
         return False
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(render(), encoding="utf-8", newline="")
     return True
+
+
+def local_addendum(target: Path) -> Path:
+    """``agent.local.md`` beside ``agent.md``: the operator's half of a generated file."""
+    return target.with_name(f"{target.stem}.local{target.suffix}")
+
+
+def _generated_receipt(target: Path) -> Path:
+    return target.with_name(f".{target.name}.generated.sha256")
+
+
+def _text_digest(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _back_up(target: Path, raw: bytes) -> Path:
+    """Copy ``raw`` beside ``target`` under a name no earlier backup holds.
+
+    Created owner-only and never wider than ``target``: the copy holds the
+    operator's private text, and the umask default would open it to others.
+    """
+    try:
+        mode = stat.S_IMODE(target.stat().st_mode) & 0o600
+    except OSError:
+        mode = 0o600
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    stem = f"{target.name}.bak-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
+    for attempt in itertools.count():
+        backup = target.with_name(f"{stem}-{attempt}" if attempt else stem)
+        try:
+            fd = os.open(backup, flags, mode)
+        except FileExistsError:
+            continue
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        return backup
+    raise AssertionError("unreachable: itertools.count does not end")
+
+
+def write_generated(
+    target: Path,
+    product_text: str | None,
+    *,
+    legacy_digests: Iterable[str] = (),
+    notify: Callable[[str], None] | None = None,
+) -> str:
+    """Write the product's current text over ``target``; the action taken.
+
+    For a workspace file the product owns -- an identity, a contract its gates
+    enforce, a tool guide. Regenerated on every launch, so a release or a
+    config change reaches the model at the next launch instead of never.
+    The operator's half lives beside it in :func:`local_addendum` and is
+    appended after the product text.
+
+    Whether the file on disk is the product's is read off a receipt beside it
+    holding the digest of the last text written, so a file another binding's
+    launch rewrote is still recognised. ``legacy_digests`` names texts written
+    before receipts existed. A file that is neither was edited in place: it is
+    copied to a ``.bak-*`` file first and ``notify`` names the copy, and the
+    target is replaced only once that copy is on disk.
+
+    ``product_text=None`` turns the file off: a file this product wrote is
+    removed; an edited one is kept, being the operator's now, and stops being
+    tracked.
+
+    Returns ``"written"``, ``"unchanged"``, ``"removed"``, ``"kept"`` or
+    ``"absent"``. Raises ``OSError`` or ``UnicodeDecodeError`` when a file
+    cannot be read or written. An edit is never replaced before its backup
+    lands, and whatever text a failure leaves in the target, the receipt
+    still names it.
+    """
+    say = notify or (lambda _message: None)
+    receipt = _generated_receipt(target)
+    local = local_addendum(target)
+    with write_transaction(target):
+        raw = target.read_bytes() if target.is_file() else None
+        # Line endings folded the way read_text folds them, so a copy written
+        # with CRLF before seeds pinned newline="" still matches its digest.
+        current = None if raw is None else raw.decode("utf-8", errors="replace").replace("\r\n", "\n")
+        try:
+            recorded = set(receipt.read_text(encoding="ascii").split())
+        except (OSError, UnicodeDecodeError):
+            recorded = set()
+        wanted = product_text
+        if wanted is not None and local.is_file():
+            addendum = local.read_text(encoding="utf-8").strip("\n")
+            if addendum.strip():
+                wanted = wanted.rstrip("\n") + "\n\n" + addendum + "\n"
+        ours = current is not None and (current == wanted or _text_digest(current) in recorded | set(legacy_digests))
+
+        if wanted is None:
+            if local.is_file():
+                say(f"{local} is not applied: {target.name} is turned off")
+            if current is None:
+                action = "absent"
+            elif ours:
+                target.unlink()
+                action = "removed"
+            else:
+                if recorded:
+                    say(f"kept {target}: it was edited in place, and it is turned off")
+                action = "kept"
+            receipt.unlink(missing_ok=True)
+            return action
+
+        if current is not None and not ours:
+            backup = _back_up(target, raw or b"")
+            say(
+                f"{target} was edited in place; backed up to {backup}. It is regenerated on "
+                f"every launch: keep only the lines you still need in {local}"
+            )
+        digest = _text_digest(wanted)
+        if current == wanted:
+            if recorded != {digest}:
+                atomic_replace(receipt, digest + "\n", newline="")
+            return "unchanged"
+        # Two files cannot change in one step, so the receipt names both texts
+        # while the target changes: a failure between the steps leaves a
+        # target the next launch still recognises, whichever text it holds.
+        # The old text is safe to name even when it was an edit -- its
+        # backup is already on disk.
+        pending = {digest} if current is None else {digest, _text_digest(current)}
+        atomic_replace(receipt, "".join(f"{d}\n" for d in sorted(pending)), newline="")
+        atomic_replace(target, wanted, newline="")
+        if pending != {digest}:
+            atomic_replace(receipt, digest + "\n", newline="")
+        return "written"
 
 
 def mode_catalogue(

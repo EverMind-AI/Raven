@@ -76,7 +76,7 @@ def locked_append(path: Path, lines: list[str]) -> None:
             os.fsync(f.fileno())
 
 
-def _replace_unlocked(path: Path, data: str, create_mode: int | None = None) -> None:
+def _replace_unlocked(path: Path, data: str, create_mode: int | None = None, newline: str | None = None) -> None:
     tmp_path = path.with_name(path.name + ".tmp")
     preserve: int | None = None
     if create_mode is None:
@@ -84,7 +84,7 @@ def _replace_unlocked(path: Path, data: str, create_mode: int | None = None) -> 
             preserve = path.stat().st_mode & 0o7777
         except OSError:
             preserve = None
-        f = open(tmp_path, "w", encoding="utf-8")
+        f = open(tmp_path, "w", encoding="utf-8", newline=newline)
     else:
         # Secret-bearing files: the mode must hold from the first byte, so it
         # is applied by os.open at creation — narrowing with a chmod after the
@@ -95,7 +95,12 @@ def _replace_unlocked(path: Path, data: str, create_mode: int | None = None) -> 
             os.unlink(tmp_path)
         except OSError:
             pass
-        f = os.fdopen(os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, create_mode), "w", encoding="utf-8")
+        f = os.fdopen(
+            os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, create_mode),
+            "w",
+            encoding="utf-8",
+            newline=newline,
+        )
     with f:
         f.write(data)
         f.flush()
@@ -119,15 +124,17 @@ def remove_with_lock(path: Path) -> None:
     (path.parent / ".lock" / (path.name + ".lock")).unlink(missing_ok=True)
 
 
-def atomic_replace(path: Path, data: str, *, mode: int | None = None) -> None:
+def atomic_replace(path: Path, data: str, *, mode: int | None = None, newline: str | None = None) -> None:
     """Replace ``path``'s content with ``data`` via temp file + os.replace.
 
     ``mode``: hold this exact mode from the temp file's creation onward and
     carry it onto ``path`` (for secret-bearing files like token state). The
     default preserves the target's existing mode, umask for a new file.
+    ``newline`` is :func:`open`'s: ``""`` writes ``data`` byte for byte, with
+    no translation of line endings to the platform's.
     """
     with _locked(path):
-        _replace_unlocked(path, data, create_mode=mode)
+        _replace_unlocked(path, data, create_mode=mode, newline=newline)
 
 
 def atomic_update(

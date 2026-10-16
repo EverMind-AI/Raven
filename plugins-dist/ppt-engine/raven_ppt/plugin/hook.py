@@ -34,10 +34,10 @@ one loop whose bootstrap seats live in the AGENT HOME workspace
 these), so seeding ``workdir.current()`` would feed a directory nothing
 reads. The first ``before_user_inbound`` therefore seeds the HOME the
 locator granted this plugin (``ServiceLocator.workspace``): the three
-carried prompts from this wheel's package data first, write-if-missing, then
-the host's own ``sync_workspace_templates`` for the rest of the template
-set, exactly the fork's per-session order collapsed to once per home -- a
-later turn, or an operator's in-place edit, is never overwritten.
+carried prompts from this wheel's package data first, regenerated so an
+engine upgrade reaches them, then the host's own ``sync_workspace_templates``
+for the rest of the template set, write-if-missing -- exactly the fork's
+per-session order collapsed to once per process.
 """
 
 from __future__ import annotations
@@ -161,26 +161,41 @@ IDENTITY_SEATS = (
 
 
 def seed_identity(home: Path) -> list[str]:
-    """Seed the deck identity into ``home``, write-if-missing, and report what landed.
+    """Write the deck identity into ``home`` and report what changed.
 
     The three drifted prompts first -- so the host's template sync below finds
     them present and leaves them alone -- then the host's own sync for the
     rest of the template set (USER/HEARTBEAT and the L4 stubs), which is the
     fork's per-session ``sync_workspace_templates(session.root)`` collapsed to
-    once per home. Write-if-missing on every file: an operator's in-place edit
-    outlives every later launch, the fork's own contract.
+    once per home. The prompts are this wheel's and are regenerated
+    (``write_generated``), so an engine upgrade reaches the model; an
+    operator's own lines go in the seat's ``*.local.md``. The rest of the set
+    is the user's and stays write-if-missing.
+
+    A raven older than ``write_generated`` seeds the prompts write-if-missing
+    instead, and the log says they will not be refreshed.
     """
+    from raven.config import product_render
+
     seeded: list[str] = []
     prompts = pkg_files("raven_ppt") / "prompts"
+    generate = getattr(product_render, "write_generated", None)
+    if generate is None:
+        logger.warning("ppt-engine: this raven predates regenerated prompts; the deck identity is never refreshed")
     for name, seat in IDENTITY_SEATS:
         target = home / seat
+        text = (prompts / name).read_text(encoding="utf-8")
+        if generate is not None:
+            if generate(target, text, notify=lambda message: logger.warning("ppt-engine: %s", message)) == "written":
+                seeded.append(str(seat))
+            continue
         if target.exists():
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
         # newline="" for the reason raven-code seeds its guide that way: the
         # default would write a CRLF copy of an LF prompt on Windows, and each
         # seat is asserted equal to the packaged source byte for byte.
-        target.write_text((prompts / name).read_text(encoding="utf-8"), encoding="utf-8", newline="")
+        target.write_text(text, encoding="utf-8", newline="")
         seeded.append(str(seat))
     seeded.extend(sync_workspace_templates(home, silent=True))
     return seeded
@@ -243,16 +258,17 @@ class _DeckEngine:
         # First touch, not construction: the factory runs while the host is
         # still assembling, and a seat this engine never serves a turn on is a
         # home it has no business writing into.
-        self._seeded = True
         if self.home is not None:
             try:
                 if seeded := seed_identity(Path(self.home)):
-                    logger.info("ppt-engine: seeded the deck identity into %s: %s", self.home, seeded)
-            except OSError as exc:
-                # The turn must run either way; a home that cannot be written
-                # is loud in the log, and the next process retries because
-                # nothing was marked done on disk.
-                logger.warning("ppt-engine: seeding the deck identity failed: %s", exc)
+                    logger.info("ppt-engine: wrote the deck identity into %s: %s", self.home, seeded)
+            except (OSError, UnicodeDecodeError) as exc:
+                # The turn must run either way, but on whatever identity the
+                # home still holds, which may be an older engine's: loud on
+                # every turn, and retried on every turn until it lands.
+                logger.warning("ppt-engine: writing the deck identity failed; retrying next turn: %s", exc)
+                return
+        self._seeded = True
 
     def bookkeeping(self, root: Path) -> tuple[list[tuple[str, Path]], set[str]]:
         key = str(root)

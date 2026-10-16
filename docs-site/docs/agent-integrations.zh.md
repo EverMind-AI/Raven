@@ -248,6 +248,12 @@ HTTP 后端没有本地文件访问，应传有界内容而不是宿主路径。
 凭据不要放进 prompt 和共享 manifest。A2A 凭据按 origin 而不是显示名匹配；peer
 列表不是出站防火墙，详见[A2A 指南](agent-protocols.md#call-a-remote-a2a-peer)。
 
+原生 Agent 放在 ACP home 里的提示词文件（`agent_memory/profile/` 下的 `soul.md`、
+`agent.md`，以及 `TOOLS.md`）每次启动都会按当前版本和配置重新生成，直接修改不会保留。
+自己的内容请写进同目录的 `*.local.md`（例如 `agent_memory/profile/agent.local.md`），
+下次启动时会接在产品文本之后。只放仍然需要的内容：旧版本的文本可能与当前规则冲突。
+被直接修改过的文件会在覆盖前保存为 `<name>.bak-<时间>-<pid>`，launcher 日志会写明备份位置。
+
 ## 安全与排障 { #security-and-troubleshooting }
 
 出站 ACP 自动优先选择对方提供的 allow 选项。父级 permission mode 不为每个外部
