@@ -48,24 +48,36 @@ def _is_binding(name: str) -> bool:
         "tests/test_agents_ppt_launcher.py::test_the_products_tool_face_is_the_forks_config_intent_plus_the_deck",
     ],
 )
-def test_a_file_that_binds_the_roles_leaves_the_process_as_it_found_it(target: str) -> None:
+def test_a_file_that_binds_the_roles_leaves_the_process_as_it_found_it(target: str, tmp_path: Path) -> None:
     """Run the binding tests in an interpreter of their own, then look at what is left.
 
     A fixture's teardown is the one thing the test it wraps cannot observe, so
     the check is made from outside: a child interpreter started with no
     ``EVEROS_*`` variable runs ``target`` under the suite's own conftest --
     which is where the confinement lives (``_no_leaked_everos_binding``) --
-    then reports every such variable, the provenance variable and the
-    provenance set it still holds. Marked slow for the child's wall clock, not
-    for a wait of its own: the parent does nothing but read the pipe.
+    and reports every such variable, the provenance variable and the
+    provenance set it still holds. The report is written from inside the
+    session, by a ``pytest_sessionfinish`` plugin, into a file the parent
+    reads: on CI the suite's conftest hard-exits the interpreter after the
+    session (``tests/_hard_exit.py``), so nothing after ``pytest.main`` runs
+    there. Marked slow for the child's wall clock, not for a wait of its own:
+    the parent does nothing but wait on the pipe.
     """
+    report = tmp_path / "left.json"
     child = textwrap.dedent(
         f"""
         import json, os, pytest
-        rc = pytest.main(["-q", "-n", "0", "-p", "no:cacheprovider", "--no-header", {target!r}])
-        from raven_everos import config as cf
-        left = {{k: v for k, v in os.environ.items() if k.startswith("EVEROS_") or k == cf.PROVENANCE_ENV}}
-        print("LEFT=" + json.dumps({{"rc": int(rc), "env": left, "bound": sorted(cf._BOUND_HERE)}}))
+        from pathlib import Path
+
+        class Report:
+            def pytest_sessionfinish(self, session, exitstatus):
+                from raven_everos import config as cf
+                left = {{k: v for k, v in os.environ.items() if k.startswith("EVEROS_") or k == cf.PROVENANCE_ENV}}
+                Path({str(report)!r}).write_text(
+                    json.dumps({{"rc": int(exitstatus), "env": left, "bound": sorted(cf._BOUND_HERE)}}), encoding="utf-8"
+                )
+
+        pytest.main(["-q", "-n", "0", "-p", "no:cacheprovider", "--no-header", {target!r}], plugins=[Report()])
         """
     )
     # Started clean, so anything reported was made by ``target``; and outside the
@@ -74,9 +86,8 @@ def test_a_file_that_binds_the_roles_leaves_the_process_as_it_found_it(target: s
     done = subprocess.run(
         [sys.executable, "-c", child], cwd=ROOT, env=env, capture_output=True, text=True, timeout=300, check=False
     )
-    line = next((ln for ln in reversed(done.stdout.splitlines()) if ln.startswith("LEFT=")), None)
-    assert line is not None, f"the child did not report:\n{done.stdout[-2000:]}\n{done.stderr[-2000:]}"
-    left = json.loads(line[len("LEFT=") :])
+    assert report.exists(), f"the child did not report:\n{done.stdout[-2000:]}\n{done.stderr[-2000:]}"
+    left = json.loads(report.read_text(encoding="utf-8"))
     assert left["rc"] == 0, f"{target} did not pass on its own:\n{done.stdout[-3000:]}"
     assert left["env"] == {}, f"{target} left these in the environment: {left['env']}"
     assert left["bound"] == [], f"{target} left these in the provenance set: {left['bound']}"
