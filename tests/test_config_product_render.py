@@ -709,15 +709,17 @@ def test_a_failed_write_leaves_the_previous_text_and_receipt_in_place(tmp_path, 
     assert _receipt(target).read_text() == receipt
 
 
-def _fail_on_call(monkeypatch, failing: int) -> None:
-    """Make the ``failing``-th ``atomic_replace`` of the next write raise."""
+def _fail_when(monkeypatch, failing) -> None:
+    """Make every ``atomic_replace(path, data)`` that ``failing`` matches raise.
+
+    Matched by what is written, not by call order, so the test reads the same
+    whichever order the function writes in.
+    """
     real = render.atomic_replace
-    calls = []
 
     def flaky(path, data, **kwargs):
-        calls.append(path)
-        if len(calls) == failing:
-            raise OSError(f"write {failing} failed")
+        if failing(path, data):
+            raise OSError(f"cannot write {path.name}")
         return real(path, data, **kwargs)
 
     monkeypatch.setattr(render, "atomic_replace", flaky)
@@ -728,7 +730,8 @@ def test_a_failed_receipt_after_the_new_text_landed_still_recognises_it(tmp_path
     remove it, or a switched-off conduct stays in the model's context."""
     target = tmp_path / "agent.md"
     render.write_generated(target, "v1")
-    _fail_on_call(monkeypatch, 3)
+    v2 = hashlib.sha256(b"v2").hexdigest()
+    _fail_when(monkeypatch, lambda path, data: path == _receipt(target) and data == v2 + "\n")
     with pytest.raises(OSError):
         render.write_generated(target, "v2")
     monkeypatch.undo()
@@ -741,7 +744,7 @@ def test_a_failed_target_write_keeps_the_old_text_recognised(tmp_path, monkeypat
     target = tmp_path / "agent.md"
     render.write_generated(target, "v1")
     target.write_text("operator tuned")
-    _fail_on_call(monkeypatch, 2)
+    _fail_when(monkeypatch, lambda path, _data: path == target)
     with pytest.raises(OSError):
         render.write_generated(target, "v2")
     monkeypatch.undo()
@@ -753,7 +756,7 @@ def test_a_failed_target_write_keeps_the_old_text_recognised(tmp_path, monkeypat
 
 def test_a_fresh_file_whose_write_failed_leaves_nothing_unrecognised(tmp_path, monkeypatch):
     target = tmp_path / "agent.md"
-    _fail_on_call(monkeypatch, 2)
+    _fail_when(monkeypatch, lambda path, _data: path == target)
     with pytest.raises(OSError):
         render.write_generated(target, "v1")
     monkeypatch.undo()
