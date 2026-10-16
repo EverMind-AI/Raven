@@ -232,6 +232,62 @@ def test_send_raises_when_context_token_missing():
         asyncio.run(ch.send("u1", "hi"))
 
 
+# ── the sendmessage verdict reads ret as well as errcode (#210) ───────
+
+
+def _post_returning(data: dict):
+    async def fake_post(endpoint, body=None, *, auth=True):
+        return data
+
+    return fake_post
+
+
+def test_send_text_raises_when_ret_nonzero_but_errcode_zero():
+    """iLink can refuse a send with ret=-2 while errcode stays 0; the send
+    must raise rather than hand the caller a false delivery receipt (the
+    verdict _poll_once already applies to its own answers)."""
+    ch = _channel()
+    ch._post = _post_returning({"ret": -2, "errcode": 0, "errmsg": "prepare failed"})
+    with pytest.raises(RuntimeError, match=r"send text error \(ret=-2 errcode=0\): prepare failed"):
+        asyncio.run(ch._send_text("u1", "test", "ctok"))
+
+
+def test_send_text_still_raises_on_nonzero_errcode():
+    ch = _channel()
+    ch._post = _post_returning({"ret": 0, "errcode": 5, "errmsg": "rate limited"})
+    with pytest.raises(RuntimeError, match=r"send text error \(ret=0 errcode=5\)"):
+        asyncio.run(ch._send_text("u1", "test", "ctok"))
+
+
+def test_send_text_accepts_an_all_zero_verdict():
+    ch = _channel()
+    ch._post = _post_returning({"ret": 0, "errcode": 0})
+    asyncio.run(ch._send_text("u1", "test", "ctok"))  # delivered: no raise
+
+
+def test_send_media_raises_when_ret_nonzero_but_errcode_zero(tmp_path):
+    """The media send reads the same verdict: the CDN upload fakes answer
+    clean, then sendmessage refuses with ret=-2 and errcode=0."""
+    media = tmp_path / "pic.png"
+    media.write_bytes(b"not really a png")
+
+    ch = _channel()
+    ch.config = with_channel_fields(ch.config, cdn_base_url="https://cdn.example")
+
+    async def fake_post(endpoint, body=None, *, auth=True):
+        if "getuploadurl" in endpoint:
+            return {"upload_full_url": "https://cdn.example/upload"}
+        return {"ret": -2, "errcode": 0, "errmsg": "prepare failed"}
+
+    async def fake_cdn_post(url, content=None, headers=None):
+        return SimpleNamespace(raise_for_status=lambda: None, headers={"x-encrypted-param": "p"})
+
+    ch._post = fake_post
+    ch._client = SimpleNamespace(post=fake_cdn_post)
+    with pytest.raises(RuntimeError, match=r"send media error \(ret=-2 errcode=0\)"):
+        asyncio.run(ch._send_media_file("u1", str(media), "ctok"))
+
+
 # ── _process_message gating + dedup (text path, no network) ───────────
 
 
