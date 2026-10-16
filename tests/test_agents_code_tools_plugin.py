@@ -159,7 +159,7 @@ async def test_loading_coding_tools_does_not_add_diagnostics_to_host_tools(tmp_p
     out = await writer.execute(path=str(tmp_path / "host.py"), content="value = missing_binding\n")
     assert "Successfully wrote" in str(out)
     shell = TrunkExecTool(working_dir=str(tmp_path))
-    out = await shell.execute(command="printf 'other = another_missing\n' > shell.py")
+    out = await shell.execute(command="echo other = another_missing > shell.py")
     assert "Exit code: 0" in str(out)
     assert calls == []
     assert "another_missing" in (tmp_path / "shell.py").read_text()
@@ -299,6 +299,43 @@ def test_existing_name_errors_do_not_reappear_when_unrelated_lines_move(registry
     assert "preexisting_missing" not in result
 
 
+@pytest.mark.parametrize("tool_name", ["edit_file", "write_file"])
+def test_existing_syntax_error_is_still_reported_after_an_unrelated_edit(registry, tmp_path, tool_name):
+    target = tmp_path / "still_broken.py"
+    source = "def f(:\n    return 1\nvalue = 2\n"
+    _run(registry.execute("write_file", {"file_path": str(target), "content": source}))
+    params = {"file_path": str(target)}
+    if tool_name == "edit_file":
+        params.update(old_string="value = 2", new_string="value = 3")
+    else:
+        params["content"] = source.replace("value = 2", "value = 3")
+    result = _text(_run(registry.execute(tool_name, params)))
+    assert "Python syntax error" in result
+    assert "new findings compared" not in result
+    assert target.read_text() == source.replace("value = 2", "value = 3")
+
+
+def test_fixing_syntax_does_not_label_old_name_errors_as_new(registry, tmp_path):
+    target = tmp_path / "syntax_fixed.py"
+    source = "value = old_missing\ndef f(:\n    return 1\n"
+    _run(registry.execute("write_file", {"file_path": str(target), "content": source}))
+    result = _text(
+        _run(registry.execute("edit_file", {"file_path": str(target), "old_string": "f(:", "new_string": "f():"}))
+    )
+    assert "F821" in result and "old_missing" in result
+    assert "baseline is unknown" in result and "new findings compared" not in result
+
+
+@pytest.mark.parametrize("source, expected", [("def f(:\n", "Python syntax error"), ("x = missing_name\n", "F821")])
+def test_overwriting_non_utf8_source_still_checks_the_new_content(registry, tmp_path, source, expected):
+    target = tmp_path / "legacy.py"
+    target.write_bytes('# coding: gbk\nname = "\u4e2d"\n'.encode("gbk"))
+    result = _run(registry.execute("write_file", {"file_path": str(target), "content": source}))
+    assert result.file_change is None
+    assert expected in _text(result) and "baseline is unknown" in _text(result)
+    assert target.read_text(encoding="utf-8") == source
+
+
 def test_import_notices_are_optional_and_explain_side_effects(tmp_path):
     source = "import os\n"
     quiet = factories.make_write_file(_ctx(tmp_path, {"enabled": True}))
@@ -375,6 +412,10 @@ def test_name_feedback_covers_exports_and_use_before_local_assignment(registry, 
         ("value = injected_name  # noqa\n", False),
         ("value = injected_name  # noqa: F821, F401\n", False),
         ("value = injected_name  # noqa: F401\n", True),
+        ("value = injected_name  # type: ignore[name-defined]  # noqa: F821\n", False),
+        ("value = injected_name  # type: ignore[name-defined]  # noqa: F401\n", True),
+        ("value = injected_name  # noqa: F401  # noqa: F821\n", False),
+        ("value = injected_name  # noqa: F401  # noqa\n", False),
         ("# ruff: noqa: F821\nvalue = injected_name\n", False),
         ("# flake8: noqa\nvalue = injected_name\n", False),
         ("label = '# noqa'; value = injected_name\n", True),

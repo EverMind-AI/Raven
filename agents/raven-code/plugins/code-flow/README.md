@@ -4,7 +4,10 @@ When the replacement tool face is enabled, Python writes and edits return
 syntax and name-binding diagnostics alongside the normal result. The name
 checks cover undefined names (`F821`), undefined exports (`F822`), and local
 variables used before assignment (`F823`). A direct edit compares with the
-previous content to suppress existing findings. Diagnostics never undo an edit,
+previous content to suppress existing name findings. A syntax error still
+present after an edit remains visible. A baseline that cannot be parsed or
+decoded is unknown, so findings are not claimed to be newly introduced.
+Diagnostics never undo an edit,
 automatically fix code, or change the command's exit status.
 These checks run only through the enabled code-flow replacement tools. Loading
 the plugin or installing Pyflakes does not modify the host's built-in tools;
@@ -18,7 +21,7 @@ The switches live under `plugins.config["code-flow"].tools`:
 | `pythonSyntaxNote` | `true` | Master switch for Python diagnostics. |
 | `pythonLint` | `true` | Add name-binding checks to syntax diagnostics. |
 | `pythonUnusedImports` | `false` | Add advisory `F401` notices. Imports can export names or have side effects; the notice does not recommend unconditional removal. |
-| `execPythonDiagnostics` | `true` | Check changed Python files after completed local foreground commands. |
+| `execPythonDiagnostics` | `true` | Check changed Python files after completed local foreground commands when a checkpoint supplies visibility rules. |
 
 The checks parse source without importing or executing it. They honor inline
 `# noqa` / `# noqa: F821` and file-level `# ruff: noqa` / `# flake8: noqa`
@@ -35,8 +38,12 @@ omission notices. Existing host write records are reused; otherwise a bounded
 metadata scan compares file size and modification time. Scans stop at 20,000
 files or a 250 ms deadline; an incomplete scan yields no comparison. Path
 containment checks also run off the event loop with a 250 ms wait limit.
-Where the host supplies checkpoint visibility rules, diagnostics honor them
-before applying the eight-file limit and do not read withheld files. Visibility
+Post-command checks require a checkpoint covering the working directory. With
+no checkpoint or no visibility verdict, they do not read changed source files.
+Direct `write_file` / `edit_file` diagnostics remain available. Noninteractive
+runs using the default `runtime.checkpoint.policy = "interactive"` need an
+explicit `"always"` policy to enable checkpoints and post-command checks.
+Visibility rules apply before the eight-file limit and withhold ignored files. Visibility
 queries use batches of eight and stop once eight eligible files are found.
 The host's visibility callbacks can themselves perform synchronous filesystem
 operations; yielding between batches bounds repeated work, but one blocked
