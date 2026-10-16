@@ -235,9 +235,9 @@ describe('the reply to turn.cancel', () => {
   })
 
   it('does nothing at all for a turn the reader cannot stop', async () => {
-    /* A runtime turn (a delegated result re-entering) is not cancellable, and
-       the stop button claiming the UI would reset the stage under a stream
-       still arriving. */
+    /* The machine's own guard, exercised with an uncancellable stream: while
+       the phase is not one stop can act on, the button must neither call the
+       server nor fold the stage under a stream still arriving. */
     const h = await harness()
     turn.dispatch({ type: 'stream', cancellable: false })
 

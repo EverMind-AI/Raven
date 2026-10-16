@@ -611,6 +611,24 @@ class Scheduler:
         lane = self._lanes.get(conversation_id)
         return lane.cancel() if lane is not None else 0
 
+    def cancel_running(self, conversation_id: str) -> bool:
+        """Cancel only the turn running on a conversation's lane -- queued work
+        keeps its place, the way cancelling a bound handle does. True when a
+        running turn's task was cancelled, false when the lane was idle or
+        already between turns.
+        """
+        lane = self._lanes.get(conversation_id)
+        return lane is not None and lane.cancel_running() == 1
+
+    def running_future(self, conversation_id: str) -> asyncio.Future | None:
+        """The conversation lane's in-flight turn's terminal future, or None when
+        the lane holds nothing running -- the await-turnout half of
+        ``cancel_running``, so a caller can hold the lane until the cancelled
+        turn is provably unwound.
+        """
+        lane = self._lanes.get(conversation_id)
+        return lane.running_future() if lane is not None else None
+
     def has_inflight(self, conversation_id: str) -> bool:
         """True if a turn is currently running for this conversation's lane.
         The inbound gate uses this to submit a mid-turn message as

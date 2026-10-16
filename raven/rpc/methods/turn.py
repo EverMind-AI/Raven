@@ -750,14 +750,18 @@ async def turn_cancel(
     """``turn.cancel`` — cancel the in-flight turn + notify subscribers.
 
     Sequence:
-      1. Look up the active turn handle; if absent → ``{cancelled: False}``.
-      2. ``await handle.cancel()``.
+      1. Look up the active turn handle. Absent, ask the scheduler whether the
+         lane is running a turn of its own -- a runtime-opened turn (a
+         delegated result re-entering) binds no handle; cancelling it cancels
+         only that running turn and emits the same frame. Neither there →
+         ``{cancelled: False}``.
+      2. Cancel what was found.
       3. ``emitter.emit(session_key, error(reason="cancelled_by_client"))`` — the
          client resets its UI off this event. This is the ONLY cancelled-turn
          error; the sink stays silent on a cancelled TurnFailed (avoiding a
          double error), so this emit is the one signal that clears the front-end
          turn slot — it must always fire.
-      4. Await the handle so the turn is provably unwound (the sink's TurnFailed
+      4. Await the turn so it is provably unwound (the sink's TurnFailed
          handler drops the active-turn slot) before returning, so the next
          ``turn.send`` cannot race a half-unwound turn into a phantom -32003.
       5. Return ``{cancelled: True}``.
@@ -782,7 +786,33 @@ async def turn_cancel(
 
     reach = _cancellable(lane)
     if reach is None:
-        return {"cancelled": False}
+        # No bound handle can still mean a turn is running: a runtime-opened
+        # turn (a delegated result re-entering) binds neither slot, yet the
+        # scheduler holds it as the lane's running turn and its task is
+        # cancellable like any other. Cancel only that running turn -- queued
+        # work keeps its place, as a bound handle's cancel leaves it -- emit the
+        # one cancelled frame (the sink stays silent on a cancelled TurnFailed),
+        # and hold until the lane has unwound the turn before answering. The
+        # seam is probed, not assumed: a scheduler without it (a test fake)
+        # answers ``cancelled: False``, exactly as before the seam existed.
+        scheduler = _scheduler
+        running_probe = getattr(scheduler, "running_future", None) if scheduler is not None else None
+        fut = running_probe(lane) if callable(running_probe) else None
+        cancel_probe = getattr(scheduler, "cancel_running", None) if scheduler is not None else None
+        if fut is None or not callable(cancel_probe) or not cancel_probe(lane):
+            return {"cancelled": False}
+
+        if emitter is not None:
+            await emitter.emit(
+                parsed.session_key,
+                {
+                    "type": "error",
+                    "payload": _tag(_cancel_payload((turn_ids or {}).get(lane, "")), (direct_targets or {}).get(lane)),
+                },
+            )
+
+        await fut
+        return {"cancelled": True}
     handle, inject_id = reach
 
     await handle.cancel()
