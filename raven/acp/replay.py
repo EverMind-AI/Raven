@@ -218,15 +218,19 @@ def _chunk(kind: str, text: str) -> dict[str, Any]:
 
 
 def _text_of(entry: dict[str, Any]) -> str:
-    """The entry's text, redacted and clipped, or empty.
+    """Clip the entry's text, retaining the sender's policy for agent content.
 
-    Redacted on the way out for the same reason a live frame is: a replayed
-    transcript is rendered in an editor and kept in its history, and a command
-    line recorded three turns ago carries whatever was on it.
+    Local content follows the same redaction policy as its live frames.
+    Agent output and delegated reports retain their sending agent's content.
     """
     text = entry.get("text")
     if not isinstance(text, str) or not text.strip():
         return ""
+    metadata = entry.get("metadata")
+    agent_output = isinstance(metadata, dict) and metadata.get("agent_output") is True
+    delegated = entry.get("delegated")
+    if agent_output or isinstance(delegated, dict) and delegated:
+        return _clip(text)
     return redact.redact(_clip(text))
 
 

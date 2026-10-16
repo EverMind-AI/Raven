@@ -1,4 +1,4 @@
-"""Strip credentials out of anything on its way to the client.
+"""Strip credentials from Raven's own published tool and protocol content.
 
 An ACP payload is a publishing surface: a tool title, a permission prompt and an
 error message are all rendered in an editor, and some of them are persisted in
@@ -20,11 +20,8 @@ match replacement would leave a row nobody can act on. The pattern list is the
 same size as the one openclaw uses for the same job (about sixteen), and
 deliberately not the 409-line RFC-7235 header scanner sitting next to it.
 
-The same table scrubs a command the outbound client writes to its log when it
-refuses a sub-agent's request (``raven/acp_client/permissions.py``): that
-command is the sub-agent's to author and the log is retained. Seated in
-``raven.security`` rather than in ``raven.acp`` because the client may not import
-the server package.
+This table applies to Raven's own publishing surfaces. Content received from
+another agent retains that agent's redaction policy.
 
 Redaction is defence in depth, not the mechanism. A tool whose output must never
 leave the process should not be put on the wire in the first place.

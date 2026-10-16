@@ -57,6 +57,7 @@ class SpawnTool(Tool):
     # whether a given one happens to return before its sub-agent does -- a
     # consumer cannot see that distinction.
     blocking_interaction = True
+    agent_output = True
 
     def __init__(self, manager: "SubagentManager"):
         self._manager = manager

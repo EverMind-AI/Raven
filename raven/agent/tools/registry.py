@@ -52,6 +52,7 @@ class ToolSpec:
     timeout_seconds: float | None
     truncation_hint: str | None
     incomplete_hint: str | None
+    agent_output: bool
     # The optional availability declaration (raven/contracts/plugin_surface.py):
     # a tool that bills against a credential the deployment may not have
     # configured authors ``configured()``, and the withheld axis asks it per
@@ -89,6 +90,9 @@ def admit_tool(tool: Tool) -> ToolSpec:
         raise ToolAdmissionError(f"tool {name!r}: timeout_seconds must be a number or None")
     truncation = getattr(tool, "truncation_hint", None)
     incomplete = getattr(tool, "incomplete_hint", None)
+    agent_output = getattr(tool, "agent_output", False)
+    if not isinstance(agent_output, bool):
+        raise ToolAdmissionError(f"tool {name!r}: agent_output must be a bool")
     configured = getattr(tool, "configured", None)
     if configured is not None and not callable(configured):
         # ``configured = False`` reads as an author declaring the tool
@@ -112,6 +116,7 @@ def admit_tool(tool: Tool) -> ToolSpec:
         timeout_seconds=float(timeout) if timeout is not None else None,
         truncation_hint=truncation if isinstance(truncation, str) else None,
         incomplete_hint=incomplete if isinstance(incomplete, str) else None,
+        agent_output=agent_output,
         configured=configured,
         tool=tool,
     )
@@ -861,9 +866,9 @@ class ToolRegistry:
         *,
         run_meta: RunMeta | None = None,
     ) -> str:
-        """Execute a tool by name with given parameters, its output scrubbed of the credentials it could carry.
+        """Execute a tool, preserving agent content and scrubbing Raven's own tool results.
 
-        Scrubbed here, inside the traced call, because every reader starts from
+        Local results are scrubbed here, inside the traced call, because every reader starts from
         this return value: the main and sub-agent loops, the sentinel's action
         executor, the tool forwarder, and the trace span that records it. A
         loop that scrubbed only its own copy left the span, the file diff sent
@@ -1024,8 +1029,10 @@ class ToolRegistry:
             # Unwrap ToolResult here, at the boundary: `execute` promises model
             # text to every caller, and only the agent loop wants the display
             # string and multimodal blocks (which ride along on ToolOutput).
-            if isinstance(result, ToolResult):
-                model_text, display_text = result.model_text, result.display_text
+            agent_output = getattr(spec or tool, "agent_output", False) or getattr(result, "agent_output", False)
+            if isinstance(result, (ToolResult, ToolOutput)):
+                model_text = result.model_text if isinstance(result, ToolResult) else str(result)
+                display_text = result.display_text
                 retryable, blocks_call = result.retryable, result.blocks_call
                 continuation = result.continuation
                 ok = result.ok
@@ -1084,6 +1091,7 @@ class ToolRegistry:
                     ok=False,
                     removed=removed,
                     written=written,
+                    agent_output=agent_output,
                 )
             return ToolOutput(
                 model_text,
@@ -1097,11 +1105,16 @@ class ToolRegistry:
                 file_change=file_change,
                 removed=removed,
                 written=written,
+                agent_output=agent_output,
             )
         except asyncio.TimeoutError:
             return f"Error: Tool '{name}' timed out after {ceiling:.0f}s." + _hint
         except Exception as e:
-            return f"Error executing {name}: {str(e)}" + _hint
+            return ToolOutput(
+                f"Error executing {name}: {str(e)}" + _hint,
+                ok=False,
+                agent_output=getattr(spec or tool, "agent_output", False),
+            )
 
     async def _adjudicate(self, name: str, params: dict[str, Any]) -> str | None:
         """Run the cast gates over one validated call; the first non-None
@@ -1139,7 +1152,7 @@ class ToolRegistry:
 
 
 def _scrubbed(arguments: Any, out: Any) -> Any:
-    """``out`` with every text it carries scrubbed: the model text, the display, the blocks and the file contents.
+    """Preserve agent output; scrub local model text, display, blocks and file contents.
 
     The file contents are display only (the page's diff, the removal watch);
     nothing writes them back, so a redaction there cannot reach a file.
@@ -1147,6 +1160,9 @@ def _scrubbed(arguments: Any, out: Any) -> Any:
     from dataclasses import replace
 
     from raven.config.held_secrets import scrub_tool_blocks, scrub_tool_output
+
+    if isinstance(out, ToolOutput) and out.agent_output:
+        return out
 
     def text(value: Any) -> Any:
         return scrub_tool_output(arguments, value) if isinstance(value, str) and value else value

@@ -23,7 +23,6 @@ from raven.acp.mirasim.uicli import (
     end_tree,
     last_document,
     prompt_args,
-    redact,
     route_args,
     session_gone,
 )
@@ -63,9 +62,10 @@ def test_a_stdout_with_no_document_reads_as_none() -> None:
     assert last_document('{"a": 1}\ntrailing words\n') is None
 
 
-def test_the_server_token_never_survives_redaction() -> None:
-    line = "open http://127.0.0.1:4970/?token=s3cr3t&x=1 or token=other"
-    assert redact(line) == "open http://127.0.0.1:4970/?token=<redacted>&x=1 or token=<redacted>"
+def test_the_document_preserves_agent_owned_tokens() -> None:
+    line = "open http://127.0.0.1:4970/?token=example-token&x=1 or token=other"
+    document = {"text": line, "settled": True}
+    assert last_document(f"{TOKEN_LINE}\n{json.dumps(document)}") == document
 
 
 def test_a_servers_port_is_read_from_its_announcement_on_loopback_only() -> None:
@@ -203,9 +203,9 @@ def test_a_codex_home_inside_mirasims_state_is_dropped_and_any_other_kept(tmp_pa
     assert own["PATH"] == "/bin"
 
 
-def test_a_failure_is_the_last_non_log_stderr_line_redacted() -> None:
+def test_a_failure_preserves_the_last_non_log_stderr_line() -> None:
     outcome = Outcome(1, None, "Error: bad --session token=abc\n[server 12:31:39] shutting down\n")
-    assert outcome.failure == "Error: bad --session token=<redacted>"
+    assert outcome.failure == "Error: bad --session token=abc"
     assert session_gone("ui-cli: --session: not one of this server's sessions")
 
 
@@ -217,6 +217,21 @@ async def test_query_reads_the_document_and_names_a_failure(tmp_path: Path) -> N
     with pytest.raises(UiCliError, match="unknown command"):
         await cli.query(["nonsense"])
     assert await cli.version() == "0.0.465"
+
+
+async def test_version_errors_preserve_the_commands_content(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    class FailedVersion:
+        returncode = 1
+
+        async def communicate(self):
+            return b"", b"version failed: https://agent.invalid/?token=agent-example\n"
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", AsyncMock(return_value=FailedVersion()))
+    with pytest.raises(UiCliError) as caught:
+        await UiCli(executable="mirasim").version()
+    assert str(caught.value) == "`mirasim version` exited 1: version failed: https://agent.invalid/?token=agent-example"
 
 
 async def test_a_command_that_cannot_start_is_a_uicli_error(tmp_path: Path) -> None:

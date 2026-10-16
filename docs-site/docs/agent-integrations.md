@@ -208,6 +208,9 @@ question -- Claude Code's `AskUserQuestion` when Mirasim's `askTool` setting is
 on, or an MCP server's form -- as an elicitation, answered by you or by Raven's
 question autofill. A client without forms has the question skipped and named in
 the reply.
+Question text, choices, replies and error details retain the sending agent's
+content. Raven leaves redaction decisions to that agent, including when a
+returned value matches a credential Raven itself holds.
 
 Distinguish three claims when assessing compatibility:
 

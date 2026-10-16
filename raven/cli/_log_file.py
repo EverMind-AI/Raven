@@ -41,7 +41,9 @@ def _no_secrets(message: str) -> str:
 
 
 def _redact_record(record: dict) -> None:
-    record["message"] = _no_secrets(record["message"])
+    """Keep agent content intact while filtering credentials in host-generated URLs."""
+    if not record.get("extra", {}).get("agent_output"):
+        record["message"] = _no_secrets(record["message"])
 
 
 def redirect_loguru_to_file(

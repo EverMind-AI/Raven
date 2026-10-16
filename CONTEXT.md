@@ -277,6 +277,14 @@ A background agent task spawned by `SubagentManager`. Runs with its own tool set
 re-enters the session as a `SUBAGENT`-origin `TurnRequest` via Spine submit. Bounded by
 `max_concurrent` (default 8) and a per-session hourly rate limit, both shared with the
 nodes of a DAG run — every sub-agent dispatch draws on the one allowance.
+Content received from another agent keeps that agent's redaction policy: Raven does not
+replace token-shaped text or values matching its own configured credentials in replies,
+questions, permission requests, errors, transcripts, or run records. `Tool.agent_output`
+marks tools that return agent content; the admitted tool spec and `ToolOutput` carry that
+fact through `tool_call`, context assembly, live ACP updates and stored-session replay.
+Untrusted-content fencing and output limits
+still apply. The ACP journal protects Raven's outgoing credentials without rewriting
+incoming frames or stderr.
 _Avoid_: conflating with a Turn — a Subagent lives outside the main turn and re-enters via Spine.
 
 **Sub-agent role** (`RAVEN_SUBAGENT` → `agent/subagent/role.py`):

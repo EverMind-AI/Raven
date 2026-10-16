@@ -4039,7 +4039,7 @@ async def test_a_deny_check_that_raises_refuses(host_rules, monkeypatch) -> None
     assert answer == {"outcome": {"outcome": "selected", "optionId": "no"}}
 
 
-async def test_the_logged_refusal_and_approval_carry_no_credential(host_rules) -> None:
+async def test_the_logged_refusal_and_approval_preserve_the_agents_command(host_rules) -> None:
     """The command is the sub-agent's to author and the log is retained."""
     from raven.acp_client.permissions import auto_approver
 
@@ -4059,8 +4059,8 @@ async def test_the_logged_refusal_and_approval_carry_no_credential(host_rules) -
         logger.remove(sink)
     logged = [line for line in lines if "refusing" in line or "approving" in line]
     assert len(logged) == 2, lines
-    assert all(secret not in line for line in logged), logged
-    assert all("[redacted]" in line for line in logged), logged
+    assert denied["toolCall"]["title"] in logged[0]
+    assert allowed["toolCall"]["title"] in logged[1]
 
 
 async def test_a_rule_tightened_while_running_binds_the_next_request(host_rules) -> None:

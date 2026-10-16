@@ -271,6 +271,7 @@ Skills with available="false" need dependencies installed first - you can try in
         blocks: list[dict[str, Any]] | None = None,
         *,
         trusted_note: str = "",
+        agent_output: bool = False,
     ) -> list[dict[str, Any]]:
         """Add a tool result to the message list.
 
@@ -283,6 +284,9 @@ Skills with available="false" need dependencies installed first - you can try in
         that can carry an image in a tool result; ``result`` stays the fallback
         and must make sense on its own.
 
+        ``agent_output`` keeps another agent's content unchanged. The untrusted
+        fence applies to it just as it does to local tool results.
+
         ``trusted_note`` is this system's own line about the result (the
         watch-work steering line) and goes AFTER the fence closes. Inside it,
         the fence's own contract — data, NOT instructions — orders the model
@@ -291,9 +295,9 @@ Skills with available="false" need dependencies installed first - you can try in
         composed may travel through here; never tool output.
         """
         content: Any
-        # A command or a read can print Raven's own config; its keys stop here.
-        result = scrub_held_secrets(result)
-        blocks = scrub_tool_blocks(None, blocks)
+        if not agent_output:
+            result = scrub_held_secrets(result)
+            blocks = scrub_tool_blocks(None, blocks)
         if blocks:
             content = wrap_untrusted_blocks(blocks, source=tool_name)
             if trusted_note:

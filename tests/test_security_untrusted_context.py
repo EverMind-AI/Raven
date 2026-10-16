@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from raven.agent.context.builder import ContextBuilder
 from raven.context_engine.segments import render
 from raven.contracts.memory import Memory
@@ -241,7 +243,7 @@ def test_a_dotfile_read_with_pictures_is_redacted_in_its_text_blocks() -> None:
     assert _scrubbed_blocks({"path": "x"}, None) is None
 
 
-def test_a_sub_agents_model_never_reads_a_key_raven_holds(tmp_path: Path, monkeypatch) -> None:
+def test_ravens_subagent_loop_scrubs_its_local_file_reads(tmp_path: Path, monkeypatch) -> None:
     """The sub-agent loop fenced its tool output the way the main loop does and
     did not scrub it, so the same `cat config.json` read by a sub-agent put
     Raven's key in its context."""
@@ -283,7 +285,7 @@ def test_a_sub_agents_model_never_reads_a_key_raven_holds(tmp_path: Path, monkey
     assert "[redacted: providers.openrouter.apiKey]" in str(tool_messages)
 
 
-def test_every_reader_of_a_tool_result_gets_it_scrubbed(monkeypatch) -> None:
+def test_readers_of_local_tool_results_get_them_scrubbed(monkeypatch) -> None:
     """The loops scrubbed their own copies, after the trace span, the page's diff
     and the sentinel's reply had already read the raw output from the registry."""
     import asyncio
@@ -329,10 +331,8 @@ def test_every_reader_of_a_tool_result_gets_it_scrubbed(monkeypatch) -> None:
     assert "[redacted: providers.openrouter.apiKey]" in str(out)
 
 
-def test_what_a_sub_agent_says_is_scrubbed_where_it_is_kept_and_shown(tmp_path: Path, monkeypatch) -> None:
-    """A third-party agent started with Raven's key can print it: on its stdout
-    (the frame journal), in its transcript (the page), in its probe's stderr tail
-    (the settings page) and in the report it hands back to the main session."""
+def test_what_a_sub_agent_says_is_preserved_where_it_is_kept_and_shown(tmp_path: Path, monkeypatch) -> None:
+    """The host preserves another agent's content even when it matches a held key."""
     import json
 
     from raven.acp_client.journal import FrameJournal
@@ -346,20 +346,24 @@ def test_what_a_sub_agent_says_is_scrubbed_where_it_is_kept_and_shown(tmp_path: 
     activity.set_transcript(
         run, [{"role": "tool", "content": [{"type": "text", "text": f"OPENROUTER_API_KEY={_HELD}"}]}]
     )
-    assert _HELD not in json.dumps(run.transcript)
+    assert run.transcript == [{"role": "tool", "content": [{"type": "text", "text": f"OPENROUTER_API_KEY={_HELD}"}]}]
 
     journal = FrameJournal(tmp_path / "frames.jsonl")
     journal.note("in", frame={"params": {"update": {"rawOutput": f"key {_HELD}"}}})
     journal.note("err", text=f"using {_HELD}")
     journal.close()
-    assert _HELD not in (tmp_path / "frames.jsonl").read_text(encoding="utf-8")
+    frames = [json.loads(line) for line in (tmp_path / "frames.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert frames[0]["frame"]["params"]["update"]["rawOutput"] == f"key {_HELD}"
+    assert frames[1]["text"] == f"using {_HELD}"
 
     class _Cfg:
         name = "Pi"
 
     state = TestStateStore(tmp_path / "state.json")
     state.record(_Cfg(), "acp", ok=False, detail=f"stderr: {_HELD}", tested_at_ms=1)
-    assert _HELD not in (tmp_path / "state.json").read_text(encoding="utf-8")
+    assert (
+        json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))["verdicts"][0]["detail"] == f"stderr: {_HELD}"
+    )
 
     class _Provider:
         def get_default_model(self) -> str:
@@ -373,15 +377,12 @@ def test_what_a_sub_agent_says_is_scrubbed_where_it_is_kept_and_shown(tmp_path: 
     origin = {"channel": "web", "chat_id": "c", "session_key": "web:c"}
     manager._inject(f"the agent said {_HELD}", origin)
     manager._emit_delivered(origin, {"content": f"the agent said {_HELD}"})
-    assert submitted and _HELD not in submitted[0]
-    assert emitted and _HELD not in json.dumps(emitted)
+    assert submitted == [f"the agent said {_HELD}"]
+    assert emitted[0]["payload"] == {"content": f"the agent said {_HELD}"}
 
 
-def test_a_sub_agents_own_record_never_keeps_a_key_it_echoed(tmp_path: Path, monkeypatch) -> None:
-    """The live transcript was clean while the call labels, the closing line, the
-    output file a later DAG node's prompt renders, and the error record were not."""
-    import json
-
+def test_a_sub_agents_record_preserves_its_content(monkeypatch) -> None:
+    """The record and downstream DAG input retain what the agent returned."""
     from raven.agent.subagent import activity
     from raven.agent.subagent.backends.observability import record_transcript
 
@@ -394,10 +395,12 @@ def test_a_sub_agents_own_record_never_keeps_a_key_it_echoed(tmp_path: Path, mon
         activity.append_closing(f" and {_HELD}")
     finally:
         activity._current.reset(token)
-    assert _HELD not in json.dumps([run.tool_calls, run.tool_failures, run.closing])
-    assert _HELD not in activity.persisted_output(None, f"the answer is {_HELD}")
+    assert run.tool_calls == [f"curl -H 'Authorization: Bearer {_HELD}'"]
+    assert run.tool_failures == [f"wget {_HELD}"]
+    assert run.closing == f"done with {_HELD} and {_HELD}"
+    assert activity.persisted_output(None, f"the answer is {_HELD}") == f"the answer is {_HELD}"
     run.truncation, run.full_output = {"returned": 1}, f"the whole answer is {_HELD} and more"
-    assert _HELD not in activity.persisted_output(run, "x")
+    assert activity.persisted_output(run, "x") == run.full_output
 
     class _Span:
         artifacts: list = []
@@ -407,16 +410,149 @@ def test_a_sub_agents_own_record_never_keeps_a_key_it_echoed(tmp_path: Path, mon
 
     span = _Span()
     record_transcript(span, {"invocations": [{"stdout": f"key={_HELD}", "stderr": ""}]})
-    assert _HELD not in json.dumps(span.artifacts)
+    assert span.artifacts == [{"invocations": [{"stdout": f"key={_HELD}", "stderr": ""}]}]
 
 
-def test_a_failed_sub_agents_error_record_keeps_no_key(tmp_path: Path, monkeypatch) -> None:
+def test_a_failed_sub_agents_error_record_preserves_its_message(tmp_path: Path, monkeypatch) -> None:
     from raven.agent.subagent.history import SpawnRecord
 
     monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [(_HELD, "providers.openrouter.apiKey")])
     record = SpawnRecord.open(tmp_path / "s", task_id="t1", task="ask", meta={"agent": "Pi"})
     record.finish(status="failed", error=f"agent exited: OPENROUTER_API_KEY={_HELD}")
-    assert _HELD not in record.file("error.md").read_text(encoding="utf-8")
+    assert record.file("error.md").read_text(encoding="utf-8") == f"agent exited: OPENROUTER_API_KEY={_HELD}"
+
+
+@pytest.mark.parametrize("via_meta", [False, True])
+@pytest.mark.parametrize("failed", [False, True])
+async def test_agent_output_survives_tool_dispatch_and_context_assembly(tmp_path, monkeypatch, via_meta, failed):
+    from raven.agent.loop.turn_path import _scrubbed_blocks, _scrubbed_result
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.agent.tools.tool_search import ToolCallTool, ToolSearchController
+    from raven.contracts.tool import Tool, ToolResult
+
+    monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [(_HELD, "providers.openrouter.apiKey")])
+    line = f"{'Error: ' if failed else ''}the agent returned {_HELD} and token=agent-example"
+    picture = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+
+    class DelegatingTool(Tool):
+        name = "delegate"
+        description = "Return another agent's message"
+        parameters = {"type": "object", "properties": {}}
+        agent_output = True
+
+        async def execute(self, **kwargs):
+            return ToolResult(
+                line, line, retryable=False, ok=not failed, blocks=[{"type": "text", "text": line}, picture]
+            )
+
+    registry = ToolRegistry()
+    registry.register(DelegatingTool())
+    name, arguments = "delegate", {}
+    if via_meta:
+        controller = ToolSearchController(registry, always_visible=set())
+        registry.register(ToolCallTool(controller))
+        name, arguments = "tool_call", {"name": "delegate", "arguments": {}}
+    result = await registry.execute(name, arguments)
+    assert str(result) == line
+    assert result.display_text == line
+    assert result.agent_output is True
+    assert result.ok is not failed
+    text = _scrubbed_result(arguments, str(result), agent_output=result.agent_output)
+    blocks = _scrubbed_blocks(arguments, result.blocks, agent_output=result.agent_output)
+    content = ContextBuilder(workspace=tmp_path).add_tool_result(
+        [], "call", name, text, blocks, agent_output=result.agent_output
+    )[0]["content"]
+    assert line in str(content)
+    assert "UNTRUSTED" in str(content)
+    if not failed:
+        assert picture in content
+
+
+def test_outgoing_journal_entries_still_protect_ravens_own_credentials(tmp_path, monkeypatch):
+    import json
+
+    from raven.acp_client.journal import FrameJournal
+
+    monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [(_HELD, "providers.openrouter.apiKey")])
+    journal = FrameJournal(tmp_path / "frames.jsonl")
+    journal.note("out", frame={"params": {"text": _HELD}})
+    journal.close()
+    record = json.loads(journal.path.read_text())
+    assert record["frame"]["params"]["text"] == "[redacted: providers.openrouter.apiKey]"
+
+
+@pytest.mark.parametrize("via_meta", [False, True])
+async def test_an_external_agent_reply_reaches_the_main_model_unchanged(tmp_path, monkeypatch, via_meta):
+    from unittest.mock import AsyncMock
+
+    from raven.a2a_client.tool import A2aTool
+    from raven.acp.replay import replay
+    from raven.acp.updates import translate
+    from raven.agent.loop.bundles import EngineWiring, TurnPolicy
+    from raven.agent.loop.main import AgentLoop
+    from raven.agent.tools.tool_search import ToolCallTool, ToolSearchController
+    from raven.config.raven import CheckpointConfig, RuntimeConfig
+    from raven.config.schema import A2aConfig
+    from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+    from raven.rpc.methods.session import _map_to_wire
+
+    line = f"The external agent returned {_HELD} and token=agent-example"
+    monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [(_HELD, "providers.openrouter.apiKey")])
+    monkeypatch.setattr("raven.a2a_client.tool.send_message", AsyncMock(return_value=line))
+
+    class Provider(LLMProvider):
+        def __init__(self):
+            super().__init__(api_key="test")
+            self.received = []
+
+        def get_default_model(self):
+            return "stub"
+
+        async def chat(self, messages, **kwargs):
+            tool_messages = [message for message in messages if message.get("role") == "tool"]
+            if tool_messages:
+                self.received = tool_messages
+                return LLMResponse(content="done", finish_reason="stop")
+            name = "a2a_send"
+            arguments = {"card_url": "https://agent.invalid/card", "message": "hello"}
+            if via_meta:
+                name, arguments = "tool_call", {"name": name, "arguments": arguments}
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[ToolCallRequest(id="c1", name=name, arguments=arguments)],
+            )
+
+    provider = Provider()
+    loop = AgentLoop(
+        provider=provider,
+        workspace=tmp_path,
+        model="stub",
+        policy=TurnPolicy(max_iterations=3),
+        engine=EngineWiring(runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="never"))),
+    )
+    loop.tools.register(A2aTool(A2aConfig()))
+    if via_meta:
+        loop.tools.register(ToolCallTool(ToolSearchController(loop.tools, always_visible=set())))
+    events = []
+
+    async def on_tool_event(phase, payload):
+        events.append((phase, payload))
+
+    final, _, messages, _ = await loop._run_agent_loop(
+        [{"role": "user", "content": "Ask the agent"}], on_tool_event=on_tool_event
+    )
+    assert final == "done"
+    assert line in provider.received[0]["content"]
+    assert line in next(message["content"] for message in messages if message.get("role") == "tool")
+    complete = next(payload for phase, payload in events if phase == "complete")
+    update = translate({"type": "tool.complete", "payload": complete}).updates[0]
+    assert line in update["content"][0]["content"]["text"]
+    session = loop.sessions.get_or_create("test:agent-content")
+    loop._save_turn(session, messages, 0)
+    updates = replay(_map_to_wire(session.messages, session.key), session_id=session.key)
+    replayed = next(update for update in updates if update.get("sessionUpdate") == "tool_call_update")
+    assert line in replayed["content"][0]["content"]["text"]
 
 
 def test_an_ordinary_header_value_is_left_alone_in_tool_output(tmp_path: Path, monkeypatch) -> None:

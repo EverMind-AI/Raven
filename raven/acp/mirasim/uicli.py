@@ -10,8 +10,8 @@ measured against Mirasim 0.0.465:
 - stdout carries that server's log lines ahead of the one JSON document the
   command answers with (``[server 12:31:37] ...``, ``[model-inject ...]``), and
   one of them is the server's own URL with its access token in the query. The
-  document is therefore read from the end of stdout, nothing else on stdout is
-  passed on, and what is logged goes through :func:`redact` first.
+  document is therefore read from the end of stdout, and nothing else on stdout
+  is passed on. The document and the command's error text retain Mirasim's content.
 - A failed turn can exit 0. A Codex that could not open its state answered
   ``phase: "done"`` with ``error`` set and ``incomplete: true``, so the document
   decides whether a turn worked, not the exit code.
@@ -100,7 +100,6 @@ it is ended from here, together with what it was guarding."""
 
 _GUARD = ("-P", "-m", "raven.acp.mirasim.guard", "--")
 _LOG_LINE = re.compile(r"^\[[^\]\s]+ \d{2}:\d{2}:\d{2}\] ")
-_TOKEN = re.compile(r"(token=)[^\s&\"'#]+", re.IGNORECASE)
 _SESSION_GONE = "not one of this server's sessions"
 _SERVER_URL = re.compile(r"\bmirasim server v\S+: http://(?:localhost|127\.0\.0\.1|\[::1\]):(\d{1,5})/")
 _PORT_SCAN_BYTES = 64 * 1024
@@ -111,11 +110,6 @@ _CHUNK = 64 * 1024
 
 class UiCliError(RuntimeError):
     """A ``ui-cli`` command could not be run, or did not answer with a document."""
-
-
-def redact(text: str) -> str:
-    """``text`` with every ``token=`` value replaced, for anything that is logged or shown."""
-    return _TOKEN.sub(r"\1<redacted>", text)
 
 
 def is_log_line(line: str) -> bool:
@@ -315,11 +309,11 @@ class Outcome:
 
     @property
     def failure(self) -> str:
-        """The command's own last word on stderr, redacted; empty if it said nothing."""
+        """The command's own last word on stderr; empty if it said nothing."""
         for line in reversed(self.stderr.splitlines()):
             line = line.strip()
             if line and not is_log_line(line):
-                return redact(line)
+                return line
         return ""
 
 
@@ -518,7 +512,7 @@ class UiCli:
             raise UiCliError(f"`mirasim version` did not answer within {timeout_s:.0f}s") from None
         version = out.decode("utf-8", "replace").strip()
         if proc.returncode != 0 or not version:
-            said = redact(err.decode("utf-8", "replace").strip())
+            said = err.decode("utf-8", "replace").strip()
             raise UiCliError(f"`mirasim version` exited {proc.returncode}" + (f": {said}" if said else ""))
         return version.splitlines()[-1].strip()
 
@@ -693,7 +687,6 @@ __all__ = [
     "last_document",
     "live_session",
     "prompt_args",
-    "redact",
     "route_args",
     "server_port",
     "session_gone",

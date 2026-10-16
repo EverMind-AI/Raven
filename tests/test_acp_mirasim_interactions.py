@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
+
+import pytest
 
 from raven.acp.mirasim import interactions
 from raven.acp.mirasim.interactions import (
@@ -180,3 +183,56 @@ def test_the_text_form_names_the_question_its_choices_and_its_hint() -> None:
 
 def test_the_module_says_what_it_exports() -> None:
     assert set(interactions.__all__) >= {"Reply", "pending", "elicitation_request", "permission_request"}
+
+
+@pytest.mark.parametrize("kind", ["single", "multi", "permission", "no_forms"])
+async def test_relay_preserves_the_sending_agents_content(tmp_path, kind):
+    from unittest.mock import Mock
+
+    from raven.acp.capabilities import ClientCapabilities
+    from raven.acp.mirasim.server import MirasimAgent, Session, _render_interactions
+    from raven.acp.mirasim.store import BindingStore
+
+    value = "sk-or-v1-" + "a" * 32
+    item = approval() if kind == "permission" else ask(multiSelect=kind == "multi")
+    item["title"] = f"Agent asks about {value}"
+    item["hint"] = "https://agent.invalid/?token=agent-example"
+    question = item["questions"][0]
+    question["text"] = f"Use {value}?"
+    question["choices"] = [{"label": value, "description": f"Keep {value}"}, {"label": "Deny"}]
+    sent = []
+    agent = MirasimAgent(agent="claude", cli=Mock(), store=BindingStore(tmp_path / "state.json"), emit=sent.append)
+    if kind != "no_forms":
+        agent.client = ClientCapabilities.from_params({"clientCapabilities": {"elicitation": {"form": {}}}})
+    notes = []
+    task = asyncio.create_task(agent._relay(Session(id="session", cwd=str(tmp_path)), item, notes))
+    try:
+        if kind == "no_forms":
+            assert await task == Reply("skip")
+            assert describe(item) in notes[0]
+        else:
+            async with asyncio.timeout(5):
+                while not sent:
+                    await asyncio.sleep(0)
+            request = sent[0]
+            params = request["params"]
+            if kind == "permission":
+                assert params["toolCall"]["title"] == question["text"]
+                option = params["options"][0]
+                assert option["name"] == value
+                result = {"outcome": {"outcome": "selected", "optionId": option["optionId"]}}
+            else:
+                field = params["requestedSchema"]["properties"][ANSWER_FIELD]
+                assert field["title"] == question["text"]
+                assert item["title"] in params["message"] and item["hint"] in params["message"]
+                assert question["choices"][0]["description"] in params["message"]
+                choices = field["items"]["enum"] if kind == "multi" else field["enum"]
+                assert choices == [value, "Deny"]
+                result = {"action": "accept", "content": {ANSWER_FIELD: [value] if kind == "multi" else value}}
+            agent.outbound.resolve({"jsonrpc": "2.0", "id": request["id"], "result": result})
+            assert await task == Reply("select", value)
+        assert describe(item) in _render_interactions({"interactions": [item]})
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await agent.shutdown()

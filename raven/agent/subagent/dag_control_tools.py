@@ -54,6 +54,8 @@ def _registered_tool(loop: Any) -> Any:
 class _ControlTool(Tool):
     """Shared plumbing: the loop to ask, and this turn's session key."""
 
+    agent_output = True
+
     def __init__(self, loop: Any) -> None:
         self._loop = loop
         self._session: ContextVar[str | None] = ContextVar("dag_control_session", default=None)

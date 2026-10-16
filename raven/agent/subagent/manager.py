@@ -2072,9 +2072,7 @@ class SubagentManager:
             pass  # no loop (sync CLI path): nothing is listening anyway
 
     def _emit_delivered(self, origin: dict[str, Any], payload: dict[str, Any]) -> None:
-        from raven.config.held_secrets import scrub_held_value
-
-        self._emit_event(origin["session_key"], {"type": "subagent.delivered", "payload": scrub_held_value(payload)})
+        self._emit_event(origin["session_key"], {"type": "subagent.delivered", "payload": payload})
 
     def _emit_status(
         self,
@@ -2523,13 +2521,8 @@ Read it against the plan this instance serves. If it reports finished work, resu
         the only trace a finished run used to leave. A completed run's content
         names its record, so the result stays recoverable from disk as well.
         """
-        from raven.config.held_secrets import scrub_held_secrets
         from raven.spine import ChatType, Origin, Source, TurnRequest
         from raven.spine.scheduler import SchedulerDrainingError
-
-        # A sub-agent's report enters the main conversation as a message, not a
-        # tool result, so the registry's scrub never saw it.
-        content = scrub_held_secrets(content)
 
         # Wired by set_submit before any announce (see __init__); the announce
         # path is the only caller and it runs after the gateway has wired it.
@@ -2549,7 +2542,7 @@ Read it against the plan this instance serves. If it reports finished work, resu
         try:
             self._submit(request)
         except SchedulerDrainingError:
-            logger.error(
+            logger.bind(agent_output=True).error(
                 "sub-agent announce to {} dropped: the scheduler is draining and no turn can carry it; "
                 "the undelivered text follows\n{}",
                 origin["session_key"],

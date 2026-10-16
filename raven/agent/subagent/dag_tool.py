@@ -532,6 +532,7 @@ class SubAgentDagTool(Tool):
     # for every call, background or not, the same way ``spawn`` declares it
     # while also returning before its sub-agent does -- see the note there.
     blocking_interaction = True
+    agent_output = True
 
     def __init__(
         self,

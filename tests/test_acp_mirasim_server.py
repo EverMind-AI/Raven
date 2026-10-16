@@ -558,7 +558,7 @@ async def test_frames_that_are_not_requests_are_answered_with_nothing(harness: H
     )
 
 
-async def test_an_unexpected_failure_is_an_internal_error_with_the_token_redacted(
+async def test_an_unexpected_failure_preserves_the_original_error_text(
     harness: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def boom(params: dict[str, Any]) -> dict[str, Any]:
@@ -567,7 +567,7 @@ async def test_an_unexpected_failure_is_an_internal_error_with_the_token_redacte
     monkeypatch.setattr(harness.agent, "new_session", boom)
     error = await harness.refused("session/new", cwd=str(harness.tmp_path), mcpServers=[])
     assert error["code"] == INTERNAL_ERROR
-    assert "s3cr3t" not in error["message"] and "token=<redacted>" in error["message"]
+    assert error["message"] == "server at http://127.0.0.1:1/?token=s3cr3t went away"
     assert await harness.agent.handle({"jsonrpc": "2.0", "method": "session/new", "params": {}}) is None
 
 
@@ -903,7 +903,7 @@ async def test_a_server_slow_to_say_its_port_is_logged_and_then_watched(
     assert cli.asked and cli.asked[0][0] == "--port=4970"
 
 
-async def test_what_the_agent_asks_reaches_the_client_with_credentials_cut(tmp_path: Path) -> None:
+async def test_what_the_agent_asks_reaches_the_client_unchanged(tmp_path: Path) -> None:
     from raven.acp.capabilities import ClientCapabilities
     from raven.acp.mirasim.interactions import Reply
     from tests.test_acp_mirasim_interactions import approval, ask
@@ -925,7 +925,12 @@ async def test_what_the_agent_asks_reaches_the_client_with_credentials_cut(tmp_p
         while not [frame for frame in sent if "id" in frame]:
             await asyncio.sleep(0.01)
         request = sent.pop()
-        assert secret not in json.dumps(request) and "s3cr3t" not in json.dumps(request)
+        params = request["params"]
+        if item["kind"] == "permission":
+            assert params["toolCall"]["title"] == item["questions"][0]["text"]
+        else:
+            assert params["requestedSchema"]["properties"]["answer"]["title"] == item["questions"][0]["text"]
+            assert question["hint"] in params["message"]
         agent.outbound.resolve({"jsonrpc": "2.0", "id": request["id"], "result": answer})
         assert await asyncio.wait_for(relay, 5) in (Reply("skip"), Reply("cancel"))
 

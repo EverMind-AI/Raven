@@ -19,6 +19,7 @@ from raven.contracts.tool import Tool
 
 class A2aTool(Tool):
     timeout_seconds = 600.0
+    agent_output = True
 
     def __init__(self, config: A2aConfig) -> None:
         self._config = config

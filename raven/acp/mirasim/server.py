@@ -94,7 +94,6 @@ from raven.acp.mirasim.catalog import (
     read_catalog,
 )
 from raven.acp.mirasim.interactions import (
-    ANSWER_FIELD,
     PERMISSION,
     Reply,
     describe,
@@ -117,7 +116,6 @@ from raven.acp.mirasim.uicli import (
     answer_args,
     live_session,
     prompt_args,
-    redact,
     route_args,
     session_gone,
     sessions_args,
@@ -138,7 +136,6 @@ from raven.acp.protocol import (
     result_response,
 )
 from raven.acp.stdio import claim_stdout, open_stdin, read_frames, write_frame
-from raven.security.redact import redact as redact_secrets
 from raven.utils import asyncio_runner
 
 CATALOG_TTL_S = 15 * 60
@@ -265,7 +262,7 @@ class MirasimAgent:
             logger.opt(exception=True).error("Mirasim adapter: {} failed", method)
             if not is_request:
                 return None
-            return error_response(request_id, INTERNAL_ERROR, redact(str(exc)) or type(exc).__name__)
+            return error_response(request_id, INTERNAL_ERROR, str(exc) or type(exc).__name__)
         return result_response(request_id, result) if is_request else None
 
     async def _dispatch(self, method: str, params: dict[str, Any], is_request: bool) -> Any:
@@ -299,7 +296,7 @@ class MirasimAgent:
             try:
                 self._version = await self.cli.version()
             except UiCliError as exc:
-                logger.warning("Mirasim adapter: {}", exc)
+                logger.bind(agent_output=True).warning("Mirasim adapter: {}", exc)
                 self._version = ""
         label = self._catalog.label if self._catalog is not None else self.agent
         return {
@@ -335,7 +332,7 @@ class MirasimAgent:
             )
             if isinstance(agents_doc, BaseException):
                 if self._catalog is not None:
-                    logger.warning(
+                    logger.bind(agent_output=True).warning(
                         "Mirasim adapter: re-reading the agent list failed ({}); keeping the last", agents_doc
                     )
                     return self._catalog
@@ -345,7 +342,9 @@ class MirasimAgent:
                 offered = [row.get("id") for row in rows or () if isinstance(row, dict)]
                 raise RefusalError(INVALID_PARAMS, f"Mirasim has no agent {self.agent!r}; it offers {offered}")
             if isinstance(catalog_doc, BaseException):
-                logger.warning("Mirasim adapter: no model menu for {} ({})", self.agent, catalog_doc)
+                logger.bind(agent_output=True).warning(
+                    "Mirasim adapter: no model menu for {} ({})", self.agent, catalog_doc
+                )
                 catalog_doc = None
             self._catalog = read_catalog(self.agent, agents_doc, catalog_doc)
             self._catalog_at = time.monotonic()
@@ -639,23 +638,19 @@ class MirasimAgent:
         try:
             return await self.cli.query(args, port=port, timeout_s=LOOK_TIMEOUT_S)
         except UiCliError as exc:
-            logger.debug("Mirasim adapter: `{}` on a turn's server failed: {}", args[0], exc)
+            logger.bind(agent_output=True).debug("Mirasim adapter: `{}` on a turn's server failed: {}", args[0], exc)
             return None
 
     async def _relay(self, session: Session, interaction: dict[str, Any], notes: list[str]) -> Reply:
         """The client's answer to one interaction, or the skip or dismissal that stands in for one."""
-        asked = _scrub(describe(interaction))
+        asked = describe(interaction)
         try:
             if interaction.get("kind") == PERMISSION:
                 params, offered = permission_request(session.id, interaction)
-                params["toolCall"]["title"] = _scrub(params["toolCall"]["title"])
                 result = await self.outbound.call(PERMISSION_METHOD, params, timeout=HUMAN_ANSWER_TIMEOUT_S)
                 return read_permission(result, offered)
             if self.client.elicitation_form:
                 params = elicitation_request(session.id, interaction)
-                params["message"] = _scrub(params["message"])
-                field = params["requestedSchema"]["properties"][ANSWER_FIELD]
-                field["title"] = _scrub(field["title"])
                 result = await self.outbound.call(ELICITATION_METHOD, params, timeout=HUMAN_ANSWER_TIMEOUT_S)
                 return read_elicitation(interaction, result)
         except (RequestFailedError, ConnectionClosedError, TimeoutError) as exc:
@@ -880,23 +875,14 @@ def _render_interactions(doc: dict[str, Any]) -> str:
         "for you. Answer it in the next prompt to this same session; a new session will not see the question."
     ]
     lines += [f"- {describe(item)}" for item in pending(doc)]
-    return _scrub("\n".join(lines))
-
-
-def _scrub(text: str) -> str:
-    """``text`` with Mirasim's server tokens and anything shaped like a credential cut out.
-
-    For what the agent wrote into a question, which goes to the client and into
-    the reply as it stands: a tool approval quotes the command it would run.
-    """
-    return redact_secrets(redact(text))
+    return "\n".join(lines)
 
 
 def _failure(outcome: Outcome) -> str:
     doc = outcome.document if isinstance(outcome.document, dict) else None
     said = _text(doc.get("error")) if doc is not None else ""
     if said:
-        return redact(" ".join(said.split()))
+        return " ".join(said.split())
     if outcome.failure:
         return outcome.failure
     if doc is not None:

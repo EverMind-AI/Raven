@@ -220,6 +220,9 @@ class ToolOutput(str):
     user-facing replies. The agent loop reads ``display_text`` off it to render
     the transcript row, ``blocks`` to build a multimodal tool result, and the
     control flags to enforce terminal tool decisions.
+
+    ``agent_output`` preserves the sending agent's content policy across tool
+    forwarding and context assembly, where local tool results are redacted.
     """
 
     display_text: str | None
@@ -232,6 +235,7 @@ class ToolOutput(str):
     file_change: "FileChange | None"
     removed: tuple["FileRemoval", ...]
     written: tuple["FileWrite", ...]
+    agent_output: bool
 
     def __new__(
         cls,
@@ -247,6 +251,7 @@ class ToolOutput(str):
         file_change: "FileChange | None" = None,
         removed: tuple["FileRemoval", ...] = (),
         written: tuple["FileWrite", ...] = (),
+        agent_output: bool = False,
     ) -> "ToolOutput":
         out = super().__new__(cls, model_text)
         out.display_text = display_text
@@ -259,6 +264,7 @@ class ToolOutput(str):
         out.file_change = file_change
         out.removed = removed
         out.written = written
+        out.agent_output = agent_output
         return out
 
 
@@ -281,6 +287,9 @@ class Tool(ABC):
     # registry does NOT wrap them in a timeout — they manage their own
     # auto-resolution instead of being killed mid-wait.
     blocking_interaction: bool = False
+
+    agent_output: bool = False
+    """The result carries another agent's content, whose redaction policy belongs to that agent."""
 
     # Channels this tool works on; None means every channel. One gateway process
     # serves the page and every enabled IM channel from a single registry,

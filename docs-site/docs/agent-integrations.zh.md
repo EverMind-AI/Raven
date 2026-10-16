@@ -177,6 +177,8 @@ Kimi Code 和 ZCode CLI 的自有模型，因此这四个 Agent 的这些模型�
 开启 `askTool` 设置时 Claude Code 的 `AskUserQuestion`，或 MCP 服务器的表单——以
 elicitation 发出，由你或 Raven 的提问自动作答回答。不支持表单的客户端会跳过该提问，
 并在回复中写明所问内容。
+提问、选项、回复和错误详情保留发送方 Agent 的内容。脱敏由该 Agent 自行决定；
+即使回传值与 Raven 自身持有的凭据相同，Raven 也不替换。
 
 判断兼容性时区分三个结论：
 
