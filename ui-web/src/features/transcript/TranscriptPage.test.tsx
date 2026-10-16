@@ -8,6 +8,7 @@ import * as attachmentCache from '../../lib/attachmentCache'
 import { _resetForTests as resetSession, setCurrent } from '../../lib/session'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
+import { noteRow } from '../../state/session/conversation'
 import { hold as holdHost } from '../../state/session/hosts'
 import { resetSources, setSources, sources } from '../../state/sources'
 import { domSnapshot } from '../../test/domSnapshot'
@@ -1151,11 +1152,31 @@ describe('transcript island, history', () => {
     expect(toggle.getAttribute('aria-expanded')).toBe('true')
     expect(toggle.textContent).toBe('en:gui.transcript.error_collapse')
     expect(row.querySelector('.transcript-note-full')?.textContent).toBe(full)
+    expect(row.hasAttribute('title')).toBe(false)
 
     act(() => { toggle.click() })
     expect(row.querySelector('.transcript-note-full')).toBeNull()
     expect(toggle.getAttribute('aria-expanded')).toBe('false')
     expect(toggle.textContent).toBe('en:gui.transcript.error_expand')
+    expect(row.title).toBe(`${mount.failedTurnLabel()} · ${reason}`)
+  })
+
+  it('copies the whole account, not the line the row shows', () => {
+    const reason = 'Error calling LLM (rate_limit@openrouter): Provider returned error'
+    const full = `${reason}\n\nthe provider's whole body`
+    const before = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+    const writeText = vi.fn(async () => {})
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    try {
+      act(() => { mount.note(mount.failedTurnLabel(), reason, { full }) })
+      const row = $$('.tnote')[0] as HTMLElement & { _ctx?: () => Array<{ label: string; fn: () => void }> }
+      const item = row._ctx?.().find((it) => it.label === 'en:gui.answer.copy')
+      act(() => { item?.fn() })
+      expect(writeText).toHaveBeenCalledWith(`${mount.failedTurnLabel()} · ${full}`)
+    } finally {
+      if (before) Object.defineProperty(navigator, 'clipboard', before)
+      else delete (navigator as { clipboard?: unknown }).clipboard
+    }
   })
 
   it('offers no toggle when the row already says everything', () => {
@@ -1190,7 +1211,7 @@ describe('transcript island, history', () => {
   it('draws the live row and the replayed row of one failure alike', () => {
     const reason = 'Error calling LLM (rate_limit@openrouter): Provider returned error'
     const full = `${reason}\n\nthe provider's whole body`
-    act(() => { mount.note(mount.failedTurnLabel(), reason, { full }) })
+    act(() => { noteRow(mount.failedTurnLabel(), reason, { full }) })
     const live = $$('.tnote')[0] as HTMLElement
     act(() => { (live.querySelector('button.transcript-note-more') as HTMLButtonElement).click() })
     const liveText = [live.querySelector('.tx')?.textContent, live.querySelector('.transcript-note-full')?.textContent]
