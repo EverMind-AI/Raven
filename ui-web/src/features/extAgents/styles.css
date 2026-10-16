@@ -452,6 +452,13 @@
    press that starts a connect does not shove the pill out of its column. */
 .extAgents-pickgo { flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 90px; }
 
+@media (max-width: 560px) {
+  .extAgents-pickrow { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; row-gap: 8px; }
+  .extAgents-pickwho { grid-column: 2 / -1; }
+  .extAgents-pickpill { grid-column: 1 / 3; width: 100%; min-width: 0; }
+  .extAgents-pickgo { grid-column: 3; }
+}
+
 /* The family card's own foot, which is a press rather than a verdict: it says
    what the card does, in the same slot every other card's verdict sits in. */
 .extAgents-card .extAgents-foot-quiet .extAgents-foot-k { color: var(--muted); }
