@@ -145,7 +145,9 @@ export const STAGES: readonly Stage[] = [
        to timing it here, a stop being the one that always does. */
     rt.startedAt = Date.now()
     rt.answerAt = 0
-    rt.dispatch({ type: 'stream', cancellable: false }); goState(); drawMeter()
+    /* Cancellable: the turn is the lane's running one, and turn.cancel reaches
+       it through the scheduler even though nothing bound a handle to it. */
+    rt.dispatch({ type: 'stream', cancellable: true }); goState(); drawMeter()
   }),
 
   arm('episode.start', (rt) => {

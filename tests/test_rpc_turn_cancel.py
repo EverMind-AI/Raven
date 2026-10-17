@@ -728,3 +728,122 @@ async def test_two_concurrent_cancels_still_leave_exactly_one_reported_end(
         with contextlib.suppress(Exception):
             await blocker.result()
         await teardown()
+
+
+# --- a runtime-opened turn (no bound handle) ---
+
+
+async def test_turn_cancel_reaches_a_runtime_opened_turn(
+    emitter: SubscriptionEmitter,
+    send_frame_capture: AsyncMock,
+) -> None:
+    """A delegated result re-entering the conversation is the lane's running turn
+    but binds no handle: turn.send never ran for it and no inject fell back. The
+    cancel must still reach it -- through the scheduler -- emit the one cancelled
+    frame that clears the page, and leave the lane free afterwards."""
+    from raven.rpc.methods import turn as _turn_mod
+    from raven.rpc.spine import build_rpc_spine
+    from raven.spine import Origin, Source, TurnRequest
+    from raven.spine.message import ChatType
+
+    running = asyncio.Event()
+
+    class _DelegatedLoop:
+        tools: dict = {}
+
+        async def run_turn(self, req, emit, drain, **_kwargs):
+            running.set()
+            await asyncio.Event().wait()  # only a cancel ends this turn
+
+    loop = _DelegatedLoop()
+    scheduler, _hub, _turn_ids, teardown = build_rpc_spine(loop, emitter, on_turn_end=_turn_mod.clear_active)
+    _turn_mod.bind_scheduler(scheduler)
+    try:
+        await turn_subscribe({"session_key": "tui:default"}, emitter=emitter)
+        handle = scheduler.submit(
+            TurnRequest(
+                origin=Origin.SUBAGENT,
+                source=Source(channel="tui", chat_id="default", sender_id="subagent", chat_type=ChatType.DM),
+                text="the result",
+                conversation="tui:default",
+                turn_id="turn-reentry",
+                delegated={"kind": "spawn", "label": "worker", "status": "ok"},
+            )
+        )
+        await running.wait()
+        assert not _turn_mod.is_turn_active("tui:default"), (
+            "the runtime turn bound the active slot; the premise does not hold"
+        )
+
+        assert await turn_cancel({"session_key": "tui:default"}, emitter=emitter) == {"cancelled": True}
+
+        await asyncio.sleep(0.05)  # let the coalescer flush
+        cancelled = [
+            e
+            for e in _collect_events(send_frame_capture)
+            if e.get("type") == "error" and e.get("payload", {}).get("reason") == "cancelled_by_client"
+        ]
+        assert len(cancelled) == 1, f"expected exactly one cancelled frame; got {len(cancelled)}"
+        assert not scheduler.has_inflight("tui:default"), "the cancel left the lane busy"
+        with contextlib.suppress(Exception):
+            await handle.result()
+    finally:
+        _turn_mod.bind_scheduler(None)
+        await teardown()
+
+
+async def test_cancelling_a_runtime_turn_leaves_queued_work_queued(
+    emitter: SubscriptionEmitter,
+) -> None:
+    """Only the running turn dies: a send queued behind the delegated re-entry
+    still runs once the lane frees, the way a bound handle's cancel leaves it."""
+    from raven.rpc.methods import turn as _turn_mod
+    from raven.rpc.spine import build_rpc_spine
+    from raven.spine import Origin, Source, Text, TurnOutcome, TurnRequest, Usage
+    from raven.spine.message import ChatType
+
+    reentry_running = asyncio.Event()
+
+    class _TwoOriginLoop:
+        tools: dict = {}
+
+        async def run_turn(self, req, emit, drain, **_kwargs):
+            if req.origin is Origin.SUBAGENT:
+                reentry_running.set()
+                await asyncio.Event().wait()  # only a cancel ends this turn
+            await emit(Text(content="done"))
+            return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
+
+    loop = _TwoOriginLoop()
+    scheduler, _hub, _turn_ids, teardown = build_rpc_spine(loop, emitter, on_turn_end=_turn_mod.clear_active)
+    _turn_mod.bind_scheduler(scheduler)
+    try:
+        reentry = scheduler.submit(
+            TurnRequest(
+                origin=Origin.SUBAGENT,
+                source=Source(channel="tui", chat_id="default", sender_id="subagent", chat_type=ChatType.DM),
+                text="the result",
+                conversation="tui:default",
+                turn_id="turn-reentry",
+                delegated={"kind": "spawn", "label": "worker", "status": "ok"},
+            )
+        )
+        await reentry_running.wait()
+        queued = scheduler.submit(
+            TurnRequest(
+                origin=Origin.USER,
+                source=Source(channel="tui", chat_id="default", sender_id="user", chat_type=ChatType.DM),
+                text="the follow-up",
+                conversation="tui:default",
+            )
+        )
+
+        assert await turn_cancel({"session_key": "tui:default"}, emitter=emitter) == {"cancelled": True}
+
+        out = await asyncio.wait_for(queued.result(), timeout=5)
+        assert isinstance(out, TurnOutcome), f"the queued turn did not survive the cancel: {out!r}"
+    finally:
+        _turn_mod.bind_scheduler(None)
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(reentry.result(), timeout=5)
+        await teardown()

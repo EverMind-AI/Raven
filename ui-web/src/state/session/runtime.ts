@@ -376,11 +376,10 @@ function runsOn(sessionId: string | null | undefined): Recent | null {
 
 /* The stop button: cancel the turn the reader started. */
 export function stop(): void {
-  /* A runtime turn (a delegated result re-entering) is NOT cancellable:
-   turn.cancel resolves only handles turn.send registered, and the stop
-   button claiming the UI here would reset the stage while the delegated
-   deltas are still streaming into it. The reader's stop does nothing until
-   the turn is one they can stop. */
+  /* The machine's guard, not a statement about the turn: a send-bound turn and
+     a runtime-opened one (a delegated result re-entering) are both backed by
+     `turn.cancel` on the server, so what stops a second press here is the
+     cancelling phase the first press moved the machine into. */
   if (!turn.cancellable()) return
   const owner = sessionCurrent()
   turn.dispatch({ type: 'cancel' })
