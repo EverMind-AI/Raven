@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 # raven_version: the raven package version (from installed metadata).
 SERVER_VERSION = "0.1.0"
 SCHEMA_VERSION = "0.1.0"
-SERVER_CAPABILITIES = ["jsonrpc-2.0", "subscriptions", "cli-dispatch"]
+SERVER_CAPABILITIES = ["jsonrpc-2.0", "subscriptions", "cli-dispatch", "model.options.selection_only"]
 # Announced while the trajectory policy is on, which it is by default. A page
 # reads the announcement at the handshake only, so one that does not see it
 # there has nothing to ask the trajectory surface and never polls it.

@@ -47,6 +47,7 @@ interface Harness {
 }
 
 function install(over: Partial<ModelSource> = {}, providers = PROVIDERS): Harness {
+  if (!store.current()) store.setCurrent('minimax-m3')
   const h: Harness = {
     toasts: [], persisted: [], persistedProviders: [], persistedScopes: [],
     local: [], settings: 0, providerSettings: [], added: [], after: 0, model: store.current,
@@ -127,6 +128,25 @@ describe('the model picker', () => {
     install()
     mount()
     expect(pick()).toBeNull()
+  })
+
+  it('waits for the composer catalogue before opening its picker', () => {
+    const h = install({ loading: () => true })
+    mount()
+    openIt()
+    expect(pick()).toBeNull()
+    expect(h.toasts).toEqual(['gui.model.catalogue_loading'])
+  })
+
+  it('opens a settings picker while the composer catalogue is pending', async () => {
+    const h = install({ loading: () => true })
+    mount()
+    openIt(document.getElementById('modelChip'))
+    expect(pick()).toBeTruthy()
+    expect(h.toasts).toEqual([])
+    await act(async () => { rows('models')[1]!.click() })
+    expect(h.persisted).toEqual(['minimax-m2'])
+    expect(h.persistedScopes).toEqual(['default'])
   })
 
   it('offers every provider with an account, including one with nothing added', () => {
