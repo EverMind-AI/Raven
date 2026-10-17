@@ -140,6 +140,12 @@ async def guard(
     except asyncio.TimeoutError:
         pass
     code = await exited
+    # Released while the loop still runs: pipes a helper still holds would
+    # otherwise be closed at exit, after the loop, and the error that raises
+    # would be the last line on stderr, where the command's own last word is read.
+    transport = getattr(proc, "_transport", None)
+    if transport is not None:
+        transport.close()
     return code if code >= 0 else 128 - code
 
 

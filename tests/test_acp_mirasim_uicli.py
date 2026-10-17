@@ -753,6 +753,35 @@ async def test_the_guard_does_not_wait_on_a_helper_holding_the_output(
             os.close(fd)
 
 
+_REFUSED_LEAVING_A_HELPER = """
+import subprocess, sys
+helper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+with open(sys.argv[1], "w") as marker:
+    marker.write(str(helper.pid))
+print("ui-cli: --session: not one of this server's sessions", file=sys.stderr, flush=True)
+sys.exit(1)
+"""
+
+
+@posix_only
+@pytest.mark.slow
+async def test_a_helper_holding_the_output_leaves_the_commands_own_last_word(tmp_path: Path) -> None:
+    """The guard stops waiting for that output, and its own exit must not write after the command's last line:
+    the adapter reads a forgotten conversation off that line."""
+    script = tmp_path / "refused.py"
+    script.write_text(_REFUSED_LEAVING_A_HELPER)
+    marker = tmp_path / "helper"
+    invocation = Invocation([sys.executable, str(script), str(marker)], env=dict(os.environ), cwd=None)
+    try:
+        outcome = await asyncio.wait_for(invocation.run(), 20)
+        assert outcome.exit_code == 1
+        assert outcome.failure == "ui-cli: --session: not one of this server's sessions"
+        assert session_gone(outcome.failure)
+    finally:
+        with contextlib.suppress(FileNotFoundError, ValueError, ProcessLookupError):
+            os.kill(int(marker.read_text()), 9)
+
+
 @posix_only
 @pytest.mark.slow
 async def test_a_read_that_runs_past_its_budget_is_ended_and_reported(tmp_path: Path) -> None:
