@@ -96,6 +96,27 @@ async def test_without_process_groups_taskkill_walks_the_tree_first(monkeypatch)
     assert len(calls) == 1, "a launcher that has exited is not walked: its pid may name another process by now"
 
 
+async def test_a_pid_only_endpoint_keeps_the_launcher_alive_for_taskkill(monkeypatch):
+    proc = SimpleNamespace(pid=4242, returncode=None, kill=Mock(), wait=AsyncMock(return_value=0))
+    proc.stdin = SimpleNamespace(close=Mock(side_effect=lambda: setattr(proc, "returncode", 0)))
+    walked = []
+
+    def run(argv, **kwargs):
+        walked.append((argv, proc.returncode))
+        return acp_client.subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.delattr(os, "killpg", raising=False)
+    monkeypatch.setattr(acp_client.shutil, "which", lambda name: "taskkill")
+    monkeypatch.setattr(acp_client.subprocess, "run", run)
+
+    await acp_client._ProcessEndpoint(proc, proc.pid).end()
+
+    assert walked == [(["taskkill", "/T", "/F", "/PID", "4242"], None)]
+    proc.stdin.close.assert_not_called()
+    proc.wait.assert_not_awaited()
+    proc.kill.assert_called_once()
+
+
 @pytest.mark.parametrize("with_job", [False, True])
 @pytest.mark.parametrize("outcome", ["exit", "timeout", "pipe_error", "missing_stdin"])
 async def test_endpoint_teardown_keeps_the_force_fallback_after_grace(monkeypatch, with_job, outcome):
@@ -121,6 +142,8 @@ async def test_endpoint_teardown_keeps_the_force_fallback_after_grace(monkeypatc
     fallback = AsyncMock(side_effect=lambda *args: closed.append(proc.returncode))
     monkeypatch.setattr(acp_client, "_end", fallback)
     monkeypatch.setattr(acp_client, "_TEARDOWN_GRACE_S", 0.01)
+    if not with_job:
+        monkeypatch.setattr(os, "killpg", Mock(), raising=False)
 
     await asyncio.wait_for(acp_client._ProcessEndpoint(proc, proc.pid, job).end(), 0.5)
 
@@ -141,6 +164,8 @@ async def test_cancelling_the_grace_wait_still_ends_the_process_tree(monkeypatch
     job = SimpleNamespace(close=Mock()) if with_job else None
     fallback = AsyncMock()
     monkeypatch.setattr(acp_client, "_end", fallback)
+    if not with_job:
+        monkeypatch.setattr(os, "killpg", Mock(), raising=False)
     ending = asyncio.create_task(acp_client._ProcessEndpoint(proc, proc.pid, job).end())
     await asyncio.wait_for(waiting.wait(), 1)
     ending.cancel()

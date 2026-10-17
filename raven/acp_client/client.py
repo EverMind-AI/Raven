@@ -199,7 +199,9 @@ class _ProcessEndpoint:
 
     async def end(self) -> None:
         try:
-            if self.proc.returncode is None and self.proc.stdin is not None:
+            # PID-only cleanup needs a live launcher for taskkill to walk its children.
+            owns_tree = self._job is not None or hasattr(os, "killpg")
+            if owns_tree and self.proc.returncode is None and self.proc.stdin is not None:
                 try:
                     self.proc.stdin.close()
                     await asyncio.wait_for(self.proc.wait(), timeout=_TEARDOWN_GRACE_S)
