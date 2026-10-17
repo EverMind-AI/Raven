@@ -12,7 +12,7 @@ import { ExtAgentsApp } from './ExtAgentsPage'
 import * as machines from './machines'
 import * as store from './store'
 
-import type { ExtAgentActArgs, ExtAgentRow, ExtAgentsSource, MachineRow, MachinesSource, RegisterForm } from './types'
+import type { ExtAgentActArgs, ExtAgentModelChoice, ExtAgentRow, ExtAgentsSource, MachineRow, MachinesSource, RegisterForm } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -329,6 +329,380 @@ describe('the tabs', () => {
   })
 })
 
+describe('the Mirasim family card', () => {
+  const family = (): HTMLElement | undefined => rowsOf().find((r) => r.querySelector('.extAgents-t')!.textContent === 'gui.agent.fam_mirasim')
+  const picks = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('.extAgents-pickrow')]
+  const pickNamed = (name: string): HTMLElement => picks().find((p) => p.querySelector('.extAgents-picknm')!.textContent === name)!
+
+  /* The preset names the server ships, in the order `presets.py` declares. */
+  const members = (): ExtAgentRow[] =>
+    ['claude', 'codex', 'kimi', 'antigravity', 'qwen', 'grok', 'dsh', 'pi', 'zcode'].map((id) =>
+      row({ name: `${id}-Mirasim`, preset: `mirasim_${id}`, configured: false, enabled: false, probe_status: 'ready' }),
+    )
+
+  /* A member whose handshake offered these choices; every other member as is. */
+  const withChoices = (rows: ExtAgentRow[], name: string, choices: ExtAgentModelChoice[]): ExtAgentRow[] =>
+    rows.map((m) => (m.name === name ? { ...m, model_source: 'agent' as const, model_choices: choices } : m))
+  const CODEX_CHOICES: ExtAgentModelChoice[] = [
+    { value: 'gpt-5.5', name: 'GPT-5.5', group: 'OpenAI' },
+    { value: 'gpt-6', name: 'GPT-6', group: 'OpenAI' },
+  ]
+
+  it('draws one card for nine presets, and says how many it stands for', async () => {
+    install(members())
+    await mount()
+    expect(rowsOf().length).toBe(1)
+    expect(family()!.querySelector('.extAgents-ctag')!.textContent).toBe('gui.agent.fam_n {"n":9}')
+    expect(family()!.querySelector('.extAgents-one')!.textContent).toBe('gui.agent.fam_mirasim_about')
+    /* The count beside the tab is the number of cards the reader can see. */
+    expect(tabNamed('gui.filter.all').querySelector('.extAgents-tn')!.textContent).toBe('1')
+  })
+
+  it('draws one card per family even when its members split across sections', async () => {
+    /* The All tab concatenates the three sections, each folded on its own --
+       so a family with at least MIN_FAMILY members in two of them produces two
+       cards wearing one key ('mirasim'). React keeps the first and drops the
+       second, which here reads as a card that does not respond. Rare in
+       practice -- the nine members share one executable, so they are usually
+       all present or all absent -- and wrong whenever it happens. */
+    /* Two sections, each with MIN_FAMILY folded members: `missing` is decided
+       by the probe (the agent is not installed), `avail` by everything else,
+       and both hold unconfigured presets. */
+    const gone = new Set(['codex-Mirasim', 'kimi-Mirasim'])
+    const all = members().map((member) =>
+      gone.has(member.name) ? { ...member, probe_status: 'missing', probe_missing: 'mirasim' } : member,
+    )
+    install(all)
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await mount()
+      const cards = rowsOf().filter((c) => c.querySelector('.extAgents-t')!.textContent === 'gui.agent.fam_mirasim')
+      expect(cards.length).toBe(2)
+      const complaint = errors.mock.calls.map((call) => String(call[0])).find((text) => text.includes('same key'))
+      expect(complaint, complaint ?? 'React reported no duplicate key').toBeUndefined()
+    } finally {
+      errors.mockRestore()
+    }
+  })
+
+  it('names a refused member instead of offering to connect it from the drawer', async () => {
+    /* The same verdict the card carries, for the same reason: the handshake
+       already refused this agent for want of a credential, and the fix --
+       signing in -- is outside this page, so a press here would spend a launch
+       to arrive at the sentence the row already says. A `toggle` from here is
+       answered with "no configured sub-agent named ...". */
+    const all = members().map((member) =>
+      member.name === 'codex-Mirasim' ? { ...member, needs_auth: true } : member,
+    )
+    const { acts } = install(all)
+    await mount()
+    await click(family())
+    const go = pickNamed('codex-Mirasim').querySelector<HTMLButtonElement>('.extAgents-pickgo')!
+    expect(go.textContent).toBe('gui.agent.unauthorized')
+    expect(go.disabled).toBe(true)
+    await click(go)
+    expect(acts).toEqual([])
+    /* Its siblings are unaffected: one refused member does not withhold the
+       connect the others are offered. */
+    const other = pickNamed('kimi-Mirasim').querySelector<HTMLButtonElement>('.extAgents-pickgo')!
+    expect(other.disabled).toBe(false)
+    expect(other.textContent).toBe('gui.agent.connect')
+  })
+
+  it('opens installation and recheck for a missing family member', async () => {
+    const all = members().map((member) => ({ ...member, probe_status: 'missing', probe_missing: 'mirasim' }))
+    const { acts, rescans } = install(all)
+    await mount()
+    await click(family())
+    const member = pickNamed('codex-Mirasim')
+    expect(member.querySelector('.extAgents-pickgo')!.textContent).toBe('gui.agent.go_install')
+    expect(member.querySelector('.extAgents-pm')).toBe(null)
+    await click(member.querySelector<HTMLElement>('.extAgents-pickgo')!)
+    expect(acts).toEqual([])
+    expect(document.querySelector('.extAgents-inst a')!.getAttribute('href')).toBe('https://mirasim.ai/download')
+    const recheck = document.querySelector<HTMLButtonElement>('.extAgents-act button')!
+    expect(recheck.textContent).toBe('gui.agent.recheck')
+    all.forEach((entry) => { entry.probe_status = 'ready' })
+    await click(recheck)
+    expect(rescans.at(-1)).toBe(true)
+    expect(document.querySelector('.extAgents-inst')).toBe(null)
+    expect(document.querySelector('.extAgents-act')!.textContent).toContain('gui.agent.connect')
+  })
+
+  it('connects the agent picked out of it, and only then draws its card', async () => {
+    const { acts } = install(members())
+    await mount()
+    await click(family())
+    expect(picks().map((p) => p.querySelector('.extAgents-picknm')!.textContent)).toEqual([
+      'claude-Mirasim',
+      'codex-Mirasim',
+      'kimi-Mirasim',
+      'antigravity-Mirasim',
+      'qwen-Mirasim',
+      'grok-Mirasim',
+      'dsh-Mirasim',
+      'pi-Mirasim',
+      'zcode-Mirasim',
+    ])
+    /* Opening the drawer changes nothing on the grid: the card is the only one. */
+    expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).not.toContain('codex-Mirasim')
+    await click(pickNamed('codex-Mirasim').querySelector<HTMLElement>('.extAgents-pickgo')!)
+    expect(acts).toEqual([['connect', 'codex-Mirasim', {}]])
+    /* The card appears because the add wrote the row, beside the group card the
+       other eight still sit behind -- and it is already a connected one. */
+    expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).toContain('codex-Mirasim')
+    expect(family()).toBeTruthy()
+    expect(rowNamed('codex-Mirasim').querySelector('.extAgents-ctl button')).toBe(null)
+    /* Done, so the drawer gets out of the way of the card it made. */
+    expect(detail.get().open).toBe(false)
+  })
+
+  /* A connect runs the agent for up to a minute, and the member is still folded
+     into the card behind -- so the row it was asked on is the one place that
+     can say so, and the drawer has to stay up until the add lands. */
+  it('keeps the drawer up while the connect runs, and the row says it is running', async () => {
+    const all = members()
+    let land!: () => void
+    const held = new Promise<void>((done) => {
+      land = done
+    })
+    install(all, {
+      act: async (op, r) => {
+        await held
+        if (op === 'connect') {
+          r.configured = true
+          r.enabled = true
+        }
+        return all
+      },
+    })
+    await mount()
+    await click(family())
+    await click(pickNamed('codex-Mirasim').querySelector<HTMLElement>('.extAgents-pickgo')!)
+    const go = pickNamed('codex-Mirasim').querySelector<HTMLButtonElement>('.extAgents-pickgo')!
+    expect(detail.get().open).toBe(true)
+    expect(go.disabled).toBe(true)
+    expect(go.textContent).not.toBe('gui.agent.connect')
+    expect(pickNamed('codex-Mirasim').querySelector<HTMLButtonElement>('.extAgents-pm')!.disabled).toBe(true)
+    await act(async () => {
+      land()
+      await held
+    })
+    expect(detail.get().open).toBe(false)
+    expect(rowNamed('codex-Mirasim')).toBeTruthy()
+  })
+
+  /* The model is the likeliest reason, and the one thing the row can change, so
+     the refusal stays where the reader can change it and press again. */
+  it('keeps a refused connect on its row, in the open drawer, with the reason', async () => {
+    const all = members()
+    install(all, {
+      act: async (op, r) => {
+        if (op === 'connect' && r.name === 'codex-Mirasim') {
+          throw { data: { detail: 'model not served', remedy: { kind: 'model', command: '' } } }
+        }
+        return all
+      },
+    })
+    await mount()
+    await click(family())
+    await click(pickNamed('codex-Mirasim').querySelector<HTMLElement>('.extAgents-pickgo')!)
+    expect(detail.get().open).toBe(true)
+    const line = pickNamed('codex-Mirasim').querySelector<HTMLElement>('.extAgents-pickone')!
+    expect(line.classList.contains('extAgents-pickone-bad')).toBe(true)
+    expect(line.textContent).toBe('gui.agent.st_connect_bad · gui.agent.why_model')
+    expect(line.title).toBe('model not served')
+    /* Still a member of the card: nothing was written. */
+    expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).not.toContain('codex-Mirasim')
+    expect(pickNamed('codex-Mirasim').querySelector<HTMLButtonElement>('.extAgents-pickgo')!.disabled).toBe(false)
+  })
+
+  /* Every write refetches the roster, and a reload must not take a choice the
+     reader has made but not yet sent: trying one agent and having it refused is
+     exactly when they move on to the one they had already set up. */
+  it('keeps the model picked on one row while another row s refusal reloads the roster', async () => {
+    const all = withChoices(members(), 'codex-Mirasim', CODEX_CHOICES)
+    const sent: Array<[string, string, ExtAgentActArgs]> = []
+    install(all, {
+      act: async (op, r, args) => {
+        sent.push([op, r.name, args || {}])
+        if (op === 'connect' && r.name === 'kimi-Mirasim') throw { data: { detail: 'not signed in' } }
+        if (op === 'connect') {
+          r.configured = true
+          r.enabled = true
+        }
+        return all
+      },
+    })
+    await mount()
+    await click(family())
+    await click(pickNamed('codex-Mirasim').querySelector<HTMLElement>('.extAgents-pm')!)
+    await click([...document.querySelectorAll<HTMLElement>('.model-picker-model')].find((o) => o.textContent === 'GPT-6'))
+    await click(pickNamed('kimi-Mirasim').querySelector<HTMLElement>('.extAgents-pickgo')!)
+    expect(pickNamed('kimi-Mirasim').querySelector('.extAgents-pickone')!.classList.contains('extAgents-pickone-bad')).toBe(true)
+    expect(pickNamed('codex-Mirasim').querySelector('.extAgents-mid')!.textContent).toBe('GPT-6')
+    await click(pickNamed('codex-Mirasim').querySelector<HTMLElement>('.extAgents-pickgo')!)
+    expect(sent.at(-1)).toEqual(['connect', 'codex-Mirasim', { model: 'gpt-6' }])
+  })
+
+  /* The same for a model picker the reader has open: a reload -- any write's
+     refetch, or the poll while some agent builds -- does not shut it under the
+     cursor. */
+  it('keeps a model picker open across a reload', async () => {
+    install(withChoices(members(), 'codex-Mirasim', CODEX_CHOICES))
+    await mount()
+    await click(family())
+    await click(pickNamed('codex-Mirasim').querySelector<HTMLElement>('.extAgents-pm')!)
+    expect(document.querySelector('.model-picker')).toBeTruthy()
+    await act(async () => {
+      store.open()
+    })
+    expect(document.querySelector('.model-picker')).toBeTruthy()
+  })
+
+  /* The picker measures itself against the ROW: `anchorRow` sizes a popover from
+     its anchor's left edge to 20px inside the drawer, and from the pill -- at the
+     row's right -- it fell to its 320px floor. happy-dom does no layout, so the
+     rects are stubbed; what this pins is which element the picker is sized from. */
+  it('hangs the model picker off the row, so it opens as wide as the sheet s', async () => {
+    install(withChoices(members(), 'codex-Mirasim', CODEX_CHOICES))
+    await mount()
+    await click(family())
+    const rect = (left: number, right: number, top: number, bottom: number) => (): DOMRect =>
+      ({ left, right, top, bottom, width: right - left, height: bottom - top, x: left, y: top, toJSON: () => ({}) }) as DOMRect
+    const drawer = document.getElementById('detail')!
+    drawer.classList.add('dpanel')
+    drawer.getBoundingClientRect = rect(0, 540, 0, 900)
+    const codex = pickNamed('codex-Mirasim')
+    codex.getBoundingClientRect = rect(20, 520, 100, 146)
+    codex.querySelector<HTMLElement>('.extAgents-pm')!.getBoundingClientRect = rect(262, 430, 109, 137)
+    await click(codex.querySelector<HTMLElement>('.extAgents-pm')!)
+    /* 540 - 20 - 20 from the row; the pill would have given the 320 floor. */
+    const picker = document.querySelector<HTMLElement>('.model-picker')!
+    expect(picker.style.width).toBe('500px')
+    /* And not INSIDE it: `anchorRow` measures the anchor before the picker leaves
+       the flow, so a picker within the row stretched the very rect it measured
+       and every one flipped up over the drawer. A stub cannot stretch, so the
+       containment itself is what is held here. */
+    expect(codex.contains(picker)).toBe(false)
+  })
+
+  it('puts the model picker away when its row is connected', async () => {
+    const { acts } = install(withChoices(members(), 'codex-Mirasim', CODEX_CHOICES))
+    await mount()
+    await click(family())
+    await click(pickNamed('codex-Mirasim').querySelector<HTMLElement>('.extAgents-pm')!)
+    expect(document.querySelector('.model-picker')).toBeTruthy()
+    await click(pickNamed('codex-Mirasim').querySelector<HTMLElement>('.extAgents-pickgo')!)
+    expect(document.querySelector('.model-picker')).toBe(null)
+    expect(acts).toEqual([['connect', 'codex-Mirasim', {}]])
+  })
+
+  /* Both draw into the one drawer, so a sheet opened over the picker replaces
+     it rather than drawing beside it. */
+  it('puts the picker away when a card s sheet opens in its place', async () => {
+    const all = [...members(), row({ name: 'codex', preset: 'codex' })]
+    install(all)
+    await mount()
+    await click(family())
+    expect(picks().length).toBe(9)
+    await act(async () => {
+      store.sheetOpen(all.at(-1)!)
+    })
+    expect(store.get().picking).toBe(null)
+    expect(picks().length).toBe(0)
+    expect(sheet()).toBeTruthy()
+  })
+
+  /* The reader's model rides the add, so the row is never connected on the
+     agent's default first and moved afterwards. */
+  it('sends the model picked for an agent with its connect, in the one write', async () => {
+    const { acts } = install(
+      withChoices(members(), 'codex-Mirasim', [
+        { value: 'gpt-5.5', name: 'GPT-5.5', group: 'OpenAI' },
+        { value: 'glm-5.3-flash', name: 'GLM 5.3 Flash', group: 'Platform' },
+      ]),
+    )
+    await mount()
+    await click(family())
+    const codex = pickNamed('codex-Mirasim')
+    await click(codex.querySelector<HTMLElement>('.extAgents-pm')!)
+    /* The agent's own groups, as the left column: its choices, not Raven's providers. */
+    /* By the name span: the button also carries the provider's icon letter. */
+    const prov = [...document.querySelectorAll<HTMLElement>('.model-picker-prov')].find((p) =>
+      [...p.querySelectorAll('span')].some((x) => x.textContent === 'Platform'),
+    )
+    expect(prov, 'the picker lists the agent s own groups').toBeTruthy()
+    await click(prov!)
+    const opt = [...document.querySelectorAll<HTMLElement>('.model-picker-model')].find((o) =>
+      (o.textContent || '').includes('GLM 5.3 Flash'),
+    )
+    expect(opt, 'the picker lists the agent s own choices').toBeTruthy()
+    await click(opt!)
+    expect(codex.querySelector('.extAgents-mid')!.textContent).toBe('GLM 5.3 Flash')
+    /* Reopened, it ticks the pick: the tick matches the value the agent lists,
+       which here differs from the name the pill shows for it. */
+    await click(codex.querySelector<HTMLElement>('.extAgents-pm')!)
+    const ticked = [...document.querySelectorAll<HTMLElement>('.model-picker-model[aria-pressed="true"]')]
+    expect(ticked.map((o) => o.textContent)).toEqual(['GLM 5.3 Flash✓'])
+    await click(ticked[0]!)
+    await click(codex.querySelector<HTMLElement>('.extAgents-pickgo')!)
+    expect(acts).toEqual([['connect', 'codex-Mirasim', { model: 'glm-5.3-flash' }]])
+  })
+
+  /* An agent whose handshake offered no model choices runs on its own default,
+     and the pill says so rather than opening an empty picker. */
+  it('offers no model to pick when the agent advertised none', async () => {
+    install(members())
+    await mount()
+    await click(family())
+    const pm = pickNamed('claude-Mirasim').querySelector<HTMLButtonElement>('.extAgents-pm')!
+    expect(pm.disabled).toBe(true)
+    expect(pm.textContent).toBe('gui.agent.model_managed')
+  })
+
+  /* The mark of an agent run through Mirasim is Mirasim's, with the agent's
+     over it -- on its card, not in the picker, where the drawer is already
+     Mirasim's and the agent is what is being chosen. */
+  it('draws a connected member s mark as the route with the agent over it', async () => {
+    install(members().map((m) => (m.name === 'codex-Mirasim' ? { ...m, configured: true, enabled: true } : m)))
+    await mount()
+    const mark = rowNamed('codex-Mirasim').querySelector('.agent-mark')!
+    expect(mark.querySelector(':scope > img')!.getAttribute('src')).toBe('assets/agents/mirasim.svg')
+    expect(mark.querySelector('.agent-mark-badge img')!.getAttribute('src')).toBe('assets/agents/codex-color.svg')
+    await click(family())
+    const plain = pickNamed('claude-Mirasim').querySelector('.agent-mark')!
+    expect(plain.querySelector(':scope > img')!.getAttribute('src')).toBe('assets/agents/claudecode-color.svg')
+    expect(plain.querySelector('.agent-mark-badge')).toBe(null)
+  })
+
+  it('never folds a member that is already on the roster', async () => {
+    const all = members().map((m) =>
+      m.name === 'codex-Mirasim' ? { ...m, configured: true, enabled: true } : m,
+    )
+    install(all)
+    await mount()
+    expect(rowNamed('codex-Mirasim')).toBeTruthy()
+    await click(family())
+    expect(picks().map((p) => p.querySelector('.extAgents-picknm')!.textContent)).not.toContain('codex-Mirasim')
+    expect(picks().length).toBe(8)
+  })
+
+  it('unfolds a family that has come down to one visible member', async () => {
+    install([members()[0]!])
+    await mount()
+    expect(family()).toBeUndefined()
+    expect(rowNamed('claude-Mirasim')).toBeTruthy()
+  })
+
+  it('folds only the presets that share the prefix', async () => {
+    install([...members(), row({ name: 'codex', preset: 'codex', configured: false, enabled: false })])
+    await mount()
+    expect(rowNamed('codex')).toBeTruthy()
+    expect(rowsOf().length).toBe(2)
+  })
+})
+
 describe('a card', () => {
   it('says who it is in one line: the catalogue for a known agent, the probe or the transport otherwise', async () => {
     install([
@@ -524,7 +898,11 @@ describe('connecting', () => {
       },
     })
     await mount()
-    expect(document.querySelectorAll('.extAgents-wcard').length).toBe(18)
+    /* Nineteen and not the agent catalogue's twenty-seven: the nine Mirasim presets
+       are one card while none of them has been opened out, so the skeleton has
+       to draw one cell for them or the grid jumps by eight when the roster
+       lands -- which is the whole reason this count is pinned. */
+    expect(document.querySelectorAll('.extAgents-wcard').length).toBe(19)
     expect(document.querySelector('.extAgents-grid')!.getAttribute('aria-busy')).toBe('true')
     expect(document.querySelector('.extAgents-empty')).toBeNull()
     /* The machines tab counts its own rows, which the roster's wait does not cover. */

@@ -15,7 +15,7 @@
 
 import { hasBuildFlag } from '../../rpc/capabilities'
 import { gateway } from '../../rpc/gateway'
-import { isOwnRow } from './catalogue'
+import { MIN_FAMILY, familyOf, isOwnRow } from './catalogue'
 
 import type { ResultOf } from '../../rpc/generated'
 import type { ExtAgentActArgs, ExtAgentOp, ExtAgentRow, ExtAgentsSource, MachineRow, MachinesSource, Remedy } from './types'
@@ -135,6 +135,71 @@ export function sectionOf(row: ExtAgentRow): Section {
   return 'avail'
 }
 
+/* ── what the grid draws ─────────────────────────────────────────── */
+
+/* One cell of the grid: a row of its own, or the card standing in for a family
+   the reader has not opened yet. */
+export type GridEntry =
+  | { kind: 'row'; row: ExtAgentRow }
+  /* `section` is part of the card's identity, not decoration. The All tab
+     concatenates the three sections, each folded on its own, so a family with
+     MIN_FAMILY members in two of them yields two cards -- and two cards with
+     one React key read as one card that does not respond, because React keeps
+     the first and drops the rest. Two populations, two cards: the drawer lists
+     the unconfigured members, so a family with a connected member and folded
+     ones really does stand for two different things on this tab. */
+  | { kind: 'family'; family: string; section: Section; members: ExtAgentRow[] }
+
+/* The rows folded into what the grid actually draws.
+
+   A Mirasim preset folds into its family's card until it is CONNECTED; a
+   configured one never folds, because it is on the roster and its card is
+   where it is disconnected from. So the fold lifts on the one event the design
+   makes it wait for, and `configured` -- the fact that the add wrote a config
+   entry -- is the whole of it: choosing an agent in the picker does not unfold
+   anything, it connects that agent, and the card that appears is the evidence.
+
+   One exception, about the card earning its place: a family whose folded
+   members are fewer than `MIN_FAMILY` unfolds, because a card standing for one
+   agent hides the very thing the reader came for.
+
+   The family takes the position of its first folded member, so the caller's own
+   ordering -- `ordered`, which sorts Raven's own first and is otherwise the
+   server's -- is what decides where the card lands, exactly as it did for the
+   rows it replaced. */
+export function gridEntries(rows: ExtAgentRow[], section?: Section): GridEntry[] {
+  const folded = new Map<string, ExtAgentRow[]>()
+  const foldedNames = new Set<string>()
+  for (const row of rows) {
+    const family = familyOf(row)
+    if (family && !row.configured) {
+      folded.set(family, [...(folded.get(family) ?? []), row])
+      foldedNames.add(row.name)
+    }
+  }
+  for (const [family, members] of folded) {
+    if (members.length >= MIN_FAMILY) continue
+    folded.delete(family)
+    for (const member of members) foldedNames.delete(member.name)
+  }
+  const entries: GridEntry[] = []
+  const placed = new Set<string>()
+  for (const row of rows) {
+    /* By NAME, not by family: a member the reader has opened out belongs to a
+       family that is still folded, so asking whether the family was placed
+       would swallow the very row the press just asked for. */
+    if (!foldedNames.has(row.name)) {
+      entries.push({ kind: 'row', row })
+      continue
+    }
+    const family = familyOf(row)!
+    if (placed.has(family)) continue
+    placed.add(family)
+    entries.push({ kind: 'family', family, section: section ?? sectionOf(row), members: folded.get(family)! })
+  }
+  return entries
+}
+
 /* The onboarding wizard's agents step draws two of the hub's three sections,
    from the same `sectionOf`, and leaves out the rows that are not a first
    run's decision: the built-in loop (always on, nothing to do), an openai
@@ -239,9 +304,13 @@ export const extAgentsSource: ExtAgentsSource = {
   act: async (op, row, args) => {
     const a = args || {}
     if (op === 'connect') {
-      /* Only name / description / key travel: every execution field comes from
-         the preset server-side. A page that could post a command line would make
-         "which agent is this" unanswerable. */
+      /* Only name / description / key / model travel: every execution field
+         comes from the preset server-side. A client that could post a command
+         line would make "which agent is this" unanswerable.
+
+         `model` is the one execution field that is the reader's: the add stores
+         it verbatim, so choosing an agent and its model is ONE write rather
+         than an add followed by an update that can fail in between. */
       await gateway().call('subagents.add', {
         preset: row.preset || row.name,
         name: a.new_name || undefined,
@@ -249,6 +318,7 @@ export const extAgentsSource: ExtAgentsSource = {
         api_key: a.api_key || undefined,
         machine: a.machine || undefined,
         remote_cwd: a.machine && a.remote_cwd ? a.remote_cwd : undefined,
+        model: a.model || undefined,
       })
     } else if (op === 'update') {
       await gateway().call('subagents.update', {

@@ -29,7 +29,12 @@ import type { JSX } from 'react'
    themes (page.css, `.agent-mark`), because recolouring a mark for a dark
    ground is a per-file guess: inverting a mono illustration gives its negative
    and rotating qoder's hue back lands on a different green. The attribute
-   stays as the file's fact, for the test that ties each tone to its file. */
+   stays as the file's fact, for the test that ties each tone to its file.
+
+   A `mirasim_` row is the agent of the same name run through Mirasim, so it
+   wears that agent's mark; the row's name already says the route. DSH (the
+   DeepSeek Harness) publishes no mark of its own and wears DeepSeek's, whose
+   models it is built around. */
 const MARKS: Record<string, { file: string; tone?: 'mono' | 'hybrid' }> = {
   claude_code: { file: 'claudecode-color' },
   codebuddy: { file: 'codebuddy-color' },
@@ -38,6 +43,15 @@ const MARKS: Record<string, { file: string; tone?: 'mono' | 'hybrid' }> = {
   grok: { file: 'grok', tone: 'mono' },
   hermes: { file: 'hermesagent', tone: 'mono' },
   kimi_code: { file: 'kimi', tone: 'mono' },
+  mirasim_antigravity: { file: 'antigravity-color' },
+  mirasim_claude: { file: 'claudecode-color' },
+  mirasim_codex: { file: 'codex-color' },
+  mirasim_dsh: { file: 'deepseek-color' },
+  mirasim_grok: { file: 'grok', tone: 'mono' },
+  mirasim_kimi: { file: 'kimi', tone: 'mono' },
+  mirasim_pi: { file: 'pi', tone: 'mono' },
+  mirasim_qwen: { file: 'qwen-color' },
+  mirasim_zcode: { file: 'zai', tone: 'mono' },
   mirothinker: { file: 'miromind' },
   openclaw: { file: 'openclaw-color' },
   opencode: { file: 'opencode', tone: 'mono' },
@@ -54,12 +68,30 @@ const MARKS: Record<string, { file: string; tone?: 'mono' | 'hybrid' }> = {
    none, for the reason the table above is not keyed by name either.
 
    raven.svg is this project's own mark rather than upstream's, so the `cmp`
-   against @lobehub/icons-static-svg that settles provenance for the thirteen
+   against @lobehub/icons-static-svg that settles provenance for the files above
    does not apply to it and LICENSES/README.md counts it separately. It answers
    the theme from a prefers-color-scheme rule inside the file, the way
    miromind.svg does; the tile pins that scheme light, so on its light plate the
    raven is black under either theme, as the app icon draws it. */
 const OWN_MARK: { file: string } = { file: 'raven' }
+
+/* The group card's mark: one tile standing for the nine `mirasim_*` rows the
+   reader has not picked an agent out of yet.
+
+   Outside `MARKS` on purpose, and parsed separately in the test that reads this
+   file, for the reason `OWN_MARK` is: that table's contract is that it equals
+   the third-party presets one for one, and this stands for nine of them at
+   once. It is Mirasim's own file, from `https://mirasim.ai/icon.svg` -- the
+   handwritten "m" the vendor's own `marks.tsx` draws -- copied byte for byte
+   except for the comment the site carries. It answers the theme from a
+   `prefers-color-scheme` rule inside itself, the way raven.svg and
+   miromind.svg do. */
+const GROUP_MARK: { file: string } = { file: 'mirasim' }
+
+/* The preset key the group card is drawn under. Not a preset: no row carries
+   it, and `subagents.list` never sends one. It exists so the group card can
+   reach `AgentMark` through the same door every other mark does. */
+export const MIRASIM_GROUP = 'mirasim'
 
 /* Spelled once, because four call sites read it off three different row types
    and a fifth that forgets `vendored` loses the mark on every Discovered agent
@@ -78,6 +110,7 @@ export const isOwnAgent = (row?: { builtin?: boolean; vendored?: boolean } | nul
    miss, not the inherited hit. */
 function markFor(preset?: string | null, own?: boolean): { file: string; tone?: 'mono' | 'hybrid' } | undefined {
   if (own) return OWN_MARK
+  if (preset === MIRASIM_GROUP) return GROUP_MARK
   return preset && Object.hasOwn(MARKS, preset) ? MARKS[preset] : undefined
 }
 
@@ -106,8 +139,16 @@ function BotIcon(): JSX.Element {
    `own` is the row's `builtin || vendored`, not a name test: it is resolved by
    the caller because the two flags live on the row and their spelling is the
    server's, not this module's. */
-export function AgentMark({ preset, own }: { preset?: string | null; own?: boolean }): JSX.Element {
+export function AgentMark({
+  preset, own, badge,
+}: { preset?: string | null; own?: boolean; badge?: string | null }): JSX.Element {
   const mark = markFor(preset, own)
+  /* The overlaid mark, for an agent that reaches the reader through another
+     one: the plate keeps the route's mark and the badge names the agent. Both
+     files are already in the table -- the route's and the agent's -- so this
+     draws a composite out of what ships rather than adding a third file per
+     agent, which is also why the pair is a prop and not a second table. */
+  const over = badge ? markFor(badge) : undefined
   return (
     <span className="agent-mark" aria-hidden="true">
       {mark ? (
@@ -119,6 +160,17 @@ export function AgentMark({ preset, own }: { preset?: string | null; own?: boole
           data-tone={mark.tone}
         />
       ) : <BotIcon />}
+      {over ? (
+        <span className="agent-mark-badge">
+          <img
+            src={`assets/agents/${over.file}.svg`}
+            alt=""
+            draggable="false"
+            data-agent={badge}
+            data-tone={over.tone}
+          />
+        </span>
+      ) : null}
     </span>
   )
 }

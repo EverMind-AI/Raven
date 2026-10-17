@@ -25,7 +25,11 @@ machine without uv gets one under
 (:data:`UV_VERSION`), fetched with the machine's curl or wget and run as an
 unmanaged install, which writes no receipt under the home directory and
 changes no PATH; with neither uv nor a way to fetch it, the install stops
-and says so.
+and says so. So does a machine whose uv is older than
+:data:`UV_INDEX_SINCE` when pip there is configured with an index: such a
+uv ignores ``UV_DEFAULT_INDEX`` and would install from PyPI behind a plan
+that names the mirror. A uv an earlier install fetched under ``node_dir/.uv``
+is used in its place when it is there, so the next install fetches nothing.
 
 Each step is one ssh call through :func:`raven.acp_client.remote.run`; a step
 that fails removes the half-made node directory, so the next attempt starts
@@ -58,6 +62,12 @@ UV_INSTALLER = "https://astral.sh/uv/install.sh"
 #: uv on two machines. The installer for a version is served under its number.
 UV_VERSION = "0.13.0"
 UV_PINNED_INSTALLER = f"https://astral.sh/uv/{UV_VERSION}/install.sh"
+#: The first uv that reads the package index from ``UV_DEFAULT_INDEX`` (with
+#: ``--default-index``, both added in 0.4.23 per uv's changelog). An older one
+#: ignores the variable and installs from PyPI, so with an index configured a
+#: machine's uv older than this, or one that does not say its version, is
+#: passed over for :data:`UV_VERSION`.
+UV_INDEX_SINCE = (0, 4, 23)
 
 _PROBE_TIMEOUT_S = 60.0
 _STEP_TIMEOUT_S = 900.0
@@ -83,11 +93,22 @@ class Plan:
     index: str = ""
     """The package index pip is configured with on the machine, or ``""`` for PyPI: handed to uv on a step's stdin,
     never on a command line, and shown only without its sign-in (:func:`_shown_index`)."""
+    uv_version: str = ""
+    """What the machine's uv says it is (``uv --version``), or ``""`` when it says nothing readable."""
+
+    @property
+    def uv_too_old(self) -> bool:
+        """Whether the machine's uv would ignore the configured index: older than :data:`UV_INDEX_SINCE`, or silent.
+
+        Only with an index configured: without one, uv's default is what the
+        plan says, and an old uv installs from it as well as a new one.
+        """
+        return bool(self.uv and self.index) and _version_of_uv(self.uv_version) < UV_INDEX_SINCE
 
     @property
     def uv_from(self) -> str:
         """``"machine"`` (its own uv), ``"fetched"`` (one put under node_dir first), or ``""`` (no way to one)."""
-        if self.uv:
+        if self.uv and not self.uv_too_old:
             return "machine"
         return "fetched" if self.fetch else ""
 
@@ -110,9 +131,14 @@ class Plan:
             if self.how == "python"
             else "a Python 3.12 made by uv, kept beside it"
         )
+        why = (
+            f"the machine has {_uv_said(self)}, and only uv {_SINCE} or later installs from the index pip is "
+            "configured with"
+            if self.uv_too_old
+            else "the machine has none"
+        )
         uv = (
-            f" uv {UV_VERSION} itself first, under {self.node_dir}/.uv (the machine has none), fetched with its own "
-            f"{self.fetch};"
+            f" uv {UV_VERSION} itself first, under {self.node_dir}/.uv ({why}), fetched with its own {self.fetch};"
             if self.uv_from == "fetched"
             else ""
         )
@@ -188,7 +214,9 @@ def probe_script(node_dir: str, install_name: str, digest: str) -> str:
 
     uv is looked for on the PATH, in the two places its installer puts it
     that a non-login PATH misses, and under ``node_dir/.uv``, where an
-    earlier install of this Raven may have put it. The index is read the way
+    earlier install of this Raven may have put it; that one is reported on
+    its own as well (``NODE_UV``), for :func:`plan` to use when the one
+    found first would ignore the configured index. The index is read the way
     pip reads it (:data:`_PIP_INDEX`), by whichever Python the loop found,
     since uv reads no pip configuration of its own accord.
     """
@@ -199,7 +227,10 @@ def probe_script(node_dir: str, install_name: str, digest: str) -> str:
         "if \"$q\" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)' "
         '2>/dev/null; then echo "PYTHON=$q"; break; fi; done; '
         'for u in "$(command -v uv 2>/dev/null)" "$HOME/.local/bin/uv" "$HOME/.cargo/bin/uv" "$dir/.uv/uv"; do '
-        'if [ -n "$u" ] && [ -x "$u" ]; then echo "UV=$u"; break; fi; done; '
+        'if [ -n "$u" ] && [ -x "$u" ]; then echo "UV=$u"; '
+        '"$u" --version 2>/dev/null | awk \'NR==1 && $2 {print "UV_VERSION=" $2}\'; break; fi; done; '
+        'if [ -x "$dir/.uv/uv" ]; then echo "NODE_UV=$dir/.uv/uv"; '
+        '"$dir/.uv/uv" --version 2>/dev/null | awk \'NR==1 && $2 {print "NODE_UV_VERSION=" $2}\'; fi; '
         'for f in curl wget; do c=$(command -v "$f" 2>/dev/null) || continue; echo "FETCH=$c"; break; done; '
         f'if [ -n "$PIP_INDEX_URL" ]; then echo "INDEX=$PIP_INDEX_URL"; elif [ -n "$q" ]; then "$q" -c {shlex.quote(_PIP_INDEX)} '
         "2>/dev/null; fi; "
@@ -213,6 +244,9 @@ def plan(machine_id: str, *, node_dir: str | None = None, run: Runner = _run) ->
 
     ``node_dir`` is where to keep nodes when it should differ from the
     machine's registry row; the caller records it once the install succeeds.
+    A uv an earlier install fetched under ``node_dir/.uv`` stands in for the
+    machine's own when that one would ignore the index pip is configured
+    with (older than :data:`UV_INDEX_SINCE`, or silent about its version).
     """
     try:
         target = remote.machine(machine_id)
@@ -226,19 +260,26 @@ def plan(machine_id: str, *, node_dir: str | None = None, run: Runner = _run) ->
     seen: dict[str, str] = {}
     for line in out.splitlines():
         key, sep, value = line.strip().partition("=")
-        if sep and key in {"PRESENT", "PYTHON", "UV", "FETCH", "FREE_KB", "INDEX"}:
+        if sep and key in {
+            "PRESENT",
+            "PYTHON",
+            "UV",
+            "UV_VERSION",
+            "NODE_UV",
+            "NODE_UV_VERSION",
+            "FETCH",
+            "FREE_KB",
+            "INDEX",
+        }:
             seen[key] = value.strip()
     index = seen.get("INDEX", "")
-    try:
-        urlsplit(index).port
-    except ValueError:
-        # pip's configuration is hand-written, and a port there that is not
-        # one is the owner's to correct; uv would refuse the URL as well.
-        raise InstallError(
-            f"the package index pip is configured with on machine {target.label} has a port that is not a number "
-            f"from 0 to 65535 ({_shown_index(index)}); correct index-url in pip's configuration there, or "
-            "PIP_INDEX_URL"
-        ) from None
+    uv, uv_version = seen.get("UV", ""), seen.get("UV_VERSION", "")
+    own, own_version = seen.get("NODE_UV", ""), seen.get("NODE_UV_VERSION", "")
+    if index and uv and own != uv and _version_of_uv(uv_version) < UV_INDEX_SINCE <= _version_of_uv(own_version):
+        # The machine's own uv comes first in the look and would ignore the
+        # index; the one an earlier install fetched under node_dir reads it,
+        # and is used rather than fetched again.
+        uv, uv_version = own, own_version
     free = seen.get("FREE_KB", "")
     return Plan(
         target=target,
@@ -246,15 +287,37 @@ def plan(machine_id: str, *, node_dir: str | None = None, run: Runner = _run) ->
         install_name=install_name,
         present=seen.get("PRESENT") == "1",
         python=seen.get("PYTHON", ""),
-        uv=seen.get("UV", ""),
+        uv=uv,
         free_kb=int(free) if free.isdigit() else None,
         fetch=seen.get("FETCH", ""),
         index=index,
+        uv_version=uv_version,
     )
 
 
 def refusal(p: Plan) -> str | None:
-    """Why ``p`` cannot go ahead, or ``None`` when it can."""
+    """Why ``p`` cannot go ahead, or ``None`` when it can.
+
+    The checks an install needs and a look does not: a machine that already
+    has this node is found so, and pruned, whatever its pip configuration.
+    """
+    if p.index:
+        try:
+            urlsplit(p.index).port
+        except ValueError:
+            # pip's configuration is hand-written, and a port there that is
+            # not one is the owner's to correct; uv would refuse the URL too.
+            return (
+                f"the package index pip is configured with on machine {p.target.label} has a port that is not a "
+                f"number from 0 to 65535 ({_shown_index(p.index)}); correct index-url in pip's configuration there, "
+                "or PIP_INDEX_URL"
+            )
+    if p.how == "" and p.uv_too_old:
+        return (
+            f"machine {p.target.label} has {_uv_said(p)}, and only uv {_SINCE} or later installs from the package "
+            f"index pip is configured with there; with no curl or wget to fetch uv {UV_VERSION}, upgrade uv there "
+            f"({UV_INSTALLER}), then run this again"
+        )
     if p.how == "":
         return (
             f"machine {p.target.label} has no uv, and no curl or wget to fetch one with; "
@@ -405,6 +468,24 @@ def _shown_index(url: str) -> str:
     return urlunsplit(parts._replace(netloc=parts.netloc.rpartition("@")[2]))
 
 
+_SINCE = ".".join(str(part) for part in UV_INDEX_SINCE)
+
+
+def _version_of_uv(said: str) -> tuple[int, ...]:
+    """``uv --version``'s number as a tuple to compare, or ``()`` -- older than any -- when it is not one."""
+    parts = said.strip().split(".")
+    if len(parts) < 3 or not all(part.isdigit() for part in parts[:3]):
+        return ()
+    return tuple(int(part) for part in parts[:3])
+
+
+def _uv_said(p: Plan) -> str:
+    """The machine's uv as a sentence names it: its version when it said one, else that it says none."""
+    if _version_of_uv(p.uv_version):
+        return f"uv {p.uv_version}"
+    return "a uv that does not say which version it is"
+
+
 def _version_of(install_name: str) -> str:
     """The version an install name begins with: everything before its digest (``<version>-<digest>``)."""
     return install_name.rpartition("-")[0] or install_name
@@ -436,6 +517,7 @@ def _confirm_digest(p: Plan, out: str) -> None:
 
 
 __all__ = [
+    "UV_INDEX_SINCE",
     "UV_INSTALLER",
     "UV_PINNED_INSTALLER",
     "UV_VERSION",

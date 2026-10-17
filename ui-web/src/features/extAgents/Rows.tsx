@@ -12,17 +12,18 @@
  * looks up.
  */
 
-import { AgentMark } from '../../components/AgentMark'
+import { AgentMark, MIRASIM_GROUP } from '../../components/AgentMark'
 import { Glyph } from '../../components/Ico'
 import { t } from '../../i18n/t'
 import { agentKindLabel } from '../../lib/agentKind'
 import { ask as confirmAsk } from '../../state/confirm'
-import { catalogueSize, isOwnRow, shortOf } from './catalogue'
+import { catalogueCards, familyOf, isOwnRow, shortOf } from './catalogue'
 import { healthOf, kindOf, ledClass, pendingLabel, refusedWrite, shownOf } from './health'
 import { stageOf } from './source'
 import * as store from './store'
 
 import type { Health, Shown } from './health'
+import type { GridEntry } from './source'
 import type { ExtAgentsState, Failure } from './store'
 import type { ExtAgentRow, Remedy } from './types'
 import type { JSX, ReactNode } from 'react'
@@ -64,11 +65,17 @@ function MachineTag({ row }: { row: ExtAgentRow }): JSX.Element | null {
   )
 }
 
-export function Tile({ row }: { row: ExtAgentRow }): JSX.Element {
+/* The plate a row wears. One of Mirasim's agents is that agent run through
+   Mirasim, so its mark is the route's with the agent's over it -- and the pair
+   is drawn from the two files the table already carries rather than a
+   per-agent composite asset. `plain` is the picker's own row, where the agent
+   is what the reader is choosing and the route is already the drawer's title. */
+export function Tile({ row, plain }: { row: ExtAgentRow; plain?: boolean }): JSX.Element {
   const own = isOwnRow(row)
+  const via = !plain && familyOf(row) ? { preset: MIRASIM_GROUP, badge: row.preset } : null
   return (
     <span className={'extAgents-tile' + (own ? ' extAgents-tile-own' : '')}>
-      <AgentMark preset={row.preset} own={own} />
+      {via ? <AgentMark badge={via.badge} preset={via.preset} /> : <AgentMark preset={row.preset} own={own} />}
     </span>
   )
 }
@@ -77,7 +84,7 @@ export function Tile({ row }: { row: ExtAgentRow }): JSX.Element {
    for a row nobody catalogued -- the probe's own verdict when it has one, else
    how Raven reaches it. A refusal replaces it in red; a write in flight
    replaces it with the ring. */
-function oneLine(row: ExtAgentRow): string {
+export function oneLine(row: ExtAgentRow): string {
   const short = shortOf(row)
   const stale = stageOf(row) === 'stale' ? t('gui.agent.tag_stale') : ''
   const base =
@@ -282,7 +289,7 @@ export function connect(row: ExtAgentRow): void {
     )
     return
   }
-  store.connectRow(row)
+  void store.connectRow(row)
 }
 
 /* The one control a row carries. Exactly one, or none for the built-in loop,
@@ -460,11 +467,13 @@ function AgentCard({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Ele
 /* The grid before the first answer: one card of the fixed shape a real card
    has per catalogue entry, which is the roster on every machine, so it lands
    in place instead of after an empty message and a jump. Bars, not rows: a
-   card would be claiming a state the server has not confirmed. */
+   card would be claiming a state the server has not confirmed. Cards, not
+   keys: a family is one cell in the answer and so one cell here, or the grid
+   would jump by eight the moment the roster landed. */
 export function WaitGrid(): JSX.Element {
   return (
     <div className="extAgents-grid" aria-busy="true">
-      {Array.from({ length: catalogueSize() }, (_, i) => (
+      {Array.from({ length: catalogueCards() }, (_, i) => (
         <div className="extAgents-card extAgents-wcard" key={i}>
           <div className="extAgents-ctop">
             <span className="extAgents-wbar extAgents-wtile" />
@@ -480,13 +489,61 @@ export function WaitGrid(): JSX.Element {
   )
 }
 
-export function CardGrid({ rows, s, empty }: { rows: ExtAgentRow[]; s: ExtAgentsState; empty: string }): JSX.Element {
-  if (!rows.length) return <div className="extAgents-empty">{empty}</div>
+/* The card that stands in for a family of presets the reader has not opened.
+   Its job is one press: show the agents behind it. It reads like every other
+   card -- mark, name, a line, a filled foot -- because it IS one of the grid's
+   cells and a different shape would read as a different kind of thing. */
+function FamilyCard({ entry, s }: { entry: Extract<GridEntry, { kind: 'family' }>; s: ExtAgentsState }): JSX.Element {
+  const open = (): void => store.pickerOpen(entry.family)
+  return (
+    <div
+      className="extAgents-card"
+      role="button"
+      tabIndex={0}
+      aria-current={s.picking === entry.family ? 'true' : undefined}
+      onClick={open}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          open()
+        }
+      }}
+    >
+      <div className="extAgents-ctop">
+        <span className="extAgents-tile">
+          <AgentMark preset={MIRASIM_GROUP} />
+        </span>
+        <div className="extAgents-nm">
+          <span className="extAgents-t">{t('gui.agent.fam_mirasim')}</span>
+        </div>
+        <div className="extAgents-ctl" onClick={(e) => e.stopPropagation()}>
+          <span className="extAgents-ctag">{t('gui.agent.fam_n', { n: entry.members.length })}</span>
+        </div>
+      </div>
+      <div className="extAgents-one">{t('gui.agent.fam_mirasim_about')}</div>
+      <div className="extAgents-foot-slot">
+        <Foot v={{ label: t('gui.agent.fam_pick'), why: '', raw: '', remedy: null, act: '', onAct: () => {}, quiet: true }} />
+      </div>
+    </div>
+  )
+}
+
+export function CardGrid({
+  entries, s, empty,
+}: { entries: GridEntry[]; s: ExtAgentsState; empty: string }): JSX.Element {
+  if (!entries.length) return <div className="extAgents-empty">{empty}</div>
   return (
     <div className="extAgents-grid">
-      {rows.map((row) => (
-        <AgentCard key={row.name} row={row} s={s} />
-      ))}
+      {entries.map((entry) =>
+        entry.kind === 'family' ? (
+          /* Family AND section: see GridEntry -- one key per population, or
+             React keeps the first of two cards and silently drops the other. */
+          <FamilyCard entry={entry} key={`${entry.family}:${entry.section}`} s={s} />
+        ) : (
+          <AgentCard key={entry.row.name} row={entry.row} s={s} />
+        ),
+      )}
     </div>
   )
 }

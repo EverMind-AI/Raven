@@ -158,4 +158,38 @@ describe('an agent row s brand mark', () => {
     expect(withMark).toBe('agent-mark')
     expect(withGlyph).toBe('agent-mark')
   })
+
+  /* An agent reached through another one: the route's mark on the plate and the
+     agent's over its corner, each looked up by its own key in the one table --
+     so the guard against inherited names covers the badge too, and an unknown
+     one draws nothing rather than a broken image. */
+  describe('the badge', () => {
+    const drawVia = (badge: string): void => {
+      act(() => { root.render(<AgentMark preset="mirasim" badge={badge} />) })
+    }
+
+    it('draws the agent over the route, in the one slot', () => {
+      drawVia('mirasim_codex')
+      const slot = host.firstElementChild as HTMLElement
+      expect(slot.className).toBe('agent-mark')
+      expect(slot.querySelector(':scope > img')?.getAttribute('src')).toBe('assets/agents/mirasim.svg')
+      const over = slot.querySelector<HTMLImageElement>('.agent-mark-badge img')
+      expect(over?.getAttribute('src')).toBe('assets/agents/codex-color.svg')
+      expect(over?.dataset.agent).toBe('mirasim_codex')
+    })
+
+    it('carries the badge s own tone, which the route s mark does not share', () => {
+      drawVia('mirasim_kimi')
+      expect(host.querySelector<HTMLImageElement>('.agent-mark-badge img')?.dataset.tone).toBe('mono')
+      expect(host.querySelector<HTMLImageElement>(':scope > .agent-mark > img')?.dataset.tone).toBe(undefined)
+    })
+
+    it('draws no badge for one it does not know', () => {
+      for (const key of ['some_local_agent', 'constructor', '__proto__']) {
+        drawVia(key)
+        expect(host.querySelector('.agent-mark-badge')).toBe(null)
+        expect(host.querySelector('img')?.getAttribute('src')).toBe('assets/agents/mirasim.svg')
+      }
+    })
+  })
 })

@@ -1863,3 +1863,5 @@ async def test_describe_names_registered_machines_without_a_debug_switch(config_
     assert '"machine": "<id>"' in line and "203.0.113" not in said
     # Every kind, each its own way: a command runs there, an endpoint is reached from there.
     assert "an acp or cli preset runs there" in line and "openai preset's endpoint is reached from there" in line
+    # Bar the one family whose command is this host's own interpreter.
+    assert "a mirasim_* preset runs only here" in line

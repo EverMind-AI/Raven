@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import re
 import sys
 from collections.abc import Iterator
@@ -338,7 +339,7 @@ def _migrate_auto_provider(data: dict[str, Any], *, notify: bool = False) -> boo
     return True
 
 
-def _persist_migrations(path: Path, from_version: int = 0) -> None:
+def _persist_migrations(path: Path, from_version: int = 0, *, refresh_interpreters: bool = False) -> None:
     """Apply the stamped migrations to the file itself, then stamp. Best effort.
 
     Re-reads the raw file instead of reusing the mapping ``load_config`` already
@@ -403,6 +404,8 @@ def _persist_migrations(path: Path, from_version: int = 0) -> None:
                 changed = _migrate_display_only_addresses(raw) or changed
             if from_version < _PLANTED_CRON_TIMEZONE_MIGRATION:
                 changed = _migrate_planted_cron_timezone(raw) or changed
+            if refresh_interpreters:
+                changed = _refresh_bundled_shim_interpreters(raw) or changed
         if not changed:
             return None, True
         return json.dumps(raw, indent=2, ensure_ascii=False), True
@@ -480,6 +483,12 @@ def load_config(config_path: Path | None = None) -> Config:
             # (the TUI RPC server reloads every turn) and nothing else.
             from_version = _migration_version(path)
             unstamped = from_version < CURRENT_CONFIG_VERSION
+            # Ungated, unlike the migrations below it: this one corrects a path
+            # that follows the running install, so it has to reach a config this
+            # same build wrote, not only one an older build left behind. Run here
+            # rather than left to ``_migrate_config`` so its own answer -- did a
+            # row move? -- is what decides whether the file is rewritten.
+            reinterpreted = _refresh_bundled_shim_interpreters(data)
             data = _migrate_config(data, from_version=from_version, config_path=path)
             _stash_channel_slices(data)
         except json.JSONDecodeError as e:
@@ -518,8 +527,11 @@ def load_config(config_path: Path | None = None) -> Config:
                 ) from e
             # Only once the migrated data is known to validate: a file we
             # cannot load is a file we have no business rewriting.
-            if unstamped:
-                _persist_migrations(path, from_version)
+            if unstamped or reinterpreted:
+                # The shim rows' interpreter follows this install, not the
+                # watermark: a config already stamped still has to be rewritten
+                # when one of those rows names an interpreter that moved.
+                _persist_migrations(path, from_version, refresh_interpreters=reinterpreted)
 
     if config is None:
         config = Config()
@@ -1419,3 +1431,67 @@ def _migrate_config(  # noqa: C901 (cc 45: pre-existing, above the ceiling)
             data.pop(ek, None)
 
     return data
+
+
+def _refresh_bundled_shim_interpreters(data: dict[str, Any]) -> bool:
+    """Point a bundled-shim row whose interpreter is gone at this Raven's. True when changed.
+
+    Those rows launch ``python -m raven.acp.mirasim`` and ``subagents.add`` writes
+    the interpreter's absolute path into the row, because the table the presets
+    come from cannot know where this install puts Python. An install that lands
+    elsewhere -- a different ``uv tool dir``, a checkout whose interpreter moved --
+    leaves every stored row naming an interpreter that is gone, and the row then
+    reads "not on the login shell PATH": true, and about nothing the reader can act
+    on. Repaired here rather than surfaced for a remove-and-add because there is
+    nothing to decide: Raven is running, so an interpreter that can launch its own
+    adapter is at hand, and the row is otherwise untouched -- a model, a key and a
+    session handle all keep meaning what they meant.
+
+    Only an interpreter that is gone, not every one that differs from this
+    process's. Two installs can read one config -- a checkout's venv beside a
+    ``uv tool`` install -- and pointing the rows at whichever loaded last made each
+    load from the other install rewrite the file the first had just written, while
+    the TUI's server reloads the config on every turn. An interpreter that still
+    exists can still launch the adapter, so the file is written once, by the first
+    install to read it after the move.
+
+    Only a row that names the preset and launches this package's adapter through an
+    interpreter of its own, the way ``_migrate_retired_shim_pins`` reads the same
+    rows for the pin. A hand-written row keeps its command; so does one whose first
+    token is no interpreter -- ``uv run``, ``poetry run`` -- where the adapter is a
+    subcommand of a runner that owns the interpreter itself, and putting one in its
+    place would break the command rather than fix it. Everything after the first
+    token is carried over untouched, so a flag its owner added rides along.
+    Silently, and False, when it changes nothing.
+    """
+    from raven.config.agent_names import BUNDLED_SHIM_PRESET_NAMES
+    from raven.utils.commands import command_quote, command_tokens
+
+    # The vocabulary from ``agent_names`` and this interpreter from ``sys``, the
+    # same pair ``raven.cli.agents_commands._resolved_python`` uses: config does
+    # not import the agent package (see ``agent_names``), so the preset table and
+    # the roster's own resolver are both out of reach from here.
+    python = os.environ.get("SUBAGENT_PYTHON", "").strip() or sys.executable
+    changed = False
+    for _alias, rows in _subagent_alias_rows(data):
+        for row in rows:
+            if not isinstance(row, dict) or str(row.get("preset") or "") not in BUNDLED_SHIM_PRESET_NAMES:
+                continue
+            command = row.get("command")
+            if not isinstance(command, str) or not command.strip():
+                continue
+            try:
+                tokens = command_tokens(command)
+            except ValueError:
+                continue
+            if not tokens or tokens[0] == python or not Path(tokens[0]).name.startswith("python"):
+                continue
+            if "raven.acp.mirasim" not in tokens:
+                continue
+            # `exists` follows a link, so a venv whose base interpreter was removed
+            # under it -- a dangling `bin/python` -- counts as gone too.
+            if not Path(tokens[0]).is_absolute() or Path(tokens[0]).exists():
+                continue
+            row["command"] = " ".join(command_quote(token) for token in (python, *tokens[1:]))
+            changed = True
+    return changed

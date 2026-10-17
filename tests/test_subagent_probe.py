@@ -1066,6 +1066,67 @@ class TestAutomaticSnapshotVerification:
         await schedule_snapshot_verification(_FakeManager([_FakeRow("refused"), _FakeRow("wedged"), _FakeRow("fine")]))
         assert sorted(recorded) == ["attention", "ready"]
 
+    @staticmethod
+    def _mirasim_boot(
+        monkeypatch: pytest.MonkeyPatch, snapshot: object, installed: frozenset[str]
+    ) -> tuple[list, list]:
+        """A boot whose unconfigured presets are three Mirasim agents and one other; what it verified and asked."""
+        from raven.agent.subagent import mirasim_presets
+        from raven.agent.subagent.presets import third_party_subagent_preset
+        from raven.config.schema import SubagentsConfig
+
+        keys = ("mirasim_claude", "mirasim_zcode", "mirasim_qwen")
+        configs = SubagentsConfig(agents=[third_party_subagent_preset(key) for key in keys]).agents
+        verified: list[str] = []
+        asked: list[str | None] = []
+
+        async def fake_verify(cfg: object) -> object:
+            verified.append(cfg.name)
+            return type("S", (), {"status": "ready", "needs_auth": False})()
+
+        async def fake_installed(*, path: str | None) -> frozenset[str]:
+            asked.append(path)
+            return installed
+
+        monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: snapshot)
+        monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
+        monkeypatch.setattr(
+            "raven.acp_client.capabilities.SnapshotStore",
+            lambda: type("S", (), {"record": staticmethod(lambda s: None)})(),
+        )
+        monkeypatch.setattr(
+            probe_mod,
+            "_unconfigured_acp_preset_rows",
+            lambda configured, path=None: [*(probe_mod._PresetRow(cfg) for cfg in configs), _FakeRow("a-preset")],
+        )
+        monkeypatch.setattr(mirasim_presets, "installed_agents", fake_installed, raising=False)
+        monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
+        return verified, asked
+
+    async def test_a_mirasim_preset_whose_agent_mirasim_lacks_is_not_handshaken(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Its handshake fails and a preset's failure is not kept, so verifying it would handshake it again at
+        every start: two Mirasim servers or more started for nothing, per such agent. Mirasim is asked once
+        instead."""
+        from raven.agent.subagent.probe import schedule_snapshot_verification
+
+        verified, asked = self._mirasim_boot(monkeypatch, None, frozenset({"claude", "qwen"}))
+        await schedule_snapshot_verification(_FakeManager([]))
+        assert verified == ["Claude Code-Mirasim", "Qwen Code-Mirasim", "a-preset"]
+        assert len(asked) == 1
+
+    async def test_mirasim_is_asked_only_when_one_of_its_presets_is_to_be_handshaken(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The question starts a Mirasim server of its own, which a boot with every preset measured never needs."""
+        from raven.agent.subagent.probe import schedule_snapshot_verification
+
+        measured = type("S", (), {"status": "ready", "stale": False, "needs_auth": False})()
+        verified, asked = self._mirasim_boot(monkeypatch, measured, frozenset())
+        await schedule_snapshot_verification(_FakeManager([]))
+        assert verified == [] and asked == []
+
     async def test_a_preset_nobody_has_configured_is_verified_too(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Or the page can never say `Unauthorized` before the first press.
 
@@ -1593,6 +1654,34 @@ def test_only_resolvable_unconfigured_acp_presets_are_offered_for_verification(
     assert set(seen_paths) == {"/login/shell/bin"}
 
 
+def test_a_shim_preset_whose_agent_is_absent_is_not_offered_for_verification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A shim's command resolves on any machine; the agent it drives may not.
+
+    ``_probe_acp`` reads such a row as missing, so handshaking it at boot would
+    pay to learn what the free probe already said. Sharpest for a Mirasim row,
+    whose command is Raven's own interpreter.
+    """
+    presets = [
+        {
+            "name": "Claude Code-Mirasim",
+            "preset": "mirasim_claude",
+            "kind": "acp",
+            "command": "/venv/bin/python -P -m raven.acp.mirasim --agent claude",
+        },
+        {"name": "Pi", "preset": "pi", "kind": "acp", "command": "npx -y pi-acp@0.0.33"},
+    ]
+    present = {"/venv/bin/python", "npx", "pi"}
+    monkeypatch.setattr(probe_mod, "third_party_subagent_presets", lambda: presets)
+    monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: f"/bin/{exe}" if exe in present else None)
+
+    assert [row.name for row in probe_mod._unconfigured_acp_preset_rows(set(), path=None)] == ["Pi"]
+    present.add("mirasim")
+    rows = probe_mod._unconfigured_acp_preset_rows(set(), path=None)
+    assert [row.name for row in rows] == ["Claude Code-Mirasim", "Pi"]
+
+
 async def test_a_hand_written_npx_row_is_not_held_to_a_shims_requirement(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1880,6 +1969,60 @@ async def test_a_modes_relearn_during_the_boot_verify_does_not_stop_its_write(tm
     expected_modes = ("measured",) if late_status == "ready" else ("fast",)
     assert tuple(m.id for m in stored.available_modes) == expected_modes
     assert manager.refresh_calls == 1
+
+
+def _menu_records() -> tuple[object, object]:
+    """A record with a measured menu, and a later answer that was ready but could not read one."""
+    from raven.acp_client.capabilities import AcpMode, AcpModelChoice, CapabilitySnapshot
+
+    measured = CapabilitySnapshot(
+        agent="Claude Code-Mirasim",
+        fingerprint="old",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        model_choices=(AcpModelChoice("own:sonnet", "Sonnet", "Claude Code"),),
+        available_modes=(AcpMode("high", "High"),),
+        stale=True,
+    )
+    unread = CapabilitySnapshot(
+        agent="Claude Code-Mirasim",
+        fingerprint="new",
+        status="ready",
+        detail="ready",
+        measured_at_ms=2,
+        model_menu_measured=False,
+    )
+    return measured, unread
+
+
+def test_a_ready_answer_whose_menu_went_unread_keeps_the_menu_it_had() -> None:
+    """A connect or a Test during Mirasim's cold start is answered menuless: a read that failed, not a measured none."""
+    measured, unread = _menu_records()
+    saved = probe_mod._test_record(unread, measured)
+    assert (saved.model_choices, saved.available_modes) == (measured.model_choices, measured.available_modes)
+    assert saved.model_menu_measured
+    assert (saved.status, saved.fingerprint, saved.measured_at_ms) == ("ready", "new", 2)
+
+
+async def test_the_boot_keeps_a_measured_menu_over_an_answer_that_could_not_read_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    measured, unread = _menu_records()
+    recorded: list[object] = []
+
+    async def fake_verify(cfg: object) -> object:
+        return unread
+
+    monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: measured)
+    monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
+    monkeypatch.setattr(
+        "raven.acp_client.capabilities.SnapshotStore",
+        lambda: type("S", (), {"record": staticmethod(recorded.append)})(),
+    )
+    row = _FakeRow("Claude Code-Mirasim")
+    await probe_mod._verify_missing_snapshots(_FakeManager([row]), [row])
+    assert [snapshot.model_choices for snapshot in recorded] == [measured.model_choices]
 
 
 @pytest.mark.parametrize("needs_auth,unfetched", [(True, False), (False, True), (False, False)])

@@ -180,11 +180,39 @@ your local installation has passed a live task.
 | `hermes` | `hermes acp --accept-hooks` | Native authentication; the flag accepts previously unseen shell hooks |
 | `openclaw` | `openclaw acp` | Its gateway and authentication; startup has a longer handshake allowance |
 | `mirothinker` | OpenAI-compatible HTTP | Endpoint/model/key; preset opts out of stateful replay |
+| `mirasim_<agent>` | Raven's own ACP adapter over `mirasim ui-cli` | Mirasim installed, and the agent installed inside it; session MCP withheld via `sessionMcp: false` |
 
 GitHub Copilot, Qwen Code, CodeBuddy, Qoder, Grok Build, Kimi Code, and Pi also
 have preset entries. Adapter versions and exact commands are maintained in
 `raven/agent/subagent/presets.py` and `raven/agent/subagent/acp_registry_presets.py`.
 Prefer the installed version's preset instead of reconstructing its flags.
+
+The `mirasim_*` presets reach the agents Mirasim runs, one
+row each: Claude Code, Codex, Kimi Code, Antigravity, Qwen Code, Grok Build, DSH,
+Pi and ZCode CLI, named `Claude Code-Mirasim` and so on. Such a row is the agent on
+the accounts and model routes set in Mirasim, which is why it can sit beside the
+same agent's own preset. The adapter ships with Raven (`raven/acp/mirasim/`), so
+nothing is downloaded; the `{PYTHON}` in its command becomes Raven's interpreter
+when the row is written to config; if that interpreter is later gone, as after an
+install moves, the row is pointed at the one serving Raven the next time the config
+is read. Its model list is Mirasim's for that agent,
+grouped under the agent's own name, `Mirasim` (the platform's quota) and `Own key`
+(keys you added to Mirasim). Mirasim's platform also runs the own models of Claude
+Code, Codex, Kimi Code and ZCode CLI, so for those four each such model is listed in
+both of the first two groups: under the agent's name it runs on your own account,
+under `Mirasim` on the platform's quota. Choosing the other one for a session that
+already has a conversation moves that conversation to the other route before its
+next turn. A session with no model chosen runs on Mirasim's default for the agent,
+route included. Each turn's
+reply arrives whole when the turn settles. What a turn stops to ask is put to
+Raven while the turn waits: a tool approval as a permission request, and a
+question -- Claude Code's `AskUserQuestion` when Mirasim's `askTool` setting is
+on, or an MCP server's form -- as an elicitation, answered by you or by Raven's
+question autofill. A client without forms has the question skipped and named in
+the reply.
+Question text, choices, replies and error details retain the sending agent's
+content. Raven leaves redaction decisions to that agent, including when a
+returned value matches a credential Raven itself holds.
 
 Distinguish three claims when assessing compatibility:
 

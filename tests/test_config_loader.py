@@ -1701,3 +1701,134 @@ def test_channels_section_settings_are_not_mistaken_for_channels(tmp_path: Path,
     warned = [r.getMessage() for r in caplog.records if "is not a table" in r.getMessage()]
     assert warned == ["channels.oddity is not a table; its cargo reads as unset"]
     assert cfg.channels.send_progress is False
+
+
+def _shipped_shim_command(agent: str) -> str:
+    """The command this bundled-shim preset ships, as ``subagents.add`` writes it."""
+    from raven.agent.subagent.presets import third_party_subagent_preset
+
+    return third_party_subagent_preset(agent)["command"]
+
+
+def _stale_shim_row(agent: str, **extra: object) -> dict:
+    """A stored row pinning an interpreter a re-install has since moved."""
+    import sys
+
+    shipped = _shipped_shim_command(agent)
+    return {
+        "name": "Mirasim Claude",
+        "kind": "acp",
+        "preset": agent,
+        "command": shipped.replace(sys.executable, "/nonexistent/opt/raven-old/bin/python"),
+        **extra,
+    }
+
+
+def test_a_row_pinning_a_gone_raven_interpreter_follows_this_install(tmp_path: Path) -> None:
+    """A bundled shim runs on the interpreter Raven itself runs on, and ``add``
+    writes that absolute path into the row. An install that lands elsewhere -- a
+    different ``uv tool dir``, a checkout whose pyenv moved -- leaves every stored
+    row pointing at an interpreter that is gone, and the row then reads "not on
+    the login shell PATH" with nothing saying what moved. Repaired at the next load,
+    in the file too: Raven is running, so an interpreter that can launch its own
+    adapter is at hand. The rest of the row is left as it was, and it is silent --
+    there is nothing for its owner to decide."""
+    from raven.agent.subagent.presets import BUNDLED_SHIM_PRESETS
+
+    agent = sorted(BUNDLED_SHIM_PRESETS)[0]
+    p = tmp_path / "config.json"
+    _write(p, {"subagents": {"agents": [_stale_shim_row(agent, model="own:opus")]}})
+    _stamp_path(p).write_text(json.dumps({"version": CURRENT_CONFIG_VERSION}), encoding="utf-8")
+
+    drain_migration_notices()
+    cfg = load_config(p)
+
+    shipped = _shipped_shim_command(agent)
+    assert [a.command for a in cfg.subagents.agents] == [shipped]
+    assert json.loads(p.read_text(encoding="utf-8"))["subagents"]["agents"] == [
+        {"name": "Mirasim Claude", "kind": "acp", "preset": agent, "command": shipped, "model": "own:opus"}
+    ]
+    assert drain_migration_notices() == []
+
+
+def test_the_interpreter_is_refreshed_only_on_a_stock_adapter_command_under_its_preset() -> None:
+    """Only a row naming the preset and launching this package's adapter through an
+    interpreter of its own. A row wearing the preset's name with no provenance
+    field, one carrying ``{PYTHON}`` unexpanded -- the schema refuses that command,
+    so nothing here expands it either -- one naming a bare interpreter the PATH
+    resolves, which is no stored path to have gone, one launched through a runner rather than
+    an interpreter, where the adapter is a subcommand and the runner owns the
+    interpreter, and a command that is not a string are all their owners'. A flag
+    an owner added rides along rather than costing them the interpreter fix.
+    Idempotent: a second pass finds the interpreter current and writes nothing."""
+    from raven.agent.subagent.presets import BUNDLED_SHIM_PRESETS
+    from raven.config import loader
+
+    agent = sorted(BUNDLED_SHIM_PRESETS)[0]
+    shipped = _shipped_shim_command(agent)
+    stale = _stale_shim_row(agent)["command"]
+    kept = [
+        {"name": "flagged", "kind": "acp", "preset": agent, "command": stale + " --verbose"},
+        {"name": "hand-written", "kind": "acp", "command": stale},
+        {"name": "unexpanded", "kind": "acp", "command": f"{{PYTHON}} -P -m raven.acp.mirasim --agent {agent}"},
+        {
+            "name": "someone-elses-module",
+            "kind": "acp",
+            "preset": agent,
+            "command": stale.replace("raven.acp.mirasim", "some_other_module"),
+        },
+        {
+            "name": "on-the-path",
+            "kind": "acp",
+            "preset": agent,
+            "command": f"python3 -P -m raven.acp.mirasim --agent {agent}",
+        },
+        {
+            "name": "through-a-runner",
+            "kind": "acp",
+            "preset": agent,
+            "command": f"uv run python -m raven.acp.mirasim --agent {agent}",
+        },
+    ]
+    # Snapshot the strings before the call: the rows below are handed to the
+    # migration by reference, so an expectation read afterwards off the same
+    # dictionaries would agree with whatever the call did to them.
+    untouched = [row["command"] for row in kept]
+    data = {"subagents": {"agents": [{"name": "stock", "kind": "acp", "preset": agent, "command": stale}, *kept]}}
+
+    assert loader._refresh_bundled_shim_interpreters(data) is True
+    assert [row["command"] for row in data["subagents"]["agents"]] == [shipped, shipped + " --verbose", *untouched[1:]]
+    assert loader._refresh_bundled_shim_interpreters(data) is False
+
+
+def test_a_row_naming_another_interpreter_that_still_exists_is_left_alone(tmp_path: Path) -> None:
+    """Two installs can read one config -- a checkout's venv beside a ``uv tool``
+    install, or a worktree's beside the main checkout's. Pointing every row at the
+    interpreter of whichever loaded last made each load from the other install
+    rewrite the file the first had just written (measured: six loads alternating
+    two existing interpreters, five rewrites), and the TUI's server reloads the
+    config on every turn. An interpreter that still exists can still launch the
+    adapter, so only one that is gone is replaced: the file is written once, by
+    the first install to read it after the move, and never again."""
+    import sys
+
+    from raven.agent.subagent.presets import BUNDLED_SHIM_PRESETS
+
+    other = tmp_path / "other-install" / "bin" / "python"
+    other.parent.mkdir(parents=True)
+    other.write_text("")
+    other.chmod(0o755)
+    agent = sorted(BUNDLED_SHIM_PRESETS)[0]
+    command = _shipped_shim_command(agent).replace(sys.executable, str(other))
+    assert command != _shipped_shim_command(agent), "the fixture must name another interpreter"
+    p = tmp_path / "config.json"
+    _write(
+        p, {"subagents": {"agents": [{"name": "Mirasim Claude", "kind": "acp", "preset": agent, "command": command}]}}
+    )
+    _stamp_path(p).write_text(json.dumps({"version": CURRENT_CONFIG_VERSION}), encoding="utf-8")
+    before = p.read_bytes()
+
+    cfg = load_config(p)
+
+    assert [a.command for a in cfg.subagents.agents] == [command]
+    assert p.read_bytes() == before

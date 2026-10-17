@@ -47,11 +47,14 @@ history.
   the artwork is unaltered in design or colour; only the embedded PNG is
   resampled to 96x96, which `cmp` will therefore not match for this file alone.
   Regenerate it with scripts/refresh_dmxapi_mark.py.
-- `MIT-lobe-icons.txt` - twelve of the fourteen sub-agent brand marks under
-  `ui-web/src/assets/agents/`, and `providers/vllm.svg`. Those twelve keep
+- `MIT-lobe-icons.txt` - fifteen of the eighteen sub-agent brand marks under
+  `ui-web/src/assets/agents/`, and `providers/vllm.svg`. Those fifteen keep
   upstream's filenames, so each is byte-identical to the one
   `@lobehub/icons-static-svg@1.95.0` ships under that name and the attribution is checkable
-  with `cmp` rather than by trust. `raven.svg` is this project's own mark, drawn here and
-  not upstream's, so no `cmp` applies to it. The rest of `providers/` moved to the vendors'
+  with `cmp` rather than by trust. The other three on the same nominative basis as the
+  vendor marks above: `raven.svg` is this project's own mark, drawn here and not upstream's;
+  `miromind.svg` is MiroMind's own favicon; `mirasim.svg` is the mark mirasim.ai serves for
+  itself at `/icon.svg`, copied byte for byte from the drawing its `marks.tsx` shares. No
+  `cmp` applies to those three. The rest of `providers/` moved to the vendors'
   own colour marks; see the Cherry Studio entry above.
 - `MIT-nanobot.txt` - Nanobot license notice.

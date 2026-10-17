@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
+import { AgentMark, MIRASIM_GROUP } from '../../components/AgentMark'
 import { HubHead } from '../../components/HubHead'
 import { KeyInput } from '../../components/KeyInput'
 import { ModelPicker } from '../../components/ModelPicker'
@@ -9,17 +10,17 @@ import { t } from '../../i18n/t'
 import * as lang from '../../state/lang'
 import { defaultProviders as hostProviders, loadDefaultProviders } from '../model/source'
 import { offered, withCurrent } from '../model/types'
-import { byOf, installOf, isOwnRow } from './catalogue'
+import { byOf, familyOf, installOf, isOwnRow } from './catalogue'
 import { badOf, healthOf, kindOf, ledClass, pendingLabel, refusedWrite, shownOf } from './health'
 import { MachineSheet, MachinesGrid, RegisterSheet, WhereField } from './MachineCards'
 import * as machines from './machines'
-import { CardGrid, Spin, Tile, WaitGrid, ago, connect, ordered, refusedLabel } from './Rows'
-import { sectionOf, stageOf } from './source'
+import { CardGrid, Spin, Tile, WaitGrid, ago, connect, oneLine, ordered, refusedLabel, whyOf } from './Rows'
+import { gridEntries, sectionOf, stageOf } from './source'
 import * as store from './store'
 
 import type { PickerProvider } from '../../components/ModelPicker'
 import type { Shown } from './health'
-import type { Section } from './source'
+import type { GridEntry, Section } from './source'
 import type { ExtAgentsState } from './store'
 import type { ExtAgentRow, Remedy } from './types'
 import type { JSX } from 'react'
@@ -731,6 +732,158 @@ const TABS: Array<{ tab: Tab; label: string; empty: string }> = [
   { tab: 'machines', label: 'gui.machine.g_machines', empty: 'gui.machine.none' },
 ]
 
+/* One row of the family picker: the agent, the model to run it on, and the one
+   press that connects it. The pick is held in the store (`picked`) and sent
+   with the connect, which is what keeps the row from being briefly connected on
+   the agent's default before the reader's model lands. */
+function PickRow({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Element {
+  /* The model picker hangs off the row, not the pill: `anchorRow` sizes a
+     popover from its anchor's left edge to the drawer's right, and the pill
+     sits at the right of the row, which left the picker at its 320px floor --
+     too narrow for a provider heading and a model name side by side. From the
+     row it opens as wide as the sheet's. It is drawn BESIDE the row, not in it:
+     `anchorRow` measures the anchor before the picker leaves the flow, and a
+     picker inside the row stretched the row it measured, so every one flipped
+     up over the drawer. */
+  const rowEl = useRef<HTMLDivElement>(null)
+  const [open, setOpen] = useState(false)
+  const pick = s.picked[row.name] ?? ''
+  const provs = pickerProvidersFor(row)
+  /* Nothing to pick is the agent's own answer -- a handshake that offered no
+     model choices -- which is why the pill says so rather than opening an
+     empty picker. */
+  const menuless = !provs.length
+  const busy = !!s.joining[row.name]
+  const missing = sectionOf(row) === 'missing'
+  /* The same verdict the card carries, and for the same reason: the handshake
+     already refused this agent for want of a credential, and the fix -- signing
+     in -- is outside this page, so a press here would spend a launch to arrive
+     at the sentence the row already says. Left to `connectRow`, it would take
+     the `toggle` branch, which the server answers with "no configured sub-agent
+     named ...".
+     After `missing`: a command this machine has never had is the earlier fact. */
+  const refused = !missing && stageOf(row) === 'unauthorized'
+  const failed = s.failed[row.name]
+  const shown = pick ? shownModel({ ...row, model: pick }) : null
+  /* The sheet's own pill states: no frame when there is nothing to pick, locked
+     while the connect runs, the muted face while it is still the default. */
+  const cls = [
+    'extAgents-pill',
+    menuless ? 'extAgents-pill-fixed' : busy ? 'extAgents-pill-busy' : '',
+    shown ? '' : 'extAgents-pill-dim',
+  ]
+    .filter(Boolean)
+    .join(' ')
+  /* A refusal takes the line, in red, with the reason when the server named
+     one -- most often the model, which is the one thing this row can change
+     before pressing again. */
+  const line = failed ? [refusedLabel(failed), failed.remedy ? whyOf(failed.remedy) : ''].filter(Boolean).join(' · ') : oneLine(row)
+  return (
+    <>
+      <div className="extAgents-pickrow" ref={rowEl}>
+        <Tile plain row={row} />
+        <div className="extAgents-pickwho">
+          <span className="extAgents-picknm">{row.name}</span>
+          <span className={'extAgents-pickone' + (failed ? ' extAgents-pickone-bad' : '')} title={failed ? failed.detail : line}>
+            {line}
+          </span>
+        </div>
+        {missing ? null : <div className="extAgents-pickpill">
+          <span className={cls}>
+            <button
+              aria-expanded={open}
+              aria-label={t('gui.agent.model_change')}
+              className="extAgents-pm"
+              disabled={menuless || busy}
+              onClick={() => setOpen(true)}
+              type="button"
+            >
+              <span className="extAgents-mid">
+                {shown ? shown.id : t(menuless ? 'gui.agent.model_managed' : 'gui.agent.model_own_default')}
+              </span>
+              {menuless ? null : <span className="extAgents-mch">{'⌄'}</span>}
+            </button>
+          </span>
+        </div>}
+        <button
+          className="extAgents-pickgo mini go"
+          disabled={busy || refused}
+          onClick={() => {
+            /* The row is the picker's anchor, so a press on its own button is not
+               "outside" the picker and would leave it open over a running connect. */
+            setOpen(false)
+            if (missing) store.sheetOpen(row)
+            else void store.pickAndConnect(row)
+          }}
+          type="button"
+        >
+          {busy ? <Spin /> : null}
+          {t(
+            busy
+              ? pendingLabel(row, s)
+              : missing
+                ? 'gui.agent.go_install'
+                : refused
+                  ? 'gui.agent.unauthorized'
+                  : 'gui.agent.connect',
+          )}
+        </button>
+      </div>
+      {open && !missing ? (
+        <ModelPicker
+          anchor={rowEl.current}
+          allowTyped={false}
+          /* The tick matches on the value the agent lists, not the name shown
+             for it -- the same rule the sheet's pill follows for an acp row. */
+          current={pick && shown ? { model: pick, provider: shown.provider } : null}
+          emptyNote={t('gui.agent.model_managed')}
+          onClose={() => setOpen(false)}
+          onPick={(model) => {
+            setOpen(false)
+            store.pickModel(row, model)
+          }}
+          providers={provs}
+          title={t('gui.agent.model_label')}
+        />
+      ) : null}
+    </>
+  )
+}
+
+/* The family card's drawer: the agents behind the card, each with the model to
+   run it on and one press that connects it.
+
+   Its own component and its own state rather than a mode of the sheet, because
+   the two are different objects -- the sheet is a row and this stands for nine
+   of them. Every row drawn here is one the card is hiding, and the press
+   connects that one; the card that appears afterwards is the add having written
+   the row, not a flag this drawer set. */
+function FamilyPicker({ family, s }: { family: string; s: ExtAgentsState }): JSX.Element {
+  const dHost = store.detailHost()
+  const members = ordered(s.rows.filter((row) => familyOf(row) === family && !row.configured))
+  return createPortal(
+    <div className="extAgents-sheet" aria-label={t('gui.agent.fam_mirasim')} role="document">
+      <div className="extAgents-head">
+        <span className="extAgents-tile">
+          <AgentMark preset={MIRASIM_GROUP} />
+        </span>
+        <div className="extAgents-meta">
+          <h3>{t('gui.agent.fam_mirasim')}</h3>
+          <div className="extAgents-by">{t('gui.agent.fam_lead')}</div>
+        </div>
+      </div>
+      <div className="extAgents-body">
+        <div className="extAgents-picklist">
+          {members.map((row) => (
+            <PickRow key={row.name} row={row} s={s} />
+          ))}
+        </div>
+      </div>
+    </div>,
+    dHost,
+  )
+}
+
 export function ExtAgentsApp(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
   /* The language the page resolved, so a pick repaints this island: every word
@@ -741,10 +894,18 @@ export function ExtAgentsApp(): JSX.Element {
     void machines.load()
   }, [])
   const [tab, setTab] = useState<Tab>('all')
-  const by = (section: Section): ExtAgentRow[] => ordered(s.rows.filter((row) => sectionOf(row) === section))
-  const rows: Record<Section | 'all', ExtAgentRow[]> = { all: [], on: by('on'), avail: by('avail'), missing: by('missing') }
-  rows.all = [...rows.on, ...rows.avail, ...rows.missing]
-  const count = (x: Tab): number => (x === 'machines' ? ms.rows.length : rows[x].length)
+  /* Folded, then ordered -- not the other way round: a family takes the
+     position of its first member, so the sort has to have decided where that
+     is. `ordered` is stable, so within a tab the server's own order survives. */
+  const by = (section: Section): GridEntry[] =>
+    gridEntries(
+      ordered(s.rows.filter((row) => sectionOf(row) === section)),
+      section,
+    )
+  const entries: Record<Section | 'all', GridEntry[]> = { all: [], on: by('on'), avail: by('avail'), missing: by('missing') }
+  entries.all = [...entries.on, ...entries.avail, ...entries.missing]
+  /* The machines tab counts registry rows; every other tab counts its cards. */
+  const count = (x: Tab): number => (x === 'machines' ? ms.rows.length : entries[x].length)
   const current = TABS.find((x) => x.tab === tab)!
   /* Before the first answer only: a later reload keeps showing the rows it
      has, the way the wizard's step does. */
@@ -757,7 +918,8 @@ export function ExtAgentsApp(): JSX.Element {
       {/* All, Connected and Machines are always offered; the other two only
           with agents in them, or while they are the tab being read -- so
           connecting the last one leaves the reader on an emptied tab rather
-          than moving them. */}
+          than moving them. The count is the number of CARDS, which is what the
+          reader counts on the grid, so a family of nine counts once. */}
       <div className="extAgents-tabs" role="tablist">
         {TABS.filter((x) => x.tab === 'all' || x.tab === 'on' || x.tab === 'machines' || x.tab === tab || count(x.tab)).map((x) => (
           <button
@@ -778,7 +940,7 @@ export function ExtAgentsApp(): JSX.Element {
           </button>
         ) : null}
       </div>
-      {tab === 'machines' ? <MachinesGrid ms={ms} /> : scanning ? <WaitGrid /> : <CardGrid empty={t(current.empty)} rows={rows[tab]} s={s} />}
+      {tab === 'machines' ? <MachinesGrid ms={ms} /> : scanning ? <WaitGrid /> : <CardGrid empty={t(current.empty)} entries={entries[tab]} s={s} />}
       {s.msheet === 'new' ? (
         <RegisterSheet key={`new:${s.epoch}`} ms={ms} />
       ) : machineRow ? (
@@ -786,6 +948,7 @@ export function ExtAgentsApp(): JSX.Element {
       ) : sheetRow ? (
         <AgentSheet key={`${s.sheet}:${s.epoch}`} row={sheetRow} s={s} />
       ) : null}
+      {s.picking ? <FamilyPicker family={s.picking} key={s.picking} s={s} /> : null}
     </>
   )
 }

@@ -15,9 +15,10 @@ tests are the pin: the sets must be equal, in both directions.
 from __future__ import annotations
 
 from raven.agent.subagent import builtin_agents
-from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
+from raven.agent.subagent.presets import BUNDLED_SHIM_PRESETS, THIRD_PARTY_SUBAGENT_PRESETS
 from raven.config.agent_names import (
     BUILTIN_AGENT_NAMES,
+    BUNDLED_SHIM_PRESET_NAMES,
     GENERIC_AGENT,
     THIRD_PARTY_PRESET_NAMES,
 )
@@ -36,6 +37,17 @@ def test_builtin_names_match_the_seed_table() -> None:
     assert seeded == set(BUILTIN_AGENT_NAMES), (
         "the seed table and the name vocabulary have drifted; a seed whose name is "
         "not reserved can be claimed by a user row"
+    )
+
+
+def test_bundled_shim_names_match_the_preset_table() -> None:
+    """The rows whose command is this host's interpreter, which config has to
+    name for the load-time refresh and for the cross-machine refusal. A preset
+    added to the table without its key here would simply stop being refreshed --
+    silently, at the next install that moves."""
+    assert set(BUNDLED_SHIM_PRESETS) == set(BUNDLED_SHIM_PRESET_NAMES), (
+        "the bundled-shim table and the name vocabulary have drifted; a row whose "
+        "interpreter is never refreshed points at one that is gone"
     )
 
 

@@ -116,6 +116,11 @@ class TurnFailed:
     wire frame stays one ``error``, and the distinction exists so a consumer
     deciding what to show a stranger (the gateway's channel reply) can quote a
     report and refuse to quote a crash.
+
+    ``full_detail`` is the failure's long account, for a client that lets a
+    reader expand the row: built, scrubbed and capped by the runner, which sets
+    it on the exception it lets out. None when the runner set none. ``error``
+    stays the bounded text every other consumer reads.
     """
 
     error: str
@@ -123,6 +128,7 @@ class TurnFailed:
     conversation_id: str | None = None
     turn_id: str = ""
     reported: bool = False
+    full_detail: str | None = None
 
 
 @dataclass(frozen=True)

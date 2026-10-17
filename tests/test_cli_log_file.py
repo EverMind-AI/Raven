@@ -72,6 +72,19 @@ def test_writes_to_named_file_under_logs_dir(tmp_logs: Path) -> None:
     assert "hello-gateway-marker" in _flush_and_read(log_path)
 
 
+def test_agent_content_keeps_its_query_values_in_the_log(tmp_logs: Path) -> None:
+    from loguru import logger
+
+    log_path = redirect_loguru_to_file("gateway.log")
+    external = "Agent returned https://agent.invalid/result?token=agent-example"
+    logger.bind(agent_output=True).info(external)
+    logger.info("Host requested https://host.invalid/api?token=host-example")
+    content = _flush_and_read(log_path)
+    assert external in content
+    assert "host-example" not in content
+    assert "https://host.invalid/api?token=<redacted>" in content
+
+
 def test_terminal_warning_keeps_warnings_drops_info(tmp_logs: Path, capsys) -> None:
     from loguru import logger
 

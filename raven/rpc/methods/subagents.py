@@ -27,6 +27,7 @@ from pydantic import ValidationError
 from raven.agent.subagent.backends import acp_snapshot_for, agent_meta
 from raven.agent.subagent.backends.env import refresh_login_shell_env
 from raven.agent.subagent.presets import (
+    BUNDLED_SHIM_PRESETS,
     THIRD_PARTY_SUBAGENT_PRESETS,
     third_party_subagent_preset,
     third_party_subagent_presets,
@@ -518,6 +519,8 @@ async def subagents_add(params: dict, *, agent_loop_factory: "AgentLoopFactory |
         validate_agents(entries, config_path=get_config_path())
     except (ValueError, ValidationError) as exc:
         _raise_config_error(exc)
+    if entry.get("model") and entry.get("kind") == "acp":
+        await _refuse_a_model_it_does_not_offer(entry)
     # `force is not True` for the same reason the switch reads it that way: it is
     # declared a boolean, and `"no"` / `"0"` / `"false"` are all truthy in Python
     # while reading as a refusal to whoever sent them.
@@ -542,7 +545,8 @@ def _refuse_unless_it_can_run_there(entry: dict, machine: str, *, remote_cwd: st
     node; an openai preset's endpoint is reached from the machine through an
     ssh tunnel, so it has no directory there, and a ``remote_cwd`` is refused
     with it rather than written and ignored. A built-in agent is Raven's own
-    loop in this process and runs on no other machine. The machine is judged
+    loop in this process and runs on no other machine, and so is a bundled shim
+    (the ``mirasim_*`` presets): its command is this host's own interpreter. The machine is judged
     the way a dispatch judges it (:func:`raven.acp_client.remote.machine`):
     the row registered and usable -- each refusal one sentence,
     with no address in it.
@@ -554,6 +558,12 @@ def _refuse_unless_it_can_run_there(entry: dict, machine: str, *, remote_cwd: st
         raise ConfigValidationError(
             f"preset {shown!r} is a built-in agent: Raven's own loop in this process, which runs on no other "
             "machine; reach the machine from it with exec instead",
+            data={"field": "machine", "machine": machine},
+        )
+    if entry.get("preset") in BUNDLED_SHIM_PRESETS:
+        raise ConfigValidationError(
+            f"preset {shown!r} is served by Raven's own Mirasim adapter, started on this host's interpreter, which "
+            "runs on no other machine",
             data={"field": "machine", "machine": machine},
         )
     if entry.get("kind") == "openai" and remote_cwd:
@@ -668,6 +678,41 @@ def _model_rule(cfg: Any, snapshot: Any, meta: Any) -> str:
     if cfg.kind != "acp":
         return "fixed"
     return "raven" if getattr(snapshot, "agent_name", "") == "raven" else "agent"
+
+
+def _no_such_model(name: str, proposed: str, choices: list[str]) -> ConfigValidationError:
+    """The refusal of a pick the agent's own menu does not hold, for add and update alike."""
+    # Mirrors ``SubagentManager.set_instance_model``'s own message: the values are
+    # opaque provider-qualified ids, so a refusal names how many the agent offers
+    # rather than leaving a reader to guess at the vocabulary.
+    return ConfigValidationError(
+        f"{name!r} has no model {proposed!r}" + (f"; it offers {len(choices)}" if choices else "; it offers none"),
+        data={"field": "model", "name": name},
+    )
+
+
+async def _refuse_a_model_it_does_not_offer(entry: dict) -> None:
+    """Judge an add's model pick on the agent's own menu, as ``subagents.update`` does.
+
+    Before the ping rather than left to it: an agent that refuses the pick goes
+    on with its own default, so the ping passes and the row would be stored
+    naming a model it never runs. A menu never recorded is read from the
+    handshake first, which spends nothing; one of raven's own takes host ids
+    too, and is judged where it is dispatched.
+    """
+    cfg = _as_configs([entry])[0]
+    snapshot = acp_snapshot_for(cfg)
+    if snapshot is None:
+        try:
+            snapshot = await record_capabilities(cfg)
+        except Exception as exc:  # noqa: BLE001 - judged on what is recorded, as update is
+            logger.debug("subagents: {!r} menu not measured for a model pick: {}", cfg.name, exc)
+    meta = agent_meta(cfg, snapshot=snapshot)
+    if _model_rule(cfg, snapshot, meta) != "agent":
+        return
+    choices = [c.value for c in meta.model_choices]
+    if entry["model"] not in choices:
+        raise _no_such_model(str(entry["name"]), entry["model"], choices)
 
 
 def _host_pair(model: str) -> str | None:
@@ -850,15 +895,7 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
             if proposed in choices:
                 target["model"] = proposed
             elif rule == "agent" and not own_acp:
-                # Mirrors ``SubagentManager.set_instance_model``'s own message: the
-                # values are opaque provider-qualified ids, so a refusal names how
-                # many the agent offers rather than leaving a reader to guess at
-                # the vocabulary.
-                raise ConfigValidationError(
-                    f"{name!r} has no model {proposed!r}"
-                    + (f"; it offers {len(choices)}" if choices else "; it offers none"),
-                    data={"field": "model", "name": name},
-                )
+                raise _no_such_model(name, proposed, choices)
             else:
                 # One of raven's own reaches here under either rule, and so takes
                 # either vocabulary: it runs on this host's providers, so a host id

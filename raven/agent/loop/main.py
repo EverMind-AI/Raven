@@ -44,6 +44,7 @@ from raven.agent.loop.bundles import (
     TurnPolicy,
     resolve_wiring,
 )
+from raven.agent.loop.failure_text import attach_full_detail
 from raven.agent.loop.mcp_glue import McpGlueMixin
 from raven.agent.loop.organ_glue import OrganGlueMixin
 from raven.agent.loop.turn_path import TurnPathMixin
@@ -996,6 +997,9 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             # branch saved the full text for a *successful* turn whose compile
             # step erred.
             failure = exc
+            # The lane copies the runner's long account off the exception it lets out; the kernel cannot build it.
+            if isinstance(exc, Exception):
+                attach_full_detail(exc)
             raise
         finally:
             if capture is not None and capture.status == "running" and self._playbooks is not None:

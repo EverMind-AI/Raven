@@ -863,6 +863,26 @@
       "en": "That did not work: {detail}",
       "zh": "没成功：{detail}"
     },
+    "gui.agent.fam_lead": {
+      "en": "Which agent runs through Mirasim",
+      "zh": "让哪个智能体经由 Mirasim 运行"
+    },
+    "gui.agent.fam_mirasim": {
+      "en": "Mirasim",
+      "zh": "Mirasim"
+    },
+    "gui.agent.fam_mirasim_about": {
+      "en": "Coding agents run through Mirasim; pick one, and its model, to connect it on its own.",
+      "zh": "经 Mirasim 运行的编码智能体；选一个并选好模型，即可单独接入它。"
+    },
+    "gui.agent.fam_n": {
+      "en": "{n} agents",
+      "zh": "{n} 个智能体"
+    },
+    "gui.agent.fam_pick": {
+      "en": "Pick an agent",
+      "zh": "选择智能体"
+    },
     "gui.agent.g_on": {
       "en": "Connected",
       "zh": "已接入"
@@ -2130,6 +2150,18 @@
     "gui.transcript.date_yesterday": {
       "en": "Yesterday {t}",
       "zh": "昨天 {t}"
+    },
+    "gui.transcript.error_expand": {
+      "en": "Show full error",
+      "zh": "展开完整错误"
+    },
+    "gui.transcript.notice_expand": {
+      "en": "Show details",
+      "zh": "展开详情"
+    },
+    "gui.transcript.error_collapse": {
+      "en": "Hide",
+      "zh": "收起"
     },
     "gui.freq.cron": {
       "en": "Custom",
@@ -5740,6 +5772,10 @@
     "gui.agent.short_pi": {
       "en": "Pi's coding agent",
       "zh": "Pi 的编码智能体"
+    },
+    "gui.agent.short_mirasim": {
+      "en": "A coding agent run through Mirasim",
+      "zh": "经 Mirasim 运行的编码智能体"
     },
     "gui.agent.by_raven": {
       "en": "Built into Raven",

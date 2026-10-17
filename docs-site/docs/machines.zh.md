@@ -86,7 +86,7 @@ The node answers: Python 3.12.3, code <摘要>.
 | --- | --- |
 | 节点 | `<node_dir>/<版本>-<摘要>/`，`node_dir` 取注册表那一行的值，默认 `~/.raven-node` |
 | 运行状态 | `node_dir` 下的 `run/`（套接字）、`tasks/<任务>/`（每个 Agent 的记录，仅属主可读）和 `log/` |
-| `uv`（机器上原本没有时） | `<node_dir>/.uv`，版本 0.13.0，用机器自己的 `curl` 或 `wget` 取回 |
+| `uv`（机器上原本没有时，或者机器自己的 `uv` 早于 0.4.23 而 pip 又配了索引时——那样的 `uv` 会无视索引） | `<node_dir>/.uv`，版本 0.13.0，用机器自己的 `curl` 或 `wget` 取回；之后的安装直接用它 |
 | Python 3.12（机器上原本没有时） | 节点旁边，由 `uv` 管理 |
 
 别的都不变：不装系统包，不改 shell 的 rc 文件，不改环境变量，不注册服务，不开端口。
@@ -336,6 +336,7 @@ Windows 保留的字符，落地时该字符写成百分号编码。
 | *is not installed on machine …; install it with `raven ops connection install-node …`* | 那里没有节点 | 安装节点 |
 | *runs different code from this Raven; update it with …* | 节点来自另一个 Raven 版本 | 再跑一次 `install-node` |
 | *has no uv, and no curl or wget to fetch one with* | 安装程序需要 `uv`，机器上既没有它也没有取它的办法；有 Python 也不改变这一点 | 在机器上装 `uv`（提示里给了它的安装程序），或者装 `curl` 或 `wget`，再试 |
+| *has uv 0.4.22, and only uv 0.4.23 or later installs from the package index pip is configured with there; with no curl or wget to fetch uv 0.13.0, upgrade uv there* | 机器上的 pip 配了索引，它的 `uv` 太旧、读不了索引（或者说不出自己的版本），安装程序又没办法取一个新的 | 在机器上升级 `uv`，或者装 `curl` 或 `wget` 让安装程序把 `uv` 取到 `node_dir` 下，再试 |
 | *the agent's command was not found on machine …* | 那个用户在机器上没装这个 Agent | 在机器上安装并登录 |
 | *already runs 8 agents; wait for one to finish* | 机器已到上限 | 等一等，或换一台机器 |
 | *did not answer a heartbeat within 15s* | 链路断了 | 不用做什么，Raven 会重连；Agent 还在跑 |

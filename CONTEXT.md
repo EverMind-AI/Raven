@@ -277,6 +277,14 @@ A background agent task spawned by `SubagentManager`. Runs with its own tool set
 re-enters the session as a `SUBAGENT`-origin `TurnRequest` via Spine submit. Bounded by
 `max_concurrent` (default 8) and a per-session hourly rate limit, both shared with the
 nodes of a DAG run — every sub-agent dispatch draws on the one allowance.
+Content received from another agent keeps that agent's redaction policy: Raven does not
+replace token-shaped text or values matching its own configured credentials in replies,
+questions, permission requests, errors, transcripts, or run records. `Tool.agent_output`
+marks tools that return agent content; the admitted tool spec and `ToolOutput` carry that
+fact through `tool_call`, context assembly, live ACP updates and stored-session replay.
+Untrusted-content fencing and output limits
+still apply. The ACP journal protects Raven's outgoing credentials without rewriting
+incoming frames or stderr.
 _Avoid_: conflating with a Turn — a Subagent lives outside the main turn and re-enters via Spine.
 
 **Sub-agent role** (`RAVEN_SUBAGENT` → `agent/subagent/role.py`):
@@ -801,6 +809,8 @@ ran (a queued turn drained by a stop, an inject merged into a turn that did not 
 A `TurnFailed` is `reported` when the runner worded `error` itself (an `AnswerlessTurnError`)
 rather than it being whatever a crash carried — in-process only, so a consumer deciding what to
 show a stranger can quote a report and refuse to quote a crash.
+A `TurnFailed` may also carry `full_detail`, the failure's long account, which the runner builds and
+the lane copies off the exception (see **AnswerlessTurnError**).
 Per-conversation **Lanes** are the unit of both ordering and cancellation. Deliberately
 not a broadcast bus.
 _Avoid_: "the bus" — there is no Bus; "queue" for Lane — Lane is a serial+cancel domain.
@@ -834,6 +844,13 @@ it), and the `turn_ended` marker that says so is filed before the failure leaves
 is worded twice, for its two readers: `turn_ended.reason` keeps the provider's account for whoever is
 diagnosing the failure, while the entry text the model reads back names the failure's category and
 endpoint only — a vendor body is not history the model should spend context on or try to answer.
+Beside that bounded report a failed turn may carry `full_detail`, the same account at length --
+credentials scrubbed, capped at the call record's body ceiling. The runner builds it
+(`agent/loop/failure_text.py`), since the kernel imports nothing to scrub with, and sets it on the
+exception it lets out; the lane copies it onto `TurnFailed.full_detail`, and it is filed on the
+marker as `turn_ended.full_detail`, only when the bounded text left something out.
+Both use the base exception's instance storage so a foreign property cannot substitute a value
+or disrupt failure reporting. The turn path and runner reuse the same scrubbed account.
 _Avoid_: conflating AnswerlessTurnError with `TurnFailed`, the lifecycle event the Spine worker
 emits for any exception a runner lets out, this one included.
 
@@ -2729,7 +2746,10 @@ unpinned `npx -y` would silently change which shim build a user runs. The **agen
 never fetched; its preset names the bare executable (`opencode acp`, `hermes acp`), so the
 build that answers is the one the user installed, at the version they chose, holding the login
 they already granted. `SHIM_LAUNCHED_PRESETS` declares that split per preset and a test holds
-every acp command to it.
+every acp command to it. A **bundled shim** (`BUNDLED_SHIM_PRESETS`) is one Raven ships rather
+than fetches: `raven.acp.mirasim` serves an agent Mirasim runs, over `mirasim ui-cli`, launched
+on Raven's own interpreter (`{PYTHON}`, expanded when the preset is read), so there is no pin;
+the executable its probe asks after is `mirasim` (`SHIM_REQUIRED_EXECUTABLES`).
 _Avoid_: inferring it from the command shape. An agent whose own CLI happens to ship on npm
 (`opencode-ai`) is not a shim, and fetching it would run a second copy beside the user's
 install and report the agent as present on a machine that does not have it - `_probe_acp`

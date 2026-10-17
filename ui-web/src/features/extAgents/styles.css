@@ -49,8 +49,12 @@
 /* The brand mark is the tile: the shared component, sized inside this box. */
 .extAgents-tile { flex: none; display: grid; place-items: center; }
 .extAgents-tile .agent-mark { width: 36px; height: 36px; border-radius: 10px; background: var(--mark-plate); border: 1px solid var(--mark-plate-line); }
-.extAgents-tile .agent-mark img, .extAgents-tile .agent-mark svg { width: 23px; height: 23px; }
-.extAgents-tile-own .agent-mark img { width: 21px; height: 26px; }
+/* `>` on every size rule below: a slot sizes its OWN image, and the badge an
+   agent run through Mirasim wears inside the slot sizes its own (page.css). A
+   descendant selector here outranks the badge's rule and blows its image up to
+   the slot's size, clipped at the plate's edge. */
+.extAgents-tile .agent-mark > img, .extAgents-tile .agent-mark > svg { width: 23px; height: 23px; }
+.extAgents-tile-own .agent-mark > img { width: 21px; height: 26px; }
 
 .extAgents-who { flex: 1; min-width: 0; }
 .extAgents-nm { display: flex; align-items: center; gap: 7px; min-width: 0; }
@@ -201,8 +205,8 @@
 .extAgents-ctop .extAgents-nm { flex: 1; }
 .extAgents-ctop .extAgents-t { font-size: 14px; font-weight: 600; }
 .extAgents-card .extAgents-tile .agent-mark { width: 32px; height: 32px; border-radius: 9px; }
-.extAgents-card .extAgents-tile .agent-mark img, .extAgents-card .extAgents-tile .agent-mark svg { width: 20px; height: 20px; }
-.extAgents-card .extAgents-tile-own .agent-mark img { width: 18px; height: 23px; }
+.extAgents-card .extAgents-tile .agent-mark > img, .extAgents-card .extAgents-tile .agent-mark > svg { width: 20px; height: 20px; }
+.extAgents-card .extAgents-tile-own .agent-mark > img { width: 18px; height: 23px; }
 .extAgents-card .extAgents-one {
   margin: 10px 0; line-height: 1.55; min-height: 3.1em; white-space: normal;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
@@ -241,8 +245,8 @@
 .extAgents-sheet { width: 100%; flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .extAgents-head { flex: none; display: flex; align-items: center; gap: 12px; padding: 20px 48px 0 20px; }
 .extAgents-head .extAgents-tile .agent-mark { width: 46px; height: 46px; border-radius: 12px; }
-.extAgents-head .extAgents-tile .agent-mark img, .extAgents-head .extAgents-tile .agent-mark svg { width: 29px; height: 29px; }
-.extAgents-head .extAgents-tile-own .agent-mark img { width: 26px; height: 33px; }
+.extAgents-head .extAgents-tile .agent-mark > img, .extAgents-head .extAgents-tile .agent-mark > svg { width: 29px; height: 29px; }
+.extAgents-head .extAgents-tile-own .agent-mark > img { width: 26px; height: 33px; }
 .extAgents-meta { flex: 1; min-width: 0; }
 .extAgents-meta h3 { margin: 0; font-family: var(--mono); font-size: 16px; font-weight: 600; letter-spacing: -.02em; }
 .extAgents-by { font-size: 11.5px; color: var(--faint); margin-top: 1px; display: flex; align-items: center; gap: 6px; }
@@ -433,3 +437,55 @@
 .extAgents-fld > .extAgents-about { margin-top: 6px; }
 .extAgents-body > .extAgents-about + .extAgents-fld { margin-top: 16px; }
 .extAgents-tabs .extAgents-tabs-end { margin-left: auto; align-self: center; }
+
+/* ── the family picker ──────────────────────────────────────────── */
+
+/* The group card's drawer: one row per agent the card is standing in for, and
+   the row is a decision rather than a press -- which agent, on which model --
+   so it carries a field and a button the way the sheet does, at the sheet's
+   row rhythm. The list scrolls with the body, which the sheet's own
+   `.extAgents-body` already does. */
+.extAgents-picklist { display: flex; flex-direction: column; gap: 4px; margin: 2px 0 8px; }
+.extAgents-pickrow {
+  display: flex; align-items: center; gap: 10px; width: 100%; box-sizing: border-box;
+  border: 1px solid transparent; border-radius: var(--ctl-r);
+  padding: 7px 9px; min-height: 46px;
+}
+.extAgents-pickrow:hover { background: var(--raised); border-color: var(--line); }
+/* The mark keeps the plate it wears on every card, one size down: the sheet's
+   head already shows the family's mark at 46px, and nine of them at that size
+   would be a wall of plates rather than a list. */
+.extAgents-pickrow .extAgents-tile .agent-mark { width: 30px; height: 30px; border-radius: 9px; }
+.extAgents-pickrow .extAgents-tile .agent-mark > img { width: 19px; height: 19px; }
+/* Name over its line, the roster row's own stack: the line is the one part of
+   the row that gives way, and beside the name it had only what the pill and the
+   button left, which was a word. */
+.extAgents-pickwho { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.extAgents-picknm, .extAgents-pickone { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.extAgents-picknm { font-size: 13px; font-weight: 600; }
+.extAgents-pickone { font-size: 11.5px; color: var(--faint); }
+.extAgents-pickone-bad { color: var(--clay); }
+/* The pill is the same control the sheet draws, sized for a row: the sheet's
+   320px is the width of a whole field column, and here it would leave the name
+   nothing. One fixed width for all nine, so the pills read as a column rather
+   than a ragged edge, and a long id ellipses instead of pushing the button out.
+   The frameless pill of an agent with nothing to pick keeps this rule's padding, which
+   puts its words at the x the framed ones start at. */
+.extAgents-pickpill { flex: none; display: flex; width: 168px; }
+.extAgents-pickpill .extAgents-pill { width: 100%; height: 28px; }
+.extAgents-pickpill .extAgents-pm { padding: 0 8px 0 9px; gap: 5px; }
+.extAgents-pickpill .extAgents-mid { font-size: 11.5px; }
+/* Wide enough for the pending face, ring and all, in either language, so the
+   press that starts a connect does not shove the pill out of its column. */
+.extAgents-pickgo { flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 90px; }
+
+@media (max-width: 560px) {
+  .extAgents-pickrow { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; row-gap: 8px; }
+  .extAgents-pickwho { grid-column: 2 / -1; }
+  .extAgents-pickpill { grid-column: 1 / 3; width: 100%; min-width: 0; }
+  .extAgents-pickgo { grid-column: 3; }
+}
+
+/* The family card's own foot, which is a press rather than a verdict: it says
+   what the card does, in the same slot every other card's verdict sits in. */
+.extAgents-card .extAgents-foot-quiet .extAgents-foot-k { color: var(--muted); }

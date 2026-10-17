@@ -788,6 +788,14 @@ class ErrorEventPayload(_Strict):
     message: str
     reason: Literal["cancelled_by_client", "internal"] | None = None
     detail: str | None = None
+    full_detail: str | None = Field(
+        None,
+        description=(
+            "The failure's long account beside the bounded detail, for a reader who expands the row: "
+            "the runner's own text, credentials scrubbed, capped at 8000 characters. Absent when the "
+            "bounded text already is the whole account."
+        ),
+    )
     target: DirectTarget | None = None
 
 
@@ -3506,6 +3514,14 @@ class TranscriptTurnEnded(_Strict):
 
     status: str = Field(..., description="'cancelled' (a person stopped it) or 'failed'.")
     reason: str | None = None
+    full_detail: str | None = Field(
+        None,
+        description=(
+            "The failure's long account beside the bounded reason, for a reader who expands the row: "
+            "the runner's own text, credentials scrubbed, capped at 8000 characters. Absent when the "
+            "bounded text already is the whole account."
+        ),
+    )
 
 
 class TranscriptNotice(_Strict):

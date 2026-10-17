@@ -14,11 +14,24 @@ from loguru import logger
 
 from raven.a2a_client.client import send_message
 from raven.config.schema import A2aConfig
-from raven.contracts.tool import Tool
+from raven.contracts.tool import Tool, ToolOutput
 
 
 class A2aTool(Tool):
+    """Declared ``agent_output`` because the peer's reply is that peer's words.
+
+    The declaration is the permission; each return still says whether THIS one
+    carries them. The reply does, and is returned as a claiming result. Every
+    other line here is this process's own -- a missing argument, or the
+    transport's error interpolated into "the A2A call failed" -- and is returned
+    as a bare string, which claims nothing and is scrubbed like any local
+    result. Measured live: a peer credential with a trailing newline made httpx
+    report ``Illegal header value b'Bearer ...\\n'``, and the whole sentence
+    skipped the scrub while the tool's declaration stood for the result.
+    """
+
     timeout_seconds = 600.0
+    agent_output = True
 
     def __init__(self, config: A2aConfig) -> None:
         self._config = config
@@ -58,7 +71,8 @@ class A2aTool(Tool):
         if not card_url or not message:
             return "Error: both card_url and message are required."
         try:
-            return await send_message(self._config, card_url, message)
+            reply = await send_message(self._config, card_url, message)
         except Exception as exc:
             logger.opt(exception=True).warning("a2a_send failed for {}", card_url)
             return f"Error: the A2A call failed: {exc}"
+        return ToolOutput(reply, agent_output=True)

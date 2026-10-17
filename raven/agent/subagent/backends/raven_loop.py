@@ -753,7 +753,10 @@ class RavenLoopBackend:
                             "tool_call_id": tool_call.id,
                             "name": tool_call.name,
                             "content": wrap_untrusted(
-                                scrub_tool_output(tool_call.arguments, str(result)), source=tool_call.name
+                                str(result)
+                                if getattr(result, "agent_output", False)
+                                else scrub_tool_output(tool_call.arguments, str(result)),
+                                source=tool_call.name,
                             ),
                         }
                     )

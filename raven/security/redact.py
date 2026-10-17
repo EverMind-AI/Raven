@@ -1,4 +1,4 @@
-"""Strip credentials out of anything on its way to the client.
+"""Strip credentials from Raven's own published tool and protocol content.
 
 An ACP payload is a publishing surface: a tool title, a permission prompt and an
 error message are all rendered in an editor, and some of them are persisted in
@@ -20,11 +20,8 @@ match replacement would leave a row nobody can act on. The pattern list is the
 same size as the one openclaw uses for the same job (about sixteen), and
 deliberately not the 409-line RFC-7235 header scanner sitting next to it.
 
-The same table scrubs a command the outbound client writes to its log when it
-refuses a sub-agent's request (``raven/acp_client/permissions.py``): that
-command is the sub-agent's to author and the log is retained. Seated in
-``raven.security`` rather than in ``raven.acp`` because the client may not import
-the server package.
+This table applies to Raven's own publishing surfaces. Content received from
+another agent retains that agent's redaction policy.
 
 Redaction is defence in depth, not the mechanism. A tool whose output must never
 leave the process should not be put on the wire in the first place.
@@ -47,7 +44,8 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "http-auth",
         re.compile(
-            r"((?:Authorization|Proxy-Authorization)\s*:\s*(?:Bearer|Basic|Token)\s+)([\w\-.~+/=]{8,})", re.IGNORECASE
+            r"((?:Authorization|Proxy-Authorization)\s*+:\s*+(?:Bearer|Basic|Token)\s++)([\w\-.~+/=]{8,}+)",
+            re.IGNORECASE,
         ),
     ),
     # An assignment to anything whose name says secret. Quoted or bare.
@@ -73,9 +71,12 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("google", re.compile(r"()(AIza[0-9A-Za-z_-]{30,})")),
     ("aws-access-key", re.compile(r"()((?:A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA)[A-Z0-9]{16})")),
     ("anthropic-legacy", re.compile(r"()(sk_live_[A-Za-z0-9]{16,})")),
-    ("jwt", re.compile(r"()(eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})")),
-    # PEM blocks: the body, not the armour, so the reader still sees what it was.
-    ("pem", re.compile(r"(-----BEGIN [A-Z ]*PRIVATE KEY-----)([\s\S]+?)(?=-----END)")),
+    (
+        "jwt",
+        re.compile(r"()(?<![A-Za-z0-9_-])(eyJ[A-Za-z0-9_-]{10,}+\.[A-Za-z0-9_-]{10,}+\.[A-Za-z0-9_-]{10,}+)"),
+    ),
+    # A scan or call-record cap may have removed the closing armour.
+    ("pem", re.compile(r"(-----BEGIN [A-Z ]*PRIVATE KEY-----)([\s\S]+?)(?=-----END|\Z)")),
     # A heredoc or echo piping a credential into a file.
     ("env-export", re.compile(r"((?:export|set)\s+[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_]*=)(\S+)")),
     # Deliberately NOT here: a pattern for credential *paths*
@@ -92,20 +93,103 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 # string is worse than an honestly shortened one.
 MAX_SCAN_CHARS = 256 * 1024
 
+# At a known cut, a token may be too short for the ordinary patterns or have
+# lost a closing delimiter. Keep ordinary unlabelled text, but remove a tail
+# whose label or prefix already identifies it as a credential. Each pattern is
+# paired with the characters its value is made of, which say where its search
+# can start (_tail_search_start).
+_TRUNCATED_SECRETS: tuple[tuple[re.Pattern[str], re.Pattern[str]], ...] = (
+    (
+        re.compile(
+            r"()(?<![A-Za-z0-9_-])((?:sk-|gh[pousr]_|glpat-|xox[abposr]-|AIza|A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA|eyJ)"
+            r"[A-Za-z0-9_.-]*+)\Z"
+        ),
+        re.compile(r"[A-Za-z0-9_.-]*+"),
+    ),
+    (re.compile(r"(://[^\s/:@]++:)([^\s/@]++)\Z"), re.compile(r"[^\s/@]*+")),
+    (
+        re.compile(
+            r"((?:api[_-]?key|secret|token|password|passwd|pwd|credential|private[_-]?key|access[_-]?key|auth)"
+            r"[\"']?\s*+[:=]\s*+[\"']?)([^\s\"',;&|)]++)\Z",
+            re.IGNORECASE,
+        ),
+        re.compile(r"[^\s\"',;&|)]*+"),
+    ),
+    (
+        re.compile(
+            r"((?:Proxy-)?Authorization[\"']?\s*+[:=]\s*+[\"']?(?:(?:Bearer|Basic|Token)\s++)?)"
+            r"([\w\-.~+/=]++)\Z",
+            re.IGNORECASE,
+        ),
+        re.compile(r"[\w\-.~+/=]*+"),
+    ),
+    (
+        re.compile(r"(--(?:token|password|api-key|secret|with-token)[= ])([^\s\"']++)\Z", re.IGNORECASE),
+        re.compile(r"[^\s\"']*+"),
+    ),
+)
 
-def redact(text: str) -> str:
+# What may stand between a label's name and its value: quotes, whitespace, a
+# colon or an equals sign, and the scheme word an Authorization label can carry.
+_LABEL_GAP = re.compile(r"[\s\"':=]*+")
+_LABEL_SCHEME = re.compile(r"[A-Za-z]{0,6}+")
+# Room for the name itself; the longest, Proxy-Authorization, is 19 characters.
+_LABEL_NAME_CHARS = 32
+
+
+def _tail_search_start(text: str, value: re.Pattern[str]) -> int:
+    """The earliest position a tail pattern's match can begin at in ``text``.
+
+    The match's value is the run of ``value``'s characters that ends the text, or
+    lies inside it; its label's name ends where the gap, scheme word and gap in
+    front of that run do. Each step matches the reversed text from where the last
+    one stopped, so the walk reads those characters once, however wide a gap is.
+    """
+    reverse = text[::-1]
+    end = value.match(reverse).end()
+    for step in (_LABEL_GAP, _LABEL_SCHEME, _LABEL_GAP):
+        end = step.match(reverse, end).end()
+    return max(0, len(text) - end - _LABEL_NAME_CHARS)
+
+
+def _redact_cut_tail(text: str) -> str:
+    """``text`` with a credential that ends it replaced, for a text a cut ended.
+
+    Each search starts where its match can (:func:`_tail_search_start`), and finds
+    the match a search of the whole text finds. ``re.sub`` over the whole text
+    retries every position instead, and a tail pattern's value runs to the end, so
+    each retry before the final run walks on to the character that stops it:
+    64,000 characters of ``pwd=`` ending in a comma take 10.8 seconds. A regex
+    search for where that run starts retries every position too, 32 seconds for
+    31,000 spaces before the last two words of a failure.
+    """
+    for pattern, value in _TRUNCATED_SECRETS:
+        found = pattern.search(text, _tail_search_start(text, value))
+        if found is not None:
+            text = text[: found.start()] + found.group(1) + REPLACEMENT
+    return text
+
+
+def redact(text: str, *, truncated: bool = False) -> str:
     """Return ``text`` with every recognised credential replaced.
 
     Idempotent: the replacement token matches none of the patterns, so a string
     that has already been through here is unchanged by a second pass. That
     matters because the same text can be redacted at more than one layer.
+    ``truncated`` says a caller already cut the input, so recognized credential
+    tails must be removed even without their usual length or closing delimiter.
     """
     if not text:
         return text
-    if len(text) > MAX_SCAN_CHARS:
-        text = text[:MAX_SCAN_CHARS] + "\n[truncated before scanning for credentials]"
+    scan_cut = len(text) > MAX_SCAN_CHARS
+    if scan_cut:
+        text = text[:MAX_SCAN_CHARS]
+    if truncated or scan_cut:
+        text = _redact_cut_tail(text)
     for _, pattern in _PATTERNS:
         text = pattern.sub(lambda m: m.group(1) + REPLACEMENT, text)
+    if scan_cut:
+        text += "\n[truncated before scanning for credentials]"
     return text
 
 

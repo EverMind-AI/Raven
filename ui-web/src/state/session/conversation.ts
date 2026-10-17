@@ -97,16 +97,18 @@ export function noteSay(row: NoteHandle, label: string, detail: string): void {
 
 /* The one row for everything raven says about itself in the transcript, so a
    new kind of notice cannot arrive wearing its own shape. `label` leads, the
-   detail follows after a `.`, and the whole thing is one line: a failure and a
-   framework note differ only in colour. Options: `quiet` for a framework note
-   (no failure happened, so no red) and `retry`, which is the caller's -- this
-   row cannot know what should happen next. Omit it and no action appears. */
+   detail follows after a `.`, and the whole thing is one line until it is
+   opened: a failure and a framework note differ only in colour. Options:
+   `quiet` for a framework note (no failure happened, so no red); `retry`, which
+   is the caller's -- this row cannot know what should happen next, so omit it
+   and no action appears; and `full`, the account at length the row opens to --
+   omit it and the row opens to its detail, when the line cut any of it. */
 export function noteRow(
   label: string,
   detail: string,
   /* `host` is passed by one caller and has never been forwarded, for the reason
      below; it is in the type because that call site is real. */
-  opts?: { quiet?: boolean; retry?: (() => void) | null; host?: unknown } | null
+  opts?: { quiet?: boolean; retry?: (() => void) | null; full?: string | null; host?: unknown } | null
 ): NoteHandle {
   const o = opts ?? {}
   /* The row is an island segment; the handle keeps the two verbs the page still
@@ -116,5 +118,6 @@ export function noteRow(
   return drawNote(label, detail, {
     quiet: !!o.quiet,
     retry: typeof o.retry === 'function' ? o.retry : null,
+    full: o.full || '',
   })
 }

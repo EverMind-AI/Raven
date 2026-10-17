@@ -12349,6 +12349,10 @@
           },
           "reason": {
             "type": "string"
+          },
+          "full_detail": {
+            "type": "string",
+            "description": "The failure's long account beside the bounded reason, for a reader who expands the row: the runner's own text, credentials scrubbed, capped at 8000 characters. Absent when the bounded text already is the whole account."
           }
         },
         "required": [
@@ -15061,6 +15065,10 @@
               },
               "detail": {
                 "type": "string"
+              },
+              "full_detail": {
+                "type": "string",
+                "description": "The failure's long account beside the bounded detail, for a reader who expands the row: the runner's own text, credentials scrubbed, capped at 8000 characters. Absent when the bounded text already is the whole account."
               },
               "target": {
                 "$ref": "#/components/schemas/DirectTarget"

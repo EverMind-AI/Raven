@@ -404,6 +404,13 @@ jobs:
       - name: Test Windows ACP teardown
         run: uv run --frozen --python 3.13 --no-sync pytest tests/test_subagent_acp.py -k close_without_killpg -q -n 0 --tb=short
 
+      # The CreateProcess command-line budget and the venv redirector's second
+      # launch are Windows-only facts, and the unit shards exclude
+      # tests/integration by norecursedirs -- so without this they are only ever
+      # exercised by hand, and only on a native host.
+      - name: Test the native command-line limit
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/integration/test_acp_mirasim_real_process.py -m integration -q -n 0 --tb=short
+
   core-wheel:
     name: kernel wheel smoke
     runs-on: ubuntu-latest

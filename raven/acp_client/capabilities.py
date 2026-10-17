@@ -39,7 +39,14 @@ from loguru import logger
 from raven.acp_client import protocol, remote
 from raven.acp_client.client import AcpClient
 from raven.acp_client.permissions import auto_approver
-from raven.acp_client.protocol import SESSION_MCP_CAPABILITY, STEER_CAPABILITY, AcpError, AcpRemoteError, reason_of
+from raven.acp_client.protocol import (
+    MENU_UNREAD_META,
+    SESSION_MCP_CAPABILITY,
+    STEER_CAPABILITY,
+    AcpError,
+    AcpRemoteError,
+    reason_of,
+)
 from raven.home import subagent_role_env
 from raven.ops import remote_path
 from raven.utils.atomic_io import atomic_update
@@ -468,6 +475,8 @@ class _Handshake:
     available_models: tuple[str, ...] = ()
     model_choices: tuple["AcpModelChoice", ...] = ()
     available_modes: tuple["AcpMode", ...] = ()
+    menu_unread: bool = False
+    """The agent answered ``session/new``, saying its menus are empty for want of a read."""
     warnings: list[str] = field(default_factory=list)
 
 
@@ -614,6 +623,28 @@ def read_session_current_model(result: Any) -> str:
     entry = next((o for o in options if isinstance(o, dict) and o.get("category") == "model"), None)
     current = _dict(entry).get("currentValue")
     return current if isinstance(current, str) else ""
+
+
+def _read_session_menu_unread(result: Any) -> bool:
+    """Whether this ``session/new`` said its menus are empty for want of a read.
+
+    An agent whose catalog read failed answers with no ``configOptions`` and no
+    ``modes`` -- byte for byte what an agent that genuinely offers neither
+    answers. Raven's own extension tells the two apart: the adapter sets
+    ``_meta.raven[MENU_UNREAD_META]`` when it could not read, and this reads it
+    back, so the snapshot records "not measured" rather than "measured, none".
+
+    The distinction is not cosmetic. Nothing invalidates a recorded
+    measurement -- staleness asks whether the launch config moved, and a failed
+    read moved nothing -- so an empty menu recorded as measured outlives every
+    restart, and the row offers no model picker for as long as the file
+    survives. An unmeasured menu is re-read at the next boot, which is what
+    makes a cold start's timeout self-healing.
+
+    Absent means measured: every agent that is not this adapter, and every
+    adapter old enough not to send the key, is taken at its word.
+    """
+    return bool(_dict(_dict(_dict(result).get("_meta")).get("raven")).get(MENU_UNREAD_META))
 
 
 def _read_session_modes(result: Any) -> tuple[AcpMode, ...]:
@@ -883,6 +914,7 @@ async def verify_agent(cfg: Any, *, env: dict[str, str] | None = None) -> Capabi
             prompt_modalities=hs.prompt_modalities,
             available_models=hs.available_models,
             model_choices=hs.model_choices,
+            model_menu_measured=not hs.menu_unread,
             available_modes=hs.available_modes,
             auth_methods=hs.auth_methods,
             needs_auth=needs_auth,
@@ -1000,6 +1032,7 @@ async def verify_agent(cfg: Any, *, env: dict[str, str] | None = None) -> Capabi
 
         handshake.available_models = _read_session_models(session)
         handshake.model_choices = _read_session_model_choices(session)
+        handshake.menu_unread = _read_session_menu_unread(session)
         handshake.available_modes = _read_session_modes(session)
         caps = ", ".join(
             [

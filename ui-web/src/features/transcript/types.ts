@@ -212,6 +212,8 @@ export interface NoteData {
   kind: 'note'
   label: string
   detail: string
+  /* The account at length when the runner kept more than `detail` says; empty otherwise. */
+  full: string
   quiet: boolean
   retry: (() => void) | null
 }
@@ -370,7 +372,7 @@ export interface HistoryMessage {
   metadata?: Record<string, unknown>
   notice?: { kind?: string; detail?: string }
   origin?: string
-  turn_ended?: { status?: string; reason?: string }
+  turn_ended?: { status?: string; reason?: string; full_detail?: string }
   /* Present on a USER entry the runtime wrote: a delegated run's result coming
      back. The model reads `text`, a reader must not -- see the note on the
      delivery branch in history(). */

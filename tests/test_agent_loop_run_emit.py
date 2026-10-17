@@ -1605,3 +1605,21 @@ async def test_a_held_key_reaches_neither_the_log_the_page_nor_the_model(tmp_pat
     assert any("Tool result: leakytool" in line for line in logged)
     assert not any(_LeakyTool.KEY in line for line in logged)
     assert recorded and _LeakyTool.KEY not in recorded[0]
+
+
+async def test_run_turn_hands_the_lane_the_long_account_of_a_crash(tmp_path):
+    """Every agent turn's failure leaves through run_turn, so that is where the
+    exception gets the long account the kernel cannot build -- including a
+    crash raised before the turn path's own arms could file a marker."""
+    loop = AgentLoop(provider=_FakeChatProvider([]), workspace=tmp_path)
+    _stub_edges(loop)
+    message = "the setup fell over: " + "q" * 400
+
+    async def _crashes(req, emit, drain, **kwargs):
+        raise RuntimeError(message)
+
+    loop._run_turn = _crashes
+    with pytest.raises(RuntimeError) as raised:
+        await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
+
+    assert raised.value.full_detail == f"RuntimeError: {message}"

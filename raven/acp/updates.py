@@ -499,14 +499,16 @@ def _tool_call_update(payload: dict[str, Any], meta: dict[str, Any] | None) -> d
     }
     content: list[dict[str, Any]] = []
     if isinstance(preview, str) and preview:
-        # Scanned before it is cut, and the order is the whole point: cutting
+        # Local previews are scanned before they are cut: cutting
         # first can slice a credential so that it no longer matches the pattern
         # that would have caught it -- ``redact("token sk-ant-api")`` returns it
         # unchanged -- and then the head of it is published as ordinary text.
         # The scan cap in :mod:`raven.security.redact` is four times this one, so a
         # preview of any length that reaches here is scanned whole or truncated
         # by that module with a notice of its own.
-        scanned = redact(preview)
+        metadata = payload.get("metadata")
+        agent_output = isinstance(metadata, dict) and metadata.get("agent_output") is True
+        scanned = preview if agent_output else redact(preview)
         text = scanned[:MAX_RESULT_PREVIEW]
         if payload.get("truncated") or len(scanned) > MAX_RESULT_PREVIEW:
             text += "\n[truncated]"

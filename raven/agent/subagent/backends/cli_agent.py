@@ -1384,9 +1384,26 @@ class CliAgentBackend:
         the transcript's id, else the pattern over stdout then stderr -- so
         the next dispatch to the handle resumes this session instead of
         opening a fresh one. Nothing for a minted id (bound at the launch)
-        or a stateless run.
+        or a stateless run -- the record's ``stateful`` says which, as the
+        handle cannot: every run carries one (``instance`` or ``task_id``),
+        and a stateless entry may declare ``idSource: derived`` too, which
+        the dispatch path then reads nothing from and binds nothing with.
+
+        Bound only where nothing is bound yet (``InstanceRegistry.bind_if_absent``,
+        one step under the registry's own lock): a dispatch to the same named
+        instance while this pick-up waited on the machine's command looked
+        the handle up, found nothing, and bound the session it created; that
+        binding is the newer turn's thread and is kept, this one's session
+        left unbound, where committing over it would have moved the instance
+        back to a session the newer turn never saw. Not under ``hold_handle``:
+        the dispatch holds that across its whole turn, with no timeout, and
+        the pick-ups run one after another -- a pick-up waiting for it would
+        hold back every run picked up after it. The dispatch commits last
+        whichever way the two land, so the handle ends on its session either
+        way, and the pick-up never waits for that turn. The minted id of a
+        ``provisioned`` entry is bound the same way, by ``resume_remote._conclude``.
         """
-        if run.session_id or not run.handle or self.id_source != "derived":
+        if run.session_id or not run.stateful or self.id_source != "derived":
             return ""
         agent_id = jsonl_id
         if agent_id is None and self._session_id_re is not None:
@@ -1395,11 +1412,13 @@ class CliAgentBackend:
                     agent_id = m.group(1)
                     break
         if agent_id is None:
+            if await self._registry.lookup(run.session_key, self.name, run.handle) is not None:
+                return ""  # bound meanwhile by a newer turn: resumable through that
             return (
                 "\n\n[raven] Warning: no session id could be extracted from the create "
                 "output, so this instance is not resumable. Use a new handle to recreate."
             )
-        await self._registry.commit(run.session_key, self.name, run.handle, agent_id)
+        await self._registry.bind_if_absent(run.session_key, self.name, run.handle, agent_id)
         return ""
 
     async def _attempt(
