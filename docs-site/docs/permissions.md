@@ -161,9 +161,13 @@ scopes. Prompt-injection labels mark tool results and sub-agent output as
 untrusted data; they do not make model judgement infallible. Check credentials
 and network reach separately from prompt instructions.
 
-ACP redacts recognized secrets in outgoing arguments, previews, errors, and
-permission descriptions. A2A turn failures expose a fixed message and retain
-the detailed exception in local logs. Neither mechanism guarantees every log or
+ACP redacts recognized secrets in outgoing arguments and permission
+descriptions, and in the errors Raven itself composes. Content that comes back
+from another agent -- a sub-agent's answer, a Mirasim turn, an A2A peer's reply
+-- is kept as that agent sent it, on the policy that the agent producing it
+decides what may be redacted; a credential such a reply echoes is therefore
+left in place. A2A turn failures expose a fixed message and retain the detailed
+exception in local logs. Neither mechanism guarantees every log or
 transcript is safe to publish. Keep secrets out of task prompts where possible,
 and review/redact diagnostic exports before sharing.
 
