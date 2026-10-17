@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import math
 import wave
 from pathlib import Path
 from types import SimpleNamespace
@@ -201,6 +202,312 @@ async def test_an_openai_compatible_base_takes_a_size_and_edits_by_multipart(mon
     assert edit.url.path == "/v1/images/edits"
     assert edit.headers["content-type"].startswith("multipart/form-data")
     assert b'name="image[]"' in edit.content and _PNG in edit.content and b"gpt-image-2" in edit.content
+
+
+_JPG = b"\xff\xd8\xff\xe0" + b"jpg pixels"
+
+
+async def test_an_ark_plan_base_is_answered_in_url_form_and_downloads_the_picture(monkeypatch, tmp_path) -> None:
+    """The Volces Ark Agent-Plan endpoint speaks its own dialect on
+    /images/generations -- ``size`` as an explicit WxH pair at the 2K budget,
+    no response_format -- and answers with ``data[].url`` only, so the picture
+    behind the URL is fetched and written like any other generated file."""
+    sent: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/plan/v3/images/generations":
+            sent["body"] = json.loads(request.content)
+            return httpx.Response(200, json={"data": [{"url": "https://1.2.3.4/tos/signed.jpeg"}]})
+        sent["download"] = request
+        return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=_JPG)
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-5-0-pro",
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/plan/v3",
+    )
+    out = json.loads(await tool.execute("a poster", aspect_ratio="16:9"))
+    assert out["success"] and out["model"] == "doubao-seedream-5-0-pro"
+    path = Path(out["paths"][0])
+    assert path.suffix == ".jpg" and path.read_bytes() == _JPG
+    assert sent["body"] == {"model": "doubao-seedream-5-0-pro", "prompt": "a poster", "n": 1, "size": "2736x1539"}
+    # The download URL is the provider's own storage, not its API: the key the
+    # generation call carried must not travel with the fetch.
+    assert sent["download"].headers.get("Authorization") is None
+
+
+async def test_an_ark_plan_base_without_a_ratio_leaves_size_to_the_endpoint(monkeypatch, tmp_path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/plan/v3/images/generations":
+            assert "size" not in json.loads(request.content)
+            return httpx.Response(200, json={"data": [{"url": "https://1.2.3.4/tos/signed.jpeg"}]})
+        return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=_JPG)
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-5-0-pro",
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/plan/v3",
+    )
+    assert json.loads(await tool.execute("a poster"))["success"]
+
+
+async def test_an_ark_plan_base_with_an_unknown_ratio_falls_back_to_the_2k_tier(monkeypatch, tmp_path) -> None:
+    sent: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/plan/v3/images/generations":
+            sent["body"] = json.loads(request.content)
+            return httpx.Response(200, json={"data": [{"url": "https://1.2.3.4/tos/signed.jpeg"}]})
+        return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=_JPG)
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-5-0-pro",
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/plan/v3",
+    )
+    assert json.loads(await tool.execute("a poster", aspect_ratio="5:1"))["success"]
+    assert sent["body"]["size"] == "2K"
+
+
+async def test_a_seedream_3_t2i_ark_base_is_sized_inside_its_own_window(monkeypatch, tmp_path) -> None:
+    """Seedream 3.0-t2i's card lists WxH only, in [512x512, 2048x2048] -- the
+    model-independent 2736x1539 is a 400 there, and an unspellable ratio has
+    no tier to fall back to, so the endpoint default stands in."""
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/plan/v3/images/generations":
+            sent.append(json.loads(request.content))
+            return httpx.Response(200, json={"data": [{"url": "https://1.2.3.4/tos/signed.jpeg"}]})
+        return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=_JPG)
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-3-0-t2i-250415",
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/plan/v3",
+    )
+    for ratio in ("16:9", "21:9", "5:1"):
+        assert json.loads(await tool.execute("a poster", aspect_ratio=ratio))["success"]
+    # 16:9 hits the 2048 per-side cap; 21:9 lands on the pair that always
+    # worked pre-PR; 5:1 is unspellable and 3.0-t2i has no tier to send.
+    assert [body.get("size") for body in sent] == ["2048x1152", "1536x658", None]
+
+
+_EP_ID = "ep-20250101000000-abcde"
+
+
+def _ark_ep_tool(monkeypatch, handler, tmp_path: Path) -> ImageGenerateTool:
+    return _image_tool(
+        monkeypatch,
+        handler,
+        model=_EP_ID,
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/plan/v3",
+    )
+
+
+async def test_an_ark_endpoint_id_keeps_the_ratio_and_retries_sizeless_on_a_400(monkeypatch, tmp_path) -> None:
+    """An inference endpoint id names none of the family keywords, so the ratio
+    used to be dropped on the floor and the endpoint rendered its default
+    frame; and no single WxH is valid for every family behind an ep- id. The
+    ratio passes through, and a sized call the endpoint refuses is retried once
+    with no size at all, letting the endpoint default stand."""
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/plan/v3/images/generations":
+            sent.append(json.loads(request.content))
+            if len(sent) == 1:
+                return httpx.Response(400, json={"error": {"message": "size exceeds the model's range"}})
+            return httpx.Response(200, json={"data": [{"url": "https://1.2.3.4/tos/signed.jpeg"}]})
+        return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=_JPG)
+
+    out = json.loads(await _ark_ep_tool(monkeypatch, handler, tmp_path).execute("a poster", aspect_ratio="16:9"))
+    assert out["success"] and Path(out["paths"][0]).read_bytes() == _JPG
+    # The explicit pair drawn from the default window first, then no size key.
+    assert sent[0]["size"] == "2736x1539"
+    assert "size" not in sent[1]
+
+
+async def test_an_ark_endpoint_id_whose_sized_call_succeeds_never_reposts(monkeypatch, tmp_path) -> None:
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/plan/v3/images/generations":
+            sent.append(json.loads(request.content))
+            return httpx.Response(200, json={"data": [{"url": "https://1.2.3.4/tos/signed.jpeg"}]})
+        return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=_JPG)
+
+    assert json.loads(await _ark_ep_tool(monkeypatch, handler, tmp_path).execute("a poster", aspect_ratio="16:9"))[
+        "success"
+    ]
+    assert len(sent) == 1 and sent[0]["size"] == "2736x1539"
+
+
+async def test_an_ark_endpoint_id_refused_both_times_propagates_the_400(monkeypatch, tmp_path) -> None:
+    """The retry is one shot: a size-less call still refused is a real error,
+    and it reaches the model the way every other HTTP failure does."""
+    posts: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/plan/v3/images/generations":
+            posts.append(json.loads(request.content))
+        return httpx.Response(400, text="InvalidParameter")
+
+    out = json.loads(await _ark_ep_tool(monkeypatch, handler, tmp_path).execute("a poster", aspect_ratio="16:9"))
+    assert out["error"] == "HTTP 400"
+    assert len(posts) == 2 and "size" not in posts[1]
+
+
+async def test_a_ratio_less_ark_endpoint_call_sends_no_size_on_the_first_try(monkeypatch, tmp_path) -> None:
+    """Without a ratio there is nothing to spell, exactly as for a named model:
+    the first request carries no size key and no retry is waiting behind it."""
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/plan/v3/images/generations":
+            sent.append(json.loads(request.content))
+            return httpx.Response(200, json={"data": [{"url": "https://1.2.3.4/tos/signed.jpeg"}]})
+        return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=_JPG)
+
+    assert json.loads(await _ark_ep_tool(monkeypatch, handler, tmp_path).execute("a poster"))["success"]
+    assert len(sent) == 1 and "size" not in sent[0]
+
+
+async def test_an_identified_family_s_400_is_not_retried(monkeypatch, tmp_path) -> None:
+    """A matched card's window is documented, so a 400 naming the size is a
+    real error there, not a guess to take back."""
+    posts: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/plan/v3/images/generations":
+            posts.append(json.loads(request.content))
+        return httpx.Response(400, text="InvalidParameter")
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-4-5-pro",
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/plan/v3",
+    )
+    out = json.loads(await tool.execute("a poster", aspect_ratio="16:9"))
+    assert out["error"] == "HTTP 400"
+    assert len(posts) == 1 and posts[0]["size"] == "2736x1539"
+
+
+def test_ark_explicit_sizes_stay_exact_and_inside_every_models_window() -> None:
+    """The reviewer's hand enumeration, locked into CI: for every supported
+    ratio and every Seedream window in the table (default included), the pair
+    sent keeps the ratio exact by construction -- the same coprime pair scaled
+    by one integer -- and fits the card's per-side and total-pixel bounds."""
+    windows = [(f"doubao-{needle}", *bounds) for needle, *bounds in media_gen._ARK_SIZE_WINDOWS]
+    windows.append(("doubao-seedream-future", None, None, 2560 * 1440, 4096 * 4096))
+    for ratio, dims in media_gen._SIZES.items():
+        width, height = (int(side) for side in dims.split("x"))
+        divisor = math.gcd(width, height)
+        for model_id, min_side, max_side, min_total, max_total in windows:
+            size = media_gen.ark_explicit_size(model_id, ratio)
+            assert size is not None, (model_id, ratio)
+            sw, sh = (int(side) for side in size.split("x"))
+            common = math.gcd(sw, sh)
+            assert (sw // common, sh // common) == (width // divisor, height // divisor)
+            assert min_total <= sw * sh <= max_total, (model_id, ratio, size)
+            if min_side:
+                assert min_side <= min(sw, sh), (model_id, ratio, size)
+            if max_side:
+                assert max(sw, sh) <= max_side, (model_id, ratio, size)
+
+
+async def test_an_ark_plan_base_still_takes_an_inline_b64_picture(monkeypatch, tmp_path) -> None:
+    """b64_json keeps working wherever it appears: the url form was added for
+    Ark, not swapped for it."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-5-0-pro",
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/plan/v3",
+    )
+    out = json.loads(await tool.execute("a poster"))
+    assert out["success"] and Path(out["paths"][0]).read_bytes() == _PNG
+
+
+async def test_any_openai_compatible_base_may_answer_in_url_form(monkeypatch, tmp_path) -> None:
+    """data[].url is read on every Images base, not only Ark's: a gateway
+    answering OpenAI's documented url form used to look like no image at all,
+    and the pixel size the same base takes is unchanged."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/images/generations":
+            assert json.loads(request.content)["size"] == "1024x1536"
+            return httpx.Response(200, json={"data": [{"url": "https://1.2.3.4/cdn/signed.png"}]})
+        return httpx.Response(200, headers={"content-type": "image/png"}, content=_PNG)
+
+    tool = _image_tool(
+        monkeypatch, handler, model="gpt-image-2", workspace=tmp_path / "ws", api_base="https://gw.test/v1"
+    )
+    out = json.loads(await tool.execute("a poster", aspect_ratio="3:4"))
+    assert out["success"] and Path(out["paths"][0]).read_bytes() == _PNG
+
+
+async def test_a_generated_picture_pointing_inward_is_refused_before_anything_is_fetched(monkeypatch, tmp_path) -> None:
+    """The download side of the URL form is a provider-supplied address too: the
+    guarded fetch refuses a link-local or private target, and -- the generation
+    already billed -- that refusal is its own error, not "no image returned"."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.path == "/api/plan/v3/images/generations":
+            return httpx.Response(200, json={"data": [{"url": "http://169.254.169.254/latest/meta-data/"}]})
+        return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=_JPG)
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-5-0-pro",
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/plan/v3",
+    )
+    out = json.loads(await tool.execute("a poster"))
+    assert out["error"] == "generated, but the picture URL was refused or could not be fetched"
+    assert out["url"] == "http://169.254.169.254/latest/meta-data/"
+    assert len(seen) == 1
+
+
+async def test_a_generated_picture_a_dead_network_cannot_deliver_is_not_read_as_missing(monkeypatch, tmp_path) -> None:
+    """A public URL the transport cannot reach is the same billed generation:
+    the answer names the fetch failure instead of reading as no image."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/plan/v3/images/generations":
+            return httpx.Response(200, json={"data": [{"url": "https://1.2.3.4/tos/signed.jpeg"}]})
+        raise httpx.ConnectError("[Errno 61] Connection refused to 1.2.3.4")
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-5-0-pro",
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/plan/v3",
+    )
+    out = json.loads(await tool.execute("a poster"))
+    assert out["error"] == "generated, but the picture URL was refused or could not be fetched"
+    assert out["url"] == "https://1.2.3.4/tos/signed.jpeg"
+    assert "1.2.3.4" in out["detail"]
 
 
 @pytest.mark.parametrize(

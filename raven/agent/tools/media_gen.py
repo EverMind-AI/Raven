@@ -44,6 +44,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import math
 import os
 import re
 import shutil
@@ -332,6 +333,67 @@ def images_api_size(model_id: str, aspect_ratio: str | None) -> str | None:
     return _GPT_IMAGE_LANDSCAPE if width > height else _GPT_IMAGE_PORTRAIT
 
 
+# Ark's per-model explicit-size windows, from the Seedream cards on
+# docs.volcengine.com: every model takes WxH with its own total-pixel range,
+# and 3.0-t2i lists WxH only -- no tier at all. Its doc row [512x512,
+# 2048x2048] is honored as BOTH readings, per-side bounds and total pixels,
+# so whichever the endpoint enforces, the pair sent fits. Needles are matched
+# as substrings of the lowercased model id, most specific first ("5-0-lite"
+# before "5-0", which also covers the non-lite 5.0 cards on the same family
+# envelope).
+_ARK_SIZE_WINDOWS = (
+    ("3-0-t2i", 512, 2048, 512 * 512, 2048 * 2048),
+    ("5-0-lite", None, None, 2560 * 1440, int(3072 * 3072 * 1.1025)),
+    ("5-0", None, None, 2560 * 1440, int(3072 * 3072 * 1.1025)),
+    ("4-5", None, None, 2560 * 1440, 4096 * 4096),
+    ("4-0", None, None, 1280 * 720, 4096 * 4096),
+)
+
+
+def _ark_size_window(model_id: str) -> tuple[int | None, int | None, int, int]:
+    """(min side, max side, min total pixels, max total pixels) for the model."""
+    for needle, min_side, max_side, min_total, max_total in _ARK_SIZE_WINDOWS:
+        if needle in model_id.lower():
+            return min_side, max_side, min_total, max_total
+    # Every Seedream after 3.0 documents a window containing the 2K class, so
+    # an unidentified one gets the family-wide default.
+    return None, None, 2560 * 1440, 4096 * 4096
+
+
+def _ark_family_known(model_id: str) -> bool:
+    """Whether the size table knows this model's family.
+
+    An inference endpoint id (``ep-...``) names none, so the window it gets is
+    the family-wide default -- a guess, unlike a matched card's bounds.
+    """
+    return any(needle in model_id.lower() for needle, *_ in _ARK_SIZE_WINDOWS)
+
+
+def ark_explicit_size(model_id: str, aspect_ratio: str | None) -> str | None:
+    """The explicit WxH an Ark generations call spells a ratio as, or None to leave it."""
+    if not aspect_ratio or aspect_ratio not in _SIZES:
+        return None
+    width, height = (int(side) for side in _SIZES[aspect_ratio].split("x"))
+    divisor = math.gcd(width, height)
+    rw, rh = width // divisor, height // divisor
+    min_side, max_side, min_total, max_total = _ark_size_window(model_id)
+    # One common factor keeps the ratio exact by construction, aimed at the 2K
+    # budget (2048x2048 pixels, the class the "2K" tier itself outputs; the
+    # _SIZES dims at ~1.3M sit below every post-3.0 floor) and then pulled
+    # inside the selected model's own window: 3.0-t2i tops out at 2048x2048
+    # total, where a model-independent 2736x1539 was a 400.
+    k = round(math.sqrt(min(2048 * 2048, max_total) / (rw * rh)))
+    if max_side:
+        k = min(k, max_side // rw, max_side // rh)
+    if rw * rh * k * k < min_total:
+        # A window whose floor sits above a side-capped budget needs k raised
+        # back over it -- growing the pair, never shrinking it.
+        k = math.ceil(math.sqrt(min_total / (rw * rh)))
+    if min_side:
+        k = max(k, math.ceil(min_side / rw), math.ceil(min_side / rh))
+    return f"{rw * k}x{rh * k}"
+
+
 def _image_only_refusal(e: httpx.HTTPStatusError) -> bool:
     """OpenRouter's two spellings of "this model is not a chat model"."""
     body = e.response.text
@@ -342,6 +404,20 @@ def _split_data_uri(url: str) -> tuple[str, bytes]:
     head, _, encoded = url.partition(",")
     mime = head[len("data:") :].split(";", 1)[0] or "image/png"
     return mime, base64.b64decode(encoded)
+
+
+class _PictureUnfetchableError(Exception):
+    """A generation that answered with a picture URL this process cannot take.
+
+    Raised only where the URL is the picture (an Ark generations call is
+    billed before it answers): the answer must not read as ``no image``,
+    or an orchestrating model retries and pays for the picture twice.
+    """
+
+    def __init__(self, url: str, detail: str) -> None:
+        super().__init__(detail)
+        self.url = url
+        self.detail = detail
 
 
 # How many of a batch are in flight at once. The deck engine settled on four for the
@@ -677,8 +753,13 @@ class ImageGenerateTool(_OpenRouterMediaTool):
             model_id = wire_model(model_id, client_provider=runs_on)
         quality = self.effective_quality(spec.get("quality"), model_id)
         # The Images API takes the frame only from the families known to honour
-        # it; the chat route takes it from any model, as image_config below.
-        frames = any(name in model_id.lower() for name in ("gpt-image", "seedream", "qwen-image", "grok-imagine"))
+        # it; the chat route takes it from any model, as image_config below. A
+        # volces base may serve the family behind an inference endpoint id
+        # (ep-...), which spells no keyword: the ratio passes through there, and
+        # the endpoint's own answer to the sized call sorts the rest out.
+        volces = httpx.URL(self.api_base).host.endswith(".volces.com")
+        families = ("gpt-image", "seedream", "qwen-image", "grok-imagine")
+        frames = volces or any(name in model_id.lower() for name in families)
         # Chat routing with output modalities is OpenRouter's own; any other
         # address serves pictures through the Images API, whatever the model.
         if not openrouter or any(name in model_id.lower() for name in _IMAGE_API_MODELS):
@@ -752,6 +833,42 @@ class ImageGenerateTool(_OpenRouterMediaTool):
             {"success": True, "model": model_id, "quality": quality or "", "paths": paths}, ensure_ascii=False
         )
 
+    async def _generated_bytes(
+        self, client: httpx.AsyncClient, item: Any, *, surface_unfetchable: bool = False
+    ) -> tuple[str, bytes] | None:
+        """The picture one ``data`` entry carries, as ``(mime, bytes)``, or None
+        when it has none this code can take: inline as ``b64_json``, or behind
+        its ``url`` -- an Ark-style endpoint answers with download URLs only, so
+        the bytes are fetched (through the guarded fetch: a provider response
+        is as untrusted a place for a URL as a model's chat text).
+
+        Where ``surface_unfetchable`` is set the URL is the picture and the
+        generation behind it is already billed, so a URL the guard refuses or
+        the network cannot deliver raises :class:`_PictureUnfetchableError` rather
+        than reading as no image at all."""
+        if not isinstance(item, dict):
+            return None
+        if encoded := item.get("b64_json"):
+            return str(item.get("media_type") or "image/png"), base64.b64decode(encoded)
+        url = str(item.get("url") or "")
+        if url.startswith("data:"):
+            return _split_data_uri(url)
+        if not url.startswith(("http://", "https://")):
+            return None
+        try:
+            fetched = await guarded_fetch(client, url, what="generated image")
+        except httpx.TransportError as e:
+            if surface_unfetchable:
+                raise _PictureUnfetchableError(url, str(e)) from e
+            raise
+        if fetched is None:
+            if surface_unfetchable:
+                raise _PictureUnfetchableError(url, "not a fetchable public target")
+            return None
+        fetched.raise_for_status()
+        mime = fetched.headers.get("content-type", "image/png").split(";", 1)[0].strip()
+        return mime, fetched.content
+
     async def _via_images_api(
         self,
         model_id: str,
@@ -763,9 +880,14 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         stem: str = "",
     ) -> str:
         """The Images API: OpenRouter's unified ``/images``, or ``/images/generations``
-        and ``/images/edits`` on an OpenAI-compatible base."""
+        and ``/images/edits`` on an OpenAI-compatible base. A Volces Ark base
+        speaks the Ark dialect on the generations route: ``size`` as a "1K"/"2K"
+        resolution tier or an explicit WxH pair (the pair is sent to keep the
+        asked-for frame; the tier only when the ratio is not one we spell), and
+        the pictures behind ``data[].url`` rather than ``b64_json``."""
         headers = self._headers()
         openrouter = httpx.URL(self.api_base).host == "openrouter.ai"
+        volces = httpx.URL(self.api_base).host.endswith(".volces.com")
         try:
             # OpenRouter takes the chat content-part shape verbatim; the OpenAI
             # edits form takes the bytes behind it.
@@ -810,27 +932,62 @@ class ImageGenerateTool(_OpenRouterMediaTool):
                     r = await client.post(f"{self.api_base}/images/edits", headers=headers, data=form, files=files)
                 else:
                     body = {"model": model_id, "prompt": prompt, "n": 1}
-                    if size := images_api_size(model_id, aspect_ratio):
+                    retry_sizeless = False
+                    if volces:
+                        # Ark's size is a resolution tier or an explicit WxH
+                        # pair, and the pair must fit the selected model's own
+                        # window: spell the ratio as pixels inside it, keep the
+                        # "2K" tier for a ratio the table cannot spell --
+                        # except on 3.0-t2i, whose card lists WxH only, so
+                        # there the endpoint default stands in for the tier.
+                        if size := ark_explicit_size(model_id, aspect_ratio):
+                            body["size"] = size
+                            # An unrecognized id (an inference endpoint) drew
+                            # that pair from the default window, which may sit
+                            # outside the endpoint's real one: a 400 is retried
+                            # once with no size, the endpoint default standing
+                            # in -- a rejected request is not a billed
+                            # generation. A known family's window is
+                            # documented, so its 400 is a real error.
+                            retry_sizeless = not _ark_family_known(model_id)
+                        elif aspect_ratio and "3-0-t2i" not in model_id.lower():
+                            body["size"] = "2K"
+                    elif size := images_api_size(model_id, aspect_ratio):
                         body["size"] = size
                     if quality:
                         body["quality"] = quality
                     r = await client.post(f"{self.api_base}/images/generations", headers=headers, json=body)
+                    if retry_sizeless and r.status_code == 400:
+                        body.pop("size", None)
+                        r = await client.post(f"{self.api_base}/images/generations", headers=headers, json=body)
                 r.raise_for_status()
                 payload = r.json()
                 await self._record_usage(payload, model_id, "images")
-                items = payload.get("data") or []
+                try:
+                    pictures: list[tuple[str, bytes]] = []
+                    for item in payload.get("data") or []:
+                        picture = await self._generated_bytes(client, item, surface_unfetchable=volces)
+                        if picture is not None:
+                            pictures.append(picture)
+                except _PictureUnfetchableError as e:
+                    return json.dumps(
+                        {
+                            "error": "generated, but the picture URL was refused or could not be fetched",
+                            "model": model_id,
+                            "url": e.url,
+                            "detail": e.detail,
+                        },
+                        ensure_ascii=False,
+                    )
         except httpx.HTTPStatusError as e:
             return self._format_http_error(e)
         except Exception as e:
             logger.error("image_generate error: {}", e)
             return json.dumps({"error": type(e).__name__, "detail": str(e)}, ensure_ascii=False)
         paths: list[str] = []
-        for item in items:
-            encoded = item.get("b64_json") if isinstance(item, dict) else None
-            if not encoded:
-                continue
-            path = self._output_path(_MIME_EXT.get(item.get("media_type"), "png"), output_dir, stem)
-            path.write_bytes(base64.b64decode(encoded))
+        for mime, data in pictures:
+            path = self._output_path(_MIME_EXT.get(mime, "png"), output_dir, stem)
+            path.write_bytes(data)
             paths.append(str(path))
         if not paths:
             return json.dumps({"error": "no image returned", "model": model_id}, ensure_ascii=False)
