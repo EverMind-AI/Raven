@@ -317,6 +317,7 @@ class MirasimAgent:
         self._commands: dict[str, tuple[float, list[dict[str, Any]]]] = {}
         self._effort_skipped: set[tuple[str | None, str]] = set()
         self._tasks: set[asyncio.Task[Any]] = set()
+        self._shutting_down = False
 
     async def handle(self, frame: dict[str, Any]) -> dict[str, Any] | None:
         """Answer one inbound frame; ``None`` for a notification or a response.
@@ -773,7 +774,7 @@ class MirasimAgent:
             )
         retried = False
         while True:
-            if session.deleted:
+            if session.deleted or self._shutting_down:
                 return {"stopReason": "cancelled"}
             turn = Turn(client_ref=f"raven-{uuid.uuid4().hex}", session=session, ended=_future())
             turn.notes = notes
@@ -959,6 +960,8 @@ class MirasimAgent:
             return frame.get("type") == "outbox" and ref in (_ref(frame.get("steered")), _ref(frame.get("dispatched")))
 
         catalog = await self.catalog(allow_stale=True)
+        if self._shutting_down:
+            return {"status": "no_turn"}
         model = session.model or catalog.default_model
         frame: dict[str, Any] = {"type": "prompt", "clientRef": ref, "sessionKey": key, "prompt": text}
         if mirasim_model := catalog.mirasim_model(model):
@@ -1313,12 +1316,13 @@ class MirasimAgent:
         return task
 
     async def shutdown(self) -> None:
-        """Stop every turn this adapter started, as a client that hung up can no longer cancel them.
+        """Refuse new turns and stop those already started, as a client that hung up can no longer cancel them.
 
         Questions still out with the client fail first, so a turn waiting on one
         is not held for a client that is gone. The connection stays up for the
         requests still being answered; :meth:`close` ends it.
         """
+        self._shutting_down = True
         self.outbound.close()
         turns = list(self._turns.values())
         await asyncio.gather(*(self._cancel_turn(turn) for turn in turns), return_exceptions=True)

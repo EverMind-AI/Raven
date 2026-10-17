@@ -135,27 +135,45 @@ async def test_a_dispatch_cancelled_in_raven_leaves_no_turn_running(tmp_path: Pa
 
 
 @pytest.mark.slow
-async def test_closing_the_adapter_stops_its_turn_on_the_shared_host(tmp_path: Path, host: FakeHost) -> None:
+@pytest.mark.parametrize("queued", [False, True])
+async def test_closing_the_adapter_stops_its_turn_on_the_shared_host(
+    tmp_path: Path, host: FakeHost, queued: bool
+) -> None:
     from raven.acp.mirasim.host import HostConnection
 
     host.respond = lambda prompt, session: [("text", "working"), ("hold",)]
     cfg = adapter_config(tmp_path, host)
     client = await AcpClient.launch(name=cfg.name, command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env))
-    pending = None
+    pending = []
     try:
         await client.request("initialize", {"protocolVersion": 1}, timeout=30)
         opened = await client.request("session/new", {"cwd": str(tmp_path), "mcpServers": []}, timeout=30)
-        pending = asyncio.create_task(
-            client.request(
-                "session/prompt",
-                {"sessionId": opened["sessionId"], "prompt": [{"type": "text", "text": "wait"}]},
-                timeout=30,
+        pending.append(
+            asyncio.create_task(
+                client.request(
+                    "session/prompt",
+                    {"sessionId": opened["sessionId"], "prompt": [{"type": "text", "text": "wait"}]},
+                    timeout=30,
+                )
             )
         )
         session = await host.wait_for(lambda: host.sessions and host.session().running and host.session())
+        if queued:
+            pending.append(
+                asyncio.create_task(
+                    client.request(
+                        "session/prompt",
+                        {"sessionId": opened["sessionId"], "prompt": [{"type": "text", "text": "queued"}]},
+                        timeout=30,
+                    )
+                )
+            )
+            await asyncio.sleep(0)
+            await client.request("session/set_mode", {"sessionId": opened["sessionId"], "modeId": "low"}, timeout=10)
         await client.close()
         await host.wait_for(lambda: session.running is None)
         assert host.frames("stop")[0]["sessionKey"] == session.key
+        assert len(host.frames("prompt")) == 1
         connection = HostConnection(on_frame=lambda frame: None, locate=lambda: host.address)
         try:
             await connection.connect()
@@ -164,8 +182,7 @@ async def test_closing_the_adapter_stops_its_turn_on_the_shared_host(tmp_path: P
             await connection.close()
     finally:
         await client.close()
-        if pending is not None:
-            await asyncio.gather(pending, return_exceptions=True)
+        await asyncio.gather(*pending, return_exceptions=True)
 
 
 @pytest.mark.slow
