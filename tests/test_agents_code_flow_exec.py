@@ -20,7 +20,6 @@ import sys
 import tempfile
 import threading
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -83,9 +82,9 @@ def _diagnostic_tool(tmp_path: Path, tools: dict | None = None) -> CodeExecTool:
             repos[root] = CheckpointService(root)
         return repos[root]
 
-    # Supply visibility independently so these cases also cover the bounded
-    # fallback scan when host write measurement is not enabled.
-    tool._shadow = shadow
+    # As the loop wires a same-name exec: the write record and the visibility
+    # hook arrive together, through the one door production uses.
+    tool.measure_writes(shadow)
     return tool
 
 
@@ -123,7 +122,6 @@ def test_exec_diagnostics_work_in_paths_with_spaces_and_non_ascii_characters(tmp
 
 def test_exec_reuses_the_hosts_write_record_and_keeps_it_in_the_result(tmp_path):
     tool = _diagnostic_tool(tmp_path)
-    tool.measure_writes(tool._shadow)
     out = _run(tool.execute(command=_write_command(tmp_path, {"recorded.py": "result = missing_value\n"})))
     assert "F821" in str(out)
     assert len(out.written) == 1 and out.written[0].path.endswith("recorded.py")
@@ -157,13 +155,13 @@ def test_exec_syntax_feedback_keeps_command_failure_and_does_not_rollback(tmp_pa
 def test_exec_diagnostics_follow_explicit_working_directory_and_have_a_switch(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
-    elsewhere = tmp_path / "elsewhere"
+    elsewhere = home / "elsewhere"
     elsewhere.mkdir()
     tool = _diagnostic_tool(tmp_path)
     out = str(
         _run(tool.execute(command=_write_command(tmp_path, {"other.py": "x = missing\n"}), working_dir=str(elsewhere)))
     )
-    assert "other.py" in out and "F821" in out
+    assert os.path.join("elsewhere", "other.py") in out and "F821" in out
     quiet = _diagnostic_tool(tmp_path, {"execPythonDiagnostics": False})
     out = str(_run(quiet.execute(command=_write_command(tmp_path, {"quiet.py": "def f(:\n"}))))
     assert "Python diagnostics" not in out
@@ -212,21 +210,27 @@ def test_exec_diagnostics_do_not_read_files_withheld_by_the_host(tmp_path):
     assert out.ok is True and len(out.written) == 2
 
 
-@pytest.mark.parametrize("kind", ["missing", "exception"])
-def test_exec_unavailable_pre_command_snapshot_does_not_block_or_scan_all_files(tmp_path, monkeypatch, kind):
-    from code_flow.tools import workspace_scan
+def test_exec_without_a_write_record_reads_nothing(tmp_path, monkeypatch):
+    from code_flow.tools import diagnostics
+
+    from raven.contracts.tool import FileWrite, ToolOutput
 
     tool = _diagnostic_tool(tmp_path)
+    target = tmp_path / "home" / "recorded.py"
+    reads, records = [], []
+    monkeypatch.setattr(diagnostics, "read_python", lambda path: reads.append(path))
 
-    def unavailable(*args, **kwargs):
-        if kind == "exception":
-            raise RuntimeError("listing failed")
-        return None
+    async def host(*args, **kwargs):
+        # With no record, as when the host's listing gave up: the output alone.
+        return ToolOutput("Exit code: 0", ok=True, written=tuple(records))
 
-    monkeypatch.setattr(workspace_scan, "take", unavailable)
-    out = _run(tool.execute(command=_write_command(tmp_path, {"kept.py": "result = missing\n"})))
-    assert out.ok is True and "Python diagnostics" not in str(out)
-    assert (tmp_path / "home" / "kept.py").exists()
+    monkeypatch.setattr(TrunkExecTool, "execute", host)
+    out = _run(tool.execute(command="test command"))
+    assert out.ok is True and str(out) == "Exit code: 0" and reads == []
+    # The control: the same tool reads the file once the host records it.
+    records.append(FileWrite(path=str(target), created=True, size=24))
+    _run(tool.execute(command="test command"))
+    assert reads == [target]
 
 
 @pytest.mark.parametrize("kind", ["timeout", "exception"])
@@ -247,15 +251,15 @@ def test_exec_post_command_checker_failure_keeps_original_exit_and_output(tmp_pa
     assert out.ok is False
 
 
-def test_exec_refused_command_does_not_scan_the_working_directory(tmp_path, monkeypatch):
+def test_exec_refused_command_takes_no_diagnostics(tmp_path, monkeypatch):
     tool = _diagnostic_tool(tmp_path)
     calls = []
 
-    async def listing(root):
-        calls.append(root)
-        return {}
+    async def diagnose(*args):
+        calls.append(args)
+        return "unexpected"
 
-    monkeypatch.setattr(tool, "_listing", listing)
+    monkeypatch.setattr(tool, "_diagnose_writes", diagnose)
     monkeypatch.setattr(tool, "_guard_command", lambda *args: "refused for this test")
     out = _run(tool.execute(command="echo refused"))
     assert not calls and out.blocks_call
@@ -380,56 +384,40 @@ def test_exec_diagnostics_skip_symlinks_cache_and_non_python_files(tmp_path):
     outside = tmp_path / "outside.py"
     outside.write_text("value = external_missing\n")
     try:
-        (home / "link.py").symlink_to(outside)
+        (tmp_path / "probe_link.py").symlink_to(outside)
     except (OSError, NotImplementedError):
         pytest.skip("This host cannot create the symlink fixture")
-    out = str(
-        _run(
-            tool.execute(
-                command=_write_command(tmp_path, {".venv/cached.py": "x = cached_missing\n", "text.txt": "def f(:\n"})
-            )
-        )
+    command = _python_command(
+        tmp_path,
+        "import os\n"
+        "from pathlib import Path\n"
+        f"os.symlink({str(outside)!r}, 'link.py')\n"
+        "Path('.venv').mkdir()\n"
+        "Path('.venv/cached.py').write_text('x = cached_missing\\n')\n"
+        "Path('text.txt').write_text('def f(:\\n')\n"
+        "Path('shown.py').write_text('y = shown_missing\\n')\n",
     )
-    assert "Python diagnostics" not in out
-
-
-def test_exec_coding_snapshot_deadline_discards_partial_results(tmp_path, monkeypatch):
-    from code_flow.tools import workspace_scan
-
-    (tmp_path / "a.py").touch()
-    (tmp_path / "b.py").touch()
-    ticks = iter([0, 0, 2])
-    monkeypatch.setattr(workspace_scan, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
-    assert workspace_scan.take(tmp_path, deadline=1) is None
-    monkeypatch.setattr(workspace_scan, "time", SimpleNamespace(monotonic=lambda: 0))
-    assert len(workspace_scan.take(tmp_path, deadline=1)) == 2
-
-
-def test_exec_coding_snapshot_entry_limit_and_invalid_directory(tmp_path, monkeypatch):
-    from code_flow.tools import workspace_scan
-
-    (tmp_path / "a.py").touch()
-    (tmp_path / "b.py").touch()
-    monkeypatch.setattr(workspace_scan, "MAX_ENTRIES", 1)
-    assert workspace_scan.take(tmp_path, deadline=float("inf")) is None
-    assert workspace_scan.take(tmp_path / "missing", deadline=float("inf")) is None
+    out = str(_run(tool.execute(command=command)))
+    assert (home / "link.py").is_symlink()
+    assert "shown_missing" in out
+    assert "external_missing" not in out and "cached_missing" not in out and "text.txt" not in out
 
 
 @pytest.mark.parametrize("params", [{"machine": "elsewhere"}, {"run_in_background": True}])
-def test_exec_nonlocal_or_background_commands_do_not_take_local_diagnostic_snapshots(tmp_path, monkeypatch, params):
+def test_exec_nonlocal_or_background_commands_take_no_local_diagnostics(tmp_path, monkeypatch, params):
     from raven.contracts.tool import ToolOutput
 
     tool = _diagnostic_tool(tmp_path)
     calls = []
 
-    async def listing(root):
-        calls.append(root)
-        return {}
+    async def diagnose(*args):
+        calls.append(args)
+        return "unexpected"
 
     async def host(*args, **kwargs):
         return ToolOutput("host response", ok=True)
 
-    monkeypatch.setattr(tool, "_listing", listing)
+    monkeypatch.setattr(tool, "_diagnose_writes", diagnose)
     monkeypatch.setattr(TrunkExecTool, "execute", host)
     assert str(_run(tool.execute(command="test command", **params))) == "host response"
     assert calls == []

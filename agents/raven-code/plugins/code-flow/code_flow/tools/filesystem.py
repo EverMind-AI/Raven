@@ -24,16 +24,6 @@ from raven.agent.tools import filesystem as trunk
 from raven.contracts.tool import FileChange, ToolResult
 
 
-def python_syntax_note(fp: Path, text: str) -> str:
-    """Post-write syntax verdict for ``.py`` files, appended to the result.
-
-    Deterministic and in-band: a write or edit that leaves the file
-    unparseable is told so in the same tool result, costing zero extra
-    rounds. Syntax only -- a line that crashes at runtime still needs tests.
-    """
-    return PythonDiagnostics(lint=False).note(fp, text)
-
-
 def _append_note(result: str | ToolResult, note: str) -> str | ToolResult:
     if not note:
         return result
@@ -428,5 +418,4 @@ __all__ = [
     "ReadFileTool",
     "ReadLedger",
     "WriteFileTool",
-    "python_syntax_note",
 ]

@@ -59,7 +59,6 @@ from loguru import logger
 from code_flow.tools import workspace_scan
 from code_flow.tools.diagnostic_workers import MAX_WORKERS, WORKERS
 from code_flow.tools.diagnostics import UNKNOWN, PythonDiagnostics
-from raven.agent.tools import snapshot
 from raven.agent.tools.shell import ExecTool
 from raven.contracts.tool import ToolOutput, ToolResult
 from raven.sandbox.direct_executor import DirectExecutor
@@ -315,28 +314,12 @@ class CodeExecTool(ExecTool):
         # The loop's backstop above the executor's own timeout, as trunk sets it.
         self.timeout_seconds = float(max_timeout + 60)
 
-    async def _listing(self, root: Path) -> snapshot.Snapshot | None:
-        try:
-            deadline = time.monotonic() + _SCAN_WAIT_SECONDS
-            return await WORKERS.run(
-                lambda: workspace_scan.take(root, deadline=deadline),
-                timeout=_SCAN_WAIT_SECONDS,
-            )
-        except Exception:  # noqa: BLE001 - diagnostics must not prevent the command from running
-            return None
-
-    async def _diagnose_writes(self, root: Path, before: snapshot.Snapshot | None, out: str | ToolResult) -> str:
+    async def _diagnose_writes(self, root: Path, out: str | ToolResult) -> str:
         if self._shadow is None or (shadow := self._shadow(root)) is None:
             return ""
-        written = getattr(out, "written", ())
-        if self.record_writes:
-            candidates = [(Path(item.path), None if item.created else UNKNOWN) for item in written]
-        else:
-            if before is None:
-                return ""
-            after = await self._listing(root)
-            created, modified, _ = snapshot.diff(before, after)
-            candidates = [(Path(path), None) for path in created] + [(Path(path), UNKNOWN) for path in modified]
+        # Only measure_writes hands this tool a visibility hook, and it turns
+        # the host's write record on with it: the record is the one source.
+        candidates = [(Path(item.path), None if item.created else UNKNOWN) for item in getattr(out, "written", ())]
         if not candidates:
             return ""
         deadline = time.monotonic() + _SCAN_WAIT_SECONDS
@@ -414,15 +397,6 @@ class CodeExecTool(ExecTool):
         inspect_writes = (
             self._python_diagnostics and not machine and not run_in_background and not self._executor.is_sandboxed
         )
-        root = Path(self._cwd_for(working_dir))
-        if inspect_writes and self._guard_command(command, str(root)):
-            inspect_writes = False
-        if inspect_writes:
-            try:
-                inspect_writes = self._shadow is not None and self._shadow(root) is not None
-            except Exception:  # noqa: BLE001 - unavailable visibility must not prevent the command
-                inspect_writes = False
-        before = await self._listing(root) if inspect_writes and not self.record_writes else None
         if timeout is not None and not machine and not run_in_background and timeout > self._MAX_TIMEOUT:
             note = (
                 f"[note: timeout {timeout}s clamped to the {self._MAX_TIMEOUT}s ceiling; for longer "
@@ -438,10 +412,9 @@ class CodeExecTool(ExecTool):
             **kwargs,
         )
         if inspect_writes and isinstance(out, (ToolOutput, ToolResult)) and not out.blocks_call:
+            root = Path(self._cwd_for(working_dir))
             try:
-                diagnostics = await asyncio.wait_for(
-                    self._diagnose_writes(root, before, out), timeout=_DIAGNOSTIC_WAIT_SECONDS
-                )
+                diagnostics = await asyncio.wait_for(self._diagnose_writes(root, out), timeout=_DIAGNOSTIC_WAIT_SECONDS)
             except Exception as exc:  # noqa: BLE001 - never replace a completed command's output with a checker error
                 logger.debug("code-flow: post-exec diagnostics unavailable: {}", exc)
             else:
