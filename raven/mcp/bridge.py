@@ -68,6 +68,36 @@ async def _pump(reader: asyncio.StreamReader, write: "BinaryIO | asyncio.StreamW
             write.flush()
 
 
+class _StdinTransport(asyncio.ReadTransport):
+    """Pass StreamReader backpressure and shutdown to the Windows stdin worker."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.ready = threading.Event()
+        self.ready.set()
+        self._stopped = threading.Event()
+        self._reading = True
+
+    def is_reading(self) -> bool:
+        return self._reading and not self.is_closing()
+
+    def pause_reading(self) -> None:
+        self._reading = False
+        self.ready.clear()
+
+    def resume_reading(self) -> None:
+        if not self.is_closing():
+            self._reading = True
+            self.ready.set()
+
+    def is_closing(self) -> bool:
+        return self._stopped.is_set()
+
+    def close(self) -> None:
+        self._stopped.set()
+        self.ready.set()
+
+
 @contextlib.asynccontextmanager
 async def _stdin_reader() -> AsyncIterator[asyncio.StreamReader]:
     """Read inherited stdin without keeping the process alive after a disconnect."""
@@ -85,12 +115,25 @@ async def _stdin_reader() -> AsyncIterator[asyncio.StreamReader]:
     # raw descriptor neither holds a buffered-stdio lock nor delays exit while
     # stdin stays open after the endpoint dies, as a default-executor job would.
     fd = sys.stdin.fileno()
-    stopped = threading.Event()
+    transport = _StdinTransport()
+    reader.set_transport(transport)
+
+    def deliver(chunk: bytes) -> None:
+        if not transport.is_closing():
+            reader.feed_data(chunk)
+            if transport.is_reading():
+                transport.ready.set()
 
     def feed() -> None:
         try:
-            while not stopped.is_set() and (chunk := os.read(fd, _READ_CHUNK)):
-                loop.call_soon_threadsafe(reader.feed_data, chunk)
+            while True:
+                # Acknowledge delivery before reading again: queued callbacks
+                # would otherwise bypass the reader's buffer limit.
+                transport.ready.wait()
+                transport.ready.clear()
+                if transport.is_closing() or not (chunk := os.read(fd, _READ_CHUNK)):
+                    break
+                loop.call_soon_threadsafe(deliver, chunk)
         except (OSError, RuntimeError):
             pass
         finally:
@@ -101,7 +144,7 @@ async def _stdin_reader() -> AsyncIterator[asyncio.StreamReader]:
     try:
         yield reader
     finally:
-        stopped.set()
+        transport.close()
 
 
 async def run_bridge(socket_path: str, stdout: BinaryIO) -> int:
