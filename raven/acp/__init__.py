@@ -36,9 +36,9 @@ exists under :mod:`raven.acp_client` and is not this. The two share only the wir
 layer in :mod:`raven.acp_client.protocol`, which is imported rather than copied.
 
 :mod:`raven.acp.mirasim` is a second agent served over the same channel: not
-raven, but an agent Mirasim runs, answered one ``mirasim ui-cli`` command at a
-time. It reuses :mod:`raven.acp.stdio` and :mod:`raven.acp.protocol` and none of
-the layers above them.
+raven, but an agent Mirasim runs, answered over the Mirasim host's own protocol.
+It reuses :mod:`raven.acp.stdio` and :mod:`raven.acp.protocol` and none of the
+layers above them.
 """
 
 from typing import Any
@@ -48,9 +48,8 @@ __all__ = ["MAX_FRAME_BYTES", "claim_stdout", "read_frames", "write_frame"]
 
 def __getattr__(name: str) -> Any:
     # Resolved on first use rather than at import: :mod:`raven.acp.stdio` reaches
-    # the ACP client and Raven's config schema, and the Mirasim command guard --
-    # a process of its own for every ``ui-cli`` command -- imports this package
-    # and needs none of them.
+    # the ACP client and Raven's config schema, which a module of this package
+    # that only needs the protocol constants should not pay for.
     if name in __all__:
         from raven.acp import stdio
 

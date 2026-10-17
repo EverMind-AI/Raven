@@ -175,7 +175,9 @@ executable as well, so a machine without it reports the row absent with the
 install beside it, instead of offering a connect that fails a minute later
 inside the adapter with the same sentence. Listed only where the shim really
 does reach for a local install: ``pi-acp`` launches ``pi`` and fails with
-"executable not found" without it, and every Mirasim row runs ``mirasim``. The
+"executable not found" without it. A Mirasim row asks after ``mirasim`` as the
+sign that Mirasim is installed: the adapter itself runs no executable, it
+reaches the Mirasim host already running on the machine. The
 other two shims bring their agent along -- ``codex-acp`` ships it as its own binary, and ``claude-agent-acp``
 runs the CLI its ``@anthropic-ai/claude-agent-sdk`` pin carries as a
 per-platform optional dependency (read from the 0.66.0, 0.79.0 and 0.81.1

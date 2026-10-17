@@ -180,7 +180,7 @@ your local installation has passed a live task.
 | `hermes` | `hermes acp --accept-hooks` | Native authentication; the flag accepts previously unseen shell hooks |
 | `openclaw` | `openclaw acp` | Its gateway and authentication; startup has a longer handshake allowance |
 | `mirothinker` | OpenAI-compatible HTTP | Endpoint/model/key; preset opts out of stateful replay |
-| `mirasim_<agent>` | Raven's own ACP adapter over `mirasim ui-cli` | Mirasim installed, and the agent installed inside it; session MCP withheld via `sessionMcp: false` |
+| `mirasim_<agent>` | Raven's own ACP adapter over the Mirasim host's protocol | Mirasim running on this machine, and the agent installed inside it; session MCP withheld via `sessionMcp: false` |
 
 GitHub Copilot, Qwen Code, CodeBuddy, Qoder, Grok Build, Kimi Code, and Pi also
 have preset entries. Adapter versions and exact commands are maintained in
@@ -200,12 +200,26 @@ grouped under the agent's own name, `Mirasim` (the platform's quota) and `Own ke
 (keys you added to Mirasim). Mirasim's platform also runs the own models of Claude
 Code, Codex, Kimi Code and ZCode CLI, so for those four each such model is listed in
 both of the first two groups: under the agent's name it runs on your own account,
-under `Mirasim` on the platform's quota. Choosing the other one for a session that
-already has a conversation moves that conversation to the other route before its
-next turn. A session with no model chosen runs on Mirasim's default for the agent,
-route included. Each turn's
-reply arrives whole when the turn settles. What a turn stops to ask is put to
-Raven while the turn waits: a tool approval as a permission request, and a
+under `Mirasim` on the platform's quota. Every turn names the route its model
+runs on, so choosing the other one moves an existing conversation to that route
+from its next turn. A session with no model chosen runs on Mirasim's default for
+the agent, route included.
+
+The adapter is one more client of the Mirasim host already running on the
+machine -- the desktop app's, or the one Mirasim keeps on a machine it reaches
+over SSH -- so it starts nothing of its own, and Raven's turns show in the Mirasim
+app as they run. A turn streams: its thinking, text, tool calls, plan and the
+files it delivers reach Raven as they happen, and the context it used is reported
+when it ends. A cancel stops the turn. Text sent to a running turn is taken into
+it for Claude Code, Codex, DSH, Pi and ZCode CLI, and images reach Claude Code
+inline; other agents get an image as a file path. Sessions can be listed --
+including conversations begun in Mirasim itself -- resumed, loaded with their
+whole history, closed and deleted; deleting one also deletes its Mirasim
+conversation. A turn Mirasim starts on its own in a session Raven holds, such as a
+background job's report, is forwarded to Raven too. When the host listens
+somewhere the adapter does not look, `RAVEN_MIRASIM_HOST` names it: `unix:<path>`,
+or a loopback port. What a turn stops to ask is put to Raven while the turn
+waits: a tool approval as a permission request, and a
 question -- Claude Code's `AskUserQuestion` when Mirasim's `askTool` setting is
 on, or an MCP server's form -- as an elicitation, answered by you or by Raven's
 question autofill. A client without forms has the question skipped and named in

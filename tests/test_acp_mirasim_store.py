@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from raven.acp.mirasim import store as store_mod
-from raven.acp.mirasim.store import Binding, BindingStore, server_workdir, store_path
+from raven.acp.mirasim.store import Binding, BindingStore, store_dir, store_path
 
 
 def test_a_record_written_by_one_store_is_read_by_another(tmp_path: Path) -> None:
@@ -16,22 +16,37 @@ def test_a_record_written_by_one_store_is_read_by_another(tmp_path: Path) -> Non
     assert found is not None
     assert (found.cwd, found.mirasim_key) == ("/w", "sess-1")
     assert found.used_at_ms > 0
-    # Only what continuing needs: no model and no effort, which Raven re-asserts.
-    assert set(json.loads(path.read_text())["sessions"]["acp-1"]) == {"cwd", "mirasimKey", "route", "usedAtMs"}
+    # Only what continuing needs: no model, no effort and no route, which every turn names.
+    assert set(json.loads(path.read_text())["sessions"]["acp-1"]) == {"cwd", "mirasimKey", "usedAtMs"}
 
 
-def test_the_route_a_conversation_is_on_is_kept_with_it(tmp_path: Path) -> None:
+def test_a_record_written_with_a_route_still_reads_and_drops_it_on_the_next_write(tmp_path: Path) -> None:
     path = tmp_path / "claude.json"
-    BindingStore(path).put(Binding(session_id="acp-1", cwd="/w", mirasim_key="sess-1", route="platform"))
-    found = BindingStore(path).get("acp-1")
-    assert found is not None and found.route == "platform"
-    # Anything else -- a record from before routes were kept, a value this
-    # adapter never writes -- says nothing about the route, so it reads as unknown.
-    doc = json.loads(path.read_text())
-    doc["sessions"]["acp-2"] = {"cwd": "/w", "mirasimKey": "sess-2", "usedAtMs": doc["sessions"]["acp-1"]["usedAtMs"]}
-    doc["sessions"]["acp-1"]["route"] = "cloud"
-    path.write_text(json.dumps(doc))
-    assert [BindingStore(path).get(sid).route for sid in ("acp-1", "acp-2")] == [None, None]
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "sessions": {"acp-1": {"cwd": "/w", "mirasimKey": "s", "route": "platform", "usedAtMs": 2**62}},
+            }
+        )
+    )
+    store = BindingStore(path)
+    found = store.get("acp-1")
+    assert found is not None and found.mirasim_key == "s"
+    store.put(found)
+    assert "route" not in json.loads(path.read_text())["sessions"]["acp-1"]
+
+
+def test_each_recorded_conversation_maps_back_to_the_session_that_continues_it(tmp_path: Path, monkeypatch) -> None:
+    store = BindingStore(tmp_path / "claude.json")
+    assert store.by_key() == {}
+    store.put(Binding(session_id="acp-1", cwd="/w", mirasim_key="claude:a"))
+    store.put(Binding(session_id="acp-2", cwd="/w"))
+    store.put(Binding(session_id="acp-3", cwd="/w", mirasim_key="claude:c"))
+    assert store.by_key() == {"claude:a": "acp-1", "claude:c": "acp-3"}
+    later = store_mod._now_ms() + store_mod._RETENTION_MS + 1
+    monkeypatch.setattr(store_mod, "_now_ms", lambda: later)
+    assert store.by_key() == {}
 
 
 def test_a_record_past_retention_is_gone_and_the_next_write_drops_it(tmp_path: Path, monkeypatch) -> None:
@@ -71,9 +86,9 @@ def test_an_agent_has_a_file_of_its_own_under_the_raven_home(tmp_path: Path, mon
     assert store_path("claude") != store_path("codex")
 
 
-def test_the_server_directory_is_one_folder_under_the_raven_home(tmp_path: Path, monkeypatch) -> None:
+def test_every_agents_records_live_in_one_folder_under_the_raven_home(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
-    assert server_workdir() == tmp_path / "home" / "subagent_sessions" / "mirasim"
+    assert store_dir() == tmp_path / "home" / "subagent_sessions" / "mirasim"
 
 
 def test_a_row_without_a_directory_is_no_record(tmp_path: Path) -> None:
