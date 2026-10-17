@@ -539,29 +539,38 @@ async def end_tree(proc: asyncio.subprocess.Process, *, grace_s: float = TREE_GR
     a grandchild the snapshot missed still goes with its group. ``proc`` itself
     shares this adapter's group and is signalled by pid, which is also why that
     one group is never signalled whole: it holds this process too.
+
+    The tree is read again before the second signal. An agent that outlives the
+    first -- Claude Code does -- can start a tool meanwhile in a session of its
+    own, which is in no group signalled so far.
     """
     if os.name == "nt":
         await _taskkill(proc)
         return
     tree = await asyncio.to_thread(descendants, proc.pid)
-    own_group = os.getpgrp()
-    groups = {pgid for _, pgid in tree if pgid not in (own_group, 0)}
-    loose = [pid for pid, pgid in tree if pgid == own_group]
-
-    def signal_all(sig: signal.Signals) -> None:
-        for pid in (proc.pid, *loose):
-            _quietly(os.kill, pid, sig)
-        for pgid in groups:
-            _quietly(os.killpg, pgid, sig)
-
-    signal_all(signal.SIGTERM)
+    signal_tree(tree, signal.SIGTERM, pid=proc.pid)
     loop = asyncio.get_running_loop()
     deadline = loop.time() + grace_s
     while loop.time() < deadline and (proc.returncode is None or any(_alive(pid) for pid, _ in tree)):
         await asyncio.sleep(0.05)
     if proc.returncode is None or any(_alive(pid) for pid, _ in tree):
-        signal_all(signal.SIGKILL)
+        tree += await asyncio.to_thread(descendants, proc.pid)
+        signal_tree(tree, signal.SIGKILL, pid=proc.pid)
     await exit_status(proc)
+
+
+def signal_tree(tree: list[tuple[int, int]], sig: signal.Signals, *, pid: int | None = None) -> None:
+    """Send ``sig`` to each ``(pid, pgid)`` of ``tree``, and to ``pid`` when one is given.
+
+    A process in a group of its own is signalled through the group, so whatever
+    it started there goes too. One in this process's group is signalled alone,
+    since signalling that group would reach this process as well.
+    """
+    own_group = os.getpgrp()
+    for target in (*(() if pid is None else (pid,)), *(child for child, pgid in tree if pgid == own_group)):
+        _quietly(os.kill, target, sig)
+    for pgid in {pgid for _, pgid in tree if pgid not in (own_group, 0)}:
+        _quietly(os.killpg, pgid, sig)
 
 
 def descendants(root: int) -> list[tuple[int, int]]:
@@ -691,6 +700,7 @@ __all__ = [
     "server_port",
     "session_gone",
     "sessions_args",
+    "signal_tree",
     "snapshot_args",
     "snapshot_of",
 ]

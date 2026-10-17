@@ -277,6 +277,130 @@ async def test_a_cancel_ends_the_command_and_the_grandchild_in_its_own_session(t
     assert _gone(grandchild), "the grandchild outlived the cancel"
 
 
+_BUSY_AGENT = """
+import os, signal, subprocess, sys, time
+state = sys.argv[1]
+if sys.argv[2:] == ["agent"]:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    while True:
+        tool = subprocess.Popen(["sleep", "300"], start_new_session=True)
+        with open(os.path.join(state, "tools"), "a") as tools:
+            tools.write(f"{tool.pid}\\n")
+        time.sleep(0.1)
+subprocess.Popen([sys.executable, __file__, state, "agent"], start_new_session=True)
+while True:
+    time.sleep(0.2)
+"""
+
+
+@posix_only
+@pytest.mark.slow
+async def test_a_cancel_ends_the_tools_an_agent_starts_while_it_is_being_stopped(tmp_path: Path) -> None:
+    """Measured for claude: an agent outlives SIGTERM, and a tool it starts meanwhile, in a
+    session of its own, is in no tree read before the first signal."""
+    script = tmp_path / "busy.py"
+    script.write_text(_BUSY_AGENT)
+    tools = tmp_path / "tools"
+    invocation = Invocation([sys.executable, str(script), str(tmp_path)], env=dict(os.environ), cwd=None)
+    running = asyncio.create_task(invocation.run())
+    pids: list[int] = []
+    try:
+        deadline = time.monotonic() + 15
+        while (not tools.exists() or len(tools.read_text().split()) < 3) and time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
+        await invocation.cancel()
+        await asyncio.wait_for(running, 15)
+        await asyncio.sleep(0.5)
+        pids = [int(pid) for pid in tools.read_text().split()]
+        survivors = [pid for pid in pids if not _gone(pid)]
+        assert len(pids) > 3
+        assert survivors == [], f"{len(survivors)} of {len(pids)} tools outlived the cancel"
+    finally:
+        for pid in pids:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid, 9)
+
+
+_STARTS_ONE_ON_TERM = """
+import os, signal, subprocess, sys, time
+def started(*_):
+    child = subprocess.Popen(["sleep", "300"], start_new_session=True)
+    with open(sys.argv[1], "w") as marker:
+        marker.write(str(child.pid))
+signal.signal(signal.SIGTERM, started)
+with open(sys.argv[1] + ".self", "w") as marker:
+    marker.write(str(os.getpid()))
+while True:
+    time.sleep(0.1)
+"""
+
+
+@posix_only
+@pytest.mark.slow
+async def test_end_tree_reads_the_tree_again_before_its_second_signal(tmp_path: Path) -> None:
+    """A process that outlives the first signal can start another meanwhile, in a session of its own."""
+    marker = tmp_path / "child"
+    proc = await asyncio.create_subprocess_exec(sys.executable, "-c", _STARTS_ONE_ON_TERM, str(marker))
+    child: int | None = None
+    try:
+        await _wait_for_pid(tmp_path / "child.self")
+        await end_tree(proc, grace_s=1)
+        child = await _wait_for_pid(marker, limit=5)
+        deadline = time.monotonic() + 3
+        while not _gone(child) and time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
+        assert _gone(child), "the child started after the first signal outlived the tree"
+    finally:
+        if child is not None:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(child, 9)
+
+
+_LEAVES_A_TOOL_ON_TERM = """
+import os, signal, subprocess, sys, time
+state = sys.argv[1]
+if sys.argv[2:] == ["agent"]:
+    def leave(*_):
+        tool = subprocess.Popen(["sleep", "300"], start_new_session=True)
+        with open(os.path.join(state, "tool"), "w") as marker:
+            marker.write(str(tool.pid))
+        os._exit(0)
+    signal.signal(signal.SIGTERM, leave)
+    with open(os.path.join(state, "agent"), "w") as marker:
+        marker.write(str(os.getpid()))
+    while True:
+        time.sleep(0.1)
+subprocess.Popen([sys.executable, __file__, state, "agent"], start_new_session=True)
+while True:
+    time.sleep(0.2)
+"""
+
+
+@posix_only
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="a child subreaper is Linux's")
+@pytest.mark.slow
+async def test_the_guard_ends_a_tool_whose_agent_died_after_starting_it(tmp_path: Path) -> None:
+    """Orphaned before any second look at the tree could see it: only the guard, as its subreaper, still can."""
+    script = tmp_path / "leaves.py"
+    script.write_text(_LEAVES_A_TOOL_ON_TERM)
+    invocation = Invocation([sys.executable, str(script), str(tmp_path)], env=dict(os.environ), cwd=None)
+    running = asyncio.create_task(invocation.run())
+    tool: int | None = None
+    try:
+        await _wait_for_pid(tmp_path / "agent")
+        await invocation.cancel()
+        await asyncio.wait_for(running, 15)
+        tool = await _wait_for_pid(tmp_path / "tool", limit=5)
+        deadline = time.monotonic() + 3
+        while not _gone(tool) and time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
+        assert _gone(tool), "the tool its agent left behind outlived the cancel"
+    finally:
+        if tool is not None:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(tool, 9)
+
+
 _ADAPTER = """
 import asyncio, sys
 from raven.acp.mirasim.uicli import UiCli, prompt_args
@@ -427,20 +551,40 @@ def test_the_guard_entry_needs_a_command(monkeypatch: pytest.MonkeyPatch) -> Non
 
     assert guard_mod.main([]) == 2
     assert guard_mod.main(["--"]) == 2
-    seen: list[list[str]] = []
+    seen: list[tuple[list[str], bool]] = []
 
-    async def fake(argv: list[str]) -> int:
-        seen.append(argv)
+    async def fake(argv: list[str], *, subreaper: bool = False) -> int:
+        seen.append((argv, subreaper))
         return 0
 
     monkeypatch.setattr(guard_mod, "guard", fake)
+    monkeypatch.setattr(guard_mod, "_become_subreaper", lambda: True)
     assert guard_mod.main(["--", "mirasim", "ui-cli", "agents"]) == 0
-    assert seen == [["mirasim", "ui-cli", "agents"]]
+    assert seen == [(["mirasim", "ui-cli", "agents"], True)]
     monkeypatch.setattr(sys, "argv", ["guard"])
     monkeypatch.delitem(sys.modules, "raven.acp.mirasim.guard")
     with pytest.raises(SystemExit) as stopped:
         runpy.run_module("raven.acp.mirasim.guard", run_name="__main__")
     assert stopped.value.code == 2
+
+
+def test_only_linux_is_asked_to_make_the_guard_a_subreaper(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Called by hand here, through a stand-in libc, so this test process is never made one."""
+    from raven.acp.mirasim import guard as guard_mod
+
+    asked: list[tuple[int, ...]] = []
+
+    class Libc:
+        def prctl(self, *args: int) -> int:
+            asked.append(args)
+            return 0
+
+    monkeypatch.setattr(guard_mod.ctypes, "CDLL", lambda *args, **kwargs: Libc())
+    monkeypatch.setattr(guard_mod.sys, "platform", "darwin")
+    assert guard_mod._become_subreaper() is False
+    monkeypatch.setattr(guard_mod.sys, "platform", "linux")
+    assert guard_mod._become_subreaper() is True
+    assert asked == [(36, 1, 0, 0, 0)]
 
 
 @posix_only

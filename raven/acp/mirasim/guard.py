@@ -19,18 +19,23 @@ of the output, which does not come while any copy of the pipe is open. And
 reach it as a failed write in the instant before it reached the guard as end
 of file; a ``ui-cli`` that dies of that leaves its agent outside any tree the
 guard can read.
+
+On Linux the guard is also its command's subreaper. A process the agent starts
+while it is being stopped, in a session of its own, passes to the guard rather
+than to init when the agent dies, and the guard ends it with the rest.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import ctypes
 import os
 import signal
 import sys
 import threading
 
-from raven.acp.mirasim.uicli import end_tree, exit_status
+from raven.acp.mirasim.uicli import descendants, end_tree, exit_status, signal_tree
 
 DRAIN_S = 1.0
 """How long output is still relayed after the command has exited or been ended.
@@ -40,6 +45,32 @@ command's output can hold the pipe open for as long as it lives, and the
 answer is not kept waiting for it."""
 
 _CHUNK = 64 * 1024
+
+_PR_SET_CHILD_SUBREAPER = 36
+
+_ADOPTED_ROUNDS = 10
+"""How many times the guard looks for processes it adopted, each found one ended
+first: a process ended in one round can leave children of its own to the next."""
+
+
+def _become_subreaper() -> bool:
+    """Make this process the parent its command's orphans pass to; whether it took. Linux only."""
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        return ctypes.CDLL(None, use_errno=True).prctl(_PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) == 0
+    except (OSError, AttributeError):
+        return False
+
+
+async def _end_adopted() -> None:
+    """End every process this subreaper adopted from the command's tree."""
+    for _ in range(_ADOPTED_ROUNDS):
+        adopted = await asyncio.to_thread(descendants, os.getpid())
+        if not adopted:
+            return
+        signal_tree(adopted, signal.SIGKILL)
+        await asyncio.sleep(0.05)
 
 
 def _watch_hangup(fd: int, loop: asyncio.AbstractEventLoop, hangup: asyncio.Event) -> None:
@@ -70,8 +101,14 @@ async def _relay(source: asyncio.StreamReader, fd: int) -> None:
                 delivering = False
 
 
-async def guard(argv: list[str], *, stdin_fd: int = 0, stdout_fd: int = 1, stderr_fd: int = 2) -> int:
-    """Run ``argv`` until it exits or ``stdin_fd`` closes, and answer with its exit status."""
+async def guard(
+    argv: list[str], *, stdin_fd: int = 0, stdout_fd: int = 1, stderr_fd: int = 2, subreaper: bool = False
+) -> int:
+    """Run ``argv`` until it exits or ``stdin_fd`` closes, and answer with its exit status.
+
+    ``subreaper`` says this process adopts the command's orphans (:func:`main`
+    makes it one), so ending the command ends whatever it adopted as well.
+    """
     loop = asyncio.get_running_loop()
     hangup = asyncio.Event()
     threading.Thread(target=_watch_hangup, args=(stdin_fd, loop, hangup), daemon=True).start()
@@ -95,6 +132,8 @@ async def guard(argv: list[str], *, stdin_fd: int = 0, stdout_fd: int = 1, stder
     await asyncio.wait({exited, stopped}, return_when=asyncio.FIRST_COMPLETED)
     if not exited.done():
         await end_tree(proc)
+        if subreaper:
+            await _end_adopted()
     stopped.cancel()
     try:
         await asyncio.wait_for(relays, DRAIN_S)
@@ -111,7 +150,8 @@ def main(argv: list[str] | None = None) -> int:
     if not args:
         print("usage: python -m raven.acp.mirasim.guard -- <command> [arg ...]", file=sys.stderr)
         return 2
-    return asyncio.run(guard(args))
+    # Here rather than in guard(), which also runs inside other processes.
+    return asyncio.run(guard(args, subreaper=_become_subreaper()))
 
 
 if __name__ == "__main__":
