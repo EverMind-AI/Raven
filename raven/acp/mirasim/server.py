@@ -332,8 +332,13 @@ class MirasimAgent:
         A failed re-read keeps the copy in hand: the menus a session was opened
         with are better than refusing the session over a read it did not need.
         Menus left unread count as stale, and no read starts within
-        :data:`CATALOG_RETRY_S` of one that failed.
+        :data:`CATALOG_RETRY_S` of one that failed. ``allow_stale`` takes the
+        copy in hand without queueing behind a read another session started: a
+        turn waiting there could not settle a cancel within the five seconds
+        Raven gives it.
         """
+        if allow_stale and not refresh and self._catalog is not None:
+            return self._catalog
         async with self._catalog_lock:
             held = self._catalog
             if held is not None:

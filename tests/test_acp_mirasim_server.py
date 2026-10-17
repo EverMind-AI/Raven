@@ -676,6 +676,14 @@ async def test_the_pause_after_a_slow_failure_counts_from_when_it_failed(
     assert len(reads) == 1
 
 
+async def test_a_turn_does_not_wait_for_another_sessions_menu_read(harness: Harness) -> None:
+    """A read can take ui-cli's whole timeout; a turn queued behind it settles a cancel too late for Raven."""
+    sid = await opened(harness)
+    async with harness.agent._catalog_lock:
+        reply = await asyncio.wait_for(harness.ok("session/prompt", sessionId=sid, prompt=text("hi")), 8)
+    assert reply == {"stopReason": "end_turn"}
+
+
 async def test_an_effort_mirasim_added_since_the_menus_were_read_is_accepted(harness: Harness) -> None:
     """The adapter reads Mirasim's menus again before refusing an effort it does not know."""
     sid = (await harness.ok("session/new", cwd=str(harness.tmp_path), mcpServers=[]))["sessionId"]
