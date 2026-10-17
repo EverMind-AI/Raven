@@ -545,10 +545,10 @@ async def test_trackable_asks_about_a_name_as_given_and_precomposed(workspace):
     as given is asked about too: NFC also rewrites a compatibility ideograph,
     which git leaves alone. Judged on the rules alone."""
     svc = CheckpointService(workspace)
-    composed, hangul, ideograph = "secret-café.py", "한.py", "豈.py"
+    composed, hangul, ideograph = "secret-caf\u00e9.py", "\ud55c.py", "\uf900.py"
     (workspace / ".gitignore").write_text(f"{composed}\n{hangul}\n{ideograph}\n", encoding="utf-8")
     decomposed = [str(workspace / unicodedata.normalize("NFD", name)) for name in (composed, hangul)]
-    unruled = str(workspace / unicodedata.normalize("NFD", "notes-café.py"))
+    unruled = str(workspace / unicodedata.normalize("NFD", "notes-caf\u00e9.py"))
     assert all(unicodedata.normalize("NFC", path) != path for path in [*decomposed, unruled])
     assert unicodedata.normalize("NFC", ideograph) != ideograph
 
@@ -561,9 +561,9 @@ async def test_a_file_the_snapshot_leaves_out_is_never_trackable(workspace):
     decomposed name under a precomposed rule is left out and must not be
     vouched for."""
     svc = CheckpointService(workspace)
-    composed = "secret-café.py"
+    composed = "secret-caf\u00e9.py"
     (workspace / ".gitignore").write_text(f"{composed}\n*.log\n", encoding="utf-8")
-    unruled = unicodedata.normalize("NFD", "notes-café.py")
+    unruled = unicodedata.normalize("NFD", "notes-caf\u00e9.py")
     names = [unicodedata.normalize("NFD", composed), "build.log", unruled]
     for name in names:
         (workspace / name).write_text("x\n", encoding="utf-8")
