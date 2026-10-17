@@ -51,6 +51,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import ntpath
 import os
 import re
 import shutil
@@ -317,6 +318,23 @@ class Outcome:
         return ""
 
 
+def _program(name: str, path: str | None) -> str | None:
+    """Where ``name`` runs from, or ``None``.
+
+    On Windows only a native ``.exe`` or ``.com`` counts, the rule Raven's own
+    launcher keeps for turn content (``resolve_program`` in
+    ``raven/agent/subagent/backends/env.py``): CreateProcess runs a ``.bat`` or
+    ``.cmd`` through cmd.exe, which would read every argument -- the turn's own
+    text among them -- as shell syntax.
+    """
+    if sys.platform != "win32":
+        return shutil.which(name, path=path)
+    suffix = ntpath.splitext(name)[1].lower()
+    if suffix:
+        return shutil.which(name, path=path) if suffix in (".exe", ".com") else None
+    return shutil.which(f"{name}.exe", path=path)
+
+
 def _guard_argv(argv: list[str]) -> list[str]:
     return [sys.executable, *_GUARD, *argv]
 
@@ -387,7 +405,13 @@ class Invocation:
     async def _run(self) -> Outcome:
         if self._cancel_requested:
             return Outcome(None, None, "", cancelled=True)
-        if shutil.which(self.argv[0], path=self._env.get("PATH")) is None:
+        path = self._env.get("PATH")
+        if _program(self.argv[0], path) is None:
+            if shutil.which(self.argv[0], path=path) is not None:
+                raise UiCliError(
+                    f"cannot start {self.argv[0]!r}: on Windows only Mirasim's own .exe is run, never a .bat or "
+                    ".cmd, which would pass the turn's text through cmd.exe"
+                )
             raise UiCliError(f"cannot start {self.argv[0]!r}: no such executable")
         with _staged_command(self.argv) as argv:
             return await self._execute(argv)
@@ -468,7 +492,7 @@ class UiCli:
         workdir: str | os.PathLike[str] | None = None,
     ) -> None:
         self.env = child_env(os.environ if env is None else env)
-        self.executable = shutil.which(executable, path=self.env.get("PATH")) or executable
+        self.executable = _program(executable, self.env.get("PATH")) or executable
         self.workdir = os.fspath(workdir) if workdir else None
 
     def start(self, args: Sequence[str], *, cwd: str | None = None, port: int | None = None) -> Invocation:

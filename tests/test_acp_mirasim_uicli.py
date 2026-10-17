@@ -242,6 +242,29 @@ async def test_a_command_that_cannot_start_is_a_uicli_error(tmp_path: Path) -> N
         await cli.version()
 
 
+def _windows_path(monkeypatch: pytest.MonkeyPatch, found: dict[str, str]) -> None:
+    """Windows, as ``shutil.which`` answers there: PATHEXT finds a name as whichever file ``found`` gives."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(uicli, "sys", SimpleNamespace(platform="win32", executable=sys.executable))
+    monkeypatch.setattr(uicli.shutil, "which", lambda name, path=None: found.get(name))
+
+
+def test_windows_takes_only_a_native_mirasim_from_the_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A ``.cmd`` that PATHEXT finds first is passed over for the ``.exe``, as Raven's launcher does for turn content."""
+    _windows_path(monkeypatch, {"mirasim": r"C:\npm\mirasim.cmd", "mirasim.exe": r"C:\Mirasim\mirasim.exe"})
+    assert UiCli(executable="mirasim", env={"PATH": r"C:\npm;C:\Mirasim"}).executable == r"C:\Mirasim\mirasim.exe"
+
+
+async def test_windows_runs_no_turn_through_a_batch_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    """cmd.exe would read every argument of a ``.bat`` or ``.cmd`` -- the turn's own text among them -- as shell syntax."""
+    _windows_path(monkeypatch, {"mirasim": r"C:\npm\mirasim.cmd", r"C:\npm\mirasim.cmd": r"C:\npm\mirasim.cmd"})
+    for executable in ("mirasim", r"C:\npm\mirasim.cmd"):
+        cli = UiCli(executable=executable, env={"PATH": r"C:\npm"})
+        with pytest.raises(UiCliError, match="cmd.exe"):
+            await cli.start(prompt_args(text="a & calc", agent="claude", cwd="C:\\work")).run()
+
+
 async def test_a_cancel_before_the_command_starts_runs_nothing() -> None:
     invocation = Invocation(["/definitely/not/run"], env=dict(os.environ), cwd=None)
     await invocation.cancel()
