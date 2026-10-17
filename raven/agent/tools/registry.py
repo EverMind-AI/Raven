@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.agent import workdir
-from raven.agent.tools.params import cast_params, validate_params
+from raven.agent.tools.params import cast_params, render_param_errors, validate_params
 from raven.contracts.llm_provider import RunMeta, TruncationInfo
 from raven.contracts.tool import RAW_ARGUMENTS_KEY, Continuation, Tool, ToolOutput, ToolResult
 from raven.observability import semconv
@@ -981,7 +981,7 @@ class ToolRegistry:
             # dispatch was briefed to do.
             errors += self._verifier_refusals(name, params)
             if errors:
-                return f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors) + _hint
+                return f"Error: Invalid parameters for tool '{name}':" + render_param_errors(errors) + _hint
 
             # Post-validation, pre-dispatch, and ahead of the plugin gates:
             # platform authority precedes plugin policy. The refusal (or the
