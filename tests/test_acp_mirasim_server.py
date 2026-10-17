@@ -456,6 +456,25 @@ async def test_an_image_reaches_an_agent_that_sees_images_inline(harness: Harnes
     assert sent["prompt"] == "See the attached files." and "paths" not in sent
 
 
+async def test_inline_image_content_is_refused_where_images_are_not_declared_or_not_an_image(
+    harness: Harness,
+) -> None:
+    sid = await harness.new()
+    for block in (
+        {"type": "image", "data": "R0lGODlh", "mimeType": "image/tiff"},
+        {"type": "image", "mimeType": "image/png"},
+    ):
+        error = await harness.refused("session/prompt", sessionId=sid, prompt=[block])
+        assert error["code"] == INVALID_PARAMS and "image/png" in error["message"]
+    harness.use("qwen")
+    sid = await harness.new()
+    error = await harness.refused(
+        "session/prompt", sessionId=sid, prompt=[{"type": "image", "data": "R0lGODlh", "mimeType": "image/gif"}]
+    )
+    assert error["code"] == INVALID_PARAMS and "resource_link" in error["message"]
+    assert harness.prompts() == []
+
+
 async def test_an_image_too_large_or_for_an_agent_not_seen_seeing_images_goes_as_its_path(
     harness: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:

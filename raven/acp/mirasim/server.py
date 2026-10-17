@@ -1435,7 +1435,17 @@ def read_prompt(blocks: Any, *, images: bool) -> PromptInput:
         kind = block.get("type") if isinstance(block, dict) else None
         if kind == "text":
             texts.append(_raw(block.get("text")))
-        elif kind == "image" and isinstance(block.get("data"), str) and _raw(block.get("mimeType")) in _IMAGE_TYPES:
+        elif kind == "image":
+            if not images:
+                raise RefusalError(
+                    INVALID_PARAMS,
+                    "this agent takes no image content (promptCapabilities.image is false); "
+                    "send the picture as a resource_link to its file, which goes as a path",
+                )
+            if not isinstance(block.get("data"), str) or _raw(block.get("mimeType")) not in _IMAGE_TYPES:
+                raise RefusalError(
+                    INVALID_PARAMS, f"an image block carries base64 data and one of {', '.join(sorted(_IMAGE_TYPES))}"
+                )
             attachments.append(f"data:{block['mimeType']};base64,{block['data']}")
         elif kind == "resource_link":
             uri = _raw(block.get("uri"))
