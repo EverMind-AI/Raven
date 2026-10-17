@@ -90,7 +90,14 @@ describe('the tab strip', () => {
     act(() => { fireEvent.scroll(strip) })
     expect(document.querySelectorAll('.trajectory-tab-arrow')).toHaveLength(2)
     expect(scrolled).toEqual(['trajectory-tab-b11'])
-    act(() => { fireEvent.click(q('.trajectory-tab-arrow') as HTMLElement) })
+    /* A nudge changes which arrows are enabled, not whether they show: the
+       reader's own scroll stands. */
+    const arrows = (): HTMLButtonElement[] => [...document.querySelectorAll<HTMLButtonElement>('.trajectory-tab-arrow')]
+    expect(arrows().map((a) => a.disabled)).toEqual([true, false])
+    act(() => { fireEvent.click(arrows()[1]!) })
+    act(() => { fireEvent.scroll(strip) })
+    expect(strip.scrollLeft).toBe(300 * ARROW_STEP)
+    expect(arrows().map((a) => a.disabled)).toEqual([false, false])
     expect(scrolled).toEqual(['trajectory-tab-b11'])
   })
 })
