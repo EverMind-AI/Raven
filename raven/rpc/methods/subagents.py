@@ -27,6 +27,7 @@ from pydantic import ValidationError
 from raven.agent.subagent.backends import acp_snapshot_for, agent_meta
 from raven.agent.subagent.backends.env import refresh_login_shell_env
 from raven.agent.subagent.presets import (
+    BUNDLED_SHIM_PRESETS,
     THIRD_PARTY_SUBAGENT_PRESETS,
     third_party_subagent_preset,
     third_party_subagent_presets,
@@ -542,7 +543,8 @@ def _refuse_unless_it_can_run_there(entry: dict, machine: str, *, remote_cwd: st
     node; an openai preset's endpoint is reached from the machine through an
     ssh tunnel, so it has no directory there, and a ``remote_cwd`` is refused
     with it rather than written and ignored. A built-in agent is Raven's own
-    loop in this process and runs on no other machine. The machine is judged
+    loop in this process and runs on no other machine, and so is a bundled shim
+    (the ``mirasim_*`` presets): its command is this host's own interpreter. The machine is judged
     the way a dispatch judges it (:func:`raven.acp_client.remote.machine`):
     the row registered and usable -- each refusal one sentence,
     with no address in it.
@@ -554,6 +556,12 @@ def _refuse_unless_it_can_run_there(entry: dict, machine: str, *, remote_cwd: st
         raise ConfigValidationError(
             f"preset {shown!r} is a built-in agent: Raven's own loop in this process, which runs on no other "
             "machine; reach the machine from it with exec instead",
+            data={"field": "machine", "machine": machine},
+        )
+    if entry.get("preset") in BUNDLED_SHIM_PRESETS:
+        raise ConfigValidationError(
+            f"preset {shown!r} is served by Raven's own Mirasim adapter, started on this host's interpreter, which "
+            "runs on no other machine",
             data={"field": "machine", "machine": machine},
         )
     if entry.get("kind") == "openai" and remote_cwd:

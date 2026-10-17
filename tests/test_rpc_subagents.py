@@ -3413,6 +3413,18 @@ def test_a_built_in_agent_is_refused_a_machine_in_one_sentence() -> None:
     assert caught.value.data == {"field": "machine", "machine": "ravenx2"}
 
 
+def test_a_mirasim_preset_is_refused_a_machine_in_one_sentence() -> None:
+    """Its command is this host's own interpreter, written in as a path: a machine elsewhere has no such file."""
+    from raven.agent.subagent.presets import third_party_subagent_preset
+    from raven.rpc.methods.subagents import _refuse_unless_it_can_run_there
+
+    with pytest.raises(ConfigValidationError) as caught:
+        _refuse_unless_it_can_run_there(third_party_subagent_preset("mirasim_claude"), "ravenx2")
+
+    assert "Mirasim" in str(caught.value) and "runs on no other machine" in str(caught.value)
+    assert caught.value.data == {"field": "machine", "machine": "ravenx2"}
+
+
 async def test_add_on_a_machine_lends_no_key(
     config_path: Path, registry: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
