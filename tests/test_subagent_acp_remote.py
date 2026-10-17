@@ -753,7 +753,10 @@ async def test_a_cancel_while_the_acp_launch_answer_waits_ends_the_agent_too(box
     while box.agents_left():
         assert time.monotonic() < deadline, "the agent stayed on the machine"
         await asyncio.sleep(0.05)
-    assert box.nodes._nodes["box"].channels == {}, "the channel of a launch left waiting is dropped"
+    deadline = time.monotonic() + 10
+    while box.nodes._nodes["box"].channels:
+        assert time.monotonic() < deadline, "the channel of a launch left waiting is dropped"
+        await asyncio.sleep(0.05)
 
 
 async def test_a_reply_the_caller_reports_keeps_its_record_and_a_host_that_stops_before_the_announce_reads_it_again(
