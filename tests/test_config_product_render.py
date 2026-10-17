@@ -888,6 +888,46 @@ def test_a_read_only_prompt_regenerates_once_it_is_writable_again(tmp_path):
     assert target.read_text() == "v2"
 
 
+def _windows_dacl(path):
+    """The DACL's flags and its set of ACE strings, read the way an operator would."""
+    sddl = subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", f"(Get-Acl -LiteralPath '{path}').Sddl"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    dacl = sddl[sddl.index("D:") + 2 :]
+    return dacl[: dacl.find("(")], set(re.findall(r"\(([^)]*)\)", dacl))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows ACLs")
+def test_a_private_windows_prompt_keeps_its_own_dacl_when_regenerated_and_backed_up(tmp_path):
+    """A new Windows file takes its folder's inherited ACL, and os.replace
+    moves the tmp's onto the target, so a prompt kept private in a folder
+    every local user may read came back readable by all of them."""
+    folder = tmp_path / "profile"
+    folder.mkdir()
+    subprocess.run(["icacls", str(folder), "/grant", "*S-1-5-32-545:(OI)(CI)(RX)"], capture_output=True, check=True)
+    target = folder / "agent.md"
+    _write(target, "v1")
+    user = subprocess.run(["whoami", "/user", "/fo", "csv", "/nh"], capture_output=True, text=True, check=True)
+    sid = user.stdout.strip().split(",")[-1].strip('"')
+    subprocess.run(
+        ["icacls", str(target), "/inheritance:r", "/grant:r", f"*{sid}:(F)"], capture_output=True, check=True
+    )
+    flags, aces = _windows_dacl(target)
+    assert "P" in flags and not any(ace.endswith(";BU") for ace in aces), "the setup made the prompt private"
+
+    assert _write(target, "v2") == "written"
+    assert _windows_dacl(target)[1] == aces and "P" in _windows_dacl(target)[0]
+
+    target.write_text("operator tuned")
+    assert _write(target, "v3") == "written"
+    [backup] = _backups(target)
+    assert _windows_dacl(backup)[1] == aces
+    assert _windows_dacl(target)[1] == aces
+
+
 @pytest.mark.parametrize("by_link", [False, True], ids=["copy", "link"])
 def test_backups_taken_in_the_same_second_do_not_collide(tmp_path, monkeypatch, by_link):
     monkeypatch.setattr(render, "_BACK_UP_BY_LINK", by_link)

@@ -150,6 +150,30 @@ def test_atomic_replace_with_explicit_mode_holds_from_creation(tmp_path: Path):
     assert path.read_text(encoding="utf-8") == '{"token": "s3cret"}'
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not available on Windows")
+def test_the_tmp_is_never_more_open_than_the_target_while_it_holds_the_new_bytes(tmp_path: Path, monkeypatch):
+    """A chmod after the write left a private target's next text in a
+    umask-default tmp for the span in between."""
+    path = tmp_path / "agent.md"
+    path.write_text("private", encoding="utf-8")
+    os.chmod(path, 0o600)
+    seen: list[int] = []
+    real_fsync = os.fsync
+
+    def watched(fd: int) -> None:
+        seen.append(stat.S_IMODE(os.fstat(fd).st_mode))
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", watched)
+    previous = os.umask(0o022)
+    try:
+        atomic_replace(path, "still private")
+    finally:
+        os.umask(previous)
+    assert seen == [0o600]
+    assert path.read_text(encoding="utf-8") == "still private"
+
+
 def test_a_failed_replace_takes_its_tmp_with_it(tmp_path: Path, monkeypatch):
     """Windows refuses to replace a read-only target, by which point the tmp
     has taken the target's read-only mode; left behind, it refused the next
