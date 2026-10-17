@@ -653,7 +653,9 @@ class CheckpointService:
         takes a path read from ``--stdin`` as written, so a file the disk holds
         decomposed would slip past a rule written precomposed. The name as
         given still counts: NFC also rewrites what git leaves alone, a
-        compatibility ideograph among them.
+        compatibility ideograph among them. Off macOS git matches a decomposed
+        name as written, so one under a precomposed rule is stored there and
+        still withheld here: the safe side of the same mismatch.
         """
         if not await self._ensure_init():
             return set()
