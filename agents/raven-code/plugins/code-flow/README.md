@@ -5,10 +5,10 @@ syntax and name-binding diagnostics alongside the normal result. The name
 checks cover undefined names (`F821`), undefined exports (`F822`), and local
 variables used before assignment (`F823`). A direct edit compares with the
 previous content to suppress existing name findings. A syntax error still
-present after an edit remains visible. A baseline that cannot be parsed or
-decoded is unknown, so findings are not claimed to be newly introduced.
-Diagnostics never undo an edit,
-automatically fix code, or change the command's exit status.
+present after an edit remains visible, including after a rewrite that left
+the file unchanged. A baseline that cannot be parsed or decoded is unknown, so
+findings are not claimed to be newly introduced. Diagnostics never undo an
+edit, automatically fix code, or change the command's exit status.
 These checks run only through the enabled code-flow replacement tools. Loading
 the plugin or installing Pyflakes does not modify the host's built-in tools;
 other agents keep their existing behavior unless explicitly configured to use
