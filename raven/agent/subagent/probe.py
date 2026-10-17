@@ -1310,7 +1310,21 @@ def _test_record(snapshot: Any, previous: Any) -> Any:
     after a config edit must not erase what it was trusting -- or ``None``,
     with nothing to keep. The record takes this test's fingerprint: it is a
     measurement of the config as it stands now, whatever it kept.
+
+    A usable result keeps the previous menu too when it could not read its own
+    (``model_menu_measured`` false): an agent that answered while its catalog
+    read failed -- a Mirasim cold start -- has measured nothing about its models.
     """
+    if previous is not None and snapshot.usable and not snapshot.model_menu_measured:
+        if previous.model_menu_measured:
+            return replace(
+                snapshot,
+                available_models=previous.available_models,
+                model_choices=previous.model_choices,
+                available_modes=previous.available_modes,
+                model_menu_measured=True,
+            )
+        return snapshot
     if snapshot.usable or previous is None:
         return snapshot
     return replace(
@@ -1537,7 +1551,8 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured
             # Failed rows are retried next boot, so a timeout is not a permanent
             # verdict. A formerly working row still keeps its old capabilities.
             if result.status == "ready" or getattr(result, "needs_auth", False) or failed_before:
-                record = _test_record(result, current) if current is not None and result.status != "ready" else result
+                kept = result.status != "ready" or not getattr(result, "model_menu_measured", True)
+                record = _test_record(result, current) if current is not None and kept else result
                 store.record(record)
                 recorded = True
             logger.info("acp agent {!r}: auto-verify {}", name, result.status)

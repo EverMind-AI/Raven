@@ -1971,6 +1971,60 @@ async def test_a_modes_relearn_during_the_boot_verify_does_not_stop_its_write(tm
     assert manager.refresh_calls == 1
 
 
+def _menu_records() -> tuple[object, object]:
+    """A record with a measured menu, and a later answer that was ready but could not read one."""
+    from raven.acp_client.capabilities import AcpMode, AcpModelChoice, CapabilitySnapshot
+
+    measured = CapabilitySnapshot(
+        agent="Claude Code-Mirasim",
+        fingerprint="old",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        model_choices=(AcpModelChoice("own:sonnet", "Sonnet", "Claude Code"),),
+        available_modes=(AcpMode("high", "High"),),
+        stale=True,
+    )
+    unread = CapabilitySnapshot(
+        agent="Claude Code-Mirasim",
+        fingerprint="new",
+        status="ready",
+        detail="ready",
+        measured_at_ms=2,
+        model_menu_measured=False,
+    )
+    return measured, unread
+
+
+def test_a_ready_answer_whose_menu_went_unread_keeps_the_menu_it_had() -> None:
+    """A connect or a Test during Mirasim's cold start is answered menuless: a read that failed, not a measured none."""
+    measured, unread = _menu_records()
+    saved = probe_mod._test_record(unread, measured)
+    assert (saved.model_choices, saved.available_modes) == (measured.model_choices, measured.available_modes)
+    assert saved.model_menu_measured
+    assert (saved.status, saved.fingerprint, saved.measured_at_ms) == ("ready", "new", 2)
+
+
+async def test_the_boot_keeps_a_measured_menu_over_an_answer_that_could_not_read_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    measured, unread = _menu_records()
+    recorded: list[object] = []
+
+    async def fake_verify(cfg: object) -> object:
+        return unread
+
+    monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: measured)
+    monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
+    monkeypatch.setattr(
+        "raven.acp_client.capabilities.SnapshotStore",
+        lambda: type("S", (), {"record": staticmethod(recorded.append)})(),
+    )
+    row = _FakeRow("Claude Code-Mirasim")
+    await probe_mod._verify_missing_snapshots(_FakeManager([row]), [row])
+    assert [snapshot.model_choices for snapshot in recorded] == [measured.model_choices]
+
+
 @pytest.mark.parametrize("needs_auth,unfetched", [(True, False), (False, True), (False, False)])
 @pytest.mark.parametrize("previous_status", ["ready", "attention"])
 def test_manual_test_merges_current_failure_flags_with_old_capabilities(needs_auth, unfetched, previous_status):
