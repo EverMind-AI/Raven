@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { t } from '../../i18n/t'
-import { INTERNAL_BLOCKS, blockTitleKey } from './blocks'
+import { blockTitleKey } from './blocks'
 import * as details from './detailStore'
 
 import type { TrajectoryBlockDescriptor } from './types'
@@ -31,10 +31,9 @@ export function blockTitle(block: Pick<TrajectoryBlockDescriptor, 'id'>): string
   return key ? t(key) : block.id
 }
 
-export function Tabs({ entryId, blocks: all }: { entryId: string; blocks: TrajectoryBlockDescriptor[] }): JSX.Element {
+export function Tabs({ entryId, blocks }: { entryId: string; blocks: TrajectoryBlockDescriptor[] }): JSX.Element {
   const current = details.tabOf(entryId)
-  const blocks = all.filter((b) => !INTERNAL_BLOCKS.includes(b.id))
-  const tabs: details.Tab[] = ['overview', ...blocks.map((b) => b.id)]
+  const tabs = details.visibleTabs(blocks)
   const strip = useRef<HTMLDivElement | null>(null)
   const [reach, setReach] = useState({ left: false, right: false })
 

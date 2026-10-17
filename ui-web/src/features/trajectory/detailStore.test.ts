@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { absorb, has, resetCapabilities } from '../../rpc/capabilities'
 import { RpcError } from '../../rpc/transport'
@@ -123,6 +123,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.unstubAllGlobals()
   resetSources()
   document.body.innerHTML = ''
 })
@@ -902,5 +903,219 @@ describe('the files a span names', () => {
     expect(details.fileFault(1)).toBeNull()
     await answerBlock(fileBody(1, { ok: true }))
     expect(details.fileBody(1)?.item).toMatchObject({ value: { ok: true } })
+  })
+})
+
+/* ── the pinned tab ───────────────────────────────────────────────── */
+
+describe('the pinned tab', () => {
+  /* A first visit: the descriptor is read and answered. */
+  async function arrive(id: string, blocks: string[], over: Partial<TrajectoryDetailResult> = {}): Promise<void> {
+    list.select(id, { source: 'click' })
+    void details.loadDescriptor()
+    await answerDetail(descriptor(id, list.entry(id)!.revision, blocks, over))
+  }
+
+  /* A visit back: the descriptor comes from the cache. */
+  async function revisit(id: string): Promise<void> {
+    list.select(id, { source: 'click' })
+    void details.loadDescriptor()
+    await flush()
+  }
+
+  async function pin(id: string, tab: string): Promise<void> {
+    details.setTab(id, tab)
+    details.togglePin(id)
+    expect(details.pinned()).toBe(tab)
+  }
+
+  /* Everything in memory goes; the tab's storage stays. */
+  function reload(): void {
+    list._resetForTests()
+    details._resetForTests({ keepStorage: true })
+    list.install()
+    details.install()
+  }
+
+  it('opens another entry that has the pinned tab on that tab', async () => {
+    await ready()
+    await arrive('r1', ['relations', 'usage'])
+    await pin('r1', 'relations')
+    list.select('r2', { source: 'click' })
+    expect(details.get().arrival).toBe('r2')
+    void details.loadDescriptor()
+    await answerDetail(descriptor('r2', 1, ['relations', 'usage']))
+    expect(details.tabOf('r2')).toBe('relations')
+    expect(details.get().arrival).toBeNull()
+  })
+
+  it('leaves an entry without the pinned tab on the tab it would show anyway', async () => {
+    await ready()
+    await arrive('r3', ['usage'])
+    details.setTab('r3', 'usage')
+    await arrive('r1', ['relations'])
+    await pin('r1', 'relations')
+    await revisit('r3')
+    expect(details.tabOf('r3')).toBe('usage')
+    expect(details.get().arrival).toBeNull()
+    await arrive('r4', ['usage'])
+    expect(details.tabOf('r4')).toBe('overview')
+  })
+
+  it('comes back to the pinned tab on the next arrival after the reader switched away from it', async () => {
+    await ready()
+    await arrive('r1', ['relations', 'usage'])
+    await pin('r1', 'relations')
+    await arrive('r2', ['relations', 'usage'])
+    details.setTab('r2', 'usage')
+    await revisit('r1')
+    await revisit('r2')
+    expect(details.tabOf('r2')).toBe('relations')
+    expect(detailCalls).toHaveLength(2)
+  })
+
+  it('decides on reopening the entry it closed on, without reading the descriptor again', async () => {
+    await ready()
+    await arrive('r1', ['relations', 'usage'])
+    await pin('r1', 'relations')
+    details.setTab('r1', 'usage')
+    details.closeDetails()
+    expect(details.get().arrival).toBeNull()
+    details.openDetails()
+    expect(details.tabOf('r1')).toBe('relations')
+    expect(details.get().arrival).toBeNull()
+    expect(detailCalls).toHaveLength(1)
+  })
+
+  it('decides against the descriptor read again when the entry moved on while the pane was closed', async () => {
+    await ready()
+    await arrive('r1', ['relations', 'usage'])
+    await pin('r1', 'relations')
+    details.setTab('r1', 'usage')
+    details.closeDetails()
+    list.applyChanges(batch({ upserts: [entry('r1', 1, 2)] }))
+    expect(details.get().stale).toBe(true)
+    details.openDetails()
+    expect(details.tabOf('r1')).toBe('usage')
+    expect(details.get().arrival).toBe('r1')
+    void details.loadDescriptor()
+    await answerDetail(descriptor('r1', 2, ['relations', 'usage']))
+    expect(details.get().current?.revision).toBe(2)
+    expect(details.tabOf('r1')).toBe('relations')
+    expect(details.get().arrival).toBeNull()
+  })
+
+  it('does not move the reader when the entry on screen moves on', async () => {
+    await ready()
+    await arrive('r1', ['relations', 'usage'])
+    await pin('r1', 'relations')
+    await arrive('r2', ['relations', 'usage'])
+    details.setTab('r2', 'usage')
+    list.applyChanges(batch({ upserts: [entry('r2', 2, 2)] }))
+    void details.loadDescriptor()
+    await answerDetail(descriptor('r2', 2, ['relations', 'usage']))
+    expect(details.get().current?.revision).toBe(2)
+    expect(details.tabOf('r2')).toBe('usage')
+  })
+
+  it('pins the current tab, unpins from the pinned tab and repins from another, without touching the tab or the ticket', async () => {
+    await ready()
+    await arrive('r1', ['relations', 'usage'])
+    details.setTab('r1', 'relations')
+    let ticket = details.ticket()
+    details.togglePin('r1')
+    expect(details.pinned()).toBe('relations')
+    details.togglePin('r1')
+    expect(details.pinned()).toBeNull()
+    details.togglePin('r1')
+    expect(details.ticket()).toBe(ticket)
+    details.setTab('r1', 'usage')
+    ticket = details.ticket()
+    details.togglePin('r1')
+    expect(details.pinned()).toBe('usage')
+    expect(details.tabOf('r1')).toBe('usage')
+    expect(details.ticket()).toBe(ticket)
+  })
+
+  it('pins the overview like any other tab', async () => {
+    await ready()
+    await arrive('r2', ['usage'])
+    details.setTab('r2', 'usage')
+    await arrive('r1', ['usage'])
+    expect(details.tabOf('r1')).toBe('overview')
+    details.togglePin('r1')
+    expect(details.pinned()).toBe('overview')
+    await revisit('r2')
+    expect(details.tabOf('r2')).toBe('overview')
+  })
+
+  it('keeps a pin per conversation and opens on it again on the way back', async () => {
+    await ready()
+    await arrive('r1', ['relations', 'usage'])
+    await pin('r1', 'relations')
+    list.sessionChanged('gui:b')
+    expect(details.pinned()).toBeNull()
+    await pin('r1', 'usage')
+    list.sessionChanged('gui:a')
+    expect(details.pinned()).toBe('relations')
+    list.sessionChanged('gui:b')
+    expect(details.pinned()).toBe('usage')
+    list.sessionChanged('gui:a')
+    list.setView('trajectory')
+    await list.load()
+    list.select(null, { source: 'click' })
+    await arrive('r2', ['relations', 'usage'])
+    expect(details.tabOf('r2')).toBe('relations')
+  })
+
+  it('forgets no conversation\'s pin however many there are, in memory and after a reload', async () => {
+    await ready()
+    const keys = Array.from({ length: 25 }, (_, k) => `gui:c${k}`)
+    for (const [k, key] of keys.entries()) {
+      list.sessionChanged(key)
+      details.setTab('r1', `b${k}`)
+      details.togglePin('r1')
+    }
+    /* One conversation unpinned: a reload must not bring it back from storage. */
+    list.sessionChanged('gui:c3')
+    details.setTab('r1', 'b3')
+    details.togglePin('r1')
+    const expected = keys.map((_, k) => (k === 3 ? null : `b${k}`))
+    const pins = (): Array<string | null> => keys.map((key) => { list.sessionChanged(key); return details.pinned() })
+    expect(pins()).toEqual(expected)
+    reload()
+    expect(pins()).toEqual(expected)
+  })
+
+  it('keeps pins for the page when storage throws, and only a reload loses them', async () => {
+    await ready()
+    /* The global itself rather than a spy on Storage.prototype: happy-dom hands
+       out its storage methods through a proxy that a prototype spy does not
+       always reach. */
+    const refuse = (): never => { throw new Error('SecurityError') }
+    vi.stubGlobal('sessionStorage', { getItem: refuse, setItem: refuse, removeItem: refuse, clear: refuse, key: refuse, length: 0 })
+    await pin('r1', 'relations')
+    list.sessionChanged('gui:b')
+    expect(details.pinned()).toBeNull()
+    list.sessionChanged('gui:a')
+    expect(details.pinned()).toBe('relations')
+    reload()
+    list.sessionChanged('gui:a')
+    expect(details.pinned()).toBeNull()
+  })
+
+  it('waits through a failed descriptor read and decides when the retry answers', async () => {
+    await ready()
+    await arrive('r1', ['relations'])
+    await pin('r1', 'relations')
+    list.select('r2', { source: 'click' })
+    void details.loadDescriptor()
+    await failDetail(new Error('the gateway hiccuped'))
+    expect(details.fault('descriptor')).toBe('the gateway hiccuped')
+    expect(details.get().arrival).toBe('r2')
+    void details.retryDescriptor()
+    await answerDetail(descriptor('r2', 1, ['relations']))
+    expect(details.tabOf('r2')).toBe('relations')
+    expect(details.get().arrival).toBeNull()
   })
 })
