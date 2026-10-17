@@ -302,8 +302,12 @@ class MirasimAgent:
         self.sessions: OrderedDict[str, Session] = OrderedDict()
         self._by_key: dict[str, Session] = {}
         self._turns: dict[str, Turn] = {}
-        self._abandoned: OrderedDict[str, None] = OrderedDict()
-        """Prompts given up before the host took them; one it takes later is stopped at once."""
+        self._abandoned: OrderedDict[str, Session | None] = OrderedDict()
+        """Prompts given up before the host took them; one it takes later is stopped at once.
+
+        A first prompt also names its session: the conversation the host opens for it
+        is that session's, to keep, or to delete when the session was deleted meanwhile.
+        """
         self._deleted: OrderedDict[str, None] = OrderedDict()
         self._catalog: AgentCatalog | None = None
         self._catalog_at = 0.0
@@ -830,9 +834,9 @@ class MirasimAgent:
         )
         await asyncio.wait({answer, turn.ended}, return_when=asyncio.FIRST_COMPLETED)
         if not answer.done():
-            # A cancel gave the turn up before the host said it took the prompt.
+            # A cancel, a close or a delete gave the turn up before the host said it took the prompt.
             answer.cancel()
-            self._abandon_ref(turn.client_ref)
+            self._abandon_ref(turn)
             return None
         try:
             got = answer.result()
@@ -847,8 +851,9 @@ class MirasimAgent:
             await self._recall(turn)
         return None
 
-    def _abandon_ref(self, client_ref: str) -> None:
-        self._abandoned[client_ref] = None
+    def _abandon_ref(self, turn: Turn) -> None:
+        session = turn.session
+        self._abandoned[turn.client_ref] = session if session.mirasim_key is None else None
         while len(self._abandoned) > DELETED_KEPT:
             self._abandoned.popitem(last=False)
 
@@ -860,7 +865,7 @@ class MirasimAgent:
             self._drop(turn)
             if turn.task_id is None:
                 # Given up before the host said it runs: if a recall did not land, it runs later.
-                self._abandon_ref(turn.client_ref)
+                self._abandon_ref(turn)
         if turn.lost is not None:
             raise RefusalError(INTERNAL_ERROR, f"Mirasim {self.agent} turn: {turn.lost}")
         if snapshot is None:
@@ -986,6 +991,32 @@ class MirasimAgent:
     async def _stop_task(self, key: str, task_id: str) -> None:
         await self._quiet_send({"type": "stop", "sessionKey": key, "taskId": task_id})
 
+    def _claim(self, session: Session, key: str, task_id: str) -> None:
+        """Settle the conversation a given-up first prompt opened, by what became of its session.
+
+        A deleted session's conversation is deleted too; any other session keeps
+        it, recorded as a turn the host took would have been -- so a closed one can
+        be loaded again, and an open one's next prompt continues it. The given-up
+        turn itself is marked shown, so its frames are not forwarded as a turn
+        nobody prompted.
+        """
+        if session.deleted:
+            self._spawn(self._discard(key))
+            return
+        if session.mirasim_key is not None:
+            return
+        self._bind(session, key)
+        if task_id:
+            session.stream.start(task_id)
+            session.stream.ended = True
+        self._spawn(self._persist(session))
+
+    async def _discard(self, key: str) -> None:
+        try:
+            await self._delete_conversation(key)
+        except RefusalError as exc:
+            logger.warning("Mirasim adapter: {}", exc.message)
+
     async def _quiet_send(self, frame: dict[str, Any]) -> None:
         """Send a frame whose loss changes nothing that matters: a stop or recall the host no longer needs."""
         with contextlib.suppress(HostUnavailableError):
@@ -996,12 +1027,15 @@ class MirasimAgent:
     def _on_frame(self, frame: dict[str, Any]) -> None:
         """Route one frame from the host. Answers to requests were taken by their listeners already."""
         kind = frame.get("type")
-        if kind == "accepted" and _text(frame.get("clientRef")) in self._abandoned:
+        if kind == "accepted" and (ref := _text(frame.get("clientRef"))) in self._abandoned:
             key, task_id = _text(frame.get("sessionKey")), _text(frame.get("taskId"))
             if key and task_id:
                 self._spawn(self._stop_task(key, task_id))
             elif key:
-                self._spawn(self._quiet_send({"type": "recall", "sessionKey": key, "ref": frame["clientRef"]}))
+                self._spawn(self._quiet_send({"type": "recall", "sessionKey": key, "ref": ref}))
+            owner = self._abandoned[ref]
+            if key and owner is not None:
+                self._claim(owner, key, task_id)
         elif kind == "accepted":
             turn = self._turns.get(_text(frame.get("clientRef")))
             if turn is not None:

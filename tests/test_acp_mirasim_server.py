@@ -956,12 +956,73 @@ async def test_closing_a_session_ends_its_turn_and_keeps_the_conversation(harnes
     harness.host.respond = script(("hold",))
     sid = await harness.new()
     turn = asyncio.ensure_future(harness.ok("session/prompt", sessionId=sid, prompt=text("go")))
-    await harness.host.wait_for(lambda: harness.host.sessions and harness.host.session().running)
+    await harness.host.wait_for(lambda: (running := harness.agent.sessions[sid].turn) and running.task_id)
     assert await harness.ok("session/close", sessionId=sid) == {}
     assert await turn == {"stopReason": "cancelled"}
     assert harness.store.get(sid) is not None and harness.host.sessions
     assert (await harness.refused("session/prompt", sessionId=sid, prompt=text("x")))["code"] == RESOURCE_NOT_FOUND
     assert await harness.ok("session/close", sessionId=sid) == {}
+
+
+async def first_prompt_held_at_the_host(harness: Harness, *steps: Any) -> tuple[str, asyncio.Future[Any]]:
+    """A new session whose first prompt the host has received and not yet answered."""
+    harness.host.respond = script(*steps)
+    harness.host.accepting = asyncio.Event()
+    sid = await harness.new()
+    turn = asyncio.ensure_future(harness.ok("session/prompt", sessionId=sid, prompt=text("go")))
+    await harness.host.wait_for(harness.prompts)
+    return sid, turn
+
+
+async def test_a_session_closed_before_the_host_takes_its_first_prompt_still_records_the_conversation(
+    harness: Harness,
+) -> None:
+    sid, turn = await first_prompt_held_at_the_host(harness, ("text", "late words"), ("hold",))
+    assert await harness.ok("session/close", sessionId=sid) == {}
+    assert await turn == {"stopReason": "cancelled"}
+    assert harness.host.accepting is not None
+    harness.host.accepting.set()
+    stop = await harness.host.wait_for(lambda: harness.host.frames("stop"))
+    key = harness.host.session().key
+    assert stop[0] == {"type": "stop", "sessionKey": key, "taskId": "task-1"}
+    binding = await harness.host.wait_for(lambda: harness.store.get(sid))
+    assert binding.mirasim_key == key
+    await harness.host.wait_for(lambda: harness.host.session().running is None)
+    await harness.ok("session/load", sessionId=sid, cwd=str(harness.tmp_path), mcpServers=[])
+    assert harness.said(sid, "user_message_chunk") == "go"
+
+
+async def test_a_session_deleted_before_the_host_takes_its_first_prompt_takes_the_conversation_with_it(
+    harness: Harness,
+) -> None:
+    sid, turn = await first_prompt_held_at_the_host(harness, ("hold",))
+    assert await harness.ok("session/delete", sessionId=sid) == {}
+    assert await turn == {"stopReason": "cancelled"}
+    assert harness.host.frames("deleteSession") == []
+    assert harness.host.accepting is not None
+    harness.host.accepting.set()
+    deleted = await harness.host.wait_for(lambda: harness.host.frames("deleteSession"))
+    assert harness.host.deleted == {deleted[0]["sessionKey"]} and not harness.host.sessions
+    assert harness.store.get(sid) is None
+
+
+async def test_a_first_prompt_the_host_takes_after_its_cancel_settled_becomes_the_sessions_conversation(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(server_mod, "CANCEL_SETTLE_S", 0.1)
+    sid, turn = await first_prompt_held_at_the_host(harness, ("text", "late words"), ("hold",))
+    await harness.ok("session/cancel", sessionId=sid)
+    assert await turn == {"stopReason": "cancelled"}
+    assert harness.host.accepting is not None
+    harness.host.accepting.set()
+    await harness.host.wait_for(lambda: harness.host.frames("stop"))
+    session = harness.host.session()
+    await harness.host.wait_for(lambda: session.running is None)
+    harness.host.respond = echo
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("again"))
+    assert harness.prompts()[-1]["sessionKey"] == session.key
+    # The given-up turn's words were never forwarded as a turn nobody prompted.
+    assert harness.said(sid) == f"turn 2 of {session.key} on sonnet effort high: again"
 
 
 async def test_idle_sessions_past_the_cap_are_let_go_and_a_recorded_one_comes_back(
