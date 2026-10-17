@@ -64,13 +64,37 @@ def test_only_the_models_meant_to_be_offered_come_back(monkeypatch: pytest.Monke
 
 
 def test_the_client_version_is_sent(monkeypatch: pytest.MonkeyPatch, signed_in) -> None:
-    """The value a live account was observed to answer for, pinned so a change to
-    it is a decision rather than a typo."""
+    """The value a live account was observed to answer in full for, pinned so a
+    change to it is a decision rather than a typo."""
     seen = _serve(monkeypatch, {"models": [{"slug": "gpt-5.6-sol", "visibility": "list"}]})
 
     codex_catalog.account_models()
 
-    assert seen[0].url.params["client_version"] == codex_catalog.CLIENT_VERSION
+    assert seen[0].url.params["client_version"] == "0.163.0"
+
+
+def test_models_gated_above_an_old_client_are_offered(monkeypatch: pytest.MonkeyPatch, signed_in) -> None:
+    """The backend drops every model whose minimum client version is above the one
+    sent; at `0.0.0` the newest models never reached the picker (#986)."""
+    gates = {"gpt-6.1-sol": (0, 159, 0), "gpt-6-sol": (0, 155, 0), "gpt-5.6-sol": (0, 0, 0)}
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        client = tuple(int(part) for part in request.url.params["client_version"].split("."))
+        models = [{"slug": slug, "visibility": "list"} for slug, gate in gates.items() if client >= gate]
+        models.append({"slug": "codex-auto-review", "visibility": "hide"})
+
+        return httpx.Response(200, json={"models": models})
+
+    def fake_get(url, **kwargs):
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            return client.get(url, **{k: v for k, v in kwargs.items() if k != "timeout"})
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    assert codex_catalog.account_models() == ("gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol")
+    assert seen[0].url.params["client_version"] != "0.0.0"
 
 
 def test_the_answer_is_cached_between_refreshes(monkeypatch: pytest.MonkeyPatch, signed_in) -> None:

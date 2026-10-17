@@ -18,9 +18,16 @@ from typing import Any
 
 CATALOG_URL = "https://chatgpt.com/backend-api/codex/models"
 
-#: Sent because the endpoint takes it; a live account answered with its models for
-#: this value. What it does with an unknown one, or with none, is not established.
-CLIENT_VERSION = "0.0.0"
+#: The Codex CLI release we present as. The backend filters the catalogue by each
+#: model's own minimum client version, so a value that is too old hides every model
+#: gated above it: at `0.0.0` an account was offered 4 of its 7 models, and
+#: `gpt-6-sol` / `gpt-6-luna` only appear from `0.155.0`, `gpt-6.1-sol` from
+#: `0.159.0`. A newer value is accepted and returns every visible model; leaving the
+#: parameter out is a 400. (Measured against a live account on 2026-10-16, #986.)
+#: A real release rather than an arbitrarily high one, in case the backend starts
+#: checking it -- which means it has to follow Codex CLI releases as new models are
+#: gated behind them.
+CLIENT_VERSION = "0.163.0"
 
 _CACHE_TTL_SECONDS = 300
 
