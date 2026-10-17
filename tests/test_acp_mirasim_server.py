@@ -861,6 +861,60 @@ async def test_deleting_a_session_waits_for_a_store_write_already_in_flight(harn
     assert harness.store.get(sid) is None
 
 
+async def test_a_session_loaded_while_it_is_being_deleted_stays_deleted(harness: Harness, monkeypatch) -> None:
+    import threading
+
+    sid = await opened(harness)
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("first"))
+    entered, release = threading.Event(), threading.Event()
+    remove = harness.store.delete
+
+    def removing(session_id):
+        entered.set()
+        assert release.wait(10)
+        remove(session_id)
+
+    monkeypatch.setattr(harness.store, "delete", removing)
+    deleting = asyncio.create_task(harness.ok("session/delete", sessionId=sid))
+    try:
+        assert await asyncio.to_thread(entered.wait, 10)
+        error = await harness.refused("session/load", sessionId=sid, cwd=str(harness.tmp_path))
+        assert error["code"] == RESOURCE_NOT_FOUND
+    finally:
+        release.set()
+        await asyncio.wait_for(deleting, 10)
+    assert harness.store.get(sid) is None
+
+
+async def test_a_load_that_read_the_record_before_a_delete_does_not_bring_it_back(
+    harness: Harness, monkeypatch
+) -> None:
+    import threading
+
+    sid = await opened(harness)
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("first"))
+    harness.use("ok")
+    entered, release = threading.Event(), threading.Event()
+    read = harness.store.get
+
+    def reading(session_id):
+        found = read(session_id)
+        entered.set()
+        assert release.wait(10)
+        return found
+
+    monkeypatch.setattr(harness.store, "get", reading)
+    loading = asyncio.create_task(harness.call("session/load", sessionId=sid, cwd=str(harness.tmp_path)))
+    try:
+        assert await asyncio.to_thread(entered.wait, 10)
+        await asyncio.wait_for(harness.ok("session/delete", sessionId=sid), 5)
+    finally:
+        release.set()
+    response = await asyncio.wait_for(loading, 10)
+    assert response.get("error", {}).get("code") == RESOURCE_NOT_FOUND, response
+    assert read(sid) is None
+
+
 @pytest.mark.parametrize("switch_route", [False, True])
 async def test_deleting_during_a_route_lookup_starts_no_later_prompt(
     harness: Harness, monkeypatch, switch_route

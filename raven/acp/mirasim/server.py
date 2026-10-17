@@ -155,6 +155,11 @@ session per dispatch that names no instance, so an adapter that lives as long as
 Raven does would otherwise grow by one per spawn. An evicted session that had a
 turn is still on disk and comes back on ``session/load``."""
 
+DELETED_KEPT = 1024
+"""Deleted session ids remembered, so a ``session/load`` racing a delete -- one
+that read the record before the delete removed it -- cannot bring the session
+back. The race lasts as long as a delete's cancel, so the recent ones suffice."""
+
 REPLY_CHUNK_CHARS = 64 * 1024
 
 SHUTDOWN_GRACE_S = 5.0
@@ -242,6 +247,7 @@ class MirasimAgent:
         self.outbound = OutboundRequests(emit)
         self.client = ClientCapabilities()
         self.sessions: OrderedDict[str, Session] = OrderedDict()
+        self._deleted: OrderedDict[str, None] = OrderedDict()
         self._catalog: AgentCatalog | None = None
         self._catalog_at = 0.0
         self._catalog_failed_at: float | None = None
@@ -406,11 +412,14 @@ class MirasimAgent:
     async def load_session(self, params: dict[str, Any]) -> dict[str, Any]:
         session_id = _required_text(params, "sessionId")
         cwd = _required_text(params, "cwd")
+        missing = RefusalError(RESOURCE_NOT_FOUND, f"no Mirasim session {session_id!r} is recorded here")
+        if session_id in self._deleted:
+            raise missing
         session = self.sessions.get(session_id)
         if session is None:
             binding = await asyncio.to_thread(self.store.get, session_id)
-            if binding is None:
-                raise RefusalError(RESOURCE_NOT_FOUND, f"no Mirasim session {session_id!r} is recorded here")
+            if binding is None or session_id in self._deleted:
+                raise missing
             session = Session(
                 id=binding.session_id, cwd=binding.cwd, mirasim_key=binding.mirasim_key, route=binding.route
             )
@@ -466,6 +475,9 @@ class MirasimAgent:
 
     async def delete_session(self, params: dict[str, Any]) -> dict[str, Any]:
         session_id = _required_text(params, "sessionId")
+        self._deleted[session_id] = None
+        while len(self._deleted) > DELETED_KEPT:
+            self._deleted.popitem(last=False)
         session = self.sessions.pop(session_id, None)
         if session is not None:
             session.deleted = True
