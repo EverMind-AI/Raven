@@ -404,6 +404,12 @@ jobs:
       - name: Test Windows ACP teardown
         run: uv run --frozen --python 3.13 --no-sync pytest tests/test_subagent_acp.py -k close_without_killpg -q -n 0 --tb=short
 
+      # A launch rewrites the agents' prompt files. Keeping a private file's
+      # DACL and recovering from a read-only one are Windows facts the Linux
+      # shards skip.
+      - name: Test regenerated prompt files
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/test_config_product_render.py tests/test_atomic_io.py::test_a_failed_replace_takes_its_tmp_with_it tests/test_atomic_io.py::test_a_read_only_tmp_a_dead_writer_left_does_not_block_the_replace -q -n 0 --tb=short
+
       # The CreateProcess command-line budget and the venv redirector's second
       # launch are Windows-only facts, and the unit shards exclude
       # tests/integration by norecursedirs -- so without this they are only ever

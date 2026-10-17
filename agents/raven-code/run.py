@@ -190,7 +190,7 @@ def log(message: str) -> None:
 
 
 # Pristine guide and conduct seeds from before per-file seed receipts existed.
-# Digests recognize exact product text without overwriting an operator's edit.
+# Digests recognize exact product text, so an untouched copy is not backed up.
 _LEGACY_GUIDE_DIGESTS = frozenset(
     {
         "7d0dc36934316639000b486d2775e2581b1378472b29841bdc67231570576657",
@@ -210,35 +210,44 @@ _LEGACY_CONDUCT_DIGESTS = frozenset(
 )
 
 
-def _seed_prompt(target: Path, wanted: str | None, pristine: set[str] | frozenset[str]) -> None:
-    """Refresh an untouched product seed; keep edited files byte-for-byte.
+def _seed_prompt(target: Path, wanted: str | None, pristine: set[str] | frozenset[str] = frozenset()) -> None:
+    """Regenerate a product-owned prompt file, or remove it when ``wanted`` is None.
 
-    A small sibling receipt remembers the last text this launcher wrote, so
-    later product updates do not need an ever-growing list of old templates.
+    ``write_generated`` decides what an edit in place is and backs it up
+    before writing. The receipt this launcher kept before that function
+    existed still names the last text it wrote, so it counts as one more
+    pristine digest and is dropped once the shared receipt replaces it.
+
+    A raven older than ``write_generated`` -- a home tree copied out by a
+    newer wheel serves an older checkout too -- seeds the file once instead,
+    and says that it will not be refreshed or removed.
     """
-    receipt = target.with_name(f".{target.name}.code-flow.sha256")
-    if target.exists():
-        current = target.read_text(encoding="utf-8")
-        digest = hashlib.sha256(current.encode()).hexdigest()
-        previous = receipt.read_text(encoding="ascii").strip() if receipt.exists() else ""
-        if current != wanted and digest not in pristine and digest != previous:
-            log(f"[run] {target.name}: edited in place; kept unchanged")
-            return
-    if wanted is None:
-        target.unlink(missing_ok=True)
-        receipt.unlink(missing_ok=True)
+    generate = getattr(render, "write_generated", None)
+    if generate is None:
+        if wanted is not None:
+            render.seed_once(target, lambda: wanted)
+        log(f"[run] {target.name}: this raven predates regenerated prompts; seeded once, never refreshed or removed")
         return
-    target.parent.mkdir(parents=True, exist_ok=True)
-    if not target.exists() or target.read_text(encoding="utf-8") != wanted:
-        # newline="" so the seed is the carried asset byte for byte. The default
-        # translates each line ending to os.linesep, which on Windows writes a
-        # CRLF copy of an LF source; the guide is asserted equal to its asset.
-        target.write_text(wanted, encoding="utf-8", newline="")
-    receipt.write_text(hashlib.sha256(wanted.encode()).hexdigest() + "\n", encoding="ascii")
+    old_receipt = target.with_name(f".{target.name}.code-flow.sha256")
+    try:
+        previous = {old_receipt.read_text(encoding="ascii").strip()}
+    except (OSError, UnicodeDecodeError):
+        previous = set()
+    try:
+        generate(
+            target,
+            wanted,
+            owner=PRODUCT,
+            legacy_digests=pristine | previous,
+            notify=lambda message: log(f"[run] {message}"),
+        )
+        old_receipt.unlink(missing_ok=True)
+    except (OSError, UnicodeDecodeError) as exc:
+        raise SystemExit(f"error: cannot regenerate {target}: {exc}") from exc
 
 
 def seed_guide(partition: Path) -> None:
-    """Seed or refresh the tool guide while preserving in-place edits."""
+    """Regenerate the tool guide; an operator's own lines go in ``TOOLS.local.md``."""
     _seed_prompt(partition / "TOOLS.md", GUIDE.read_text(encoding="utf-8"), _LEGACY_GUIDE_DIGESTS)
 
 
@@ -285,21 +294,22 @@ def conduct_settings() -> dict:
 
 
 def seed_soul(partition: Path) -> None:
-    """Seed the product identity as the partition's ``soul.md``, once.
+    """Write the product identity as the partition's ``soul.md``.
 
-    The workspace sync only creates what is missing, so a file seeded before
-    the engine starts is the one bootstrap reads on both hostings. Once is the
-    contract (``seed_once``): an operator's edit is never overwritten.
+    The workspace sync only creates what is missing, so a file written before
+    the engine starts is the one bootstrap reads on both hostings. Regenerated
+    on every launch; an operator's own lines go in ``soul.local.md``.
     """
-    render.seed_once(partition / SOUL_RELATIVE, lambda: SOUL.read_text(encoding="utf-8"))
+    _seed_prompt(partition / SOUL_RELATIVE, SOUL.read_text(encoding="utf-8"))
 
 
 def seed_conduct(partition: Path, model: str | None) -> None:
-    """Seed the configured conduct, replacing only untouched product text.
+    """Write the configured conduct, regenerated on every launch.
 
     Bootstrap reads agent.md after the product identity. Model-family,
-    discipline and product updates refresh managed seeds; edited text stays.
-    Turning conduct off removes a managed seed instead of leaving it resident.
+    discipline and product updates all reach it. Turning conduct off removes
+    the copy this product wrote instead of leaving it resident; an edited
+    copy is the operator's, and stays.
     """
     settings = conduct_settings()
     wanted = (

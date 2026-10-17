@@ -293,6 +293,20 @@ Keep credentials out of prompts and shared manifests. A2A credentials are
 matched by origin, not by agent display name; its peer list is not an egress
 firewall. Follow the [A2A guide](agent-protocols.md#call-a-remote-a2a-peer).
 
+The prompt files a native agent keeps in its ACP home -- `soul.md` and
+`agent.md` under `agent_memory/profile/`, and `TOOLS.md` -- are regenerated
+from the release and its config on every launch, so editing them in place
+does not last. Put your own lines in the sibling `*.local.md` file
+(`agent_memory/profile/agent.local.md`, for example); the next launch appends
+it after the product text. Copy in only what you still need: text from an
+older release can contradict the current one. A file that was edited in place,
+or that an older release left behind, is saved as `<name>.bak-<time>-<pid>`
+before it is replaced, and the launcher log names the backup. The regenerated
+file keeps the access rights the old one had. On Windows the backup is a hard
+link to the file, so it keeps them too; on a volume that cannot hard-link, the
+launch stops and names the file instead.
+Backups are not deleted for you.
+
 ## Security and troubleshooting
 
 Outbound ACP automatically prefers an offered allow option. The parent's

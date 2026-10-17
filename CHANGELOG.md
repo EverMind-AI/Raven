@@ -133,11 +133,10 @@ All notable changes to Raven are documented here.
   terminal shows as raw tags. The shape gate, the clarify exemption and
   `scripts/research_report_audit.py` read the new layout, and the old
   three-heading layout stays the class default (`finalShape.reportLayout`).
-  An install that has already run Raven-Research keeps the contract it seeded
-  into its workspace (`agent_memory/profile/agent.md`), because seeding is
-  once-only so that an operator's edits survive; it moves to the new layout
-  when that file is deleted, and until then the gate still accepts its
-  three-heading replies.
+  An install that has already run Raven-Research moves to the new layout at
+  its next launch, since the contract in its workspace
+  (`agent_memory/profile/agent.md`) is now regenerated on every launch (see
+  Fixed); the gate still accepts three-heading replies.
   The identity no longer carries the measured-guidance block, whose short-run
   and one-answer numbers came from a short-answer benchmark
   (`measuredGuidance` off). The product label moves to
@@ -261,6 +260,29 @@ All notable changes to Raven are documented here.
   from the session's mode overlay.
 
 ### Fixed
+
+- The research, code, oncall and ppt agents follow an upgrade or a config
+  change into the prompt files they keep in their workspace (`soul.md`,
+  `agent.md`, `TOOLS.md`). Those files were written only when absent, so the
+  model kept reading the text of the first launch while the gates enforced
+  the current release: a research contract seeded before the reader layout
+  still asked for the three-heading report. They are now rewritten on every
+  launch. Your own lines go in the sibling `*.local.md` file
+  (`agent_memory/profile/agent.local.md`, for example) and are appended after
+  the product text; a file edited in place, or left by an older release, is
+  saved as `<name>.bak-<time>-<pid>` before it is replaced, never readable by
+  more accounts than the file was, and the launcher log names the backup. The
+  ppt engine, whose plugin can be granted a host's or another product's home,
+  replaces only a file it can show it wrote.
+
+- A file Raven saves by replacing it -- `config.json`, an agent's prompt
+  files, state files -- keeps its own access rights from the first byte of the
+  new text. On Windows the replacement took its folder's inherited ACL, so a
+  file kept private in a folder other accounts may read came back readable by
+  them; on POSIX the new text sat in a umask-default temp file until the
+  target's mode was copied over. On Windows a save refused by a read-only
+  target also left a read-only temp file that failed every later save, even
+  after the target was made writable again.
 
 - A task on a registered machine ends the way it ended, whatever happened on
   either side. A Raven node killed outright (`kill -9`) used to leave its

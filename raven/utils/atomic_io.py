@@ -8,8 +8,9 @@ lock is cross-platform (``portalocker``: POSIX ``fcntl`` + Windows
 """
 
 import os
+import stat
 import threading
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Callable, Iterator, TypeVar
 
@@ -76,36 +77,143 @@ def locked_append(path: Path, lines: list[str]) -> None:
             os.fsync(f.fileno())
 
 
-def _replace_unlocked(path: Path, data: str, create_mode: int | None = None) -> None:
-    tmp_path = path.with_name(path.name + ".tmp")
-    preserve: int | None = None
-    if create_mode is None:
-        try:
-            preserve = path.stat().st_mode & 0o7777
-        except OSError:
-            preserve = None
-        f = open(tmp_path, "w", encoding="utf-8")
-    else:
-        # Secret-bearing files: the mode must hold from the first byte, so it
-        # is applied by os.open at creation — narrowing with a chmod after the
-        # write leaves the payload readable for the span in between. A crashed
-        # writer's leftover tmp would keep its old inode mode through O_CREAT,
-        # so it is removed first to restore creation semantics.
-        try:
+def _discard(tmp_path: Path) -> None:
+    try:
+        os.unlink(tmp_path)
+    except FileNotFoundError:
+        return
+    except OSError:
+        # Windows will not unlink a read-only file, and a tmp is read-only
+        # once a read-only target's mode has been carried onto it.
+        with suppress(OSError):
+            os.chmod(tmp_path, stat.S_IREAD | stat.S_IWRITE)
             os.unlink(tmp_path)
-        except OSError:
-            pass
-        f = os.fdopen(os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, create_mode), "w", encoding="utf-8")
-    with f:
-        f.write(data)
-        f.flush()
-        os.fsync(f.fileno())
-    # os.replace swaps the inode, so a target that was chmod 600 (config files
-    # carrying api keys) would silently come back with the tmp's umask default
-    # after every save. Carry the target's own mode onto the replacement.
-    if preserve is not None:
-        os.chmod(tmp_path, preserve)
-    os.replace(tmp_path, path)
+
+
+_DACL_SECURITY_INFORMATION = 0x4
+_GENERIC_WRITE = 0x40000000
+_CREATE_NEW = 1
+_FILE_ATTRIBUTE_NORMAL = 0x80
+
+
+def _create_with_dacl_of(tmp_path: Path, like: Path) -> int:  # pragma: no cover - WinDLL does not load off Windows
+    """A write fd on a new ``tmp_path`` holding ``like``'s DACL from creation.
+
+    Raises ``OSError`` when that DACL cannot be read: the tmp is then never
+    made with a wider one.
+    """
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    class _SecurityAttributes(ctypes.Structure):
+        _fields_ = [
+            ("nLength", wintypes.DWORD),
+            ("lpSecurityDescriptor", ctypes.c_void_p),
+            ("bInheritHandle", wintypes.BOOL),
+        ]
+
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    advapi32.GetFileSecurityW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    advapi32.GetFileSecurityW.restype = wintypes.BOOL
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.POINTER(_SecurityAttributes),
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    source = str(like)
+    needed = wintypes.DWORD(0)
+    if (
+        not advapi32.GetFileSecurityW(source, _DACL_SECURITY_INFORMATION, None, 0, ctypes.byref(needed))
+        and not needed.value
+    ):
+        raise ctypes.WinError(ctypes.get_last_error())
+    descriptor = ctypes.create_string_buffer(needed.value)
+    if not advapi32.GetFileSecurityW(
+        source, _DACL_SECURITY_INFORMATION, descriptor, needed.value, ctypes.byref(needed)
+    ):
+        raise ctypes.WinError(ctypes.get_last_error())
+    attributes = _SecurityAttributes(ctypes.sizeof(_SecurityAttributes), ctypes.addressof(descriptor), False)
+    handle = kernel32.CreateFileW(
+        str(tmp_path), _GENERIC_WRITE, 0, ctypes.byref(attributes), _CREATE_NEW, _FILE_ATTRIBUTE_NORMAL, None
+    )
+    if handle is None or handle == ctypes.c_void_p(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        return msvcrt.open_osfhandle(handle, os.O_WRONLY)
+    except BaseException:
+        kernel32.CloseHandle(handle)
+        raise
+
+
+def _create_like(tmp_path: Path, path: Path, preserve: int | None) -> int:
+    """A write fd on a new ``tmp_path`` no more open than ``path``, from its first byte.
+
+    The new bytes may be as private as the old: a chmod after the write, or
+    on Windows the folder's inherited ACL, which os.replace carries onto the
+    target, would leave them readable by more accounts in between or after.
+    """
+    if os.name == "nt" and preserve is not None:
+        return _create_with_dacl_of(tmp_path, path)  # pragma: no cover - Windows only
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    return os.open(tmp_path, flags, 0o666 if preserve is None else preserve & 0o777)
+
+
+def _replace_unlocked(path: Path, data: str, create_mode: int | None = None, newline: str | None = None) -> None:
+    tmp_path = path.with_name(path.name + ".tmp")
+    # Callers hold path's lock, so a tmp already here is a dead writer's: it
+    # would lend its old mode through O_CREAT, or refuse the open outright
+    # when it was left read-only.
+    _discard(tmp_path)
+    preserve: int | None = None
+    try:
+        if create_mode is None:
+            try:
+                preserve = path.stat().st_mode & 0o7777
+            except OSError:
+                preserve = None
+            f = os.fdopen(_create_like(tmp_path, path, preserve), "w", encoding="utf-8", newline=newline)
+        else:
+            # Secret-bearing files: the mode must hold from the first byte, so it
+            # is applied by os.open at creation — narrowing with a chmod after the
+            # write leaves the payload readable for the span in between.
+            f = os.fdopen(
+                os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, create_mode),
+                "w",
+                encoding="utf-8",
+                newline=newline,
+            )
+        with f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        # os.replace swaps the inode, so a target that was chmod 600 (config files
+        # carrying api keys) would silently come back with the tmp's umask default
+        # after every save. Carry the target's own mode onto the replacement.
+        if preserve is not None:
+            os.chmod(tmp_path, preserve)
+        os.replace(tmp_path, path)
+    except BaseException:
+        # Windows refuses to replace a read-only target after the tmp has
+        # taken its mode; the tmp goes too, so making the target writable is
+        # all a retry needs.
+        _discard(tmp_path)
+        raise
 
 
 def remove_with_lock(path: Path) -> None:
@@ -119,15 +227,18 @@ def remove_with_lock(path: Path) -> None:
     (path.parent / ".lock" / (path.name + ".lock")).unlink(missing_ok=True)
 
 
-def atomic_replace(path: Path, data: str, *, mode: int | None = None) -> None:
+def atomic_replace(path: Path, data: str, *, mode: int | None = None, newline: str | None = None) -> None:
     """Replace ``path``'s content with ``data`` via temp file + os.replace.
 
     ``mode``: hold this exact mode from the temp file's creation onward and
     carry it onto ``path`` (for secret-bearing files like token state). The
-    default preserves the target's existing mode, umask for a new file.
+    default preserves the target's existing mode -- and on Windows its DACL --
+    from the temp file's creation, umask for a new file.
+    ``newline`` is :func:`open`'s: ``""`` writes ``data`` byte for byte, with
+    no translation of line endings to the platform's.
     """
     with _locked(path):
-        _replace_unlocked(path, data, create_mode=mode)
+        _replace_unlocked(path, data, create_mode=mode, newline=newline)
 
 
 def atomic_update(

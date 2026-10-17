@@ -52,6 +52,10 @@ def grounded(launcher, tmp_path, monkeypatch):
     monkeypatch.delenv("CODE_SERPER_API_KEY", raising=False)
     monkeypatch.delenv("CODE_JINA_API_KEY", raising=False)
     monkeypatch.delenv("CODE_PROJECT_FILES", raising=False)
+    # Set, not deleted: a deleted switch falls back to the folder's .env, which
+    # a developer's machine may use to turn the conduct or its discipline off.
+    monkeypatch.setenv("CODE_CONDUCT", "on")
+    monkeypatch.setenv("CODE_CONDUCT_DISCIPLINE", "on")
     for retired in (
         "RAVEN_WORKSPACE_ALLOC_BASE",
         "RAVEN_WORKSPACE_ALLOC_REPOS",
@@ -250,12 +254,14 @@ def test_the_conduct_variant_follows_the_model_family(launcher):
     assert launcher.conduct_source(None) == CONDUCTS["default"]
 
 
-def test_the_conduct_is_seeded_once_and_never_overwritten(grounded, tmp_path):
+def test_the_conduct_is_regenerated_on_every_render_and_an_edit_is_backed_up(grounded, tmp_path):
     _render(grounded)
     conduct = tmp_path / "home" / "subagent_sessions" / "raven-code" / "acp" / "agent_memory" / "profile" / "agent.md"
+    shipped = conduct.read_text()
     conduct.write_text("operator tuned")
     _render(grounded)
-    assert conduct.read_text() == "operator tuned"
+    assert conduct.read_text() == shipped
+    assert [b.read_text() for b in conduct.parent.glob("agent.md.bak-*")] == ["operator tuned"]
 
 
 def _launcher_render_conduct(variant: str) -> str:
@@ -290,12 +296,14 @@ def test_the_conduct_speaks_engineering_not_evaluation(variant):
     assert "{{" not in text, "no unrendered sentinel"
 
 
-def test_the_guide_is_seeded_once_and_never_overwritten(grounded, tmp_path):
+def test_the_guide_is_regenerated_on_every_render_and_an_edit_is_backed_up(grounded, tmp_path):
     _render(grounded)
     guide = tmp_path / "home" / "subagent_sessions" / "raven-code" / "acp" / "TOOLS.md"
+    shipped = guide.read_text()
     guide.write_text("operator tuned")
     _render(grounded)
-    assert guide.read_text() == "operator tuned"
+    assert guide.read_text() == shipped
+    assert [b.read_text() for b in guide.parent.glob("TOOLS.md.bak-*")] == ["operator tuned"]
 
 
 def test_the_roster_row_identity_is_the_vendored_twins():
@@ -1110,18 +1118,19 @@ def test_switching_the_tool_face_off_leaves_a_working_face(grounded, tmp_path):
 def test_the_conduct_is_reseeded_when_the_model_family_changes(grounded, tmp_path):
     """A partition is reused across renders, and seed-once alone froze whichever
     variant the first render picked: pointing the product at another family
-    changed the rendered config and left the conduct behind, silently. A
-    pristine seed of the other variant is replaced; anything an operator
-    tuned in place is not."""
+    changed the rendered config and left the conduct behind, silently. The
+    other variant is written over it; an edit in place is backed up first."""
     partition = tmp_path / "part"
     grounded.seed_conduct(partition, "anthropic/claude-opus-5")
     conduct = partition / "agent_memory" / "profile" / "agent.md"
     assert conduct.read_text() == grounded.render_conduct("anthropic/claude-opus-5")
     grounded.seed_conduct(partition, "deepseek/deepseek-v4")
     assert conduct.read_text() == grounded.render_conduct("deepseek/deepseek-v4"), "the family switch is followed"
+    assert not list(conduct.parent.glob("agent.md.bak-*")), "a family switch is not an edit"
     conduct.write_text("operator tuned")
     grounded.seed_conduct(partition, "anthropic/claude-opus-5")
-    assert conduct.read_text() == "operator tuned", "an edited conduct is never overwritten"
+    assert conduct.read_text() == grounded.render_conduct("anthropic/claude-opus-5")
+    assert [b.read_text() for b in conduct.parent.glob("agent.md.bak-*")] == ["operator tuned"]
 
 
 def test_the_render_declares_the_effort_tiers_on_the_hosts_ladder(grounded):
@@ -1249,7 +1258,7 @@ def test_the_conduct_and_the_discipline_are_each_switchable(grounded, tmp_path, 
     assert conduct.read_text() == without
 
     # Back on: the composition changes, and a pristine copy follows it.
-    monkeypatch.delenv("CODE_CONDUCT_DISCIPLINE")
+    monkeypatch.setenv("CODE_CONDUCT_DISCIPLINE", "on")
     grounded.seed_conduct(partition, "deepseek/deepseek-v4")
     assert conduct.read_text() == whole
 
@@ -1278,6 +1287,11 @@ def test_an_edited_conduct_is_never_removed_by_the_switch(grounded, tmp_path, mo
     monkeypatch.setenv("CODE_CONDUCT", "off")
     grounded.seed_conduct(partition, "deepseek/deepseek-v4")
     assert conduct.read_text() == "operator tuned"
+    # Back on: the product's conduct returns, and the edit survives as a backup.
+    monkeypatch.setenv("CODE_CONDUCT", "on")
+    grounded.seed_conduct(partition, "deepseek/deepseek-v4")
+    assert conduct.read_text() == grounded.render_conduct("deepseek/deepseek-v4")
+    assert [b.read_text() for b in conduct.parent.glob("agent.md.bak-*")] == ["operator tuned"]
 
 
 @pytest.mark.asyncio
@@ -1366,7 +1380,7 @@ def test_a_pristine_legacy_tool_guide_is_migrated_in_existing_partitions(grounde
     assert (partition / "TOOLS.md").read_text() == grounded.GUIDE.read_text()
 
 
-def test_a_managed_tool_guide_refreshes_but_an_operator_edit_is_preserved(grounded, tmp_path, monkeypatch):
+def test_a_managed_tool_guide_refreshes_and_an_operator_edit_is_backed_up(grounded, tmp_path, monkeypatch):
     partition = tmp_path / "part"
     grounded.seed_guide(partition)
     newer = tmp_path / "new-guide.md"
@@ -1377,7 +1391,85 @@ def test_a_managed_tool_guide_refreshes_but_an_operator_edit_is_preserved(ground
     (partition / "TOOLS.md").write_text("operator guidance")
     newer.write_text("Another product update")
     grounded.seed_guide(partition)
-    assert (partition / "TOOLS.md").read_text() == "operator guidance"
+    assert (partition / "TOOLS.md").read_text() == "Another product update"
+    assert [b.read_text() for b in partition.glob("TOOLS.md.bak-*")] == ["operator guidance"]
+
+
+def test_a_receipt_from_before_shared_receipts_still_marks_the_products_text(grounded, tmp_path, monkeypatch):
+    """Partitions written by the launcher's own receipt carry
+    ``.TOOLS.md.code-flow.sha256``; the text it names is the product's, so it
+    is refreshed without a backup and the old receipt gives way to the new."""
+    import hashlib
+
+    partition = tmp_path / "part"
+    partition.mkdir()
+    (partition / "TOOLS.md").write_text("guide from an older release")
+    old_receipt = partition / ".TOOLS.md.code-flow.sha256"
+    old_receipt.write_text(hashlib.sha256(b"guide from an older release").hexdigest() + "\n")
+    grounded.seed_guide(partition)
+    assert (partition / "TOOLS.md").read_text() == grounded.GUIDE.read_text()
+    assert not list(partition.glob("TOOLS.md.bak-*"))
+    assert not old_receipt.exists()
+    assert (partition / ".TOOLS.md.generated.sha256").is_file()
+
+
+def test_an_unwritable_prompt_refuses_the_launch_with_the_reason(grounded, tmp_path, monkeypatch):
+    def unwritable(*_args, **_kwargs):
+        raise PermissionError("read-only partition")
+
+    monkeypatch.setattr(grounded.render, "write_generated", unwritable)
+    with pytest.raises(SystemExit, match="cannot regenerate .*TOOLS.md: read-only partition"):
+        grounded.seed_guide(tmp_path / "part")
+
+
+def test_a_stuck_old_receipt_refuses_the_launch_with_the_reason(grounded, tmp_path, monkeypatch):
+    partition = tmp_path / "part"
+    partition.mkdir()
+    old_receipt = partition / ".TOOLS.md.code-flow.sha256"
+    old_receipt.write_text("0" * 64 + "\n")
+    real_unlink = type(old_receipt).unlink
+
+    def unlink(path, missing_ok=False):
+        if path.name == old_receipt.name:
+            raise PermissionError("immutable file")
+        return real_unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(type(old_receipt), "unlink", unlink)
+    with pytest.raises(SystemExit, match="cannot regenerate .*TOOLS.md: immutable file"):
+        grounded.seed_guide(partition)
+
+
+def test_the_operators_local_lines_reach_the_system_prompt(grounded, tmp_path):
+    """Read back where the model reads: the bootstrap files the context builder
+    assembles, not the file the launcher wrote."""
+    from raven.agent.context import ContextBuilder
+
+    partition = tmp_path / "part"
+    profile = partition / "agent_memory" / "profile"
+    profile.mkdir(parents=True)
+    (profile / "agent.local.md").write_text("Run the linter before every commit.")
+    (partition / "TOOLS.local.md").write_text("The staging database is read-only.")
+    grounded.seed_guide(partition)
+    grounded.seed_soul(partition)
+    grounded.seed_conduct(partition, "deepseek/deepseek-v4")
+    (profile / "soul.md").write_text("an edit outside the local file")
+    grounded.seed_soul(partition)
+    system = ContextBuilder(partition).build_system_prompt()
+    assert "Run the linter before every commit." in system
+    assert "The staging database is read-only." in system
+    assert "## Tool usage policy" in system, "the product conduct is there too"
+    assert "an edit outside the local file" not in system
+
+
+def test_the_identity_is_regenerated_with_the_operators_local_lines(grounded, tmp_path):
+    partition = tmp_path / "part"
+    grounded.seed_soul(partition)
+    soul = partition / "agent_memory" / "profile" / "soul.md"
+    assert soul.read_text() == grounded.SOUL.read_text()
+    (soul.parent / "soul.local.md").write_text("Prefer small commits.")
+    grounded.seed_soul(partition)
+    assert soul.read_text() == grounded.SOUL.read_text().rstrip("\n") + "\n\nPrefer small commits.\n"
+    assert not list(soul.parent.glob("soul.md.bak-*"))
 
 
 @pytest.mark.parametrize("tools_enabled", [True, False])
