@@ -10,10 +10,12 @@
  * squeezes a name into something unreadable.
  */
 
+import { Pin02Icon } from '@hugeicons/core-free-icons'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
+import { Icon } from '../../components/Icon'
 import { t } from '../../i18n/t'
-import { INTERNAL_BLOCKS, blockTitleKey } from './blocks'
+import { blockTitleKey } from './blocks'
 import * as details from './detailStore'
 
 import type { TrajectoryBlockDescriptor } from './types'
@@ -31,10 +33,10 @@ export function blockTitle(block: Pick<TrajectoryBlockDescriptor, 'id'>): string
   return key ? t(key) : block.id
 }
 
-export function Tabs({ entryId, blocks: all }: { entryId: string; blocks: TrajectoryBlockDescriptor[] }): JSX.Element {
+export function Tabs({ entryId, blocks }: { entryId: string; blocks: TrajectoryBlockDescriptor[] }): JSX.Element {
   const current = details.tabOf(entryId)
-  const blocks = all.filter((b) => !INTERNAL_BLOCKS.includes(b.id))
-  const tabs: details.Tab[] = ['overview', ...blocks.map((b) => b.id)]
+  const tabs = details.visibleTabs(blocks)
+  const pin = details.pinned()
   const strip = useRef<HTMLDivElement | null>(null)
   const [reach, setReach] = useState({ left: false, right: false })
 
@@ -54,11 +56,14 @@ export function Tabs({ entryId, blocks: all }: { entryId: string; blocks: Trajec
     ro.observe(el)
     return () => ro.disconnect()
   }, [measure])
-  /* The selected tab is kept in view, however it was selected. */
+  const over = reach.left || reach.right
+  /* The selected tab is kept in view, however it was selected -- and again
+     when the arrows come or go, since they take their room from the strip: a
+     tab brought to the edge before they appeared would end up under one. */
   useLayoutEffect(() => {
     strip.current?.querySelector<HTMLElement>(`#${tabId(current)}`)?.scrollIntoView?.({ inline: 'nearest', block: 'nearest' })
     measure()
-  }, [current, measure])
+  }, [current, over, measure])
   const nudge = (direction: -1 | 1): void => {
     const el = strip.current
     if (!el) return
@@ -84,7 +89,7 @@ export function Tabs({ entryId, blocks: all }: { entryId: string; blocks: Trajec
 
   return (
     <div className="trajectory-tabs-wrap" data-reach-left={reach.left ? '' : undefined} data-reach-right={reach.right ? '' : undefined}>
-      {reach.left || reach.right ? (
+      {over ? (
         <button className="trajectory-tab-arrow" aria-label={t('gui.trajectory.details.tabs_earlier')} disabled={!reach.left} onClick={() => nudge(-1)}>
           {'\u2039'}
         </button>
@@ -103,15 +108,22 @@ export function Tabs({ entryId, blocks: all }: { entryId: string; blocks: Trajec
             aria-selected={selected}
             aria-controls={panelId(tab)}
             tabIndex={selected ? 0 : -1}
+            data-pinned={tab === pin ? '' : undefined}
             onClick={() => details.setTab(entryId, tab)}
           >
             {tab === 'overview' ? t('gui.trajectory.details.overview') : blockTitle(block!)}
             {muted ? <span className="trajectory-tab-dot" aria-hidden="true" /> : null}
+            {/* Named rather than hidden, so the tab's own name says it is the pinned one. */}
+            {tab === pin ? (
+              <span className="trajectory-tab-pin" role="img" aria-label={t('gui.trajectory.details.pinned')} title={t('gui.trajectory.details.pinned')}>
+                <Icon icon={Pin02Icon} size={11} />
+              </span>
+            ) : null}
           </button>
         )
       })}
     </div>
-      {reach.left || reach.right ? (
+      {over ? (
         <button className="trajectory-tab-arrow" aria-label={t('gui.trajectory.details.tabs_later')} disabled={!reach.right} onClick={() => nudge(1)}>
           {'\u203a'}
         </button>

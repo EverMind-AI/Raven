@@ -157,6 +157,11 @@ details pane beside the list (`features/trajectory/detailStore.ts`): a descripto
 read through `trajectory.detail` and block bodies read through
 `trajectory.block`, each filed under its whole identity (session, epoch,
 entry, revision, block) and shown only under the ticket it was asked with.
+The pane's head carries a pin for the tab on screen: the conversation's
+**pinned tab**, opened first whenever the pane arrives at an entry whose strip
+has it (a new selection, or the pane reopened) and never while the reader is
+already on the entry; kept per conversation in memory and in the tab's session
+storage (`lib/persist.ts`), with no cap.
 Above the list sits the duration bar (`features/trajectory/DurationBar.tsx`,
 arithmetic in `geometry.ts`): every entry as a block as wide as what it is
 charged, zoomed about the pointer and dragged, dense blocks where the fit has

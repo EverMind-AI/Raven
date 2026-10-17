@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as details from './detailStore'
+import * as list from './store'
 import { ARROW_STEP, Tabs } from './Tabs'
 
 import type { TrajectoryBlockDescriptor } from './types'
@@ -29,7 +30,9 @@ function geometry(strip: HTMLElement, scrollWidth: number, clientWidth: number):
 }
 
 beforeEach(() => {
+  list._resetForTests()
   details._resetForTests()
+  list.sessionChanged('gui:a')
   setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
   document.body.innerHTML = ''
 })
@@ -75,5 +78,52 @@ describe('the tab strip', () => {
     act(() => { fireEvent.keyDown(strip, { key: 'End' }) })
     expect(details.tabOf('r0')).toBe('b11')
     expect(scrolled.at(-1)).toBe('trajectory-tab-b11')
+  })
+
+  it('brings the selected tab into view again once the arrows take their room, and not on a nudge', () => {
+    details.setTab('r0', 'b11')
+    render(<Host blocks={Array.from({ length: 12 }, (_, i) => block(`b${i}`))} />)
+    const strip = q('.trajectory-tabs') as HTMLElement
+    const scrolled: string[] = []
+    for (const tab of document.querySelectorAll<HTMLElement>('[role="tab"]')) tab.scrollIntoView = () => { scrolled.push(tab.id) }
+    geometry(strip, 900, 300)
+    act(() => { fireEvent.scroll(strip) })
+    expect(document.querySelectorAll('.trajectory-tab-arrow')).toHaveLength(2)
+    expect(scrolled).toEqual(['trajectory-tab-b11'])
+    /* A nudge changes which arrows are enabled, not whether they show: the
+       reader's own scroll stands. */
+    const arrows = (): HTMLButtonElement[] => [...document.querySelectorAll<HTMLButtonElement>('.trajectory-tab-arrow')]
+    expect(arrows().map((a) => a.disabled)).toEqual([true, false])
+    act(() => { fireEvent.click(arrows()[1]!) })
+    act(() => { fireEvent.scroll(strip) })
+    expect(strip.scrollLeft).toBe(300 * ARROW_STEP)
+    expect(arrows().map((a) => a.disabled)).toEqual([false, false])
+    expect(scrolled).toEqual(['trajectory-tab-b11'])
+  })
+})
+
+describe('the pinned mark', () => {
+  const pinnedTabs = (): string[] => [...document.querySelectorAll('[data-pinned]')].map((t) => t.id)
+
+  it('marks only the pinned tab, by name, wherever the selection moves', () => {
+    render(<Host blocks={[block('a'), block('b'), block('c')]} />)
+    expect(q('.trajectory-tab-pin')).toBeNull()
+    act(() => { details.setTab('r0', 'b'); details.togglePin('r0') })
+    const marks = [...document.querySelectorAll('.trajectory-tab-pin')]
+    expect(marks.map((m) => m.closest('[role="tab"]')!.id)).toEqual(['trajectory-tab-b'])
+    expect(marks[0]!.getAttribute('role')).toBe('img')
+    expect(marks[0]!.getAttribute('aria-label')).toBe('gui.trajectory.details.pinned')
+    expect(pinnedTabs()).toEqual(['trajectory-tab-b'])
+    act(() => { details.setTab('r0', 'c') })
+    expect(pinnedTabs()).toEqual(['trajectory-tab-b'])
+  })
+
+  it('marks nothing when the pinned tab is not among the blocks', () => {
+    details.setTab('r0', 'z')
+    details.togglePin('r0')
+    render(<Host blocks={[block('a'), block('b')]} />)
+    expect(details.pinned()).toBe('z')
+    expect(q('.trajectory-tab-pin')).toBeNull()
+    expect(pinnedTabs()).toEqual([])
   })
 })

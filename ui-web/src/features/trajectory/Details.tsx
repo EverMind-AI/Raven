@@ -9,8 +9,10 @@
  * so the next key goes where the reader was.
  */
 
+import { Pin02Icon } from '@hugeicons/core-free-icons'
 import { useLayoutEffect, useRef, useSyncExternalStore } from 'react'
 
+import { Icon } from '../../components/Icon'
 import { t } from '../../i18n/t'
 import { BlockView } from './BlockView'
 import * as details from './detailStore'
@@ -125,6 +127,9 @@ export function Details(): JSX.Element | null {
   if (!s.open || entryId === null) return null
   const kind = value?.kind ?? entry?.kind ?? ''
   const closeLabel = t(narrow ? 'gui.trajectory.details.back' : 'gui.trajectory.details.close')
+  const pin = details.pinned(s)
+  const here = value !== null && pin !== null && pin === details.tabOf(entryId)
+  const pinLabel = t(here ? 'gui.trajectory.details.unpin' : 'gui.trajectory.details.pin')
   return (
     <aside
       className={narrow ? 'trajectory-details trajectory-details-over' : 'trajectory-details'}
@@ -135,6 +140,11 @@ export function Details(): JSX.Element | null {
       <div className="trajectory-head">
         {kind ? <span className={`trajectory-tag ${kindClass(kind)}`}>{kindLabel(kind)}</span> : null}
         <span className="trajectory-head-name" title={value ? shortName(value, entry) : undefined}>{value ? shortName(value, entry) : (entry?.span_name ?? '')}</span>
+        {value ? (
+          <button className="trajectory-pin" aria-pressed={here} aria-label={pinLabel} title={pinLabel} onClick={() => details.togglePin(entryId)}>
+            <Icon icon={Pin02Icon} size={15} />
+          </button>
+        ) : null}
         <button className="trajectory-close" aria-label={closeLabel} title={closeLabel} onClick={() => details.closeDetails()}>
           {narrow ? t('gui.trajectory.details.back') : '✕'}
         </button>

@@ -442,3 +442,65 @@ describe('shortName', () => {
     expect(shortName(descriptor('x', [block({ id: 'content' })]))).toBe('tool.call')
   })
 })
+
+describe('the pin', () => {
+  const blocks = (...ids: string[]): TrajectoryBlockDescriptor[] => ids.map((id) => block({ id }))
+  const pinButton = (): HTMLButtonElement | null => q<HTMLButtonElement>('.trajectory-pin')
+  const click = (sel: string): void => { act(() => { fireEvent.click(q(sel) as HTMLElement) }) }
+  /* Where the pin sits against the close button among the head's children. */
+  const offset = (): number => {
+    const head = [...q('.trajectory-head')!.children]
+    return head.indexOf(q('.trajectory-close')!) - head.indexOf(pinButton()!)
+  }
+
+  it('sits just left of the close button once the descriptor is in, wide and narrow', async () => {
+    await draw()
+    await pick('r0')
+    expect(pinButton()).toBeNull()
+    await answerDetail(descriptor('r0', blocks('relations', 'usage')))
+    expect(offset()).toBe(1)
+    act(() => { details.setAreaWidth(700) })
+    expect(q('.trajectory-details-over')).not.toBeNull()
+    expect(q('.trajectory-close')!.textContent).toBe('gui.trajectory.details.back')
+    expect(offset()).toBe(1)
+  })
+
+  it('pins the tab on screen, reads unpinned on any other tab, and unpins from the pinned one', async () => {
+    await draw()
+    await pick('r0')
+    await answerDetail(descriptor('r0', blocks('relations', 'usage')))
+    expect(pinButton()!.getAttribute('aria-pressed')).toBe('false')
+    expect(pinButton()!.getAttribute('aria-label')).toBe('gui.trajectory.details.pin')
+    click('#trajectory-tab-relations')
+    click('.trajectory-pin')
+    expect(details.pinned()).toBe('relations')
+    expect(pinButton()!.getAttribute('aria-pressed')).toBe('true')
+    expect(pinButton()!.getAttribute('aria-label')).toBe('gui.trajectory.details.unpin')
+    click('#trajectory-tab-usage')
+    expect(pinButton()!.getAttribute('aria-pressed')).toBe('false')
+    expect(details.pinned()).toBe('relations')
+    click('#trajectory-tab-relations')
+    click('.trajectory-pin')
+    expect(details.pinned()).toBeNull()
+    expect(pinButton()!.getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('opens another row on the pinned tab, and leaves a row without that tab where the reader left it', async () => {
+    await draw()
+    await pick('r1')
+    await answerDetail(descriptor('r1', blocks('usage', 'origin')))
+    click('#trajectory-tab-origin')
+    await pick('r0')
+    await answerDetail(descriptor('r0', blocks('relations', 'usage')))
+    click('#trajectory-tab-relations')
+    click('.trajectory-pin')
+    await pick('r2')
+    await answerDetail(descriptor('r2', blocks('relations', 'usage')))
+    expect(q('#trajectory-tab-relations')!.getAttribute('aria-selected')).toBe('true')
+    expect(pinButton()!.getAttribute('aria-pressed')).toBe('true')
+    await pick('r1')
+    expect(q('#trajectory-tab-origin')!.getAttribute('aria-selected')).toBe('true')
+    expect(pinButton()!.getAttribute('aria-pressed')).toBe('false')
+    expect(q('[data-pinned]')).toBeNull()
+  })
+})
