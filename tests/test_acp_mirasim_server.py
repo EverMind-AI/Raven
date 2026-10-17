@@ -887,6 +887,9 @@ async def test_resume_reopens_without_replaying(harness: Harness) -> None:
     result = await harness.ok("session/resume", sessionId="acp-1", cwd=str(harness.tmp_path), mcpServers=[])
     validate_def("ResumeSessionResponse", result)
     assert harness.said("acp-1", "user_message_chunk") == ""
+    # Nor is the turn the conversation ended on: its snapshot is its client's, not new words.
+    assert harness.said("acp-1") == ""
+    assert [u for u in harness.session_updates("acp-1") if u["sessionUpdate"] != "available_commands_update"] == []
     assert harness.host.frames("subscribe")[-1]["sessionKey"] == session.key
 
 
