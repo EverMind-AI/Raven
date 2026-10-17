@@ -14,12 +14,21 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shlex
+import subprocess
 import sys
+import tempfile
+import threading
+import time
 from pathlib import Path
 
+import pytest
+
+from raven.agent.loop.checkpoint import CheckpointService
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.shell import ExecTool as TrunkExecTool
 from raven.plugins.context import PluginContext, ServiceLocator
+from raven.sandbox.direct_executor import DirectExecutor
 
 REPO = Path(__file__).resolve().parent.parent
 PLUGIN_DIR = REPO / "agents" / "raven-code" / "plugins" / "code-flow"
@@ -57,6 +66,509 @@ def _tool(tmp_path: Path, max_timeout: int = 1200) -> CodeExecTool:
         extra_allowed_dirs=(home,),
         max_timeout=max_timeout,
     )
+
+
+def _diagnostic_tool(tmp_path: Path, tools: dict | None = None) -> CodeExecTool:
+    (tmp_path / "home").mkdir(exist_ok=True)
+    tool = factories.make_exec(_ctx(tmp_path, tools))
+    assert tool is not None
+    # The existing CodeExecutor probe uses POSIX quoting. Exercise the new
+    # diagnostic layer with the real native host executor on Windows.
+    if os.name == "nt":
+        tool._executor = DirectExecutor()
+    repos = {}
+
+    def shadow(root):
+        if root not in repos:
+            repos[root] = CheckpointService(root)
+        return repos[root]
+
+    # As the loop wires a same-name exec: the write record and the visibility
+    # hook arrive together, through the one door production uses.
+    tool.measure_writes(shadow)
+    return tool
+
+
+def _python_command(tmp_path: Path, source: str) -> str:
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=tmp_path, suffix=".py", delete=False) as script:
+        script.write(source)
+    argv = [sys.executable, script.name]
+    return subprocess.list2cmdline(argv) if os.name == "nt" else shlex.join(argv)
+
+
+def _write_command(tmp_path: Path, files: dict[str, str], *, exit_code: int = 0) -> str:
+    source = "from pathlib import Path\n"
+    for name, text in files.items():
+        source += f"Path({name!r}).parent.mkdir(parents=True, exist_ok=True)\n"
+        source += f"Path({name!r}).write_text({text!r}, encoding='utf-8')\n"
+    return _python_command(tmp_path, source + f"raise SystemExit({exit_code})\n")
+
+
+def test_exec_created_python_gets_name_diagnostics_in_the_command_result(tmp_path):
+    tool = _diagnostic_tool(tmp_path)
+    out = _run(tool.execute(command=_write_command(tmp_path, {"created.py": "result = missing_value\n"})))
+    assert "Exit code: 0" in str(out) and "F821" in str(out) and "missing_value" in str(out)
+    assert getattr(out, "ok", None) is True
+    assert (tmp_path / "home" / "created.py").read_text() == "result = missing_value\n"
+
+
+def test_exec_diagnostics_work_in_paths_with_spaces_and_non_ascii_characters(tmp_path):
+    root = tmp_path / "space path \u00e9"
+    root.mkdir()
+    tool = _diagnostic_tool(root)
+    out = _run(tool.execute(command=_write_command(root, {"created.py": "result = missing_value\n"})))
+    assert out.ok is True and "F821" in str(out)
+    assert (root / "home" / "created.py").read_text() == "result = missing_value\n"
+
+
+def test_exec_reuses_the_hosts_write_record_and_keeps_it_in_the_result(tmp_path):
+    tool = _diagnostic_tool(tmp_path)
+    out = _run(tool.execute(command=_write_command(tmp_path, {"recorded.py": "result = missing_value\n"})))
+    assert "F821" in str(out)
+    assert len(out.written) == 1 and out.written[0].path.endswith("recorded.py")
+
+
+def test_exec_modified_python_labels_unknown_baseline_and_ignores_untouched_files(tmp_path):
+    tool = _diagnostic_tool(tmp_path)
+    home = tmp_path / "home"
+    (home / "untouched.py").write_text("old = untouched_missing\n")
+    (home / "changed.py").write_text("value = 1\n")
+    out = str(_run(tool.execute(command=_write_command(tmp_path, {"changed.py": "value = newly_missing\n"}))))
+    assert "newly_missing" in out and "baseline is unknown" in out
+    assert "untouched_missing" not in out
+    assert "Python diagnostics" not in str(
+        _run(
+            tool.execute(
+                command=_python_command(tmp_path, "from pathlib import Path; print(Path('changed.py').read_text())")
+            )
+        )
+    )
+
+
+def test_exec_syntax_feedback_keeps_command_failure_and_does_not_rollback(tmp_path):
+    tool = _diagnostic_tool(tmp_path)
+    out = _run(tool.execute(command=_write_command(tmp_path, {"broken.py": "def f(:\n"}, exit_code=7)))
+    assert "Exit code: 7" in str(out) and "syntax error" in str(out)
+    assert getattr(out, "ok", None) is False
+    assert (tmp_path / "home" / "broken.py").read_text() == "def f(:\n"
+
+
+def test_exec_diagnostics_follow_explicit_working_directory_and_have_a_switch(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    elsewhere = home / "elsewhere"
+    elsewhere.mkdir()
+    tool = _diagnostic_tool(tmp_path)
+    out = str(
+        _run(tool.execute(command=_write_command(tmp_path, {"other.py": "x = missing\n"}), working_dir=str(elsewhere)))
+    )
+    assert os.path.join("elsewhere", "other.py") in out and "F821" in out
+    quiet = _diagnostic_tool(tmp_path, {"execPythonDiagnostics": False})
+    out = str(_run(quiet.execute(command=_write_command(tmp_path, {"quiet.py": "def f(:\n"}))))
+    assert "Python diagnostics" not in out
+
+
+def test_exec_notes_preserve_file_metadata_and_control_flags():
+    from code_flow.tools.exec import _prefixed
+
+    from raven.contracts.tool import Continuation, FileRemoval, FileWrite, ToolOutput, ToolResult
+
+    for cls in (ToolOutput, ToolResult):
+        original = cls(
+            "command failed",
+            ok=False,
+            retryable=False,
+            blocks_call=True,
+            continuation=Continuation.CONTINUE,
+            written=(FileWrite(path="a.py", created=True, size=1),),
+            removed=(FileRemoval(path="gone.py"),),
+        )
+        annotated = _prefixed(" diagnostic", original, append=True)
+        assert annotated.written == original.written and annotated.removed == original.removed
+        assert annotated.ok is False and annotated.retryable is False and annotated.blocks_call is True
+
+
+def test_exec_diagnostics_do_not_read_files_withheld_by_the_host(tmp_path):
+    class Shadow:
+        async def stage_tree(self):
+            return None
+
+        async def trackable(self, paths):
+            return {path for path in paths if Path(path).name != "private.py"}
+
+    tool = _diagnostic_tool(tmp_path)
+    tool.measure_writes(lambda root: Shadow())
+    out = _run(
+        tool.execute(
+            command=_write_command(
+                tmp_path,
+                {"private.py": "private_value = private_missing\n", "public.py": "public_value = public_missing\n"},
+            )
+        )
+    )
+    assert "public_missing" in str(out)
+    assert "private_missing" not in str(out)
+    assert out.ok is True and len(out.written) == 2
+
+
+def test_exec_without_a_write_record_reads_nothing(tmp_path, monkeypatch):
+    from code_flow.tools import diagnostics
+
+    from raven.contracts.tool import FileWrite, ToolOutput
+
+    tool = _diagnostic_tool(tmp_path)
+    target = tmp_path / "home" / "recorded.py"
+    reads, records = [], []
+    monkeypatch.setattr(diagnostics, "read_python", lambda path: reads.append(path))
+
+    async def host(*args, **kwargs):
+        # With no record, as when the host's listing gave up: the output alone.
+        return ToolOutput("Exit code: 0", ok=True, written=tuple(records))
+
+    monkeypatch.setattr(TrunkExecTool, "execute", host)
+    out = _run(tool.execute(command="test command"))
+    assert out.ok is True and str(out) == "Exit code: 0" and reads == []
+    # The control: the same tool reads the file once the host records it.
+    records.append(FileWrite(path=str(target), created=True, size=24))
+    _run(tool.execute(command="test command"))
+    assert reads == [target]
+
+
+@pytest.mark.parametrize("kind", ["timeout", "exception"])
+def test_exec_post_command_checker_failure_keeps_original_exit_and_output(tmp_path, monkeypatch, kind):
+    from code_flow.tools import exec as module
+
+    tool = _diagnostic_tool(tmp_path)
+
+    async def broken(*args):
+        if kind == "timeout":
+            await asyncio.Event().wait()
+        raise RuntimeError("diagnostic failed")
+
+    monkeypatch.setattr(tool, "_diagnose_writes", broken)
+    monkeypatch.setattr(module, "_DIAGNOSTIC_WAIT_SECONDS", 0.01)
+    out = _run(tool.execute(command=_python_command(tmp_path, "print('evidence'); raise SystemExit(9)")))
+    assert "evidence" in str(out) and "Exit code: 9" in str(out)
+    assert out.ok is False
+
+
+def test_exec_refused_command_takes_no_diagnostics(tmp_path, monkeypatch):
+    tool = _diagnostic_tool(tmp_path)
+    calls = []
+
+    async def diagnose(*args):
+        calls.append(args)
+        return "unexpected"
+
+    monkeypatch.setattr(tool, "_diagnose_writes", diagnose)
+    monkeypatch.setattr(tool, "_guard_command", lambda *args: "refused for this test")
+    out = _run(tool.execute(command="echo refused"))
+    assert not calls and out.blocks_call
+
+
+def test_exec_diagnostics_limit_changed_files_and_output(tmp_path):
+    tool = _diagnostic_tool(tmp_path)
+    files = {f"file{i}.py": "result = missing\n" for i in range(10)}
+    files.update({f"notes{i}.txt": "not python\n" for i in range(3)})
+    out = str(_run(tool.execute(command=_write_command(tmp_path, files))))
+    assert out.count("Python diagnostics for") == 8
+    assert "2 more were skipped" in out and "notes" not in out
+    assert len(out) < 6500
+
+
+def test_exec_checks_four_files_at_a_time_in_stable_order_with_an_eight_file_cap(tmp_path, monkeypatch):
+    from code_flow.tools import diagnostics
+
+    tool = _diagnostic_tool(tmp_path)
+    barrier = threading.Barrier(4, timeout=2)
+    lock = threading.Lock()
+    active = peak = 0
+    checked = []
+
+    def note(self, path, text, **kwargs):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+            checked.append(path.name)
+        try:
+            barrier.wait()
+            return f"checked:{path.name}"
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(diagnostics.PythonDiagnostics, "note", note)
+    out = str(_run(tool.execute(command=_write_command(tmp_path, {f"file{i}.py": "x = 1\n" for i in range(10)}))))
+    assert peak == 4 and len(checked) == 8
+    assert sorted(checked) == [f"file{i}.py" for i in range(8)]
+    positions = [out.index(f"checked:file{i}.py") for i in range(8)]
+    assert positions == sorted(positions)
+    assert "2 more were skipped" in out
+
+
+@pytest.mark.parametrize("visible_count", [1, 10])
+def test_exec_withheld_files_do_not_consume_the_diagnostic_file_limit(tmp_path, monkeypatch, visible_count):
+    from raven.contracts.tool import FileWrite, ToolOutput
+
+    batches = []
+
+    class Shadow:
+        async def trackable(self, paths):
+            batches.append(list(paths))
+            return {path for path in paths if Path(path).name.startswith("visible")}
+
+    tool = _diagnostic_tool(tmp_path)
+    tool.measure_writes(lambda root: Shadow())
+    paths = [tmp_path / "home" / f"private{i}.py" for i in range(8)] + [
+        tmp_path / "home" / f"visible{i}.py" for i in range(visible_count)
+    ]
+    for path in paths:
+        path.write_text("value = missing_binding\n")
+
+    async def host(*args, **kwargs):
+        return ToolOutput(
+            "Exit code: 0", ok=True, written=tuple(FileWrite(path=str(p), created=True, size=24) for p in paths)
+        )
+
+    monkeypatch.setattr(TrunkExecTool, "execute", host)
+    out = str(_run(tool.execute(command="test command")))
+    assert "visible0.py" in out and "F821" in out
+    assert all(f"private{i}.py" not in out for i in range(8))
+    assert [len(batch) for batch in batches] == [8 + visible_count]
+    assert out.count("Python diagnostics for") == min(8, visible_count)
+    if visible_count > 8:
+        assert "2 more were skipped" in out and "visible8.py" not in out
+    else:
+        assert "were skipped" not in out
+
+
+def test_exec_ignored_files_are_asked_about_in_wide_batches(tmp_path, monkeypatch):
+    from raven.contracts.tool import FileWrite, ToolOutput
+
+    queries = []
+
+    class Shadow:
+        async def trackable(self, paths):
+            queries.append(len(paths))
+            return {path for path in paths if Path(path).name == "visible.py"}
+
+    tool = _diagnostic_tool(tmp_path)
+    tool.measure_writes(lambda root: Shadow())
+    home = tmp_path / "home"
+    ignored = [home / "build" / f"mod{i}.py" for i in range(600)]
+    visible = home / "visible.py"
+    visible.write_text("shown = visible_missing\n")
+
+    async def host(*args, **kwargs):
+        # Ordered the way the host sorts its record: the ignored tree first.
+        records = [FileWrite(path=str(p), created=True, size=1) for p in ignored]
+        records.append(FileWrite(path=str(visible), created=True, size=24))
+        return ToolOutput("Exit code: 0", ok=True, written=tuple(records))
+
+    monkeypatch.setattr(TrunkExecTool, "execute", host)
+    out = str(_run(tool.execute(command="test command")))
+    assert queries == [256, 256, 89]
+    assert "visible_missing" in out and "mod0.py" not in out
+
+
+def test_exec_visibility_queries_stop_once_the_file_limit_is_visible(tmp_path, monkeypatch):
+    from raven.contracts.tool import FileWrite, ToolOutput
+
+    queries = []
+
+    class Shadow:
+        async def trackable(self, paths):
+            queries.append(len(paths))
+            return set(paths)
+
+    tool = _diagnostic_tool(tmp_path)
+    tool.measure_writes(lambda root: Shadow())
+    paths = [tmp_path / "home" / f"file{i:03}.py" for i in range(300)]
+    for path in paths[:8]:
+        path.write_text("value = missing_binding\n")
+
+    async def host(*args, **kwargs):
+        return ToolOutput(
+            "Exit code: 0", ok=True, written=tuple(FileWrite(path=str(p), created=True, size=24) for p in paths)
+        )
+
+    monkeypatch.setattr(TrunkExecTool, "execute", host)
+    out = str(_run(tool.execute(command="test command")))
+    assert queries == [256]
+    assert out.count("Python diagnostics for") == 8
+    assert "248 more were skipped" in out
+    assert "44 additional changed files were not checked" in out
+
+
+def test_exec_visibility_batches_yield_to_the_post_command_deadline(tmp_path, monkeypatch):
+    from code_flow.tools import exec as module
+
+    from raven.contracts.tool import FileWrite, ToolOutput
+
+    calls = []
+
+    class Shadow:
+        async def trackable(self, paths):
+            # Stands for the host resolving every path on the loop: no await.
+            calls.append(len(paths))
+            time.sleep(0.06)
+            return set()
+
+    tool = _diagnostic_tool(tmp_path)
+    tool.measure_writes(lambda root: Shadow())
+    home = tmp_path / "home"
+    records = tuple(FileWrite(path=str(home / f"mod{i}.py"), created=True, size=1) for i in range(3000))
+
+    async def host(*args, **kwargs):
+        return ToolOutput("Exit code: 0", ok=True, written=records)
+
+    monkeypatch.setattr(TrunkExecTool, "execute", host)
+    monkeypatch.setattr(module, "_DIAGNOSTIC_WAIT_SECONDS", 0.05)
+    out = _run(tool.execute(command="test command"))
+    assert str(out) == "Exit code: 0" and out.ok is True
+    # Twelve batches in all; the deadline stops them at a yield in between.
+    assert 1 <= len(calls) < 12
+
+
+@pytest.mark.asyncio
+async def test_exec_diagnostics_do_not_stat_walk_or_open_files_on_the_event_loop(tmp_path, monkeypatch):
+    """The plugin's own selection, with the host's visibility hook faked out:
+    every stat, walk and open it needs happens on a diagnostic worker."""
+    import io
+
+    from raven.contracts.tool import FileWrite, ToolOutput
+
+    loop_thread = threading.get_ident()
+    on_loop, walked = [], []
+    active = False
+
+    def watch(module, name):
+        original = getattr(module, name)
+
+        def watched(*args, **kwargs):
+            if active and threading.get_ident() == loop_thread:
+                on_loop.append(name)
+            if active and name == "scandir":
+                walked.append(args)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(module, name, watched)
+
+    for module, name in ((os, "stat"), (os, "lstat"), (os, "scandir"), (os.path, "realpath"), (io, "open")):
+        watch(module, name)
+
+    class Shadow:
+        async def trackable(self, paths):
+            return {path for path in paths if Path(path).name == "visible.py"}
+
+    tool = _diagnostic_tool(tmp_path)
+    tool.measure_writes(lambda root: Shadow())
+    home = tmp_path / "home"
+    visible = home / "visible.py"
+    visible.write_text("shown = visible_missing\n")
+    records = [FileWrite(path=str(home / "build" / f"mod{i}.py"), created=True, size=1) for i in range(3000)]
+    records.append(FileWrite(path=str(visible), created=True, size=24))
+    active = True
+    try:
+        note = await tool._diagnose_writes(home, ToolOutput("Exit code: 0", ok=True, written=tuple(records)))
+    finally:
+        active = False
+    assert "visible_missing" in note
+    assert on_loop == [] and walked == []
+
+
+def test_exec_diagnostics_skip_symlinks_cache_and_non_python_files(tmp_path):
+    tool = _diagnostic_tool(tmp_path)
+    home = tmp_path / "home"
+    outside = tmp_path / "outside.py"
+    outside.write_text("value = external_missing\n")
+    try:
+        (tmp_path / "probe_link.py").symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("This host cannot create the symlink fixture")
+    command = _python_command(
+        tmp_path,
+        "import os\n"
+        "from pathlib import Path\n"
+        f"os.symlink({str(outside)!r}, 'link.py')\n"
+        "Path('.venv').mkdir()\n"
+        "Path('.venv/cached.py').write_text('x = cached_missing\\n')\n"
+        "Path('text.txt').write_text('def f(:\\n')\n"
+        "Path('shown.py').write_text('y = shown_missing\\n')\n",
+    )
+    out = str(_run(tool.execute(command=command)))
+    assert (home / "link.py").is_symlink()
+    assert "shown_missing" in out
+    assert "external_missing" not in out and "cached_missing" not in out and "text.txt" not in out
+
+
+@pytest.mark.parametrize("params", [{"machine": "elsewhere"}, {"run_in_background": True}])
+def test_exec_nonlocal_or_background_commands_take_no_local_diagnostics(tmp_path, monkeypatch, params):
+    from raven.contracts.tool import ToolOutput
+
+    tool = _diagnostic_tool(tmp_path)
+    calls = []
+
+    async def diagnose(*args):
+        calls.append(args)
+        return "unexpected"
+
+    async def host(*args, **kwargs):
+        return ToolOutput("host response", ok=True)
+
+    monkeypatch.setattr(tool, "_diagnose_writes", diagnose)
+    monkeypatch.setattr(TrunkExecTool, "execute", host)
+    assert str(_run(tool.execute(command="test command", **params))) == "host response"
+    assert calls == []
+
+
+def test_exec_missing_visibility_verdict_never_falls_back_to_reading_the_file(tmp_path, monkeypatch):
+    from raven.contracts.tool import FileWrite, ToolOutput
+
+    class Shadow:
+        async def trackable(self, paths):
+            raise RuntimeError("visibility unavailable")
+
+    tool = _diagnostic_tool(tmp_path)
+    target = tmp_path / "home" / "withheld.py"
+    target.write_text("value = confidential_name\n")
+    tool.measure_writes(lambda root: Shadow())
+
+    async def host(*args, **kwargs):
+        return ToolOutput("Exit code: 0", ok=True, written=(FileWrite(path=str(target), created=True, size=1),))
+
+    monkeypatch.setattr(TrunkExecTool, "execute", host)
+    out = _run(tool.execute(command="test command"))
+    assert out.ok is True and len(out.written) == 1
+    assert "confidential_name" not in str(out)
+
+
+@pytest.mark.parametrize("hook", [None, lambda root: None])
+def test_exec_without_checkpoint_never_reads_changed_file_contents(tmp_path, monkeypatch, hook):
+    from code_flow.tools import diagnostics
+
+    from raven.contracts.tool import FileWrite, ToolOutput
+
+    tool = _tool(tmp_path)
+    tool.measure_writes(hook)
+    target = tmp_path / "home" / "local_secrets.py"
+    target.write_text("token = confidential_name\n")
+    (target.parent / ".gitignore").write_text("local_secrets.py\n")
+    reads = []
+
+    def read(path):
+        reads.append(path)
+        return path.read_text()
+
+    async def host(*args, **kwargs):
+        return ToolOutput("Exit code: 0", ok=True, written=(FileWrite(path=str(target), created=True, size=26),))
+
+    monkeypatch.setattr(diagnostics, "read_python", read)
+    monkeypatch.setattr(TrunkExecTool, "execute", host)
+    out = _run(tool.execute(command="test command"))
+    assert reads == [] and str(out) == "Exit code: 0"
+    assert out.ok is True and len(out.written) == 1
 
 
 # --- the schema and the clamp -------------------------------------------------------

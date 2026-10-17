@@ -15,35 +15,13 @@ trunk's, inherited unchanged.
 
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 from typing import Any
 
+from code_flow.tools.diagnostics import UNKNOWN, PythonDiagnostics, read_before
 from code_flow.tools.read_state import Owner, ReadLedger, current_ledger
 from raven.agent.tools import filesystem as trunk
 from raven.contracts.tool import FileChange, ToolResult
-
-
-def python_syntax_note(fp: Path, text: str) -> str:
-    """Post-write syntax verdict for ``.py`` files, appended to the result.
-
-    Deterministic and in-band: a write or edit that leaves the file
-    unparseable is told so in the same tool result, costing zero extra
-    rounds. Syntax only -- a line that crashes at runtime still needs tests.
-    """
-    if fp.suffix != ".py":
-        return ""
-    try:
-        ast.parse(text)
-    except SyntaxError as exc:
-        location = f"line {exc.lineno}" if exc.lineno else "unknown line"
-        return (
-            f"\nWARNING: {fp.name} now has a Python syntax error at {location}: "
-            f"{exc.msg}. The file cannot even be parsed; fix it before moving on."
-        )
-    except Exception:  # noqa: BLE001 - a verdict the parser cannot give is no verdict
-        return ""
-    return ""
 
 
 def _append_note(result: str | ToolResult, note: str) -> str | ToolResult:
@@ -146,9 +124,12 @@ class ReadFileTool(_Aliased, trunk.ReadFileTool):
 class WriteFileTool(_Aliased, trunk.WriteFileTool):
     ALIASES = {"path": "file_path"}
 
-    def __init__(self, *args: Any, syntax_note: bool = True, **kwargs: Any) -> None:
+    def __init__(
+        self, *args: Any, syntax_note: bool = True, lint: bool = True, unused_imports: bool = False, **kwargs: Any
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._syntax_note = syntax_note
+        self._diagnostics = PythonDiagnostics(lint=lint, unused_imports=unused_imports)
 
     @property
     def description(self) -> str:
@@ -180,6 +161,7 @@ class WriteFileTool(_Aliased, trunk.WriteFileTool):
         except (OSError, ValueError) as exc:
             return f"Error: {exc}"
         ledger = self._ledger
+        previous = await read_before(fp) if self._syntax_note and fp.suffix == ".py" and mode == "append" else UNKNOWN
         known = ledger is not None and ledger.status(fp) == ReadLedger.OK
         authored = mode == "overwrite" or not fp.exists()
         result = await super().execute(path=file_path, content=content, mode=mode, **kwargs)
@@ -198,11 +180,14 @@ class WriteFileTool(_Aliased, trunk.WriteFileTool):
                 ledger.forget(fp)
         if not self._syntax_note:
             return result
-        try:
-            text = fp.read_text(encoding="utf-8", errors="replace") if mode == "append" else content
-        except Exception:  # noqa: BLE001 - no verdict beats a wrong one
-            return result
-        return _append_note(result, python_syntax_note(fp, text))
+        if isinstance(result, ToolResult) and result.file_change is not None:
+            previous = result.file_change.before
+        elif mode != "append" and isinstance(result, ToolResult) and result.model_text.startswith("File unchanged:"):
+            # Nothing was written, so the content is its own baseline: name
+            # findings are not repeated, a syntax error still present is.
+            previous = content
+        note = await self._diagnostics.check(fp, text=None if mode == "append" else content, before=previous)
+        return _append_note(result, note)
 
 
 def _respell(result: str | ToolResult) -> str | ToolResult:
@@ -262,11 +247,14 @@ class EditFileTool(_Aliased, trunk.EditFileTool):
         self,
         *args: Any,
         syntax_note: bool = True,
+        lint: bool = True,
+        unused_imports: bool = False,
         require_read: bool = True,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         self._syntax_note = syntax_note
+        self._diagnostics = PythonDiagnostics(lint=lint, unused_imports=unused_imports)
         self._require_read = require_read
 
     @property
@@ -368,11 +356,8 @@ class EditFileTool(_Aliased, trunk.EditFileTool):
             ledger.note(fp)
         if not self._syntax_note:
             return result
-        try:
-            after = fp.read_text(encoding="utf-8", errors="replace")
-        except Exception:  # noqa: BLE001
-            return result
-        return _append_note(result, python_syntax_note(fp, after))
+        note = await self._diagnostics.check(fp, text=result.file_change.after, before=result.file_change.before)
+        return _append_note(result, note)
 
     @staticmethod
     def _edit_occurrence(fp: Path, shown: str, old: str, new: str, occurrence: int) -> str | ToolResult:
@@ -433,5 +418,4 @@ __all__ = [
     "ReadFileTool",
     "ReadLedger",
     "WriteFileTool",
-    "python_syntax_note",
 ]

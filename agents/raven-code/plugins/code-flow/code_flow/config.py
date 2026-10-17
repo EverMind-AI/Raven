@@ -41,7 +41,7 @@ class ExecFaceConfig(_Base):
 
 
 class ToolsConfig(_Base):
-    """The product's own tool face, and the two conduct knobs it carries.
+    """The product's file checks and shell interface.
 
     ``enabled`` defaults False the D6 way, like the flow itself: an absent
     section hands the tools back to the host, and the model is served the
@@ -54,11 +54,21 @@ class ToolsConfig(_Base):
     that field (``ServiceLocator`` grants five things and this is not one), so
     the launcher renders the product's answer in here. Without it a product
     that asked for the fence got replacements with no fence at all.
+
+    ``python_syntax_note`` is the master diagnostic switch. ``python_lint``
+    adds name-binding checks; ``python_unused_imports`` opts into advisory
+    import notices. ``exec_python_diagnostics`` covers changed Python files
+    under a completed local command's working directory, read from the host's
+    write record where a checkpoint supplies visibility rules.
+    Background and remote commands have no local completion snapshot.
     """
 
     enabled: bool = False
     require_read_before_edit: bool = True
     python_syntax_note: bool = True
+    python_lint: bool = True
+    python_unused_imports: bool = False
+    exec_python_diagnostics: bool = True
     restrict_to_workspace: bool = False
     exec: ExecFaceConfig = Field(default_factory=ExecFaceConfig)
 
