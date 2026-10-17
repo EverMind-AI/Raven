@@ -168,6 +168,42 @@ async def test_closing_the_adapter_stops_its_turn_on_the_shared_host(tmp_path: P
             await asyncio.gather(pending, return_exceptions=True)
 
 
+@pytest.mark.slow
+async def test_the_live_preset_fixture_keeps_its_desktop_token_home(tmp_path: Path, monkeypatch) -> None:
+    import importlib.util
+
+    desktop = tmp_path / "desktop profile"
+    state = desktop / ".mirasim"
+    (state / "run").mkdir(parents=True)
+    host = FakeHost(token="fixture-token")
+    await host.start()
+    try:
+        assert host.address is not None
+        (state / "run" / f"local-{host.address.port}.token").write_text(host.token, encoding="utf-8")
+        monkeypatch.delenv("MIRASIM_HOME", raising=False)
+        monkeypatch.setenv("HOME", str(desktop))
+        monkeypatch.setenv("USERPROFILE", str(desktop))
+        monkeypatch.setenv("RAVEN_MIRASIM_HOST", str(host.address.port))
+        spec = importlib.util.spec_from_file_location(
+            "mirasim_live_fixture", Path(__file__).parent / "integration" / "test_acp_mirasim_real_llm.py"
+        )
+        assert spec is not None and spec.loader is not None
+        live = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(live)
+        assert live.HOST == host.address
+        isolated = tmp_path / "isolated profile"
+        isolated.mkdir()
+        monkeypatch.setenv("HOME", str(isolated))
+        monkeypatch.setenv("USERPROFILE", str(isolated))
+        workdir = tmp_path / "work"
+        workdir.mkdir()
+        monkeypatch.setattr(live, "WORKDIR", workdir)
+        await asyncio.wait_for(live.test_raven_dispatches_to_a_mirasim_preset(tmp_path), 40)
+        assert host.frames("prompt")[0]["prompt"] == "Reply with exactly: PONG"
+    finally:
+        await host.stop()
+
+
 async def test_the_agents_mirasim_has_are_asked_of_the_adapter(host: FakeHost, monkeypatch: pytest.MonkeyPatch) -> None:
     """The question the boot's verification asks before handshaking a preset: the host's agent list."""
     from raven.agent.subagent.mirasim_presets import installed_agents

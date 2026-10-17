@@ -23,7 +23,7 @@ from typing import Any
 
 import pytest
 
-from raven.acp.mirasim.host import HostConnection, HostUnavailableError, locate_host
+from raven.acp.mirasim.host import HostConnection, HostUnavailableError, locate_host, mirasim_home
 from raven.acp.mirasim.server import MirasimAgent
 from raven.acp.mirasim.store import BindingStore
 
@@ -32,14 +32,17 @@ pytestmark = [pytest.mark.integration, pytest.mark.slow]
 MODEL = "glm-5.3-flash"
 WORKDIR = Path(tempfile.gettempdir()) / "raven-mirasim-it"
 TURN_S = 240.0
+HOST_HOME = mirasim_home().resolve()
 HOST = locate_host()
-"""Read once at import: every test runs under a HOME of its own (``tests/conftest.py``), where the
-host's socket is not."""
+"""Read the address and token directory at import, before each test isolates its home."""
 
 
 def _host_env() -> dict[str, str]:
     assert HOST is not None
-    return {"RAVEN_MIRASIM_HOST": f"unix:{HOST.socket}" if HOST.socket else str(HOST.port)}
+    return {
+        "RAVEN_MIRASIM_HOST": f"unix:{HOST.socket}" if HOST.socket else str(HOST.port),
+        "MIRASIM_HOME": str(HOST_HOME),
+    }
 
 
 async def _host_is_up() -> bool:
