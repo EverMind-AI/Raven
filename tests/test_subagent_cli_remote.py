@@ -878,6 +878,7 @@ async def test_a_cli_run_left_on_the_machine_when_this_computer_stops_is_picked_
     )
     pid_file = box.home / "raven-work" / "left" / "pid.txt"
     await _until(pid_file.exists)
+    await _until(lambda: remote_runs.pending() != [])
     pid = int(pid_file.read_text(encoding="utf-8"))
     (run,) = remote_runs.pending()
     assert (run.kind, run.machine, run.agent, run.session_key, run.handle, run.task_id) == (
@@ -942,6 +943,7 @@ async def test_a_cancel_while_this_computer_goes_on_ends_the_command_and_keeps_n
     )
     pid_file = box.home / "raven-work" / "gone" / "pid.txt"
     await _until(pid_file.exists)
+    await _until(lambda: remote_runs.pending() != [])
     pid = int(pid_file.read_text(encoding="utf-8"))
     assert [run.kind for run in remote_runs.pending()] == ["cli"], "recorded while it runs"
 
