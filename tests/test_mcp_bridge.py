@@ -308,10 +308,15 @@ async def test_bridge_exits_when_a_stalled_endpoint_has_pending_writes(bridge_io
     task = asyncio.create_task(bridge.run_bridge("endpoint", output))
     try:
         await asyncio.wait_for(bridge_io.entered.wait(), 2)
+        # The endpoint stops reading before anything is sent, so what the
+        # bridge writes can never drain. Left to stop by its own flow control,
+        # the endpoint first trickles 128 KiB through those 4 KiB buffers,
+        # which took 1.87 s on Linux.
+        bridge_io.peer_writer.transport.pause_reading()
         frame = b'{"data":"' + b"x" * 65000 + b'"}\n'
         bridge_io.stdin.feed_data(frame * 128)
         async with asyncio.timeout(2):
-            while bridge_io.peer_writer.transport.is_reading():
+            while bridge_io.writer.transport.get_write_buffer_size() == 0:
                 await asyncio.sleep(0)
         await asyncio.sleep(0.1)
         assert bridge_io.writer.transport.get_write_buffer_size() > 0
