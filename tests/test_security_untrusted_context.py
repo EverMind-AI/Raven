@@ -727,8 +727,8 @@ async def test_a_tools_own_metadata_cannot_claim_provenance_either(tmp_path, mon
             )
 
     # ``RAVEN_HOME`` rather than the suite's ``HOME``: ``Path.home()`` reads
-    # ``USERPROFILE`` on Windows, where the suite's full-access config would not
-    # be found and the call would wait for an approval instead of running.
+    # ``USERPROFILE`` on Windows, so the suite's full-access config would not be
+    # found there, and this turn, which cannot ask, would refuse the call.
     home = tmp_path / "home"
     home.mkdir()
     (home / "config.json").write_text('{"permissions": {"mode": "full"}}')
