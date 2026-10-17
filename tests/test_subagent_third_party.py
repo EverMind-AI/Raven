@@ -2619,8 +2619,9 @@ def test_only_the_measured_non_isolating_preset_withholds_session_mcp() -> None:
     assert declared["OpenCode"] is False
     # And nothing else withholds. Asserted as "the only false" rather than by
     # listing every other preset, so adding one cannot quietly arrive as a false.
-    # The Mirasim rows are a measured exception of another kind: ui-cli takes no
-    # MCP servers at all, so withholding them is the honest declaration there.
+    # The Mirasim rows are a measured exception of another kind: the Mirasim host
+    # takes no MCP servers for one session, so withholding them is the honest
+    # declaration there.
     mirasim = {row["name"] for row in MIRASIM_PRESETS.values()}
     assert {name for name, isolates in declared.items() if not isolates} == {"OpenCode"} | mirasim
 

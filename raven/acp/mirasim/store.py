@@ -1,10 +1,11 @@
 """Which Mirasim conversation each ACP session continues, kept on disk.
 
 The two ids are minted at different moments. ACP needs a session id when the
-session opens, while Mirasim names its conversation only when the first turn
-settles, and refuses a key the caller made up ("not one of this server's
-sessions", measured). So the adapter mints the ACP id and records the Mirasim
-key against it once a turn reports one.
+session opens, while Mirasim names its conversation only when the host takes
+its first prompt (``accepted``). So the adapter mints the ACP id and records the
+Mirasim key against it once the host reports one. A conversation the user began
+in Mirasim itself goes by its own key, which :meth:`BindingStore.by_key` is how
+``session/list`` tells apart from one this adapter recorded.
 
 On disk rather than in memory, because Raven resumes an instance with
 ``session/load`` on whatever adapter process it reaches next: a restarted
@@ -13,21 +14,18 @@ same conversation. One file per Mirasim agent, written under the cross-process
 lock in :mod:`raven.utils.atomic_io`, since those processes write it
 concurrently.
 
-Only what continuing needs is kept: the conversation, the directory it works
-in, and the route this adapter last put it on. The model and effort a session
-was last put on are not, because Raven's client re-asserts its own choice on
-every route into a session and keeps none across its own restart -- an adapter
-restoring that choice would leave the session answering on a model every Raven
-surface reports as cleared. The route is kept because it is a fact about the
-conversation rather than a choice: Mirasim holds it, and switching it is a
-command of its own, which the record is what lets a turn skip. Any adapter
-process may be the one that switches it, so the record is read again before
-each turn rather than trusted from memory.
+Only what continuing needs is kept: the conversation and the directory it
+works in. The model and effort a session was last put on are not, because
+Raven's client re-asserts its own choice on every route into a session and
+keeps none across its own restart -- an adapter restoring that choice would
+leave the session answering on a model every Raven surface reports as cleared.
+Nor is its route: every turn names the route its model choice runs on, and the
+host keeps it.
 
 A record is dropped once it has gone :data:`RETENTION_DAYS` without a turn,
 and at once on ``session/delete``, which Raven sends when a person forgets the
-instance. Raven then finds no session to load and opens a fresh one; the
-conversation itself stays in Mirasim's own history either way.
+instance and which deletes the Mirasim conversation too. A record that merely
+expired leaves the conversation in Mirasim's own history.
 """
 
 from __future__ import annotations
@@ -40,7 +38,6 @@ from typing import Any
 
 from loguru import logger
 
-from raven.acp.mirasim.catalog import DEFAULT_ROUTE, OWN_ROUTE, PLATFORM_ROUTE
 from raven.home import raven_home
 from raven.utils.atomic_io import atomic_update
 
@@ -49,22 +46,13 @@ RETENTION_DAYS = 90
 _RETENTION_MS = RETENTION_DAYS * 24 * 3600 * 1000
 
 
-_ROUTES = (OWN_ROUTE, PLATFORM_ROUTE, DEFAULT_ROUTE)
-
-
 def store_path(agent: str) -> Path:
     """Where ``agent``'s records live, under Raven's own home."""
-    return server_workdir() / f"{agent}.json"
+    return store_dir() / f"{agent}.json"
 
 
-def server_workdir() -> Path:
-    """The directory every Mirasim server this package starts is told it runs in.
-
-    Mirasim keeps a session's route in an index named after its server's
-    directory, so a server started where Raven happened to be started would
-    not see the route an earlier one set. One directory of Raven's own keeps
-    them in one index; measured, Mirasim writes nothing into the directory.
-    """
+def store_dir() -> Path:
+    """The directory the records of every Mirasim agent live in."""
     return raven_home() / "subagent_sessions" / "mirasim"
 
 
@@ -75,8 +63,6 @@ class Binding:
     session_id: str
     cwd: str
     mirasim_key: str | None = None
-    route: str | None = None
-    """``own``, ``platform`` or ``default``; ``None`` when not known."""
     used_at_ms: int = 0
 
 
@@ -105,13 +91,11 @@ def _binding(session_id: str, row: dict[str, Any]) -> Binding | None:
     if not isinstance(cwd, str) or not cwd:
         return None
     key = row.get("mirasimKey")
-    route = row.get("route")
     used = row.get("usedAtMs")
     return Binding(
         session_id=session_id,
         cwd=cwd,
         mirasim_key=key if isinstance(key, str) and key else None,
-        route=route if route in _ROUTES else None,
         used_at_ms=used if isinstance(used, int) else 0,
     )
 
@@ -124,15 +108,24 @@ class BindingStore:
 
     def get(self, session_id: str) -> Binding | None:
         """The live record for ``session_id``, or ``None`` when absent or past retention."""
+        return self._live().get(session_id)
+
+    def by_key(self) -> dict[str, str]:
+        """Each live record's Mirasim conversation, mapped to the ACP session that continues it."""
+        return {binding.mirasim_key: sid for sid, binding in self._live().items() if binding.mirasim_key}
+
+    def _live(self) -> dict[str, Binding]:
         try:
             raw = self.path.read_text(encoding="utf-8")
         except FileNotFoundError:
-            return None
-        row = _decode(raw, self.path).get(session_id)
-        binding = _binding(session_id, row) if row is not None else None
-        if binding is None or _now_ms() - binding.used_at_ms > _RETENTION_MS:
-            return None
-        return binding
+            return {}
+        horizon = _now_ms() - _RETENTION_MS
+        live: dict[str, Binding] = {}
+        for session_id, row in _decode(raw, self.path).items():
+            binding = _binding(session_id, row)
+            if binding is not None and binding.used_at_ms >= horizon:
+                live[session_id] = binding
+        return live
 
     def put(self, binding: Binding) -> None:
         """Write ``binding``, stamped as used now, and drop every record past retention."""
@@ -148,7 +141,6 @@ class BindingStore:
             kept[binding.session_id] = {
                 "cwd": binding.cwd,
                 "mirasimKey": binding.mirasim_key,
-                "route": binding.route,
                 "usedAtMs": binding.used_at_ms,
             }
             return _encode(kept), None
@@ -169,4 +161,4 @@ class BindingStore:
         return atomic_update(self.path, update)
 
 
-__all__ = ["RETENTION_DAYS", "STORE_VERSION", "Binding", "BindingStore", "server_workdir", "store_path"]
+__all__ = ["RETENTION_DAYS", "STORE_VERSION", "Binding", "BindingStore", "store_dir", "store_path"]

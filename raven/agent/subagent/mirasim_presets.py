@@ -1,8 +1,8 @@
 """Presets for the agents Mirasim runs, one row per agent, each reached through Raven's own shim.
 
 Mirasim (https://mirasim.ai) launches third-party coding agents on the accounts
-and model routes its user configured, and drives them through ``mirasim
-ui-cli``. A row here is that agent as Mirasim runs it -- its model menu is
+and model routes its user configured, from the Mirasim host running on the
+machine. A row here is that agent as Mirasim runs it -- its model menu is
 Mirasim's for that agent, the platform's models and the user's own keys beside
 the agent's own -- which is a different agent to delegate to than the same
 agent's own row in :mod:`raven.agent.subagent.presets`, launched on its own login.
@@ -16,10 +16,11 @@ the launch directory -- the caller's working directory, which may itself be a
 checkout of this repository -- off ``sys.path``, so the adapter that answers is the
 installed one.
 
-Measured 2026-10-12 against Mirasim 0.0.465, where ``mirasim ui-cli agents``
-listed these nine as installed, beside ``echo``: a stub that answers with its
-prompt, which is not an agent to delegate to. The labels are the ones it
-reports, so a row reads the way the agent does in Mirasim.
+Measured 2026-10-12 against Mirasim 0.0.465, which listed these nine as
+installed, beside ``echo``: a stub that answers with its prompt, which is not an
+agent to delegate to. The labels are the ones it reports -- 0.0.537's host lists
+the same nine under the same labels, plus OpenCode, which Raven already offers
+on its own -- so a row reads the way the agent does in Mirasim.
 """
 
 from __future__ import annotations
@@ -60,10 +61,11 @@ def _row(key: str, agent: str, label: str, what: str) -> dict[str, Any]:
         "kind": "acp",
         "description": f"{what}, run through Mirasim.",
         "command": f"{{PYTHON}} -P -m raven.acp.mirasim --agent {agent}",
-        # The first session waits on two Mirasim reads, each starting a server
-        # of its own: 7 s for one adapter, 52 s for nine adapters at once.
-        "readyTimeoutMs": 120000,
-        # Mirasim's ui-cli takes no MCP servers for a session, so nothing
+        # The first session waits on the host listing its agents, which it
+        # answers progressively: measured at about two seconds, with the rows
+        # probing every agent CLI on the machine.
+        "readyTimeoutMs": 60000,
+        # The Mirasim host takes no MCP servers for one session, so nothing
         # handed over could reach the agent. False is the one declaration that
         # withholds them and also tells the roster none arrive, so a DAG node's
         # `mcps` is reported as ignored rather than assumed. The withheld note,
@@ -79,8 +81,8 @@ MIRASIM_PRESETS: dict[str, dict[str, Any]] = {
 
 INSTALLED_QUERY = "{PYTHON} -P -m raven.acp.mirasim --installed"
 
-INSTALLED_TIMEOUT_S = 120.0
-"""How long the question may take: one Mirasim server's start, under the
+INSTALLED_TIMEOUT_S = 60.0
+"""How long the question may take: the host listing its agents, under the
 presets' own ``readyTimeoutMs`` for the same work."""
 
 
@@ -89,9 +91,10 @@ async def installed_agents(*, path: str | None) -> frozenset[str] | None:
 
     Asked before the boot handshakes the presets nobody has connected yet. One
     whose agent Mirasim lacks refuses its session, the boot keeps no preset's
-    failure, and so it was handshaken again at every start, starting Mirasim
-    servers for nothing. ``path`` is the login shell's PATH, the one the
-    presets' own check for ``mirasim`` resolves against.
+    failure, and so it was handshaken again at every start for nothing. ``None``
+    when no host is running to ask, which leaves the decision to the handshake.
+    ``path`` is the login shell's PATH, the one the presets' own check for
+    ``mirasim`` resolves against.
     """
     argv = command_argv(resolve_subagent_command(INSTALLED_QUERY, python=_resolved_python(), subagent_dir=""))
     env = {**os.environ, "PATH": path} if path else None
