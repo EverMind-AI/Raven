@@ -58,7 +58,8 @@ class ToolsConfig(_Base):
     ``python_syntax_note`` is the master diagnostic switch. ``python_lint``
     adds name-binding checks; ``python_unused_imports`` opts into advisory
     import notices. ``exec_python_diagnostics`` covers changed Python files
-    under a completed local command's working directory, with bounded scans.
+    under a completed local command's working directory, read from the host's
+    write record where a checkpoint supplies visibility rules.
     Background and remote commands have no local completion snapshot.
     """
 

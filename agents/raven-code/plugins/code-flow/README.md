@@ -36,15 +36,16 @@ that the patch is correct or replace project tests.
 Checks skip source over 256 KiB and report at most eight findings per file.
 Post-command checks consider at most eight visible changed Python files inside the
 command's working directory, with a 6,000-character diagnostic budget plus
-omission notices. Existing host write records are reused; otherwise a bounded
-metadata scan compares file size and modification time. Scans stop at 20,000
-files or a 250 ms deadline; an incomplete scan yields no comparison. Path
-containment checks also run off the event loop with a 250 ms wait limit.
-Post-command checks require a checkpoint covering the working directory. With
-no checkpoint or no visibility verdict, they do not read changed source files.
-Direct `write_file` / `edit_file` diagnostics remain available. Noninteractive
-runs using the default `runtime.checkpoint.policy = "interactive"` need an
-explicit `"always"` policy to enable checkpoints and post-command checks.
+omission notices. The changed files come from the host's own write record for
+the command, which lists regular files and skips symlinks; a command whose
+directory the host could not list has no record and gets no post-command
+checks. Path containment checks run off the event loop with a 250 ms wait
+limit. Post-command checks require a checkpoint covering the working
+directory. With no checkpoint or no visibility verdict, they do not read
+changed source files. Direct `write_file` / `edit_file` diagnostics remain
+available. Noninteractive runs using the default
+`runtime.checkpoint.policy = "interactive"` need an explicit `"always"` policy
+to enable checkpoints and post-command checks.
 Visibility rules apply before the eight-file limit and withhold ignored files. Visibility
 queries use batches of eight and stop once eight eligible files are found.
 The host's visibility callbacks can themselves perform synchronous filesystem
@@ -55,11 +56,10 @@ Up to four file checks run concurrently, with feedback kept in input order.
 Each check analyzes one file; it does not resolve imports across the project.
 Python's GIL means concurrency does not promise a CPU speedup. Each file check
 has a one-second wait limit, and post-command diagnostics have a three-second
-total wait limit, separate from the command timeout. An optional pre-command
-scan adds at most 250 ms of waiting.
+total wait limit, separate from the command timeout.
 
-All diagnostic scans, reads, and checks share a private four-worker limit per
-process, independent of the host's default executor. There is no background
+All diagnostic path filtering, reads, and checks share a private four-worker
+limit per process, independent of the host's default executor. There is no background
 work queue: when all workers are occupied, new diagnostic work is skipped or
 reported unavailable. A timeout or cancellation releases the caller but cannot
 interrupt an operating system read or Python check already running. Such work
@@ -67,8 +67,8 @@ retains its worker slot until it finishes, preventing an accumulation of
 abandoned workers; daemon workers do not delay process shutdown. A failed check
 preserves the operation's result.
 
-For existing files changed by a command, the original source is not always
+For existing files changed by a command, the original source is not
 available: feedback explicitly says findings may predate the command.
 Background, remote, sandboxed commands, symlinks, and writes outside the watched
-directory are not covered. Concurrent writers can also appear in a metadata
-comparison; the check does not establish which process made a change.
+directory are not covered. Concurrent writers can also appear in the host's write
+record; the check does not establish which process made a change.
