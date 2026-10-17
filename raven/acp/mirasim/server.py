@@ -141,6 +141,14 @@ from raven.utils import asyncio_runner
 CATALOG_TTL_S = 15 * 60
 """How long the cached menus stand before a new or loaded session reads them again."""
 
+CATALOG_RETRY_S = 30.0
+"""How long a read that failed holds off the next one.
+
+Menus a failed read left unread are read again by the first session opened
+after it, not when the copy would have expired. And a Mirasim that keeps failing
+is asked no more often than this, because each read can take ui-cli's whole
+timeout with every session waiting behind it."""
+
 MAX_IDLE_SESSIONS = 512
 """Sessions held in memory beyond the ones with a turn running. Raven opens a
 session per dispatch that names no instance, so an adapter that lives as long as
@@ -236,6 +244,7 @@ class MirasimAgent:
         self.sessions: OrderedDict[str, Session] = OrderedDict()
         self._catalog: AgentCatalog | None = None
         self._catalog_at = 0.0
+        self._catalog_failed_at: float | None = None
         self._catalog_lock = asyncio.Lock()
         self._prefetch: asyncio.Task[AgentCatalog] | None = None
         self._version: str | None = None
@@ -322,17 +331,28 @@ class MirasimAgent:
 
         A failed re-read keeps the copy in hand: the menus a session was opened
         with are better than refusing the session over a read it did not need.
+        Menus left unread count as stale, and no read starts within
+        :data:`CATALOG_RETRY_S` of one that failed.
         """
         async with self._catalog_lock:
-            fresh = time.monotonic() - self._catalog_at < CATALOG_TTL_S
-            if self._catalog is not None and not refresh and (fresh or allow_stale):
-                return self._catalog
+            held = self._catalog
+            if held is not None:
+                now = time.monotonic()
+                failed_at = self._catalog_failed_at
+                backing_off = failed_at is not None and now - failed_at < CATALOG_RETRY_S
+                fresh = not held.menus_unread and now - self._catalog_at < CATALOG_TTL_S
+                if backing_off or (not refresh and (fresh or allow_stale)):
+                    return held
             agents_doc, catalog_doc = await asyncio.gather(
                 self.cli.query(["agents"]),
                 self.cli.query(["catalog", f"--agent={self.agent}"]),
                 return_exceptions=True,
             )
+            # From when the read ended: a cold start fails on ui-cli's timeout,
+            # which is longer than the pause.
+            ended = time.monotonic()
             if isinstance(agents_doc, BaseException):
+                self._catalog_failed_at = ended
                 if self._catalog is not None:
                     logger.bind(agent_output=True).warning(
                         "Mirasim adapter: re-reading the agent list failed ({}); keeping the last", agents_doc
@@ -347,11 +367,14 @@ class MirasimAgent:
                 logger.bind(agent_output=True).warning(
                     "Mirasim adapter: no model menu for {} ({})", self.agent, catalog_doc
                 )
+                self._catalog_failed_at = ended
                 if self._catalog is not None:
                     return self._catalog
                 catalog_doc = None
+            else:
+                self._catalog_failed_at = None
             self._catalog = read_catalog(self.agent, agents_doc, catalog_doc)
-            self._catalog_at = time.monotonic()
+            self._catalog_at = ended
             return self._catalog
 
     async def new_session(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -421,6 +444,11 @@ class MirasimAgent:
         session = self._session(params)
         mode = _required_text(params, "modeId")
         catalog = await self.catalog(allow_stale=True)
+        if not catalog.offers_effort(mode):
+            # Read again before refusing, as for a model: menus left unread by a
+            # cold start would refuse every rung until the copy expired, and the
+            # turns would run on Mirasim's default effort meanwhile.
+            catalog = await self.catalog(refresh=True)
         if not catalog.offers_effort(mode):
             raise RefusalError(INVALID_PARAMS, f"{mode!r} is not one of {[rung for rung, _ in catalog.efforts]}")
         session.mode = mode

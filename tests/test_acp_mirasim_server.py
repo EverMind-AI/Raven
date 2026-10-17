@@ -617,15 +617,90 @@ async def test_a_menu_that_was_read_carries_no_unread_mark(harness: Harness) -> 
     validate_def("NewSessionResponse", result)
 
 
-async def test_menus_read_once_a_failed_read_is_not_cached_as_a_measurement(tmp_path: Path) -> None:
-    """The unread flag clears itself the moment a read lands, without a restart."""
+def catalog_reads(harness: Harness) -> int:
+    return sum(1 for command in harness.commands() if command[:1] == ["catalog"])
+
+
+async def test_a_menu_that_could_not_be_read_is_read_again_by_the_same_adapter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Once the retry pause has passed, not once the copy's whole lifetime has, and not before."""
     flaky = Harness(tmp_path, mode="nomenu")
     first = await flaky.ok("session/new", cwd=str(tmp_path), mcpServers=[])
     assert first["_meta"]["raven"]["modelMenuUnread"] is True
-    flaky.use("ok")
+    install(tmp_path, "ok")
+    again = await flaky.ok("session/new", cwd=str(tmp_path), mcpServers=[])
+    assert again["_meta"]["raven"]["modelMenuUnread"] is True
+    assert catalog_reads(flaky) == 1
+    monkeypatch.setattr(server_mod, "CATALOG_RETRY_S", 0.0, raising=False)
     second = await flaky.ok("session/new", cwd=str(tmp_path), mcpServers=[])
     assert "configOptions" in second and "_meta" not in second
+    assert catalog_reads(flaky) == 2
     validate_def("NewSessionResponse", second)
+
+
+async def test_a_re_read_that_keeps_failing_is_not_tried_on_every_session(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each read can take ui-cli's whole timeout, and every other session waits behind it."""
+    await harness.ok("session/new", cwd=str(harness.tmp_path), mcpServers=[])
+    monkeypatch.setattr(server_mod, "CATALOG_TTL_S", 0)
+    install(harness.tmp_path, "nomenu")
+    for _ in range(3):
+        result = await harness.ok("session/new", cwd=str(harness.tmp_path), mcpServers=[])
+        assert result["configOptions"][0]["currentValue"] == "sonnet"
+    assert catalog_reads(harness) == 2
+
+
+async def test_the_pause_after_a_slow_failure_counts_from_when_it_failed(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cold start fails on ui-cli's timeout, longer than the pause itself."""
+    from raven.acp.mirasim.uicli import UiCliError
+
+    await harness.ok("session/new", cwd=str(harness.tmp_path), mcpServers=[])
+    monkeypatch.setattr(server_mod, "CATALOG_TTL_S", 0)
+    monkeypatch.setattr(server_mod, "CATALOG_RETRY_S", 1.0)
+    query, reads = harness.agent.cli.query, []
+
+    async def failing_slowly(args: list[str], **kwargs: Any) -> Any:
+        if args[:1] == ["catalog"]:
+            reads.append(args)
+            await asyncio.sleep(1.5)
+            raise UiCliError("`mirasim ui-cli catalog` did not answer")
+        return await query(args, **kwargs)
+
+    monkeypatch.setattr(harness.agent.cli, "query", failing_slowly)
+    for _ in range(2):
+        await harness.ok("session/new", cwd=str(harness.tmp_path), mcpServers=[])
+    assert len(reads) == 1
+
+
+async def test_an_effort_mirasim_added_since_the_menus_were_read_is_accepted(harness: Harness) -> None:
+    """The adapter reads Mirasim's menus again before refusing an effort it does not know."""
+    sid = (await harness.ok("session/new", cwd=str(harness.tmp_path), mcpServers=[]))["sessionId"]
+    from tests.mirasim_stub_cli import CATALOG, RUNGS
+
+    grown = [*RUNGS, {"id": "ultra", "label": "Ultra"}]
+    efforts = {**CATALOG["effortByModel"], "sonnet": grown}
+    catalog = {**CATALOG, "effort": grown, "effortByModel": efforts}
+    (harness.tmp_path / "stub" / "catalog.json").write_text(json.dumps(catalog))
+    await harness.ok("session/set_mode", sessionId=sid, modeId="ultra")
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("hi"))
+    assert "--effort=ultra" in harness.prompts()[-1]
+
+
+async def test_an_effort_asked_for_while_the_menus_are_unread_reads_them_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Refused, every turn would run on Mirasim's default effort until the unread copy expired."""
+    flaky = Harness(tmp_path, mode="nomenu")
+    sid = (await flaky.ok("session/new", cwd=str(tmp_path), mcpServers=[]))["sessionId"]
+    install(tmp_path, "ok")
+    monkeypatch.setattr(server_mod, "CATALOG_RETRY_S", 0.0, raising=False)
+    await flaky.ok("session/set_mode", sessionId=sid, modeId="max")
+    await flaky.ok("session/prompt", sessionId=sid, prompt=text("hi"))
+    assert "--effort=max" in flaky.prompts()[-1]
 
 
 async def test_malformed_requests_are_invalid_params(harness: Harness) -> None:
