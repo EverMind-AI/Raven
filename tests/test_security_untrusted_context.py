@@ -758,6 +758,45 @@ async def test_a_tools_own_metadata_cannot_claim_provenance_either(tmp_path, mon
     assert "token=[redacted]" in replayed["content"][0]["content"]["text"]
 
 
+async def test_a_dag_result_keeps_its_provenance_through_a_downgrade_notice(tmp_path, monkeypatch) -> None:
+    """A notice the preflight adds is this system's line, put in front of the
+    model text; the node output under it is still the agent's own. Rebuilt from
+    its text alone, the result would lose its claim, and the registry would
+    scrub a value Raven holds out of what the node returned."""
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+
+    monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [(_HELD, "providers.openrouter.apiKey")])
+    registry = ToolRegistry()
+    # `cat` answers with its prompt, and a row with no `{mcp_file}` cannot take
+    # injected servers, so the node's `mcps` list becomes a downgrade notice.
+    registry.register(
+        SubAgentDagTool(workspace=tmp_path, agents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")])
+    )
+
+    out = await registry.execute(
+        "run_subagent_dag",
+        {
+            "task_summary": "relay one reply",
+            "nodes": [
+                {
+                    "id": "a",
+                    "subagent": "echo",
+                    "node_summary": "repeat the reply",
+                    "prompt_template": f"the agent answered {_HELD}",
+                    "mcps": ["any"],
+                }
+            ],
+            "background": False,
+        },
+    )
+
+    assert "cannot take injected mcp servers" in str(out), str(out)
+    assert getattr(out, "agent_output", False) is True
+    assert f"the agent answered {_HELD}" in str(out), str(out)
+
+
 async def test_a_search_result_keeps_the_provenance_the_registry_settled(monkeypatch) -> None:
     """A tool that hands control back to the registry (``tool_call`` -> the
     target) must not stamp its own provenance over what the target's call
