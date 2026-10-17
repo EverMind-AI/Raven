@@ -217,6 +217,21 @@ def test_an_unreadable_config_lends_no_key_and_does_not_stop_the_start(monkeypat
 _HELD = "sk-or-held-0123456789abcdef"
 
 
+@pytest.fixture
+def full_access_raven_home(tmp_path, monkeypatch) -> Path:
+    """The suite's full-access permission config, found on every platform.
+
+    The suite writes it under ``HOME``, and ``Path.home()`` reads
+    ``USERPROFILE`` on Windows, so it is not found there and a turn that cannot
+    ask refuses the call it was meant to run. ``RAVEN_HOME`` outranks both.
+    """
+    home = tmp_path.with_name(f"{tmp_path.name}-raven")
+    home.mkdir()
+    (home / "config.json").write_text('{"permissions": {"mode": "full"}}')
+    monkeypatch.setenv("RAVEN_HOME", str(home))
+    return home
+
+
 def test_a_held_key_in_an_image_bearing_result_never_reaches_the_model(monkeypatch) -> None:
     """A model that takes images in a tool result is sent the blocks, not the text,
     so scrubbing only the text left the key in the half the model reads."""
@@ -487,7 +502,9 @@ def test_outgoing_journal_entries_still_protect_ravens_own_credentials(tmp_path,
 
 
 @pytest.mark.parametrize("via_meta", [False, True])
-async def test_an_external_agent_reply_reaches_the_main_model_unchanged(tmp_path, monkeypatch, via_meta):
+async def test_an_external_agent_reply_reaches_the_main_model_unchanged(
+    tmp_path, monkeypatch, via_meta, full_access_raven_home
+):
     from unittest.mock import AsyncMock
 
     from raven.a2a_client.tool import A2aTool
@@ -683,7 +700,7 @@ async def test_a_result_cannot_claim_provenance_the_tool_never_declared(monkeypa
     assert _HELD not in str(out)
 
 
-async def test_a_tools_own_metadata_cannot_claim_provenance_either(tmp_path, monkeypatch) -> None:
+async def test_a_tools_own_metadata_cannot_claim_provenance_either(tmp_path, full_access_raven_home) -> None:
     """``take_metadata`` is the tool's answer about the payload it hands the UI,
     not about whose words its result holds. Were its ``agent_output`` key kept,
     the live ACP preview and the session replay would both skip their redaction
@@ -726,13 +743,6 @@ async def test_a_tools_own_metadata_cannot_claim_provenance_either(tmp_path, mon
                 tool_calls=[ToolCallRequest(id="c1", name="local", arguments={})],
             )
 
-    # ``RAVEN_HOME`` rather than the suite's ``HOME``: ``Path.home()`` reads
-    # ``USERPROFILE`` on Windows, so the suite's full-access config would not be
-    # found there, and this turn, which cannot ask, would refuse the call.
-    home = tmp_path / "home"
-    home.mkdir()
-    (home / "config.json").write_text('{"permissions": {"mode": "full"}}')
-    monkeypatch.setenv("RAVEN_HOME", str(home))
     loop = AgentLoop(
         provider=Provider(),
         workspace=tmp_path / "workspace",
@@ -756,6 +766,48 @@ async def test_a_tools_own_metadata_cannot_claim_provenance_either(tmp_path, mon
     updates = replay(_map_to_wire(session.messages, session.key), session_id=session.key)
     replayed = next(update for update in updates if update.get("sessionUpdate") == "tool_call_update")
     assert "token=[redacted]" in replayed["content"][0]["content"]["text"]
+
+
+async def test_a_dag_result_keeps_its_provenance_through_a_downgrade_notice(tmp_path, monkeypatch) -> None:
+    """A notice the preflight adds is this system's line, put in front of the
+    model text; the node output under it is still the agent's own. Rebuilt from
+    its text alone, the result would lose its claim, and the registry would
+    scrub a value Raven holds out of what the node returned."""
+    import sys
+
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+
+    monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [(_HELD, "providers.openrouter.apiKey")])
+    registry = ToolRegistry()
+    # The CLI answers with its prompt, and a row with no `{mcp_file}` cannot take
+    # injected servers, so the node's `mcps` list becomes a downgrade notice.
+    command = f'"{sys.executable}" -c "import sys; sys.stdout.write(sys.stdin.read())"'
+    registry.register(
+        SubAgentDagTool(workspace=tmp_path, agents=[ThirdPartyCliSubagentConfig(name="echo", command=command)])
+    )
+
+    out = await registry.execute(
+        "run_subagent_dag",
+        {
+            "task_summary": "relay one reply",
+            "nodes": [
+                {
+                    "id": "a",
+                    "subagent": "echo",
+                    "node_summary": "repeat the reply",
+                    "prompt_template": f"the agent answered {_HELD}",
+                    "mcps": ["any"],
+                }
+            ],
+            "background": False,
+        },
+    )
+
+    assert "cannot take injected mcp servers" in str(out), str(out)
+    assert getattr(out, "agent_output", False) is True
+    assert f"the agent answered {_HELD}" in str(out), str(out)
 
 
 async def test_a_search_result_keeps_the_provenance_the_registry_settled(monkeypatch) -> None:

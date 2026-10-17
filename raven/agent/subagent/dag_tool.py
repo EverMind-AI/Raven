@@ -147,13 +147,15 @@ def _with_notices(result: "str | ToolResult", notices: list[str]) -> "str | Tool
     On the model-facing text only. A notice says a field the graph carried will
     not take effect, which is something the caller has to know when it reads the
     output; the display line is a one-liner for a transcript row and has no room
-    for it.
+    for it. Everything else the result carries is kept, its provenance claim
+    included: the notice is this system's line, but the node output under it is
+    still the agent's.
     """
     if not notices:
         return result
     head = "Note: " + "; ".join(notices) + "."
     if isinstance(result, ToolResult):
-        return ToolResult(model_text=f"{head}\n\n{result.model_text}", display_text=result.display_text)
+        return replace(result, model_text=f"{head}\n\n{result.model_text}")
     return f"{head}\n\n{result}"
 
 
