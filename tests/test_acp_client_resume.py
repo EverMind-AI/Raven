@@ -177,16 +177,20 @@ def test_a_run_is_tracked_only_over_a_channel_to_a_machine_and_a_record_that_can
     local = SimpleNamespace(endpoint=SimpleNamespace(pid=1), next_request_id=1)
     assert backend._track_on_machine(local, connection, **track) is None, "a child process here is no run on a machine"
 
-    channel = SimpleNamespace(task="stub@box-1", watchers=[], received=0)
+    channel = SimpleNamespace(task="stub@box-1", watchers=[], received=0, stderr_received=5)
     over_channel = SimpleNamespace(endpoint=channel, next_request_id=1)
     tracker = backend._track_on_machine(over_channel, connection, **track)
     assert tracker is not None and channel.watchers == [tracker.received]
     assert [run.task for run in remote_runs.pending()] == ["stub@box-1"]
+    assert tracker.run.stderr_received == 5
+    channel.stderr_received = 9
+    tracker.prompt_sent(1)
+    assert tracker.run.stderr_received == 9, "the endpoint's stderr count, read as the prompt goes out"
     backend._untrack(over_channel, tracker, keep=False)
     assert channel.watchers == [] and remote_runs.pending() == []
     backend._untrack(over_channel, tracker, keep=False)  # a watcher already gone is not an error
 
-    def refuse(run):
+    def refuse(run, **_kw):
         raise OSError("read-only home")
 
     records: list[str] = []

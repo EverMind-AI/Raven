@@ -269,7 +269,11 @@ All notable changes to Raven are documented here.
   names its session only on stderr (hermes) could not be bound to it by the
   pick-up, so its next turn opened a new session, and what was written while a
   link was down was lost the same way. The node now numbers stderr lines as it
-  numbers output lines and replays the ones the link has not seen.
+  numbers output lines and replays the ones the link has not seen. An ACP
+  agent is one task across every prompt its process is sent, so its pick-up
+  asks the replay from the line its record kept as the prompt went out, not
+  from the agent's first line; a CLI pick-up, whose task is the command's
+  own, reads from the first line.
 
 - A task on a registered machine ends the way it ended, whatever happened on
   either side. A Raven node killed outright (`kill -9`) used to leave its

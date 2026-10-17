@@ -614,16 +614,20 @@ class NodePool:
         return endpoint
 
     async def attach(
-        self, machine_id: str, task: str, *, name: str, after: int = 0
+        self, machine_id: str, task: str, *, name: str, after: int = 0, stderr_after: int = 0
     ) -> tuple[ChannelEndpoint, dict[str, Any]]:
-        """``task`` on the machine, onto a channel of its link, from the frame past the ``after``-th.
+        """``task`` on the machine, onto a channel of its link, from the frame past the ``after``-th and the
+        stderr line past the ``stderr_after``-th.
 
         What a process that comes after the one that started the agent uses
         to pick the run up: the daemon replays the frames past the record's
         count -- the turn whole, from where its prompt went out -- and the
-        agent's stderr from its first line, which this process has not read
-        any of, and hands the rest over as it comes, or, for a task that has
-        ended, replays its record and says so. The endpoint returned is what an
+        agent's stderr past ``stderr_after``: from its first line for a cli
+        run, whose task is the command's own and none of whose stderr this
+        process has read, and from the line the run's record kept as the
+        prompt went out for an acp agent, which is one task across every
+        prompt its process is sent; and hands the rest over as it comes, or,
+        for a task that has ended, replays its record and says so. The endpoint returned is what an
         :class:`AcpClient` runs over; the answer says the pid, the frames
         and the exit code (``None`` while the agent runs).
         """
@@ -633,8 +637,9 @@ class NodePool:
         node.next_channel += 1
         endpoint = ChannelEndpoint(node.client, channel, target=node.target, agent=name, task=task)
         endpoint.received = after
+        endpoint.stderr_received = stderr_after
         node.channels[channel] = endpoint
-        params = {"channel": channel, "task": task, "after": after, "stderr_after": 0}
+        params = {"channel": channel, "task": task, "after": after, "stderr_after": stderr_after}
         try:
             answer = await node.client.request(protocol.AGENT_ATTACH, params, timeout=_ATTACH_TIMEOUT_S)
         except AcpRemoteError as exc:
@@ -656,7 +661,13 @@ class NodePool:
         if isinstance(answer.get("pid"), int):
             endpoint.pid = answer["pid"]
         node.used = time.monotonic()
-        logger.info("acp agent {!r}: picked up on {} from frame {}", name, endpoint.describe(), after)
+        logger.info(
+            "acp agent {!r}: picked up on {} from frame {} and stderr line {}",
+            name,
+            endpoint.describe(),
+            after,
+            stderr_after,
+        )
         return endpoint, answer
 
     def status(self, machine_id: str) -> MachineStatus:

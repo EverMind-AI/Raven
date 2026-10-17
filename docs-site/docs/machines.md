@@ -313,8 +313,9 @@ a cancel sent while the link was down is delivered when it is back.
 Stopping Raven does the same on purpose. An agent running on a machine is left
 to the daemon; what Raven keeps is a record under
 `<raven home>/machines/runs/`. The next start reads those records, attaches
-each run from where it was, reads all it wrote on stderr too (the reason a
-command failed, or the session id a CLI names only there), and announces the
+each run from where it was, reads what it wrote on stderr during that turn
+too (a command's whole stderr: the reason it failed, or the session id a CLI
+names only there), and announces the
 result into the conversation that asked, as a finished turn. Keep the
 machine's registration and the agent entry in place for that. `/restart` and a
 Raven that was killed are covered the same way.

@@ -654,6 +654,70 @@ async def test_a_run_left_on_the_machine_when_this_computer_stops_is_picked_up_b
     assert _agent_pid() == agent, "the agent's process is the pool's connection again"
 
 
+async def test_a_pick_up_reads_the_turn_s_own_stderr_and_not_what_the_prompts_before_it_wrote(
+    box, tmp_path, monkeypatch
+):
+    """An ACP agent is one task on the daemon for every prompt its process is sent. The pick-up of its third turn
+    gets the stderr of that turn: the record keeps the stderr line count as the prompt goes out, as it keeps the
+    frame count, and the attach asks from there. The two turns before it wrote 150 lines each, which would
+    otherwise be replayed into the pick-up's tail, which keeps 200, and its journal, which keeps everything."""
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    env = {"ACP_STUB_STDERR_LINES": "150", "ACP_STUB_PROMPT_DELAY_S": "3", "ACP_STUB_PROMPT_DELAY_FROM": "3"}
+    backend = build_third_party_backend(remote_config(env=env))
+    for n in (1, 2):
+        reply = await backend.run(f"turn {n}", task_id=f"t{n}", workspace=tmp_path, executor=None, session_key="tui:s1")
+        assert "pong" in reply, reply
+    # A turn's stderr and its answer travel on two pipes: the last lines of the
+    # second turn may still be on their way when its answer is read.
+    (connection,) = get_pool().connections("stub@box")
+    deadline = time.monotonic() + 10
+    while connection.client._endpoint.stderr_received < 300:
+        assert time.monotonic() < deadline, "the two turns' 300 stderr lines never all arrived"
+        await asyncio.sleep(0.05)
+    turn = asyncio.ensure_future(
+        backend.run("turn 3", task_id="t3", workspace=tmp_path, executor=None, session_key="tui:s1")
+    )
+    deadline = time.monotonic() + 20
+    while not any(run.prompt_id > 0 for run in remote_runs.pending()):
+        assert time.monotonic() < deadline and not turn.done(), "the prompt never went out"
+        await asyncio.sleep(0.05)
+    (run,) = remote_runs.pending()
+    assert run.stderr_received == 300, "the record keeps the stderr line count as the prompt goes out"
+    agent = _agent_pid()
+
+    remote.leave_agents_running()
+    try:
+        turn.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await turn
+        await close_pool()
+        await box.nodes.close_all()
+    finally:
+        remote.staying()
+    assert _alive(agent), "the agent stays with the machine's daemon"
+
+    session_dir = tmp_path / "sessions" / "s1"
+    meta = {"call_id": "n3", "session_key": "tui:s1", "agent": backend.name, "handle": "t3", "task_summary": "turn 3"}
+    SpawnRecord.open(session_dir, task_id="t3", task="turn 3", meta=meta, node_id="n3")
+    manager = _Manager(backend, session_dir)
+    monkeypatch.setattr(resume_remote, "get_registry", lambda: _Registry())
+
+    assert await asyncio.wait_for(resume_remote.resume_remote_runs(manager), timeout=30) == 1
+
+    (said,) = manager.announced
+    assert said["status"] == "ok" and said["result"].startswith("pong")
+    (picked,) = get_pool().connections("stub@box")
+    deadline = time.monotonic() + 10
+    while len(picked.client._stderr) < 150:
+        assert time.monotonic() < deadline, f"the turn's stderr never reached the pick-up: {len(picked.client._stderr)}"
+        await asyncio.sleep(0.05)
+    lines = list(picked.client._stderr)
+    assert len(lines) == 150 and all(line.startswith("stub: prompt 3 stderr ") for line in lines), lines[:3]
+    assert picked.client._endpoint.stderr_received == 450, (
+        "numbered as the daemon numbers them: a lost link goes on from there"
+    )
+
+
 async def test_a_stop_that_lands_under_a_pick_up_leaves_the_run_for_the_start_after(box, tmp_path, monkeypatch):
     """This computer stops again while a pick-up is attached: the record and the agent stay, and the next start reads the answer."""
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))

@@ -113,6 +113,26 @@ def test_the_tracker_keeps_the_prompt_s_id_and_the_frames_read_before_it_and_rem
     assert remote_runs.pending() == [] and tracker.kept is False
 
 
+def test_the_tracker_takes_the_stderr_line_count_as_the_prompt_goes_out_and_not_after() -> None:
+    """The lines before the prompt are the earlier prompts'; the turn's own are the pick-up's to read again."""
+    count = [4]
+    tracker = remote_runs.Tracker(_run(prompt_id=0, next_id=1), stderr_count=lambda: count[0])
+    assert remote_runs.pending()[0].stderr_received == 0, "taken as the prompt goes out, not before"
+
+    count[0] = 7
+    tracker.prompt_sent(5)
+    count[0] = 30
+
+    (kept,) = remote_runs.pending()
+    assert (kept.prompt_id, kept.stderr_received) == (5, 7)
+    tracker.close(keep=False)
+
+    tracker = remote_runs.Tracker(_run(prompt_id=0, next_id=1, stderr_received=9))  # no count to read: as given
+    tracker.prompt_sent(5)
+    assert remote_runs.pending()[0].stderr_received == 9
+    tracker.close(keep=False)
+
+
 def test_a_dispatch_s_record_is_forgotten_by_the_manager_s_id_with_its_claim() -> None:
     """The manager's end of a run that returned: the record the backend left with the reply goes once the announce was taken."""
     remote_runs.record(_run(task_id="d1"))
@@ -263,7 +283,11 @@ def test_a_record_carries_what_the_announce_after_a_restart_needs_and_an_older_o
             origin=origin,
         )
     )
-    older = {k: v for k, v in _run().as_json().items() if k not in ("kind", "authored_task", "task_summary", "origin")}
+    older = {
+        k: v
+        for k, v in _run().as_json().items()
+        if k not in ("kind", "authored_task", "task_summary", "origin", "stderr_received")
+    }
     (remote_runs.runs_dir() / "echo@box-1a2b3c4d.json").write_text(json.dumps(older), encoding="utf-8")
 
     back = {run.task: run for run in remote_runs.pending()}
@@ -272,6 +296,7 @@ def test_a_record_carries_what_the_announce_after_a_restart_needs_and_an_older_o
     assert (cli.kind, cli.authored_task, cli.task_summary, cli.origin) == ("cli", "count the rows", "count", origin)
     acp = back["echo@box-1a2b3c4d"]
     assert (acp.kind, acp.authored_task, acp.task_summary, acp.origin) == ("acp", "", "", None)
+    assert acp.stderr_received == 0, "a record from before the stderr count reads as a pick-up from the first line"
 
 
 def test_a_cli_record_needs_no_acp_session_and_an_acp_one_still_does() -> None:

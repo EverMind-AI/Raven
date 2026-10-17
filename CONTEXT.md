@@ -439,8 +439,10 @@ it -- and keeps those lines and the agent's stderr, each line numbered, in the t
 (`node_dir/tasks/<task>/`, owner-only like the host's journal), so a connection that goes
 leaves the agent running and the next
 one takes it over from the frame and the stderr line the host last read (`agent/attach`; a
-pick-up, which read none of it, gets the stderr from its first line -- a session id or a
-failure a CLI agent says only there is not lost with a link); and answers probes of
+cli pick-up, which read none of it, gets the stderr from its first line -- a session id or a
+failure a CLI agent says only there is not lost with a link -- and an acp pick-up from the
+line its run record kept as the prompt went out, so the earlier prompts' lines are not read
+again); and answers probes of
 the machine and of an agent's command. It holds no conversation, calls no model and opens
 no network port. It runs exactly the host's code, checked by protocol and digest at every
 connection (`raven/node/bundle.py`); `raven ops connection install-node` puts it on a

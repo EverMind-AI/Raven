@@ -234,17 +234,25 @@ async def test_a_parked_endpoint_is_attached_again_from_the_frame_and_the_stderr
     await pool.close_all()
 
 
-async def test_a_pick_up_attaches_for_all_of_the_stderr_whatever_frame_it_reads_from(tmp_path):
+async def test_a_pick_up_attaches_from_the_stderr_line_it_is_told_and_from_the_first_by_default(tmp_path):
+    """A cli pick-up asks from the first line (the command's own stderr); an acp pick-up from the line its
+    record kept as the prompt went out, whatever frame it reads from."""
     pool = NodePool()
     client = _live(pool, tmp_path, result={"pid": 7, "rc": None})
 
     endpoint, _answer = await pool.attach("box", "echo@box-1", name="echo@box", after=4)
-
     assert client.asked[-1][:2] == (
         protocol.AGENT_ATTACH,
         {"channel": 1, "task": "echo@box-1", "after": 4, "stderr_after": 0},
     )
     assert endpoint.received == 4 and endpoint.stderr_received == 0
+
+    endpoint, _answer = await pool.attach("box", "stub@box-1", name="stub@box", after=4, stderr_after=7)
+    assert client.asked[-1][:2] == (
+        protocol.AGENT_ATTACH,
+        {"channel": 2, "task": "stub@box-1", "after": 4, "stderr_after": 7},
+    )
+    assert endpoint.received == 4 and endpoint.stderr_received == 7, "a lost link goes on from there"
     await pool.close_all()
 
 
