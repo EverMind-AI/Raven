@@ -323,8 +323,13 @@ def _guard_argv(argv: list[str]) -> list[str]:
 
 def _fits_windows_command_line(argv: list[str]) -> bool:
     # CreateProcess counts UTF-16 units, including quoting and the final NUL.
-    command = subprocess.list2cmdline(_guard_argv(argv))
-    return len(command.encode("utf-16-le")) // 2 + 1 <= _WINDOWS_COMMAND_LINE_LIMIT
+    # A venv's python.exe then starts its base interpreter with the same
+    # arguments, that path quoted in front, and the second line must fit too.
+    lines = [subprocess.list2cmdline(_guard_argv(argv))]
+    base = getattr(sys, "_base_executable", sys.executable)
+    if base != sys.executable:
+        lines.append(f'"{base}" ' + subprocess.list2cmdline([*_GUARD, *argv]))
+    return all(len(line.encode("utf-16-le")) // 2 + 1 <= _WINDOWS_COMMAND_LINE_LIMIT for line in lines)
 
 
 @contextlib.contextmanager

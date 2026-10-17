@@ -186,6 +186,20 @@ def test_the_windows_budget_includes_the_terminating_nul(windows_command, monkey
         assert staged[-1].startswith("--file=")
 
 
+def test_a_venv_pythons_second_launch_is_in_the_budget_too(monkeypatch) -> None:
+    """A venv's python.exe starts its base interpreter again with the same arguments, the base path
+    quoted in front -- a longer line where that path is longer, as uv's is."""
+    venv = r"C:\proj\.venv\Scripts\python.exe"
+    base = r"C:\Users\someone\AppData\Roaming\uv\python\cpython-3.12.13-windows-x86_64-none\python.exe"
+    monkeypatch.setattr(uicli, "sys", SimpleNamespace(platform="win32", executable=venv, _base_executable=base))
+    argv = ["mirasim.exe", "prompt", "--text=" + "x" * 1000]
+    first = len(subprocess.list2cmdline([venv, *uicli._GUARD, *argv]).encode("utf-16-le")) // 2
+    monkeypatch.setattr(uicli, "_WINDOWS_COMMAND_LINE_LIMIT", first + 1)
+    with uicli._staged_command(argv) as staged:
+        assert staged is not argv
+        assert staged[-1].startswith("--file=")
+
+
 @pytest.mark.parametrize("prompt", [[], ["--text=short"]])
 def test_an_oversized_non_prompt_argument_is_refused_and_leaves_no_staging_file(
     windows_command, monkeypatch, tmp_path: Path, prompt: list[str]
