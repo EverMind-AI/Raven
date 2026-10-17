@@ -675,20 +675,41 @@ def _receipt_text(owner: str, digests: Iterable[str]) -> str:
     return "".join(f"{owner} {digest}\n" for digest in sorted(digests))
 
 
-def _back_up(target: Path, raw: bytes) -> Path:
-    """Copy ``raw`` beside ``target`` under a name no earlier backup holds.
+# A new Windows file takes its folder's inherited ACL whatever mode os.open is
+# given, so a copy of a prompt kept private in a shared folder would be open
+# to every account the folder lets in.
+_BACK_UP_BY_LINK = os.name == "nt"
 
-    Created owner-only and never wider than ``target``: the copy holds the
-    operator's private text, and the umask default would open it to others.
+
+def _back_up(target: Path, raw: bytes) -> Path:
+    """Keep ``target``'s bytes beside it under a name no earlier backup holds.
+
+    Never readable by more accounts than ``target``, since it holds the
+    operator's private text. On POSIX, a copy of ``raw`` created owner-only
+    and never wider than ``target``. On Windows, a hard link to ``target``
+    itself, so the backup is the same file with the same ACL and no bytes are
+    written; a volume that cannot link refuses the backup instead of copying.
     """
+    stem = f"{target.name}.bak-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
+    names = (target.with_name(f"{stem}-{attempt}" if attempt else stem) for attempt in itertools.count())
+    if _BACK_UP_BY_LINK:
+        for backup in names:
+            try:
+                os.link(target, backup)
+            except FileExistsError:
+                continue
+            except OSError as exc:
+                raise OSError(
+                    f"cannot back it up: on Windows only a hard link keeps the file's access rights, "
+                    f"and this volume refused one ({exc})"
+                ) from exc
+            return backup
     try:
         mode = stat.S_IMODE(target.stat().st_mode) & 0o600
     except OSError:
         mode = 0o600
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
-    stem = f"{target.name}.bak-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
-    for attempt in itertools.count():
-        backup = target.with_name(f"{stem}-{attempt}" if attempt else stem)
+    for backup in names:
         try:
             fd = os.open(backup, flags, mode)
         except FileExistsError:
@@ -724,11 +745,12 @@ def write_generated(
     product wrote into the same home is not taken for this one's.
     ``legacy_digests`` names texts written before receipts existed. A file
     that is neither -- edited in place, another product's, or an older
-    release's copy no digest names -- is copied to a ``.bak-*`` file first and
-    ``notify`` names the copy, and the target is replaced only once that copy
-    is on disk. ``adopt=False`` is for a caller whose directory may not be its
-    own -- a plugin writes into whatever home it is granted: a file this
-    owner's receipt never named and no digest matches is then left as it is.
+    release's copy no digest names -- is backed up to a ``.bak-*`` file first
+    (:func:`_back_up`) and ``notify`` names it, and the target is replaced
+    only once that backup is on disk. ``adopt=False`` is for a caller whose
+    directory may not be its own -- a plugin writes into whatever home it is
+    granted: a file this owner's receipt never named and no digest matches is
+    then left as it is.
 
     ``product_text=None`` turns the file off: a file this product wrote is
     removed; an edited one is kept, being the operator's now, and stops being

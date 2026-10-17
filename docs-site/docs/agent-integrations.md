@@ -301,8 +301,10 @@ does not last. Put your own lines in the sibling `*.local.md` file
 it after the product text. Copy in only what you still need: text from an
 older release can contradict the current one. A file that was edited in place,
 or that an older release left behind, is saved as `<name>.bak-<time>-<pid>`
-before it is replaced, and the launcher log names the copy. Backups are not
-deleted for you.
+before it is replaced, and the launcher log names the backup. On Windows the
+backup is a hard link to the file, so it keeps the file's access rights; on a
+volume that cannot hard-link, the launch stops and names the file instead.
+Backups are not deleted for you.
 
 ## Security and troubleshooting
 

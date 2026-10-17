@@ -8,8 +8,9 @@ lock is cross-platform (``portalocker``: POSIX ``fcntl`` + Windows
 """
 
 import os
+import stat
 import threading
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Callable, Iterator, TypeVar
 
@@ -76,41 +77,59 @@ def locked_append(path: Path, lines: list[str]) -> None:
             os.fsync(f.fileno())
 
 
+def _discard(tmp_path: Path) -> None:
+    try:
+        os.unlink(tmp_path)
+    except FileNotFoundError:
+        return
+    except OSError:
+        # Windows will not unlink a read-only file, and a tmp is read-only
+        # once a read-only target's mode has been carried onto it.
+        with suppress(OSError):
+            os.chmod(tmp_path, stat.S_IREAD | stat.S_IWRITE)
+            os.unlink(tmp_path)
+
+
 def _replace_unlocked(path: Path, data: str, create_mode: int | None = None, newline: str | None = None) -> None:
     tmp_path = path.with_name(path.name + ".tmp")
+    # Callers hold path's lock, so a tmp already here is a dead writer's: it
+    # would lend its old mode through O_CREAT, or refuse the open outright
+    # when it was left read-only.
+    _discard(tmp_path)
     preserve: int | None = None
-    if create_mode is None:
-        try:
-            preserve = path.stat().st_mode & 0o7777
-        except OSError:
-            preserve = None
-        f = open(tmp_path, "w", encoding="utf-8", newline=newline)
-    else:
-        # Secret-bearing files: the mode must hold from the first byte, so it
-        # is applied by os.open at creation — narrowing with a chmod after the
-        # write leaves the payload readable for the span in between. A crashed
-        # writer's leftover tmp would keep its old inode mode through O_CREAT,
-        # so it is removed first to restore creation semantics.
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        f = os.fdopen(
-            os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, create_mode),
-            "w",
-            encoding="utf-8",
-            newline=newline,
-        )
-    with f:
-        f.write(data)
-        f.flush()
-        os.fsync(f.fileno())
-    # os.replace swaps the inode, so a target that was chmod 600 (config files
-    # carrying api keys) would silently come back with the tmp's umask default
-    # after every save. Carry the target's own mode onto the replacement.
-    if preserve is not None:
-        os.chmod(tmp_path, preserve)
-    os.replace(tmp_path, path)
+    try:
+        if create_mode is None:
+            try:
+                preserve = path.stat().st_mode & 0o7777
+            except OSError:
+                preserve = None
+            f = open(tmp_path, "w", encoding="utf-8", newline=newline)
+        else:
+            # Secret-bearing files: the mode must hold from the first byte, so it
+            # is applied by os.open at creation — narrowing with a chmod after the
+            # write leaves the payload readable for the span in between.
+            f = os.fdopen(
+                os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, create_mode),
+                "w",
+                encoding="utf-8",
+                newline=newline,
+            )
+        with f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        # os.replace swaps the inode, so a target that was chmod 600 (config files
+        # carrying api keys) would silently come back with the tmp's umask default
+        # after every save. Carry the target's own mode onto the replacement.
+        if preserve is not None:
+            os.chmod(tmp_path, preserve)
+        os.replace(tmp_path, path)
+    except BaseException:
+        # Windows refuses to replace a read-only target after the tmp has
+        # taken its mode; the tmp goes too, so making the target writable is
+        # all a retry needs.
+        _discard(tmp_path)
+        raise
 
 
 def remove_with_lock(path: Path) -> None:

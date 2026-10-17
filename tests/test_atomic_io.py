@@ -2,7 +2,10 @@
 
 import multiprocessing
 import os
+import stat
 from pathlib import Path
+
+import pytest
 
 from raven.utils.atomic_io import atomic_replace, atomic_update, locked_append, write_transaction
 
@@ -145,6 +148,39 @@ def test_atomic_replace_with_explicit_mode_holds_from_creation(tmp_path: Path):
 
     assert (path.stat().st_mode & 0o777) == 0o600
     assert path.read_text(encoding="utf-8") == '{"token": "s3cret"}'
+
+
+def test_a_failed_replace_takes_its_tmp_with_it(tmp_path: Path, monkeypatch):
+    """Windows refuses to replace a read-only target, by which point the tmp
+    has taken the target's read-only mode; left behind, it refused the next
+    attempt's open even after the target was made writable again."""
+    path = tmp_path / "agent.md"
+    path.write_text("old", encoding="utf-8")
+
+    def refused(_src, dst):
+        raise PermissionError(13, "Access is denied", str(dst))
+
+    monkeypatch.setattr(os, "replace", refused)
+    with pytest.raises(PermissionError):
+        atomic_replace(path, "new")
+    assert not (tmp_path / "agent.md.tmp").exists()
+
+    monkeypatch.undo()
+    atomic_replace(path, "new")
+    assert path.read_text(encoding="utf-8") == "new"
+
+
+def test_a_read_only_tmp_a_dead_writer_left_does_not_block_the_replace(tmp_path: Path):
+    path = tmp_path / "agent.md"
+    path.write_text("old", encoding="utf-8")
+    stale_tmp = tmp_path / "agent.md.tmp"
+    stale_tmp.write_text("dead writer residue", encoding="utf-8")
+    os.chmod(stale_tmp, stat.S_IREAD)
+
+    atomic_replace(path, "new")
+
+    assert path.read_text(encoding="utf-8") == "new"
+    assert not stale_tmp.exists()
 
 
 def test_write_transaction_is_reentrant_for_the_helpers(tmp_path: Path):

@@ -842,7 +842,55 @@ def test_a_backup_is_never_more_open_than_the_file_it_copies(tmp_path):
         os.umask(previous)
 
 
-def test_backups_taken_in_the_same_second_do_not_collide(tmp_path, monkeypatch):
+def test_a_windows_backup_is_the_edited_file_itself_so_its_acl_comes_with_it(tmp_path, monkeypatch):
+    """Windows gives a new file its folder's inherited ACL whatever mode it is
+    opened with, so a copy of a privately permissioned prompt was readable by
+    accounts the prompt was not."""
+    monkeypatch.setattr(render, "_BACK_UP_BY_LINK", True)
+    target = tmp_path / "agent.md"
+    _write(target, "v1")
+    target.write_text("private tuning")
+    edited = target.stat()
+    assert _write(target, "v2") == "written"
+    [backup] = _backups(target)
+    assert os.path.samestat(backup.stat(), edited), "the same file under a second name, not a copy"
+    assert backup.read_text() == "private tuning" and target.read_text() == "v2"
+
+
+def test_a_windows_backup_the_volume_cannot_link_is_refused_not_copied(tmp_path, monkeypatch):
+    monkeypatch.setattr(render, "_BACK_UP_BY_LINK", True)
+    target = tmp_path / "agent.md"
+    _write(target, "v1")
+    receipt = _receipt(target).read_text()
+    target.write_text("private tuning")
+
+    def unsupported(_src, _dst):
+        raise OSError(1, "Incorrect function")
+
+    monkeypatch.setattr(render.os, "link", unsupported)
+    with pytest.raises(OSError, match="only a hard link keeps the file's access rights"):
+        _write(target, "v2")
+    assert target.read_text() == "private tuning" and _backups(target) == []
+    assert _receipt(target).read_text() == receipt
+
+
+@pytest.mark.skipif(os.name != "nt", reason="only Windows refuses to replace a read-only file")
+def test_a_read_only_prompt_regenerates_once_it_is_writable_again(tmp_path):
+    target = tmp_path / "agent.md"
+    _write(target, "v1")
+    target.chmod(stat.S_IREAD)
+    with pytest.raises(OSError):
+        _write(target, "v2")
+    assert target.read_text() == "v1"
+    assert not target.with_name("agent.md.tmp").exists()
+    target.chmod(stat.S_IREAD | stat.S_IWRITE)
+    assert _write(target, "v2") == "written"
+    assert target.read_text() == "v2"
+
+
+@pytest.mark.parametrize("by_link", [False, True], ids=["copy", "link"])
+def test_backups_taken_in_the_same_second_do_not_collide(tmp_path, monkeypatch, by_link):
+    monkeypatch.setattr(render, "_BACK_UP_BY_LINK", by_link)
     monkeypatch.setattr(render.time, "strftime", lambda _fmt: "20261016-120000")
     target = tmp_path / "agent.md"
     for edit, release in (("first edit", "v1"), ("second edit", "v2")):
