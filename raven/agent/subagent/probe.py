@@ -14,7 +14,6 @@ import asyncio
 import os
 import re
 import shutil
-import tempfile
 import time
 import uuid
 from collections.abc import Mapping, Sequence
@@ -46,6 +45,7 @@ from raven.agent.subagent.presets import (
 )
 from raven.agent.subagent.probe_state import LastTest, Remedy
 from raven.utils.commands import command_argv
+from raven.utils.scratch import ScratchDir
 
 ProbeStatus = Literal["ready", "attention", "missing", "unknown"]
 Source = Literal["config", "preset", "vendored"]
@@ -848,16 +848,16 @@ async def run_test(cfg: Any, *, source: Source) -> TestResult:
         return TestResult(cfg.name, source, "cli", False, probe.detail, None, elapsed())
 
     try:
-        with tempfile.TemporaryDirectory(prefix="raven_subagent_test_") as tmp:
+        async with ScratchDir("raven_subagent_test_") as tmp:
             backend = build_third_party_backend(
                 cfg,
                 # A stateful create commits a handle binding; a test must not leave
                 # that in the file the running gateway reads.
-                registry=InstanceRegistry(path=Path(tmp) / "probe_instances.json"),
+                registry=InstanceRegistry(path=tmp / "probe_instances.json"),
                 timeout=min(getattr(cfg, "timeout", None) or TEST_TIMEOUT_SECONDS, TEST_TIMEOUT_SECONDS),
             )
             reply = await backend.run(
-                PROBE_PROMPT, task_id=f"test-{uuid.uuid4().hex[:8]}", workspace=Path(tmp), executor=None
+                PROBE_PROMPT, task_id=f"test-{uuid.uuid4().hex[:8]}", workspace=tmp, executor=None
             )
     except Exception as exc:  # noqa: BLE001 - every failure is the answer, not a crash
         # Covers an unwritable TMPDIR or an unrecognised kind too, neither reachable
@@ -1027,39 +1027,40 @@ async def ping_agent(cfg: Any) -> PingResult:
     ready_ms, answer_s, wait_s = _ping_bounds(cfg)
     machine = (getattr(cfg, "machine", None) or "").strip()
     pool = acp_pool.AcpConnectionPool()
+    scratch: ScratchDir | None = None
     reply: str | None = None
     failure: Exception | None = None
     try:
-        with tempfile.TemporaryDirectory(prefix="raven_subagent_ping_") as tmp:
-            backend = build_third_party_backend(
-                cfg,
-                # A stateful create commits a handle binding; a ping must not leave
-                # that in the file the running gateway reads.
-                registry=InstanceRegistry(path=Path(tmp) / "ping_instances.json"),
-                timeout=answer_s,
-                ready_timeout_ms=ready_ms,
-                pool=pool,
-            )
-            # The row's own model, the way every dispatch of it runs: without
-            # it the ping asked the agent's default, so a row pinned to another
-            # model -- the fix for a default its provider refuses -- was judged
-            # by the model it was pinned away from.
-            pinned = optional_keyword(backend, "session_model", getattr(cfg, "model", None) or None)
-            # On a registered machine the session directory is named by the
-            # handle; one shared by every check leaves one directory there
-            # rather than one per press.
-            checked = {"instance": remote_check_handle()} if machine else {}
-            reply = await asyncio.wait_for(
-                backend.run(
-                    PROBE_PROMPT,
-                    task_id=f"ping-{uuid.uuid4().hex[:8]}",
-                    workspace=Path(tmp),
-                    executor=None,
-                    **pinned,
-                    **checked,
-                ),
-                timeout=wait_s,
-            )
+        scratch = ScratchDir("raven_subagent_ping_")
+        backend = build_third_party_backend(
+            cfg,
+            # A stateful create commits a handle binding; a ping must not leave
+            # that in the file the running gateway reads.
+            registry=InstanceRegistry(path=scratch.path / "ping_instances.json"),
+            timeout=answer_s,
+            ready_timeout_ms=ready_ms,
+            pool=pool,
+        )
+        # The row's own model, the way every dispatch of it runs: without
+        # it the ping asked the agent's default, so a row pinned to another
+        # model -- the fix for a default its provider refuses -- was judged
+        # by the model it was pinned away from.
+        pinned = optional_keyword(backend, "session_model", getattr(cfg, "model", None) or None)
+        # On a registered machine the session directory is named by the
+        # handle; one shared by every check leaves one directory there
+        # rather than one per press.
+        checked = {"instance": remote_check_handle()} if machine else {}
+        reply = await asyncio.wait_for(
+            backend.run(
+                PROBE_PROMPT,
+                task_id=f"ping-{uuid.uuid4().hex[:8]}",
+                workspace=scratch.path,
+                executor=None,
+                **pinned,
+                **checked,
+            ),
+            timeout=wait_s,
+        )
     except asyncio.TimeoutError:
         said = f"it did not answer within {wait_s:.0f}s"
         # A diagnosis names a command to run here, and the agent is not here.
@@ -1072,6 +1073,10 @@ async def ping_agent(cfg: Any) -> PingResult:
         # pool left open holds the child process it launched for the rest of the
         # gateway's life -- one per press.
         await pool.close_all()
+        # Only now that the pool has ended the agent: its processes ran in this
+        # directory, and Windows will not remove one a live process works in.
+        if scratch is not None:
+            await scratch.remove()
 
     if failure is None and (reply or "").strip():
         # Copilot reports a refused model call as the assistant message of a
