@@ -484,6 +484,19 @@ async def test_a_failed_catalog_refresh_preserves_the_selected_model_and_route(h
     assert "--effort=high" in harness.prompts()[-1]
 
 
+async def test_an_agent_installed_since_the_menus_were_read_opens_while_its_menu_read_fails(tmp_path: Path) -> None:
+    """The refresh a new session makes is how it sees the install; a failed menu read must not hide it."""
+    absent = Harness(tmp_path, agent="zcode")
+    error = await absent.refused("session/new", cwd=str(tmp_path), mcpServers=[])
+    assert "not installed" in error["message"]
+    from tests.mirasim_stub_cli import AGENTS
+
+    rows = [{**row, "installed": True} if row["id"] == "zcode" else row for row in AGENTS["agents"]]
+    (tmp_path / "stub" / "agents.json").write_text(json.dumps({"agents": rows}))
+    install(tmp_path, "nomenu")
+    await absent.ok("session/new", cwd=str(tmp_path), mcpServers=[])
+
+
 async def test_with_no_menus_in_hand_a_mirasim_that_cannot_list_its_agents_is_refused(tmp_path: Path) -> None:
     broken = Harness(tmp_path, mode="broken")
     assert (await broken.ok("initialize", protocolVersion=1))["agentInfo"]["version"] == "0.0.465"

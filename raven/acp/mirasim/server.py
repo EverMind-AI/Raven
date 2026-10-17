@@ -76,7 +76,7 @@ import time
 import uuid
 from collections import OrderedDict
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, BinaryIO
 from urllib.parse import unquote, urlparse
@@ -374,6 +374,11 @@ class MirasimAgent:
                 )
                 self._catalog_failed_at = ended
                 if self._catalog is not None:
+                    # The menus in hand, with what the list just said of the
+                    # agent: a new session refreshes to see an install.
+                    listed = read_catalog(self.agent, agents_doc, None)
+                    if (listed.installed, listed.label) != (self._catalog.installed, self._catalog.label):
+                        self._catalog = replace(self._catalog, installed=listed.installed, label=listed.label)
                     return self._catalog
                 catalog_doc = None
             else:
