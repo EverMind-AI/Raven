@@ -307,6 +307,30 @@ describe('the Mirasim family card', () => {
     expect(tabNamed('gui.filter.all').querySelector('.extAgents-tn')!.textContent).toBe('1')
   })
 
+  it('names a refused member instead of offering to connect it from the drawer', async () => {
+    /* The same verdict the card carries, for the same reason: the handshake
+       already refused this agent for want of a credential, and the fix --
+       signing in -- is outside this page, so a press here would spend a launch
+       to arrive at the sentence the row already says. A `toggle` from here is
+       answered with "no configured sub-agent named ...". */
+    const all = members().map((member) =>
+      member.name === 'codex-Mirasim' ? { ...member, needs_auth: true } : member,
+    )
+    const { acts } = install(all)
+    await mount()
+    await click(family())
+    const go = pickNamed('codex-Mirasim').querySelector<HTMLButtonElement>('.extAgents-pickgo')!
+    expect(go.textContent).toBe('gui.agent.unauthorized')
+    expect(go.disabled).toBe(true)
+    await click(go)
+    expect(acts).toEqual([])
+    /* Its siblings are unaffected: one refused member does not withhold the
+       connect the others are offered. */
+    const other = pickNamed('kimi-Mirasim').querySelector<HTMLButtonElement>('.extAgents-pickgo')!
+    expect(other.disabled).toBe(false)
+    expect(other.textContent).toBe('gui.agent.connect')
+  })
+
   it('opens installation and recheck for a missing family member', async () => {
     const all = members().map((member) => ({ ...member, probe_status: 'missing', probe_missing: 'mirasim' }))
     const { acts, rescans } = install(all)

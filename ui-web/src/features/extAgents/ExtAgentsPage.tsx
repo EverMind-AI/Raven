@@ -743,6 +743,14 @@ function PickRow({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Eleme
   const menuless = !provs.length
   const busy = !!s.joining[row.name]
   const missing = sectionOf(row) === 'missing'
+  /* The same verdict the card carries, and for the same reason: the handshake
+     already refused this agent for want of a credential, and the fix -- signing
+     in -- is outside this page, so a press here would spend a launch to arrive
+     at the sentence the row already says. Left to `connectRow`, it would take
+     the `toggle` branch, which the server answers with "no configured sub-agent
+     named ...".
+     After `missing`: a command this machine has never had is the earlier fact. */
+  const refused = !missing && stageOf(row) === 'unauthorized'
   const failed = s.failed[row.name]
   const shown = pick ? shownModel({ ...row, model: pick }) : null
   /* The sheet's own pill states: no frame when there is nothing to pick, locked
@@ -787,7 +795,7 @@ function PickRow({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Eleme
         </div>}
         <button
           className="extAgents-pickgo mini go"
-          disabled={busy}
+          disabled={busy || refused}
           onClick={() => {
             /* The row is the picker's anchor, so a press on its own button is not
                "outside" the picker and would leave it open over a running connect. */
@@ -798,7 +806,15 @@ function PickRow({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Eleme
           type="button"
         >
           {busy ? <Spin /> : null}
-          {t(busy ? pendingLabel(row, s) : missing ? 'gui.agent.go_install' : 'gui.agent.connect')}
+          {t(
+            busy
+              ? pendingLabel(row, s)
+              : missing
+                ? 'gui.agent.go_install'
+                : refused
+                  ? 'gui.agent.unauthorized'
+                  : 'gui.agent.connect',
+          )}
         </button>
       </div>
       {open && !missing ? (
