@@ -483,13 +483,16 @@ async def cron_save(params: dict, *, agent_loop_factory=None) -> dict:
     # committed the deletion -- so a bad schedule did not fail the edit, it
     # deleted the job.
     old_id = str(params.get("id") or "")
+    previous = next((j for j in svc.list_jobs(include_disabled=True) if j.id == old_id), None) if old_id else None
     try:
         job = svc.add_job(
             name=name,
             schedule=schedule,
             message=message,
-            channel=LOCAL_CHANNEL,
-            to="default",
+            channel=previous.payload.channel if previous is not None else LOCAL_CHANNEL,
+            to=previous.payload.to if previous is not None else "default",
+            topic_tag=previous.payload.topic_tag if previous is not None else None,
+            fire_missed=previous.payload.fire_missed if previous is not None else False,
             delete_after_run=kind == "at",
             # Keep the id across an edit: run history lives in the
             # cron:<id> session and would orphan under a fresh id.

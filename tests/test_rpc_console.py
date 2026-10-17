@@ -351,6 +351,11 @@ async def test_cron_save_creates_a_job(tmp_path: Path) -> None:
 
     assert r["job"]["name"] == "hourly"
     assert r["job"]["id"]
+    job = loop.cron_service.list_jobs()[0]
+    assert job.payload.channel == "tui"
+    assert job.payload.to == "default"
+    assert job.payload.topic_tag is None
+    assert job.payload.fire_missed is False
     assert [j["name"] for j in (await console_module.cron_list({}, agent_loop_factory=lambda: loop))["jobs"]] == [
         "hourly"
     ]
@@ -384,6 +389,86 @@ async def test_cron_save_edits_in_place_and_keeps_the_id(tmp_path: Path) -> None
     jobs = (await console_module.cron_list({}, agent_loop_factory=lambda: loop))["jobs"]
     assert len(jobs) == 1
     assert jobs[0]["name"] == "two-hourly"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "channel,to",
+    [("telegram", "chat-a"), ("feishu", "chat-b"), ("tui", "direct"), ("tui", "default"), (None, None)],
+)
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_cron_save_preserves_delivery_and_metadata(
+    tmp_path: Path, channel: str | None, to: str | None, enabled: bool
+) -> None:
+    from raven.proactive_engine.schedulers.cron.service import CronService
+    from raven.proactive_engine.schedulers.cron.types import CronSchedule
+
+    loop = _cron_loop(tmp_path)
+    service = loop.cron_service
+    original = service.add_job(
+        "summary",
+        CronSchedule(kind="every", every_ms=3_600_000),
+        "Summarize the project",
+        channel=channel,
+        to=to,
+        topic_tag="project-summary",
+    )
+    service.enable_job(original.id, enabled)
+
+    result = await console_module.cron_save(
+        {"id": original.id, "kind": "every", "every_seconds": 7200, "name": "updated", "message": "New summary"},
+        agent_loop_factory=lambda: loop,
+    )
+
+    stored = CronService(service.store_path).list_jobs(include_disabled=True)
+    assert len(stored) == 1
+    edited = stored[0]
+    assert edited.id == result["job"]["id"] == original.id
+    assert edited.payload.channel == channel
+    assert edited.payload.to == to
+    assert edited.payload.topic_tag == "project-summary"
+    assert edited.enabled is enabled
+    assert edited.created_at_ms == original.created_at_ms
+    assert edited.name == "updated"
+    assert edited.payload.message == "New summary"
+    assert edited.schedule.every_ms == 7_200_000
+
+
+@pytest.mark.asyncio
+async def test_cron_save_preserves_a_keyed_wakes_direct_target_and_missed_fire_policy(tmp_path: Path) -> None:
+    from raven.proactive_engine.schedulers.cron.service import CronService
+
+    loop = _cron_loop(tmp_path)
+    service = loop.cron_service
+    original = service.schedule_wake(
+        "ops:campaign",
+        service._now_ms() + 60_000,
+        "Check the campaign",
+        channel="tui",
+        to="campaign-chat",
+        direct_agent="operator",
+        direct_handle="campaign",
+    )
+
+    await console_module.cron_save(
+        {
+            "id": original.id,
+            "kind": "at",
+            "at_iso": "2099-01-01T12:00:00+00:00",
+            "name": "wake",
+            "message": "Check again",
+        },
+        agent_loop_factory=lambda: loop,
+    )
+
+    edited = CronService(service.store_path).pending_wakes()[0]
+    assert edited.id == original.id
+    assert edited.payload.channel == "tui"
+    assert edited.payload.to == "campaign-chat"
+    assert edited.payload.direct_agent == "operator"
+    assert edited.payload.direct_handle == "campaign"
+    assert edited.payload.fire_missed is True
+    assert edited.delete_after_run is True
 
 
 @pytest.mark.asyncio
