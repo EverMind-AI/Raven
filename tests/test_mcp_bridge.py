@@ -3,6 +3,7 @@
 import asyncio
 import io
 import os
+import socket
 import threading
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
@@ -241,5 +242,46 @@ async def test_bridge_reports_a_failed_output_pump_and_reaps_the_connection(brid
         assert bridge_io.released.is_set() and bridge_io.writer.is_closing()
         assert await asyncio.wait_for(bridge_io.peer_reader.read(), 2) == b""
     finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("ending", ["cancel", "output-error"])
+async def test_bridge_exits_when_a_stalled_endpoint_has_pending_writes(bridge_io, monkeypatch, ending):
+    monkeypatch.setattr(bridge, "_CLOSE_TIMEOUT_S", 0.05, raising=False)
+    bridge_io.writer.get_extra_info("socket").setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+    bridge_io.peer_writer.get_extra_info("socket").setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+
+    class BrokenOutput:
+        def write(self, data):
+            raise BrokenPipeError("stdout closed")
+
+    output = BrokenOutput() if ending == "output-error" else bridge_io.stdout
+    task = asyncio.create_task(bridge.run_bridge("endpoint", output))
+    try:
+        await asyncio.wait_for(bridge_io.entered.wait(), 2)
+        frame = b'{"data":"' + b"x" * 65000 + b'"}\n'
+        bridge_io.stdin.feed_data(frame * 128)
+        async with asyncio.timeout(2):
+            while bridge_io.peer_writer.transport.is_reading():
+                await asyncio.sleep(0)
+        await asyncio.sleep(0.1)
+        assert bridge_io.writer.transport.get_write_buffer_size() > 0
+        if ending == "cancel":
+            task.cancel()
+        else:
+            bridge_io.peer_writer.write(b'{"result":{}}\n')
+            await bridge_io.peer_writer.drain()
+        done, _ = await asyncio.wait({task}, timeout=1)
+        assert task in done, "bridge teardown must not depend on the endpoint reading again"
+        if ending == "cancel":
+            with pytest.raises(asyncio.CancelledError):
+                task.result()
+        else:
+            assert task.result() == 1
+        assert bridge_io.released.is_set()
+        assert bridge_io.writer.transport.get_write_buffer_size() == 0
+    finally:
+        bridge_io.writer.transport.abort()
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)

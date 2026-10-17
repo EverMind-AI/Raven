@@ -25,6 +25,7 @@ from raven.mcp.transport import unix_sockets_available as unix_sockets_available
 BRIDGE_MAX_FRAME_BYTES = 32 * 1024 * 1024
 
 _READ_CHUNK = 64 * 1024
+_CLOSE_TIMEOUT_S = 1.0
 
 
 async def iter_raw_frames(
@@ -129,6 +130,10 @@ async def run_bridge(socket_path: str, stdout: BinaryIO) -> int:
         for task in tasks:
             task.cancel()
         sock_writer.close()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        with contextlib.suppress(OSError):
-            await sock_writer.wait_closed()
+        try:
+            await asyncio.gather(*tasks, return_exceptions=True)
+            with contextlib.suppress(OSError, TimeoutError):
+                async with asyncio.timeout(_CLOSE_TIMEOUT_S):
+                    await sock_writer.wait_closed()
+        finally:
+            sock_writer.transport.abort()
