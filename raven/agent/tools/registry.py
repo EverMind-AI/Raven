@@ -1029,7 +1029,23 @@ class ToolRegistry:
             # Unwrap ToolResult here, at the boundary: `execute` promises model
             # text to every caller, and only the agent loop wants the display
             # string and multimodal blocks (which ride along on ToolOutput).
-            agent_output = getattr(spec or tool, "agent_output", False) or getattr(result, "agent_output", False)
+            #
+            # Provenance is a permission plus a claim, and takes both. The
+            # tool's declaration admits it to carrying another agent's words;
+            # the result claims that THIS one does. Judged on the declaration
+            # alone, a tool's own sentence about its own failure would read as
+            # an agent's -- `a2a_send` interpolates the exception into "the A2A
+            # call failed", and a peer credential echoed in it would reach the
+            # model unscrubbed. Judged on the claim alone, any tool could
+            # unscrub itself. So both are required, and the claim is opt-in: a
+            # bare string claims nothing, which is what every refusal and status
+            # line this process composed is, and a structured result claims only
+            # where it says so. A forwarder owns none of what it returns, so its
+            # declaration is read off the tool it forwarded to.
+            declared = getattr(spec or tool, "agent_output", False)
+            if not declared:
+                declared = bool(getattr(tool.metadata_owner(params), "agent_output", False))
+            agent_output = declared and bool(getattr(result, "agent_output", False))
             if isinstance(result, (ToolResult, ToolOutput)):
                 model_text = result.model_text if isinstance(result, ToolResult) else str(result)
                 display_text = result.display_text
@@ -1049,9 +1065,11 @@ class ToolRegistry:
                 blocks = None
                 diff = None
                 file_change = None
-                # Read off the result rather than defaulted: a tool whose own
-                # return is already a ToolOutput (exec) misses the unwrap above,
-                # and its removals would be dropped at this boundary.
+                # Neither of the two result shapes, so nothing is declared
+                # about what this return carries: read off it the fields a
+                # caller may have attached (a `str` subclass a tool built for
+                # itself), and default the rest. Read rather than defaulted for
+                # the removals and writes, which no other field would carry.
                 removed = tuple(getattr(result, "removed", ()) or ())
                 written = tuple(getattr(result, "written", ()) or ())
             # Remembered once the verdict is in, and only when it is good. A
@@ -1110,11 +1128,10 @@ class ToolRegistry:
         except asyncio.TimeoutError:
             return f"Error: Tool '{name}' timed out after {ceiling:.0f}s." + _hint
         except Exception as e:
-            return ToolOutput(
-                f"Error executing {name}: {str(e)}" + _hint,
-                ok=False,
-                agent_output=getattr(spec or tool, "agent_output", False),
-            )
+            # Never the tool's declaration: this sentence is the registry's own,
+            # raised out of a call that produced nothing, so an agent tool that
+            # dies here reports its own error as exactly what it is.
+            return ToolOutput(f"Error executing {name}: {str(e)}" + _hint, ok=False)
 
     async def _adjudicate(self, name: str, params: dict[str, Any]) -> str | None:
         """Run the cast gates over one validated call; the first non-None

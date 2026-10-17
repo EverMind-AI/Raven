@@ -2147,7 +2147,8 @@ class SubagentManager:
 
         # The subagent's result is attacker-influenceable (it may have fetched
         # web pages / read files), so fence it as untrusted before it re-enters
-        # the main agent's context.
+        # the main agent's context. Left exactly as the agent returned it: this
+        # is the other agent's content, and Raven does not redact that.
         fenced_result = wrap_untrusted(result, source="subagent")
         # Only a named or minted instance is addressable; a stateless call's
         # handle continues nothing, so offering it would invite a call the
@@ -2185,7 +2186,16 @@ class SubagentManager:
         # The template, not the rendered prompt: a rendered `ref` can inline a
         # whole file, and this line is concatenated verbatim with no truncation,
         # so the file would be re-injected into the host's context in full.
-        asked = origin.get("authored_task") or task
+        #
+        # Scrubbed, because it is the opposite provenance to the fence below:
+        # this line is what the host's own model asked for, so a credential the
+        # spawn pasted into the task is Raven's own text on the way back out.
+        # Done on this line rather than over the assembled message, which would
+        # reach the sub-agent's answer inside the fence too.
+        from raven.config.held_secrets import scrub_held_secrets
+
+        asked = scrub_held_secrets(origin.get("authored_task") or task)
+        task_summary = scrub_held_secrets(task_summary)
         # System voice, with the announce's own instructions and outside the
         # fence -- the channel measured to change the next move (watch_work's
         # module docstring carries the measurements).

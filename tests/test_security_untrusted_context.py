@@ -442,7 +442,12 @@ async def test_agent_output_survives_tool_dispatch_and_context_assembly(tmp_path
 
         async def execute(self, **kwargs):
             return ToolResult(
-                line, line, retryable=False, ok=not failed, blocks=[{"type": "text", "text": line}, picture]
+                line,
+                line,
+                retryable=False,
+                ok=not failed,
+                blocks=[{"type": "text", "text": line}, picture],
+                agent_output=True,
             )
 
     registry = ToolRegistry()
@@ -602,3 +607,255 @@ def test_ravens_own_home_is_not_read_as_another_programs_settings() -> None:
     settings = '{"apiKey": "sk-or-v1-0123456789abcdef0123456789abcdef"}'
     qwen = os.path.join(os.path.expanduser("~"), ".qwen", "settings.json")
     assert "0123456789abcdef0123456789abcdef" not in redact_home_config_read({"path": qwen}, settings)
+
+
+async def test_a_tools_own_error_text_is_scrubbed_even_when_it_declares_agent_output(monkeypatch) -> None:
+    """The declaration is a permission, not a claim.
+
+    A tool declared ``agent_output`` because *some* of its results carry another
+    agent's words. Its own error text -- an exception interpolated into a
+    sentence this process composed -- is Raven's own wording, and the credential
+    in it is one Raven holds and sent. Seen live on ``a2a_send``: a peer
+    credential with a trailing newline made httpx report
+    ``Illegal header value b'Bearer ...\\n'``, and the whole sentence skipped
+    the scrub because the tool itself was marked.
+    """
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.contracts.tool import Tool, ToolResult
+
+    monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [(_HELD, "a2a.peers.0.credential")])
+
+    class DeclaredTool(Tool):
+        name = "declared"
+        description = "A tool whose results may quote another agent"
+        parameters = {"type": "object", "properties": {}}
+        agent_output = True
+
+        async def execute(self, **kwargs):
+            # The peer's own words: the declared tool claims them, which is the
+            # half that says which return carries them.
+            return ToolResult(f"the peer said {_HELD}", agent_output=True)
+
+    class RaisingTool(Tool):
+        name = "raising"
+        description = "A tool whose execution may raise"
+        parameters = {"type": "object", "properties": {}}
+        agent_output = True
+
+        async def execute(self, **kwargs):
+            raise ConnectionError(f"Illegal header value Bearer {_HELD}")
+
+    registry = ToolRegistry()
+    registry.register(DeclaredTool())
+    registry.register(RaisingTool())
+
+    # The claim is what carries provenance, so the peer's own words survive.
+    quoted = await registry.execute("declared", {})
+    assert _HELD in str(quoted)
+
+    caught = await registry.execute("raising", {})
+    assert "[redacted: a2a.peers.0.credential]" in str(caught), str(caught)
+    assert _HELD not in str(caught)
+
+
+async def test_a_result_cannot_claim_provenance_the_tool_never_declared(monkeypatch) -> None:
+    """The other direction of the same rule: the declaration is the
+    permission, so a result may narrow it but never widen it. Only Python in
+    this process can set the result flag, which is exactly why it must not be
+    the half that decides."""
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.contracts.tool import Tool, ToolOutput
+
+    monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [(_HELD, "providers.openrouter.apiKey")])
+
+    class UndeclaredTool(Tool):
+        name = "undeclared"
+        description = "A local tool wearing another agent's claim"
+        parameters = {"type": "object", "properties": {}}
+
+        async def execute(self, **kwargs):
+            return ToolOutput(f"the peer said {_HELD}", agent_output=True)
+
+    registry = ToolRegistry()
+    registry.register(UndeclaredTool())
+    out = await registry.execute("undeclared", {})
+    assert getattr(out, "agent_output", False) is False
+    assert _HELD not in str(out)
+
+
+async def test_a_tools_own_metadata_cannot_claim_provenance_either(tmp_path, monkeypatch) -> None:
+    """``take_metadata`` is the tool's answer about the payload it hands the UI,
+    not about whose words its result holds. Were its ``agent_output`` key kept,
+    the live ACP preview and the session replay would both skip their redaction
+    for a local tool's output."""
+    from raven.acp.replay import replay
+    from raven.acp.updates import translate
+    from raven.agent.loop.bundles import EngineWiring, TurnPolicy
+    from raven.agent.loop.main import AgentLoop
+    from raven.config.raven import CheckpointConfig, RuntimeConfig
+    from raven.contracts.tool import Tool
+    from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+    from raven.rpc.methods.session import _map_to_wire
+
+    delivery = {"raven_delivery": {"files": [{"name": "report.pdf"}]}}
+
+    class LocalTool(Tool):
+        name = "local"
+        description = "A local tool whose metadata claims another agent's words"
+        parameters = {"type": "object", "properties": {}}
+
+        async def execute(self, **kwargs):
+            return "the local tool printed token=agent-example"
+
+        def take_metadata(self):
+            return {"agent_output": True, **delivery}
+
+    class Provider(LLMProvider):
+        def __init__(self):
+            super().__init__(api_key="test")
+
+        def get_default_model(self):
+            return "stub"
+
+        async def chat(self, messages, **kwargs):
+            if any(message.get("role") == "tool" for message in messages):
+                return LLMResponse(content="done", finish_reason="stop")
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[ToolCallRequest(id="c1", name="local", arguments={})],
+            )
+
+    # ``RAVEN_HOME`` rather than the suite's ``HOME``: ``Path.home()`` reads
+    # ``USERPROFILE`` on Windows, where the suite's full-access config would not
+    # be found and the call would wait for an approval instead of running.
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.json").write_text('{"permissions": {"mode": "full"}}')
+    monkeypatch.setenv("RAVEN_HOME", str(home))
+    loop = AgentLoop(
+        provider=Provider(),
+        workspace=tmp_path / "workspace",
+        model="stub",
+        policy=TurnPolicy(max_iterations=3),
+        engine=EngineWiring(runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="never"))),
+    )
+    loop.tools.register(LocalTool())
+    events = []
+
+    async def on_tool_event(phase, payload):
+        events.append((phase, payload))
+
+    _, _, messages, _ = await loop._run_agent_loop([{"role": "user", "content": "Run it"}], on_tool_event=on_tool_event)
+    complete = next(payload for phase, payload in events if phase == "complete")
+    assert complete["metadata"] == delivery
+    update = translate({"type": "tool.complete", "payload": complete}).updates[0]
+    assert "token=[redacted]" in update["content"][0]["content"]["text"]
+    session = loop.sessions.get_or_create("test:local-metadata")
+    loop._save_turn(session, messages, 0)
+    updates = replay(_map_to_wire(session.messages, session.key), session_id=session.key)
+    replayed = next(update for update in updates if update.get("sessionUpdate") == "tool_call_update")
+    assert "token=[redacted]" in replayed["content"][0]["content"]["text"]
+
+
+async def test_a_search_result_keeps_the_provenance_the_registry_settled(monkeypatch) -> None:
+    """A tool that hands control back to the registry (``tool_call`` -> the
+    target) must not stamp its own provenance over what the target's call
+    settled: the forwarder declares nothing, and an entry claiming the flag for
+    the forwarded result would unscrub a local tool's output."""
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.contracts.tool import Tool, ToolResult
+
+    monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [(_HELD, "providers.openrouter.apiKey")])
+
+    class LocalTool(Tool):
+        name = "local"
+        description = "A local tool"
+        parameters = {"type": "object", "properties": {}}
+
+        async def execute(self, **kwargs):
+            return ToolResult(f"read {_HELD} from the file")
+
+    registry = ToolRegistry()
+    registry.register(LocalTool())
+    out = await registry.execute("local", {})
+    assert getattr(out, "agent_output", False) is False
+    assert _HELD not in str(out)
+
+
+async def test_an_announcement_scrubs_this_systems_own_lines_but_not_the_agents(tmp_path, monkeypatch) -> None:
+    """One message, two provenances.
+
+    The ``Task:`` line and the header's label quote what this host's own model
+    wrote, and the lines around them are this process's; the fenced result is
+    the sub-agent's answer.
+    The scrub belongs on the first and must not reach the second -- and the
+    whole content has to survive as one message either way, since it is the
+    fence that carries the boundary, not a second pass over the text.
+    """
+    from raven.agent.subagent.manager import SubagentManager
+
+    monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [(_HELD, "providers.openrouter.apiKey")])
+
+    class _Provider:
+        def get_default_model(self) -> str:
+            return "stub"
+
+    captured: list = []
+    mgr = SubagentManager(provider=_Provider(), workspace=tmp_path)
+    mgr.set_submit(lambda req: captured.append(req))
+
+    await mgr._announce_result(
+        "id1",
+        f"deploy with {_HELD}",
+        f"deploy with {_HELD}",
+        f"the agent answered {_HELD}",
+        {
+            "channel": "cli",
+            "chat_id": "direct",
+            "session_key": "cli:direct",
+            "authored_task": f"deploy with {_HELD}",
+        },
+        "ok",
+    )
+
+    assert captured, "announce should submit a turn"
+    text = captured[0].text
+    task_line = next(line for line in text.splitlines() if line.startswith("Task:"))
+    assert _HELD not in task_line, task_line
+    assert "[redacted: providers.openrouter.apiKey]" in task_line
+    header = next(line for line in text.splitlines() if line.startswith("[Subagent '"))
+    assert header == "[Subagent 'deploy with [redacted: providers.openrouter.apiKey]' returned]", header
+    # The sub-agent's own answer is what the fence is for.
+    assert f"the agent answered {_HELD}" in text
+
+
+async def test_the_a2a_tools_own_transport_error_is_scrubbed(tmp_path, monkeypatch) -> None:
+    """The sentence the peer's credential leaked through, on the real tool.
+
+    ``a2a_send`` declares ``agent_output`` for the peer's reply, and its error
+    path interpolates the transport's exception into a sentence this process
+    composes. Measured live: a peer credential stored with a trailing newline
+    made httpx answer ``Illegal header value b'Bearer ...\\n'``, and the whole
+    sentence reached the model unscrubbed because the tool itself was marked.
+    """
+    from raven.a2a_client.tool import A2aTool
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.config.schema import A2aConfig
+
+    monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [(_HELD, "a2a.peers.0.credential")])
+
+    async def boom(config, card_url, message, *, timeout_s=300.0):
+        raise ConnectionError(f"Illegal header value b'Bearer {_HELD}\\n'")
+
+    monkeypatch.setattr("raven.a2a_client.tool.send_message", boom)
+    registry = ToolRegistry()
+    registry.register(A2aTool(A2aConfig.model_validate({"peers": [{"origin": "https://peer.example.com"}]})))
+    arguments = {"card_url": "https://peer.example.com/card", "message": "hello"}
+
+    out = await registry.execute("a2a_send", arguments)
+    assert getattr(out, "agent_output", False) is False
+    assert _HELD not in str(out)
+    assert "[redacted: a2a.peers.0.credential]" in str(out)
+    content = ContextBuilder(workspace=tmp_path).add_tool_result([], "c1", "a2a_send", str(out))[0]["content"]
+    assert _HELD not in str(content)

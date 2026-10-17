@@ -1503,7 +1503,16 @@ class TurnPathMixin:
                     )
                     tool_metadata = self.tools.take_metadata(tool_call.name, tool_call.arguments)
                     if agent_output:
+                        # Overwritten, not merged: the key is derived from the
+                        # result's own provenance and the spec it ran under, and
+                        # a tool answering its own ``take_metadata`` with a
+                        # different value is answering about the payload it
+                        # hands the UI, not about whose words the result holds.
+                        # Merging would let a tool's own dict unscrub the
+                        # preview; the derivation stays the only writer.
                         tool_metadata = {**(tool_metadata or {}), "agent_output": True}
+                    elif isinstance(tool_metadata, dict) and "agent_output" in tool_metadata:
+                        tool_metadata = {key: value for key, value in tool_metadata.items() if key != "agent_output"}
                     # What the tool saw go, plus what this turn wrote and can no
                     # longer find. Settled before this call's own write is noted,
                     # so the file it just wrote is not stat'ed to say it exists.

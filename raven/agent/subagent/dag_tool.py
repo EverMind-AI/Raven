@@ -532,6 +532,9 @@ class SubAgentDagTool(Tool):
     # for every call, background or not, the same way ``spawn`` declares it
     # while also returning before its sub-agent does -- see the note there.
     blocking_interaction = True
+    # A permission, not a claim: what this tool returns is mostly its own
+    # rendering of the run, and only the branches that quote a node's own output
+    # (its terminal results, a report) return a result claiming it.
     agent_output = True
 
     def __init__(
@@ -856,6 +859,7 @@ class SubAgentDagTool(Tool):
                 # the fence as node evidence and once trusted.
                 model_text=wrap_untrusted(event.text, source="subagent") + "\n\n" + _FOREGROUND_REPORT_TAIL,
                 display_text=f"DAG {run_id}: node {event.node_id} needs a decision",
+                agent_output=True,
             )
         if isinstance(event, Final):
             return event.result
@@ -2528,4 +2532,7 @@ class SubAgentDagTool(Tool):
             for term in result.terminal_outputs:
                 lines.append(f"### {term['node']}")
                 lines.append(term["text"])
-        return ToolResult(model_text="\n".join(lines), display_text=self._result_label(result))
+        # The model text quotes every terminal node's own output verbatim, so it
+        # is an agent's content; the tallies and paths above it are ours, which
+        # is why this is claimed here rather than declared on the tool.
+        return ToolResult(model_text="\n".join(lines), display_text=self._result_label(result), agent_output=True)

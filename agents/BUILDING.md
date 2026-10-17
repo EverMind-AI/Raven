@@ -96,6 +96,10 @@ doctor just compiled.
    optional knobs: `timeout_seconds`, `blocking_interaction`, `channels`).
    The factory signature is `Callable[[PluginContext], Tool | None]` --
    return `None` to decline registration for this run.
+   `agent_output = True` is a permission for results that carry another agent's
+   content (whose redaction policy is that agent's), and each such result still
+   has to claim it -- `ToolResult(..., agent_output=True)` -- so a tool's own
+   refusals and status lines around them stay Raven's text and stay scrubbed.
 2. **Declare it** in `raven-plugin.toml`:
 
    ```toml

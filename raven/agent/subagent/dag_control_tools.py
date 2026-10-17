@@ -52,9 +52,14 @@ def _registered_tool(loop: Any) -> Any:
 
 
 class _ControlTool(Tool):
-    """Shared plumbing: the loop to ask, and this turn's session key."""
+    """Shared plumbing: the loop to ask, and this turn's session key.
 
-    agent_output = True
+    Not declared ``agent_output``: every line these three return is this
+    process's own -- node tallies, the run's prompt lines, the advice naming
+    which call to make -- and the one place a node's own text is quoted
+    (``_render_run``'s ``error`` and ``node_summary``) is quoted by Raven in a
+    report about the run, the way ``dag_status`` has always read.
+    """
 
     def __init__(self, loop: Any) -> None:
         self._loop = loop
