@@ -37,6 +37,7 @@ import shutil
 import subprocess
 import threading
 import time
+import unicodedata
 from pathlib import Path
 from typing import Any, Collection
 
@@ -644,24 +645,34 @@ class CheckpointService:
         checkpoint keeps an ignored file out of storage, so its text must not
         reach a diff either. A path outside the work-tree is never trackable,
         and when git cannot answer nothing is.
+
+        A name is asked about as given and, where it differs, precomposed
+        (NFC), and either spelling being ignored withholds it. git on macOS
+        precomposes a name it reads off the disk before matching a rule
+        (``core.precomposeunicode``, which ``git init`` turns on there) but
+        takes a path read from ``--stdin`` as written, so a file the disk holds
+        decomposed would slip past a rule written precomposed. The name as
+        given still counts: NFC also rewrites what git leaves alone, a
+        compatibility ideograph among them.
         """
         if not await self._ensure_init():
             return set()
-        rel_of: dict[str, str] = {}
+        spellings: dict[str, set[str]] = {}
         for path in paths:
             try:
-                rel_of[path] = Path(path).resolve().relative_to(self._workspace).as_posix()
+                rel = Path(path).resolve().relative_to(self._workspace).as_posix()
             except (OSError, ValueError):
                 continue
-        if not rel_of:
+            spellings[path] = {rel, unicodedata.normalize("NFC", rel)}
+        if not spellings:
             return set()
-        query = "".join(f"{rel}\0" for rel in rel_of.values()).encode(errors="surrogateescape")
+        query = "".join(f"{rel}\0" for rels in spellings.values() for rel in rels).encode(errors="surrogateescape")
         rc, out, _ = await self._run(("check-ignore", "--no-index", "-z", "--stdin"), stdin=query)
         # 0: some are ignored, 1: none are; anything else is git failing to say.
         if rc not in (0, 1):
             return set()
         ignored = set(out.decode(errors="surrogateescape").split("\0")) - {""}
-        return {path for path, rel in rel_of.items() if rel not in ignored}
+        return {path for path, rels in spellings.items() if ignored.isdisjoint(rels)}
 
     def _stage_path(self) -> Path:
         """This process's staging index.
