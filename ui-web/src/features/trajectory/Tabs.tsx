@@ -10,8 +10,10 @@
  * squeezes a name into something unreadable.
  */
 
+import { Pin02Icon } from '@hugeicons/core-free-icons'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
+import { Icon } from '../../components/Icon'
 import { t } from '../../i18n/t'
 import { blockTitleKey } from './blocks'
 import * as details from './detailStore'
@@ -34,6 +36,7 @@ export function blockTitle(block: Pick<TrajectoryBlockDescriptor, 'id'>): string
 export function Tabs({ entryId, blocks }: { entryId: string; blocks: TrajectoryBlockDescriptor[] }): JSX.Element {
   const current = details.tabOf(entryId)
   const tabs = details.visibleTabs(blocks)
+  const pin = details.pinned()
   const strip = useRef<HTMLDivElement | null>(null)
   const [reach, setReach] = useState({ left: false, right: false })
 
@@ -102,10 +105,17 @@ export function Tabs({ entryId, blocks }: { entryId: string; blocks: TrajectoryB
             aria-selected={selected}
             aria-controls={panelId(tab)}
             tabIndex={selected ? 0 : -1}
+            data-pinned={tab === pin ? '' : undefined}
             onClick={() => details.setTab(entryId, tab)}
           >
             {tab === 'overview' ? t('gui.trajectory.details.overview') : blockTitle(block!)}
             {muted ? <span className="trajectory-tab-dot" aria-hidden="true" /> : null}
+            {/* Named rather than hidden, so the tab's own name says it is the pinned one. */}
+            {tab === pin ? (
+              <span className="trajectory-tab-pin" role="img" aria-label={t('gui.trajectory.details.pinned')} title={t('gui.trajectory.details.pinned')}>
+                <Icon icon={Pin02Icon} size={11} />
+              </span>
+            ) : null}
           </button>
         )
       })}

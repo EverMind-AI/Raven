@@ -218,6 +218,14 @@ html[data-theme="dark"] {
   font-size: 12px; display: grid; place-items: center;
 }
 .trajectory-close:hover { color: var(--text); background: var(--hover); }
+/* The pin for the tab on screen: hollow and faint until that tab is the
+   pinned one, then solid in the colour the selected tab is underlined in. */
+.trajectory-pin {
+  flex: none; width: 26px; height: 26px; border-radius: 7px; color: var(--faint); display: grid; place-items: center;
+}
+.trajectory-pin:hover { color: var(--text); background: var(--hover); }
+.trajectory-pin[aria-pressed='true'], .trajectory-pin[aria-pressed='true']:hover { color: var(--amber); }
+.trajectory-pin[aria-pressed='true'] svg path, .trajectory-tab-pin svg path { fill: currentColor; }
 
 /* The strip and, when it overflows, an arrow at either end to move it. */
 .trajectory-tabs-wrap { flex: none; display: flex; align-items: stretch; border-bottom: 1px solid var(--line-soft); }
@@ -238,6 +246,7 @@ html[data-theme="dark"] {
 .trajectory-tab-on, .trajectory-tab-on:hover { color: var(--text); border-bottom-color: var(--amber); background: transparent; }
 .trajectory-tab:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
 .trajectory-tab-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--faint); }
+.trajectory-tab-pin { display: inline-grid; place-items: center; color: var(--amber); }
 
 /* ── the pane's body ────────────────────────────────────────────── */
 
