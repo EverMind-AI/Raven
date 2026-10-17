@@ -441,8 +441,11 @@ def test_ensure_bridge_dir_keeps_a_build_it_cannot_check(tmp_path, monkeypatch):
 def test_ensure_bridge_dir_raises_without_the_packaged_source(tmp_path, monkeypatch):
     monkeypatch.setattr(wb, "_find_bridge_source", lambda: None)
     monkeypatch.setattr("raven.config.paths.get_bridge_install_dir", lambda: tmp_path / "absent")
-    with pytest.raises(RuntimeError, match="bridge source not found"):
+    with pytest.raises(RuntimeError) as exc:
         wb.ensure_bridge_dir()
+    assert "official installer" in str(exc.value)
+    assert "pip install" not in str(exc.value)
+    assert "uv tool install raven" not in str(exc.value)
 
 
 def test_ensure_bridge_dir_raises_without_npm(tmp_path, monkeypatch):
