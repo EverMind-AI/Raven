@@ -378,6 +378,8 @@ class MirasimAgent:
             # repeats initialize with five seconds, so nothing here may wait long,
             # and a host that is not there is the menus' read to report.
             connecting = asyncio.ensure_future(self.host.connect())
+            self._tasks.add(connecting)
+            connecting.add_done_callback(self._tasks.discard)
             connecting.add_done_callback(_quiet)
             await asyncio.wait({connecting}, timeout=INITIALIZE_CONNECT_S)
         label = self._catalog.label if self._catalog is not None else self.agent
