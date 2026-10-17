@@ -56,11 +56,14 @@ export function Tabs({ entryId, blocks }: { entryId: string; blocks: TrajectoryB
     ro.observe(el)
     return () => ro.disconnect()
   }, [measure])
-  /* The selected tab is kept in view, however it was selected. */
+  const over = reach.left || reach.right
+  /* The selected tab is kept in view, however it was selected -- and again
+     when the arrows come or go, since they take their room from the strip: a
+     tab brought to the edge before they appeared would end up under one. */
   useLayoutEffect(() => {
     strip.current?.querySelector<HTMLElement>(`#${tabId(current)}`)?.scrollIntoView?.({ inline: 'nearest', block: 'nearest' })
     measure()
-  }, [current, measure])
+  }, [current, over, measure])
   const nudge = (direction: -1 | 1): void => {
     const el = strip.current
     if (!el) return
@@ -86,7 +89,7 @@ export function Tabs({ entryId, blocks }: { entryId: string; blocks: TrajectoryB
 
   return (
     <div className="trajectory-tabs-wrap" data-reach-left={reach.left ? '' : undefined} data-reach-right={reach.right ? '' : undefined}>
-      {reach.left || reach.right ? (
+      {over ? (
         <button className="trajectory-tab-arrow" aria-label={t('gui.trajectory.details.tabs_earlier')} disabled={!reach.left} onClick={() => nudge(-1)}>
           {'\u2039'}
         </button>
@@ -120,7 +123,7 @@ export function Tabs({ entryId, blocks }: { entryId: string; blocks: TrajectoryB
         )
       })}
     </div>
-      {reach.left || reach.right ? (
+      {over ? (
         <button className="trajectory-tab-arrow" aria-label={t('gui.trajectory.details.tabs_later')} disabled={!reach.right} onClick={() => nudge(1)}>
           {'\u203a'}
         </button>

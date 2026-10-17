@@ -79,6 +79,20 @@ describe('the tab strip', () => {
     expect(details.tabOf('r0')).toBe('b11')
     expect(scrolled.at(-1)).toBe('trajectory-tab-b11')
   })
+
+  it('brings the selected tab into view again once the arrows take their room, and not on a nudge', () => {
+    details.setTab('r0', 'b11')
+    render(<Host blocks={Array.from({ length: 12 }, (_, i) => block(`b${i}`))} />)
+    const strip = q('.trajectory-tabs') as HTMLElement
+    const scrolled: string[] = []
+    for (const tab of document.querySelectorAll<HTMLElement>('[role="tab"]')) tab.scrollIntoView = () => { scrolled.push(tab.id) }
+    geometry(strip, 900, 300)
+    act(() => { fireEvent.scroll(strip) })
+    expect(document.querySelectorAll('.trajectory-tab-arrow')).toHaveLength(2)
+    expect(scrolled).toEqual(['trajectory-tab-b11'])
+    act(() => { fireEvent.click(q('.trajectory-tab-arrow') as HTMLElement) })
+    expect(scrolled).toEqual(['trajectory-tab-b11'])
+  })
 })
 
 describe('the pinned mark', () => {
