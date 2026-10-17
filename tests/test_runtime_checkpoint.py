@@ -16,6 +16,7 @@ import os
 import subprocess
 import tempfile
 import time
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -535,6 +536,47 @@ async def test_a_name_that_is_not_utf8_is_judged_and_looked_up_by_its_bytes(work
     tree = await svc.stage_tree()
     assert tree is not None
     assert await svc.read_blobs(tree, [plain], max_bytes=1024) == {}
+
+
+async def test_trackable_asks_about_a_name_as_given_and_precomposed(workspace):
+    """git on macOS precomposes a name it reads off the disk before matching an
+    ignore rule, but takes a path read from --stdin as written, so a file the
+    disk holds decomposed must still meet a rule written precomposed. The name
+    as given is asked about too: NFC also rewrites a compatibility ideograph,
+    which git leaves alone. Judged on the rules alone."""
+    svc = CheckpointService(workspace)
+    composed, hangul, ideograph = "secret-café.py", "한.py", "豈.py"
+    (workspace / ".gitignore").write_text(f"{composed}\n{hangul}\n{ideograph}\n", encoding="utf-8")
+    decomposed = [str(workspace / unicodedata.normalize("NFD", name)) for name in (composed, hangul)]
+    unruled = str(workspace / unicodedata.normalize("NFD", "notes-café.py"))
+    assert all(unicodedata.normalize("NFC", path) != path for path in [*decomposed, unruled])
+    assert unicodedata.normalize("NFC", ideograph) != ideograph
+
+    assert await svc.trackable([*decomposed, str(workspace / ideograph), unruled]) == {unruled}
+
+
+async def test_a_file_the_snapshot_leaves_out_is_never_trackable(workspace):
+    """Held against the staged tree itself, in whichever spelling this
+    platform's git matches its rules: on macOS the precomposed one, so there a
+    decomposed name under a precomposed rule is left out and must not be
+    vouched for."""
+    svc = CheckpointService(workspace)
+    composed = "secret-café.py"
+    (workspace / ".gitignore").write_text(f"{composed}\n*.log\n", encoding="utf-8")
+    unruled = unicodedata.normalize("NFD", "notes-café.py")
+    names = [unicodedata.normalize("NFD", composed), "build.log", unruled]
+    for name in names:
+        (workspace / name).write_text("x\n", encoding="utf-8")
+
+    tree = await svc.stage_tree()
+    assert tree is not None
+    _rc, out, _err = await svc._git("ls-tree", "-r", "-z", "--name-only", tree)
+    stored = {unicodedata.normalize("NFC", name) for name in out.split("\0") if name}
+    kept = await svc.trackable([str(workspace / name) for name in names])
+
+    left_out = [name for name in names if unicodedata.normalize("NFC", name) not in stored]
+    assert "build.log" in left_out and str(workspace / unruled) in kept
+    assert [name for name in left_out if str(workspace / name) in kept] == []
 
 
 async def test_trackable_vouches_for_nothing_when_git_cannot_answer(workspace, monkeypatch):
