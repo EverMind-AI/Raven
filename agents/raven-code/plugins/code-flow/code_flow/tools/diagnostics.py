@@ -62,7 +62,12 @@ def _ignores(text: str) -> dict[int, set[str] | None]:
     for token in tokenize.generate_tokens(io.StringIO(text).readline):
         if token.type != tokenize.COMMENT:
             continue
+        # Ruff honors a file-level directive only on a line of its own and
+        # ignores one that trails code, which suppresses nothing.
+        own_line = not token.line[: token.start[1]].strip()
         for match in _NOQA.finditer(token.string):
+            if match[1] and not own_line:
+                continue
             row = 0 if match[1] else token.start[0]
             codes = set(re.findall(r"[A-Z]+\d+", match[2].upper())) if match[2] else None
             if row not in ignored:

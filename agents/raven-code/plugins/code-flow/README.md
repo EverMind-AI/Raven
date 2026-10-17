@@ -25,8 +25,10 @@ The switches live under `plugins.config["code-flow"].tools`:
 
 The checks parse source without importing or executing it. They honor inline
 `# noqa` / `# noqa: F821` and file-level `# ruff: noqa` / `# flake8: noqa`
-comments for name/import checks. They use the host's Python parser and builtins,
-not the project's complete Ruff/Flake8 configuration or target interpreter;
+comments for name/import checks; as in Ruff, a file-level directive counts
+only on a line of its own, and one trailing code suppresses nothing. They use
+the host's Python parser and builtins, not the project's complete Ruff/Flake8
+configuration or target interpreter;
 dynamic bindings and version differences can need human or agent judgment.
 Syntax feedback names the parser version. Passing diagnostics do not prove
 that the patch is correct or replace project tests.
