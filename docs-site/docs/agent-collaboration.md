@@ -135,6 +135,16 @@ Parallel instances do not imply independent working copies. For concurrent
 edits, give each agent explicit file ownership or separate worktrees. Raven-Code
 reports shared-workspace conditions, but that is not a filesystem lock.
 
+For coding work the host arranges this itself, following its built-in
+`multi-agent-coding` skill. When coding tasks run side by side in one git
+project, the host asks each coding agent to create a git worktree of its own, on
+a branch named for its task, and to report the worktree's path and branch. The
+changes stay on those branches until you ask for them to be merged, and the
+worktrees stay until you ask for them to be removed. The same skill keeps one
+instance per task, sends a follow-up on an unfinished task to that task's
+instance, and moves a task to another coding agent when the first reports that
+its quota is used up.
+
 ## Troubleshooting
 
 | Symptom | Check |

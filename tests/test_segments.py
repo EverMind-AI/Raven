@@ -559,6 +559,33 @@ class TestActiveSkills:
 
         assert seg is None or "subagent-dag-orchestration" not in seg.text
 
+    async def test_coding_skill_is_resident_as_a_digest_beside_spawn(self, tmp_path: Path) -> None:
+        """The multi-agent coding skill rides on ``spawn`` alone: a turn that can
+        hand code to a coding agent carries its description and route every turn,
+        and the body stays on disk until the agent reads it."""
+        b = ActiveSkillsSegmentBuilder(
+            ContextBuilder(workspace=tmp_path).skills,
+            get_tool_definitions=_tool_defs("read_file", "spawn", "exec"),
+        )
+        seg = await b.build(_ctx(tmp_path))
+
+        assert seg is not None
+        assert "### Skill: multi-agent-coding" in seg.text
+        assert 'read_skill("local/multi-agent-coding")' in seg.text
+        assert "Create a git worktree of your own" not in seg.text
+
+    async def test_coding_skill_withheld_when_spawn_is(self, tmp_path: Path) -> None:
+        """Its procedure continues an instance with ``spawn``'s own fields, so a
+        turn whose ``spawn`` is disabled must not be told to follow it, whatever
+        else it can dispatch with."""
+        b = ActiveSkillsSegmentBuilder(
+            ContextBuilder(workspace=tmp_path).skills,
+            get_tool_definitions=_tool_defs("read_file", "run_subagent_dag", "exec"),
+        )
+        seg = await b.build(_ctx(tmp_path))
+
+        assert seg is None or "multi-agent-coding" not in seg.text
+
     async def test_unwired_tool_lookup_does_not_gate(self, tmp_path: Path) -> None:
         """No callable wired → unknown, not empty. A wiring gap must degrade to
         showing the skill, never to silently blanking the segment."""

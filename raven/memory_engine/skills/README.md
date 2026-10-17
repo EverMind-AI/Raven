@@ -25,6 +25,7 @@ time per skill.
 | `weather` | Get current weather and forecasts (wttr.in + Open-Meteo, no API key) |
 | `subagent-dag-orchestration` | Orchestrate multi-sub-agent work as one `run_subagent_dag` graph |
 | `raven-self-config` | Read and change Raven's own settings with `raven_config`, and apply them |
+| `multi-agent-coding` | Get the user's coding done through coding sub-agents: an instance per task, a worktree of its own when tasks share a project, results passed by file, and another coding agent when one runs out of quota |
 
 ## Notes
 User-defined skills can be placed under `<workspace>/skills/` or any directory listed in `skill_forge.local_dirs`.

@@ -835,6 +835,37 @@ async def test_cancel_by_session_clears_spawn_history(monkeypatch):
     assert "sessA" not in mgr._session_spawn_times
 
 
+async def test_the_coding_skill_names_ravens_own_refusals_in_their_words(monkeypatch):
+    """The multi-agent coding skill moves a task to another coding agent when that agent's
+    quota runs out, and tells the main agent which of Raven's own refusals are not that
+    case, since they refuse every agent alike. It names them by the words below, read off
+    the refusals themselves: reworded on either side, the skill would send the main agent
+    from agent to agent against a limit they all share. Not every `Spawn refused:` is one
+    of them -- an agent missing from the table is refused for that agent alone -- which is
+    why the skill names reasons rather than the prefix. The graph's pause refusal, written
+    by the graph tool, carries the same words as the spawn one."""
+    import raven
+
+    skill_md = Path(raven.__file__).parent / "memory_engine" / "skills" / "multi-agent-coding" / "SKILL.md"
+    skill = " ".join(skill_md.read_text(encoding="utf-8").split())
+    limited = _stub_mgr(monkeypatch, max_spawns_per_hour=0)
+    paused = _stub_mgr(monkeypatch)
+    paused.set_paused(True)
+    closing = _stub_mgr(monkeypatch)
+    await closing.cancel_all()
+
+    refusals = {
+        "spawn rate limit": [await limited.spawn(task="a")],
+        "dispatch rate limit": [limited.charge_dag_run("web:sess1")],
+        "delegation is paused": [await paused.spawn(task="a")],
+        "the host is shutting down": [await closing.spawn(task="a"), closing.charge_dag_run("web:sess1")],
+    }
+    for words, texts in refusals.items():
+        for text in texts:
+            assert text is not None and words in text, (words, text)
+        assert words in skill, f"the skill no longer names the refusal for {words!r}"
+
+
 async def test_cancel_by_session_cancels_live_task(monkeypatch):
     """cancel_by_session cancels a still-running asyncio.Task registered under
     the session (not just the rate-limit bookkeeping)."""
@@ -995,13 +1026,15 @@ def test_generated_participant_notes_preserve_each_supported_message_shape() -> 
 def test_build_subagent_prompt_hides_orchestration_skills(tmp_path):
     """The catalog handed to a sub-agent must not advertise a skill whose
     procedure needs a tool this backend never registers — the DAG skill tells
-    the reader to call run_subagent_dag, which only the main agent has."""
+    the reader to call run_subagent_dag, and the coding skill to call spawn,
+    which only the main agent has."""
     from raven.agent.subagent.backends.raven_loop import build_subagent_prompt
 
     prompt = build_subagent_prompt(tmp_path, tmp_path / "session", ["read_file", "exec"])
 
     assert "subagent-dag-orchestration" not in prompt
     assert "run_subagent_dag" not in prompt
+    assert "multi-agent-coding" not in prompt
     # The filter is targeted, not a blanket catalog suppression.
     assert "weather" in prompt
 
