@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import os
 import subprocess
+import sys
 import tempfile
 import time
 import unicodedata
@@ -555,16 +556,18 @@ async def test_trackable_asks_about_a_name_as_given_and_precomposed(workspace):
     assert await svc.trackable([*decomposed, str(workspace / ideograph), unruled]) == {unruled}
 
 
-async def test_a_file_the_snapshot_leaves_out_is_never_trackable(workspace):
+async def test_a_decomposed_name_the_snapshot_leaves_out_is_not_trackable(workspace):
     """Held against the staged tree itself, in whichever spelling this
     platform's git matches its rules: on macOS the precomposed one, so there a
     decomposed name under a precomposed rule is left out and must not be
-    vouched for."""
+    vouched for. Elsewhere git stores that name, and only the controls are
+    left to check."""
     svc = CheckpointService(workspace)
     composed = "secret-caf\u00e9.py"
     (workspace / ".gitignore").write_text(f"{composed}\n*.log\n", encoding="utf-8")
+    secret = unicodedata.normalize("NFD", composed)
     unruled = unicodedata.normalize("NFD", "notes-caf\u00e9.py")
-    names = [unicodedata.normalize("NFD", composed), "build.log", unruled]
+    names = [secret, "build.log", unruled]
     for name in names:
         (workspace / name).write_text("x\n", encoding="utf-8")
 
@@ -576,6 +579,8 @@ async def test_a_file_the_snapshot_leaves_out_is_never_trackable(workspace):
 
     left_out = [name for name in names if unicodedata.normalize("NFC", name) not in stored]
     assert "build.log" in left_out and str(workspace / unruled) in kept
+    if sys.platform == "darwin":
+        assert secret in left_out
     assert [name for name in left_out if str(workspace / name) in kept] == []
 
 
