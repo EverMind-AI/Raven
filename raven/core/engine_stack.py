@@ -13,6 +13,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
+from loguru import logger
+
 from raven.core.runtime import RavenRuntime
 
 if TYPE_CHECKING:
@@ -97,21 +99,41 @@ def build_local_sessions(config, *, workspace: str | None) -> "tuple[SessionMana
     The gateway passes no slug -- one daemon serves every project, so its
     grouping is the channel instead. ``workspace`` is the operator's explicit
     working-directory override, validated against the agent home
-    (``ValueError`` when it is not allowed).
+    (``ValueError`` when it is not allowed). A protected launch directory
+    falls back to the gateway's per-channel directories.
     """
-    from raven.agent.workdir import WorkdirPolicy, WorkdirResolver, validate_override
+    from raven.agent.workdir import WorkdirPolicy, WorkdirResolver, default_channel_root, validate_override
     from raven.session.manager import SessionManager
     from raven.utils.paths import project_slug
 
     launch_dir = Path.cwd()
-    session_manager = SessionManager(
-        config.workspace_path, project_slug=project_slug(launch_dir), project_dir=launch_dir
-    )
+    agent_home = config.workspace_path
+    explicit_workdir = validate_override(workspace, agent_home) if workspace else None
+    policy = WorkdirPolicy.LAUNCH_DIR
+    if explicit_workdir is None:
+        try:
+            validate_override(launch_dir, agent_home)
+        except ValueError as exc:
+            user_home = Path.home().resolve()
+            resolved_launch = launch_dir.resolve()
+            # CheckpointService already refuses the user's home and wider roots.
+            wide_ancestor = resolved_launch in agent_home.resolve().parents and (
+                resolved_launch == user_home or resolved_launch in user_home.parents
+            )
+            if not wide_ancestor:
+                policy = WorkdirPolicy.PER_CHANNEL
+                logger.warning(
+                    "Launch directory {} is not a usable working directory ({}); falling back to {} per channel",
+                    launch_dir,
+                    exc,
+                    default_channel_root(agent_home),
+                )
+    session_manager = SessionManager(agent_home, project_slug=project_slug(launch_dir), project_dir=launch_dir)
     workdir_resolver = WorkdirResolver(
-        WorkdirPolicy.LAUNCH_DIR,
-        agent_home=config.workspace_path,
+        policy,
+        agent_home=agent_home,
         launch_dir=launch_dir,
-        explicit_workdir=validate_override(workspace, config.workspace_path) if workspace else None,
+        explicit_workdir=explicit_workdir,
         sessions=session_manager,
     )
     return session_manager, workdir_resolver

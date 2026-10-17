@@ -27,7 +27,18 @@ provider is configured.
 
 The working directory holds the files the task acts on. Agent home holds
 identity, memory, skills, and transcripts; it is not an interchangeable name for
-the project checkout. For a one-shot task:
+the project checkout.
+
+Local commands (`raven tui`, `raven serve`, `raven agent`, and `raven a2a serve`)
+normally work in the directory they were launched from. A launch inside Agent
+home's memory, skills, or transcripts, at Agent home itself, or at an ancestor
+other than your user home or a higher root produces a warning and uses
+`<instance>/tmp/<channel>` instead. A valid `--workspace` override takes precedence; a protected explicit
+override is rejected. When your user home or a higher root is a strict ancestor
+of Agent home, launching there keeps that directory, with checkpointing disabled
+for that scope.
+
+For a one-shot task:
 
 ```bash
 raven agent --workspace /absolute/path/to/project -m "Read the README and summarize the setup steps"

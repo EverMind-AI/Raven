@@ -24,7 +24,16 @@
 ## 选择正确工作目录 { #work-in-the-right-directory }
 
 工作目录保存任务操作的文件；Agent home 保存身份、记忆、技能和 transcript，
-不能把它当作项目仓库的同义词。单次任务示例：
+不能把它当作项目仓库的同义词。
+
+本地命令（`raven tui`、`raven serve`、`raven agent`、`raven a2a serve`）通常使用
+启动时所在的目录。如果从 Agent home 本身、其记忆、技能或 transcript 子树，
+或既包含 Agent home、又不是用户主目录及其更高层的目录启动，会输出警告并改用
+`<instance>/tmp/<channel>`。合法的 `--workspace` 覆盖优先；显式指定受保护目录
+则会报错。当用户主目录或更高层是 Agent home 的上级目录时，从那里启动仍使用
+原目录，该范围不会启用 checkpoint。
+
+单次任务示例：
 
 ```bash
 raven agent --workspace /absolute/path/to/project -m "Read the README and summarize the setup steps"
