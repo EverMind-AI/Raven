@@ -193,7 +193,9 @@ class WriteFileTool(_Aliased, trunk.WriteFileTool):
         if isinstance(result, ToolResult) and result.file_change is not None:
             previous = result.file_change.before
         elif mode != "append" and isinstance(result, ToolResult) and result.model_text.startswith("File unchanged:"):
-            return result
+            # Nothing was written, so the content is its own baseline: name
+            # findings are not repeated, a syntax error still present is.
+            previous = content
         note = await self._diagnostics.check(fp, text=None if mode == "append" else content, before=previous)
         return _append_note(result, note)
 

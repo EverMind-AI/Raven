@@ -458,6 +458,14 @@ def test_identical_rewrite_does_not_repeat_diagnostics(registry, tmp_path):
     assert "Python diagnostics" not in _text(_run(registry.execute("write_file", args)))
 
 
+def test_identical_rewrite_still_reports_a_syntax_error(registry, tmp_path):
+    target = tmp_path / "same_broken.py"
+    args = {"file_path": str(target), "content": "def f(:\n    return 1\n"}
+    assert "Python syntax error" in _text(_run(registry.execute("write_file", args)))
+    result = _text(_run(registry.execute("write_file", args)))
+    assert result.startswith("File unchanged:") and "Python syntax error" in result
+
+
 def test_diagnostics_bound_source_and_findings_without_executing_code(tmp_path):
     from code_flow.tools.diagnostics import MAX_FINDINGS, MAX_SOURCE_BYTES, PythonDiagnostics
 
