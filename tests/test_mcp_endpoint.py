@@ -1,4 +1,4 @@
-"""Host-side unix socket endpoints that front a held MCP connection."""
+"""Host-local endpoints that front a held MCP connection."""
 
 import asyncio
 import contextlib
@@ -7,6 +7,7 @@ import os
 import stat
 import sys
 import time
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -15,6 +16,13 @@ from loguru import logger
 from raven.config.schema import MCPServerConfig
 from raven.mcp import endpoint
 from raven.mcp.endpoint import McpEndpoints, bridge_command
+from raven.mcp.transport import open_endpoint, unix_sockets_available
+
+
+@pytest.fixture(autouse=True, params=["native", "tcp"] if unix_sockets_available() else ["tcp"])
+def endpoint_transport(request, monkeypatch):
+    if request.param == "tcp":
+        monkeypatch.setattr(endpoint, "unix_sockets_available", lambda: False)
 
 
 async def _resolved(executor):
@@ -64,7 +72,7 @@ def test_the_bridge_command_is_this_builds_own_raven(monkeypatch, tmp_path):
     for that dispatch died as a closed connection, while the sub-agent still
     answered the turn without them.
     """
-    own = tmp_path / "bin" / "raven"
+    own = tmp_path / "bin" / ("raven.exe" if sys.platform == "win32" else "raven")
     own.parent.mkdir()
     own.write_text("#!/bin/sh\nexit 0\n")
     own.chmod(0o755)
@@ -72,8 +80,8 @@ def test_the_bridge_command_is_this_builds_own_raven(monkeypatch, tmp_path):
 
     other = tmp_path / "elsewhere"
     other.mkdir()
-    (other / "raven").write_text("#!/bin/sh\nexit 0\n")
-    (other / "raven").chmod(0o755)
+    (other / ("raven.exe" if sys.platform == "win32" else "raven")).write_text("#!/bin/sh\nexit 0\n")
+    (other / ("raven.exe" if sys.platform == "win32" else "raven")).chmod(0o755)
 
     assert bridge_command(path=str(other)) == [str(own), "mcp", "bridge"]
 
@@ -85,9 +93,11 @@ def test_the_bridge_command_falls_back_to_the_path_then_to_nothing(monkeypatch, 
 
     on_path = tmp_path / "onpath"
     on_path.mkdir()
-    (on_path / "raven").write_text("#!/bin/sh\nexit 0\n")
-    (on_path / "raven").chmod(0o755)
-    assert bridge_command(path=str(on_path)) == [str(on_path / "raven"), "mcp", "bridge"]
+    (on_path / ("raven.exe" if sys.platform == "win32" else "raven")).write_text("#!/bin/sh\nexit 0\n")
+    (on_path / ("raven.exe" if sys.platform == "win32" else "raven")).chmod(0o755)
+    argv = bridge_command(path=str(on_path))
+    assert argv is not None and argv[1:] == ["mcp", "bridge"]
+    assert Path(argv[0]) == on_path / ("raven.exe" if sys.platform == "win32" else "raven")
 
     assert bridge_command(path=str(tmp_path / "empty")) is None
 
@@ -98,9 +108,10 @@ async def test_an_open_endpoint_relays_to_the_held_upstream(tmp_path):
     endpoints = McpEndpoints()
     try:
         path = await endpoints.open("node-1", "echo", cfg)
-        assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+        if isinstance(path, Path):
+            assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
 
-        reader, writer = await asyncio.open_unix_connection(str(path))
+        reader, writer = await open_endpoint(str(path))
         writer.write(b'{"jsonrpc":"2.0","id":7,"method":"tools/list"}\n')
         await writer.drain()
         line = await asyncio.wait_for(reader.readline(), timeout=20)
@@ -109,7 +120,8 @@ async def test_an_open_endpoint_relays_to_the_held_upstream(tmp_path):
         await endpoints.aclose()
 
     assert json.loads(line)["result"] == {"saw": "tools/list"}
-    assert not path.exists()
+    with pytest.raises(OSError):
+        await open_endpoint(str(path))
 
 
 @pytest.mark.asyncio
@@ -121,7 +133,7 @@ async def test_close_returns_even_while_a_downstream_is_still_connected():
     cfg = MCPServerConfig(command=sys.executable, args=["-c", _ECHO_SERVER])
     endpoints = McpEndpoints()
     path = await endpoints.open("held", "echo", cfg)
-    reader, writer = await asyncio.open_unix_connection(str(path))
+    reader, writer = await open_endpoint(str(path))
     writer.write(b'{"jsonrpc":"2.0","id":1,"method":"ping"}\n')
     await writer.drain()
     await asyncio.wait_for(reader.readline(), timeout=20)  # the relay is up
@@ -130,7 +142,8 @@ async def test_close_returns_even_while_a_downstream_is_still_connected():
         await asyncio.wait_for(endpoints.close("held"), timeout=15)
     finally:
         writer.close()
-    assert not path.exists()
+    with pytest.raises(OSError):
+        await open_endpoint(str(path))
 
 
 @pytest.mark.asyncio
@@ -139,7 +152,7 @@ async def test_a_malformed_frame_is_dropped_without_killing_the_connection(tmp_p
     endpoints = McpEndpoints()
     try:
         path = await endpoints.open("node-2", "echo", cfg)
-        reader, writer = await asyncio.open_unix_connection(str(path))
+        reader, writer = await open_endpoint(str(path))
         writer.write(b"this is not json\n")
         writer.write(b'{"jsonrpc":"2.0","id":8,"method":"ping"}\n')
         await writer.drain()
@@ -179,7 +192,7 @@ async def _round_trip(path, frames):
     itself can overtake an upstream reply that is still in flight, and JSON-RPC
     correlates by id, not by arrival.
     """
-    reader, writer = await asyncio.open_unix_connection(str(path))
+    reader, writer = await open_endpoint(str(path))
     try:
         for frame in frames:
             writer.write(json.dumps(frame).encode() + b"\n")
@@ -228,7 +241,7 @@ async def test_close_does_not_wait_out_its_timeout_when_cancellation_lands_mid_o
     with mock.patch.object(endpoint, "open_mcp_transport", _never_opens):
         endpoints = McpEndpoints()
         path = await endpoints.open("mid-open", "echo", MCPServerConfig(command=sys.executable, args=["-c", ""]))
-        reader, writer = await asyncio.open_unix_connection(str(path))
+        reader, writer = await open_endpoint(str(path))
         await asyncio.wait_for(opening.wait(), timeout=10)
 
         with _warnings() as lines:
@@ -242,7 +255,8 @@ async def test_close_does_not_wait_out_its_timeout_when_cancellation_lands_mid_o
     # The downstream was closed rather than merely abandoned, which is what let
     # wait_closed return at all.
     assert await asyncio.wait_for(reader.read(), timeout=5) == b""
-    assert not path.exists()
+    with pytest.raises(OSError):
+        await open_endpoint(str(path))
 
 
 @pytest.mark.asyncio
@@ -258,7 +272,7 @@ async def test_close_leaves_no_relay_task_behind():
     endpoints = McpEndpoints()
     before = asyncio.all_tasks()
     path = await endpoints.open("owned", "echo", cfg)
-    reader, writer = await asyncio.open_unix_connection(str(path))
+    reader, writer = await open_endpoint(str(path))
     writer.write(b'{"jsonrpc":"2.0","id":1,"method":"ping"}\n')
     await writer.drain()
     await asyncio.wait_for(reader.readline(), timeout=20)
@@ -347,7 +361,7 @@ async def test_a_sandbox_that_cannot_spawn_fails_the_bridge_instead_of_escaping_
     endpoints = McpEndpoints(executor_provider=lambda: _resolved(_NoSpawnBox()))
     try:
         path = await endpoints.open("no-spawn", "echo", cfg)
-        reader, writer = await asyncio.open_unix_connection(str(path))
+        reader, writer = await open_endpoint(str(path))
         writer.write(b'{"jsonrpc":"2.0","id":1,"method":"ping"}\n')
         await writer.drain()
         # Either shape of "the connection went away" counts: the host closes the

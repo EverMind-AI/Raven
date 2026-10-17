@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -289,20 +290,22 @@ def test_acp_grants_name_this_builds_raven_as_the_command(tmp_path, monkeypatch)
     """
     own = tmp_path / "own"
     own.mkdir()
-    (own / "raven").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    (own / "raven").chmod(0o755)
+    (own / ("raven.exe" if sys.platform == "win32" else "raven")).write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (own / ("raven.exe" if sys.platform == "win32" else "raven")).chmod(0o755)
     monkeypatch.setattr(sys, "executable", str(own / "python"))
 
     stale = tmp_path / "stale"
     stale.mkdir()
-    (stale / "raven").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    (stale / "raven").chmod(0o755)
+    (stale / ("raven.exe" if sys.platform == "win32" else "raven")).write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (stale / ("raven.exe" if sys.platform == "win32" else "raven")).chmod(0o755)
 
     source = _Source({"local": _view("local", MCPServerConfig(command="mcp-local", args=["serve"]))})
 
     grant = resolve_grant(["local"], source, acp_target(allow_secrets=False, stdio_path=str(stale)))
 
-    assert [(server.name, server.command) for server in grant.granted] == [("local", str(own / "raven"))]
+    assert [(server.name, Path(server.command)) for server in grant.granted] == [
+        ("local", own / ("raven.exe" if sys.platform == "win32" else "raven"))
+    ]
     assert grant.missing == ()
 
 
@@ -311,13 +314,17 @@ def test_acp_falls_back_to_the_adapter_path_when_this_build_has_no_script(tmp_pa
     monkeypatch.setattr(sys, "executable", str(tmp_path / "no-bin" / "python"))
     on_path = tmp_path / "onpath"
     on_path.mkdir()
-    (on_path / "raven").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    (on_path / "raven").chmod(0o755)
+    (on_path / ("raven.exe" if sys.platform == "win32" else "raven")).write_text(
+        "#!/bin/sh\nexit 0\n", encoding="utf-8"
+    )
+    (on_path / ("raven.exe" if sys.platform == "win32" else "raven")).chmod(0o755)
     source = _Source({"local": _view("local", MCPServerConfig(command="mcp-local", args=["serve"]))})
 
     grant = resolve_grant(["local"], source, acp_target(allow_secrets=False, stdio_path=str(on_path)))
 
-    assert [(server.name, server.command) for server in grant.granted] == [("local", str(on_path / "raven"))]
+    assert [(server.name, Path(server.command)) for server in grant.granted] == [
+        ("local", on_path / ("raven.exe" if sys.platform == "win32" else "raven"))
+    ]
 
 
 def test_degradation_notes_name_only_servers_and_policy_reasons() -> None:

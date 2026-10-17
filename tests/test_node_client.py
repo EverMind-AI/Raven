@@ -19,10 +19,9 @@ import asyncio
 import hashlib
 import json
 import os
-import shutil
+import secrets
 import signal
 import sys
-import tempfile
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -1381,30 +1380,33 @@ async def test_a_cancel_while_the_link_is_down_does_not_wait_the_settle_budget(m
 
 
 async def _endpoint(name: str = "pg") -> tuple[str, list[bytes], Any]:
-    """A unix socket standing in for a host endpoint: every line it is sent, and the writers back to each stream.
+    """An authenticated loopback endpoint, with the frames and writers it accepted."""
+    from raven.mcp.transport import TOKEN_BYTES, authenticate
 
-    In a directory of its own under the system's temporary one, short enough
-    for a socket's path, which pytest's is not on every system.
-    """
-    if not callable(getattr(asyncio, "start_unix_server", None)):
-        pytest.skip("this endpoint fixture needs a Unix-socket host")
-    base = Path(tempfile.mkdtemp(prefix="raven-ep-"))
-    path = str(base / f"{name}.sock")
+    token = secrets.token_hex(TOKEN_BYTES)
     got: list[bytes] = []
     writers: list[asyncio.StreamWriter] = []
 
     async def serve(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        writers.append(writer)
-        while line := await reader.readline():
-            got.append(line)
+        try:
+            if not await authenticate(reader, writer, token):
+                return
+            writers.append(writer)
+            while line := await reader.readline():
+                got.append(line)
+        finally:
+            writer.close()
 
-    listening = await asyncio.start_unix_server(serve, path=path)
+    listening = await asyncio.start_server(serve, "127.0.0.1", 0)
+    port = listening.sockets[0].getsockname()[1]
+    address = f"tcp://127.0.0.1:{port}/{token}"
 
     def close() -> None:
         listening.close()
-        shutil.rmtree(base, ignore_errors=True)
+        for writer in writers:
+            writer.close()
 
-    return path, got, SimpleNamespace(base=base, writers=writers, close=close)
+    return address, got, SimpleNamespace(writers=writers, close=close)
 
 
 def _told(client: _Client, method: str) -> list[dict[str, Any]]:
@@ -1463,7 +1465,7 @@ async def test_a_stream_the_host_cannot_serve_is_closed_with_the_reason_and_the_
     try:
         await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 1, "task": "agent", "lend": "d1", "server": "pg"})
         assert _told(client, protocol.MCP_CLOSE) == [{"stream": 1, "reason": "server 'pg' is not lent to that run"}]
-        pool.lend("box", "d1", {"pg": str(endpoint.base / "gone.sock")}, task="agent")
+        pool.lend("box", "d1", {"pg": path.rsplit("/", 1)[0] + "/" + "0" * 64}, task="agent")
         await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 2, "task": "agent", "lend": "d1", "server": "pg"})
         gone = _told(client, protocol.MCP_CLOSE)[-1]
         assert gone["stream"] == 2 and gone["reason"].startswith("the host's endpoint for 'pg' is gone: ")
@@ -1571,7 +1573,7 @@ async def test_an_mcp_stream_without_a_task_is_refused_before_connecting(tmp_pat
     async def connected(*args, **kwargs):
         pytest.fail("a missing task reached the connection")
 
-    monkeypatch.setattr(asyncio, "open_unix_connection", connected, raising=False)
+    monkeypatch.setattr(node_client, "open_endpoint", connected)
     await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 1, "lend": "d1", "server": "pg"})
     assert _told(client, protocol.MCP_CLOSE)
 
@@ -1596,8 +1598,7 @@ async def test_an_mcp_connection_opening_after_its_authorization_ended_is_discar
         await resume.wait()
         return asyncio.StreamReader(), writer
 
-    monkeypatch.setattr(asyncio, "open_unix_connection", opening, raising=False)
-    monkeypatch.setattr(node_client, "unix_sockets_available", lambda: True)
+    monkeypatch.setattr(node_client, "open_endpoint", opening)
     waiting = asyncio.create_task(
         pool._on_stream("box", protocol.MCP_OPEN, {"stream": 1, "task": "agent", "lend": "d1", "server": "pg"})
     )
@@ -1614,16 +1615,32 @@ async def test_an_mcp_connection_opening_after_its_authorization_ended_is_discar
     assert _told(client, protocol.MCP_CLOSE)[-1]["reason"] == "the dispatch or link ended"
 
 
-async def test_a_host_without_unix_sockets_refuses_a_stream_in_one_sentence(tmp_path, monkeypatch):
+async def test_a_host_without_unix_sockets_lends_a_real_mcp_endpoint(tmp_path, monkeypatch):
+    from raven.config.schema import MCPServerConfig
+    from raven.mcp.endpoint import McpEndpoints
+
+    monkeypatch.delattr(asyncio, "start_unix_server", raising=False)
+    monkeypatch.delattr(asyncio, "open_unix_connection", raising=False)
     pool = NodePool()
     client = _live(pool, tmp_path)
-    pool.lend("box", "d1", {"pg": "/unused"}, task="agent")
-    monkeypatch.delattr(asyncio, "open_unix_connection", raising=False)
-    await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 1, "task": "agent", "lend": "d1", "server": "pg"})
-    assert _told(client, protocol.MCP_CLOSE) == [
-        {"stream": 1, "reason": "the host does not support Unix-socket MCP endpoints"}
-    ]
-    assert not pool._nodes["box"].streams
+    endpoints = McpEndpoints()
+    cfg = MCPServerConfig(
+        command=sys.executable, args=["-c", "import sys; [print(line, end='', flush=True) for line in sys.stdin]"]
+    )
+    path = await endpoints.open("d1", "pg", cfg)
+    try:
+        pool.lend("box", "d1", {"pg": str(path)}, task="agent")
+        await pool._on_stream("box", protocol.MCP_OPEN, {"stream": 1, "task": "agent", "lend": "d1", "server": "pg"})
+        frame = '{"jsonrpc":"2.0","id":1,"method":"ping"}'
+        await pool._on_stream("box", protocol.MCP_FRAME, {"stream": 1, "text": frame})
+        await _until(lambda: bool(_told(client, protocol.MCP_FRAME)))
+        assert json.loads(_told(client, protocol.MCP_FRAME)[0]["text"])["method"] == "ping"
+        await pool.unlend("box", "d1")
+        assert not pool._nodes["box"].streams
+        assert _told(client, protocol.MCP_CLOSE)[-1]["reason"] == "the dispatch ended"
+    finally:
+        await pool.close_all()
+        await endpoints.aclose()
 
 
 def test_lending_requires_a_nonempty_task():

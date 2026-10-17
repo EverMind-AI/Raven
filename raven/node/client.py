@@ -54,7 +54,8 @@ from loguru import logger
 from raven.acp_client import remote
 from raven.acp_client.client import AcpClient
 from raven.acp_client.protocol import AcpConnectionError, AcpError, AcpRemoteError, AcpTimeoutError
-from raven.mcp.bridge import iter_raw_frames, unix_sockets_available
+from raven.mcp.bridge import iter_raw_frames
+from raven.mcp.transport import open_endpoint
 from raven.node import bundle, protocol
 from raven.ops import remote_path
 
@@ -752,15 +753,8 @@ class NodePool:
                 node, protocol.MCP_CLOSE, {"stream": stream_id, "reason": f"server {server!r} is not lent to that run"}
             )
             return
-        if not unix_sockets_available():
-            await self._tell(
-                node,
-                protocol.MCP_CLOSE,
-                {"stream": stream_id, "reason": "the host does not support Unix-socket MCP endpoints"},
-            )
-            return
         try:
-            reader, writer = await asyncio.open_unix_connection(path)
+            reader, writer = await open_endpoint(path)
         except OSError as exc:
             await self._tell(
                 node,

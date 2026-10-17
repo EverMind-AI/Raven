@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import os
 import sys
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -21,6 +23,7 @@ from raven.agent.subagent.backends import build_third_party_backend
 from raven.agent.subagent.mcp_grant import McpServerView
 from raven.config.schema import MCPServerConfig, ThirdPartyAcpSubagentConfig
 from raven.mcp.endpoint import McpEndpoints, bridge_command, socket_dir
+from raven.mcp.transport import unix_sockets_available
 
 _STUB = Path(__file__).with_name("acp_stub_server.py")
 # A server that never answers: nothing here talks MCP to it, and the endpoint
@@ -32,20 +35,33 @@ def _idle_config() -> MCPServerConfig:
     return MCPServerConfig(command=sys.executable, args=_IDLE_SERVER_ARGS)
 
 
+async def _reachable(address) -> bool:
+    if not str(address).startswith("tcp://"):
+        return Path(address).exists()
+    parts = urlsplit(str(address))
+    try:
+        _, writer = await asyncio.open_connection(parts.hostname, parts.port)
+    except OSError:
+        return False
+    writer.close()
+    await writer.wait_closed()
+    return True
+
+
 @pytest.mark.asyncio
 async def test_a_nodes_endpoints_are_gone_when_that_node_ends():
     cfg = _idle_config()
     endpoints = McpEndpoints()
     a = await endpoints.open("node-a", "s1", cfg)
     b = await endpoints.open("node-b", "s1", cfg)
-    assert a.exists() and b.exists()
+    assert await _reachable(a) and await _reachable(b)
 
     await endpoints.close("node-a")
-    assert not a.exists()
-    assert b.exists(), "closing one node must not take another node's endpoint with it"
+    assert not await _reachable(a)
+    assert await _reachable(b), "closing one node must not take another node's endpoint with it"
 
     await endpoints.aclose()
-    assert not b.exists()
+    assert not await _reachable(b)
 
 
 @pytest.mark.asyncio
@@ -55,6 +71,7 @@ async def test_two_nodes_asking_for_the_same_server_get_different_endpoints():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(not unix_sockets_available(), reason="Unix socket file recovery")
 async def test_reopening_after_a_crash_left_the_socket_file_behind():
     cfg = _idle_config()
     endpoints = McpEndpoints()
@@ -104,7 +121,7 @@ def raven_on_the_adapter_path(tmp_path: Path) -> Path:
     """
     bindir = tmp_path / "bin"
     bindir.mkdir()
-    shim = bindir / "raven"
+    shim = bindir / ("raven.exe" if sys.platform == "win32" else "raven")
     shim.write_text("#!/bin/sh\nexit 0\n")
     shim.chmod(0o755)
     return shim
@@ -139,7 +156,7 @@ async def test_session_new_is_handed_a_live_bridge_endpoint(
 
     async def spy(self, client, **kwargs):
         seen["mcp_servers"] = kwargs["mcp_servers"]
-        seen["bound"] = [Path(entry["args"][-1]).exists() for entry in kwargs["mcp_servers"]]
+        seen["bound"] = [await _reachable(entry["args"][-1]) for entry in kwargs["mcp_servers"]]
         return await real(self, client, **kwargs)
 
     monkeypatch.setattr(AcpAgentBackend, "_open_session", spy)
@@ -150,7 +167,7 @@ async def test_session_new_is_handed_a_live_bridge_endpoint(
     # McpEndpoints instance that salts these paths, and nothing outside it has
     # any business deriving one.
     [entry] = seen["mcp_servers"]
-    endpoint = Path(entry["args"][-1])
+    endpoint = entry["args"][-1]
     # The command comes from the resolver rather than being restated here: which
     # raven is handed over is its rule (this build's own, not a PATH lookup) and
     # has its own tests. This one is about the stanza and a socket already bound.
@@ -162,11 +179,14 @@ async def test_session_new_is_handed_a_live_bridge_endpoint(
         "args": ["mcp", "bridge", str(endpoint)],
         "env": [],
     }
-    assert endpoint.parent == socket_dir()
-    assert endpoint.suffix == ".sock"
-    assert len(str(endpoint).encode()) < 104, "AF_UNIX caps the whole path at 104 bytes"
+    if unix_sockets_available():
+        assert Path(endpoint).parent == socket_dir()
+        assert Path(endpoint).suffix == ".sock"
+        assert len(endpoint.encode()) < 104
+    else:
+        assert endpoint.startswith("tcp://127.0.0.1:")
     assert seen["bound"] == [True], "the endpoint must be listening before session/new names it"
-    assert not endpoint.exists(), "the dispatch that opened it is over"
+    assert not await _reachable(endpoint), "the dispatch that opened it is over"
 
 
 @pytest.mark.asyncio
@@ -180,8 +200,8 @@ async def test_a_failed_dispatch_still_reaps_its_endpoints(
     real = AcpAgentBackend._open_session
 
     async def spy(self, client, **kwargs):
-        seen["paths"] = [Path(entry["args"][-1]) for entry in kwargs["mcp_servers"]]
-        seen["bound"] = [path.exists() for path in seen["paths"]]
+        seen["paths"] = [entry["args"][-1] for entry in kwargs["mcp_servers"]]
+        seen["bound"] = [await _reachable(path) for path in seen["paths"]]
         return await real(self, client, **kwargs)
 
     monkeypatch.setattr(AcpAgentBackend, "_open_session", spy)
@@ -189,7 +209,7 @@ async def test_a_failed_dispatch_still_reaps_its_endpoints(
     with pytest.raises(AcpRemoteError):
         await backend.run("ping", task_id="node-y", workspace=tmp_path, executor=None)
     assert seen["bound"] == [True], "nothing is proven unless the endpoint was open when it failed"
-    assert [path.exists() for path in seen["paths"]] == [False]
+    assert [await _reachable(path) for path in seen["paths"]] == [False]
 
 
 # ---- the per-session MCP promise -------------------------------------------
@@ -243,7 +263,6 @@ async def _dispatch(backend: AcpAgentBackend, monkeypatch, workspace: Path, node
     return seen[0], reply
 
 
-@pytest.mark.usefixtures("unix_socket_host")
 def test_an_unmeasured_peer_is_never_refused() -> None:
     """No snapshot is not evidence of a refusal.
 
@@ -257,7 +276,6 @@ def test_an_unmeasured_peer_is_never_refused() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("unix_socket_host")
 async def test_a_raven_peer_without_the_promise_is_told_why_it_got_nothing(
     tmp_path: Path, monkeypatch, raven_on_the_adapter_path: Path
 ) -> None:
@@ -290,7 +308,6 @@ async def test_a_raven_peer_that_declares_the_promise_is_handed_the_bridge(
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("unix_socket_host")
 async def test_an_agent_declared_as_not_isolating_is_withheld_and_told_why(
     tmp_path: Path, monkeypatch, raven_on_the_adapter_path: Path
 ) -> None:
@@ -319,7 +336,6 @@ async def test_an_agent_declared_as_not_isolating_is_withheld_and_told_why(
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("unix_socket_host")
 async def test_the_operator_log_names_which_refusal_it_was(
     tmp_path: Path, monkeypatch, raven_on_the_adapter_path: Path, caplog
 ) -> None:
@@ -352,7 +368,6 @@ async def test_the_operator_log_names_which_refusal_it_was(
     assert SESSION_MCP_CAPABILITY not in declared_line
 
 
-@pytest.mark.usefixtures("unix_socket_host")
 def test_the_two_refusals_are_independent(raven_on_the_adapter_path: Path) -> None:
     """One is the agent's own property, the other is a build that would error.
 
@@ -413,7 +428,7 @@ async def test_a_third_party_peer_keeps_its_bridge_without_declaring_anything(
     handed, reply = await _dispatch(backend, monkeypatch, tmp_path, f"node-{agent_name[-6:]}")
 
     assert [entry["name"] for entry in handed] == ["echo"]
-    assert Path(handed[0]["args"][-1]).parent == socket_dir()
+    assert await _reachable(handed[0]["args"][-1]) is False, "the dispatch has reaped its endpoint"
     assert reply == "pong"
 
 
@@ -518,7 +533,6 @@ async def test_the_capture_a_bridged_dispatch_needs_runs_off_the_event_loop(
 
 
 @pytest.mark.asyncio
-@pytest.mark.usefixtures("unix_socket_host")
 async def test_the_endpoint_gets_the_hosts_sandbox_and_deny_set(
     tmp_path: Path, raven_on_the_adapter_path: Path, monkeypatch
 ) -> None:
@@ -555,7 +569,6 @@ async def test_the_endpoint_gets_the_hosts_sandbox_and_deny_set(
     assert seen["disabled_tools"] == frozenset({"mcp_echo_ping"})
 
 
-@pytest.mark.usefixtures("unix_socket_host")
 async def test_a_bridged_oauth_server_is_dialled_with_the_hosts_credential(
     tmp_path: Path, monkeypatch, raven_on_the_adapter_path: Path
 ) -> None:
@@ -640,12 +653,9 @@ async def test_dispatch_keeps_usage_ownership_out_of_process_binding(tmp_path, m
 
 @pytest.mark.parametrize("machine", ["box", None], ids=["on a machine", "on this computer"])
 @pytest.mark.parametrize("missing", ["start_unix_server", "open_unix_connection"])
-async def test_mcp_is_withheld_before_any_endpoint_opens_on_a_computer_without_unix_sockets(
-    monkeypatch, missing, machine
-):
-    """A Windows host has neither asyncio call: no endpoint is opened for a row here or on a machine, the reply
-    says why, and the roster does not advertise what the dispatch would withhold."""
+async def test_mcp_is_delivered_without_unix_sockets(monkeypatch, missing, machine):
     from types import SimpleNamespace
+    from unittest.mock import AsyncMock
 
     from raven.agent.subagent.backends import session_mcp_effective
     from raven.agent.subagent.mcp_grant import GrantedServer, McpGrant
@@ -655,18 +665,49 @@ async def test_mcp_is_withheld_before_any_endpoint_opens_on_a_computer_without_u
     cfg = ThirdPartyAcpSubagentConfig(name="remote", command="agent", machine=machine, session_mcp=True)
     backend = build_third_party_backend(cfg)
     grant = McpGrant(granted=(GrantedServer("private", "stdio", _idle_config()),))
-    launched = SimpleNamespace(target=SimpleNamespace(id="box")) if machine else None
-
-    async def opened(*args, **kwargs):
-        pytest.fail("a computer without unix sockets must withhold before opening endpoints")
-
-    monkeypatch.setattr(McpEndpoints, "open", opened)
-    monkeypatch.setattr(backend, "_adapter_path", lambda: pytest.fail("nothing of the adapter's PATH is asked"))
+    link = SimpleNamespace(unlend=AsyncMock())
+    launched = SimpleNamespace(target=SimpleNamespace(id="box"), link=link) if machine else None
     async with backend._mcp_endpoints("d1", grant, launched) as endpoints:
-        assert endpoints == []
-    note = backend._mcp_note(grant)
-    assert "MCP servers 'private' were not delivered to acp agent 'remote'" in note
-    assert "this computer does not support Unix-socket MCP endpoints" in note
-    assert ("on machine 'box'" in note) is bool(machine)
-    assert not session_mcp_effective(cfg)
-    assert not _row_for(cfg).injectable.mcps
+        address = endpoints.paths["private"] if machine else endpoints[0]["args"][-1]
+        assert address.startswith("tcp://127.0.0.1:")
+        assert await _reachable(address)
+    assert not await _reachable(address)
+    if machine:
+        link.unlend.assert_awaited_once_with("box", "d1")
+    assert backend._mcp_note(grant) == ""
+    assert session_mcp_effective(cfg)
+    assert _row_for(cfg).injectable.mcps
+
+
+@pytest.mark.slow
+async def test_a_local_acp_agent_calls_the_lent_server_without_unix_sockets(tmp_path, monkeypatch):
+    from raven.agent.subagent.mcp_grant import GrantedServer, McpGrant
+
+    monkeypatch.delattr(asyncio, "start_unix_server", raising=False)
+    monkeypatch.delattr(asyncio, "open_unix_connection", raising=False)
+    ledger, receipt = tmp_path / "ledger.jsonl", tmp_path / "receipt.jsonl"
+    server = MCPServerConfig(
+        command=sys.executable,
+        args=[str(Path(__file__).with_name("mcp_handoff_stub_server.py"))],
+        env={"MCP_HANDOFF_LEDGER": str(ledger)},
+    )
+    backend = build_third_party_backend(
+        ThirdPartyAcpSubagentConfig(
+            name="local-handoff",
+            command=f"{sys.executable} {Path(__file__).with_name('mcp_handoff_acp_stub.py')}",
+            env={"ACP_HANDOFF_RECEIPT": str(receipt)},
+            ready_timeout_ms=15000,
+        )
+    )
+    grant = McpGrant(granted=(GrantedServer("probe", "stdio", server),))
+    reply = await backend.run("local-42", task_id="local", workspace=tmp_path, executor=None, mcp_grant=grant)
+    assert reply == "MCP_HANDOFF_OK:local-42"
+    assert [json.loads(line) for line in ledger.read_text().splitlines()] == [
+        {"tool": "handoff_probe", "marker": "local-42"}
+    ]
+    (handed,) = [json.loads(line) for line in receipt.read_text().splitlines()]
+    (stanza,) = handed["mcpServers"]
+    assert stanza["env"] == []
+    assert stanza["args"][-1].startswith("tcp://127.0.0.1:")
+    assert str(ledger) not in json.dumps(stanza)
+    assert not await _reachable(stanza["args"][-1])

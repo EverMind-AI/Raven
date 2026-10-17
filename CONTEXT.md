@@ -478,9 +478,11 @@ and the host pumps them into the endpoint it opened on its own side (`raven/node
 `NodePool.lend`). The host binds each dispatch's endpoints to the acquired agent's task
 and checks that binding against the daemon-authenticated task before connecting, and again
 after the connection opens. A bridge's dispatch/server names alone grant no access.
-The server's definition and keys stay here. On a host without Unix-socket endpoint
-support, remote MCP is withheld, the task still runs and its reply explains why; the
-roster does not advertise that capability. Only
+The server's definition and keys stay here. Host endpoints use Unix sockets where
+available; otherwise they bind an ephemeral port on `127.0.0.1` and authenticate
+with a random per-endpoint token before opening the upstream. Local ACP bridges
+and the host's Raven node client use the same transport, including on Windows.
+The loopback token stays on the host for a remote dispatch. Only
 `--stdio` (tests, a fallback) ties the agents to the connection.
 _Avoid_: "node" alone (a DAG node is a `run_subagent_dag` step, and the Machine
 entry already rules the bare word out for a computer); "node id" for the install
