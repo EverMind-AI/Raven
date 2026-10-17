@@ -773,16 +773,19 @@ async def test_a_dag_result_keeps_its_provenance_through_a_downgrade_notice(tmp_
     model text; the node output under it is still the agent's own. Rebuilt from
     its text alone, the result would lose its claim, and the registry would
     scrub a value Raven holds out of what the node returned."""
+    import sys
+
     from raven.agent.subagent.dag_tool import SubAgentDagTool
     from raven.agent.tools.registry import ToolRegistry
     from raven.config.schema import ThirdPartyCliSubagentConfig
 
     monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [(_HELD, "providers.openrouter.apiKey")])
     registry = ToolRegistry()
-    # `cat` answers with its prompt, and a row with no `{mcp_file}` cannot take
+    # The CLI answers with its prompt, and a row with no `{mcp_file}` cannot take
     # injected servers, so the node's `mcps` list becomes a downgrade notice.
+    command = f'"{sys.executable}" -c "import sys; sys.stdout.write(sys.stdin.read())"'
     registry.register(
-        SubAgentDagTool(workspace=tmp_path, agents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")])
+        SubAgentDagTool(workspace=tmp_path, agents=[ThirdPartyCliSubagentConfig(name="echo", command=command)])
     )
 
     out = await registry.execute(
