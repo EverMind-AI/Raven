@@ -39,18 +39,17 @@ command's working directory, with a 6,000-character diagnostic budget plus
 omission notices. The changed files come from the host's own write record for
 the command, which lists regular files and skips symlinks; a command whose
 directory the host could not list has no record and gets no post-command
-checks. Path containment checks run off the event loop with a 250 ms wait
-limit. Post-command checks require a checkpoint covering the working
+checks. Post-command checks require a checkpoint covering the working
 directory. With no checkpoint or no visibility verdict, they do not read
 changed source files. Direct `write_file` / `edit_file` diagnostics remain
 available. Noninteractive runs using the default
 `runtime.checkpoint.policy = "interactive"` need an explicit `"always"` policy
-to enable checkpoints and post-command checks.
-Visibility rules apply before the eight-file limit and withhold ignored files. Visibility
-queries use batches of eight and stop once eight eligible files are found.
-The host's visibility callbacks can themselves perform synchronous filesystem
-operations; yielding between batches bounds repeated work, but one blocked
-host callback cannot be preempted by an asyncio timeout.
+to enable checkpoints and post-command checks. Visibility rules apply before the
+eight-file limit and withhold ignored files. Visibility queries use batches of
+up to 256 files and stop once eight eligible files are found. The host's
+visibility callback resolves each queried path synchronously; yielding between
+batches bounds that work, but one blocked host callback cannot be preempted by
+an asyncio timeout.
 
 Up to four file checks run concurrently, with feedback kept in input order.
 Each check analyzes one file; it does not resolve imports across the project.
@@ -58,8 +57,8 @@ Python's GIL means concurrency does not promise a CPU speedup. Each file check
 has a one-second wait limit, and post-command diagnostics have a three-second
 total wait limit, separate from the command timeout.
 
-All diagnostic path filtering, reads, and checks share a private four-worker
-limit per process, independent of the host's default executor. There is no background
+All diagnostic reads and checks share a private four-worker limit per
+process, independent of the host's default executor. There is no background
 work queue: when all workers are occupied, new diagnostic work is skipped or
 reported unavailable. A timeout or cancellation releases the caller but cannot
 interrupt an operating system read or Python check already running. Such work

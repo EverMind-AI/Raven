@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -267,11 +268,11 @@ def test_exec_refused_command_takes_no_diagnostics(tmp_path, monkeypatch):
 
 def test_exec_diagnostics_limit_changed_files_and_output(tmp_path):
     tool = _diagnostic_tool(tmp_path)
-    out = str(
-        _run(tool.execute(command=_write_command(tmp_path, {f"file{i}.py": "result = missing\n" for i in range(10)})))
-    )
+    files = {f"file{i}.py": "result = missing\n" for i in range(10)}
+    files.update({f"notes{i}.txt": "not python\n" for i in range(3)})
+    out = str(_run(tool.execute(command=_write_command(tmp_path, files))))
     assert out.count("Python diagnostics for") == 8
-    assert "2 additional changed files were not checked" in out
+    assert "2 more were skipped" in out and "notes" not in out
     assert len(out) < 6500
 
 
@@ -303,7 +304,7 @@ def test_exec_checks_four_files_at_a_time_in_stable_order_with_an_eight_file_cap
     assert sorted(checked) == [f"file{i}.py" for i in range(8)]
     positions = [out.index(f"checked:file{i}.py") for i in range(8)]
     assert positions == sorted(positions)
-    assert "2 additional changed files were not checked" in out
+    assert "2 more were skipped" in out
 
 
 @pytest.mark.parametrize("visible_count", [1, 10])
@@ -333,49 +334,148 @@ def test_exec_withheld_files_do_not_consume_the_diagnostic_file_limit(tmp_path, 
     monkeypatch.setattr(TrunkExecTool, "execute", host)
     out = str(_run(tool.execute(command="test command")))
     assert "visible0.py" in out and "F821" in out
-    assert all(f"private{i}.py" not in out for i in range(8)) and "were skipped" not in out
-    assert [len(batch) for batch in batches] == [8, min(8, visible_count)]
+    assert all(f"private{i}.py" not in out for i in range(8))
+    assert [len(batch) for batch in batches] == [8 + visible_count]
     assert out.count("Python diagnostics for") == min(8, visible_count)
     if visible_count > 8:
-        assert "2 additional changed files were not checked" in out and "visible8.py" not in out
+        assert "2 more were skipped" in out and "visible8.py" not in out
+    else:
+        assert "were skipped" not in out
 
 
-@pytest.mark.asyncio
-async def test_exec_path_filtering_wait_does_not_block_the_event_loop(tmp_path, monkeypatch):
-    from code_flow.tools import exec as module
-    from code_flow.tools import workspace_scan
-    from code_flow.tools.diagnostic_workers import DiagnosticWorkers
-
+def test_exec_ignored_files_are_asked_about_in_wide_batches(tmp_path, monkeypatch):
     from raven.contracts.tool import FileWrite, ToolOutput
 
-    tool = _diagnostic_tool(tmp_path)
-    tool.measure_writes(tool._shadow)
-    release, entered = threading.Event(), threading.Event()
-    loop_thread = threading.get_ident()
-    thread_ids = []
+    queries = []
 
-    def slow_paths(*args, **kwargs):
-        thread_ids.append(threading.get_ident())
-        entered.set()
-        release.wait(2)
-        return []
+    class Shadow:
+        async def trackable(self, paths):
+            queries.append(len(paths))
+            return {path for path in paths if Path(path).name == "visible.py"}
+
+    tool = _diagnostic_tool(tmp_path)
+    tool.measure_writes(lambda root: Shadow())
+    home = tmp_path / "home"
+    ignored = [home / "build" / f"mod{i}.py" for i in range(600)]
+    visible = home / "visible.py"
+    visible.write_text("shown = visible_missing\n")
+
+    async def host(*args, **kwargs):
+        # Ordered the way the host sorts its record: the ignored tree first.
+        records = [FileWrite(path=str(p), created=True, size=1) for p in ignored]
+        records.append(FileWrite(path=str(visible), created=True, size=24))
+        return ToolOutput("Exit code: 0", ok=True, written=tuple(records))
+
+    monkeypatch.setattr(TrunkExecTool, "execute", host)
+    out = str(_run(tool.execute(command="test command")))
+    assert queries == [256, 256, 89]
+    assert "visible_missing" in out and "mod0.py" not in out
+
+
+def test_exec_visibility_queries_stop_once_the_file_limit_is_visible(tmp_path, monkeypatch):
+    from raven.contracts.tool import FileWrite, ToolOutput
+
+    queries = []
+
+    class Shadow:
+        async def trackable(self, paths):
+            queries.append(len(paths))
+            return set(paths)
+
+    tool = _diagnostic_tool(tmp_path)
+    tool.measure_writes(lambda root: Shadow())
+    paths = [tmp_path / "home" / f"file{i:03}.py" for i in range(300)]
+    for path in paths[:8]:
+        path.write_text("value = missing_binding\n")
 
     async def host(*args, **kwargs):
         return ToolOutput(
-            "Exit code: 7", ok=False, written=(FileWrite(path=str(tmp_path / "home/file.py"), created=True, size=0),)
+            "Exit code: 0", ok=True, written=tuple(FileWrite(path=str(p), created=True, size=24) for p in paths)
         )
 
-    monkeypatch.setattr(module, "WORKERS", DiagnosticWorkers())
-    monkeypatch.setattr(module, "_SCAN_WAIT_SECONDS", 0.02)
-    monkeypatch.setattr(workspace_scan, "eligible", slow_paths)
     monkeypatch.setattr(TrunkExecTool, "execute", host)
+    out = str(_run(tool.execute(command="test command")))
+    assert queries == [256]
+    assert out.count("Python diagnostics for") == 8
+    assert "248 more were skipped" in out
+    assert "44 additional changed files were not checked" in out
+
+
+def test_exec_visibility_batches_yield_to_the_post_command_deadline(tmp_path, monkeypatch):
+    from code_flow.tools import exec as module
+
+    from raven.contracts.tool import FileWrite, ToolOutput
+
+    calls = []
+
+    class Shadow:
+        async def trackable(self, paths):
+            # Stands for the host resolving every path on the loop: no await.
+            calls.append(len(paths))
+            time.sleep(0.06)
+            return set()
+
+    tool = _diagnostic_tool(tmp_path)
+    tool.measure_writes(lambda root: Shadow())
+    home = tmp_path / "home"
+    records = tuple(FileWrite(path=str(home / f"mod{i}.py"), created=True, size=1) for i in range(3000))
+
+    async def host(*args, **kwargs):
+        return ToolOutput("Exit code: 0", ok=True, written=records)
+
+    monkeypatch.setattr(TrunkExecTool, "execute", host)
+    monkeypatch.setattr(module, "_DIAGNOSTIC_WAIT_SECONDS", 0.05)
+    out = _run(tool.execute(command="test command"))
+    assert str(out) == "Exit code: 0" and out.ok is True
+    # Twelve batches in all; the deadline stops them at a yield in between.
+    assert 1 <= len(calls) < 12
+
+
+@pytest.mark.asyncio
+async def test_exec_diagnostics_do_not_stat_walk_or_open_files_on_the_event_loop(tmp_path, monkeypatch):
+    """The plugin's own selection, with the host's visibility hook faked out:
+    every stat, walk and open it needs happens on a diagnostic worker."""
+    import io
+
+    from raven.contracts.tool import FileWrite, ToolOutput
+
+    loop_thread = threading.get_ident()
+    on_loop, walked = [], []
+    active = False
+
+    def watch(module, name):
+        original = getattr(module, name)
+
+        def watched(*args, **kwargs):
+            if active and threading.get_ident() == loop_thread:
+                on_loop.append(name)
+            if active and name == "scandir":
+                walked.append(args)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(module, name, watched)
+
+    for module, name in ((os, "stat"), (os, "lstat"), (os, "scandir"), (os.path, "realpath"), (io, "open")):
+        watch(module, name)
+
+    class Shadow:
+        async def trackable(self, paths):
+            return {path for path in paths if Path(path).name == "visible.py"}
+
+    tool = _diagnostic_tool(tmp_path)
+    tool.measure_writes(lambda root: Shadow())
+    home = tmp_path / "home"
+    visible = home / "visible.py"
+    visible.write_text("shown = visible_missing\n")
+    records = [FileWrite(path=str(home / "build" / f"mod{i}.py"), created=True, size=1) for i in range(3000)]
+    records.append(FileWrite(path=str(visible), created=True, size=24))
+    active = True
     try:
-        out = await asyncio.wait_for(tool.execute(command="test command"), 1)
-        assert entered.is_set() and not release.is_set()
-        assert thread_ids and thread_ids[0] != loop_thread
-        assert str(out) == "Exit code: 7" and out.ok is False
+        note = await tool._diagnose_writes(home, ToolOutput("Exit code: 0", ok=True, written=tuple(records)))
     finally:
-        release.set()
+        active = False
+    assert "visible_missing" in note
+    assert on_loop == [] and walked == []
 
 
 def test_exec_diagnostics_skip_symlinks_cache_and_non_python_files(tmp_path):
