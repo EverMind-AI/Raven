@@ -1107,7 +1107,7 @@ class TestAutomaticSnapshotVerification:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Its handshake fails and a preset's failure is not kept, so verifying it would handshake it again at
-        every start: two Mirasim servers or more started for nothing, per such agent. Mirasim is asked once
+        every start: two adapter launches or more for nothing, per such agent. Mirasim is asked once
         instead."""
         from raven.agent.subagent.probe import schedule_snapshot_verification
 
@@ -1119,7 +1119,7 @@ class TestAutomaticSnapshotVerification:
     async def test_mirasim_is_asked_only_when_one_of_its_presets_is_to_be_handshaken(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The question starts a Mirasim server of its own, which a boot with every preset measured never needs."""
+        """The question launches the adapter and waits out the host's agent list, which a fully measured boot never needs."""
         from raven.agent.subagent.probe import schedule_snapshot_verification
 
         measured = type("S", (), {"status": "ready", "stale": False, "needs_auth": False})()
@@ -1997,7 +1997,7 @@ def _menu_records() -> tuple[object, object]:
 
 
 def test_a_ready_answer_whose_menu_went_unread_keeps_the_menu_it_had() -> None:
-    """A connect or a Test during Mirasim's cold start is answered menuless: a read that failed, not a measured none."""
+    """A connect or a Test the Mirasim host leaves unanswered is menuless: a read that failed, not a measured none."""
     measured, unread = _menu_records()
     saved = probe_mod._test_record(unread, measured)
     assert (saved.model_choices, saved.available_modes) == (measured.model_choices, measured.available_modes)

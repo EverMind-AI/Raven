@@ -159,6 +159,25 @@ def test_an_approval_is_a_permission_request_whose_options_are_mirasims_buttons(
     )
 
 
+def test_an_approval_an_acp_agent_asked_is_offered_by_its_intents_and_answered_with_its_option_id() -> None:
+    """The shape the host builds from an ACP agent's own permission request (0.0.537)."""
+    item = approval()
+    item["questions"][0]["choices"] = [
+        {"label": "Always allow", "value": "opt-always", "intent": "allow_always"},
+        {"label": "Don't allow", "value": "opt-no", "intent": "reject_once"},
+        {"label": "Odd", "value": "opt-odd", "intent": "sometimes"},
+        {"label": ""},
+    ]
+    params, offered = permission_request("s", item)
+    validate_def("RequestPermissionRequest", params)
+    kinds = {option["name"]: option["kind"] for option in params["options"]}
+    assert kinds == {"Always allow": "allow_always", "Don't allow": "reject_once", "Odd": "allow_once"}
+    chosen = next(option["optionId"] for option in params["options"] if option["name"] == "Don't allow")
+    assert read_permission({"outcome": {"outcome": "selected", "optionId": chosen}}, offered) == Reply(
+        "select", "opt-no"
+    )
+
+
 def test_an_approval_with_no_buttons_offers_allow_and_deny_and_a_stray_answer_cancels() -> None:
     bare = {**approval(), "questions": []}
     params, offered = permission_request("s", bare)
@@ -190,7 +209,7 @@ async def test_relay_preserves_the_sending_agents_content(tmp_path, kind):
     from unittest.mock import Mock
 
     from raven.acp.capabilities import ClientCapabilities
-    from raven.acp.mirasim.server import MirasimAgent, Session, _render_interactions
+    from raven.acp.mirasim.server import MirasimAgent, Session
     from raven.acp.mirasim.store import BindingStore
 
     value = "sk-or-v1-" + "a" * 32
@@ -201,11 +220,13 @@ async def test_relay_preserves_the_sending_agents_content(tmp_path, kind):
     question["text"] = f"Use {value}?"
     question["choices"] = [{"label": value, "description": f"Keep {value}"}, {"label": "Deny"}]
     sent = []
-    agent = MirasimAgent(agent="claude", cli=Mock(), store=BindingStore(tmp_path / "state.json"), emit=sent.append)
+    agent = MirasimAgent(
+        agent="claude", store=BindingStore(tmp_path / "state.json"), emit=sent.append, locate=Mock(return_value=None)
+    )
     if kind != "no_forms":
         agent.client = ClientCapabilities.from_params({"clientCapabilities": {"elicitation": {"form": {}}}})
     notes = []
-    task = asyncio.create_task(agent._relay(Session(id="session", cwd=str(tmp_path)), item, notes))
+    task = asyncio.create_task(agent._ask(Session(id="session", cwd=str(tmp_path)), item, notes))
     try:
         if kind == "no_forms":
             assert await task == Reply("skip")
@@ -231,8 +252,8 @@ async def test_relay_preserves_the_sending_agents_content(tmp_path, kind):
                 result = {"action": "accept", "content": {ANSWER_FIELD: [value] if kind == "multi" else value}}
             agent.outbound.resolve({"jsonrpc": "2.0", "id": request["id"], "result": result})
             assert await task == Reply("select", value)
-        assert describe(item) in _render_interactions({"interactions": [item]})
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         await agent.shutdown()
+        await agent.close()

@@ -1,11 +1,12 @@
-"""What one Mirasim agent offers, read from ``ui-cli agents`` and ``ui-cli catalog``.
+"""What one Mirasim agent offers, read from the host's ``listClis`` and ``getCatalog`` frames.
 
 Read once when the adapter starts and again when the copy is old, never per
-turn: each read starts a Mirasim server of its own, measured at five to seven
-seconds. The menus are advertised in the shapes Raven already reads off any ACP
-agent -- the model as the ``session/new`` config option whose ``category`` is
-``model``, and the effort rungs as session modes -- so the model picker, a
-per-instance model and the session tier reach a Mirasim agent unchanged.
+turn. ``listClis`` says whether the agent's CLI is installed and what Mirasim
+calls it; ``getCatalog`` names its models and effort rungs. The menus are
+advertised in the shapes Raven already reads off any ACP agent -- the model as
+the ``session/new`` config option whose ``category`` is ``model``, and the effort
+rungs as session modes -- so the model picker, a per-instance model and the
+session tier reach a Mirasim agent unchanged.
 
 Three kinds of model share one catalog, told apart by ``routeByModel``: a row
 routed ``relay`` runs on the Mirasim platform's quota, one routed ``direct`` on
@@ -16,9 +17,10 @@ platform ``deepseek-flash`` and an own-key profile that also reaches DeepSeek --
 and the label alone cannot say which one bills where.
 
 Which of the two a session bills, the platform's quota or the user's own
-account, is the session's route, not a property of the model: Mirasim puts a
-session on one with ``--route`` on its first turn, or with ``session route``
-after, and the id it runs stays the same. The platform runs the own models of the
+account, is the session's route, not a property of the model: a ``prompt``
+frame's ``route`` puts the session on one (``cloud`` or ``local``, ``null`` for
+Mirasim's default), on its first turn and on any later one, and the id it runs
+stays the same. The platform runs the own models of the
 agents in :data:`PLATFORM_ROUTE_AGENTS` too, so for those each own model is
 offered once per route, the route prefixed to its id -- ``own:`` under the
 agent's heading, ``platform:`` under the platform's. The bare id is still taken,
@@ -39,7 +41,21 @@ OWN_KEY_GROUP = ("own-key", "Own key")
 OWN_ROUTE = "own"
 PLATFORM_ROUTE = "platform"
 DEFAULT_ROUTE = "default"
-"""The routes ``ui-cli session route --to`` takes; ``default`` leaves the session to Mirasim's own setting."""
+"""A session's routes as this adapter names them; ``default`` leaves the session to Mirasim's own setting."""
+
+WIRE_ROUTES: dict[str, str | None] = {OWN_ROUTE: "local", PLATFORM_ROUTE: "cloud", DEFAULT_ROUTE: None}
+"""Each route as a ``prompt`` frame's ``route`` spells it; ``None`` goes out as ``null``, clearing a choice."""
+
+STEER_AGENTS = frozenset({"claude", "codex", "dsh", "pi", "zcode"})
+"""The agents whose running turn takes a ``steer``, as ``mirasim ui-cli agents`` reported each one's
+``capabilities.steer`` (measured 2026-10-12 on 0.0.465). The host's ``listClis`` rows do not say."""
+
+IMAGE_AGENTS = frozenset({"claude"})
+"""The agents measured seeing an image sent as a ``prompt`` frame's ``attachments``.
+
+Measured 2026-10-17: Claude Code on ``glm-5.3-flash`` named the colour of an
+attached image. An agent outside this set gets an image as a file path instead,
+which its own tools can open."""
 
 PLATFORM_ROUTE_AGENTS = frozenset({"claude", "codex", "kimi", "zcode"})
 """The agents whose own models the Mirasim platform runs as well.
@@ -63,6 +79,8 @@ class ModelEntry:
     """The id Mirasim runs, where it is not ``id``: the model behind a route prefix."""
     session_route: str = ""
     """The route a session is put on to run this value, ``own`` or ``platform``; empty leaves that to Mirasim."""
+    context_window: int | None = None
+    """The model's context window in tokens, as the catalog says; the size a usage update reports against."""
 
 
 @dataclass(frozen=True)
@@ -113,6 +131,13 @@ class AgentCatalog:
 
     def offers_model(self, model_id: str) -> bool:
         return model_id in self._by_id
+
+    def context_window(self, mirasim_model: str | None) -> int | None:
+        """The context window of the model Mirasim names ``mirasim_model`` -- the id a snapshot reports."""
+        for entry in self._by_id.values():
+            if mirasim_model in (entry.id, entry.model) and entry.context_window:
+                return entry.context_window
+        return None
 
     def offers_effort(self, effort: str) -> bool:
         return any(rung == effort for rung, _ in self.efforts)
@@ -190,18 +215,16 @@ def _rungs(items: Any) -> tuple[tuple[str, str], ...]:
     return tuple(out)
 
 
-def agent_entry(agents_doc: Any, agent: str) -> dict[str, Any] | None:
-    """The ``agents[]`` row naming ``agent``, or ``None``."""
-    rows = agents_doc.get("agents") if isinstance(agents_doc, dict) else None
+def agent_entry(rows: Any, agent: str) -> dict[str, Any] | None:
+    """The ``listClis`` row naming ``agent``, or ``None``."""
     for row in rows if isinstance(rows, list) else ():
         if isinstance(row, dict) and row.get("id") == agent:
             return row
     return None
 
 
-def installed_ids(agents_doc: Any) -> list[str]:
-    """The ids of the ``agents[]`` rows Mirasim reports installed, in its order."""
-    rows = agents_doc.get("agents") if isinstance(agents_doc, dict) else None
+def installed_ids(rows: Any) -> list[str]:
+    """The ids of the ``listClis`` rows Mirasim reports installed, in its order."""
     return [
         row["id"]
         for row in (rows if isinstance(rows, list) else ())
@@ -209,13 +232,13 @@ def installed_ids(agents_doc: Any) -> list[str]:
     ]
 
 
-def read_catalog(agent: str, agents_doc: Any, catalog_doc: Any) -> AgentCatalog:
-    """Build an :class:`AgentCatalog` from the two documents, tolerating a missing catalog.
+def read_catalog(agent: str, row: Any, catalog_doc: Any) -> AgentCatalog:
+    """Build an :class:`AgentCatalog` from the agent's ``listClis`` row and its catalog, tolerating a missing catalog.
 
     Anything not in the expected shape is dropped rather than guessed at: a
     guessed model would be offered to a reader and then refused by Mirasim.
     """
-    row = agent_entry(agents_doc, agent) or {}
+    row = row if isinstance(row, dict) else {}
     label = _text(row.get("label")) or agent
     installed = bool(row.get("installed"))
     doc = catalog_doc if isinstance(catalog_doc, dict) else {}
@@ -229,12 +252,16 @@ def read_catalog(agent: str, agents_doc: Any, catalog_doc: Any) -> AgentCatalog:
             continue
         seen.add(model_id)
         route = routes.get(model_id)
+        window = item.get("contextWindow")
         listed.append(
             ModelEntry(
                 id=model_id,
                 label=_text(item.get("label")) or model_id,
                 route=route if route in ("relay", "direct") else "",
                 rungs=tuple(rung for rung, _ in _rungs(efforts_by_model.get(model_id))),
+                context_window=window
+                if isinstance(window, int) and not isinstance(window, bool) and window > 0
+                else None,
             )
         )
     models, unlisted = _menu(agent, listed)
@@ -282,12 +309,15 @@ def _menu(agent: str, listed: list[ModelEntry]) -> tuple[list[ModelEntry], list[
 
 __all__ = [
     "DEFAULT_ROUTE",
+    "IMAGE_AGENTS",
     "MODEL_OPTION",
     "OWN_KEY_GROUP",
     "OWN_ROUTE",
     "PLATFORM_GROUP",
     "PLATFORM_ROUTE",
     "PLATFORM_ROUTE_AGENTS",
+    "STEER_AGENTS",
+    "WIRE_ROUTES",
     "AgentCatalog",
     "ModelEntry",
     "agent_entry",
