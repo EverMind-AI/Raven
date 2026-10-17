@@ -250,6 +250,40 @@ async def test_a_turn_streams_and_the_next_continues_the_conversation(harness: H
     assert harness.said(sid).endswith(f"turn 2 of {key} on sonnet effort high: what was it?")
 
 
+async def test_a_tool_call_streams_from_its_start_to_its_result_between_the_words_around_it(
+    harness: Harness,
+) -> None:
+    call = {"id": "call_1", "name": "Bash", "summary": "Run shell: ls", "input": "ls", "status": "running"}
+    harness.host.respond = script(
+        ("text", "Let me look."),
+        ("tool", call),
+        ("tool", {"id": "call_1", "status": "done", "result": "a b"}),
+        ("text", " Done."),
+    )
+    sid = await harness.new()
+    assert await harness.ok("session/prompt", sessionId=sid, prompt=text("go")) == {"stopReason": "end_turn"}
+    turn = [u for u in harness.session_updates(sid) if u["sessionUpdate"] != "available_commands_update"]
+    for update in turn:
+        validate_def("SessionUpdate", update)
+    assert [u["sessionUpdate"] for u in turn] == [
+        "agent_message_chunk",
+        "tool_call",
+        "tool_call_update",
+        "agent_message_chunk",
+        "usage_update",
+    ]
+    assert turn[1] == {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_1",
+        "title": "Run shell: ls",
+        "kind": "execute",
+        "status": "in_progress",
+        "rawInput": "ls",
+    }
+    assert (turn[2]["status"], turn[2]["content"][0]["content"]["text"]) == ("completed", "a b")
+    assert (turn[0]["content"]["text"], turn[3]["content"]["text"]) == ("Let me look.", " Done.")
+
+
 async def test_the_usage_a_turn_ends_on_is_measured_against_whatever_names_the_window(harness: Harness) -> None:
     await harness.agent.catalog()
     usage = harness.agent._usage

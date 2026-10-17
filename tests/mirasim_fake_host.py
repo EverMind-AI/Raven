@@ -16,7 +16,6 @@ A turn runs a script of steps, ``respond(prompt_frame, session) -> steps``:
 - ``("ask", interaction)``: the turn waits for its ``interact``, recorded in
   ``session.answers``;
 - ``("hold",)``: the turn waits for a ``stop`` or a ``steer``;
-- ``("sleep", seconds)``;
 - ``("error", message)``: the turn ends with that error.
 """
 
@@ -504,8 +503,6 @@ class FakeHost:
                 session.wake.clear()
             if session.steered:
                 await self._patch(session, {"appendText": f"steered: {session.steered[-1]}"})
-        elif kind == "sleep":
-            await asyncio.sleep(step[1])
         elif kind == "error":
             return str(step[1])
         return None
