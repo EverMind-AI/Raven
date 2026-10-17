@@ -141,7 +141,14 @@ export function sectionOf(row: ExtAgentRow): Section {
    the reader has not opened yet. */
 export type GridEntry =
   | { kind: 'row'; row: ExtAgentRow }
-  | { kind: 'family'; family: string; members: ExtAgentRow[] }
+  /* `section` is part of the card's identity, not decoration. The All tab
+     concatenates the three sections, each folded on its own, so a family with
+     MIN_FAMILY members in two of them yields two cards -- and two cards with
+     one React key read as one card that does not respond, because React keeps
+     the first and drops the rest. Two populations, two cards: the drawer lists
+     the unconfigured members, so a family with a connected member and folded
+     ones really does stand for two different things on this tab. */
+  | { kind: 'family'; family: string; section: Section; members: ExtAgentRow[] }
 
 /* The rows folded into what the grid actually draws.
 
@@ -160,7 +167,7 @@ export type GridEntry =
    ordering -- `ordered`, which sorts Raven's own first and is otherwise the
    server's -- is what decides where the card lands, exactly as it did for the
    rows it replaced. */
-export function gridEntries(rows: ExtAgentRow[]): GridEntry[] {
+export function gridEntries(rows: ExtAgentRow[], section?: Section): GridEntry[] {
   const folded = new Map<string, ExtAgentRow[]>()
   const foldedNames = new Set<string>()
   for (const row of rows) {
@@ -188,7 +195,7 @@ export function gridEntries(rows: ExtAgentRow[]): GridEntry[] {
     const family = familyOf(row)!
     if (placed.has(family)) continue
     placed.add(family)
-    entries.push({ kind: 'family', family, members: folded.get(family)! })
+    entries.push({ kind: 'family', family, section: section ?? sectionOf(row), members: folded.get(family)! })
   }
   return entries
 }

@@ -537,7 +537,9 @@ export function CardGrid({
     <div className="extAgents-grid">
       {entries.map((entry) =>
         entry.kind === 'family' ? (
-          <FamilyCard entry={entry} key={entry.family} s={s} />
+          /* Family AND section: see GridEntry -- one key per population, or
+             React keeps the first of two cards and silently drops the other. */
+          <FamilyCard entry={entry} key={`${entry.family}:${entry.section}`} s={s} />
         ) : (
           <AgentCard key={entry.row.name} row={entry.row} s={s} />
         ),

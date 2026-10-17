@@ -881,7 +881,11 @@ export function ExtAgentsApp(): JSX.Element {
   /* Folded, then ordered -- not the other way round: a family takes the
      position of its first member, so the sort has to have decided where that
      is. `ordered` is stable, so within a tab the server's own order survives. */
-  const by = (section: Section): GridEntry[] => gridEntries(ordered(s.rows.filter((row) => sectionOf(row) === section)))
+  const by = (section: Section): GridEntry[] =>
+    gridEntries(
+      ordered(s.rows.filter((row) => sectionOf(row) === section)),
+      section,
+    )
   const entries: Record<Tab, GridEntry[]> = { all: [], on: by('on'), avail: by('avail'), missing: by('missing') }
   entries.all = [...entries.on, ...entries.avail, ...entries.missing]
   const current = TABS.find((x) => x.tab === tab)!

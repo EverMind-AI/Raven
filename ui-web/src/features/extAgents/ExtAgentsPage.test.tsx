@@ -307,6 +307,33 @@ describe('the Mirasim family card', () => {
     expect(tabNamed('gui.filter.all').querySelector('.extAgents-tn')!.textContent).toBe('1')
   })
 
+  it('draws one card per family even when its members split across sections', async () => {
+    /* The All tab concatenates the three sections, each folded on its own --
+       so a family with at least MIN_FAMILY members in two of them produces two
+       cards wearing one key ('mirasim'). React keeps the first and drops the
+       second, which here reads as a card that does not respond. Rare in
+       practice -- the nine members share one executable, so they are usually
+       all present or all absent -- and wrong whenever it happens. */
+    /* Two sections, each with MIN_FAMILY folded members: `missing` is decided
+       by the probe (the agent is not installed), `avail` by everything else,
+       and both hold unconfigured presets. */
+    const gone = new Set(['codex-Mirasim', 'kimi-Mirasim'])
+    const all = members().map((member) =>
+      gone.has(member.name) ? { ...member, probe_status: 'missing', probe_missing: 'mirasim' } : member,
+    )
+    install(all)
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await mount()
+      const cards = rowsOf().filter((c) => c.querySelector('.extAgents-t')!.textContent === 'gui.agent.fam_mirasim')
+      expect(cards.length).toBe(2)
+      const complaint = errors.mock.calls.map((call) => String(call[0])).find((text) => text.includes('same key'))
+      expect(complaint, complaint ?? 'React reported no duplicate key').toBeUndefined()
+    } finally {
+      errors.mockRestore()
+    }
+  })
+
   it('names a refused member instead of offering to connect it from the drawer', async () => {
     /* The same verdict the card carries, for the same reason: the handshake
        already refused this agent for want of a credential, and the fix --
