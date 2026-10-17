@@ -66,6 +66,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import json
 import os
 import re
 import shutil
@@ -91,6 +92,7 @@ from raven.acp.mirasim.catalog import (
     PLATFORM_ROUTE,
     AgentCatalog,
     agent_entry,
+    installed_ids,
     read_catalog,
 )
 from raven.acp.mirasim.interactions import (
@@ -987,6 +989,17 @@ async def serve(reader: asyncio.StreamReader, out: BinaryIO, *, agent: str, cli:
         await asyncio.gather(*still, return_exceptions=True)
 
 
+async def _print_installed(executable: str) -> int:
+    """``--installed``: one ``ui-cli agents``, for a caller deciding which agents are worth a handshake."""
+    try:
+        doc = await UiCli(executable=executable).query(["agents"])
+    except UiCliError as exc:
+        print(f"Mirasim could not list its agents: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(installed_ids(doc)))
+    return 0
+
+
 async def _main(args: argparse.Namespace, out: BinaryIO) -> None:
     workdir = server_workdir()
     with contextlib.suppress(OSError):
@@ -1006,10 +1019,17 @@ def main(argv: list[str] | None = None) -> int:
         prog="python -m raven.acp.mirasim",
         description="Serve one Mirasim agent over ACP on stdio, one `mirasim ui-cli` command per request.",
     )
-    parser.add_argument("--agent", required=True, help="the Mirasim agent id, as `mirasim ui-cli agents` lists it")
+    parser.add_argument("--agent", help="the Mirasim agent id, as `mirasim ui-cli agents` lists it")
     parser.add_argument("--executable", default=EXECUTABLE, help="the Mirasim command (default: %(default)s)")
     parser.add_argument("--verbose", action="store_true", help="log progress to stderr, not only problems")
+    parser.add_argument(
+        "--installed", action="store_true", help="print the agents Mirasim has installed, as a JSON list, and exit"
+    )
     args = parser.parse_args(argv)
+    if args.installed:
+        return asyncio_runner.run(_print_installed(args.executable))
+    if args.agent is None:
+        parser.error("--agent is required")
     if not _AGENT_ID.match(args.agent):
         parser.error(f"--agent {args.agent!r} is not a Mirasim agent id")
     logger.remove()

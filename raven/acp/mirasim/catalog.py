@@ -199,6 +199,16 @@ def agent_entry(agents_doc: Any, agent: str) -> dict[str, Any] | None:
     return None
 
 
+def installed_ids(agents_doc: Any) -> list[str]:
+    """The ids of the ``agents[]`` rows Mirasim reports installed, in its order."""
+    rows = agents_doc.get("agents") if isinstance(agents_doc, dict) else None
+    return [
+        row["id"]
+        for row in (rows if isinstance(rows, list) else ())
+        if isinstance(row, dict) and isinstance(row.get("id"), str) and row.get("installed") is True
+    ]
+
+
 def read_catalog(agent: str, agents_doc: Any, catalog_doc: Any) -> AgentCatalog:
     """Build an :class:`AgentCatalog` from the two documents, tolerating a missing catalog.
 
@@ -281,5 +291,6 @@ __all__ = [
     "AgentCatalog",
     "ModelEntry",
     "agent_entry",
+    "installed_ids",
     "read_catalog",
 ]

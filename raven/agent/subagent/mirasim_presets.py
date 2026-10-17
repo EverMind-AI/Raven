@@ -24,7 +24,15 @@ reports, so a row reads the way the agent does in Mirasim.
 
 from __future__ import annotations
 
+import asyncio
+import json
+import os
 from typing import Any
+
+from loguru import logger
+
+from raven.agent.subagent.vendored_agents import _resolved_python
+from raven.utils.commands import command_argv, resolve_subagent_command
 
 MIRASIM_AGENTS: dict[str, tuple[str, str, str]] = {
     "mirasim_claude": ("claude", "Claude Code", "Anthropic's agentic coding tool"),
@@ -69,10 +77,60 @@ MIRASIM_PRESETS: dict[str, dict[str, Any]] = {
     key: _row(key, agent, label, what) for key, (agent, label, what) in MIRASIM_AGENTS.items()
 }
 
+INSTALLED_QUERY = "{PYTHON} -P -m raven.acp.mirasim --installed"
+
+INSTALLED_TIMEOUT_S = 120.0
+"""How long the question may take: one Mirasim server's start, under the
+presets' own ``readyTimeoutMs`` for the same work."""
+
+
+async def installed_agents(*, path: str | None) -> frozenset[str] | None:
+    """The agents Mirasim has installed, asked once through the adapter; ``None`` when it could not say.
+
+    Asked before the boot handshakes the presets nobody has connected yet. One
+    whose agent Mirasim lacks refuses its session, the boot keeps no preset's
+    failure, and so it was handshaken again at every start, starting Mirasim
+    servers for nothing. ``path`` is the login shell's PATH, the one the
+    presets' own check for ``mirasim`` resolves against.
+    """
+    argv = command_argv(resolve_subagent_command(INSTALLED_QUERY, python=_resolved_python(), subagent_dir=""))
+    env = {**os.environ, "PATH": path} if path else None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+    except OSError as exc:
+        logger.debug("Mirasim was not asked which agents it has: {}", exc)
+        return None
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), INSTALLED_TIMEOUT_S)
+    except TimeoutError:
+        proc.kill()
+        await proc.wait()
+        logger.debug("Mirasim did not say which agents it has within {:.0f}s", INSTALLED_TIMEOUT_S)
+        return None
+    if proc.returncode != 0:
+        logger.debug("Mirasim did not say which agents it has: {}", err.decode("utf-8", "replace").strip())
+        return None
+    try:
+        listed = json.loads(out)
+    except ValueError:
+        return None
+    if not isinstance(listed, list) or not all(isinstance(agent, str) for agent in listed):
+        return None
+    return frozenset(listed)
+
+
 __all__ = [
+    "INSTALLED_QUERY",
     "MIRASIM_AGENTS",
     "MIRASIM_EXECUTABLE",
     "MIRASIM_INSTALL_HINT",
     "MIRASIM_PRESETS",
     "MIRASIM_SHIM_PRESETS",
+    "installed_agents",
 ]

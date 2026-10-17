@@ -1059,6 +1059,21 @@ def test_main_wires_the_logger_the_stdout_claim_and_the_runner(tmp_path: Path, m
     assert calls == ["remove", "add INFO", "claim", "run"]
 
 
+def test_the_entry_lists_the_agents_mirasim_has_installed(tmp_path: Path, capsys) -> None:
+    """For a caller deciding which agents are worth a handshake: one ``ui-cli agents``, printed as JSON."""
+    exe = install(tmp_path)
+    assert server_mod.main(["--installed", "--executable", str(exe)]) == 0
+    assert json.loads(capsys.readouterr().out) == ["claude", "qwen"]
+
+
+def test_the_installed_listing_says_so_when_mirasim_cannot_list(tmp_path: Path, capsys) -> None:
+    exe = install(tmp_path, "broken")
+    assert server_mod.main(["--installed", "--executable", str(exe)]) == 1
+    printed = capsys.readouterr()
+    assert printed.out == ""
+    assert "could not list its agents" in printed.err
+
+
 def test_a_logged_failure_names_no_local_values(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     """Raven journals this stream, and an annotated frame would print each local, the prompt among them."""
     import contextlib

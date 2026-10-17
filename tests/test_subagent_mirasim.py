@@ -140,3 +140,21 @@ async def test_a_dispatch_cancelled_in_raven_leaves_no_turn_running(tmp_path: Pa
             return
         await asyncio.sleep(0.05)
     pytest.fail("the turn's grandchild outlived the cancelled dispatch")
+
+
+@posix_only
+async def test_the_agents_mirasim_has_are_asked_of_the_adapter(tmp_path: Path) -> None:
+    """The question the boot's verification asks before handshaking a preset: one ``ui-cli agents``."""
+    from raven.agent.subagent.mirasim_presets import installed_agents
+
+    install(tmp_path)
+    assert await installed_agents(path=str(tmp_path)) == frozenset({"claude", "qwen"})
+
+
+@posix_only
+async def test_a_mirasim_that_cannot_list_its_agents_answers_nothing(tmp_path: Path) -> None:
+    """Not an empty set: that would read as every agent missing, and skip the handshakes it was meant to spare."""
+    from raven.agent.subagent.mirasim_presets import installed_agents
+
+    install(tmp_path, "broken")
+    assert await installed_agents(path=str(tmp_path)) is None

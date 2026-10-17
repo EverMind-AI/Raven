@@ -25,11 +25,12 @@ from typing import Any, Literal
 import aiohttp
 from loguru import logger
 
-from raven.agent.subagent import github_copilot, kimi_code
+from raven.agent.subagent import github_copilot, kimi_code, mirasim_presets
 from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_backend, lent_key_env
 from raven.agent.subagent.backends.base import optional_keyword
 from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.instances import InstanceRegistry
+from raven.agent.subagent.mirasim_presets import MIRASIM_AGENTS
 from raven.agent.subagent.node_runtime import NodeTooOld, node_too_old
 from raven.agent.subagent.presets import (
     SHIM_REQUIRED_EXECUTABLES,
@@ -1465,8 +1466,14 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured
     # After the configured rows, never before: those are the ones a run can
     # dispatch to this minute, and a slow preset adapter ahead of them would hold
     # the roster's own capabilities back behind an agent nobody has asked for yet.
+    path: str | None = None
     if configured is not None:
-        rows = [*rows, *_unconfigured_acp_preset_rows(configured, path=await _captured_login_path())]
+        path = await _captured_login_path()
+        rows = [*rows, *_unconfigured_acp_preset_rows(configured, path=path)]
+    # Asked once, and only once a Mirasim preset is about to be handshaken: the
+    # question starts a Mirasim server of its own.
+    mirasim_has: frozenset[str] | None = None
+    mirasim_asked = False
     store = SnapshotStore()
     # Optional: a caller's own stand-in (tests substitute a bare `record`-only
     # object) may not carry it, and its absence must not itself force a
@@ -1505,6 +1512,14 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured
                 and not failed_before
             ):
                 continue
+            agent = MIRASIM_AGENTS.get(getattr(cfg, "preset", None) or "") if isinstance(row, _PresetRow) else None
+            if agent is not None:
+                if not mirasim_asked:
+                    mirasim_asked = True
+                    mirasim_has = await mirasim_presets.installed_agents(path=path)
+                if mirasim_has is not None and agent[0] not in mirasim_has:
+                    logger.debug("acp agent {!r}: Mirasim has no {} installed; not handshaken", name, agent[0])
+                    continue
             result = await verify_agent(cfg, **_launch_kw(cfg))
             _note_menu_re_measured(result, name)
             # Read again with nothing awaited between here and the write: the
