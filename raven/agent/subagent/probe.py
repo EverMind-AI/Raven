@@ -1313,7 +1313,7 @@ def _test_record(snapshot: Any, previous: Any) -> Any:
 
     A usable result keeps the previous menu too when it could not read its own
     (``model_menu_measured`` false): an agent that answered while its catalog
-    read failed -- a Mirasim cold start -- has measured nothing about its models.
+    read failed -- a Mirasim host that did not answer it -- has measured nothing about its models.
     """
     if previous is not None and snapshot.usable and not snapshot.model_menu_measured:
         if previous.model_menu_measured:
@@ -1485,7 +1485,7 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured
         path = await _captured_login_path()
         rows = [*rows, *_unconfigured_acp_preset_rows(configured, path=path)]
     # Asked once, and only once a Mirasim preset is about to be handshaken: the
-    # question starts a Mirasim server of its own.
+    # question launches the adapter, which waits for the host's agent list to settle.
     mirasim_has: frozenset[str] | None = None
     mirasim_asked = False
     store = SnapshotStore()
