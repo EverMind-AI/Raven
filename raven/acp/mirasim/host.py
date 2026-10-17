@@ -48,6 +48,8 @@ from loguru import logger
 
 HOST_ENV = "RAVEN_MIRASIM_HOST"
 DESKTOP_PORT = 4970
+UNIX_SOCKETS = os.name != "nt"
+"""Whether asyncio can open a unix socket here: on Windows neither of its event loops can."""
 
 CONNECT_TIMEOUT_S = 10.0
 HEALTH_TIMEOUT_S = 5.0
@@ -130,7 +132,7 @@ def locate_host(env: Mapping[str, str] | None = None) -> HostAddress | None:
     if named := env.get(HOST_ENV, "").strip():
         return parse_address(named, env)
     socket = remote_socket()
-    if os.name != "nt":
+    if UNIX_SOCKETS:
         with contextlib.suppress(OSError):
             if socket.is_socket():
                 return HostAddress(socket=str(socket))
@@ -193,6 +195,11 @@ class HostConnection:
                 raise HostUnavailableError(str(exc)) from exc
             if address is None:
                 raise HostUnavailableError(NO_HOST)
+            if address.socket and not UNIX_SOCKETS:
+                raise HostUnavailableError(
+                    f"cannot reach the Mirasim host at {address.describe()}: asyncio opens no unix socket on this "
+                    f"platform, so name the Mirasim app's port in {HOST_ENV} instead"
+                )
             connector: aiohttp.BaseConnector = (
                 aiohttp.UnixConnector(path=address.socket) if address.socket else aiohttp.TCPConnector()
             )
