@@ -166,7 +166,8 @@ GitHub Copilot、Qwen Code、CodeBuddy、Qoder、Grok Build、Kimi Code 和 Pi �
 Claude Code、Codex、Kimi Code、Antigravity、Qwen Code、Grok Build、DSH、Pi 和 ZCode CLI，
 名称形如 `Claude Code-Mirasim`。这样一行代表在 Mirasim 所设账号与模型路由上运行的该
 Agent，因此可以与同一 Agent 自己的预设并存。适配器随 Raven 发布（`raven/acp/mirasim/`），
-无需下载；命令中的 `{PYTHON}` 在写入配置时替换为 Raven 自己的解释器。可选模型取自
+无需下载；命令中的 `{PYTHON}` 在写入配置时替换为 Raven 自己的解释器；若该解释器之后不复存在
+（例如安装位置发生变化），下次读取配置时该行会改指当前运行 Raven 的解释器。可选模型取自
 Mirasim 为该 Agent 提供的列表，分为三组：Agent 自己名下的模型、`Mirasim`（平台额度）
 和 `Own key`（你在 Mirasim 中添加的 key）。Mirasim 平台也能运行 Claude Code、Codex、
 Kimi Code 和 ZCode CLI 的自有模型，因此这四个 Agent 的这些模型在前两组各列一次：

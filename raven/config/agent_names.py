@@ -92,6 +92,32 @@ Kept equal to ``THIRD_PARTY_SUBAGENT_PRESETS``'s keys by
 tests/test_subagent_name_vocabulary.py."""
 
 
+BUNDLED_SHIM_PRESET_NAMES: frozenset[str] = frozenset(
+    {
+        "mirasim_antigravity",
+        "mirasim_claude",
+        "mirasim_codex",
+        "mirasim_dsh",
+        "mirasim_grok",
+        "mirasim_kimi",
+        "mirasim_pi",
+        "mirasim_qwen",
+        "mirasim_zcode",
+    }
+)
+"""Presets whose command runs a shim Raven ships inside its own package.
+
+These are the rows whose command is this host's interpreter
+(``{PYTHON} -P -m raven.acp.mirasim``, expanded when the preset is read), which
+is why config needs to know them: a load-time refresh rewrites the interpreter
+in a stored one, and the write path refuses to register one on another machine.
+Spelled out for the reason the block above gives -- deriving them is the import
+this module exists to remove.
+
+Kept equal to ``raven.agent.subagent.presets.BUNDLED_SHIM_PRESETS`` by
+tests/test_subagent_name_vocabulary.py."""
+
+
 def canonical_agent_name(name: str) -> str:
     """The seed name an agent reference resolves to, or the name unchanged.
 
@@ -115,6 +141,7 @@ def is_builtin_agent_name(name: str) -> bool:
 
 
 __all__ = [
+    "BUNDLED_SHIM_PRESET_NAMES",
     "BUILTIN_AGENT_NAMES",
     "GENERIC_AGENT",
     "LEGACY_AGENT_ALIASES",

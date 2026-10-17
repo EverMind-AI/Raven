@@ -193,7 +193,9 @@ Pi and ZCode CLI, named `Claude Code-Mirasim` and so on. Such a row is the agent
 the accounts and model routes set in Mirasim, which is why it can sit beside the
 same agent's own preset. The adapter ships with Raven (`raven/acp/mirasim/`), so
 nothing is downloaded; the `{PYTHON}` in its command becomes Raven's interpreter
-when the row is written to config. Its model list is Mirasim's for that agent,
+when the row is written to config; if that interpreter is later gone, as after an
+install moves, the row is pointed at the one serving Raven the next time the config
+is read. Its model list is Mirasim's for that agent,
 grouped under the agent's own name, `Mirasim` (the platform's quota) and `Own key`
 (keys you added to Mirasim). Mirasim's platform also runs the own models of Claude
 Code, Codex, Kimi Code and ZCode CLI, so for those four each such model is listed in
