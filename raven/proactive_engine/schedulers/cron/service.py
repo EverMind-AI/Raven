@@ -736,23 +736,23 @@ class CronService:
         conversations; without dedup the user gets N near-identical
         fires per scheduled tick.
 
-        Two cross-kind dedup layers also apply (in order):
+        One cross-kind dedup layer also applies:
 
-        1. **Message-equal dedup**: if any existing enabled job for the
-           same (channel, to) has a *byte-identical* ``payload.message``,
-           return it. Catches the case where the LLM creates the same
-           reminder N times across the simulation horizon (e.g. a
-           medication-reminder string appearing as both an ``at`` shot
-           today and a ``cron_expr`` recurring tomorrow — identical
-           text, different fire times).
+        **Message-equal dedup**: if any existing enabled job for the
+        same (channel, to) has a *byte-identical* ``payload.message``,
+        return it. Catches the case where the LLM creates the same
+        reminder N times across the simulation horizon (e.g. a
+        medication-reminder string appearing as both an ``at`` shot
+        today and a ``cron_expr`` recurring tomorrow — identical
+        text, different fire times).
 
-        2. **Time-window dedup**: if any existing enabled job for the
-           same (channel, to) is scheduled to fire within 15 minutes of
-           this new schedule's next fire (regardless of schedule kind),
-           return it. Catches the case where the LLM creates both a
-           recurring ``cron_expr`` AND a same-day ``at`` shot for the
-           same intent (e.g. "daily 8:00 take meds" + "today 8:00 take
-           meds").
+        Deduplication keys on explicit identity only — a shared
+        ``topic_tag``, a byte-identical message, or an identical
+        schedule. Near-simultaneous reminders with different content
+        are distinct tasks and are kept, however close their fire
+        times: a time-window heuristic here used to silently drop the
+        second reminder with no indication a different task was
+        discarded.
 
         ``job_id`` edits one named job rather than adding: if a job with that id
         exists it is updated in place, otherwise the id is used for the new job.
@@ -819,10 +819,10 @@ class CronService:
             # catches the caregiver-style failure mode where the LLM
             # creates near-identical med-reminder crons with subtly
             # different schedule offsets (11:20 + 11:30) or message
-            # wording — message-equal dedup and 15min window dedup both
-            # miss them. The topic_tag IS the identity for "what topic
-            # is this reminder about", so two crons with the same
-            # topic_tag are by definition the same logical reminder.
+            # wording — message-equal dedup misses those. The topic_tag
+            # IS the identity for "what topic is this reminder about", so
+            # two crons with the same topic_tag are by definition the
+            # same logical reminder.
             # Update the existing job's message/schedule in-place rather
             # than spawn a parallel one.
             if topic_tag:
@@ -854,8 +854,8 @@ class CronService:
 
             # Message-equal dedup (covers same-intent reminders the LLM
             # re-asks for across days, possibly with different schedule
-            # kinds). Stricter than time-window: byte-equality on full
-            # message text → false-positive rate ~0.
+            # kinds). Byte-equality on full message text → false-positive
+            # rate ~0.
             for j in store.jobs:
                 if not j.enabled:
                     continue
@@ -876,36 +876,6 @@ class CronService:
                 )
                 self._signal_wake()
                 return j
-
-            # Cross-kind time-window dedup (covers caregiver-style
-            # "expr + at for the same intent" double-add). Window is
-            # generous (15min) because two genuinely-distinct reminders
-            # less than 15min apart are almost always an LLM mistake;
-            # the rare legitimate case (two distinct meds at 8:00 and
-            # 8:10) loses one fire — acceptable trade-off given the
-            # spam alternative.
-            new_next = _compute_next_run(schedule, now)
-            if new_next is not None:
-                for j in store.jobs:
-                    if not j.enabled:
-                        continue
-                    if j.payload.channel != channel or j.payload.to != to:
-                        continue
-                    existing_next = j.state.next_run_at_ms
-                    if existing_next is None:
-                        continue
-                    if abs(existing_next - new_next) <= 15 * 60 * 1000:
-                        logger.info(
-                            "Cron: skipped duplicate add — existing job '{}' "
-                            "({}) fires within 15min of new request "
-                            "(same channel/to, kinds={}/{})",
-                            j.name,
-                            j.id,
-                            j.schedule.kind,
-                            schedule.kind,
-                        )
-                        self._signal_wake()
-                        return j
 
             # Dedup: same recurring schedule + same channel + same recipient
             # → update message in place rather than create a duplicate.
