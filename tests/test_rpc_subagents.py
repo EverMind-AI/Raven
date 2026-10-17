@@ -430,20 +430,68 @@ async def test_add_writes_the_preset_template_under_a_chosen_name(
     assert entry["description"] == "builds"
 
 
+def _menu(name: str, *values: str) -> object:
+    """A measured snapshot of an agent whose model menu is ``values``."""
+    from raven.acp_client.capabilities import AcpModelChoice, CapabilitySnapshot
+
+    return CapabilitySnapshot(
+        agent=name,
+        fingerprint="f",
+        status="ready",
+        detail="ok",
+        measured_at_ms=0,
+        model_choices=tuple(AcpModelChoice(value=value) for value in values),
+    )
+
+
 async def test_add_can_pin_a_model_the_agent_lists(config_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The retry for an agent whose own default model its provider refuses: the
-    ping and the stored row both carry the model the caller picked."""
+    ping and the stored row both carry the model the caller picked. Nothing was
+    recorded for the row yet, so its menu is read from the handshake first."""
     pinged: list[object] = []
 
     async def _ping(cfg: object) -> object:
         pinged.append(getattr(cfg, "model", None))
         return await _pings_ok(cfg)
 
+    async def _handshake(cfg: object) -> object:
+        return _menu("OpenCode", "openai/gpt-5.5", "openai/gpt-5.5-mini")
+
     monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _ping)
+    monkeypatch.setattr("raven.rpc.methods.subagents.acp_snapshot_for", lambda cfg: None)
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", _handshake)
     await subagents_add({"preset": "opencode", "model": " openai/gpt-5.5 "})
     entry = next(e for e in _stored(config_path) if e["name"] == "OpenCode")
     assert entry["model"] == "openai/gpt-5.5"
     assert pinged == ["openai/gpt-5.5"]
+
+
+async def test_add_refuses_a_model_the_agents_menu_does_not_offer(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Judged the way ``subagents.update`` judges the same pick, before anything
+    is spent. An agent that refuses the pick goes on with its own default, so
+    the ping alone would pass and store a row naming a model it never runs."""
+    from raven.agent.subagent.presets import third_party_subagent_preset
+
+    name = third_party_subagent_preset("mirasim_claude")["name"]
+    pinged: list[object] = []
+
+    async def _ping(cfg: object) -> object:
+        pinged.append(cfg)
+        return await _pings_ok(cfg)
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _ping)
+    monkeypatch.setattr(
+        "raven.rpc.methods.subagents.acp_snapshot_for", lambda cfg: _menu(name, "own:opus", "platform:opus")
+    )
+    with pytest.raises(ConfigValidationError, match="has no model 'own:no-such-model'; it offers 2"):
+        await subagents_add({"preset": "mirasim_claude", "model": "own:no-such-model"})
+    assert pinged == []
+    assert not any(e.get("name") == name for e in _stored(config_path))
+
+    await subagents_add({"preset": "mirasim_claude", "model": "platform:opus"})
+    assert next(e for e in _stored(config_path) if e["name"] == name)["model"] == "platform:opus"
 
 
 async def test_add_defaults_name_and_description_to_the_preset(
