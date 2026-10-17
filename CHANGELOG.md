@@ -321,8 +321,18 @@ All notable changes to Raven are documented here.
   (`agent_memory/profile/agent.local.md`, for example) and are appended after
   the product text; a file edited in place, or left by an older release, is
   saved as `<name>.bak-<time>-<pid>` before it is replaced, never readable by
-  more accounts than the file was, and the launcher log names the backup. The ppt engine, whose plugin can be granted a host's or
-  another product's home, replaces only a file it can show it wrote.
+  more accounts than the file was, and the launcher log names the backup. The
+  ppt engine, whose plugin can be granted a host's or another product's home,
+  replaces only a file it can show it wrote.
+
+- A file Raven saves by replacing it -- `config.json`, an agent's prompt
+  files, state files -- keeps its own access rights from the first byte of the
+  new text. On Windows the replacement took its folder's inherited ACL, so a
+  file kept private in a folder other accounts may read came back readable by
+  them; on POSIX the new text sat in a umask-default temp file until the
+  target's mode was copied over. On Windows a save refused by a read-only
+  target also left a read-only temp file that failed every later save, even
+  after the target was made writable again.
 
 - A task on a registered machine ends the way it ended, whatever happened on
   either side. A Raven node killed outright (`kill -9`) used to leave its

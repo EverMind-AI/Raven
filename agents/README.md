@@ -201,7 +201,8 @@ Agent vocabulary:
   names the backup. A backup is never readable by more accounts than the file
   was: an owner-only copy on POSIX, and on Windows a hard link to the file
   itself, which keeps its ACL; a Windows volume that cannot hard-link stops
-  the launch and names the file rather than copy it. Backups are never
+  the launch and names the file rather than copy it. The regenerated file
+  keeps the file's own mode, and on Windows its DACL. Backups are never
   deleted for you: remove one once what you need from it is in the
   `*.local.md` file. The ppt engine writes into
   whatever home its plugin is granted, which can be a host's own or another
