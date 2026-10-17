@@ -196,10 +196,14 @@ Agent vocabulary:
   `TOOLS.local.md` beside `TOOLS.md`), appended after the product text at the
   next launch; keep only the lines still needed there. A file that does not
   hold the text the product last wrote -- edited in place, or left by an
-  older release before receipts existed -- is copied to
+  older release before receipts existed -- is saved as
   `<name>.bak-<time>-<pid>` before it is replaced, and the launcher's log
-  names the copy. Backups are never deleted for you: remove one once what you
-  need from it is in the `*.local.md` file. The ppt engine writes into
+  names the backup. A backup is never readable by more accounts than the file
+  was: an owner-only copy on POSIX, and on Windows a hard link to the file
+  itself, which keeps its ACL; a Windows volume that cannot hard-link stops
+  the launch and names the file rather than copy it. Backups are never
+  deleted for you: remove one once what you need from it is in the
+  `*.local.md` file. The ppt engine writes into
   whatever home its plugin is granted, which can be a host's own or another
   product's, so it replaces only a seat its own receipt or a shipped prompt's
   digest shows it wrote, and leaves any other file as it is. Each receipt

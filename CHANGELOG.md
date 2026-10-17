@@ -320,8 +320,8 @@ All notable changes to Raven are documented here.
   launch. Your own lines go in the sibling `*.local.md` file
   (`agent_memory/profile/agent.local.md`, for example) and are appended after
   the product text; a file edited in place, or left by an older release, is
-  copied to `<name>.bak-<time>-<pid>` before it is replaced, and the launcher
-  log names the copy. The ppt engine, whose plugin can be granted a host's or
+  saved as `<name>.bak-<time>-<pid>` before it is replaced, never readable by
+  more accounts than the file was, and the launcher log names the backup. The ppt engine, whose plugin can be granted a host's or
   another product's home, replaces only a file it can show it wrote.
 
 - A task on a registered machine ends the way it ended, whatever happened on
