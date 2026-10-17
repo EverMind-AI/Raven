@@ -888,16 +888,17 @@ def test_a_read_only_prompt_regenerates_once_it_is_writable_again(tmp_path):
     assert target.read_text() == "v2"
 
 
-def _windows_dacl(path):
-    """The DACL's flags and its set of ACE strings, read the way an operator would."""
-    sddl = subprocess.run(
-        ["powershell", "-NoProfile", "-NonInteractive", "-Command", f"(Get-Acl -LiteralPath '{path}').Sddl"],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
-    dacl = sddl[sddl.index("D:") + 2 :]
-    return dacl[: dacl.find("(")], set(re.findall(r"\(([^)]*)\)", dacl))
+def _windows_dacl(path, scratch):
+    """The DACL's flags and its set of ACE strings, as ``icacls /save`` writes them."""
+    saved = scratch / "dacl.txt"
+    saved.unlink(missing_ok=True)
+    result = subprocess.run(["icacls", str(path), "/save", str(saved)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    raw = saved.read_bytes()
+    text = raw.decode("utf-16-le" if b"\x00" in raw[:4] else "utf-8")
+    dacl = re.search(r"D:([A-Z]*)((?:\([^)]*\))+)", text)
+    assert dacl, text
+    return dacl.group(1), set(re.findall(r"\(([^)]*)\)", dacl.group(2)))
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows ACLs")
@@ -915,17 +916,18 @@ def test_a_private_windows_prompt_keeps_its_own_dacl_when_regenerated_and_backed
     subprocess.run(
         ["icacls", str(target), "/inheritance:r", "/grant:r", f"*{sid}:(F)"], capture_output=True, check=True
     )
-    flags, aces = _windows_dacl(target)
+    flags, aces = _windows_dacl(target, tmp_path)
     assert "P" in flags and not any(ace.endswith(";BU") for ace in aces), "the setup made the prompt private"
 
     assert _write(target, "v2") == "written"
-    assert _windows_dacl(target)[1] == aces and "P" in _windows_dacl(target)[0]
+    regenerated = _windows_dacl(target, tmp_path)
+    assert regenerated[1] == aces and "P" in regenerated[0]
 
     target.write_text("operator tuned")
     assert _write(target, "v3") == "written"
     [backup] = _backups(target)
-    assert _windows_dacl(backup)[1] == aces
-    assert _windows_dacl(target)[1] == aces
+    assert _windows_dacl(backup, tmp_path)[1] == aces
+    assert _windows_dacl(target, tmp_path)[1] == aces
 
 
 @pytest.mark.parametrize("by_link", [False, True], ids=["copy", "link"])
