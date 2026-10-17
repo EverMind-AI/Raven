@@ -364,7 +364,43 @@ async def test_a_cancel_while_the_launch_answer_waits_ends_the_agent_too(box, tm
         await turn
 
     await _until(lambda: _gone(pid))
-    assert box.nodes._nodes["box"].channels == {}, "the channel of a launch left waiting is dropped"
+    await _until(lambda: box.nodes._nodes["box"].channels == {})
+
+
+async def test_a_cancel_while_the_daemon_still_prepares_the_launch_ends_the_agent_too(box, tmp_path, monkeypatch):
+    """The daemon registers the channel only once it has the login environment and the agent: a cancel
+    sent before that is answered ``no agent on channel``, and the agent starts all the same."""
+    from raven.acp_client.client import AcpClient
+    from raven.node import protocol
+    from tests.test_subagent_acp_remote import _FAKE_SSH
+
+    if not Path("/bin/bash").exists():
+        pytest.skip("the daemon captures a login environment from bash or zsh only")
+    # A login shell that takes a second, which the daemon runs before its first agent starts.
+    stand_in = _FAKE_SSH.format(python=sys.executable, host=HOST, port=PORT)
+    assert stand_in.count('"SHELL": "/bin/sh"') == 1
+    (box.bin / "ssh").write_text(stand_in.replace('"SHELL": "/bin/sh"', '"SHELL": "/bin/bash"'), encoding="utf-8")
+    (box.home / ".bash_profile").write_text("sleep 1\n", encoding="utf-8")
+    request = AcpClient.request
+    sent = asyncio.Event()
+
+    async def watched(self: AcpClient, method: str, *args: Any, **kwargs: Any) -> Any:
+        if method == protocol.AGENT_LAUNCH:
+            sent.set()
+        return await request(self, method, *args, **kwargs)
+
+    monkeypatch.setattr(AcpClient, "request", watched)
+    turn = asyncio.ensure_future(_run(cli_config("sh -c 'exec sleep 30'"), "hi", tmp_path, instance="early"))
+    await asyncio.wait_for(sent.wait(), 15)
+    await asyncio.sleep(0.3)  # the launch is on the daemon, inside that login shell
+
+    turn.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await turn
+
+    tasks = box.home / ".raven-node" / "tasks"
+    await _until(lambda: any(tasks.glob("*/task.json")))
+    await _until(lambda: not box.agents_left(), timeout=5)
 
 
 async def test_a_stateful_cli_agent_resumes_its_session_on_the_machine(box, tmp_path):
