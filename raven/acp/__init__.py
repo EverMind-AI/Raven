@@ -41,6 +41,18 @@ time. It reuses :mod:`raven.acp.stdio` and :mod:`raven.acp.protocol` and none of
 the layers above them.
 """
 
-from raven.acp.stdio import MAX_FRAME_BYTES, claim_stdout, read_frames, write_frame
+from typing import Any
 
 __all__ = ["MAX_FRAME_BYTES", "claim_stdout", "read_frames", "write_frame"]
+
+
+def __getattr__(name: str) -> Any:
+    # Resolved on first use rather than at import: :mod:`raven.acp.stdio` reaches
+    # the ACP client and Raven's config schema, and the Mirasim command guard --
+    # a process of its own for every ``ui-cli`` command -- imports this package
+    # and needs none of them.
+    if name in __all__:
+        from raven.acp import stdio
+
+        return getattr(stdio, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

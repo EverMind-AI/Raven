@@ -99,6 +99,10 @@ GUARD_SLACK_S = 1.0
 """How long past :data:`TREE_GRACE_S` a guard has to exit after a cancel before
 it is ended from here, together with what it was guarding."""
 
+EXIT_QUICK_S = 5.0
+"""How long :func:`exit_status` looks for an exit every twentieth of a second
+before it looks twice a second."""
+
 _GUARD = ("-P", "-m", "raven.acp.mirasim.guard", "--")
 _LOG_LINE = re.compile(r"^\[[^\]\s]+ \d{2}:\d{2}:\d{2}\] ")
 _SESSION_GONE = "not one of this server's sessions"
@@ -551,10 +555,15 @@ async def exit_status(proc: asyncio.subprocess.Process) -> int:
 
     Not ``proc.wait()``: asyncio settles that only when the process has exited
     and every one of its pipes has closed, and a process it started that
-    inherited them keeps them open for as long as it lives.
+    inherited them keeps them open for as long as it lives. So the status is
+    looked at: often for :data:`EXIT_QUICK_S`, within which most commands end,
+    then twice a second, because a turn can run for hours and the guard waiting
+    on it would otherwise wake twenty times a second all along.
     """
+    loop = asyncio.get_running_loop()
+    quick_until = loop.time() + EXIT_QUICK_S
     while proc.returncode is None:
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.05 if loop.time() < quick_until else 0.5)
     return proc.returncode
 
 

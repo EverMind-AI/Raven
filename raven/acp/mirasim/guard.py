@@ -139,7 +139,10 @@ async def guard(
         await asyncio.wait_for(relays, DRAIN_S)
     except asyncio.TimeoutError:
         pass
-    code = await exited
+    # Asked afresh: after a hang-up, end_tree has seen the exit already, and
+    # the first look may be pausing for half a second.
+    code = await exit_status(proc)
+    exited.cancel()
     # Released while the loop still runs: pipes a helper still holds would
     # otherwise be closed at exit, after the loop, and the error that raises
     # would be the last line on stderr, where the command's own last word is read.

@@ -591,6 +591,63 @@ def test_the_guard_entry_needs_a_command(monkeypatch: pytest.MonkeyPatch) -> Non
     assert stopped.value.code == 2
 
 
+def test_the_guard_starts_without_the_rest_of_raven() -> None:
+    """One starts for every ``ui-cli`` command. Measured: through ``raven.acp``'s package exports it
+    loaded Raven's config schema and ACP client, 379 modules and most of a second, each time."""
+    import subprocess
+
+    started = subprocess.run(
+        [sys.executable, "-P", "-X", "importtime", "-m", "raven.acp.mirasim.guard"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert started.returncode == 2, started.stderr[-2000:]
+    loaded = {
+        line.rpartition("|")[2].strip()
+        for line in started.stderr.splitlines()
+        if line.startswith("import time:") and "|" in line
+    }
+    assert "raven.acp.mirasim.uicli" in loaded
+    assert {name for name in loaded if name.split(".")[0] == "raven"} == {
+        "raven",
+        "raven.acp",
+        "raven.acp.mirasim",
+        "raven.acp.mirasim.uicli",
+    }
+    assert "pydantic" not in loaded
+
+
+def _sleeps(pid: int) -> int:
+    """How many times ``pid``'s main thread has gone to sleep and been woken."""
+    for line in Path(f"/proc/{pid}/status").read_text().splitlines():
+        if line.startswith("voluntary_ctxt_switches:"):
+            return int(line.split()[1])
+    raise AssertionError(f"no voluntary_ctxt_switches for {pid}")
+
+
+@pytest.mark.skipif(not Path("/proc/self/status").exists(), reason="reads the guard's own counters under /proc")
+@pytest.mark.slow
+async def test_a_guard_waiting_on_a_long_command_mostly_sleeps() -> None:
+    """A turn can run for hours under one, so its guard must not wake twenty times a second to ask whether
+    it has ended."""
+    invocation = Invocation([sys.executable, "-c", "import time; time.sleep(60)"], env=dict(os.environ), cwd=None)
+    running = asyncio.create_task(invocation.run())
+    try:
+        deadline = time.monotonic() + 15
+        while invocation._proc is None and time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
+        assert invocation._proc is not None
+        await asyncio.sleep(uicli.EXIT_QUICK_S + 1.0 if hasattr(uicli, "EXIT_QUICK_S") else 6.0)
+        before = _sleeps(invocation._proc.pid)
+        await asyncio.sleep(2.0)
+        assert _sleeps(invocation._proc.pid) - before < 10
+    finally:
+        await invocation.cancel()
+        await asyncio.gather(running, return_exceptions=True)
+
+
 def test_only_linux_is_asked_to_make_the_guard_a_subreaper(monkeypatch: pytest.MonkeyPatch) -> None:
     """Called by hand here, through a stand-in libc, so this test process is never made one."""
     from raven.acp.mirasim import guard as guard_mod
