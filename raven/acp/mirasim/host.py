@@ -164,6 +164,7 @@ class HostConnection:
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._reader: asyncio.Task[None] | None = None
         self._reconnect: asyncio.Task[None] | None = None
+        self._closing: set[asyncio.Future[None]] = set()
         self._connect_lock = asyncio.Lock()
         self._send_lock = asyncio.Lock()
         self._listeners: list[tuple[Predicate, asyncio.Queue[dict[str, Any] | BaseException]]] = []
@@ -269,6 +270,7 @@ class HostConnection:
             await asyncio.gather(reader, return_exceptions=True)
         if session is not None:
             await session.close()
+        await asyncio.gather(*self._closing, return_exceptions=True)
 
     async def _send(self, frame: dict[str, Any]) -> None:
         ws = self._ws
@@ -314,7 +316,9 @@ class HostConnection:
         lost = HostUnavailableError("the connection to the Mirasim host dropped")
         for _, queue in list(self._listeners):
             queue.put_nowait(lost)
-        asyncio.ensure_future(session.close())
+        closing = asyncio.ensure_future(session.close())
+        self._closing.add(closing)
+        closing.add_done_callback(self._closing.discard)
         if self._closed:
             return
         logger.warning("Mirasim adapter: the connection to the Mirasim host dropped")
