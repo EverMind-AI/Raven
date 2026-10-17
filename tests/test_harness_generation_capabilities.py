@@ -29,10 +29,18 @@ def _disabled_document(tmp_path, monkeypatch):
         ("memory", "systemPrompt"),
         ("memory", "stopWhen"),
         ("capability", "tools"),
-        ("action", "checks"),
     ):
         root[module]["parameters"]["items"][name]["enabled"] = False
-    for module, name in (("memory", "intake"), ("planning", "advise"), ("action", "judge"), ("action", "salvage")):
+    for module, name in (
+        ("memory", "intake"),
+        ("memory", "system_addendum"),
+        ("memory", "archive"),
+        ("capability", "select_tools"),
+        ("planning", "advise"),
+        ("action", "judge"),
+        ("action", "review"),
+        ("action", "salvage"),
+    ):
         root[module]["functions"]["participant"]["items"][name]["enabled"] = False
     path = tmp_path / "harness_generation.json"
     path.write_text(json.dumps(document), encoding="utf-8")
@@ -44,9 +52,18 @@ def test_checked_in_document_exposes_only_enabled_harness_fields() -> None:
         "properties"
     ]
 
-    assert {"systemPrompt", "stopWhen", "tools", "checks", "functions"} <= properties.keys()
-    assert "code" not in properties
-    assert set(properties["functions"]["properties"]) == {"intake", "advise", "judge", "salvage"}
+    assert {"systemPrompt", "stopWhen", "tools", "functions"} <= properties.keys()
+    assert "code" not in properties and "checks" not in properties
+    assert set(properties["functions"]["properties"]) == {
+        "intake",
+        "system_addendum",
+        "archive",
+        "select_tools",
+        "advise",
+        "judge",
+        "review",
+        "salvage",
+    }
     assert "reasoningEffort" not in properties
 
 
@@ -57,7 +74,7 @@ def test_disabling_fields_removes_them_from_generation(tmp_path, monkeypatch) ->
         "properties"
     ]
 
-    assert not ({"systemPrompt", "stopWhen", "tools", "checks", "functions"} & properties.keys())
+    assert not ({"systemPrompt", "stopWhen", "tools", "functions"} & properties.keys())
     assert {"as", "agent", "brief", "timeoutSeconds"} <= properties.keys()
 
 
@@ -130,8 +147,19 @@ def test_task_generator_requires_workers_and_rejects_disabled_tools(tmp_path, mo
         )
 
 
-def test_persona_generator_assembles_judge_rules_and_known_tools() -> None:
-    judge = "def judge(name, params, prior):\n    return []"
+def test_persona_generator_assembles_every_verb_and_known_tools() -> None:
+    """One judgement seat: every verb lands in its module's ``functions``,
+    including ``judge``, which used to be carried apart from the rest."""
+    sources = {
+        "intake": "def intake(text, step):\n    return None",
+        "system_addendum": "def system_addendum(step):\n    return None",
+        "archive": "def archive(step, reply):\n    return None",
+        "select_tools": "def select_tools(offered, step):\n    return None",
+        "advise": "def advise(step):\n    return None",
+        "judge": "def judge(name, params, prior):\n    return []",
+        "review": "def review(step):\n    return None",
+        "salvage": "def salvage(step):\n    return None",
+    }
     spec, _ = _persona_spec_from_args(
         {
             "workers": [
@@ -140,8 +168,7 @@ def test_persona_generator_assembles_judge_rules_and_known_tools() -> None:
                     "agent": "worker",
                     "brief": "Watch booking deadlines",
                     "tools": ["web_search"],
-                    "checks": [{"tool": "web_search"}],
-                    "functions": {"judge": judge},
+                    "functions": sources,
                 }
             ]
         },
@@ -152,8 +179,18 @@ def test_persona_generator_assembles_judge_rules_and_known_tools() -> None:
     playbook = spec.delegate[0].playbook
     assert playbook is not None
     assert playbook.capability.tools == ["web_search"]
-    assert playbook.action.checks.code == judge
-    assert [rule.tool for rule in playbook.action.checks.rules] == ["web_search"]
+    assert playbook.memory.functions == {
+        "intake": sources["intake"],
+        "system_addendum": sources["system_addendum"],
+        "archive": sources["archive"],
+    }
+    assert playbook.capability.functions == {"select_tools": sources["select_tools"]}
+    assert playbook.planning.functions == {"advise": sources["advise"]}
+    assert playbook.action.functions == {
+        "judge": sources["judge"],
+        "review": sources["review"],
+        "salvage": sources["salvage"],
+    }
 
 
 def test_persona_generator_requires_object_workers_and_known_tools() -> None:
@@ -186,7 +223,6 @@ def test_disabling_fields_rejects_generated_and_stored_values(tmp_path, monkeypa
         "systemPrompt": "special instructions",
         "stopWhen": "done",
         "tools": ["read_file"],
-        "checks": [{"tool": "read_file"}],
         "functions": {"judge": "def judge(name, params, prior):\n    return []"},
     }
 
@@ -202,12 +238,7 @@ def test_disabling_fields_rejects_generated_and_stored_values(tmp_path, monkeypa
                             "memory": {"systemPrompt": "special instructions"},
                             "stopWhen": "done",
                             "capability": {"tools": ["read_file"]},
-                            "action": {
-                                "checks": {
-                                    "rules": [{"tool": "read_file"}],
-                                    "code": "def judge(name, params, prior):\n    return []",
-                                }
-                            },
+                            "action": {"functions": {"judge": "def judge(name, params, prior):\n    return []"}},
                         },
                     }
                 ]
@@ -224,8 +255,7 @@ def test_disabling_fields_drops_them_at_the_worker_boundary(tmp_path, monkeypatc
             "instructionAddendum": "generated instructions",
             "stopWhen": "done",
             "tools": ["read_file"],
-            "checks": [{"tool": "read_file"}],
-            "code": "def judge(name, params, prior):\n    return []",
+            "functions": {"judge": "def judge(name, params, prior):\n    return []"},
         }
     )
 
@@ -235,8 +265,7 @@ def test_disabling_fields_drops_them_at_the_worker_boundary(tmp_path, monkeypatc
     assert charter.task_brief == "the dispatch brief"
     assert charter.stop_when == ""
     assert charter.tools is None
-    assert charter.checks == ()
-    assert charter.code == ""
+    assert charter.functions == ()
 
 
 def test_a_non_boolean_switch_is_refused(tmp_path, monkeypatch) -> None:
@@ -288,12 +317,12 @@ def test_capability_loader_refuses_broken_and_undeclared_catalog_entries(tmp_pat
 
 def test_enabling_an_unwired_catalog_item_fails_loudly(tmp_path, monkeypatch) -> None:
     document = json.loads(harness_capabilities._PATH.read_text(encoding="utf-8"))
-    document["harnessGeneration"]["action"]["functions"]["participant"]["items"]["review"]["enabled"] = True
+    document["harnessGeneration"]["planning"]["functions"]["self"]["items"]["prepare"]["enabled"] = True
     path = tmp_path / "harness_generation.json"
     path.write_text(json.dumps(document), encoding="utf-8")
     monkeypatch.setattr(harness_capabilities, "_PATH", path)
 
-    with pytest.raises(RuntimeError, match="enabled but not wired: action.functions.participant.review"):
+    with pytest.raises(RuntimeError, match="enabled but not wired: planning.functions.self.prepare"):
         persona_tool(["worker"], ["read_file"])
 
 
@@ -301,7 +330,10 @@ def test_enabling_an_unwired_catalog_item_fails_loudly(tmp_path, monkeypatch) ->
     ("functions", "message"),
     [
         ([], "functions must be an object"),
-        ({"archive": "def archive(step):\n    return None"}, "unknown generated participant function: archive"),
+        (
+            {"outbound": "def outbound(reply, step):\n    return None"},
+            "unknown generated participant function: outbound",
+        ),
         ({"intake": ""}, "functions.intake must be non-empty Python source"),
         ({"intake": "x" * 8001}, "functions.intake exceeds 8000 characters"),
     ],
@@ -316,7 +348,6 @@ def test_generator_refuses_malformed_function_payloads(functions, message) -> No
     [
         ({"code": "def judge(name, params, prior):\n    return []"}, "Persona worker field.*code"),
         ({"tools": "read_file"}, "tools must be an array"),
-        ({"checks": {}}, "checks must be an array"),
         ({"timeoutSeconds": 0}, "timeoutSeconds must be a positive integer"),
     ],
 )
@@ -330,11 +361,10 @@ def test_persona_generator_refuses_fields_it_cannot_preserve(extra, message) -> 
     ("playbook", "message"),
     [
         (
-            {"memory": {"functions": {"archive": "def archive(step):\n    return None"}}},
-            "unknown generated participant function: memory.archive",
+            {"memory": {"functions": {"outbound": "def outbound(reply, step):\n    return None"}}},
+            "unknown generated participant function: memory.outbound",
         ),
         ({"memory": {"functions": {"intake": ""}}}, "generated participant function is empty: memory.intake"),
-        ({"action": {"checks": {"impl": "custom"}}}, "disabled harness field.*action.checksImpl"),
     ],
 )
 def test_stored_playbook_refuses_unknown_empty_and_disabled_fields(playbook, message) -> None:
@@ -421,7 +451,15 @@ def test_disabling_one_function_removes_rejects_and_drops_only_that_function(tmp
     properties = persona_tool(["worker"], ["read_file"])[0]["function"]["parameters"]["properties"]["workers"]["items"][
         "properties"
     ]
-    assert set(properties["functions"]["properties"]) == {"intake", "judge", "salvage"}
+    assert set(properties["functions"]["properties"]) == {
+        "intake",
+        "system_addendum",
+        "archive",
+        "select_tools",
+        "judge",
+        "review",
+        "salvage",
+    }
     with pytest.raises(ValueError, match="disabled harness field.*functions.advise"):
         _persona_spec_from_args(
             {"workers": [{"agent": "worker", "functions": {"advise": "def advise(step):\n    return 'x'"}}]},

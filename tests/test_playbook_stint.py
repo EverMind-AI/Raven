@@ -3074,14 +3074,13 @@ class TestPreCallRefusals:
                     "playbook": {
                         "capability": {"tools": ["read_file", "write_file"]},
                         "action": {
-                            "checks": {
-                                "rules": [
-                                    {
-                                        "tool": "write_file",
-                                        "pathPrefix": "src/",
-                                        "message": "you only write under src/",
-                                    }
-                                ]
+                            "functions": {
+                                "judge": (
+                                    "def judge(name, params, prior):\n"
+                                    "    if name == 'write_file' and not str(params.get('path', '')).startswith('src/'):\n"
+                                    "        return ['you only write under src/']\n"
+                                    "    return []"
+                                )
                             }
                         },
                     },
@@ -3097,7 +3096,7 @@ class TestPreCallRefusals:
 
         assert set(charters) == {"game-dev-r07-builder"}, "a role with no playbook block carries no charter"
         assert charters["game-dev-r07-builder"]["tools"] == ["read_file", "write_file"]
-        assert charters["game-dev-r07-builder"]["checks"][0]["pathPrefix"] == "src/"
+        assert "write under src/" in charters["game-dev-r07-builder"]["functions"]["judge"]
 
     def test_the_charter_is_built_by_the_same_code_a_delegate_row_uses(self) -> None:
         """One worker description, so a role briefed for thirty rounds and a
@@ -3123,12 +3122,12 @@ class TestPreCallRefusals:
                 seen.append(outbound_charter())
                 return "done"
 
-        payload = {"tools": ["read_file"], "checks": [{"tool": "write_file", "pathPrefix": "src/"}]}
+        payload = {"tools": ["read_file"], "functions": {"judge": "def judge(name, params, prior):\n    return []"}}
         await _CharteredBackend(_Backend(), payload).run()
 
         assert outbound_charter() is None, "the scope closes with the call"
         assert parse(seen[0]).tools == ("read_file",)
-        assert parse(seen[0]).checks[0].path_prefix == "src/"
+        assert dict(parse(seen[0]).functions)["judge"].startswith("def judge(")
 
 
 class TestStopping:

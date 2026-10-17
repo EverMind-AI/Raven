@@ -171,15 +171,17 @@ agent keeps every tool it had and decides for itself who to hand work to.
 
 **Charter** (`agent/subagent/charter.py`, gated by `agent/subagent/charter_code.py`):
 What one dispatched Turn may see and do, written by the Worker Table row that dispatched it:
-a prompt appended to the worker's identity, the tools the job calls for, declarative checks
-judged before each tool call, an optional judge as code, and a deadline. It reaches a
+a prompt appended to the worker's identity, the tools the job calls for, the generated
+participant functions this seat answers with -- `judge` among them, asked before each tool
+call -- and a deadline. It reaches a
 `kind: acp` worker as `_meta["raven.playbook"]` and is staged for that session's next Turn;
 the one `kind: builtin` row has no wire, so its backend opens the scope itself.
 _Avoid_: applying it as given. Every field is an intersection with what this install already
 allows -- a charter may take a tool away and may not hand one back, may shorten a deadline
 and may not lengthen one -- which is what makes it safe to accept from another process. And
 reading a refused judge as a refusal: source the gate rejects is dropped with a log line, and
-a judge that raises has said nothing, so the declarative rules beside it still apply.
+a judge that raises has said nothing -- with one judgement seat rather than a rule table
+beside it, silence is the whole of what a refused source leaves behind.
 
 **Turn Runner**:
 The behavioural `Protocol` seam between Spine and an agent implementation:
@@ -222,8 +224,8 @@ verbs are exceptions and each says so on its own docstring. `outbound` has no ro
 role owns the turn's delivered reply, so the seat applies it directly and it is the one verb a
 generated participant cannot be handed. `judge` has a role but no seat: the party that asks it is
 `ToolRegistry.execute`, which is not the hook chain and holds no handle on this turn's
-participants, so today the only participant in that list is the dispatch's own `checks` and
-`code`. A plugin refuses a call from `review` instead.
+participants, so today the only participant in that list is the dispatch's own generated
+`judge`. A plugin refuses a call from `review` instead.
 _Avoid_: reading it as a replacement for Agent Hook. The phases say *when* the loop asks; a
 participant says *what this agent judges*, and a third-party hook needs neither. Unrelated to
 raven-code's **Coding Conduct** prompts, which are a different thing with a similar name.

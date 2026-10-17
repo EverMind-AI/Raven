@@ -124,9 +124,13 @@ ALLOWED_METHODS: frozenset[str] = frozenset(
 ENTRY = "judge"
 SIGNATURES: dict[str, tuple[str, ...]] = {
     "intake": ("text", "step"),
+    "system_addendum": ("step",),
+    "archive": ("step", "reply"),
+    "select_tools": ("offered", "step"),
     "advise": ("step",),
-    "salvage": ("step",),
     "judge": ("name", "params", "prior"),
+    "review": ("step",),
+    "salvage": ("step",),
 }
 """Generated functions and the exact pure-data arguments the loop supplies."""
 

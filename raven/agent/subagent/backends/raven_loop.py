@@ -69,6 +69,57 @@ def _live_exec_extra_deny() -> list[str] | None:
     return exec_extra_deny_patterns(_LIVE_CONFIG)
 
 
+def _review_verdict(answer: Any) -> str:
+    """Which of the three a ``review`` answer says, or "" for silence.
+
+    An answer the host cannot read is silence rather than an error: the third
+    invariant of the participant contract, and the reason a generated verb can
+    build a mapping where it cannot build a host class.
+    """
+    if not isinstance(answer, Mapping):
+        return ""
+    verdict = str(answer.get("verdict") or "")
+    return verdict if verdict in {"accept", "resample", "end"} else ""
+
+
+def _apply_resample(messages: list[dict[str, Any]], verdict: Mapping[str, Any]) -> None:
+    """Put what the verdict asked for in front of the next model call."""
+    inject = verdict.get("inject")
+    added = False
+    if isinstance(inject, list):
+        for message in inject:
+            if isinstance(message, Mapping) and message.get("role") and message.get("content") is not None:
+                messages.append({"role": str(message["role"]), "content": str(message["content"])})
+                added = True
+    reason = verdict.get("reason")
+    if not added and isinstance(reason, str) and reason:
+        _append_participant_note(messages, reason)
+
+
+MAX_PARTICIPANT_RESAMPLES = 2
+"""How many times one run may be sent back to the model by ``review``.
+
+Bounded by the host rather than by the participant: a verb that always
+resamples would otherwise spend the whole tool budget on the same step, and
+the contract says a participant pronounces while the loop decides what that
+costs."""
+
+
+def _tool_name(entry: Any) -> str:
+    """The name of one tool-schema entry, in either shape the array carries."""
+    if not isinstance(entry, Mapping):
+        return ""
+    function = entry.get("function")
+    if isinstance(function, Mapping):
+        return str(function.get("name") or "")
+    return str(entry.get("name") or "")
+
+
+def _pure_tools(offered: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The offered array as plain data, for a generated participant to read."""
+    return [dict(entry) for entry in offered if isinstance(entry, Mapping)]
+
+
 def _append_participant_note(messages: list[dict[str, Any]], note: str) -> None:
     """Append generated advice without importing the main loop back into this backend."""
     if not messages or not note:
@@ -308,10 +359,9 @@ class RavenLoopBackend:
             # in-process run and an unbriefed one read identically in the log,
             # and the difference between them is the whole of this feature.
             logger.info(
-                "agent playbook: charter applied to this run ({} tool(s), {} check(s){})",
+                "agent playbook: charter applied to this run ({} tool(s), {} function(s))",
                 "all" if charter.tools is None else len(charter.tools),
-                len(charter.checks),
-                ", judge" if charter.code else "",
+                len(charter.functions),
             )
         try:
             with annotate_mcp_failure(grant), charter_mod.charter_scope(charter):
@@ -528,6 +578,37 @@ class RavenLoopBackend:
                 max_iterations=self._MAX_ITERATIONS,
             )
 
+        #: The system prefix as it was assembled, so each call's addendum replaces
+        #: the previous one rather than stacking. The contract asks for the whole
+        #: of what this call should carry, not a delta, which is only answerable
+        #: if the host can put the prefix back first.
+        base_system = messages[0]["content"] if messages and messages[0].get("role") == "system" else None
+
+        def apply_addendum(text: str | None) -> None:
+            if base_system is None:
+                return
+            messages[0]["content"] = base_system + (f"\n\n{text}" if text else "")
+
+        async def narrowed_tools() -> list[dict[str, Any]]:
+            """What this iteration offers the model, after Capability has spoken.
+
+            Entries are kept only when ``offered`` carried them: a participant
+            that names a tool this install lacks is narrowing to nothing rather
+            than handing itself one, which is the same direction every other
+            charter field narrows in.
+            """
+            offered = tools.get_definitions()
+            if not participants:
+                return offered
+            chosen = await participant_answer("select_tools", _pure_tools(offered), participant_step("iteration"))
+            if not isinstance(chosen, list):
+                return offered
+            by_name = {_tool_name(entry): entry for entry in offered}
+            kept = [by_name[name] for name in (_tool_name(entry) for entry in chosen) if name in by_name]
+            return kept
+
+        resamples = 0
+
         if participants:
             intake = await participant_answer("intake", task, participant_step("user_inbound"))
             if isinstance(intake, Mapping):
@@ -558,10 +639,19 @@ class RavenLoopBackend:
                 advice = await participant_answer("advise", participant_step("iteration"))
                 if isinstance(advice, str) and advice:
                     _append_participant_note(messages, advice)
+                addendum = await participant_answer("system_addendum", participant_step("iteration"))
+                if isinstance(addendum, Mapping):
+                    if addendum.get("reply") is not None:
+                        return str(addendum["reply"])
+                    text = addendum.get("text")
+                    apply_addendum(text if isinstance(text, str) and text else None)
+                else:
+                    apply_addendum(None)
+            offered_tools = await narrowed_tools()
             if on_delta is None:
                 response = await provider.chat_with_retry(
                     messages=messages,
-                    tools=tools.get_definitions(),
+                    tools=offered_tools,
                     model=model,
                 )
                 if response.finish_reason == "error" and not response.has_tool_calls:
@@ -595,7 +685,7 @@ class RavenLoopBackend:
                 response = await stream_llm_call(
                     provider,
                     messages=messages,
-                    tools=tools.get_definitions(),
+                    tools=offered_tools,
                     model=model,
                     on_token_delta=on_delta,
                     retry_delays=self.retry_delays,
@@ -641,7 +731,7 @@ class RavenLoopBackend:
                     )
                     response = await provider.chat_with_retry(
                         messages=messages,
-                        tools=tools.get_definitions(),
+                        tools=offered_tools,
                         model=model,
                     )
                     if response.finish_reason == "error" and not response.has_tool_calls:
@@ -666,6 +756,20 @@ class RavenLoopBackend:
             )
             cut_at_ceiling = response.truncated
             if response.has_tool_calls:
+                if participants:
+                    # Before the calls, not after them: this is the phase the
+                    # main hook asks from ``before_execute_tools``, and the
+                    # whole of what ``end`` or ``resample`` is for here is
+                    # keeping the proposed calls from running. Asked after,
+                    # the verdict would be a verdict on work already done.
+                    verdict = await participant_answer("review", participant_step("execute_tools", response=response))
+                    decided = _review_verdict(verdict)
+                    if decided == "end":
+                        return str(verdict.get("reply") or "")
+                    if decided == "resample" and resamples < MAX_PARTICIPANT_RESAMPLES:
+                        resamples += 1
+                        _apply_resample(messages, verdict)
+                        continue
                 tool_call_dicts = [openai_tool_call(tc) for tc in response.tool_calls]
                 messages.append(
                     build_assistant_message(
@@ -794,7 +898,30 @@ class RavenLoopBackend:
                     advice = await participant_answer("advise", participant_step("after_iteration", response=response))
                     if isinstance(advice, str) and advice:
                         _append_participant_note(messages, advice)
+                    # The second of the two moments the contract names for one
+                    # tool-calling step. The first decides whether the calls
+                    # run; this one judges what they returned, which is the only
+                    # moment their results exist and the last one before the
+                    # next model call consumes them. ``tools_ran`` tells the two
+                    # apart, and it is derived from this phase.
+                    verdict = await participant_answer("review", participant_step("after_iteration", response=response))
+                    decided = _review_verdict(verdict)
+                    if decided == "end":
+                        return str(verdict.get("reply") or "")
+                    if decided == "resample" and resamples < MAX_PARTICIPANT_RESAMPLES:
+                        resamples += 1
+                        _apply_resample(messages, verdict)
+                        continue
             else:
+                if participants:
+                    verdict = await participant_answer("review", participant_step("after_iteration", response=response))
+                    decided = _review_verdict(verdict)
+                    if decided == "end":
+                        return str(verdict.get("reply") or "")
+                    if decided == "resample" and resamples < MAX_PARTICIPANT_RESAMPLES:
+                        resamples += 1
+                        _apply_resample(messages, verdict)
+                        continue
                 final_result = response.content
                 break
 
@@ -847,6 +974,16 @@ class RavenLoopBackend:
         if final_result is None and participants:
             salvaged = await participant_answer("salvage", participant_step("answerless"))
             final_result = salvaged if isinstance(salvaged, str) and salvaged else None
+        if participants:
+            # A generated ``archive`` is pure: the mapping it answers with is
+            # the whole of its effect, so it is filed on this run's record
+            # rather than counted and dropped. Observer name to its value, the
+            # shape the contract names, and it reaches ``meta.json`` through
+            # the activity this run is collected into.
+            filed = await participant_answer("archive", participant_step("archived"), final_result)
+            if isinstance(filed, Mapping):
+                for observer, value in filed.items():
+                    activity.note_archived(str(observer), value)
         if final_result is None:
             # Nothing to hand back. Raised rather than returned, so the node
             # fails instead of completing with a sentence the next step would
