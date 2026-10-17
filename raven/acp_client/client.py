@@ -87,6 +87,9 @@ A bound rather than an estimate: the walk returns well inside a second, and
 ``close`` has to finish whatever ``taskkill`` does.
 """
 
+_TEARDOWN_GRACE_S = 1.0
+"""Let an adapter cancel work on an existing host before ending its process tree."""
+
 
 async def _end(pgid: int, proc: Any) -> None:
     """End the server and what it started: the process group where there is one, else the tree by pid.
@@ -195,10 +198,18 @@ class _ProcessEndpoint:
         return await self.proc.stderr.readline()
 
     async def end(self) -> None:
-        if self._job is not None:
-            self._job.close()
-        else:
-            await _end(self._pgid, self.proc)
+        try:
+            if self.proc.returncode is None and self.proc.stdin is not None:
+                try:
+                    self.proc.stdin.close()
+                    await asyncio.wait_for(self.proc.wait(), timeout=_TEARDOWN_GRACE_S)
+                except (OSError, asyncio.TimeoutError):
+                    pass
+        finally:
+            if self._job is not None:
+                self._job.close()
+            else:
+                await _end(self._pgid, self.proc)
 
     async def wait(self) -> int | None:
         return await self.proc.wait()

@@ -12,6 +12,7 @@ import pytest
 
 from raven.acp_client.acp_agent import AcpAgentBackend
 from raven.acp_client.capabilities import verify_agent
+from raven.acp_client.client import AcpClient
 from raven.acp_client.pool import close_pool
 from raven.agent.subagent.instances import InstanceRegistry
 from raven.agent.subagent.mirasim_presets import MIRASIM_AGENTS, MIRASIM_PRESETS
@@ -131,6 +132,40 @@ async def test_a_dispatch_cancelled_in_raven_leaves_no_turn_running(tmp_path: Pa
     await close_pool()
     await host.wait_for(lambda: session.running is None, limit=10)
     assert host.frames("stop")[0]["sessionKey"] == session.key
+
+
+@pytest.mark.slow
+async def test_closing_the_adapter_stops_its_turn_on_the_shared_host(tmp_path: Path, host: FakeHost) -> None:
+    from raven.acp.mirasim.host import HostConnection
+
+    host.respond = lambda prompt, session: [("text", "working"), ("hold",)]
+    cfg = adapter_config(tmp_path, host)
+    client = await AcpClient.launch(name=cfg.name, command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env))
+    pending = None
+    try:
+        await client.request("initialize", {"protocolVersion": 1}, timeout=30)
+        opened = await client.request("session/new", {"cwd": str(tmp_path), "mcpServers": []}, timeout=30)
+        pending = asyncio.create_task(
+            client.request(
+                "session/prompt",
+                {"sessionId": opened["sessionId"], "prompt": [{"type": "text", "text": "wait"}]},
+                timeout=30,
+            )
+        )
+        session = await host.wait_for(lambda: host.sessions and host.session().running and host.session())
+        await client.close()
+        await host.wait_for(lambda: session.running is None)
+        assert host.frames("stop")[0]["sessionKey"] == session.key
+        connection = HostConnection(on_frame=lambda frame: None, locate=lambda: host.address)
+        try:
+            await connection.connect()
+            assert connection.connected
+        finally:
+            await connection.close()
+    finally:
+        await client.close()
+        if pending is not None:
+            await asyncio.gather(pending, return_exceptions=True)
 
 
 async def test_the_agents_mirasim_has_are_asked_of_the_adapter(host: FakeHost, monkeypatch: pytest.MonkeyPatch) -> None:
