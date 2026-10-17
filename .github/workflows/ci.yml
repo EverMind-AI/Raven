@@ -408,7 +408,7 @@ jobs:
       # and its token file, never a unix socket, and the unit shards run on
       # Linux only -- so the adapter's own road is exercised natively here.
       - name: Test the Mirasim adapter over the loopback port
-        run: uv run --frozen --python 3.13 --no-sync pytest tests/test_acp_mirasim_host.py tests/test_acp_mirasim_server.py -q -n 0 --tb=short
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/test_acp_mirasim_host.py tests/test_acp_mirasim_server.py tests/test_subagent_mirasim.py tests/test_acp_client_teardown.py -q -n 0 --tb=short
 
   core-wheel:
     name: kernel wheel smoke

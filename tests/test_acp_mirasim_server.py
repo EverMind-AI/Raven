@@ -1167,6 +1167,63 @@ async def test_a_client_that_hangs_up_mid_turn_stops_the_turn(tmp_path: Path, ho
     assert host.frames("stop")
 
 
+async def test_shutdown_refuses_a_prompt_waiting_on_the_session_lock(harness: Harness) -> None:
+    harness.host.respond = script(("text", "working"), ("hold",))
+    sid = await harness.new()
+    first = asyncio.create_task(harness.ok("session/prompt", sessionId=sid, prompt=text("first")))
+    await harness.host.wait_for(lambda: harness.host.sessions and harness.host.session().running)
+    queued = asyncio.create_task(harness.ok("session/prompt", sessionId=sid, prompt=text("queued")))
+    try:
+        await harness.host.wait_for(lambda: harness.agent.sessions[sid].pending == 2)
+        await harness.agent.shutdown()
+        answers = await asyncio.wait_for(asyncio.gather(first, queued), 5)
+        assert answers == [{"stopReason": "cancelled"}, {"stopReason": "cancelled"}]
+        assert len(harness.prompts()) == 1
+        assert not harness.agent._turns
+    finally:
+        first.cancel()
+        queued.cancel()
+        await asyncio.gather(first, queued, return_exceptions=True)
+
+
+@pytest.mark.parametrize("steer", [False, True], ids=["prompt", "steer"])
+async def test_shutdown_refuses_work_that_is_still_reading_the_catalogue(harness: Harness, monkeypatch, steer):
+    harness.host.respond = script(("text", "working"), ("hold",))
+    sid = await harness.new()
+    other = await harness.new()
+    first = asyncio.create_task(harness.ok("session/prompt", sessionId=sid, prompt=text("first")))
+    await harness.host.wait_for(lambda: harness.host.sessions and harness.host.session().running)
+    entered = asyncio.Event()
+    released = asyncio.Event()
+    original = harness.agent.catalog
+
+    async def delayed_catalog(**kwargs):
+        entered.set()
+        await released.wait()
+        return await original(**kwargs)
+
+    monkeypatch.setattr(harness.agent, "catalog", delayed_catalog)
+    work = (
+        harness.ok("_raven/session/steer", sessionId=sid, text="later")
+        if steer
+        else harness.ok("session/prompt", sessionId=other, prompt=text("later"))
+    )
+    waiting = asyncio.create_task(work)
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        await harness.agent.shutdown()
+        released.set()
+        assert await asyncio.wait_for(waiting, 5) == ({"status": "no_turn"} if steer else {"stopReason": "cancelled"})
+        assert await asyncio.wait_for(first, 5) == {"stopReason": "cancelled"}
+        assert len(harness.prompts()) == 1
+        assert not harness.agent._turns
+    finally:
+        released.set()
+        first.cancel()
+        waiting.cancel()
+        await asyncio.gather(first, waiting, return_exceptions=True)
+
+
 async def test_the_frame_loop_answers_each_request_and_a_line_it_cannot_read(tmp_path: Path, host: FakeHost) -> None:
     import io
 
