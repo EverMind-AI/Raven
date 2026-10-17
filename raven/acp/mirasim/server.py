@@ -848,9 +848,9 @@ class MirasimAgent:
         if got.get("type") != "accepted":
             self._drop(turn)
             return got
+        # Taken: ``_on_frame`` has run before this answer resolved, so a turn cancelled
+        # meanwhile was stopped by ``_dispatched`` with the task id it now holds.
         await self._persist(session)
-        if turn.cancelled and turn.task_id is None and not turn.ended.done():
-            await self._recall(turn)
         return None
 
     def _abandon_ref(self, turn: Turn) -> None:
