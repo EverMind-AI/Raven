@@ -101,6 +101,54 @@ async def test_windows_stdin_ends_the_reader_when_the_input_ends(windows_stdin, 
         assert await asyncio.wait_for(reader.read(), 2) == b""
 
 
+@pytest.mark.parametrize("ending", ["consume", "close"])
+async def test_windows_stdin_backpressure_bounds_buffering_and_releases_the_worker(windows_stdin, monkeypatch, ending):
+    chunk = b"x" * bridge._READ_CHUNK
+    chunks = iter([chunk] * 8)
+    exhausted = threading.Event()
+
+    def read(fd, size):
+        data = next(chunks, b"")
+        if not data:
+            exhausted.set()
+        return data
+
+    monkeypatch.setattr(bridge, "os", SimpleNamespace(read=read))
+    async with bridge._stdin_reader() as reader:
+        async with asyncio.timeout(2):
+            while not reader._paused and not exhausted.is_set():
+                await asyncio.sleep(0)
+        assert not exhausted.is_set(), "a stalled consumer must stop the stdin producer"
+        assert len(reader._buffer) <= 4 * bridge._READ_CHUNK
+        if ending == "consume":
+            assert await asyncio.wait_for(reader.readexactly(len(chunk) * 8), 2) == chunk * 8
+            assert await asyncio.wait_for(reader.read(), 2) == b""
+
+    for thread in windows_stdin.threads:
+        thread.join(timeout=2)
+        assert not thread.is_alive(), "closing a paused reader must release its worker without waiting for stdin EOF"
+    assert exhausted.is_set() is (ending == "consume")
+
+
+async def test_windows_stdin_backpressure_also_bounds_pending_callbacks(windows_stdin, monkeypatch):
+    """Hold the loop so buffering cannot hide in callbacks waiting to run."""
+    chunk = b"x" * bridge._READ_CHUNK
+    first_read, read_ahead = threading.Event(), threading.Event()
+
+    def read(fd, size):
+        if first_read.is_set():
+            read_ahead.set()
+            return b""
+        first_read.set()
+        return chunk
+
+    monkeypatch.setattr(bridge, "os", SimpleNamespace(read=read))
+    async with bridge._stdin_reader() as reader:
+        assert first_read.wait(timeout=2)
+        assert not read_ahead.wait(timeout=0.1), "stdin must wait for loop delivery before reading again"
+        assert await asyncio.wait_for(reader.readexactly(len(chunk)), 2) == chunk
+
+
 async def test_posix_stdin_closes_its_transport_when_the_consumer_fails(monkeypatch):
     closed = []
     stdin = object()
