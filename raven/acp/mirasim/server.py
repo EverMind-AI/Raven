@@ -963,7 +963,9 @@ def main(argv: list[str] | None = None) -> int:
     if not _AGENT_ID.match(args.agent):
         parser.error(f"--agent {args.agent!r} is not a Mirasim agent id")
     logger.remove()
-    logger.add(sys.stderr, level="INFO" if args.verbose else "WARNING")
+    # Raven journals this stream, so annotated frames would publish every local
+    # a failure carries -- the prompt among them (`raven/cli/_log_file.py`).
+    logger.add(sys.stderr, level="INFO" if args.verbose else "WARNING", backtrace=False, diagnose=False)
     with claim_stdout() as out:
         asyncio_runner.run(_main(args, out))
     return 0

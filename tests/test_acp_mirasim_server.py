@@ -890,7 +890,7 @@ def test_main_wires_the_logger_the_stdout_claim_and_the_runner(tmp_path: Path, m
         def remove(self) -> None:
             calls.append("remove")
 
-        def add(self, sink: Any, level: str) -> None:
+        def add(self, sink: Any, level: str, **options: Any) -> None:
             calls.append(f"add {level}")
 
     @contextlib.contextmanager
@@ -907,6 +907,39 @@ def test_main_wires_the_logger_the_stdout_claim_and_the_runner(tmp_path: Path, m
     monkeypatch.setattr(server_mod.asyncio_runner, "run", run)
     assert server_mod.main(["--agent", "claude", "--verbose"]) == 0
     assert calls == ["remove", "add INFO", "claim", "run"]
+
+
+def test_a_logged_failure_names_no_local_values(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    """Raven journals this stream, and an annotated frame would print each local, the prompt among them."""
+    import contextlib
+    import io
+
+    from loguru import logger
+
+    @contextlib.contextmanager
+    def claim():
+        yield io.BytesIO()
+
+    def run(coro: Any) -> None:
+        coro.close()
+
+    def start(prompt: str) -> None:
+        raise ValueError("embedded null byte")
+
+    monkeypatch.setattr(server_mod, "claim_stdout", claim)
+    monkeypatch.setattr(server_mod.asyncio_runner, "run", run)
+    prompt = "-".join(["PROMPT", "TEXT", "0451"])
+    try:
+        assert server_mod.main(["--agent", "claude"]) == 0
+        try:
+            start(prompt)
+        except ValueError:
+            logger.opt(exception=True).error("Mirasim adapter: session/prompt failed")
+    finally:
+        logger.remove()
+    err = capsys.readouterr().err
+    assert "ValueError: embedded null byte" in err
+    assert prompt not in err
 
 
 class ScriptedCli:
