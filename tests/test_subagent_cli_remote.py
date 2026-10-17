@@ -35,7 +35,13 @@ from raven.config.schema import (
 )
 from raven.config.update_subagents import reject_unsupported_openai_fields
 from raven.spine.message import Media
-from tests.test_subagent_acp_remote import HOST, PORT, Machine, box  # noqa: F401 - the fixture, by name
+from tests.test_subagent_acp_remote import (  # noqa: F401 - the fixture, by name
+    HOST,
+    PORT,
+    Machine,
+    _hold_launch_answers,
+    box,
+)
 
 # Every dispatch, test and ping here starts a real node over the stand-in ssh,
 # and the command through it: real processes, real seconds.
@@ -338,6 +344,27 @@ async def test_a_cancel_ends_the_agent_s_whole_process_tree_on_the_machine(box, 
         await turn
 
     await _until(lambda: _gone(pid))
+
+
+async def test_a_cancel_while_the_launch_answer_waits_ends_the_agent_too(box, tmp_path, monkeypatch):
+    """The turn is cancelled after the daemon started its agent but before ``agent/launch``'s answer
+    reaches :meth:`NodePool.open_channel`: the agent is ended and the channel dropped all the same."""
+    answered = asyncio.Event()
+    _hold_launch_answers(monkeypatch, answered)
+    cfg = cli_config("sh -c 'echo $$ > pid.txt; exec sleep 30'")
+    pid_file = box.home / "raven-work" / "held" / "pid.txt"
+    turn = asyncio.ensure_future(_run(cfg, "hi", tmp_path, instance="held"))
+    await _until(pid_file.exists)
+    await asyncio.wait_for(answered.wait(), 10)
+    pid = int(pid_file.read_text(encoding="utf-8"))
+    assert not _gone(pid)
+
+    turn.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await turn
+
+    await _until(lambda: _gone(pid))
+    assert box.nodes._nodes["box"].channels == {}, "the channel of a launch left waiting is dropped"
 
 
 async def test_a_stateful_cli_agent_resumes_its_session_on_the_machine(box, tmp_path):

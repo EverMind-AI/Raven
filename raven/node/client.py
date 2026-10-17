@@ -602,6 +602,15 @@ class NodePool:
             said = self._ended(node.target, node.log, exc)
             await self._lost(machine_id, node, said)
             raise NodeError(said) from None
+        except asyncio.CancelledError:
+            # The cancel landed while the launch waited: the daemon may have
+            # started the agent all the same, so the channel is dropped here
+            # and the end asked for under a shield, which the cancel itself
+            # must not cut short.
+            node.channels.pop(channel, None)
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.shield(endpoint.end())
+            raise
         if isinstance(started, dict) and isinstance(started.get("pid"), int):
             endpoint.pid = started["pid"]
         node.used = time.monotonic()
