@@ -71,8 +71,21 @@ def test_the_remote_hosts_socket_is_found_before_the_desktop_port(
         monkeypatch.setattr(host_mod, "remote_socket", lambda: path)
         write_token(tmp_path / "home", DESKTOP_PORT, "desk")
         assert locate_host({"MIRASIM_HOME": str(tmp_path / "home")}) == HostAddress(socket=str(path))
+        # Where asyncio opens no unix socket, the socket is passed over for the port.
+        monkeypatch.setattr(host_mod, "UNIX_SOCKETS", False)
+        assert locate_host({"MIRASIM_HOME": str(tmp_path / "home")}) == HostAddress(port=DESKTOP_PORT, token="desk")
     finally:
         listener.close()
+
+
+async def test_a_named_socket_where_asyncio_opens_none_is_unavailable_and_says_what_to_name_instead(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(host_mod, "UNIX_SOCKETS", False)
+    conn = HostConnection(on_frame=lambda f: None, locate=lambda: HostAddress(socket="/run/server.sock"))
+    with pytest.raises(HostUnavailableError, match=f"opens no unix socket.*port in {HOST_ENV}"):
+        await conn.connect()
+    assert not conn.connected
 
 
 def test_without_a_socket_the_desktop_port_is_found_by_its_token_file(
