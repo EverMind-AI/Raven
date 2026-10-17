@@ -56,8 +56,7 @@ from typing import Any
 
 from loguru import logger
 
-from code_flow.tools import workspace_scan
-from code_flow.tools.diagnostic_workers import MAX_WORKERS, WORKERS
+from code_flow.tools.diagnostic_workers import MAX_WORKERS
 from code_flow.tools.diagnostics import UNKNOWN, PythonDiagnostics
 from raven.agent.tools.shell import ExecTool
 from raven.contracts.tool import ToolOutput, ToolResult
@@ -81,10 +80,10 @@ _SPILL_COUNTER = itertools.count(1)
 #: Variables the probe's own shell adds on top of the baseline; not part of it.
 _SHELL_ADDED = frozenset({"PWD", "OLDPWD", "SHLVL", "_"})
 _PROBE_TIMEOUT = 15
-_SCAN_WAIT_SECONDS = 0.25
 _DIAGNOSTIC_WAIT_SECONDS = 3.0
 _DIAGNOSTIC_FILES = 8
 _DIAGNOSTIC_CHARS = 6000
+_VISIBILITY_BATCH = 256
 
 
 def spill_output(text: str, spill_dir: Path | None) -> str | None:
@@ -317,30 +316,30 @@ class CodeExecTool(ExecTool):
     async def _diagnose_writes(self, root: Path, out: str | ToolResult) -> str:
         if self._shadow is None or (shadow := self._shadow(root)) is None:
             return ""
-        # Only measure_writes hands this tool a visibility hook, and it turns
-        # the host's write record on with it: the record is the one source.
-        candidates = [(Path(item.path), None if item.created else UNKNOWN) for item in getattr(out, "written", ())]
-        if not candidates:
-            return ""
-        deadline = time.monotonic() + _SCAN_WAIT_SECONDS
-        candidates = await WORKERS.run(
-            lambda: workspace_scan.eligible(root, candidates, deadline=deadline), timeout=_SCAN_WAIT_SECONDS
-        )
-        if not candidates:
+        # The host's write record lists regular files under the command's
+        # directory and already skips symlinks; only its Python files matter.
+        changed = [
+            (item.path, None if item.created else UNKNOWN)
+            for item in getattr(out, "written", ())
+            if Path(item.path).suffix == ".py"
+        ]
+        if not changed:
             return ""
         unchecked_visibility = 0
-        visible = []
-        for start in range(0, len(candidates), _DIAGNOSTIC_FILES):
-            # The host hook can resolve paths synchronously; bound each call
-            # and give the outer deadline a cancellation point between batches.
+        candidates = []
+        for start in range(0, len(changed), _VISIBILITY_BATCH):
+            # The host resolves a batch's paths on the loop, so batches bound
+            # each stretch and the sleep gives the outer deadline a point to
+            # cancel between them. Far wider than the file limit: each query
+            # is a git process, and batches of eight spent the wait on ignored
+            # files.
             await asyncio.sleep(0)
-            batch = candidates[start : start + _DIAGNOSTIC_FILES]
-            shown = await shadow.trackable([str(path) for path, _ in batch])
-            visible.extend((path, old) for path, old in batch if str(path) in shown)
-            if len(visible) >= _DIAGNOSTIC_FILES:
-                unchecked_visibility = len(candidates) - start - len(batch)
+            batch = changed[start : start + _VISIBILITY_BATCH]
+            shown = await shadow.trackable([path for path, _ in batch])
+            candidates.extend((Path(path), old) for path, old in batch if path in shown)
+            if len(candidates) >= _DIAGNOSTIC_FILES:
+                unchecked_visibility = len(changed) - start - len(batch)
                 break
-        candidates = visible
         selected = candidates[:_DIAGNOSTIC_FILES]
         limit = asyncio.Semaphore(MAX_WORKERS)
 
