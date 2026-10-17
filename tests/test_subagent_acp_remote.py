@@ -223,6 +223,24 @@ def _alive(pid: int | None) -> bool:
     return True
 
 
+def _hold_launch_answers(monkeypatch: pytest.MonkeyPatch, answered: asyncio.Event) -> None:
+    """``agent/launch`` answers wait half a second once they are in: a cancel in that wait
+    lands before the answer reaches ``NodePool.open_channel``, with the agent already running."""
+    from raven.acp_client.client import AcpClient
+    from raven.node import protocol
+
+    original = AcpClient.request
+
+    async def held(self, method: str, *args: Any, **kwargs: Any) -> Any:
+        answer = await original(self, method, *args, **kwargs)
+        if method == protocol.AGENT_LAUNCH:
+            answered.set()
+            await asyncio.sleep(0.5)
+        return answer
+
+    monkeypatch.setattr(AcpClient, "request", held)
+
+
 def remote_config(*, mode: str = "ok", command: str | None = None, **kw: Any) -> ThirdPartyAcpSubagentConfig:
     return ThirdPartyAcpSubagentConfig(
         name=kw.pop("name", "stub@box"),
@@ -709,6 +727,33 @@ async def test_a_stop_that_lands_under_a_pick_up_leaves_the_run_for_the_start_af
     (said,) = manager.announced
     assert said["status"] == "ok" and said["result"].split("\n\n[raven]")[0] == "pong"
     assert remote_runs.pending() == [] and _agent_pid() == agent
+
+
+async def test_a_cancel_while_the_acp_launch_answer_waits_ends_the_agent_too(box, tmp_path, monkeypatch):
+    """The turn is cancelled after the daemon started its agent but before ``agent/launch``'s answer
+    reaches :meth:`NodePool.open_channel`: the agent is ended and the channel dropped all the same."""
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    answered = asyncio.Event()
+    _hold_launch_answers(monkeypatch, answered)
+    backend = build_third_party_backend(remote_config())
+    turn = asyncio.ensure_future(
+        backend.run("hi", task_id="t1", workspace=tmp_path, executor=None, session_key="tui:s1")
+    )
+    deadline = time.monotonic() + 20
+    while not box.agents_left():
+        assert time.monotonic() < deadline and not turn.done(), "the agent never started"
+        await asyncio.sleep(0.01)
+    await asyncio.wait_for(answered.wait(), 10)
+
+    turn.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await turn
+
+    deadline = time.monotonic() + 10
+    while box.agents_left():
+        assert time.monotonic() < deadline, "the agent stayed on the machine"
+        await asyncio.sleep(0.05)
+    assert box.nodes._nodes["box"].channels == {}, "the channel of a launch left waiting is dropped"
 
 
 async def test_a_reply_the_caller_reports_keeps_its_record_and_a_host_that_stops_before_the_announce_reads_it_again(
