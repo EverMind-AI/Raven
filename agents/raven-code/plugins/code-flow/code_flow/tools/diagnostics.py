@@ -214,7 +214,10 @@ class PythonDiagnostics:
             else:
                 baseline = None
         except Exception as exc:  # noqa: BLE001 - diagnostics must not change an already completed write's verdict
-            return f"\nPython diagnostics unavailable ({type(exc).__name__}); the file was kept. Run targeted project checks."
+            return (
+                f"\nPython diagnostics unavailable ({type(exc).__name__}) for {path}; the file was kept. "
+                "Run targeted project checks."
+            )
         if baseline is not None:
             fresh = []
             for finding in findings:
@@ -271,7 +274,10 @@ class PythonDiagnostics:
         try:
             return await WORKERS.run(inspect, timeout=CHECK_WAIT_SECONDS)
         except Exception as exc:  # noqa: BLE001 - keep the completed operation's result on checker failure
-            return f"\nPython diagnostics unavailable ({type(exc).__name__}); the file was kept. Run targeted project checks."
+            return (
+                f"\nPython diagnostics unavailable ({type(exc).__name__}) for {path}; the file was kept. "
+                "Run targeted project checks."
+            )
 
 
 __all__ = [

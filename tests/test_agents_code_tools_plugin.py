@@ -628,6 +628,34 @@ def test_python_source_read_is_bounded_and_respects_its_encoding(tmp_path):
     assert read_python(tmp_path) is UNKNOWN
 
 
+def test_an_unavailable_note_names_its_file(tmp_path, monkeypatch):
+    """Post-command checks append one note per changed file, so each
+    unavailable note says which file it is about, from a failed read and a
+    failed parse alike."""
+    from code_flow.tools import diagnostics
+
+    unreadable = tmp_path / "locked.py"
+    unreadable.write_text("value = 1\n")
+    deep = tmp_path / "deep.py"
+    deep.write_text("value = 1\n")
+    read = diagnostics.read_source
+
+    def refused(path):
+        if path == unreadable:
+            raise PermissionError(f"permission denied: {path}")
+        return read(path)
+
+    def too_deep(*args, **kwargs):
+        raise RecursionError("nested too deeply")
+
+    monkeypatch.setattr(diagnostics, "read_source", refused)
+    monkeypatch.setattr(diagnostics, "ast", SimpleNamespace(parse=too_deep))
+    read_note = _run(diagnostics.PythonDiagnostics().check(unreadable))
+    parse_note = _run(diagnostics.PythonDiagnostics().check(deep))
+    assert f"unavailable (PermissionError) for {unreadable};" in read_note
+    assert f"unavailable (RecursionError) for {deep};" in parse_note
+
+
 @pytest.mark.asyncio
 async def test_diagnostic_wait_is_bounded_and_cancellation_is_preserved(tmp_path, monkeypatch):
     from code_flow.tools import diagnostics
