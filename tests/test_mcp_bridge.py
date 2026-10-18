@@ -335,6 +335,46 @@ async def test_bridge_exits_when_a_stalled_endpoint_has_pending_writes(bridge_io
         assert bridge_io.released.is_set()
         assert bridge_io.writer.transport.get_write_buffer_size() == 0
     finally:
-        bridge_io.writer.transport.abort()
+        # abort() after a close that drained raises on the selector loop.
+        if not bridge_io.writer.transport.is_closing():
+            bridge_io.writer.transport.abort()
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_bridge_aborts_only_a_close_that_did_not_finish(bridge_io):
+    # A transport that drains its buffer inside close() runs connection_lost and
+    # drops its loop; the selector loop's _force_close does not stop at a
+    # finished connection, so aborting it there reaches call_soon on None. This
+    # is the Unix-socket path, and the stalled case above never reaches it.
+    task = asyncio.create_task(bridge.run_bridge("endpoint", bridge_io.stdout))
+    consumed = []
+
+    async def consume():
+        while data := await bridge_io.peer_reader.read(65536):
+            consumed.append(len(data))
+
+    reader = None
+    try:
+        await asyncio.wait_for(bridge_io.entered.wait(), 2)
+        bridge_io.peer_writer.transport.pause_reading()
+        frame = b'{"data":"' + b"x" * 65000 + b'"}\n'
+        bridge_io.stdin.feed_data(frame * 128)
+        async with asyncio.timeout(2):
+            while bridge_io.writer.transport.get_write_buffer_size() == 0:
+                await asyncio.sleep(0)
+        # Writes are pending; let the endpoint read them, so the close the
+        # cancel triggers has something to drain and finishes inside its bound.
+        reader = asyncio.create_task(consume())
+        bridge_io.peer_writer.transport.resume_reading()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 2)
+        assert bridge_io.released.is_set()
+        assert bridge_io.writer.transport.get_write_buffer_size() == 0
+        assert sum(consumed) > 0, "the close must have drained a write, not timed out"
+    finally:
+        if not bridge_io.writer.transport.is_closing():
+            bridge_io.writer.transport.abort()
+        task.cancel()
+        await asyncio.gather(task, *([reader] if reader else []), return_exceptions=True)

@@ -173,10 +173,17 @@ async def run_bridge(socket_path: str, stdout: BinaryIO) -> int:
         for task in tasks:
             task.cancel()
         sock_writer.close()
+        # A transport whose buffer drains inside that close has already run
+        # connection_lost and dropped its loop, and the selector loop's
+        # _force_close does not stop there -- aborting it afterwards reaches
+        # call_soon on None. Only a close that did not finish needs the force.
+        drained = False
         try:
             await asyncio.gather(*tasks, return_exceptions=True)
             with contextlib.suppress(OSError, TimeoutError):
                 async with asyncio.timeout(_CLOSE_TIMEOUT_S):
                     await sock_writer.wait_closed()
+                drained = True
         finally:
-            sock_writer.transport.abort()
+            if not drained:
+                sock_writer.transport.abort()
