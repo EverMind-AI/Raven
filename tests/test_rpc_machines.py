@@ -9,6 +9,7 @@ answer is validated against its declared result model.
 from __future__ import annotations
 
 import json
+import sys
 
 import pytest
 from pydantic import ValidationError
@@ -766,4 +767,35 @@ async def test_add_by_password_without_ssh_keygen_is_the_no_ssh_refusal_and_reac
         out["detail"]
         == "could not reach the machine: ssh-keygen not found on this computer, so no key can be made for the machine"
     )
+    assert not connections.store_path().exists()
+
+
+@pytest.mark.parametrize("keygen", ["installed", "missing"])
+async def test_add_by_password_on_windows_is_refused_before_a_key_is_made_or_looked_for(
+    pool, _home, tmp_path, monkeypatch, keygen
+):
+    """The Windows review of #1005: the refusal used to come only from the install step, so
+    ssh-keygen had already run (a pair left under the home) or had already been found missing
+    (a ``nossh`` that asks for OpenSSH, which cannot make the mode work there). Through the
+    real handler and the real key maker, with only the platform and the executable lookup
+    stood in for."""
+    ran = tmp_path / "keygen-ran"
+    if keygen == "installed":
+        fake = tmp_path / "ssh-keygen"
+        fake.write_text(f"#!/bin/sh\ntouch {ran}\n", encoding="utf-8")
+        fake.chmod(0o700)
+        monkeypatch.setattr(connection_add.shutil, "which", lambda name: str(fake))
+    else:
+        monkeypatch.setattr(connection_add.shutil, "which", lambda name: None)
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(connection_add, "install_public_key", lambda *a, **k: pytest.fail("logged in"))
+    monkeypatch.setattr(connection_add, "probe", lambda row, **kw: pytest.fail("reached the machine"))
+
+    out = await rpc.machines_add(BY_PASSWORD)
+
+    _check("machines.add", out)
+    assert (out["ok"], out["reason"]) == (False, "platform")
+    assert out["detail"] == "registering with a password is not supported on Windows; use a key instead"
+    assert not ran.exists(), "ssh-keygen ran"
+    assert not (_home / "keys").exists() and not list(tmp_path.rglob("*_ed25519*")), "a key was made"
     assert not connections.store_path().exists()

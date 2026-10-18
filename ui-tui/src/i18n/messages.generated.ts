@@ -1580,6 +1580,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
       "The machine's host key differs from the one on record: check the machine before trusting it again, then take the old line out of ~/.ssh/known_hosts.",
     'gui.machine.why_timeout': 'The machine did not answer in time: check that it is on and that the port is open.',
     'gui.machine.why_nossh': 'ssh is not installed on this computer: install OpenSSH, then try again.',
+    'gui.machine.why_platform':
+      "This computer is Windows, where registering with a password is not available: pick Key, put the key's public half on the machine, and give the private key's path here.",
     'gui.machine.why_duplicate': 'That id is taken: pick another, or remove the machine listed under it first.',
     'gui.machine.why_invalid': 'A field is missing or cannot be used: see the line below.',
     'gui.machine.why_registry': 'The registry file cannot be changed: fix it first, as the line below says.',
@@ -4884,6 +4886,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
       '机器的主机密钥和记录的不一样：先确认机器没问题，再把 ~/.ssh/known_hosts 里的旧记录删掉。',
     'gui.machine.why_timeout': '机器没有按时应答：确认机器开着、端口放行。',
     'gui.machine.why_nossh': '这台电脑没有 ssh：装好 OpenSSH 再试。',
+    'gui.machine.why_platform':
+      '这台电脑是 Windows，不能用密码登记：改选「密钥」，把公钥放到机器上，再在这里填私钥路径。',
     'gui.machine.why_duplicate': '这个 id 已经有机器在用：换一个，或者先移除原来那台。',
     'gui.machine.why_invalid': '有字段缺失或不能用：见下一行。',
     'gui.machine.why_registry': '登记表文件改不了：先按下一行的提示处理。',

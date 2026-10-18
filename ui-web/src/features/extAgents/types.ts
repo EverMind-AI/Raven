@@ -196,7 +196,7 @@ export interface MachineProblem {
 
 /* Why a machine was not registered, as a kind the page explains in the
    reader's language; '' when it was. */
-export type RegisterReason = '' | 'unreachable' | 'login' | 'hostkey' | 'timeout' | 'nossh' | 'duplicate' | 'invalid' | 'registry'
+export type RegisterReason = '' | 'unreachable' | 'login' | 'hostkey' | 'timeout' | 'nossh' | 'platform' | 'duplicate' | 'invalid' | 'registry'
 
 export interface RegisterForm {
   id: string

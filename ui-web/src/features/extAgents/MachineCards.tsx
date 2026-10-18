@@ -40,6 +40,7 @@ const WHY: Record<Exclude<RegisterReason, ''>, string> = {
   hostkey: 'gui.machine.why_hostkey',
   timeout: 'gui.machine.why_timeout',
   nossh: 'gui.machine.why_nossh',
+  platform: 'gui.machine.why_platform',
   duplicate: 'gui.machine.why_duplicate',
   invalid: 'gui.machine.why_invalid',
   registry: 'gui.machine.why_registry',

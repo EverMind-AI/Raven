@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -209,7 +210,8 @@ async def machines_add(params: dict) -> dict:
     that puts a key this computer makes onto the machine; the row is then
     written with that key's path, and every later connection -- the probe
     below included -- is a key connection. The password is read here and
-    nowhere else: not stored, not logged, not in the answer.
+    nowhere else: not stored, not logged, not in the answer. On Windows the
+    pick itself is refused, first of all, before a key is made or looked for.
     """
     conn_id = str(params.get("id") or "").strip()
     name = str(params.get("name") or "").strip()
@@ -228,6 +230,13 @@ async def machines_add(params: dict) -> dict:
     if paths:
         row["paths"] = paths
     if by_password:
+        if sys.platform == "win32":
+            # Judged before anything else the pick would set in motion: the
+            # one password login rides OpenSSH's askpass, which this computer
+            # does not have, so neither a key nor a lookup for ssh-keygen is
+            # owed -- a pair left behind, or a 'nossh' asking for OpenSSH,
+            # would each point the owner somewhere that cannot help.
+            return _refused("registering with a password is not supported on Windows; use a key instead", "platform")
         if not password:
             return _refused("registering with a password needs the password; nothing was written", "invalid")
         # The row is judged with the key it will carry; the key itself is made
