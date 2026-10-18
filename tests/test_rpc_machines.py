@@ -693,8 +693,17 @@ def keyed(monkeypatch, _home):
 BY_PASSWORD = {k: v for k, v in FORM.items() if k != "key"} | {"auth": "password", "password": "hunter2"}
 
 
+@pytest.fixture
+def supported_host(monkeypatch):
+    """A computer the password login is offered on. The handler refuses the pick on Windows before
+    anything else runs (the win32 cases at the end of this file), so a password-flow case that stands
+    the key making and the login in for has to say which host it runs as -- or on a Windows reviewer's
+    machine it tests that refusal instead of its own scenario."""
+    monkeypatch.setattr(sys, "platform", "linux")
+
+
 async def test_add_by_password_puts_this_computer_s_key_on_then_proves_that_key_and_writes_its_path(
-    pool, keyed, monkeypatch
+    supported_host, pool, keyed, monkeypatch
 ):
     probed: list[tuple[dict, bool]] = []
 
@@ -717,7 +726,9 @@ async def test_add_by_password_puts_this_computer_s_key_on_then_proves_that_key_
     assert "hunter2" not in json.dumps(out) and "hunter2" not in json.dumps(_rows())
 
 
-async def test_add_by_password_without_one_is_refused_before_anything_is_made_or_reached(pool, keyed, monkeypatch):
+async def test_add_by_password_without_one_is_refused_before_anything_is_made_or_reached(
+    supported_host, pool, keyed, monkeypatch
+):
     monkeypatch.setattr(connection_add, "probe", lambda row, **kw: pytest.fail("reached the machine"))
 
     out = await rpc.machines_add({**BY_PASSWORD, "password": ""})
@@ -727,7 +738,7 @@ async def test_add_by_password_without_one_is_refused_before_anything_is_made_or
 
 
 async def test_a_refused_password_is_a_login_refusal_that_names_neither_the_address_nor_the_password(
-    pool, keyed, monkeypatch
+    supported_host, pool, keyed, monkeypatch
 ):
     monkeypatch.setattr(connection_add, "probe", lambda row, **kw: pytest.fail("reached the machine"))
 
@@ -749,7 +760,9 @@ async def test_add_by_key_still_needs_the_key_path(pool, monkeypatch):
     assert (out["ok"], out["reason"]) == (False, "invalid") and "'key' is missing" in out["detail"]
 
 
-async def test_add_by_password_without_ssh_keygen_is_the_no_ssh_refusal_and_reaches_nothing(pool, monkeypatch):
+async def test_add_by_password_without_ssh_keygen_is_the_no_ssh_refusal_and_reaches_nothing(
+    supported_host, pool, monkeypatch
+):
     def no_keygen(conn_id: str):
         raise connection_add.TransportError(
             "ssh-keygen not found on this computer, so no key can be made for the machine"
