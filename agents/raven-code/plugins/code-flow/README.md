@@ -12,7 +12,8 @@ edit, automatically fix code, or change the command's exit status.
 These checks run only through the enabled code-flow replacement tools. Loading
 the plugin or installing Pyflakes does not modify the host's built-in tools;
 other agents keep their existing behavior unless explicitly configured to use
-this tool face.
+this tool face. Pyflakes is imported when the diagnostics module loads, so no
+single check pays for a cold import inside its wait.
 
 The switches live under `plugins.config["code-flow"].tools`:
 

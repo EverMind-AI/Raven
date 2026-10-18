@@ -457,6 +457,20 @@ def test_the_tool_guide_gives_the_syntax_note_s_advice():
     assert "fix it before moving on" not in guide
 
 
+def test_the_name_checker_is_loaded_with_the_module_not_by_the_first_check():
+    """A cold import of the checker inside a check's wait can outlast the wait
+    on a cold runner, which reported diagnostics unavailable for a file with a
+    plain syntax error. It is paid when the module loads instead. A fresh
+    interpreter, so no earlier test's check has already imported it."""
+    probe = (
+        "import sys; sys.path.insert(0, sys.argv[1]); import code_flow.tools.diagnostics; "
+        "print('pyflakes.checker' in sys.modules)"
+    )
+    done = subprocess.run([sys.executable, "-I", "-c", probe, str(PLUGIN_DIR)], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "True"
+
+
 def test_checker_failure_does_not_turn_a_successful_write_into_a_failure(registry, tmp_path, monkeypatch):
     from pyflakes import checker
 

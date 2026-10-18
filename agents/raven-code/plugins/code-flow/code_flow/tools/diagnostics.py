@@ -14,6 +14,15 @@ from pathlib import Path
 
 from code_flow.tools.diagnostic_workers import WORKERS
 
+# The name checks' one import, paid at plugin load rather than by whichever
+# check first needs it: a cold import inside a check's wait was measured at
+# 30-70 ms here and can outlast the wait on a cold Windows runner. Absent,
+# the import below fails as it did before, and a check reports it.
+try:
+    import pyflakes.checker  # noqa: F401
+except ImportError:
+    pass
+
 MAX_SOURCE_BYTES = 256 * 1024
 # The syntax check runs past the name checks' bound up to this one. Python's
 # syntax tree of 2 MiB of source took about 0.3 s and 190 MiB to build, and of
