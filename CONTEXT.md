@@ -422,9 +422,15 @@ Registered-machine dispatch, file access and recovery are available without an
 environment switch. An entry without `machine` still runs here. Registration,
 SSH authentication, file permissions and concurrency limits govern remote work;
 listing entries and boot capability backfills do not open machine connections.
-The registry itself is kept from the Agent Hub's **Machines** tab as well
+The registry itself is kept from the Agent Hub's **Machines** tab as well -- the
+hub's third module beside Agents and Channels (`state/hub.ts`), drawn by the agents
+island on the page the two share
 (`machines.*`, `raven/rpc/methods/machines.py`): list, register (the same probe
-as the command), install the node in the background, doctor, and remove
+as the command; or, with `auth: password`, one password login that puts a key this
+computer makes under `~/.raven/keys/` into the account's `authorized_keys`, after
+which the row carries that key's path and every connection is a key connection --
+the password is used once and neither stored, logged nor answered back,
+`connection_add.install_public_key`), install the node in the background, doctor, and remove
 (`raven ops connection remove`, refused while a connected agent entry names the machine);
 none of it hands the page an address, an account or a key path, and
 `node_install` on a row is the node the last install or contact found there,

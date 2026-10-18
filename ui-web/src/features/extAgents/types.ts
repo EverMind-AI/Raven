@@ -204,7 +204,13 @@ export interface RegisterForm {
   host: string
   port: number
   user: string
+  /* How the machine is reached once, before it is written: with the private
+     key at `key`, or with `password`, used for that one login to put a key
+     this computer makes onto the machine -- every connection after it is a
+     key connection. Both travel once, in `add`, and are not read back. */
+  auth: 'key' | 'password'
   key: string
+  password: string
   paths: string[]
 }
 

@@ -172,7 +172,7 @@ async def machines_list(params: dict) -> dict:
 # Why a machine was not registered, as a kind the page explains in the reader's
 # language; the sentence itself stays, for the reader who wants ssh's words.
 _REASONS = (
-    (re.compile(r"ssh not found on this computer", re.IGNORECASE), "nossh"),
+    (re.compile(r"ssh(-keygen)? not found on this computer", re.IGNORECASE), "nossh"),
     (re.compile(r"REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed", re.IGNORECASE), "hostkey"),
     (re.compile(r"Permission denied|Too many authentication failures|publickey", re.IGNORECASE), "login"),
     (re.compile(r"no answer within|timed out", re.IGNORECASE), "timeout"),
@@ -190,11 +190,32 @@ def _refused(detail: str, reason: str) -> dict[str, Any]:
     return {"ok": False, "detail": detail, "reason": reason}
 
 
+def _install_key(row: dict[str, Any], conn_id: str, password: str) -> tuple[bool, str]:
+    """Make this computer's key for the machine and put it there over the password login; ``(installed, sentence)``."""
+    try:
+        private, public_line = connection_add.generate_key(conn_id)
+    except connection_add.TransportError as exc:
+        return False, f"could not reach the machine: {exc}"
+    row["key"] = str(private)
+    return connection_add.install_public_key(
+        str(row["host"]), int(row["port"] or 22), str(row["user"]), password, public_line
+    )
+
+
 async def machines_add(params: dict) -> dict:
-    """Reach an ssh machine once with the given login, then write its row and its ssh alias."""
+    """Reach an ssh machine once with the given login, then write its row and its ssh alias.
+
+    With ``auth: password`` the login is a password, used for one connection
+    that puts a key this computer makes onto the machine; the row is then
+    written with that key's path, and every later connection -- the probe
+    below included -- is a key connection. The password is read here and
+    nowhere else: not stored, not logged, not in the answer.
+    """
     conn_id = str(params.get("id") or "").strip()
     name = str(params.get("name") or "").strip()
     paths = [str(x).strip() for x in (params.get("paths") or []) if str(x).strip()]
+    by_password = str(params.get("auth") or "key").strip().lower() == "password"
+    password = str(params.get("password") or "")
     row: dict[str, Any] = {
         "id": conn_id,
         "display_name": name or conn_id,
@@ -206,6 +227,12 @@ async def machines_add(params: dict) -> dict:
     }
     if paths:
         row["paths"] = paths
+    if by_password:
+        if not password:
+            return _refused("registering with a password needs the password; nothing was written", "invalid")
+        # The row is judged with the key it will carry; the key itself is made
+        # only once every other field has passed, so a bad id makes no file.
+        row["key"] = str(connection_add.key_path(conn_id))
     faults = [p.text for p in row_problems(row) if p.blocking]
     if faults:
         return _refused("; ".join(faults), "invalid")
@@ -219,7 +246,15 @@ async def machines_add(params: dict) -> dict:
         return _refused(f"{found.detail} Give those entries an id (or remove them) first.", "registry")
     if any(str(r.get("id") or "").strip() == conn_id for r in found.rows):
         return _refused(f"a machine with id {conn_id!r} is registered already", "duplicate")
-    reached, message, detected = await asyncio.to_thread(connection_add.probe, row)
+    if by_password:
+        installed, said = await asyncio.to_thread(_install_key, row, conn_id, password)
+        if not installed:
+            # ssh never echoes a password, and nothing here puts one in a
+            # sentence; the replace is the guarantee rather than the belief.
+            return _refused(_scrubbed(said, row).replace(password, "the password"), _reason(said))
+    # With a key this computer just made, the probe proves THAT key opens the
+    # session rather than some other identity ssh would also offer.
+    reached, message, detected = await asyncio.to_thread(connection_add.probe, row, isolate_key=by_password)
     if not reached:
         return _refused(_scrubbed(message, row), _reason(message))
     row.update(detected)

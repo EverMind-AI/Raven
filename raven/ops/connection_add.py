@@ -26,7 +26,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shutil
 import subprocess
+import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +39,7 @@ from typing import Any
 # and a test that stands a scratch registry in patches it there.
 from raven.ops import connections
 from raven.ops.connections import LOCAL, SSH, UNREADABLE, transport_of
+from raven.ops.transport import TransportError
 
 # What the owner has to be asked for, when the registry lists nothing that
 # fits. Shared text: the on-call agent's listing reply and the coding agent's
@@ -136,6 +141,135 @@ def probe(row: dict[str, Any], *, timeout: float = 30.0, isolate_key: bool = Fal
     if code != 0:
         return False, f"could not reach {where}: {out.strip() or f'exit {code}'}", {}
     return True, f"reached {where}", parse_probe(out)
+
+
+#: Where this Raven keeps the keys it makes for machines it was given a
+#: password for: one pair per machine id, beside the home the registry lives in.
+KEY_DIRNAME = "keys"
+
+
+def key_path(conn_id: str) -> Path:
+    """The private key this computer keeps for ``conn_id``: ``<home>/keys/<id>_ed25519``."""
+    from raven.home import raven_home
+
+    return raven_home() / KEY_DIRNAME / f"{conn_id}_ed25519"
+
+
+def generate_key(conn_id: str) -> tuple[Path, str]:
+    """A key pair for ``conn_id``, made once; ``(private path, public line)``.
+
+    The pair is made here rather than asked for: a machine registered with a
+    password gets this computer's own key, so every later connection -- the
+    probe, the node, a dispatch -- is a key connection, and the password is
+    used once and then gone. Reused when it already exists, so registering the
+    same machine again does not leave a second pair behind.
+    """
+    private = key_path(conn_id)
+    public = private.with_name(private.name + ".pub")
+    if private.is_file() and public.is_file():
+        return private, public.read_text(encoding="utf-8").strip()
+    keygen = shutil.which("ssh-keygen")
+    if keygen is None:
+        raise TransportError("ssh-keygen not found on this computer, so no key can be made for the machine")
+    private.parent.mkdir(parents=True, exist_ok=True)
+    private.parent.chmod(0o700)
+    for stale in (private, public):
+        stale.unlink(missing_ok=True)
+    done = subprocess.run(
+        [keygen, "-t", "ed25519", "-N", "", "-C", f"raven@{conn_id}", "-f", str(private)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if done.returncode != 0 or not private.is_file():
+        raise TransportError(f"ssh-keygen could not make a key for {conn_id!r}: {done.stderr.strip()}")
+    private.chmod(0o600)
+    return private, public.read_text(encoding="utf-8").strip()
+
+
+#: What the remote shell does with a public key: add it once, keep the modes sshd accepts.
+INSTALL_KEY_SCRIPT = (
+    "umask 077; mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys "
+    "&& chmod 600 ~/.ssh/authorized_keys "
+    "&& { grep -qxF %s ~/.ssh/authorized_keys || printf '%%s\\n' %s >> ~/.ssh/authorized_keys; }"
+)
+
+
+def _shell_quote(text: str) -> str:
+    return "'" + text.replace("'", "'\\''") + "'"
+
+
+def _askpass(password: str) -> tuple[str, tempfile.TemporaryDirectory[str]]:
+    """A one-use askpass helper, and the directory it lives in: ``(path, kept alive)``.
+
+    OpenSSH asks a program for the password when ``SSH_ASKPASS_REQUIRE=force``
+    says so, and the answer reaches it from this file's environment. The
+    password is never on a command line: ``ps`` for another account reads
+    those, and a password in one would be the hole the index URL had.
+    """
+    home = tempfile.TemporaryDirectory(prefix="raven_askpass_")
+    path = Path(home.name) / "askpass"
+    path.write_text("#!/bin/sh\nprintf '%s\\n' \"$RAVEN_MACHINE_PASSWORD\"\n", encoding="utf-8")
+    path.chmod(0o700)
+    return str(path), home
+
+
+def install_public_key(
+    host: str, port: int, user: str, password: str, public_line: str, *, timeout: float = 30.0
+) -> tuple[bool, str]:
+    """Add ``public_line`` to the machine's ``authorized_keys`` over a password login.
+
+    One connection, made with the password, that runs the install script; every
+    later connection uses the key. Returns ``(installed, message)`` where the
+    message is a sentence for the owner, without an address, on failure.
+    """
+    where = "the machine"
+    if sys.platform == "win32":
+        return False, (
+            f"could not reach {where}: registering with a password is not supported on Windows; use a key instead"
+        )
+    askpass, kept = _askpass(password)
+    argv = [
+        "ssh",
+        "-p",
+        str(port),
+        "-o",
+        "ConnectTimeout=15",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-o",
+        "PubkeyAuthentication=no",
+        "-o",
+        "PreferredAuthentications=password,keyboard-interactive",
+        "-o",
+        "NumberOfPasswordPrompts=1",
+        f"{user}@{host}",
+        INSTALL_KEY_SCRIPT % (_shell_quote(public_line), _shell_quote(public_line)),
+    ]
+    env = {
+        **os.environ,
+        "SSH_ASKPASS": askpass,
+        "SSH_ASKPASS_REQUIRE": "force",
+        "RAVEN_MACHINE_PASSWORD": password,
+        "DISPLAY": os.environ.get("DISPLAY", "raven-askpass"),
+    }
+    try:
+        done = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout, env=env)
+    except subprocess.TimeoutExpired:
+        return False, f"could not reach {where}: no answer within {timeout:.0f}s"
+    except FileNotFoundError:
+        return False, f"could not reach {where}: ssh not found on this computer"
+    finally:
+        kept.cleanup()
+    if done.returncode != 0:
+        said = (done.stderr or done.stdout or "").strip()
+        if re.search(r"permission denied|password|authentication", said, re.IGNORECASE):
+            said = (
+                f"{said}\nThe password was refused, or this machine does not accept password logins "
+                "(PasswordAuthentication is off in its sshd)."
+            )
+        return False, f"could not reach {where}: {said or f'exit {done.returncode}'}"
+    return True, f"installed a key on {where}"
 
 
 def parse_probe(out: str) -> dict[str, Any]:

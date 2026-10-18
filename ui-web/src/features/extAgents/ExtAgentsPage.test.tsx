@@ -284,7 +284,7 @@ describe('the tabs', () => {
       row({ name: 'Raven-PPT', preset: undefined, vendored: true, configured: false, enabled: false, probe_status: 'attention' }),
     ])
     await mount()
-    expect(tabLabels()).toEqual(['gui.filter.all', 'gui.agent.g_on', 'gui.agent.g_avail', 'gui.agent.g_missing', 'gui.machine.g_machines'])
+    expect(tabLabels()).toEqual(['gui.filter.all', 'gui.agent.g_on', 'gui.agent.g_avail', 'gui.agent.g_missing'])
     expect(await namesIn('gui.agent.g_on')).toEqual(['Raven', 'Raven-Code', 'on_one'])
     /* Raven's own first, then the server's order. An endpoint whose probe says
        unreachable is not something to install; a shipped product is never
@@ -294,13 +294,13 @@ describe('the tabs', () => {
     expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).toEqual([
       'Raven', 'Raven-Code', 'on_one', 'Raven-PPT', 'off_one', 'hermes', 'mirothinker', 'codex',
     ])
-    expect(tabs().map((b) => b.querySelector('.extAgents-tn')!.textContent)).toEqual(['8', '3', '4', '1', '0'])
+    expect(tabs().map((b) => b.querySelector('.extAgents-tn')!.textContent)).toEqual(['8', '3', '4', '1'])
   })
 
-  it('always offers All, Connected and Machines, and the other two only with cards in them', async () => {
+  it('always offers All and Connected, and the other two only with cards in them', async () => {
     install([row({ name: 'codex', preset: 'codex', configured: false, enabled: false, probe_status: 'missing' })])
     await mount()
-    expect(tabLabels()).toEqual(['gui.filter.all', 'gui.agent.g_on', 'gui.agent.g_missing', 'gui.machine.g_machines'])
+    expect(tabLabels()).toEqual(['gui.filter.all', 'gui.agent.g_on', 'gui.agent.g_missing'])
     await click(tabNamed('gui.agent.g_on'))
     expect(tabNamed('gui.agent.g_on').querySelector('.extAgents-tn')!.textContent).toBe('0')
     expect(rowsOf()).toEqual([])
@@ -316,7 +316,7 @@ describe('the tabs', () => {
     expect(rowsOf()).toEqual([])
     expect(document.querySelector('.extAgents-empty')!.textContent).toBe('gui.agent.none_avail')
     await click(tabNamed('gui.filter.all'))
-    expect(tabLabels()).toEqual(['gui.filter.all', 'gui.agent.g_on', 'gui.machine.g_machines'])
+    expect(tabLabels()).toEqual(['gui.filter.all', 'gui.agent.g_on'])
   })
 
   it('re-measures availability every time the page opens', async () => {
@@ -905,8 +905,8 @@ describe('connecting', () => {
     expect(document.querySelectorAll('.extAgents-wcard').length).toBe(19)
     expect(document.querySelector('.extAgents-grid')!.getAttribute('aria-busy')).toBe('true')
     expect(document.querySelector('.extAgents-empty')).toBeNull()
-    /* The machines tab counts its own rows, which the roster's wait does not cover. */
-    expect(document.querySelectorAll('.extAgents-tn').length).toBe(1)
+    /* Every tab waits with the roster: the machines are a module of their own now, not a tab. */
+    expect(document.querySelectorAll('.extAgents-tn').length).toBe(0)
     expect(document.querySelectorAll('.extAgents-tab .extAgents-wtn').length).toBe(2)
     await act(async () => {
       release()
@@ -2277,10 +2277,16 @@ describe('the model pill', () => {
   })
 })
 
-describe('the machines tab', () => {
+describe('the machines module', () => {
+  /* The hub's own tab beside the agents: the store switches the page's module,
+     the way HubHead's tab does through hub.open('machines'). */
   const openMachines = async (): Promise<void> => {
-    await click(tabNamed('gui.machine.g_machines'))
+    await act(async () => {
+      store.openMachines()
+    })
   }
+  const registerButton = (): HTMLButtonElement | null =>
+    [...document.querySelectorAll<HTMLButtonElement>('.extAgents-tabs button')].find((b) => b.textContent === 'gui.machine.register') ?? null
   const field = (label: string): HTMLInputElement | HTMLSelectElement | null =>
     sheet()?.querySelector(`[aria-label="${label}"]`) ?? null
   const sheetAct = (label: string): HTMLButtonElement | undefined =>
@@ -2306,8 +2312,11 @@ describe('the machines tab', () => {
       ],
     })
     await mount()
-    expect(tabNamed('gui.machine.g_machines').querySelector('.extAgents-tn')!.textContent).toBe('5')
+    expect(tabs().map(tabLabel)).not.toContain('gui.machine.g_machines')
     await openMachines()
+    /* No filter pills on this module: the one action, beside the grid. */
+    expect(tabs()).toEqual([])
+    expect(registerButton()).toBeTruthy()
     expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).toEqual([
       'Lab box', 'Old box', 'Bare box', 'This Mac', 'No node', 'gui.machine.register',
     ])
@@ -2431,7 +2440,45 @@ describe('the machines tab', () => {
     expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).toEqual(['GPU box 1', 'gui.machine.register'])
     const sent = mcalls.filter((c) => c[0] === 'add').map((c) => c[1][0] as RegisterForm)
     expect(sent.length).toBe(2)
-    expect(sent[1]).toEqual({ id: 'gpu1', name: 'GPU box 1', host: '203.0.113.7', port: 0, user: 'alice', key: '~/.ssh/id_gpu1', paths: ['/data/alice/projects', '/scratch'] })
+    expect(sent[1]).toEqual({ id: 'gpu1', name: 'GPU box 1', host: '203.0.113.7', port: 0, user: 'alice', auth: 'key', key: '~/.ssh/id_gpu1', password: '', paths: ['/data/alice/projects', '/scratch'] })
+  })
+
+  it('registers with a password once the login pick says so, and sends the password in place of a key path', async () => {
+    const rows: MachineRow[] = []
+    const { mcalls } = install([row()], {
+      machinesOver: {
+        list: async () => rows.map((r) => ({ ...r })),
+        add: async (form) => {
+          mcalls.push(['add', [form]])
+          rows.push(mrow({ id: form.id, name: form.name }))
+          return { ok: true, detail: 'reached', reason: '' }
+        },
+      },
+    })
+    await mount()
+    await openMachines()
+    await click(rowNamed('gui.machine.register'))
+    const go = (): HTMLButtonElement => sheet()!.querySelector<HTMLButtonElement>('.extAgents-act button')!
+    const segment = (label: string): HTMLButtonElement | undefined =>
+      [...sheet()!.querySelectorAll<HTMLButtonElement>('.extAgents-seg button')].find((b) => b.textContent === label)
+    for (const [label, value] of [['gui.machine.f_name', 'GPU box 2'], ['gui.machine.f_id', 'gpu2'], ['gui.machine.f_host', '203.0.113.8'], ['gui.machine.f_user', 'alice']] as const) {
+      await typeInto(field(label), value)
+    }
+    /* With a key picked, the key path is what is missing; picking the
+       password empties that and asks for the password instead. */
+    expect(go().disabled).toBe(true)
+    expect(field('gui.machine.f_password')).toBeNull()
+    await click(segment('gui.machine.auth_password'))
+    expect(segment('gui.machine.auth_password')!.getAttribute('aria-pressed')).toBe('true')
+    expect(field('gui.machine.f_key')).toBeNull()
+    expect((field('gui.machine.f_password') as HTMLInputElement).type).toBe('password')
+    expect(go().disabled).toBe(true)
+    await typeInto(field('gui.machine.f_password'), ' s3cret ')
+    expect(go().disabled).toBe(false)
+    await click(go())
+    expect(sheetName()).toBe('GPU box 2')
+    const [sent] = mcalls.filter((c) => c[0] === 'add').map((c) => c[1][0] as RegisterForm)
+    expect(sent).toEqual({ id: 'gpu2', name: 'GPU box 2', host: '203.0.113.8', port: 0, user: 'alice', auth: 'password', key: '', password: ' s3cret ', paths: [] })
   })
 
   it('removes a machine from its sheet after asking, keeps a refusal on the row, and closes the sheet once it is gone', async () => {

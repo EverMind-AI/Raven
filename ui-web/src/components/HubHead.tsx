@@ -1,12 +1,12 @@
-/* The header the two connection pages share: the module tabs, and one line
-   under them on what the module on screen is for.
+/* The header the hub's modules share: the module tabs, and one line under
+   them on what the module on screen is for.
 
-   Agents and channels are one place on the rail (state/hub.ts), and the rail
-   row already names it, so the page carries no title of its own: the tabs are
-   the top of the page. Underlined rather than filled, so they read as the
-   page's two halves and the filter pills each module draws under them stay
-   the smaller, second row. The line is the module's, so it changes with the
-   tab rather than describing the hub as a whole. */
+   Agents, channels and machines are one place on the rail (state/hub.ts), and
+   the rail row already names it, so the page carries no title of its own: the
+   tabs are the top of the page. Underlined rather than filled, so they read as
+   the page's parts and the filter pills a module draws under them stay the
+   smaller, second row. The line is the module's, so it changes with the tab
+   rather than describing the hub as a whole. */
 
 import { t } from '../i18n/t'
 import * as hub from '../state/hub'
@@ -16,7 +16,8 @@ import type { JSX } from 'react'
 
 const MODULES: ReadonlyArray<{ which: HubModule; key: string; sub: string }> = [
   { which: 'agents', key: 'gui.hub.agents', sub: 'gui.page.agents_sub' },
-  { which: 'channels', key: 'gui.hub.channels', sub: 'gui.page.conn_sub' }
+  { which: 'channels', key: 'gui.hub.channels', sub: 'gui.page.conn_sub' },
+  { which: 'machines', key: 'gui.hub.machines', sub: 'gui.page.machines_sub' }
 ]
 
 export function HubHead({ current }: { current: HubModule }): JSX.Element {

@@ -21,10 +21,12 @@ is. Three things follow:
     budget is counted in, and how many jobs it will run at once, were being
     restated in every campaign's meta and in the task statement itself.
 
-Credentials stay a reference -- a path to a key the owner already has. Passwords
-wait until there is a platform that needs them (2026-08-17, deliberate): storing
-one means a keychain or a master password, and neither is worth building before
-something asks for it.
+Credentials stay a reference -- a path to a key the owner already has, or to
+one this computer made for the machine. A password is never stored (2026-08-17,
+deliberate: storing one means a keychain or a master password); since
+2026-10-19 one is taken ONCE, at registration, to put this computer's key on
+the machine (``connection_add.install_public_key``), after which every
+connection is a key connection and the row carries that key's path.
 
 Read-only here: the file is written by hand or through
 :mod:`raven.ops.connection_add`, the one door behind both ``raven ops
