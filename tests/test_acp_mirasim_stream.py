@@ -345,6 +345,30 @@ def test_a_turn_without_segments_replays_its_reasoning_then_its_text() -> None:
     assert [update["sessionUpdate"] for update in updates] == ["agent_thought_chunk", "agent_message_chunk"]
 
 
+async def test_replay_uses_utf16_offsets_around_tools_and_thoughts() -> None:
+    from raven.acp_client.acp_agent import _TurnCollector
+
+    turn = {
+        "text": "\U0001f600OK",
+        "reasoning": "\U0001f642check",
+        "toolCalls": [{"id": "c1", "name": "Read", "status": "done", "result": "ok"}],
+        "segments": [
+            {"kind": "text", "from": 0, "to": 2},
+            {"kind": "thinking", "from": 0, "to": 2},
+            {"kind": "tools", "ids": ["c1"]},
+            {"kind": "thinking", "from": 2, "to": 7},
+            {"kind": "text", "from": 2, "to": 4},
+        ],
+    }
+    updates = valid(replay(turn))
+    collector = _TurnCollector(track_files=False)
+    for update in updates:
+        await collector("session/update", {"sessionId": "s1", "update": update})
+    assert collector.reply == "OK"
+    assert texts(updates, "agent_message_chunk") == ["\U0001f600", "OK"]
+    assert texts(updates, "agent_thought_chunk") == ["\U0001f642", "check"]
+
+
 def test_tool_calls_the_history_kept_replay_before_the_last_stretch_of_text(tmp_path) -> None:
     turn = {
         "prompt": "go",

@@ -314,13 +314,15 @@ def replay(turn: dict[str, Any]) -> list[dict[str, Any]]:
     reasoning = turn.get("reasoning") if isinstance(turn.get("reasoning"), str) else ""
     pieces: list[tuple[str, str]] = []
     segments = turn.get("segments")
+    sources = {
+        "thinking": ("agent_thought_chunk", reasoning.encode("utf-16-le", errors="surrogatepass")),
+        "text": ("agent_message_chunk", text.encode("utf-16-le", errors="surrogatepass")),
+    }
     for segment in segments if isinstance(segments, list) else ():
         if not isinstance(segment, dict) or not _is_int(segment.get("from")) or not _is_int(segment.get("to")):
             continue
-        source = {"thinking": ("agent_thought_chunk", reasoning), "text": ("agent_message_chunk", text)}.get(
-            segment.get("kind")
-        )
-        if source is not None and (piece := source[1][segment["from"] : segment["to"]]):
+        source = sources.get(segment.get("kind"))
+        if source is not None and (piece := _utf16_slice(source[1], segment["from"], segment["to"])):
             pieces.append((source[0], piece))
     if not pieces:
         pieces = [
@@ -388,6 +390,11 @@ def _text_content(text: str) -> dict[str, Any]:
 
 def _chunk(kind: str, text: str) -> dict[str, Any]:
     return {"sessionUpdate": kind, "content": {"type": "text", "text": text}}
+
+
+def _utf16_slice(encoded: bytes, start: int, end: int) -> str:
+    """Read the JavaScript string offsets the host records, including non-BMP characters."""
+    return encoded[max(0, start) * 2 : max(0, end) * 2].decode("utf-16-le", errors="replace")
 
 
 def _text(value: Any) -> str:
