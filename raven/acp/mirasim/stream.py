@@ -132,6 +132,24 @@ class SessionView:
 
 
 @dataclass
+class _TextDelta:
+    """Unsent text addressed by the host's UTF-16 segment offsets."""
+
+    kind: str
+    encoded: bytes
+    start: int
+    sent: int = 0
+
+    def through(self, end: int | None = None) -> list[dict[str, Any]]:
+        stop = len(self.encoded) // 2 if end is None else min(len(self.encoded) // 2, max(0, end - self.start))
+        if stop <= self.sent:
+            return []
+        text = _utf16_slice(self.encoded, self.sent, stop)
+        self.sent = stop
+        return [_chunk(self.kind, text)]
+
+
+@dataclass
 class TurnStream:
     """What of one turn the ACP client has been shown, so a later snapshot sends only what is new.
 
@@ -154,9 +172,9 @@ class TurnStream:
     def updates(self, snapshot: dict[str, Any]) -> list[dict[str, Any]]:
         """The ACP ``session/update`` payloads that bring the client level with ``snapshot``.
 
-        In the order a turn usually produces them within one merged frame:
-        steers taken, reasoning, the text that leads into a tool call, the tool
-        calls themselves, then the plan, sub-agents and files delivered.
+        The host's segments retain the order lost when patches are coalesced.
+        A tool's completion goes at its segment, before the text that follows
+        it, so ACP clients do not split that answer at a late tool update.
         """
         task_id = _text(snapshot.get("taskId")) or None
         if task_id != self.task_id:
@@ -165,14 +183,53 @@ class TurnStream:
             return []
         out: list[dict[str, Any]] = []
         out += self._steers(snapshot.get("steers"))
-        if delta := self._grown("reasoning", snapshot.get("reasoning")):
-            out.append(_chunk("agent_thought_chunk", delta))
-        if delta := self._grown("text", snapshot.get("text")):
-            out.append(_chunk("agent_message_chunk", delta))
-        out += self._tools(snapshot.get("toolCalls"))
+        out += self._content(snapshot)
         out += self._plan(snapshot.get("plan"))
-        out += self._sub_agents(snapshot.get("subAgents"))
         out += self._artifacts(snapshot.get("artifacts"))
+        return out
+
+    def _content(self, snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+        sources: dict[str, _TextDelta] = {}
+        for key, segment, kind in (
+            ("reasoning", "thinking", "agent_thought_chunk"),
+            ("text", "text", "agent_message_chunk"),
+        ):
+            previous = getattr(self, key)
+            delta = self._grown(key, snapshot.get(key))
+            sources[segment] = _TextDelta(
+                kind,
+                delta.encode("utf-16-le", errors="surrogatepass"),
+                len(previous.encode("utf-16-le", errors="surrogatepass")) // 2 if delta else 0,
+            )
+        calls = {
+            "tools": {u["toolCallId"]: u for u in self._tools(snapshot.get("toolCalls"))},
+            "agents": {
+                u["toolCallId"].removeprefix("subagent-"): u for u in self._sub_agents(snapshot.get("subAgents"))
+            },
+        }
+        segments = snapshot.get("segments")
+        segments = [s for s in segments if isinstance(s, dict)] if isinstance(segments, list) else []
+        out: list[dict[str, Any]] = []
+        for kind, pending in calls.items():
+            named = {call_id for s in segments if s.get("kind") == kind for call_id in _segment_ids(s)}
+            for call_id, update in list(pending.items()):
+                if call_id not in named and update["sessionUpdate"] == "tool_call_update":
+                    out.append(pending.pop(call_id))
+        for segment in segments:
+            kind = segment.get("kind")
+            if not isinstance(kind, str):
+                continue
+            if kind in sources and _is_int(segment.get("from")) and _is_int(segment.get("to")):
+                if 0 <= segment["from"] <= segment["to"]:
+                    out += sources[kind].through(segment["to"])
+            elif kind in calls:
+                for call_id in _segment_ids(segment):
+                    if update := calls[kind].pop(call_id, None):
+                        out.append(update)
+        for source in sources.values():
+            out += source.through()
+        for pending in calls.values():
+            out += pending.values()
         return out
 
     def start(self, task_id: str | None) -> None:
@@ -395,6 +452,11 @@ def _chunk(kind: str, text: str) -> dict[str, Any]:
 def _utf16_slice(encoded: bytes, start: int, end: int) -> str:
     """Read the JavaScript string offsets the host records, including non-BMP characters."""
     return encoded[max(0, start) * 2 : max(0, end) * 2].decode("utf-16-le", errors="replace")
+
+
+def _segment_ids(segment: dict[str, Any]) -> list[str]:
+    ids = segment.get("ids")
+    return [value for value in ids if isinstance(value, str)] if isinstance(ids, list) else []
 
 
 def _text(value: Any) -> str:

@@ -316,6 +316,77 @@ def test_tool_kinds_are_matched_without_case_and_anything_else_is_other() -> Non
     assert tool_kind("mcp__mirasim__deliver_artifact") == "other" and tool_kind(None) == "other"
 
 
+async def test_a_coalesced_snapshot_keeps_every_segment_in_order() -> None:
+    from raven.acp_client.acp_agent import _TurnCollector
+
+    snapshot = {
+        "taskId": "t1",
+        "text": "\U0001f600Look.Check.Done.",
+        "reasoning": "Think.\U0001f642Again.",
+        "toolCalls": [
+            {"id": "c1", "name": "Read", "status": "done", "result": "first"},
+            {"id": "c2", "name": "Read", "status": "done", "result": "second"},
+        ],
+        "subAgents": [{"id": "s1", "status": "done", "description": "Inspect"}],
+        "segments": [
+            {"kind": "thinking", "from": 0, "to": 6},
+            {"kind": "text", "from": 0, "to": 7},
+            {"kind": "tools", "ids": ["c1"]},
+            {"kind": "thinking", "from": 6, "to": 14},
+            {"kind": "text", "from": 7, "to": 13},
+            {"kind": "tools", "ids": ["c2"]},
+            {"kind": "agents", "ids": ["s1"]},
+            {"kind": "text", "from": 13, "to": 18},
+        ],
+    }
+    stream = TurnStream()
+    updates = valid(stream.updates(snapshot))
+    assert [(u["sessionUpdate"], u.get("toolCallId") or u["content"]["text"]) for u in updates] == [
+        ("agent_thought_chunk", "Think."),
+        ("agent_message_chunk", "\U0001f600Look."),
+        ("tool_call", "c1"),
+        ("agent_thought_chunk", "\U0001f642Again."),
+        ("agent_message_chunk", "Check."),
+        ("tool_call", "c2"),
+        ("tool_call", "subagent-s1"),
+        ("agent_message_chunk", "Done."),
+    ]
+    collector = _TurnCollector(track_files=False)
+    for update in updates:
+        await collector("session/update", {"sessionId": "s1", "update": update})
+    assert collector.reply == "Done."
+    assert stream.updates(snapshot) == []
+    snapshot["text"] += " More."
+    snapshot["segments"][-1]["to"] += 6
+    assert texts(valid(stream.updates(snapshot)), "agent_message_chunk") == [" More."]
+
+
+def test_partial_or_malformed_segments_drop_neither_text_nor_calls() -> None:
+    updates = valid(
+        TurnStream().updates(
+            {
+                "taskId": "t1",
+                "text": "answer",
+                "reasoning": "thinking",
+                "toolCalls": [{"id": "c1", "name": "Read"}],
+                "segments": [
+                    None,
+                    {"kind": []},
+                    {"kind": "text", "from": -1, "to": 6},
+                    {"kind": "tools", "ids": "c1"},
+                    {"kind": "tools", "ids": [False]},
+                    {"kind": "thinking", "from": 0, "to": 3},
+                    {"kind": "thinking", "from": 0, "to": 3},
+                    {"kind": "text", "from": 0, "to": "6"},
+                ],
+            }
+        )
+    )
+    assert texts(updates, "agent_message_chunk") == ["answer"]
+    assert texts(updates, "agent_thought_chunk") == ["thi", "nking"]
+    assert updates[-1]["toolCallId"] == "c1"
+
+
 # -- replay ---------------------------------------------------------------------
 
 

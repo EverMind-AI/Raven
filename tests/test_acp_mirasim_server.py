@@ -284,6 +284,36 @@ async def test_a_tool_call_streams_from_its_start_to_its_result_between_the_word
     assert (turn[0]["content"]["text"], turn[3]["content"]["text"]) == ("Let me look.", " Done.")
 
 
+@pytest.mark.parametrize("segments", [False, True])
+async def test_coalesced_tool_completion_preserves_the_collectors_whole_reply(harness: Harness, segments: bool) -> None:
+    from raven.acp_client.acp_agent import _TurnCollector
+
+    call = {"id": "c1", "name": "Bash", "status": "running"}
+    changed: dict[str, Any] = {"toolCalls": [{**call, "status": "done", "result": "ok"}]}
+    if segments:
+        changed["segments"] = [
+            {"kind": "text", "from": 0, "to": 7},
+            {"kind": "tools", "ids": ["c1"]},
+            {"kind": "text", "from": 7, "to": 11},
+        ]
+    original = harness.host._step
+
+    async def coalesced(session: FakeSession, step: Any) -> str | None:
+        if step[0] == "coalesced":
+            await harness.host._patch(session, {"appendText": "All ", "set": changed})
+            return None
+        return await original(session, step)
+
+    harness.host._step = coalesced
+    harness.host.respond = script(("text", "Check. "), ("tool", call), ("coalesced",), ("text", "checks passed."))
+    sid = await harness.new()
+    assert await harness.ok("session/prompt", sessionId=sid, prompt=text("check")) == {"stopReason": "end_turn"}
+    collector = _TurnCollector(track_files=False)
+    for update in harness.session_updates(sid):
+        await collector("session/update", {"sessionId": sid, "update": update})
+    assert collector.reply == "All checks passed."
+
+
 async def test_the_usage_a_turn_ends_on_is_measured_against_whatever_names_the_window(harness: Harness) -> None:
     await harness.agent.catalog()
     usage = harness.agent._usage
