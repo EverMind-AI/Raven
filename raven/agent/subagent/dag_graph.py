@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """The sub-agent DAG spec models and structural validation."""
 
-import posixpath
+import os
 import re
 from collections.abc import Callable, Iterable, Mapping
 from typing import Annotated, Any, Literal
@@ -973,7 +973,7 @@ def _nodes_path_errors(nodes: list[DagNodeSpec], by_id: dict[str, DagNodeSpec]) 
             order cannot be computed: the topological check reports that.
     """
     try:
-        skippable = may_not_execute(nodes, by_id)
+        skippable = {os.path.normcase(node_id): node_id for node_id in may_not_execute(nodes, by_id)}
     except DagValidationError:
         return []
     errors: list[str] = []
@@ -991,7 +991,8 @@ def _nodes_path_errors(nodes: list[DagNodeSpec], by_id: dict[str, DagNodeSpec]) 
         )
         for path, what in reads:
             target = _nodes_path_target(path)
-            if target in skippable:
+            if target is not None and target in skippable:
+                target = skippable[target]
                 errors.append(
                     f"node '{node.id}' reads {what} of node '{target}', which may not execute in this graph -- "
                     f"use {{{{ {target}.output }}}} instead, which reads as the fixed 'not executed' sentence "
@@ -1004,8 +1005,8 @@ def _nodes_path_target(path: str) -> str | None:
     """Return the node whose artifacts a ``@nodes/`` path names.
 
     Artifacts are flat files named ``<id>.`` plus a suffix and an id holds no
-    dot, so the id is whatever precedes the first one. Normalized first: a
-    ``./`` or ``x/..`` spelling reaches the same file.
+    dot, so the id is whatever precedes the first one. Normalize with the local
+    backend's host path rules, including Windows separator and case aliases.
 
     Args:
         path (`str`):
@@ -1018,7 +1019,7 @@ def _nodes_path_target(path: str) -> str | None:
     root, relative = split_reference(path)
     if root != "nodes":
         return None
-    return posixpath.normpath(relative).split(".", 1)[0]
+    return os.path.normcase(os.path.normpath(relative)).split(".", 1)[0]
 
 
 def _topological_order(by_id: dict[str, DagNodeSpec]) -> list[str]:

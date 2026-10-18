@@ -3398,6 +3398,47 @@ def test_a_file_input_aimed_at_a_node_that_may_not_execute_is_refused() -> None:
     assert "node 'reader' reads input 'k' of node 'g', which may not execute" in errors[0]
 
 
+@pytest.mark.parametrize("kind", ["ref", "ref_path", "input"])
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "Gate.out.md",
+        "./Gate.out.md",
+        "GATE.out.md",
+        "gate.out.md",
+        r".\Gate.out.md",
+        r"nested\..\Gate.out.md",
+        "nested/Gate.out.md",
+    ],
+)
+async def test_at_nodes_aliases_follow_the_local_filesystem(tmp_path: Path, kind: str, relative: str) -> None:
+    artifacts = tmp_path / "nodes"
+    artifacts.mkdir()
+    (artifacts / "nested").mkdir()
+    (artifacts / "Gate.out.md").write_text("the guarded node's output", encoding="utf-8")
+    backend = LocalFileBackend()
+    resolved = backend.abspath(relative, cwd=str(artifacts))
+    aliases_output = await backend.file_exists(resolved)
+    if aliases_output:
+        assert await backend.read_file(resolved) == b"the guarded node's output"
+    path = f"@nodes/{relative}"
+    template = "{{ inputs.k }}" if kind == "input" else "{{ " + kind + ":" + path + " }}"
+    inputs = {"k": {"file": path}} if kind == "input" else {}
+    errors = _branch_graph(
+        [
+            _decision(),
+            _branch_node(id="Gate", depends_on=["r"], when="r.a"),
+            _branch_node(id="reader", depends_on=["r", "Gate"], when="r.done", prompt_template=template, inputs=inputs),
+        ]
+    )
+    if aliases_output:
+        assert len(errors) == 1
+        assert "of node 'Gate', which may not execute" in errors[0]
+        assert "use {{ Gate.output }} instead" in errors[0]
+    else:
+        assert errors == []
+
+
 @pytest.mark.parametrize(
     "template",
     [
