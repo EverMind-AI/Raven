@@ -78,11 +78,14 @@ class OpenAICodexProvider(LLMProvider):
         model = model or self.default_model
         system_prompt, input_items = _convert_messages(messages)
 
+        from raven.providers import codex_client_version
         from raven.providers.chatgpt_token import access_token_and_account
 
         # Refreshing can block, and the credential belongs to LiteLLM's driver.
         access, account_id = await asyncio.to_thread(access_token_and_account)
-        headers = _build_headers(account_id, access)
+        # So can asking npm, once per cache window.
+        client_version = await asyncio.to_thread(codex_client_version.resolve)
+        headers = _build_headers(account_id, access, client_version=client_version)
 
         body: dict[str, Any] = {
             "model": _strip_model_prefix(model),
@@ -163,12 +166,17 @@ def _strip_model_prefix(model: str) -> str:
     return wire_model(model, spec=find_by_name("openai_codex"))
 
 
-def _build_headers(account_id: str, token: str) -> dict[str, str]:
+def _build_headers(account_id: str, token: str, *, client_version: str) -> dict[str, str]:
+    """``client_version`` goes where the official CLI puts its own release: a
+    ``version`` header on every request (``create_openai_provider`` in
+    ``codex-rs/model-provider-info``). The backend gates models by client version,
+    and a request that names none leaves the backend to assume one."""
     return {
         "Authorization": f"Bearer {token}",
         "chatgpt-account-id": account_id,
         "OpenAI-Beta": "responses=experimental",
         "originator": DEFAULT_ORIGINATOR,
+        "version": client_version,
         "User-Agent": "raven (python)",
         "accept": "text/event-stream",
         "content-type": "application/json",

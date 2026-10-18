@@ -34,11 +34,18 @@ def test_default_url_targets_codex_responses_endpoint():
 
 
 def test_headers_declare_experimental_responses_beta():
-    headers = _build_headers(account_id="acct-123", token="tok-abc")
+    headers = _build_headers(account_id="acct-123", token="tok-abc", client_version="0.163.0")
     assert headers["OpenAI-Beta"] == "responses=experimental"
     assert headers["Authorization"] == "Bearer tok-abc"
     assert headers["chatgpt-account-id"] == "acct-123"
     assert headers["accept"] == "text/event-stream"
+
+
+def test_headers_name_the_client_release_where_the_cli_does():
+    """The official CLI sends its release as a `version` header on every request."""
+    headers = _build_headers(account_id="acct-123", token="tok-abc", client_version="0.163.0")
+
+    assert headers["version"] == "0.163.0"
 
 
 def test_named_function_tool_choice_is_converted_for_responses():
@@ -435,6 +442,46 @@ async def test_no_instructions_means_no_cache_key(monkeypatch: pytest.MonkeyPatc
     await OpenAICodexProvider(default_model="openai-codex/gpt-5.6-sol").chat([{"role": "user", "content": "x"}])
 
     assert "prompt_cache_key" not in bodies[0]
+
+
+def _capture_headers(monkeypatch) -> list[dict[str, str]]:
+    """Run ``chat`` without a network call or a credential, keeping the headers."""
+    sent: list[dict[str, str]] = []
+
+    async def fake_request(url, headers, body, **kwargs):
+        sent.append(headers)
+
+        return "", [], "stop"
+
+    monkeypatch.setattr("raven.providers.openai_codex_provider._request_codex", fake_request)
+    monkeypatch.setattr("raven.providers.chatgpt_token.access_token_and_account", lambda: ("token", "acct"))
+
+    return sent
+
+
+async def test_a_turn_names_the_newest_published_release(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The backend gates generation by client version too; a turn names what npm
+    calls `latest`, not a release frozen into this code."""
+    from raven.providers import codex_client_version
+
+    monkeypatch.setattr(codex_client_version, "_fetch_latest", lambda *, timeout: "0.170.0")
+    sent = _capture_headers(monkeypatch)
+
+    await OpenAICodexProvider(default_model="openai-codex/gpt-6.1-sol").chat([{"role": "user", "content": "x"}])
+
+    assert sent[0]["version"] == "0.170.0"
+
+
+async def test_a_turn_offline_still_names_a_real_release(monkeypatch: pytest.MonkeyPatch) -> None:
+    """npm unreachable (the suite's default) is the bundled release, never `0.0.0`
+    or no version at all."""
+    from raven.providers import codex_client_version
+
+    sent = _capture_headers(monkeypatch)
+
+    await OpenAICodexProvider(default_model="openai-codex/gpt-6.1-sol").chat([{"role": "user", "content": "x"}])
+
+    assert sent[0]["version"] == codex_client_version.FALLBACK_VERSION
 
 
 def test_litellm_still_filters_out_the_cache_key() -> None:

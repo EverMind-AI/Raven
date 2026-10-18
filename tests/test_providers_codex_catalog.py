@@ -63,20 +63,26 @@ def test_only_the_models_meant_to_be_offered_come_back(monkeypatch: pytest.Monke
     assert codex_catalog.account_models() == ("gpt-5.6-sol", "gpt-5.4")
 
 
-def test_the_client_version_is_sent(monkeypatch: pytest.MonkeyPatch, signed_in) -> None:
-    """The value a live account was observed to answer in full for, pinned so a
-    change to it is a decision rather than a typo."""
+def test_the_catalogue_is_asked_as_a_client_newer_than_any_release(monkeypatch: pytest.MonkeyPatch, signed_in) -> None:
+    """The discovery sentinel, pinned so a change to it is a decision rather than
+    a typo -- and so it never drifts back to a release, or to `0.0.0`."""
     seen = _serve(monkeypatch, {"models": [{"slug": "gpt-5.6-sol", "visibility": "list"}]})
 
     codex_catalog.account_models()
 
-    assert seen[0].url.params["client_version"] == "0.163.0"
+    assert seen[0].url.params["client_version"] == "99.0.0"
 
 
 def test_models_gated_above_an_old_client_are_offered(monkeypatch: pytest.MonkeyPatch, signed_in) -> None:
     """The backend drops every model whose minimum client version is above the one
-    sent; at `0.0.0` the newest models never reached the picker (#986)."""
-    gates = {"gpt-6.1-sol": (0, 159, 0), "gpt-6-sol": (0, 155, 0), "gpt-5.6-sol": (0, 0, 0)}
+    sent; at `0.0.0` the newest models never reached the picker (#986). Asking as
+    the sentinel also lists a model gated above the newest release."""
+    gates = {
+        "gpt-7-preview": (0, 170, 0),
+        "gpt-6.1-sol": (0, 159, 0),
+        "gpt-6-sol": (0, 155, 0),
+        "gpt-5.6-sol": (0, 0, 0),
+    }
     seen: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -93,7 +99,7 @@ def test_models_gated_above_an_old_client_are_offered(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(httpx, "get", fake_get)
 
-    assert codex_catalog.account_models() == ("gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol")
+    assert codex_catalog.account_models() == ("gpt-7-preview", "gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol")
     assert seen[0].url.params["client_version"] != "0.0.0"
 
 

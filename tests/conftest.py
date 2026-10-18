@@ -837,6 +837,26 @@ def _no_openrouter_network(tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _no_codex_version_network(monkeypatch):
+    """Keep the Codex release lookup off npm.
+
+    Every Codex turn asks which CLI release to name, so an un-mocked test of the
+    provider would reach registry.npmjs.org and send whatever was published that
+    morning. Unreachable by default, which answers the bundled fallback; tests
+    of the lookup put back the real fetch and mock the transport.
+    """
+    from raven.providers import codex_client_version
+
+    def offline(*, timeout: float) -> object:
+        raise OSError("npm is not reached in tests")
+
+    codex_client_version.reset_cache()
+    monkeypatch.setattr(codex_client_version, "_fetch_latest", offline)
+    yield
+    codex_client_version.reset_cache()
+
+
+@pytest.fixture(autouse=True)
 def _no_provider_probe(monkeypatch):
     """Keep the credential probe's socket off the network, and only the socket.
 
