@@ -511,6 +511,32 @@ async def test_a_generated_picture_a_dead_network_cannot_deliver_is_not_read_as_
 
 
 @pytest.mark.parametrize(
+    "url",
+    ["http://169.254.169.254/latest/meta-data/", "https://1.2.3.4/cdn/signed.png"],
+    ids=["refused", "unreachable"],
+)
+async def test_a_gateway_s_picture_url_it_cannot_fetch_is_its_own_error_too(monkeypatch, tmp_path, url) -> None:
+    """Any Images base that answers in URL form has billed the picture before
+    the download, so a gateway's refused or unreachable URL is answered the way
+    Ark's is, not as "no image returned"."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.path == "/v1/images/generations":
+            return httpx.Response(200, json={"data": [{"url": url}]})
+        raise httpx.ConnectError("Connection refused to 1.2.3.4")
+
+    tool = _image_tool(
+        monkeypatch, handler, model="gpt-image-2", workspace=tmp_path / "ws", api_base="https://gw.test/v1"
+    )
+    out = json.loads(await tool.execute("a poster"))
+    assert out["error"] == "generated, but the picture URL was refused or could not be fetched"
+    assert out["url"] == url
+    assert seen[0].url.path == "/v1/images/generations"
+
+
+@pytest.mark.parametrize(
     ("model", "ratio", "size"),
     [
         ("gpt-image-2", "16:9", "1536x1024"),

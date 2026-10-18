@@ -410,9 +410,9 @@ def _split_data_uri(url: str) -> tuple[str, bytes]:
 class _PictureUnfetchableError(Exception):
     """A generation that answered with a picture URL this process cannot take.
 
-    Raised only where the URL is the picture (an Ark generations call is
-    billed before it answers): the answer must not read as ``no image``,
-    or an orchestrating model retries and pays for the picture twice.
+    The URL is the picture, and the generation behind it is billed before it
+    answers: the answer must not read as ``no image``, or an orchestrating
+    model retries and pays for the picture twice.
     """
 
     def __init__(self, url: str, detail: str) -> None:
@@ -834,19 +834,16 @@ class ImageGenerateTool(_OpenRouterMediaTool):
             {"success": True, "model": model_id, "quality": quality or "", "paths": paths}, ensure_ascii=False
         )
 
-    async def _generated_bytes(
-        self, client: httpx.AsyncClient, item: Any, *, surface_unfetchable: bool = False
-    ) -> tuple[str, bytes] | None:
+    async def _generated_bytes(self, client: httpx.AsyncClient, item: Any) -> tuple[str, bytes] | None:
         """The picture one ``data`` entry carries, as ``(mime, bytes)``, or None
         when it has none this code can take: inline as ``b64_json``, or behind
         its ``url`` -- an Ark-style endpoint answers with download URLs only, so
         the bytes are fetched (through the guarded fetch: a provider response
         is as untrusted a place for a URL as a model's chat text).
 
-        Where ``surface_unfetchable`` is set the URL is the picture and the
-        generation behind it is already billed, so a URL the guard refuses or
-        the network cannot deliver raises :class:`_PictureUnfetchableError` rather
-        than reading as no image at all."""
+        Behind a URL the generation is already billed, so a URL the guard
+        refuses or the network cannot deliver raises
+        :class:`_PictureUnfetchableError` rather than reading as no image at all."""
         if not isinstance(item, dict):
             return None
         if encoded := item.get("b64_json"):
@@ -859,13 +856,9 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         try:
             fetched = await guarded_fetch(client, url, what="generated image")
         except httpx.TransportError as e:
-            if surface_unfetchable:
-                raise _PictureUnfetchableError(url, str(e)) from e
-            raise
+            raise _PictureUnfetchableError(url, str(e)) from e
         if fetched is None:
-            if surface_unfetchable:
-                raise _PictureUnfetchableError(url, "not a fetchable public target")
-            return None
+            raise _PictureUnfetchableError(url, "not a fetchable public target")
         fetched.raise_for_status()
         mime = fetched.headers.get("content-type", "image/png").split(";", 1)[0].strip()
         return mime, fetched.content
@@ -971,7 +964,7 @@ class ImageGenerateTool(_OpenRouterMediaTool):
                 try:
                     pictures: list[tuple[str, bytes]] = []
                     for item in payload.get("data") or []:
-                        picture = await self._generated_bytes(client, item, surface_unfetchable=volces)
+                        picture = await self._generated_bytes(client, item)
                         if picture is not None:
                             pictures.append(picture)
                 except _PictureUnfetchableError as e:
