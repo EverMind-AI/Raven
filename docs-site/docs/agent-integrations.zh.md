@@ -156,10 +156,30 @@ Raven-Code 的 `code-flow` 提供的不只是身份 prompt。每个任务都应�
 | `hermes` | `hermes acp --accept-hooks` | 原生认证；该标志接受之前未见的 Shell hook |
 | `openclaw` | `openclaw acp` | 自身网关、认证；启动使用较长握手等待 |
 | `mirothinker` | OpenAI-compatible HTTP | 端点、模型、key；预设关闭有状态重放 |
+| `mirasim_<agent>` | Raven 自带的 ACP 适配器，经 `mirasim ui-cli` 调用 | 已安装 Mirasim，且该 Agent 已在 Mirasim 中安装；以 `sessionMcp: false` 阻止每会话 MCP 下发 |
 
 GitHub Copilot、Qwen Code、CodeBuddy、Qoder、Grok Build、Kimi Code 和 Pi 也有预设。
 适配器版本与精确命令维护在 `raven/agent/subagent/presets.py` 和
 `raven/agent/subagent/acp_registry_presets.py`，优先使用已安装版本的预设，不要自行猜 flags。
+
+`mirasim_*` 预设接入 Mirasim 运行的 Agent，每个 Agent 一行：
+Claude Code、Codex、Kimi Code、Antigravity、Qwen Code、Grok Build、DSH、Pi 和 ZCode CLI，
+名称形如 `Claude Code-Mirasim`。这样一行代表在 Mirasim 所设账号与模型路由上运行的该
+Agent，因此可以与同一 Agent 自己的预设并存。适配器随 Raven 发布（`raven/acp/mirasim/`），
+无需下载；命令中的 `{PYTHON}` 在写入配置时替换为 Raven 自己的解释器；若该解释器之后不复存在
+（例如安装位置发生变化），下次读取配置时该行会改指当前运行 Raven 的解释器。可选模型取自
+Mirasim 为该 Agent 提供的列表，分为三组：Agent 自己名下的模型、`Mirasim`（平台额度）
+和 `Own key`（你在 Mirasim 中添加的 key）。Mirasim 平台也能运行 Claude Code、Codex、
+Kimi Code 和 ZCode CLI 的自有模型，因此这四个 Agent 的这些模型在前两组各列一次：
+选 Agent 名下的走你自己的账号，选 `Mirasim` 下的走平台额度。已有对话的会话改选另一组时，
+下一轮开始前会把同一段对话切到另一条路由。未选模型的会话使用 Mirasim 为该 Agent 设定的
+默认模型和默认路由。每轮回复在该轮结束后整体返回。
+该轮停下来等待的事项会在等待期间转交 Raven：工具审批以权限请求发出；提问——Mirasim
+开启 `askTool` 设置时 Claude Code 的 `AskUserQuestion`，或 MCP 服务器的表单——以
+elicitation 发出，由你或 Raven 的提问自动作答回答。不支持表单的客户端会跳过该提问，
+并在回复中写明所问内容。
+提问、选项、回复和错误详情保留发送方 Agent 的内容。脱敏由该 Agent 自行决定；
+即使回传值与 Raven 自身持有的凭据相同，Raven 也不替换。
 
 判断兼容性时区分三个结论：
 

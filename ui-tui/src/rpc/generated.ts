@@ -357,6 +357,10 @@ export interface TranscriptTurnEnded {
    */
   status: string;
   reason?: string;
+  /**
+   * The failure's long account beside the bounded reason, for a reader who expands the row: the runner's own text, credentials scrubbed, capped at 8000 characters. Absent when the bounded text already is the whole account.
+   */
+  full_detail?: string;
 }
 /**
  * Marks an assistant entry the runtime wrote rather than the model.
@@ -1795,6 +1799,10 @@ export interface ErrorEvent {
     message: string;
     reason?: 'cancelled_by_client' | 'internal';
     detail?: string;
+    /**
+     * The failure's long account beside the bounded detail, for a reader who expands the row: the runner's own text, credentials scrubbed, capped at 8000 characters. Absent when the bounded text already is the whole account.
+     */
+    full_detail?: string;
     target?: DirectTarget;
   };
 }
@@ -3123,6 +3131,48 @@ export interface BugReportDecision {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MachineRow".
+ */
+export interface MachineRow {
+  id: string;
+  name: string;
+  transport: 'ssh' | 'local';
+  /**
+   * The link from this computer, as the roster shows it: connected (agents running), idle (a link, no agent), lost (the link is down, agents wait), off (no link), error.
+   */
+  state: 'connected' | 'idle' | 'lost' | 'off' | 'error';
+  /**
+   * One sentence for lost and error; empty otherwise. Never an address.
+   */
+  detail: string;
+  agents: number;
+  /**
+   * The node's Raven version: live while a link is up, else as recorded at its last install or contact from this computer. Absent when none is known.
+   */
+  node_version?: string;
+  /**
+   * Whether the node named by node_version is this Raven's own code, which a dispatch there needs; false when none is known.
+   */
+  node_current: boolean;
+  /**
+   * The last node install asked for from this page: in flight, or how it ended.
+   */
+  install: {
+    running: boolean;
+    /**
+     * How the last install asked for from this page ended; absent while it runs or when none was asked for.
+     */
+    ok?: boolean;
+    detail: string;
+  };
+  paths: string[];
+  /**
+   * What the registry's doctor says about this row, one sentence each; empty when nothing.
+   */
+  problems: string[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "SessionListParams".
  */
 export interface SessionListParams {
@@ -4301,6 +4351,105 @@ export interface SubagentsInstanceSetModelResult {
      */
     group?: string;
   }[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MachinesListParams".
+ */
+export interface MachinesListParams {
+  refresh?: boolean;
+  id?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MachinesListResult".
+ */
+export interface MachinesListResult {
+  rows: MachineRow[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MachinesAddParams".
+ */
+export interface MachinesAddParams {
+  id: string;
+  name: string;
+  host: string;
+  port?: number;
+  user: string;
+  key: string;
+  paths?: string[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MachinesAddResult".
+ */
+export interface MachinesAddResult {
+  ok: boolean;
+  /**
+   * What the probe found, or why the row was not written. Never an address.
+   */
+  detail: string;
+  /**
+   * Why the row was not written, as a kind the page can explain: the machine could not be reached, refused the login, presented a changed host key, did not answer in time, ssh is missing here, the id is taken, the fields are not usable, or the registry file cannot be changed. Empty when it was written.
+   */
+  reason: '' | 'unreachable' | 'login' | 'hostkey' | 'timeout' | 'nossh' | 'duplicate' | 'invalid' | 'registry';
+  row?: MachineRow;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MachinesInstallNodeParams".
+ */
+export interface MachinesInstallNodeParams {
+  id: string;
+  node_dir?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MachinesInstallNodeResult".
+ */
+export interface MachinesInstallNodeResult {
+  started: boolean;
+  detail: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MachinesDoctorParams".
+ */
+export interface MachinesDoctorParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MachinesDoctorResult".
+ */
+export interface MachinesDoctorResult {
+  problems: {
+    id: string;
+    blocking: boolean;
+    detail: string;
+  }[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MachinesRemoveParams".
+ */
+export interface MachinesRemoveParams {
+  id: string;
+  force?: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MachinesRemoveResult".
+ */
+export interface MachinesRemoveResult {
+  removed: boolean;
+  /**
+   * What was removed, or why nothing was. Never an address.
+   */
+  detail: string;
+  /**
+   * The agent entries that name the machine: the connected ones to disconnect first when the removal was refused over them; after a removal, the ones left pointing at nothing.
+   */
+  agents: string[];
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

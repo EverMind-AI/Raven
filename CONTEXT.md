@@ -277,6 +277,14 @@ A background agent task spawned by `SubagentManager`. Runs with its own tool set
 re-enters the session as a `SUBAGENT`-origin `TurnRequest` via Spine submit. Bounded by
 `max_concurrent` (default 8) and a per-session hourly rate limit, both shared with the
 nodes of a DAG run — every sub-agent dispatch draws on the one allowance.
+Content received from another agent keeps that agent's redaction policy: Raven does not
+replace token-shaped text or values matching its own configured credentials in replies,
+questions, permission requests, errors, transcripts, or run records. `Tool.agent_output`
+marks tools that return agent content; the admitted tool spec and `ToolOutput` carry that
+fact through `tool_call`, context assembly, live ACP updates and stored-session replay.
+Untrusted-content fencing and output limits
+still apply. The ACP journal protects Raven's outgoing credentials without rewriting
+incoming frames or stderr.
 _Avoid_: conflating with a Turn — a Subagent lives outside the main turn and re-enters via Spine.
 
 **Sub-agent role** (`RAVEN_SUBAGENT` → `agent/subagent/role.py`):
@@ -405,14 +413,22 @@ of it. The entry names only the machine's id, and the entry's `env` reaches the
 agent on the link, never on a command line. Such an entry is added the way any
 preset is, with `machine` (and
 `remote_cwd`, for an `acp` or `cli` one) on `subagents.add` — from a chat through
-`raven_config`, which lists the usable registered machines; the page's
-add passes no machine yet — refused before anything is spent when
+`raven_config`, which lists the usable registered machines, or from the Agent
+Hub, whose preset sheet picks the machine (*Runs on*) among those with this
+Raven's node — refused before anything is spent when
 the id is not usable or the preset is a built-in agent, and proved by the same
 readiness ping as a local add, run on that machine.
 Registered-machine dispatch, file access and recovery are available without an
 environment switch. An entry without `machine` still runs here. Registration,
 SSH authentication, file permissions and concurrency limits govern remote work;
 listing entries and boot capability backfills do not open machine connections.
+The registry itself is kept from the Agent Hub's **Machines** tab as well
+(`machines.*`, `raven/rpc/methods/machines.py`): list, register (the same probe
+as the command), install the node in the background, doctor, and remove
+(`raven ops connection remove`, refused while a connected agent entry names the machine);
+none of it hands the page an address, an account or a key path, and
+`node_install` on a row is the node the last install or contact found there,
+which is how a listing says a machine has this Raven's node without reaching it.
 _Avoid_: "host" / "server" / "node" (too broad, no link to the
 `ops connection` registry that supplies the rows); "GPU box" (only some are
 GPU hosts, and the term covers any registered compute destination);
@@ -435,10 +451,14 @@ whose entries name the machine, each under a task id of the host's, in its own p
 group in the machine user's login environment, forwards what they write (an ACP agent's
 frames, a CLI agent's output lines) on numbered channels of the connection that holds them
 -- a CLI agent's prompt reaches its stdin the other way (`agent/stdin`), which also closes
-it -- and keeps those lines in the task's record
+it -- and keeps those lines and the agent's stderr, each line numbered, in the task's record
 (`node_dir/tasks/<task>/`, owner-only like the host's journal), so a connection that goes
 leaves the agent running and the next
-one takes it over from the frame the host last read (`agent/attach`); and answers probes of
+one takes it over from the frame and the stderr line the host last read (`agent/attach`; a
+cli pick-up, which read none of it, gets the stderr from its first line -- a session id or a
+failure a CLI agent says only there is not lost with a link -- and an acp pick-up from the
+line its run record kept as the prompt went out, so the earlier prompts' lines are not read
+again); and answers probes of
 the machine and of an agent's command. It holds no conversation, calls no model and opens
 no network port. It runs exactly the host's code, checked by protocol and digest at every
 connection (`raven/node/bundle.py`); `raven ops connection install-node` puts it on a
@@ -793,6 +813,8 @@ ran (a queued turn drained by a stop, an inject merged into a turn that did not 
 A `TurnFailed` is `reported` when the runner worded `error` itself (an `AnswerlessTurnError`)
 rather than it being whatever a crash carried — in-process only, so a consumer deciding what to
 show a stranger can quote a report and refuse to quote a crash.
+A `TurnFailed` may also carry `full_detail`, the failure's long account, which the runner builds and
+the lane copies off the exception (see **AnswerlessTurnError**).
 Per-conversation **Lanes** are the unit of both ordering and cancellation. Deliberately
 not a broadcast bus.
 _Avoid_: "the bus" — there is no Bus; "queue" for Lane — Lane is a serial+cancel domain.
@@ -826,6 +848,13 @@ it), and the `turn_ended` marker that says so is filed before the failure leaves
 is worded twice, for its two readers: `turn_ended.reason` keeps the provider's account for whoever is
 diagnosing the failure, while the entry text the model reads back names the failure's category and
 endpoint only — a vendor body is not history the model should spend context on or try to answer.
+Beside that bounded report a failed turn may carry `full_detail`, the same account at length --
+credentials scrubbed, capped at the call record's body ceiling. The runner builds it
+(`agent/loop/failure_text.py`), since the kernel imports nothing to scrub with, and sets it on the
+exception it lets out; the lane copies it onto `TurnFailed.full_detail`, and it is filed on the
+marker as `turn_ended.full_detail`, only when the bounded text left something out.
+Both use the base exception's instance storage so a foreign property cannot substitute a value
+or disrupt failure reporting. The turn path and runner reuse the same scrubbed account.
 _Avoid_: conflating AnswerlessTurnError with `TurnFailed`, the lifecycle event the Spine worker
 emits for any exception a runner lets out, this one included.
 
@@ -2721,7 +2750,10 @@ unpinned `npx -y` would silently change which shim build a user runs. The **agen
 never fetched; its preset names the bare executable (`opencode acp`, `hermes acp`), so the
 build that answers is the one the user installed, at the version they chose, holding the login
 they already granted. `SHIM_LAUNCHED_PRESETS` declares that split per preset and a test holds
-every acp command to it.
+every acp command to it. A **bundled shim** (`BUNDLED_SHIM_PRESETS`) is one Raven ships rather
+than fetches: `raven.acp.mirasim` serves an agent Mirasim runs, over `mirasim ui-cli`, launched
+on Raven's own interpreter (`{PYTHON}`, expanded when the preset is read), so there is no pin;
+the executable its probe asks after is `mirasim` (`SHIM_REQUIRED_EXECUTABLES`).
 _Avoid_: inferring it from the command shape. An agent whose own CLI happens to ship on npm
 (`opencode-ai`) is not a shim, and fetching it would run a second copy beside the user's
 install and report the agent as present on a machine that does not have it - `_probe_acp`

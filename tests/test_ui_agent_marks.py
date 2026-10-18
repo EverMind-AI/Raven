@@ -40,6 +40,7 @@ _ENTRY = re.compile(
     re.MULTILINE,
 )
 _OWN = re.compile(r"^const OWN_MARK: \{ file: string \} = \{ file: '([^']+)' \}$", re.MULTILINE)
+_GROUP = re.compile(r"^const GROUP_MARK: \{ file: string \} = \{ file: '([^']+)' \}$", re.MULTILINE)
 _SHAPE = re.compile(r"<(?:path|rect|circle|ellipse|polygon)\b[^>]*>")
 
 
@@ -67,6 +68,19 @@ def _own_mark() -> str:
     """
     found = _OWN.findall(_TABLE.read_text(encoding="utf-8"))
     assert len(found) == 1, "raven's own mark did not parse -- has its shape changed?"
+    return found[0]
+
+
+def _group_mark() -> str:
+    """The mark for the card that stands in for the nine Mirasim agents at once.
+
+    Parsed separately for the same reason ``_own_mark`` is: it is one file for
+    nine presets, so it cannot live in a table whose contract is one entry per
+    preset. It is NOT exempt from the orphan check below -- the opposite: that
+    check is what stops this file becoming dead weight the bundle still ships.
+    """
+    found = _GROUP.findall(_TABLE.read_text(encoding="utf-8"))
+    assert len(found) == 1, "the group mark did not parse -- has its shape changed?"
     return found[0]
 
 
@@ -103,8 +117,12 @@ def test_no_asset_is_orphaned() -> None:
     ``ui-web/build.py`` copies the whole assets tree into the bundle, so a mark
     left behind by a removed preset ships to every user forever.
     """
-    named = {f"{file}.svg" for file, _ in _marks().values()} | {f"{_own_mark()}.svg"}
+    named = {f"{file}.svg" for file, _ in _marks().values()} | {f"{_own_mark()}.svg"} | {f"{_group_mark()}.svg"}
     assert {path.name for path in _ASSETS.glob("*.svg")} == named
+
+
+def test_the_group_mark_ships() -> None:
+    assert (_ASSETS / f"{_group_mark()}.svg").is_file()
 
 
 def test_the_tone_agrees_with_the_file() -> None:

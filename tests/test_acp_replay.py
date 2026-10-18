@@ -46,6 +46,19 @@ def _valid(updates):
     return updates
 
 
+def test_a_delegated_report_preserves_the_sending_agents_text():
+    text = "Agent report: https://agent.invalid/?token=agent-example"
+    updates = _valid(
+        replay(
+            [
+                {"role": "user", "text": text, "delegated": {"kind": "subagent", "label": "worker"}},
+            ],
+            session_id="acp:s1",
+        )
+    )
+    assert _texts(updates) == [text]
+
+
 class TestOrder:
     def test_a_whole_conversation_replays_in_the_order_it_happened(self):
         transcript = [

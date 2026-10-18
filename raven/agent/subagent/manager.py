@@ -2072,9 +2072,7 @@ class SubagentManager:
             pass  # no loop (sync CLI path): nothing is listening anyway
 
     def _emit_delivered(self, origin: dict[str, Any], payload: dict[str, Any]) -> None:
-        from raven.config.held_secrets import scrub_held_value
-
-        self._emit_event(origin["session_key"], {"type": "subagent.delivered", "payload": scrub_held_value(payload)})
+        self._emit_event(origin["session_key"], {"type": "subagent.delivered", "payload": payload})
 
     def _emit_status(
         self,
@@ -2149,7 +2147,8 @@ class SubagentManager:
 
         # The subagent's result is attacker-influenceable (it may have fetched
         # web pages / read files), so fence it as untrusted before it re-enters
-        # the main agent's context.
+        # the main agent's context. Left exactly as the agent returned it: this
+        # is the other agent's content, and Raven does not redact that.
         fenced_result = wrap_untrusted(result, source="subagent")
         # Only a named or minted instance is addressable; a stateless call's
         # handle continues nothing, so offering it would invite a call the
@@ -2187,7 +2186,16 @@ class SubagentManager:
         # The template, not the rendered prompt: a rendered `ref` can inline a
         # whole file, and this line is concatenated verbatim with no truncation,
         # so the file would be re-injected into the host's context in full.
-        asked = origin.get("authored_task") or task
+        #
+        # Scrubbed, because it is the opposite provenance to the fence below:
+        # this line is what the host's own model asked for, so a credential the
+        # spawn pasted into the task is Raven's own text on the way back out.
+        # Done on this line rather than over the assembled message, which would
+        # reach the sub-agent's answer inside the fence too.
+        from raven.config.held_secrets import scrub_held_secrets
+
+        asked = scrub_held_secrets(origin.get("authored_task") or task)
+        task_summary = scrub_held_secrets(task_summary)
         # System voice, with the announce's own instructions and outside the
         # fence -- the channel measured to change the next move (watch_work's
         # module docstring carries the measurements).
@@ -2523,13 +2531,8 @@ Read it against the plan this instance serves. If it reports finished work, resu
         the only trace a finished run used to leave. A completed run's content
         names its record, so the result stays recoverable from disk as well.
         """
-        from raven.config.held_secrets import scrub_held_secrets
         from raven.spine import ChatType, Origin, Source, TurnRequest
         from raven.spine.scheduler import SchedulerDrainingError
-
-        # A sub-agent's report enters the main conversation as a message, not a
-        # tool result, so the registry's scrub never saw it.
-        content = scrub_held_secrets(content)
 
         # Wired by set_submit before any announce (see __init__); the announce
         # path is the only caller and it runs after the gateway has wired it.
@@ -2549,7 +2552,7 @@ Read it against the plan this instance serves. If it reports finished work, resu
         try:
             self._submit(request)
         except SchedulerDrainingError:
-            logger.error(
+            logger.bind(agent_output=True).error(
                 "sub-agent announce to {} dropped: the scheduler is draining and no turn can carry it; "
                 "the undelivered text follows\n{}",
                 origin["session_key"],

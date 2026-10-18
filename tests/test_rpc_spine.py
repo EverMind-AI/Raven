@@ -1851,3 +1851,32 @@ async def test_a_direct_turns_events_reach_the_sessions_subscription(parent):
 
     assert {key for key, _e in emitter.emitted} == {parent}
     assert all(e["payload"].get("target") == {"agent": "A", "handle": "one#part"} for _k, e in emitter.emitted)
+
+
+async def test_outlet_emit_error_includes_the_long_account_when_present():
+    emitter = FakeEmitter()
+    outlet = RpcOutlet("tui", emitter)
+    await outlet.emit_error("tui:c1", -32099, "turn_failed", "internal", "short", full_detail="the long one")
+    await outlet.emit_error("tui:c1", -32099, "turn_failed", "internal", "short")
+    assert emitter.emitted[0][1]["payload"]["full_detail"] == "the long one"
+    assert "full_detail" not in emitter.emitted[1][1]["payload"]
+
+
+async def test_a_failed_turn_sends_the_runners_long_account():
+    class _BoomLoop:
+        async def run_turn(self, req, emit, drain, *, stream, usage_sink=None) -> TurnOutcome:
+            exc = RuntimeError("boom")
+            exc.full_detail = "RuntimeError: boom, at length"
+            raise exc
+
+    emitter = FakeEmitter()
+    scheduler, hub, turn_ids, teardown = build_rpc_spine(_BoomLoop(), emitter)
+    try:
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"))
+        await handle.result()
+    finally:
+        await teardown()
+
+    payload = emitter.emitted[-1][1]["payload"]
+    assert payload["detail"] == "RuntimeError: boom"
+    assert payload["full_detail"] == "RuntimeError: boom, at length"

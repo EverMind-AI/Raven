@@ -303,7 +303,12 @@ def _permission_input() -> dict:
     return {"rawInput": {"command": command}} if command else {}
 
 
+_PROMPTS = 0
+
+
 def handle_prompt(request_id, params) -> None:
+    global _PROMPTS
+    _PROMPTS += 1
     session_id = params.get("sessionId") or "stub-session-1"
     if MODE == "dies_mid_turn":
         # Half an answer, then the process is gone: the prompt went out and
@@ -615,8 +620,17 @@ def handle_prompt(request_id, params) -> None:
         # Kimi Code waiting on a provider that never answers: the prompt is
         # taken and never finished.
         return
-    if delay := os.environ.get("ACP_STUB_PROMPT_DELAY_S"):
-        # A provider that takes its time: the prompt is answered after the delay.
+    if lines := os.environ.get("ACP_STUB_STDERR_LINES"):
+        # An agent that says something on stderr every prompt: that many lines,
+        # numbered by prompt and line, so a replay's range can be read off them.
+        for i in range(1, int(lines) + 1):
+            print(f"stub: prompt {_PROMPTS} stderr {i}", file=sys.stderr)
+        sys.stderr.flush()
+    if (delay := os.environ.get("ACP_STUB_PROMPT_DELAY_S")) and _PROMPTS >= int(
+        os.environ.get("ACP_STUB_PROMPT_DELAY_FROM", "1")
+    ):
+        # A provider that takes its time: the prompt is answered after the delay
+        # -- from the first prompt, or from the one ACP_STUB_PROMPT_DELAY_FROM names.
         time.sleep(float(delay))
     if MODE == "empty_turn":
         print("provider rejected the credential: HTTP 401", file=sys.stderr, flush=True)

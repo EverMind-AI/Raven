@@ -40,7 +40,7 @@ class _Link:
         self.rows = tasks if tasks is not None else [{"task": "stub@box-1", "state": "running"}]
         self.rc = rc
         self.pipe = _Pipe()
-        self.attached: list[tuple[str, str, int]] = []
+        self.attached: list[tuple[str, str, int, int]] = []
         self.refuse: Exception | None = None
 
     async def tasks(self, machine_id: str) -> list[dict[str, Any]]:
@@ -48,10 +48,10 @@ class _Link:
             raise self.rows
         return self.rows
 
-    async def attach(self, machine_id: str, task: str, *, name: str, after: int = 0):
+    async def attach(self, machine_id: str, task: str, *, name: str, after: int = 0, stderr_after: int = 0):
         if self.refuse is not None:
             raise self.refuse
-        self.attached.append((machine_id, task, after))
+        self.attached.append((machine_id, task, after, stderr_after))
         return self.pipe, {"pid": 7, "frames": 9, "replayed": 0, "rc": self.rc}
 
 
@@ -90,7 +90,7 @@ async def test_the_reply_is_read_off_the_frames_the_other_process_never_saw_and_
     link = _Link()
     picking = asyncio.ensure_future(remote_resume.pick_up(_run(), _backend(), pool=link))
     await asyncio.sleep(0.05)
-    assert link.attached == [("box", "stub@box-1", 5)], "from the frame the other process last read"
+    assert link.attached == [("box", "stub@box-1", 5, 0)], "from the frame the other process last read"
     link.pipe.says(_chunk("po"))
     link.pipe.says(_chunk("ng"))
     link.pipe.says(_chunk("not mine", session="other"))
@@ -106,6 +106,21 @@ async def test_the_reply_is_read_off_the_frames_the_other_process_never_saw_and_
     (connection,) = _pool.connections("stub@box")
     assert connection.client.endpoint is link.pipe and connection.client.next_request_id == 4 + remote_resume._ID_ROOM
     assert connection.initialize == {} and connection.launch_key == "k"
+
+
+async def test_a_pick_up_asks_the_stderr_from_the_line_the_record_kept_as_the_prompt_went_out(_pool):
+    """An ACP agent is one task across every prompt its process is sent: the earlier prompts' stderr is not
+    read again into this turn's tail and journal."""
+    link = _Link()
+    picking = asyncio.ensure_future(remote_resume.pick_up(_run(stderr_received=12), _backend(), pool=link))
+    await asyncio.sleep(0.05)
+    assert link.attached == [("box", "stub@box-1", 5, 12)]
+    link.pipe.says(_chunk("pong"))
+    link.pipe.says({"jsonrpc": "2.0", "id": 3, "result": {"stopReason": "end_turn"}})
+
+    picked = await asyncio.wait_for(picking, timeout=5)
+
+    assert picked.status == "ok" and picked.reply.startswith("pong")
 
 
 async def test_a_turn_cut_short_is_marked_partial_as_a_turn_ended_here_would_be(_pool):

@@ -569,6 +569,18 @@ describe('error', () => {
     expect(h.park.lastAsk).toBe('send this again')
     expect(h.did('queueShift')).toHaveLength(1)
   })
+
+  it('hands the row the long account when the failure carries one', async () => {
+    const h = await harness()
+    h.park.lastAsk = 'send this again'
+
+    h.dispatch({
+      type: 'error',
+      payload: { message: 'turn_failed', reason: 'internal', detail: 'short', full_detail: 'the whole account' },
+    })
+
+    expect(h.did('noteRow')).toEqual([['noteRow', 'FAILED_LABEL', 'short', ['full', 'retry']]])
+  })
 })
 
 describe('cron.delivered', () => {

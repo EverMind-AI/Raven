@@ -220,8 +220,8 @@ class FrameJournal:
         except (TypeError, ValueError) as exc:  # pragma: no cover - default=str covers the wire shapes
             logger.debug("acp journal: unserialisable record dropped ({})", exc)
             return
-        # An agent started with Raven's key can print it on stdout or stderr.
-        line = scrub_held_secrets(line)
+        if record.get("dir") == "out":
+            line = scrub_held_secrets(line)
         marker = json.dumps({"_type": MARKER, _TRUNCATED: self._max_bytes}, ensure_ascii=False) + "\n"
         size = len(line.encode("utf-8"))
         # The marker is budgeted before the frame is, so the file never exceeds

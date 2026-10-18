@@ -24,7 +24,15 @@ class AnswerlessTurnError(Exception):
     up on, and why), so ``describe_failure`` passes the text through unchanged
     instead of prefixing it with this class name, and the ``turn_ended`` marker
     that says so is filed before the failure leaves the loop.
+
+    ``full_detail`` is the same report at length, for a reader who expands the
+    row. The runner builds and scrubs it -- the kernel imports nothing to do
+    that with -- and the lane copies it onto ``TurnFailed.full_detail``.
     """
+
+    def __init__(self, *args: object, full_detail: str | None = None) -> None:
+        super().__init__(*args)
+        self.full_detail = full_detail
 
 
 class BusyPolicy(StrEnum):

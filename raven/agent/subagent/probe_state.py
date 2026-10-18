@@ -24,8 +24,6 @@ from typing import Any, Literal, get_args
 
 from loguru import logger
 
-from raven.config.held_secrets import scrub_held_secrets
-
 _FILENAME = "subagent_test_state.json"
 
 # Only the fields that decide how the agent runs. `name`, `description`, `preset`
@@ -253,9 +251,7 @@ class TestStateStore:
                 "source": source,
                 "name": name,
                 "ok": bool(ok),
-                # The agent's stderr tail, shown on the settings page: an agent
-                # started with Raven's key can print it there.
-                "detail": scrub_held_secrets(detail),
+                "detail": detail,
                 "fingerprint": fingerprint(cfg),
                 "testedAtMs": int(tested_at_ms),
                 **({"remedy": remedy.to_wire()} if remedy is not None else {}),

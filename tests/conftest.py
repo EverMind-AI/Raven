@@ -646,6 +646,14 @@ def _no_real_raven_home(tmp_path, monkeypatch):
     both camps (measured: 17 unrelated failures), patching ``Path.home`` beats the
     ``setenv`` camp (measured: 3), and setting ``HOME`` beats neither: an attribute
     patch shadows it, and a later ``setenv`` replaces it.
+
+    ``USERPROFILE`` is set beside it, through :func:`tests._home.point_home`: on
+    Windows ``os.path.expanduser`` and ``Path.home`` read that one and ignore
+    ``HOME`` (``ntpath``), so a test that brings no home of its own -- the ssh
+    alias tests that take only ``store`` and ``reached`` -- otherwise writes its
+    ``Host`` block into the ``~/.ssh/config`` of whoever runs the suite on Windows.
+    It loses the same way ``HOME`` does; a test that wants ``~`` moved on every
+    platform moves both, through the same helper.
     """
 
     # Outside ``tmp_path`` rather than under it, and fresh per test. Tests use
@@ -655,9 +663,11 @@ def _no_real_raven_home(tmp_path, monkeypatch):
     # ``tmp_path`` rather than a second numbered directory: pytest picks the next
     # number by scanning the whole base temp dir, and with 22k tests that scan
     # cost 44 s per worker for the numbered dirs this fixture alone created.
+    from tests._home import point_home
+
     home = tmp_path.with_name(f"{tmp_path.name}-home")
     home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
+    point_home(monkeypatch, home)
     # The suite's baseline permission mode is full access -- the behaviour the
     # whole suite was written against before the gate existed, and what a test
     # about streaming or diffs should keep seeing. The product default is ask;

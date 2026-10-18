@@ -107,6 +107,10 @@ export interface ExtAgentActArgs {
      it into the stored id. An acp row's values are the agent's own. */
   provider?: string
   clear_model?: boolean
+  /* Where a preset is connected to run: a registered machine's id, and for an
+     acp or cli row the working directory there. Absent means this computer. */
+  machine?: string
+  remote_cwd?: string
 }
 
 export interface ExtAgentsSource {
@@ -151,4 +155,66 @@ export interface Remedy {
      and the one this machine launched it with (`18.20.8`). */
   needs?: string
   found?: string
+}
+
+/* -- machines: the registered machines an agent row may run on -------------
+   What a machine is and how this computer's link and node on it are doing,
+   never the way onto it: the server hands over no address, account or key,
+   and the register form's fields travel once, in `add`, and are not read
+   back. The same island as the agents because a machine is one more answer
+   to "where can my work go". */
+export type MachineLink = 'connected' | 'idle' | 'lost' | 'off' | 'error'
+
+export interface MachineRow {
+  id: string
+  name: string
+  transport: 'ssh' | 'local'
+  /* The link from this computer: connected (agents running), idle (a link,
+     no agent), lost (the link is down, agents wait), off (no link), error. */
+  state: MachineLink
+  /* One sentence for lost and error; '' otherwise. */
+  detail: string
+  agents: number
+  /* The node's Raven version -- live while a link is up, else as recorded at
+     the last install or contact -- and whether it is this Raven's own code,
+     which a dispatch there needs. '' when none is known. */
+  node_version: string
+  node_current: boolean
+  /* The last node install asked for from this page: in flight, or how it ended. */
+  install: { running: boolean; ok: boolean | null; detail: string }
+  paths: string[]
+  /* What blocks the row, one sentence each, as the registry's doctor says it. */
+  problems: string[]
+}
+
+export interface MachineProblem {
+  /* The row it is about, or '' for the registry file itself. */
+  id: string
+  blocking: boolean
+  detail: string
+}
+
+/* Why a machine was not registered, as a kind the page explains in the
+   reader's language; '' when it was. */
+export type RegisterReason = '' | 'unreachable' | 'login' | 'hostkey' | 'timeout' | 'nossh' | 'duplicate' | 'invalid' | 'registry'
+
+export interface RegisterForm {
+  id: string
+  name: string
+  host: string
+  port: number
+  user: string
+  key: string
+  paths: string[]
+}
+
+export interface MachinesSource {
+  /* `refresh` reaches the machines first -- the one read that opens links --
+     all of them, or the one `id` names. */
+  list(refresh?: boolean, id?: string): Promise<MachineRow[]>
+  add(form: RegisterForm): Promise<{ ok: boolean; detail: string; reason: RegisterReason }>
+  /* Starts the install; the list reports it (`install` on the row) until it ends. */
+  installNode(id: string, nodeDir?: string): Promise<{ started: boolean; detail: string }>
+  doctor(): Promise<MachineProblem[]>
+  remove(id: string): Promise<{ removed: boolean; detail: string; agents: string[] }>
 }

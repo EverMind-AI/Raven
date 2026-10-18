@@ -49,6 +49,19 @@ def describe_failure(exc: BaseException) -> str:
     return bound_failure_text(f"{name}: {text}")
 
 
+def full_detail_of(exc: BaseException) -> str | None:
+    """The long account a runner put on ``exc``, for ``TurnFailed.full_detail``.
+
+    Read, never built: the kernel imports no other raven package, so it cannot
+    scrub a crash's message itself. A runner that wants the row expandable sets
+    a ``full_detail`` string in the exception's instance dictionary; descriptors
+    are never called, since a foreign getter can throw or return unsanitized data.
+    Absent, blank or non-string values mean no account.
+    """
+    value = BaseException.__dict__["__dict__"].__get__(exc).get("full_detail")
+    return value if isinstance(value, str) and value.strip() else None
+
+
 def conversation_id(req: TurnRequest) -> str:
     """The lane key a request runs on: its explicit conversation, else
     ``<channel>:<chat_id>``.
@@ -502,10 +515,10 @@ class Lane:
             self._payload_reported = True
             raise
         except Exception as exc:
-            # The event carries only the exception's class and message to the
-            # front-end, so this is the only place the traceback is ever
-            # recorded — without it a failed turn leaves no trace on the process
-            # side at all.
+            # The event carries the exception's class and message, and the long
+            # account a runner attached, but never its traceback, so this is the
+            # only place the traceback is ever recorded — without it a failed
+            # turn leaves no trace on the process side at all.
             logger.opt(exception=exc).error("Turn failed on {}: {}", self._conversation_id, exc)
             # Unpaired with TurnStarted when the failure came from acquiring the pool
             # or from the sink's own TurnStarted call, both of which sit inside the
@@ -527,6 +540,7 @@ class Lane:
                 # every other exception here is a crash whose message names
                 # hosts and paths.
                 reported=isinstance(exc, AnswerlessTurnError),
+                full_detail=full_detail_of(exc),
             )
             await self._sink(failed)
             self._payload_reported = True

@@ -2,10 +2,11 @@
 
 The run's record (:mod:`raven.acp_client.remote_runs`) says which machine,
 which task its daemon runs the agent under, which ACP session the turn is in,
-which prompt is awaited and how many frames that process had read when the
-prompt went out. This module turns that into the reply the turn owes: the
-machine's daemon replays the turn from there, whole, and hands the rest over
-as it comes (``agent/attach``),
+which prompt is awaited and how many frames, and how many stderr lines, that
+process had read when the prompt went out. This module turns that into the
+reply the turn owes: the machine's daemon replays the turn from there, whole,
+with the stderr the turn wrote, and hands the rest over as it comes
+(``agent/attach``),
 a connection over that channel is taken into the pool as if started here, the
 turn's collector reads the agent's messages off it, and the answer to the
 prompt -- sent by the other process, awaited by this one -- ends the wait. What
@@ -66,7 +67,9 @@ async def pick_up(run: RemoteRun, backend: AcpAgentBackend, *, pool: Any = None)
     if run.prompt_id <= 0:
         return PickedUp("error", f"the run of {run.agent!r} on machine {target.label} ended before its prompt was sent")
     try:
-        endpoint, attached = await link.attach(run.machine, run.task, name=run.agent, after=run.received)
+        endpoint, attached = await link.attach(
+            run.machine, run.task, name=run.agent, after=run.received, stderr_after=run.stderr_received
+        )
     except remote_path.NodeCallError as exc:
         if exc.reason in ("unknown_task", None) and "no longer runs" in str(exc):
             return PickedUp("error", str(exc))

@@ -93,9 +93,12 @@ def test_lifecycle_events_construct_and_are_frozen():
 def test_turn_failed_has_no_usage():
     fields = {f.name for f in dataclasses.fields(TurnFailed)}
     # No usage; ``reported`` is the in-process flag saying the runner worded
-    # ``error`` itself rather than it being whatever a crash carried.
-    assert fields == {"error", "cancelled", "conversation_id", "turn_id", "reported"}
+    # ``error`` itself rather than it being whatever a crash carried, and
+    # ``full_detail`` is the runner's long account of the failure, which the
+    # lane copies off the exception it let out.
+    assert fields == {"error", "cancelled", "conversation_id", "turn_id", "reported", "full_detail"}
     assert TurnFailed(error="boom", cancelled=False).reported is False
+    assert TurnFailed(error="boom", cancelled=False).full_detail is None
 
 
 def test_a_failure_text_is_bounded_and_says_it_was_cut():

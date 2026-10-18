@@ -9,9 +9,10 @@ import * as pageStore from '../../state/page'
 import { resetSources, setSources } from '../../state/sources'
 import { domSnapshot } from '../../test/domSnapshot'
 import { ExtAgentsApp } from './ExtAgentsPage'
+import * as machines from './machines'
 import * as store from './store'
 
-import type { ExtAgentActArgs, ExtAgentRow, ExtAgentsSource } from './types'
+import type { ExtAgentActArgs, ExtAgentModelChoice, ExtAgentRow, ExtAgentsSource, MachineRow, MachinesSource, RegisterForm } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -59,11 +60,60 @@ function row(over: Partial<ExtAgentRow> = {}): ExtAgentRow {
    translator on setTranslator (it returns its key, so tests assert catalogue
    keys, not translations) and a fixture source on sources.extAgents. A write
    can be told to refuse, which is how the refusal states are reached. */
-function install(rows: ExtAgentRow[], over: Partial<ExtAgentsSource> & { refuse?: (op: string) => string | null } = {}) {
+/* A registered machine with every field the row carries; the tests override what they read. */
+function mrow(over: Partial<MachineRow> = {}): MachineRow {
+  return {
+    id: 'box',
+    name: 'Lab box',
+    transport: 'ssh',
+    state: 'off',
+    detail: '',
+    agents: 0,
+    node_version: '',
+    node_current: false,
+    install: { running: false, ok: null, detail: '' },
+    paths: [],
+    problems: [],
+    ...over,
+  }
+}
+
+type MachinesOver = Partial<MachinesSource>
+
+function install(
+  rows: ExtAgentRow[],
+  over: Partial<ExtAgentsSource> & { refuse?: (op: string) => string | null; machines?: MachineRow[]; machinesOver?: MachinesOver } = {},
+) {
   const acts: Array<[string, string, ExtAgentActArgs]> = []
   const loads: boolean[] = []
   const rescans: boolean[] = []
-  const { refuse, ...rest } = over
+  const { refuse, machines: machineRows = [], machinesOver = {}, ...rest } = over
+  /* The machines tab's source: the rows given, every write accepted, and
+     what was asked of it, so a test reads the call rather than the paint. */
+  const mcalls: Array<[string, unknown[]]> = []
+  const machinesSource: MachinesSource = {
+    list: async (refresh, id) => {
+      mcalls.push(['list', [!!refresh, id]])
+      return machineRows.map((r) => ({ ...r }))
+    },
+    add: async (form) => {
+      mcalls.push(['add', [form]])
+      return { ok: true, detail: 'reached', reason: '' }
+    },
+    installNode: async (id, dir) => {
+      mcalls.push(['install', [id, dir]])
+      return { started: true, detail: 'installing' }
+    },
+    doctor: async () => {
+      mcalls.push(['doctor', []])
+      return []
+    },
+    remove: async (id) => {
+      mcalls.push(['remove', [id]])
+      return { removed: true, detail: 'removed', agents: [] }
+    },
+    ...machinesOver,
+  }
   const source: ExtAgentsSource = {
     load: async (probe, rescan) => {
       loads.push(!!probe)
@@ -95,12 +145,12 @@ function install(rows: ExtAgentRow[], over: Partial<ExtAgentsSource> & { refuse?
     confirms.push(title)
     fn()
   })
-  setSources({ extAgents: source })
+  setSources({ extAgents: source, machines: machinesSource })
   document.body.innerHTML =
     '<section id="extAgentsPage"><div id="extAgentsBody"></div></section>' +
     '<aside id="detail" data-open="false"><b id="dTitle">—</b><div id="dBody"></div></aside>' +
     '<div id="menu" data-open="false"></div>'
-  return { source, acts, loads, rescans, toasts, confirms }
+  return { source, acts, loads, rescans, toasts, confirms, mcalls }
 }
 
 async function mount() {
@@ -218,6 +268,7 @@ afterEach(() => {
   cleanup()
   resetSources()
   store._resetForTests()
+  machines._resetForTests()
 })
 
 describe('the tabs', () => {
@@ -233,7 +284,7 @@ describe('the tabs', () => {
       row({ name: 'Raven-PPT', preset: undefined, vendored: true, configured: false, enabled: false, probe_status: 'attention' }),
     ])
     await mount()
-    expect(tabLabels()).toEqual(['gui.filter.all', 'gui.agent.g_on', 'gui.agent.g_avail', 'gui.agent.g_missing'])
+    expect(tabLabels()).toEqual(['gui.filter.all', 'gui.agent.g_on', 'gui.agent.g_avail', 'gui.agent.g_missing', 'gui.machine.g_machines'])
     expect(await namesIn('gui.agent.g_on')).toEqual(['Raven', 'Raven-Code', 'on_one'])
     /* Raven's own first, then the server's order. An endpoint whose probe says
        unreachable is not something to install; a shipped product is never
@@ -243,13 +294,13 @@ describe('the tabs', () => {
     expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).toEqual([
       'Raven', 'Raven-Code', 'on_one', 'Raven-PPT', 'off_one', 'hermes', 'mirothinker', 'codex',
     ])
-    expect(tabs().map((b) => b.querySelector('.extAgents-tn')!.textContent)).toEqual(['8', '3', '4', '1'])
+    expect(tabs().map((b) => b.querySelector('.extAgents-tn')!.textContent)).toEqual(['8', '3', '4', '1', '0'])
   })
 
-  it('always offers All and Connected, and the other two only with cards in them', async () => {
+  it('always offers All, Connected and Machines, and the other two only with cards in them', async () => {
     install([row({ name: 'codex', preset: 'codex', configured: false, enabled: false, probe_status: 'missing' })])
     await mount()
-    expect(tabLabels()).toEqual(['gui.filter.all', 'gui.agent.g_on', 'gui.agent.g_missing'])
+    expect(tabLabels()).toEqual(['gui.filter.all', 'gui.agent.g_on', 'gui.agent.g_missing', 'gui.machine.g_machines'])
     await click(tabNamed('gui.agent.g_on'))
     expect(tabNamed('gui.agent.g_on').querySelector('.extAgents-tn')!.textContent).toBe('0')
     expect(rowsOf()).toEqual([])
@@ -265,7 +316,7 @@ describe('the tabs', () => {
     expect(rowsOf()).toEqual([])
     expect(document.querySelector('.extAgents-empty')!.textContent).toBe('gui.agent.none_avail')
     await click(tabNamed('gui.filter.all'))
-    expect(tabLabels()).toEqual(['gui.filter.all', 'gui.agent.g_on'])
+    expect(tabLabels()).toEqual(['gui.filter.all', 'gui.agent.g_on', 'gui.machine.g_machines'])
   })
 
   it('re-measures availability every time the page opens', async () => {
@@ -275,6 +326,380 @@ describe('the tabs', () => {
       store.open()
     })
     expect(loads).toEqual([true, true])
+  })
+})
+
+describe('the Mirasim family card', () => {
+  const family = (): HTMLElement | undefined => rowsOf().find((r) => r.querySelector('.extAgents-t')!.textContent === 'gui.agent.fam_mirasim')
+  const picks = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('.extAgents-pickrow')]
+  const pickNamed = (name: string): HTMLElement => picks().find((p) => p.querySelector('.extAgents-picknm')!.textContent === name)!
+
+  /* The preset names the server ships, in the order `presets.py` declares. */
+  const members = (): ExtAgentRow[] =>
+    ['claude', 'codex', 'kimi', 'antigravity', 'qwen', 'grok', 'dsh', 'pi', 'zcode'].map((id) =>
+      row({ name: `${id}-Mirasim`, preset: `mirasim_${id}`, configured: false, enabled: false, probe_status: 'ready' }),
+    )
+
+  /* A member whose handshake offered these choices; every other member as is. */
+  const withChoices = (rows: ExtAgentRow[], name: string, choices: ExtAgentModelChoice[]): ExtAgentRow[] =>
+    rows.map((m) => (m.name === name ? { ...m, model_source: 'agent' as const, model_choices: choices } : m))
+  const CODEX_CHOICES: ExtAgentModelChoice[] = [
+    { value: 'gpt-5.5', name: 'GPT-5.5', group: 'OpenAI' },
+    { value: 'gpt-6', name: 'GPT-6', group: 'OpenAI' },
+  ]
+
+  it('draws one card for nine presets, and says how many it stands for', async () => {
+    install(members())
+    await mount()
+    expect(rowsOf().length).toBe(1)
+    expect(family()!.querySelector('.extAgents-ctag')!.textContent).toBe('gui.agent.fam_n {"n":9}')
+    expect(family()!.querySelector('.extAgents-one')!.textContent).toBe('gui.agent.fam_mirasim_about')
+    /* The count beside the tab is the number of cards the reader can see. */
+    expect(tabNamed('gui.filter.all').querySelector('.extAgents-tn')!.textContent).toBe('1')
+  })
+
+  it('draws one card per family even when its members split across sections', async () => {
+    /* The All tab concatenates the three sections, each folded on its own --
+       so a family with at least MIN_FAMILY members in two of them produces two
+       cards wearing one key ('mirasim'). React keeps the first and drops the
+       second, which here reads as a card that does not respond. Rare in
+       practice -- the nine members share one executable, so they are usually
+       all present or all absent -- and wrong whenever it happens. */
+    /* Two sections, each with MIN_FAMILY folded members: `missing` is decided
+       by the probe (the agent is not installed), `avail` by everything else,
+       and both hold unconfigured presets. */
+    const gone = new Set(['codex-Mirasim', 'kimi-Mirasim'])
+    const all = members().map((member) =>
+      gone.has(member.name) ? { ...member, probe_status: 'missing', probe_missing: 'mirasim' } : member,
+    )
+    install(all)
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await mount()
+      const cards = rowsOf().filter((c) => c.querySelector('.extAgents-t')!.textContent === 'gui.agent.fam_mirasim')
+      expect(cards.length).toBe(2)
+      const complaint = errors.mock.calls.map((call) => String(call[0])).find((text) => text.includes('same key'))
+      expect(complaint, complaint ?? 'React reported no duplicate key').toBeUndefined()
+    } finally {
+      errors.mockRestore()
+    }
+  })
+
+  it('names a refused member instead of offering to connect it from the drawer', async () => {
+    /* The same verdict the card carries, for the same reason: the handshake
+       already refused this agent for want of a credential, and the fix --
+       signing in -- is outside this page, so a press here would spend a launch
+       to arrive at the sentence the row already says. A `toggle` from here is
+       answered with "no configured sub-agent named ...". */
+    const all = members().map((member) =>
+      member.name === 'codex-Mirasim' ? { ...member, needs_auth: true } : member,
+    )
+    const { acts } = install(all)
+    await mount()
+    await click(family())
+    const go = pickNamed('codex-Mirasim').querySelector<HTMLButtonElement>('.extAgents-pickgo')!
+    expect(go.textContent).toBe('gui.agent.unauthorized')
+    expect(go.disabled).toBe(true)
+    await click(go)
+    expect(acts).toEqual([])
+    /* Its siblings are unaffected: one refused member does not withhold the
+       connect the others are offered. */
+    const other = pickNamed('kimi-Mirasim').querySelector<HTMLButtonElement>('.extAgents-pickgo')!
+    expect(other.disabled).toBe(false)
+    expect(other.textContent).toBe('gui.agent.connect')
+  })
+
+  it('opens installation and recheck for a missing family member', async () => {
+    const all = members().map((member) => ({ ...member, probe_status: 'missing', probe_missing: 'mirasim' }))
+    const { acts, rescans } = install(all)
+    await mount()
+    await click(family())
+    const member = pickNamed('codex-Mirasim')
+    expect(member.querySelector('.extAgents-pickgo')!.textContent).toBe('gui.agent.go_install')
+    expect(member.querySelector('.extAgents-pm')).toBe(null)
+    await click(member.querySelector<HTMLElement>('.extAgents-pickgo')!)
+    expect(acts).toEqual([])
+    expect(document.querySelector('.extAgents-inst a')!.getAttribute('href')).toBe('https://mirasim.ai/download')
+    const recheck = document.querySelector<HTMLButtonElement>('.extAgents-act button')!
+    expect(recheck.textContent).toBe('gui.agent.recheck')
+    all.forEach((entry) => { entry.probe_status = 'ready' })
+    await click(recheck)
+    expect(rescans.at(-1)).toBe(true)
+    expect(document.querySelector('.extAgents-inst')).toBe(null)
+    expect(document.querySelector('.extAgents-act')!.textContent).toContain('gui.agent.connect')
+  })
+
+  it('connects the agent picked out of it, and only then draws its card', async () => {
+    const { acts } = install(members())
+    await mount()
+    await click(family())
+    expect(picks().map((p) => p.querySelector('.extAgents-picknm')!.textContent)).toEqual([
+      'claude-Mirasim',
+      'codex-Mirasim',
+      'kimi-Mirasim',
+      'antigravity-Mirasim',
+      'qwen-Mirasim',
+      'grok-Mirasim',
+      'dsh-Mirasim',
+      'pi-Mirasim',
+      'zcode-Mirasim',
+    ])
+    /* Opening the drawer changes nothing on the grid: the card is the only one. */
+    expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).not.toContain('codex-Mirasim')
+    await click(pickNamed('codex-Mirasim').querySelector<HTMLElement>('.extAgents-pickgo')!)
+    expect(acts).toEqual([['connect', 'codex-Mirasim', {}]])
+    /* The card appears because the add wrote the row, beside the group card the
+       other eight still sit behind -- and it is already a connected one. */
+    expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).toContain('codex-Mirasim')
+    expect(family()).toBeTruthy()
+    expect(rowNamed('codex-Mirasim').querySelector('.extAgents-ctl button')).toBe(null)
+    /* Done, so the drawer gets out of the way of the card it made. */
+    expect(detail.get().open).toBe(false)
+  })
+
+  /* A connect runs the agent for up to a minute, and the member is still folded
+     into the card behind -- so the row it was asked on is the one place that
+     can say so, and the drawer has to stay up until the add lands. */
+  it('keeps the drawer up while the connect runs, and the row says it is running', async () => {
+    const all = members()
+    let land!: () => void
+    const held = new Promise<void>((done) => {
+      land = done
+    })
+    install(all, {
+      act: async (op, r) => {
+        await held
+        if (op === 'connect') {
+          r.configured = true
+          r.enabled = true
+        }
+        return all
+      },
+    })
+    await mount()
+    await click(family())
+    await click(pickNamed('codex-Mirasim').querySelector<HTMLElement>('.extAgents-pickgo')!)
+    const go = pickNamed('codex-Mirasim').querySelector<HTMLButtonElement>('.extAgents-pickgo')!
+    expect(detail.get().open).toBe(true)
+    expect(go.disabled).toBe(true)
+    expect(go.textContent).not.toBe('gui.agent.connect')
+    expect(pickNamed('codex-Mirasim').querySelector<HTMLButtonElement>('.extAgents-pm')!.disabled).toBe(true)
+    await act(async () => {
+      land()
+      await held
+    })
+    expect(detail.get().open).toBe(false)
+    expect(rowNamed('codex-Mirasim')).toBeTruthy()
+  })
+
+  /* The model is the likeliest reason, and the one thing the row can change, so
+     the refusal stays where the reader can change it and press again. */
+  it('keeps a refused connect on its row, in the open drawer, with the reason', async () => {
+    const all = members()
+    install(all, {
+      act: async (op, r) => {
+        if (op === 'connect' && r.name === 'codex-Mirasim') {
+          throw { data: { detail: 'model not served', remedy: { kind: 'model', command: '' } } }
+        }
+        return all
+      },
+    })
+    await mount()
+    await click(family())
+    await click(pickNamed('codex-Mirasim').querySelector<HTMLElement>('.extAgents-pickgo')!)
+    expect(detail.get().open).toBe(true)
+    const line = pickNamed('codex-Mirasim').querySelector<HTMLElement>('.extAgents-pickone')!
+    expect(line.classList.contains('extAgents-pickone-bad')).toBe(true)
+    expect(line.textContent).toBe('gui.agent.st_connect_bad · gui.agent.why_model')
+    expect(line.title).toBe('model not served')
+    /* Still a member of the card: nothing was written. */
+    expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).not.toContain('codex-Mirasim')
+    expect(pickNamed('codex-Mirasim').querySelector<HTMLButtonElement>('.extAgents-pickgo')!.disabled).toBe(false)
+  })
+
+  /* Every write refetches the roster, and a reload must not take a choice the
+     reader has made but not yet sent: trying one agent and having it refused is
+     exactly when they move on to the one they had already set up. */
+  it('keeps the model picked on one row while another row s refusal reloads the roster', async () => {
+    const all = withChoices(members(), 'codex-Mirasim', CODEX_CHOICES)
+    const sent: Array<[string, string, ExtAgentActArgs]> = []
+    install(all, {
+      act: async (op, r, args) => {
+        sent.push([op, r.name, args || {}])
+        if (op === 'connect' && r.name === 'kimi-Mirasim') throw { data: { detail: 'not signed in' } }
+        if (op === 'connect') {
+          r.configured = true
+          r.enabled = true
+        }
+        return all
+      },
+    })
+    await mount()
+    await click(family())
+    await click(pickNamed('codex-Mirasim').querySelector<HTMLElement>('.extAgents-pm')!)
+    await click([...document.querySelectorAll<HTMLElement>('.model-picker-model')].find((o) => o.textContent === 'GPT-6'))
+    await click(pickNamed('kimi-Mirasim').querySelector<HTMLElement>('.extAgents-pickgo')!)
+    expect(pickNamed('kimi-Mirasim').querySelector('.extAgents-pickone')!.classList.contains('extAgents-pickone-bad')).toBe(true)
+    expect(pickNamed('codex-Mirasim').querySelector('.extAgents-mid')!.textContent).toBe('GPT-6')
+    await click(pickNamed('codex-Mirasim').querySelector<HTMLElement>('.extAgents-pickgo')!)
+    expect(sent.at(-1)).toEqual(['connect', 'codex-Mirasim', { model: 'gpt-6' }])
+  })
+
+  /* The same for a model picker the reader has open: a reload -- any write's
+     refetch, or the poll while some agent builds -- does not shut it under the
+     cursor. */
+  it('keeps a model picker open across a reload', async () => {
+    install(withChoices(members(), 'codex-Mirasim', CODEX_CHOICES))
+    await mount()
+    await click(family())
+    await click(pickNamed('codex-Mirasim').querySelector<HTMLElement>('.extAgents-pm')!)
+    expect(document.querySelector('.model-picker')).toBeTruthy()
+    await act(async () => {
+      store.open()
+    })
+    expect(document.querySelector('.model-picker')).toBeTruthy()
+  })
+
+  /* The picker measures itself against the ROW: `anchorRow` sizes a popover from
+     its anchor's left edge to 20px inside the drawer, and from the pill -- at the
+     row's right -- it fell to its 320px floor. happy-dom does no layout, so the
+     rects are stubbed; what this pins is which element the picker is sized from. */
+  it('hangs the model picker off the row, so it opens as wide as the sheet s', async () => {
+    install(withChoices(members(), 'codex-Mirasim', CODEX_CHOICES))
+    await mount()
+    await click(family())
+    const rect = (left: number, right: number, top: number, bottom: number) => (): DOMRect =>
+      ({ left, right, top, bottom, width: right - left, height: bottom - top, x: left, y: top, toJSON: () => ({}) }) as DOMRect
+    const drawer = document.getElementById('detail')!
+    drawer.classList.add('dpanel')
+    drawer.getBoundingClientRect = rect(0, 540, 0, 900)
+    const codex = pickNamed('codex-Mirasim')
+    codex.getBoundingClientRect = rect(20, 520, 100, 146)
+    codex.querySelector<HTMLElement>('.extAgents-pm')!.getBoundingClientRect = rect(262, 430, 109, 137)
+    await click(codex.querySelector<HTMLElement>('.extAgents-pm')!)
+    /* 540 - 20 - 20 from the row; the pill would have given the 320 floor. */
+    const picker = document.querySelector<HTMLElement>('.model-picker')!
+    expect(picker.style.width).toBe('500px')
+    /* And not INSIDE it: `anchorRow` measures the anchor before the picker leaves
+       the flow, so a picker within the row stretched the very rect it measured
+       and every one flipped up over the drawer. A stub cannot stretch, so the
+       containment itself is what is held here. */
+    expect(codex.contains(picker)).toBe(false)
+  })
+
+  it('puts the model picker away when its row is connected', async () => {
+    const { acts } = install(withChoices(members(), 'codex-Mirasim', CODEX_CHOICES))
+    await mount()
+    await click(family())
+    await click(pickNamed('codex-Mirasim').querySelector<HTMLElement>('.extAgents-pm')!)
+    expect(document.querySelector('.model-picker')).toBeTruthy()
+    await click(pickNamed('codex-Mirasim').querySelector<HTMLElement>('.extAgents-pickgo')!)
+    expect(document.querySelector('.model-picker')).toBe(null)
+    expect(acts).toEqual([['connect', 'codex-Mirasim', {}]])
+  })
+
+  /* Both draw into the one drawer, so a sheet opened over the picker replaces
+     it rather than drawing beside it. */
+  it('puts the picker away when a card s sheet opens in its place', async () => {
+    const all = [...members(), row({ name: 'codex', preset: 'codex' })]
+    install(all)
+    await mount()
+    await click(family())
+    expect(picks().length).toBe(9)
+    await act(async () => {
+      store.sheetOpen(all.at(-1)!)
+    })
+    expect(store.get().picking).toBe(null)
+    expect(picks().length).toBe(0)
+    expect(sheet()).toBeTruthy()
+  })
+
+  /* The reader's model rides the add, so the row is never connected on the
+     agent's default first and moved afterwards. */
+  it('sends the model picked for an agent with its connect, in the one write', async () => {
+    const { acts } = install(
+      withChoices(members(), 'codex-Mirasim', [
+        { value: 'gpt-5.5', name: 'GPT-5.5', group: 'OpenAI' },
+        { value: 'glm-5.3-flash', name: 'GLM 5.3 Flash', group: 'Platform' },
+      ]),
+    )
+    await mount()
+    await click(family())
+    const codex = pickNamed('codex-Mirasim')
+    await click(codex.querySelector<HTMLElement>('.extAgents-pm')!)
+    /* The agent's own groups, as the left column: its choices, not Raven's providers. */
+    /* By the name span: the button also carries the provider's icon letter. */
+    const prov = [...document.querySelectorAll<HTMLElement>('.model-picker-prov')].find((p) =>
+      [...p.querySelectorAll('span')].some((x) => x.textContent === 'Platform'),
+    )
+    expect(prov, 'the picker lists the agent s own groups').toBeTruthy()
+    await click(prov!)
+    const opt = [...document.querySelectorAll<HTMLElement>('.model-picker-model')].find((o) =>
+      (o.textContent || '').includes('GLM 5.3 Flash'),
+    )
+    expect(opt, 'the picker lists the agent s own choices').toBeTruthy()
+    await click(opt!)
+    expect(codex.querySelector('.extAgents-mid')!.textContent).toBe('GLM 5.3 Flash')
+    /* Reopened, it ticks the pick: the tick matches the value the agent lists,
+       which here differs from the name the pill shows for it. */
+    await click(codex.querySelector<HTMLElement>('.extAgents-pm')!)
+    const ticked = [...document.querySelectorAll<HTMLElement>('.model-picker-model[aria-pressed="true"]')]
+    expect(ticked.map((o) => o.textContent)).toEqual(['GLM 5.3 Flash✓'])
+    await click(ticked[0]!)
+    await click(codex.querySelector<HTMLElement>('.extAgents-pickgo')!)
+    expect(acts).toEqual([['connect', 'codex-Mirasim', { model: 'glm-5.3-flash' }]])
+  })
+
+  /* An agent whose handshake offered no model choices runs on its own default,
+     and the pill says so rather than opening an empty picker. */
+  it('offers no model to pick when the agent advertised none', async () => {
+    install(members())
+    await mount()
+    await click(family())
+    const pm = pickNamed('claude-Mirasim').querySelector<HTMLButtonElement>('.extAgents-pm')!
+    expect(pm.disabled).toBe(true)
+    expect(pm.textContent).toBe('gui.agent.model_managed')
+  })
+
+  /* The mark of an agent run through Mirasim is Mirasim's, with the agent's
+     over it -- on its card, not in the picker, where the drawer is already
+     Mirasim's and the agent is what is being chosen. */
+  it('draws a connected member s mark as the route with the agent over it', async () => {
+    install(members().map((m) => (m.name === 'codex-Mirasim' ? { ...m, configured: true, enabled: true } : m)))
+    await mount()
+    const mark = rowNamed('codex-Mirasim').querySelector('.agent-mark')!
+    expect(mark.querySelector(':scope > img')!.getAttribute('src')).toBe('assets/agents/mirasim.svg')
+    expect(mark.querySelector('.agent-mark-badge img')!.getAttribute('src')).toBe('assets/agents/codex-color.svg')
+    await click(family())
+    const plain = pickNamed('claude-Mirasim').querySelector('.agent-mark')!
+    expect(plain.querySelector(':scope > img')!.getAttribute('src')).toBe('assets/agents/claudecode-color.svg')
+    expect(plain.querySelector('.agent-mark-badge')).toBe(null)
+  })
+
+  it('never folds a member that is already on the roster', async () => {
+    const all = members().map((m) =>
+      m.name === 'codex-Mirasim' ? { ...m, configured: true, enabled: true } : m,
+    )
+    install(all)
+    await mount()
+    expect(rowNamed('codex-Mirasim')).toBeTruthy()
+    await click(family())
+    expect(picks().map((p) => p.querySelector('.extAgents-picknm')!.textContent)).not.toContain('codex-Mirasim')
+    expect(picks().length).toBe(8)
+  })
+
+  it('unfolds a family that has come down to one visible member', async () => {
+    install([members()[0]!])
+    await mount()
+    expect(family()).toBeUndefined()
+    expect(rowNamed('claude-Mirasim')).toBeTruthy()
+  })
+
+  it('folds only the presets that share the prefix', async () => {
+    install([...members(), row({ name: 'codex', preset: 'codex', configured: false, enabled: false })])
+    await mount()
+    expect(rowNamed('codex')).toBeTruthy()
+    expect(rowsOf().length).toBe(2)
   })
 })
 
@@ -473,10 +898,15 @@ describe('connecting', () => {
       },
     })
     await mount()
-    expect(document.querySelectorAll('.extAgents-wcard').length).toBe(18)
+    /* Nineteen and not the agent catalogue's twenty-seven: the nine Mirasim presets
+       are one card while none of them has been opened out, so the skeleton has
+       to draw one cell for them or the grid jumps by eight when the roster
+       lands -- which is the whole reason this count is pinned. */
+    expect(document.querySelectorAll('.extAgents-wcard').length).toBe(19)
     expect(document.querySelector('.extAgents-grid')!.getAttribute('aria-busy')).toBe('true')
     expect(document.querySelector('.extAgents-empty')).toBeNull()
-    expect(document.querySelector('.extAgents-tn')).toBeNull()
+    /* The machines tab counts its own rows, which the roster's wait does not cover. */
+    expect(document.querySelectorAll('.extAgents-tn').length).toBe(1)
     expect(document.querySelectorAll('.extAgents-tab .extAgents-wtn').length).toBe(2)
     await act(async () => {
       release()
@@ -1844,5 +2274,255 @@ describe('the model pill', () => {
     expect(acts).toEqual([['toggle', 'Raven-Code', { enabled: false }]])
     await click([...sheet()!.querySelectorAll<HTMLElement>('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
     expect(acts.at(-1)).toEqual(['toggle', 'Raven-Code', { enabled: true }])
+  })
+})
+
+describe('the machines tab', () => {
+  const openMachines = async (): Promise<void> => {
+    await click(tabNamed('gui.machine.g_machines'))
+  }
+  const field = (label: string): HTMLInputElement | HTMLSelectElement | null =>
+    sheet()?.querySelector(`[aria-label="${label}"]`) ?? null
+  const sheetAct = (label: string): HTMLButtonElement | undefined =>
+    [...(sheet()?.querySelectorAll<HTMLButtonElement>('.extAgents-act button') ?? [])].find((b) => b.textContent === label)
+  const note = (): { t: string | null; said: string | null } | null => {
+    const n = sheet()?.querySelector('.extAgents-note')
+    return n ? { t: n.querySelector('.extAgents-note-t')?.textContent ?? null, said: n.querySelector('.extAgents-note-said')?.textContent ?? null } : null
+  }
+  const settle = async (): Promise<void> => {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 15))
+    })
+  }
+
+  it('lists each registered machine with its node and link, then the register card, and counts them', async () => {
+    install([row()], {
+      machines: [
+        mrow({ node_version: '0.2.4', node_current: true, state: 'connected', agents: 2 }),
+        mrow({ id: 'old', name: 'Old box', node_version: '0.2.3', state: 'lost', detail: 'the link went' }),
+        mrow({ id: 'bare', name: 'Bare box' }),
+        mrow({ id: 'here', name: 'This Mac', transport: 'local' }),
+        mrow({ id: 'none', name: 'No node', state: 'error', detail: "no Raven node on machine 'No node' (none); install it with `raven ops connection install-node none`" }),
+      ],
+    })
+    await mount()
+    expect(tabNamed('gui.machine.g_machines').querySelector('.extAgents-tn')!.textContent).toBe('5')
+    await openMachines()
+    expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).toEqual([
+      'Lab box', 'Old box', 'Bare box', 'This Mac', 'No node', 'gui.machine.register',
+    ])
+    expect(lineOf('Lab box')).toBe('boxgui.machine.node_version {"v":"0.2.4"}')
+    expect(lineOf('Old box')).toBe('oldgui.machine.node_stale {"v":"0.2.3"}')
+    expect(lineOf('Bare box')).toBe('baregui.machine.node_none')
+    expect(lineOf('This Mac')).toBe('heregui.machine.node_here')
+    expect(footOf('Lab box')!.k).toBeNull()
+    expect(rowNamed('Lab box').querySelector('.extAgents-foot-say')!.textContent).toBe('gui.machine.state_connected {"n":"2"}')
+    expect(rowNamed('Old box').querySelector('.extAgents-foot-say')!.textContent).toBe('the link went')
+    expect(rowNamed('This Mac').querySelector('.extAgents-foot-say')!.textContent).toBe('gui.machine.transport_local')
+    /* The one error a reader can act on from here is said with what to do. */
+    expect(rowNamed('No node').querySelector('.extAgents-foot-say')!.textContent).toBe(
+      'gui.machine.err_no_node {"said":"no Raven node on machine \'No node\' (none); install it with `raven ops connection install-node none`"}',
+    )
+    expect(ledOf('No node')).toBe('extAgents-led extAgents-led-bad')
+    expect(ledOf('Lab box')).toBe('extAgents-led')
+    expect(ledOf('Old box')).toBe('extAgents-led extAgents-led-warn')
+    expect(ledOf('Bare box')).toBeNull()
+    /* The corner offers the one thing to do: a node to install, or to update; nothing for a current node or this computer. */
+    expect(controlOf('Lab box')).toBe('')
+    expect(buttonOf('Old box')!.textContent).toBe('gui.machine.update')
+    expect(buttonOf('Bare box')!.textContent).toBe('gui.machine.install')
+    expect(controlOf('This Mac')).toBe('')
+  })
+
+  it('says so on an empty registry, and shows a list that could not be read once, on the tab', async () => {
+    install([row()], {
+      machinesOver: {
+        list: async () => {
+          throw { data: { detail: 'the registry is not valid JSON' } }
+        },
+      },
+    })
+    await mount()
+    await openMachines()
+    expect(document.querySelector('.extAgents-empty')!.textContent).toBe('gui.machine.none')
+    expect(document.querySelector('.extAgents-note-t')!.textContent).toBe('gui.machine.load_bad')
+    expect(document.querySelector('.extAgents-note-said')!.textContent).toBe('the registry is not valid JSON')
+  })
+
+  it('installs the node from the card or the sheet, says so until the list says it ended, and keeps a failed end on the card', async () => {
+    const stored = mrow()
+    let listed: MachineRow = stored
+    const { mcalls } = install([row()], { machines: [stored], machinesOver: { list: async () => [{ ...listed }] } })
+    machines._resetForTests(0)
+    await mount()
+    await openMachines()
+    listed = { ...stored, install: { running: true, ok: null, detail: 'looking at the machine' } }
+    await click(buttonOf('Lab box'))
+    expect(mcalls.filter((c) => c[0] === 'install')).toEqual([['install', ['box', undefined]]])
+    await settle()
+    expect(controlOf('Lab box')).toBe(' gui.machine.installing')
+    expect(lineOf('Lab box')).toBe('boxgui.machine.installing')
+    listed = { ...stored, install: { running: false, ok: false, detail: 'installing the Raven node failed at the packages step: exit 1' } }
+    await settle()
+    expect(footOf('Lab box')!.k).toBe('gui.machine.install_bad_said {"said":"installing the Raven node failed at the packages step: exit 1"}')
+    expect(buttonOf('Lab box')!.textContent).toBe('gui.machine.install')
+    /* The sheet says it in a note with what to do, and takes a directory for the next try. */
+    await openSheet('Lab box')
+    expect(note()).toEqual({ t: 'gui.machine.install_bad', said: 'installing the Raven node failed at the packages step: exit 1' })
+    await typeInto(field('gui.machine.f_node_dir'), '/data/raven-node')
+    listed = { ...stored, install: { running: true, ok: null, detail: 'looking at the machine' } }
+    await click(sheetAct('gui.machine.install'))
+    expect(mcalls.filter((c) => c[0] === 'install')[1]).toEqual(['install', ['box', '/data/raven-node']])
+    listed = { ...stored, node_version: '0.2.4', node_current: true, state: 'idle', install: { running: false, ok: true, detail: 'Installed the Raven node' } }
+    await settle()
+    expect(sheetActs()).toEqual(['gui.machine.probe', 'gui.machine.doctor', 'gui.machine.remove_do'])
+    expect(controlOf('Lab box')).toBe('')
+  })
+
+  it('keeps a refused install on the card without polling', async () => {
+    install([row()], { machines: [mrow()], machinesOver: { installNode: async () => ({ started: false, detail: 'an install is already running' }) } })
+    await mount()
+    await openMachines()
+    await click(buttonOf('Lab box'))
+    expect(footOf('Lab box')!.k).toBe('gui.machine.install_bad_said {"said":"an install is already running"}')
+    expect(buttonOf('Lab box')!.textContent).toBe('gui.machine.install')
+  })
+
+  it('registers a machine from the form once every field is typed, explains a refusal by its kind, and opens the new sheet', async () => {
+    const rows: MachineRow[] = []
+    const answers = [
+      { ok: false, detail: 'could not reach the machine: Permission denied (publickey).', reason: 'login' as const },
+      { ok: true, detail: 'reached', reason: '' as const },
+    ]
+    const { mcalls } = install([row()], {
+      machinesOver: {
+        list: async () => rows.map((r) => ({ ...r })),
+        add: async (form) => {
+          mcalls.push(['add', [form]])
+          const answer = answers.shift()!
+          if (answer.ok) rows.push(mrow({ id: form.id, name: form.name, paths: form.paths }))
+          return answer
+        },
+      },
+    })
+    await mount()
+    await openMachines()
+    await click(rowNamed('gui.machine.register'))
+    expect(sheetName()).toBe('gui.machine.register')
+    const go = (): HTMLButtonElement => sheet()!.querySelector<HTMLButtonElement>('.extAgents-act button')!
+    expect(go().disabled).toBe(true)
+    const typed: Array<[string, string]> = [
+      ['gui.machine.f_name', 'GPU box 1'],
+      ['gui.machine.f_id', 'gpu1'],
+      ['gui.machine.f_host', '203.0.113.7'],
+      ['gui.machine.f_user', 'alice'],
+      ['gui.machine.f_key', '~/.ssh/id_gpu1'],
+    ]
+    for (const [label, value] of typed) await typeInto(field(label), value)
+    await typeInto(sheetTextarea(), '/data/alice/projects\n\n /scratch ')
+    expect(go().disabled).toBe(false)
+    await click(go())
+    /* The kind is said in the head line, which never scrolls away; the server's sentence sits under the form. */
+    expect(sheetStatus()).toBe('gui.machine.why_login')
+    expect(note()).toEqual({ t: 'gui.machine.add_bad', said: 'could not reach the machine: Permission denied (publickey).' })
+    expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).toEqual(['gui.machine.register'])
+    await click(go())
+    expect(sheetName()).toBe('GPU box 1')
+    expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).toEqual(['GPU box 1', 'gui.machine.register'])
+    const sent = mcalls.filter((c) => c[0] === 'add').map((c) => c[1][0] as RegisterForm)
+    expect(sent.length).toBe(2)
+    expect(sent[1]).toEqual({ id: 'gpu1', name: 'GPU box 1', host: '203.0.113.7', port: 0, user: 'alice', key: '~/.ssh/id_gpu1', paths: ['/data/alice/projects', '/scratch'] })
+  })
+
+  it('removes a machine from its sheet after asking, keeps a refusal on the row, and closes the sheet once it is gone', async () => {
+    const rows = [mrow({ node_version: '0.2.4', node_current: true, state: 'idle' })]
+    const answers = [
+      { removed: false, detail: "1 agent entry names machine 'Lab box' (box) (claude_code@box); disconnect them first", agents: ['claude_code@box'] },
+      { removed: true, detail: 'removed', agents: [] },
+    ]
+    const { confirms, toasts } = install([row()], {
+      machinesOver: {
+        list: async () => rows.map((r) => ({ ...r })),
+        remove: async () => {
+          const answer = answers.shift()!
+          if (answer.removed) rows.length = 0
+          return answer
+        },
+      },
+    })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    expect(sheetActs()).toEqual(['gui.machine.probe', 'gui.machine.doctor', 'gui.machine.remove_do'])
+    await click(sheetAct('gui.machine.remove_do'))
+    expect(confirms).toEqual(['gui.machine.remove_do'])
+    expect(sheetStatus()).toBe('gui.machine.remove_named {"agents":"claude_code@box"}')
+    expect(footOf('Lab box')!.k).toBe('gui.machine.remove_named {"agents":"claude_code@box"}')
+    expect(toasts).toEqual([])
+    await click(sheetAct('gui.machine.remove_do'))
+    expect(toasts).toEqual(['gui.machine.removed {"name":"Lab box"}'])
+    expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).toEqual(['gui.machine.register'])
+    expect(detail.get().open).toBe(false)
+  })
+
+  it('reaches one machine on request, and asks the doctor for the sheet and the file', async () => {
+    const { mcalls } = install([row()], {
+      machines: [mrow({ problems: ["box: 'key' is missing, so there is no way onto it"] })],
+      machinesOver: {
+        doctor: async () => [
+          { id: '', blocking: false, detail: '1 entry had no id and was skipped.' },
+          { id: 'box', blocking: true, detail: "box: 'key' is missing, so there is no way onto it" },
+          { id: 'box', blocking: false, detail: "box: 'software' is not set" },
+        ],
+      },
+    })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    const problems = (): string | null => [...sheet()!.querySelectorAll('.extAgents-fld')].find((f) => f.querySelector('.extAgents-k')!.textContent === 'gui.machine.problems')!.querySelector('.extAgents-ro')!.textContent
+    expect(problems()).toBe("box: 'key' is missing, so there is no way onto it")
+    await click(sheetAct('gui.machine.probe'))
+    expect(mcalls.filter((c) => c[0] === 'list').at(-1)).toEqual(['list', [true, 'box']])
+    await click(sheetAct('gui.machine.doctor'))
+    expect(problems()).toBe("box: 'key' is missing, so there is no way onto it\nbox: 'software' is not set")
+    expect(document.querySelector('#extAgentsBody .extAgents-note-t')!.textContent).toBe('gui.machine.file_problems')
+    expect(document.querySelector('#extAgentsBody .extAgents-note-said')!.textContent).toBe('1 entry had no id and was skipped.')
+  })
+
+  it("offers a preset the machines with this Raven's node to run on, and connects it there with its directory", async () => {
+    const { acts } = install([row({ name: 'codex', preset: 'codex', kind: 'acp', configured: false, enabled: false, probe_status: 'ready' })], {
+      machines: [
+        mrow({ node_version: '0.2.4', node_current: true }),
+        mrow({ id: 'old', name: 'Old box', node_version: '0.2.3' }),
+        mrow({ id: 'bare', name: 'Bare box' }),
+        mrow({ id: 'here', name: 'This Mac', transport: 'local' }),
+      ],
+    })
+    await mount()
+    await openSheet('codex')
+    const where = field('gui.machine.where') as HTMLSelectElement
+    expect([...where.options].map((o) => [o.value, o.disabled, o.textContent])).toEqual([
+      ['', false, 'gui.machine.where_here'],
+      ['box', false, 'Lab box (box)'],
+      ['old', true, 'Old box (old) - gui.machine.needs_update'],
+      ['bare', true, 'Bare box (bare) - gui.machine.needs_node'],
+    ])
+    expect(field('gui.machine.remote_cwd')).toBeNull()
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(where, 'box')
+      where.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await typeInto(field('gui.machine.remote_cwd'), '~/work')
+    await click(buttonOf('codex'))
+    expect(acts).toEqual([['connect', 'codex', { machine: 'box', remote_cwd: '~/work' }]])
+  })
+
+  it('says a preset runs here when no machine is registered, and draws no directory for an endpoint', async () => {
+    install([row({ name: 'mirothinker', preset: 'mirothinker', kind: 'openai', configured: false, enabled: false, probe_status: 'ready', has_api_key: true })])
+    await mount()
+    await openSheet('mirothinker')
+    const where = field('gui.machine.where') as HTMLSelectElement
+    expect([...where.options].map((o) => o.value)).toEqual([''])
+    expect([...sheet()!.querySelectorAll('.extAgents-about')].map((n) => n.textContent)).toContain('gui.machine.where_none')
   })
 })

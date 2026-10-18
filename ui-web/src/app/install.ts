@@ -20,7 +20,7 @@ import { cronSource } from '../features/cron/source'
 import { openDeskTask } from '../features/desk/store'
 import { exportSource } from '../features/export/source'
 import { AgentsStepBody } from '../features/extAgents/AgentsBody'
-import { extAgentsSource } from '../features/extAgents/source'
+import { extAgentsSource, machinesSource } from '../features/extAgents/source'
 import * as extAgentsStore from '../features/extAgents/store'
 import { importedSource } from '../features/imported/source'
 import { importSyncSource } from '../features/importSync/source'
@@ -249,6 +249,7 @@ export function installSources(): void {
     onRunStarted, onNodeUpdated, onRunCompleted, onRunReplanned, onSubagentStatus,
   }
   sources.extAgents = extAgentsSource
+  sources.machines = machinesSource
   sources.knowledge = knowledgeSource
   /* How a citation in the transcript is followed. Registered by the island
      that can do it rather than imported by the one that wants it: two domains

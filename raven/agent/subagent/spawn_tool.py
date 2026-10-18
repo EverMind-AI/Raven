@@ -57,6 +57,10 @@ class SpawnTool(Tool):
     # whether a given one happens to return before its sub-agent does -- a
     # consumer cannot see that distinction.
     blocking_interaction = True
+    # Not declared ``agent_output``: this call returns a receipt this process
+    # composed ("started (id: ...)") or a refusal, and never the sub-agent's own
+    # words -- those arrive separately, as the announcement the manager injects.
+    # Declaring it here is what put the receipt's own text beyond the scrub.
 
     def __init__(self, manager: "SubagentManager"):
         self._manager = manager

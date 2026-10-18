@@ -30,7 +30,7 @@ import contextlib
 import json
 import os
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -73,6 +73,11 @@ class RemoteRun:
     received: int = 0
     """How many of the agent's frames this computer had read when the prompt went out: where an attach goes on
     from, so a pick-up reads the turn from its first frame."""
+    stderr_received: int = 0
+    """How many of the agent's stderr lines had reached this computer when the prompt went out: where a pick-up
+    asks the stderr replay from. An ACP agent is one task across every prompt its process is sent, so what the
+    earlier prompts wrote is not read again into this turn's tail and journal; a cli run, whose task is the
+    command's own, keeps 0 and reads all of it."""
     started: float = field(default_factory=time.time)
     kind: str = "acp"
     """``acp`` for a turn in an ACP session, ``cli`` for a command whose whole output is the reply
@@ -344,18 +349,26 @@ class Tracker:
     It moves the record only until ``prompt_sent``: the turn's own frames are
     never checkpointed, since the reply is put together from all of them --
     the chunks before the answer as much as the answer -- and a process that
-    picks the run up has to read the turn from its first frame.
+    picks the run up has to read the turn from its first frame. ``stderr_count``
+    is read once, as the prompt goes out: the stderr lines before it are the
+    earlier prompts', and a pick-up asks the replay from past them.
     """
 
-    def __init__(self, run: RemoteRun) -> None:
+    def __init__(self, run: RemoteRun, *, stderr_count: Callable[[], Any] | None = None) -> None:
         self.run = run
         self.kept = False
+        self._stderr_count = stderr_count
         record(run)
 
     def prompt_sent(self, request_id: int) -> None:
-        """The prompt went out under ``request_id``: what a later process awaits the answer to."""
+        """The prompt went out under ``request_id``: what a later process awaits the answer to; the stderr line
+        count is taken now."""
         self.run.prompt_id = request_id
         self.run.next_id = request_id + 1
+        if self._stderr_count is not None:
+            n = self._stderr_count()
+            if isinstance(n, int) and not isinstance(n, bool) and n > self.run.stderr_received:
+                self.run.stderr_received = n
         try:
             record(self.run)
         except OSError as exc:

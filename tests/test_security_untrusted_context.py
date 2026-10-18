@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from raven.agent.context.builder import ContextBuilder
 from raven.context_engine.segments import render
 from raven.contracts.memory import Memory
@@ -215,6 +217,21 @@ def test_an_unreadable_config_lends_no_key_and_does_not_stop_the_start(monkeypat
 _HELD = "sk-or-held-0123456789abcdef"
 
 
+@pytest.fixture
+def full_access_raven_home(tmp_path, monkeypatch) -> Path:
+    """The suite's full-access permission config, found on every platform.
+
+    The suite writes it under ``HOME``, and ``Path.home()`` reads
+    ``USERPROFILE`` on Windows, so it is not found there and a turn that cannot
+    ask refuses the call it was meant to run. ``RAVEN_HOME`` outranks both.
+    """
+    home = tmp_path.with_name(f"{tmp_path.name}-raven")
+    home.mkdir()
+    (home / "config.json").write_text('{"permissions": {"mode": "full"}}')
+    monkeypatch.setenv("RAVEN_HOME", str(home))
+    return home
+
+
 def test_a_held_key_in_an_image_bearing_result_never_reaches_the_model(monkeypatch) -> None:
     """A model that takes images in a tool result is sent the blocks, not the text,
     so scrubbing only the text left the key in the half the model reads."""
@@ -241,7 +258,7 @@ def test_a_dotfile_read_with_pictures_is_redacted_in_its_text_blocks() -> None:
     assert _scrubbed_blocks({"path": "x"}, None) is None
 
 
-def test_a_sub_agents_model_never_reads_a_key_raven_holds(tmp_path: Path, monkeypatch) -> None:
+def test_ravens_subagent_loop_scrubs_its_local_file_reads(tmp_path: Path, monkeypatch) -> None:
     """The sub-agent loop fenced its tool output the way the main loop does and
     did not scrub it, so the same `cat config.json` read by a sub-agent put
     Raven's key in its context."""
@@ -283,7 +300,7 @@ def test_a_sub_agents_model_never_reads_a_key_raven_holds(tmp_path: Path, monkey
     assert "[redacted: providers.openrouter.apiKey]" in str(tool_messages)
 
 
-def test_every_reader_of_a_tool_result_gets_it_scrubbed(monkeypatch) -> None:
+def test_readers_of_local_tool_results_get_them_scrubbed(monkeypatch) -> None:
     """The loops scrubbed their own copies, after the trace span, the page's diff
     and the sentinel's reply had already read the raw output from the registry."""
     import asyncio
@@ -329,10 +346,8 @@ def test_every_reader_of_a_tool_result_gets_it_scrubbed(monkeypatch) -> None:
     assert "[redacted: providers.openrouter.apiKey]" in str(out)
 
 
-def test_what_a_sub_agent_says_is_scrubbed_where_it_is_kept_and_shown(tmp_path: Path, monkeypatch) -> None:
-    """A third-party agent started with Raven's key can print it: on its stdout
-    (the frame journal), in its transcript (the page), in its probe's stderr tail
-    (the settings page) and in the report it hands back to the main session."""
+def test_what_a_sub_agent_says_is_preserved_where_it_is_kept_and_shown(tmp_path: Path, monkeypatch) -> None:
+    """The host preserves another agent's content even when it matches a held key."""
     import json
 
     from raven.acp_client.journal import FrameJournal
@@ -346,20 +361,24 @@ def test_what_a_sub_agent_says_is_scrubbed_where_it_is_kept_and_shown(tmp_path: 
     activity.set_transcript(
         run, [{"role": "tool", "content": [{"type": "text", "text": f"OPENROUTER_API_KEY={_HELD}"}]}]
     )
-    assert _HELD not in json.dumps(run.transcript)
+    assert run.transcript == [{"role": "tool", "content": [{"type": "text", "text": f"OPENROUTER_API_KEY={_HELD}"}]}]
 
     journal = FrameJournal(tmp_path / "frames.jsonl")
     journal.note("in", frame={"params": {"update": {"rawOutput": f"key {_HELD}"}}})
     journal.note("err", text=f"using {_HELD}")
     journal.close()
-    assert _HELD not in (tmp_path / "frames.jsonl").read_text(encoding="utf-8")
+    frames = [json.loads(line) for line in (tmp_path / "frames.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert frames[0]["frame"]["params"]["update"]["rawOutput"] == f"key {_HELD}"
+    assert frames[1]["text"] == f"using {_HELD}"
 
     class _Cfg:
         name = "Pi"
 
     state = TestStateStore(tmp_path / "state.json")
     state.record(_Cfg(), "acp", ok=False, detail=f"stderr: {_HELD}", tested_at_ms=1)
-    assert _HELD not in (tmp_path / "state.json").read_text(encoding="utf-8")
+    assert (
+        json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))["verdicts"][0]["detail"] == f"stderr: {_HELD}"
+    )
 
     class _Provider:
         def get_default_model(self) -> str:
@@ -373,15 +392,12 @@ def test_what_a_sub_agent_says_is_scrubbed_where_it_is_kept_and_shown(tmp_path: 
     origin = {"channel": "web", "chat_id": "c", "session_key": "web:c"}
     manager._inject(f"the agent said {_HELD}", origin)
     manager._emit_delivered(origin, {"content": f"the agent said {_HELD}"})
-    assert submitted and _HELD not in submitted[0]
-    assert emitted and _HELD not in json.dumps(emitted)
+    assert submitted == [f"the agent said {_HELD}"]
+    assert emitted[0]["payload"] == {"content": f"the agent said {_HELD}"}
 
 
-def test_a_sub_agents_own_record_never_keeps_a_key_it_echoed(tmp_path: Path, monkeypatch) -> None:
-    """The live transcript was clean while the call labels, the closing line, the
-    output file a later DAG node's prompt renders, and the error record were not."""
-    import json
-
+def test_a_sub_agents_record_preserves_its_content(monkeypatch) -> None:
+    """The record and downstream DAG input retain what the agent returned."""
     from raven.agent.subagent import activity
     from raven.agent.subagent.backends.observability import record_transcript
 
@@ -394,10 +410,12 @@ def test_a_sub_agents_own_record_never_keeps_a_key_it_echoed(tmp_path: Path, mon
         activity.append_closing(f" and {_HELD}")
     finally:
         activity._current.reset(token)
-    assert _HELD not in json.dumps([run.tool_calls, run.tool_failures, run.closing])
-    assert _HELD not in activity.persisted_output(None, f"the answer is {_HELD}")
+    assert run.tool_calls == [f"curl -H 'Authorization: Bearer {_HELD}'"]
+    assert run.tool_failures == [f"wget {_HELD}"]
+    assert run.closing == f"done with {_HELD} and {_HELD}"
+    assert activity.persisted_output(None, f"the answer is {_HELD}") == f"the answer is {_HELD}"
     run.truncation, run.full_output = {"returned": 1}, f"the whole answer is {_HELD} and more"
-    assert _HELD not in activity.persisted_output(run, "x")
+    assert activity.persisted_output(run, "x") == run.full_output
 
     class _Span:
         artifacts: list = []
@@ -407,16 +425,156 @@ def test_a_sub_agents_own_record_never_keeps_a_key_it_echoed(tmp_path: Path, mon
 
     span = _Span()
     record_transcript(span, {"invocations": [{"stdout": f"key={_HELD}", "stderr": ""}]})
-    assert _HELD not in json.dumps(span.artifacts)
+    assert span.artifacts == [{"invocations": [{"stdout": f"key={_HELD}", "stderr": ""}]}]
 
 
-def test_a_failed_sub_agents_error_record_keeps_no_key(tmp_path: Path, monkeypatch) -> None:
+def test_a_failed_sub_agents_error_record_preserves_its_message(tmp_path: Path, monkeypatch) -> None:
     from raven.agent.subagent.history import SpawnRecord
 
     monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [(_HELD, "providers.openrouter.apiKey")])
     record = SpawnRecord.open(tmp_path / "s", task_id="t1", task="ask", meta={"agent": "Pi"})
     record.finish(status="failed", error=f"agent exited: OPENROUTER_API_KEY={_HELD}")
-    assert _HELD not in record.file("error.md").read_text(encoding="utf-8")
+    assert record.file("error.md").read_text(encoding="utf-8") == f"agent exited: OPENROUTER_API_KEY={_HELD}"
+
+
+@pytest.mark.parametrize("via_meta", [False, True])
+@pytest.mark.parametrize("failed", [False, True])
+async def test_agent_output_survives_tool_dispatch_and_context_assembly(tmp_path, monkeypatch, via_meta, failed):
+    from raven.agent.loop.turn_path import _scrubbed_blocks, _scrubbed_result
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.agent.tools.tool_search import ToolCallTool, ToolSearchController
+    from raven.contracts.tool import Tool, ToolResult
+
+    monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [(_HELD, "providers.openrouter.apiKey")])
+    line = f"{'Error: ' if failed else ''}the agent returned {_HELD} and token=agent-example"
+    picture = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+
+    class DelegatingTool(Tool):
+        name = "delegate"
+        description = "Return another agent's message"
+        parameters = {"type": "object", "properties": {}}
+        agent_output = True
+
+        async def execute(self, **kwargs):
+            return ToolResult(
+                line,
+                line,
+                retryable=False,
+                ok=not failed,
+                blocks=[{"type": "text", "text": line}, picture],
+                agent_output=True,
+            )
+
+    registry = ToolRegistry()
+    registry.register(DelegatingTool())
+    name, arguments = "delegate", {}
+    if via_meta:
+        controller = ToolSearchController(registry, always_visible=set())
+        registry.register(ToolCallTool(controller))
+        name, arguments = "tool_call", {"name": "delegate", "arguments": {}}
+    result = await registry.execute(name, arguments)
+    assert str(result) == line
+    assert result.display_text == line
+    assert result.agent_output is True
+    assert result.ok is not failed
+    text = _scrubbed_result(arguments, str(result), agent_output=result.agent_output)
+    blocks = _scrubbed_blocks(arguments, result.blocks, agent_output=result.agent_output)
+    content = ContextBuilder(workspace=tmp_path).add_tool_result(
+        [], "call", name, text, blocks, agent_output=result.agent_output
+    )[0]["content"]
+    assert line in str(content)
+    assert "UNTRUSTED" in str(content)
+    if not failed:
+        assert picture in content
+
+
+def test_outgoing_journal_entries_still_protect_ravens_own_credentials(tmp_path, monkeypatch):
+    import json
+
+    from raven.acp_client.journal import FrameJournal
+
+    monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [(_HELD, "providers.openrouter.apiKey")])
+    journal = FrameJournal(tmp_path / "frames.jsonl")
+    journal.note("out", frame={"params": {"text": _HELD}})
+    journal.close()
+    record = json.loads(journal.path.read_text())
+    assert record["frame"]["params"]["text"] == "[redacted: providers.openrouter.apiKey]"
+
+
+@pytest.mark.parametrize("via_meta", [False, True])
+async def test_an_external_agent_reply_reaches_the_main_model_unchanged(
+    tmp_path, monkeypatch, via_meta, full_access_raven_home
+):
+    from unittest.mock import AsyncMock
+
+    from raven.a2a_client.tool import A2aTool
+    from raven.acp.replay import replay
+    from raven.acp.updates import translate
+    from raven.agent.loop.bundles import EngineWiring, TurnPolicy
+    from raven.agent.loop.main import AgentLoop
+    from raven.agent.tools.tool_search import ToolCallTool, ToolSearchController
+    from raven.config.raven import CheckpointConfig, RuntimeConfig
+    from raven.config.schema import A2aConfig
+    from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+    from raven.rpc.methods.session import _map_to_wire
+
+    line = f"The external agent returned {_HELD} and token=agent-example"
+    monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [(_HELD, "providers.openrouter.apiKey")])
+    monkeypatch.setattr("raven.a2a_client.tool.send_message", AsyncMock(return_value=line))
+
+    class Provider(LLMProvider):
+        def __init__(self):
+            super().__init__(api_key="test")
+            self.received = []
+
+        def get_default_model(self):
+            return "stub"
+
+        async def chat(self, messages, **kwargs):
+            tool_messages = [message for message in messages if message.get("role") == "tool"]
+            if tool_messages:
+                self.received = tool_messages
+                return LLMResponse(content="done", finish_reason="stop")
+            name = "a2a_send"
+            arguments = {"card_url": "https://agent.invalid/card", "message": "hello"}
+            if via_meta:
+                name, arguments = "tool_call", {"name": name, "arguments": arguments}
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[ToolCallRequest(id="c1", name=name, arguments=arguments)],
+            )
+
+    provider = Provider()
+    loop = AgentLoop(
+        provider=provider,
+        workspace=tmp_path,
+        model="stub",
+        policy=TurnPolicy(max_iterations=3),
+        engine=EngineWiring(runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="never"))),
+    )
+    loop.tools.register(A2aTool(A2aConfig()))
+    if via_meta:
+        loop.tools.register(ToolCallTool(ToolSearchController(loop.tools, always_visible=set())))
+    events = []
+
+    async def on_tool_event(phase, payload):
+        events.append((phase, payload))
+
+    final, _, messages, _ = await loop._run_agent_loop(
+        [{"role": "user", "content": "Ask the agent"}], on_tool_event=on_tool_event
+    )
+    assert final == "done"
+    assert line in provider.received[0]["content"]
+    assert line in next(message["content"] for message in messages if message.get("role") == "tool")
+    complete = next(payload for phase, payload in events if phase == "complete")
+    update = translate({"type": "tool.complete", "payload": complete}).updates[0]
+    assert line in update["content"][0]["content"]["text"]
+    session = loop.sessions.get_or_create("test:agent-content")
+    loop._save_turn(session, messages, 0)
+    updates = replay(_map_to_wire(session.messages, session.key), session_id=session.key)
+    replayed = next(update for update in updates if update.get("sessionUpdate") == "tool_call_update")
+    assert line in replayed["content"][0]["content"]["text"]
 
 
 def test_an_ordinary_header_value_is_left_alone_in_tool_output(tmp_path: Path, monkeypatch) -> None:
@@ -466,3 +624,290 @@ def test_ravens_own_home_is_not_read_as_another_programs_settings() -> None:
     settings = '{"apiKey": "sk-or-v1-0123456789abcdef0123456789abcdef"}'
     qwen = os.path.join(os.path.expanduser("~"), ".qwen", "settings.json")
     assert "0123456789abcdef0123456789abcdef" not in redact_home_config_read({"path": qwen}, settings)
+
+
+async def test_a_tools_own_error_text_is_scrubbed_even_when_it_declares_agent_output(monkeypatch) -> None:
+    """The declaration is a permission, not a claim.
+
+    A tool declared ``agent_output`` because *some* of its results carry another
+    agent's words. Its own error text -- an exception interpolated into a
+    sentence this process composed -- is Raven's own wording, and the credential
+    in it is one Raven holds and sent. Seen live on ``a2a_send``: a peer
+    credential with a trailing newline made httpx report
+    ``Illegal header value b'Bearer ...\\n'``, and the whole sentence skipped
+    the scrub because the tool itself was marked.
+    """
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.contracts.tool import Tool, ToolResult
+
+    monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [(_HELD, "a2a.peers.0.credential")])
+
+    class DeclaredTool(Tool):
+        name = "declared"
+        description = "A tool whose results may quote another agent"
+        parameters = {"type": "object", "properties": {}}
+        agent_output = True
+
+        async def execute(self, **kwargs):
+            # The peer's own words: the declared tool claims them, which is the
+            # half that says which return carries them.
+            return ToolResult(f"the peer said {_HELD}", agent_output=True)
+
+    class RaisingTool(Tool):
+        name = "raising"
+        description = "A tool whose execution may raise"
+        parameters = {"type": "object", "properties": {}}
+        agent_output = True
+
+        async def execute(self, **kwargs):
+            raise ConnectionError(f"Illegal header value Bearer {_HELD}")
+
+    registry = ToolRegistry()
+    registry.register(DeclaredTool())
+    registry.register(RaisingTool())
+
+    # The claim is what carries provenance, so the peer's own words survive.
+    quoted = await registry.execute("declared", {})
+    assert _HELD in str(quoted)
+
+    caught = await registry.execute("raising", {})
+    assert "[redacted: a2a.peers.0.credential]" in str(caught), str(caught)
+    assert _HELD not in str(caught)
+
+
+async def test_a_result_cannot_claim_provenance_the_tool_never_declared(monkeypatch) -> None:
+    """The other direction of the same rule: the declaration is the
+    permission, so a result may narrow it but never widen it. Only Python in
+    this process can set the result flag, which is exactly why it must not be
+    the half that decides."""
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.contracts.tool import Tool, ToolOutput
+
+    monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [(_HELD, "providers.openrouter.apiKey")])
+
+    class UndeclaredTool(Tool):
+        name = "undeclared"
+        description = "A local tool wearing another agent's claim"
+        parameters = {"type": "object", "properties": {}}
+
+        async def execute(self, **kwargs):
+            return ToolOutput(f"the peer said {_HELD}", agent_output=True)
+
+    registry = ToolRegistry()
+    registry.register(UndeclaredTool())
+    out = await registry.execute("undeclared", {})
+    assert getattr(out, "agent_output", False) is False
+    assert _HELD not in str(out)
+
+
+async def test_a_tools_own_metadata_cannot_claim_provenance_either(tmp_path, full_access_raven_home) -> None:
+    """``take_metadata`` is the tool's answer about the payload it hands the UI,
+    not about whose words its result holds. Were its ``agent_output`` key kept,
+    the live ACP preview and the session replay would both skip their redaction
+    for a local tool's output."""
+    from raven.acp.replay import replay
+    from raven.acp.updates import translate
+    from raven.agent.loop.bundles import EngineWiring, TurnPolicy
+    from raven.agent.loop.main import AgentLoop
+    from raven.config.raven import CheckpointConfig, RuntimeConfig
+    from raven.contracts.tool import Tool
+    from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+    from raven.rpc.methods.session import _map_to_wire
+
+    delivery = {"raven_delivery": {"files": [{"name": "report.pdf"}]}}
+
+    class LocalTool(Tool):
+        name = "local"
+        description = "A local tool whose metadata claims another agent's words"
+        parameters = {"type": "object", "properties": {}}
+
+        async def execute(self, **kwargs):
+            return "the local tool printed token=agent-example"
+
+        def take_metadata(self):
+            return {"agent_output": True, **delivery}
+
+    class Provider(LLMProvider):
+        def __init__(self):
+            super().__init__(api_key="test")
+
+        def get_default_model(self):
+            return "stub"
+
+        async def chat(self, messages, **kwargs):
+            if any(message.get("role") == "tool" for message in messages):
+                return LLMResponse(content="done", finish_reason="stop")
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[ToolCallRequest(id="c1", name="local", arguments={})],
+            )
+
+    loop = AgentLoop(
+        provider=Provider(),
+        workspace=tmp_path / "workspace",
+        model="stub",
+        policy=TurnPolicy(max_iterations=3),
+        engine=EngineWiring(runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="never"))),
+    )
+    loop.tools.register(LocalTool())
+    events = []
+
+    async def on_tool_event(phase, payload):
+        events.append((phase, payload))
+
+    _, _, messages, _ = await loop._run_agent_loop([{"role": "user", "content": "Run it"}], on_tool_event=on_tool_event)
+    complete = next(payload for phase, payload in events if phase == "complete")
+    assert complete["metadata"] == delivery
+    update = translate({"type": "tool.complete", "payload": complete}).updates[0]
+    assert "token=[redacted]" in update["content"][0]["content"]["text"]
+    session = loop.sessions.get_or_create("test:local-metadata")
+    loop._save_turn(session, messages, 0)
+    updates = replay(_map_to_wire(session.messages, session.key), session_id=session.key)
+    replayed = next(update for update in updates if update.get("sessionUpdate") == "tool_call_update")
+    assert "token=[redacted]" in replayed["content"][0]["content"]["text"]
+
+
+async def test_a_dag_result_keeps_its_provenance_through_a_downgrade_notice(tmp_path, monkeypatch) -> None:
+    """A notice the preflight adds is this system's line, put in front of the
+    model text; the node output under it is still the agent's own. Rebuilt from
+    its text alone, the result would lose its claim, and the registry would
+    scrub a value Raven holds out of what the node returned."""
+    import sys
+
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+
+    monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [(_HELD, "providers.openrouter.apiKey")])
+    registry = ToolRegistry()
+    # The CLI answers with its prompt, and a row with no `{mcp_file}` cannot take
+    # injected servers, so the node's `mcps` list becomes a downgrade notice.
+    command = f'"{sys.executable}" -c "import sys; sys.stdout.write(sys.stdin.read())"'
+    registry.register(
+        SubAgentDagTool(workspace=tmp_path, agents=[ThirdPartyCliSubagentConfig(name="echo", command=command)])
+    )
+
+    out = await registry.execute(
+        "run_subagent_dag",
+        {
+            "task_summary": "relay one reply",
+            "nodes": [
+                {
+                    "id": "a",
+                    "subagent": "echo",
+                    "node_summary": "repeat the reply",
+                    "prompt_template": f"the agent answered {_HELD}",
+                    "mcps": ["any"],
+                }
+            ],
+            "background": False,
+        },
+    )
+
+    assert "cannot take injected mcp servers" in str(out), str(out)
+    assert getattr(out, "agent_output", False) is True
+    assert f"the agent answered {_HELD}" in str(out), str(out)
+
+
+async def test_a_search_result_keeps_the_provenance_the_registry_settled(monkeypatch) -> None:
+    """A tool that hands control back to the registry (``tool_call`` -> the
+    target) must not stamp its own provenance over what the target's call
+    settled: the forwarder declares nothing, and an entry claiming the flag for
+    the forwarded result would unscrub a local tool's output."""
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.contracts.tool import Tool, ToolResult
+
+    monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [(_HELD, "providers.openrouter.apiKey")])
+
+    class LocalTool(Tool):
+        name = "local"
+        description = "A local tool"
+        parameters = {"type": "object", "properties": {}}
+
+        async def execute(self, **kwargs):
+            return ToolResult(f"read {_HELD} from the file")
+
+    registry = ToolRegistry()
+    registry.register(LocalTool())
+    out = await registry.execute("local", {})
+    assert getattr(out, "agent_output", False) is False
+    assert _HELD not in str(out)
+
+
+async def test_an_announcement_scrubs_this_systems_own_lines_but_not_the_agents(tmp_path, monkeypatch) -> None:
+    """One message, two provenances.
+
+    The ``Task:`` line and the header's label quote what this host's own model
+    wrote, and the lines around them are this process's; the fenced result is
+    the sub-agent's answer.
+    The scrub belongs on the first and must not reach the second -- and the
+    whole content has to survive as one message either way, since it is the
+    fence that carries the boundary, not a second pass over the text.
+    """
+    from raven.agent.subagent.manager import SubagentManager
+
+    monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [(_HELD, "providers.openrouter.apiKey")])
+
+    class _Provider:
+        def get_default_model(self) -> str:
+            return "stub"
+
+    captured: list = []
+    mgr = SubagentManager(provider=_Provider(), workspace=tmp_path)
+    mgr.set_submit(lambda req: captured.append(req))
+
+    await mgr._announce_result(
+        "id1",
+        f"deploy with {_HELD}",
+        f"deploy with {_HELD}",
+        f"the agent answered {_HELD}",
+        {
+            "channel": "cli",
+            "chat_id": "direct",
+            "session_key": "cli:direct",
+            "authored_task": f"deploy with {_HELD}",
+        },
+        "ok",
+    )
+
+    assert captured, "announce should submit a turn"
+    text = captured[0].text
+    task_line = next(line for line in text.splitlines() if line.startswith("Task:"))
+    assert _HELD not in task_line, task_line
+    assert "[redacted: providers.openrouter.apiKey]" in task_line
+    header = next(line for line in text.splitlines() if line.startswith("[Subagent '"))
+    assert header == "[Subagent 'deploy with [redacted: providers.openrouter.apiKey]' returned]", header
+    # The sub-agent's own answer is what the fence is for.
+    assert f"the agent answered {_HELD}" in text
+
+
+async def test_the_a2a_tools_own_transport_error_is_scrubbed(tmp_path, monkeypatch) -> None:
+    """The sentence the peer's credential leaked through, on the real tool.
+
+    ``a2a_send`` declares ``agent_output`` for the peer's reply, and its error
+    path interpolates the transport's exception into a sentence this process
+    composes. Measured live: a peer credential stored with a trailing newline
+    made httpx answer ``Illegal header value b'Bearer ...\\n'``, and the whole
+    sentence reached the model unscrubbed because the tool itself was marked.
+    """
+    from raven.a2a_client.tool import A2aTool
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.config.schema import A2aConfig
+
+    monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [(_HELD, "a2a.peers.0.credential")])
+
+    async def boom(config, card_url, message, *, timeout_s=300.0):
+        raise ConnectionError(f"Illegal header value b'Bearer {_HELD}\\n'")
+
+    monkeypatch.setattr("raven.a2a_client.tool.send_message", boom)
+    registry = ToolRegistry()
+    registry.register(A2aTool(A2aConfig.model_validate({"peers": [{"origin": "https://peer.example.com"}]})))
+    arguments = {"card_url": "https://peer.example.com/card", "message": "hello"}
+
+    out = await registry.execute("a2a_send", arguments)
+    assert getattr(out, "agent_output", False) is False
+    assert _HELD not in str(out)
+    assert "[redacted: a2a.peers.0.credential]" in str(out)
+    content = ContextBuilder(workspace=tmp_path).add_tool_result([], "c1", "a2a_send", str(out))[0]["content"]
+    assert _HELD not in str(content)

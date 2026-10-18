@@ -147,13 +147,15 @@ def _with_notices(result: "str | ToolResult", notices: list[str]) -> "str | Tool
     On the model-facing text only. A notice says a field the graph carried will
     not take effect, which is something the caller has to know when it reads the
     output; the display line is a one-liner for a transcript row and has no room
-    for it.
+    for it. Everything else the result carries is kept, its provenance claim
+    included: the notice is this system's line, but the node output under it is
+    still the agent's.
     """
     if not notices:
         return result
     head = "Note: " + "; ".join(notices) + "."
     if isinstance(result, ToolResult):
-        return ToolResult(model_text=f"{head}\n\n{result.model_text}", display_text=result.display_text)
+        return replace(result, model_text=f"{head}\n\n{result.model_text}")
     return f"{head}\n\n{result}"
 
 
@@ -532,6 +534,10 @@ class SubAgentDagTool(Tool):
     # for every call, background or not, the same way ``spawn`` declares it
     # while also returning before its sub-agent does -- see the note there.
     blocking_interaction = True
+    # A permission, not a claim: what this tool returns is mostly its own
+    # rendering of the run, and only the branches that quote a node's own output
+    # (its terminal results, a report) return a result claiming it.
+    agent_output = True
 
     def __init__(
         self,
@@ -855,6 +861,7 @@ class SubAgentDagTool(Tool):
                 # the fence as node evidence and once trusted.
                 model_text=wrap_untrusted(event.text, source="subagent") + "\n\n" + _FOREGROUND_REPORT_TAIL,
                 display_text=f"DAG {run_id}: node {event.node_id} needs a decision",
+                agent_output=True,
             )
         if isinstance(event, Final):
             return event.result
@@ -2527,4 +2534,7 @@ class SubAgentDagTool(Tool):
             for term in result.terminal_outputs:
                 lines.append(f"### {term['node']}")
                 lines.append(term["text"])
-        return ToolResult(model_text="\n".join(lines), display_text=self._result_label(result))
+        # The model text quotes every terminal node's own output verbatim, so it
+        # is an agent's content; the tallies and paths above it are ours, which
+        # is why this is claimed here rather than declared on the tool.
+        return ToolResult(model_text="\n".join(lines), display_text=self._result_label(result), agent_output=True)

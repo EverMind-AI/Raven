@@ -30,6 +30,7 @@ from __future__ import annotations
 from typing import Any
 
 from raven.acp_client.protocol import (
+    MENU_UNREAD_META,
     SESSION_MCP_CAPABILITY,
     AcpProtocolError,
     decode,
@@ -180,6 +181,7 @@ __all__ = [
     "INTERNAL_ERROR",
     "INVALID_PARAMS",
     "INVALID_REQUEST",
+    "MENU_UNREAD_META",
     "METHOD_NOT_FOUND",
     "PARSE_ERROR",
     "PROTOCOL_VERSION",

@@ -1155,14 +1155,27 @@ const AnswerView = memo(function AnswerView({ lane, seg, showFoot = true }: {
 
 const NoteView = memo(function NoteView({ lane, seg }: { lane: Lane; seg: NoteData }): ReactElement {
   useSeg(lane, seg)
+  const [open, setOpen] = useState(false)
   const brief = store.firstErrLine(seg.detail, 140) || seg.detail
-  const full = seg.detail ? `${seg.label} · ${seg.detail}` : seg.label
+  const whole = seg.full || seg.detail
+  const tip = seg.detail ? `${seg.label} · ${seg.detail}` : seg.label
+  const copied = whole ? `${seg.label} · ${whole}` : seg.label
+  /* The row stays one line; what it cut opens under it -- in a tooltip it could
+     be neither selected nor read on a phone. */
+  const more = !!whole && whole !== brief
   const items = (): Array<{ label: string; fn: () => void }> => [
-    { label: t('gui.answer.copy'), fn: () => copy(full, t('gui.answer.copied')) },
+    { label: t('gui.answer.copy'), fn: () => copy(copied, t('gui.answer.copied')) },
   ]
   return (
-    <div className={'tnote in' + (seg.quiet ? '' : ' bad')} title={full} ref={ctxRef(items)}>
+    <div className={'tnote in' + (seg.quiet ? '' : ' bad') + (open ? ' open' : '')}
+      title={open ? undefined : tip} ref={ctxRef(items)}>
       <span className="tx">{brief ? `${seg.label} · ${brief}` : seg.label}</span>
+      {more ? (
+        <button className="transcript-note-more" aria-expanded={open} onClick={() => setOpen((was) => !was)}>
+          {open ? t('gui.transcript.error_collapse')
+            : seg.quiet ? t('gui.transcript.notice_expand') : t('gui.transcript.error_expand')}
+        </button>
+      ) : null}
       {seg.retry ? (
         <button className="rt" onClick={() => {
           const retry = seg.retry
@@ -1171,6 +1184,7 @@ const NoteView = memo(function NoteView({ lane, seg }: { lane: Lane; seg: NoteDa
           retry?.()
         }}>{t('gui.retry')}</button>
       ) : null}
+      {open ? <pre className="transcript-note-full">{whole}</pre> : null}
     </div>
   )
 })

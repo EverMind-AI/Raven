@@ -2037,9 +2037,10 @@ class AcpAgentBackend:
             session_cwd=session_cwd,
             stateful=self.is_stateful,
             received=int(getattr(endpoint, "received", 0) or 0),
+            stderr_received=int(getattr(endpoint, "stderr_received", 0) or 0),
         )
         try:
-            tracker = remote_runs.Tracker(run)
+            tracker = remote_runs.Tracker(run, stderr_count=lambda: getattr(endpoint, "stderr_received", 0))
         except OSError as exc:
             logger.warning(
                 "acp agent {!r}: the run on machine {} could not be recorded: {}", self.name, self.machine, exc

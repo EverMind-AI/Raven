@@ -6,6 +6,18 @@ All notable changes to Raven are documented here.
 
 ### Added
 
+- The Agent Hub has a **Machines** tab: the registered machines with the state
+  of each one's link and Raven node, a form that registers one (it reaches the
+  machine first, like `raven ops connection add`, and explains a refusal by
+  its kind), **Install node** / **Update node** run in the background with the
+  card reporting the end, and **Remove machine**. A preset's sheet picks where
+  it runs (*Runs on*) among the machines with this Raven's node, with the
+  working directory there. `raven ops connection remove <id>` is the command
+  behind the removal, and `install-node` now records the node it put on the
+  machine (`node_install` on the row), which is how the tab says a machine has
+  the node before any link is up. New RPC group
+  `machines.{list,add,install_node,doctor,remove}`.
+
 - The bug report review remembers your redaction decisions. Every keep or
   replace answer is stored in `redaction_history.json` under the Raven home
   (hashes and masked samples only), and the next `report-bug` or browser
@@ -261,6 +273,19 @@ All notable changes to Raven are documented here.
   from the session's mode overlay.
 
 ### Fixed
+
+- What an agent on a registered machine writes on stderr reaches Raven even
+  when no link held the agent at the time. The node kept those lines but, when
+  a link attached, replayed only the agent's output: a run picked up after a
+  restart was reported as `exited 3` without the reason after it, a CLI that
+  names its session only on stderr (hermes) could not be bound to it by the
+  pick-up, so its next turn opened a new session, and what was written while a
+  link was down was lost the same way. The node now numbers stderr lines as it
+  numbers output lines and replays the ones the link has not seen. An ACP
+  agent is one task across every prompt its process is sent, so its pick-up
+  asks the replay from the line its record kept as the prompt went out, not
+  from the agent's first line; a CLI pick-up, whose task is the command's
+  own, reads from the first line.
 
 - A task on a registered machine ends the way it ended, whatever happened on
   either side. A Raven node killed outright (`kill -9`) used to leave its

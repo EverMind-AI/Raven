@@ -788,6 +788,14 @@ class ErrorEventPayload(_Strict):
     message: str
     reason: Literal["cancelled_by_client", "internal"] | None = None
     detail: str | None = None
+    full_detail: str | None = Field(
+        None,
+        description=(
+            "The failure's long account beside the bounded detail, for a reader who expands the row: "
+            "the runner's own text, credentials scrubbed, capped at 8000 characters. Absent when the "
+            "bounded text already is the whole account."
+        ),
+    )
     target: DirectTarget | None = None
 
 
@@ -2805,6 +2813,98 @@ class SubagentsTestCancelResult(_Strict):
 
 
 # ---------------------------------------------------------------------------
+# machines.* methods -- the Agent Hub's machines tab over the machine registry
+# (raven/ops/connections.py). A row carries what a machine is and how its link
+# and node are doing, never the way onto it: no address, no account, no key.
+# ---------------------------------------------------------------------------
+
+
+class MachineInstall(_Strict):
+    """The last node install asked for from the page: in flight, or how it ended."""
+
+    running: bool
+    ok: bool | None = None
+    detail: str
+
+
+class MachineRow(_Strict):
+    id: str
+    name: str
+    transport: Literal["ssh", "local"]
+    state: Literal["connected", "idle", "lost", "off", "error"]
+    detail: str
+    agents: int
+    node_version: str | None = None
+    """Live while a link is up, else as recorded at the last install or contact; None when none is known."""
+    node_current: bool
+    """Whether that node is this Raven's own code, which a dispatch there needs."""
+    install: MachineInstall
+    paths: list[str]
+    problems: list[str]
+
+
+class MachinesListParams(_Strict):
+    refresh: bool = False
+    id: str | None = None
+
+
+class MachinesListResult(_Strict):
+    rows: list[MachineRow]
+
+
+class MachinesAddParams(_Strict):
+    id: str
+    name: str
+    host: str
+    port: int | None = None
+    user: str
+    key: str
+    paths: list[str] | None = None
+
+
+class MachinesAddResult(_Strict):
+    ok: bool
+    detail: str
+    reason: Literal["", "unreachable", "login", "hostkey", "timeout", "nossh", "duplicate", "invalid", "registry"]
+    row: MachineRow | None = None
+
+
+class MachinesInstallNodeParams(_Strict):
+    id: str
+    node_dir: str | None = None
+
+
+class MachinesInstallNodeResult(_Strict):
+    started: bool
+    detail: str
+
+
+class MachinesDoctorParams(_Strict):
+    pass
+
+
+class MachineProblem(_Strict):
+    id: str
+    blocking: bool
+    detail: str
+
+
+class MachinesDoctorResult(_Strict):
+    problems: list[MachineProblem]
+
+
+class MachinesRemoveParams(_Strict):
+    id: str
+    force: bool = False
+
+
+class MachinesRemoveResult(_Strict):
+    removed: bool
+    detail: str
+    agents: list[str]
+
+
+# ---------------------------------------------------------------------------
 # subagents.instance* methods
 #
 # A different noun from the ``subagents.*`` group above: that one is about which
@@ -3414,6 +3514,14 @@ class TranscriptTurnEnded(_Strict):
 
     status: str = Field(..., description="'cancelled' (a person stopped it) or 'failed'.")
     reason: str | None = None
+    full_detail: str | None = Field(
+        None,
+        description=(
+            "The failure's long account beside the bounded reason, for a reader who expands the row: "
+            "the runner's own text, credentials scrubbed, capped at 8000 characters. Absent when the "
+            "bounded text already is the whole account."
+        ),
+    )
 
 
 class TranscriptNotice(_Strict):
@@ -6588,6 +6696,11 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "subagents.probe": (SubagentsProbeParams, SubagentsProbeResult),
     "subagents.test": (SubagentsTestParams, SubagentsTestResult),
     "subagents.test_cancel": (SubagentsTestCancelParams, SubagentsTestCancelResult),
+    "machines.list": (MachinesListParams, MachinesListResult),
+    "machines.add": (MachinesAddParams, MachinesAddResult),
+    "machines.install_node": (MachinesInstallNodeParams, MachinesInstallNodeResult),
+    "machines.doctor": (MachinesDoctorParams, MachinesDoctorResult),
+    "machines.remove": (MachinesRemoveParams, MachinesRemoveResult),
     # subagents.instance*
     "subagents.instances": (SubagentsInstancesParams, SubagentsInstancesResult),
     "subagents.instance.create": (SubagentsInstanceCreateParams, SubagentsInstanceCreateResult),

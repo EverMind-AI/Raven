@@ -20,10 +20,9 @@ Three constraints shape what is kept:
   allow list -- the header that explains an incident is exactly the one an allow
   list would not have thought of -- so the name is tested against
   :data:`_SECRET_HEADER` and a hit keeps the name with its value replaced. The
-  body goes through :func:`_scrub`, deliberately a handful of patterns rather
-  than the full table in ``raven.security.redact``: a response body is not a
-  config file. The one realistic echo is a 401 quoting the request's own
-  ``Authorization`` header, which is what the patterns are chosen for.
+  body goes through :func:`scrub_credentials` for quoted request headers, then
+  ``raven.security.redact`` before truncation: a parsed error body can carry
+  credentials whose closing delimiter would otherwise be lost at the cap.
 * **No image payloads.** A picture reaches here only inside the request, which
   this module never touches. How many rode along and what they weighed is
   counted on the ``llm.input`` side, from the messages, by
@@ -38,6 +37,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from raven.contracts.llm_provider import CallRecord
+from raven.security.redact import MAX_SCAN_CHARS, redact
 
 #: A response body is stored to be read by a person diagnosing one call. Past
 #: this the head is kept and ``body_truncated`` says so -- an empty or refused
@@ -77,16 +77,19 @@ _SECRET_HEADER = re.compile(
 #: recognisable with no label beside them. Each pattern captures only the
 #: secret, so the line stays readable and says what was there.
 _BODY_SECRETS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"((?:Proxy-)?Authorization\"?\s*[:=]\s*\"?(?:Bearer|Basic|Token)?\s*)([\w\-.~+/=]{8,})", re.IGNORECASE),
+    re.compile(
+        r"((?:Proxy-)?Authorization\"?\s*+[:=]\s*+\"?(?:(?:Bearer|Basic|Token)\s++)?)([\w\-.~+/=]{8,}+)",
+        re.IGNORECASE,
+    ),
     re.compile(r"(api[_-]?key\"?\s*[:=]\s*\"?)([^\s\"',;&|)]{6,})", re.IGNORECASE),
     re.compile(r"()(sk-(?:proj-|ant-|or-)?[A-Za-z0-9_-]{16,})"),
-    re.compile(r"()(eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})"),
+    re.compile(r"()(?<![A-Za-z0-9_-])(eyJ[A-Za-z0-9_-]{10,}+\.[A-Za-z0-9_-]{10,}+\.[A-Za-z0-9_-]{10,}+)"),
 )
 
 REPLACEMENT = "[redacted]"
 
 
-def _scrub(text: str) -> str:
+def scrub_credentials(text: str) -> str:
     """``text`` with the credential shapes a response body can carry replaced."""
     for pattern in _BODY_SECRETS:
         text = pattern.sub(lambda m: m.group(1) + REPLACEMENT, text)
@@ -109,10 +112,12 @@ def _bounded_body(value: Any) -> tuple[str | None, bool]:
             text = json.dumps(value, ensure_ascii=False, default=str)
         except Exception:  # noqa: BLE001 - the record must never be the thing that fails
             text = str(value)
-    text = _scrub(text)
+    text = scrub_credentials(text)
+    truncated = len(text) > MAX_SCAN_CHARS
+    text = redact(text)
     if len(text) > MAX_BODY_CHARS:
         return text[:MAX_BODY_CHARS], True
-    return text, False
+    return text, truncated
 
 
 def keep_headers(headers: Any) -> dict[str, str]:
@@ -224,6 +229,46 @@ def from_stream(stream: Any, chunk: Any = None) -> CallRecord:
     )
 
 
+def exception_body(exc: BaseException) -> str | None:
+    """The body a failed call's exception carries, or None.
+
+    The response's own text first. When the client library kept no readable
+    response -- litellm reduces an OpenAI-style ``{"error": {"message": ...}}``
+    body to that message in ``str(exc)``, leaves the response empty, and keeps
+    the parsed body on ``exc.body`` -- the parsed body, serialized. Read only
+    from an HTTP error (one that names a status code), so an unrelated
+    exception's ``body`` attribute is never mistaken for a provider's answer.
+    Never raises: it runs while a turn is failing, and a lookup that threw
+    would replace that failure with its own.
+    """
+    try:
+        return _exception_body(exc)
+    except Exception:  # noqa: BLE001 - see docstring
+        return None
+
+
+def _exception_body(exc: BaseException) -> str | None:
+    response = getattr(exc, "response", None)
+    if response is not None:
+        try:
+            text = response.text
+        except Exception:  # noqa: BLE001 - a streamed body cannot be re-read; the parsed one still can
+            text = None
+        if isinstance(text, str) and text.strip():
+            return text
+    if getattr(exc, "status_code", None) is None:
+        return None
+    body = getattr(exc, "body", None)
+    if body is None or body == "" or body == {} or body == []:
+        return None
+    if isinstance(body, str):
+        return body
+    try:
+        return json.dumps(body, ensure_ascii=False, default=str)
+    except Exception:  # noqa: BLE001 - the record must never be the thing that fails
+        return str(body)
+
+
 def from_exception(exc: BaseException, *, status: int | None = None) -> CallRecord:
     """The record for a call the client library raised on.
 
@@ -232,12 +277,7 @@ def from_exception(exc: BaseException, *, status: int | None = None) -> CallReco
     put a second answer to the same question in the tree.
     """
     response = getattr(exc, "response", None)
-    body: Any = None
-    if response is not None:
-        try:
-            body = response.text
-        except Exception:  # noqa: BLE001 - a streamed body cannot be re-read; str(exc) still can
-            body = None
+    body = exception_body(exc)
     return CallRecord(
         http_status=status,
         headers=keep_headers(getattr(response, "headers", None) if response is not None else None),
@@ -339,10 +379,12 @@ __all__ = [
     "MAX_HEADER_VALUE_CHARS",
     "REPLACEMENT",
     "as_payload",
+    "exception_body",
     "from_exception",
     "from_response",
     "from_stream",
     "keep_headers",
+    "scrub_credentials",
     "stream_body",
     "with_body",
 ]

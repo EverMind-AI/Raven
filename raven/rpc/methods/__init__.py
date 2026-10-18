@@ -32,6 +32,7 @@ from raven.rpc.methods.imported import register_imported_methods
 from raven.rpc.methods.input import register_input_methods
 from raven.rpc.methods.instances import register_instance_methods
 from raven.rpc.methods.knowledge import register_knowledge_methods
+from raven.rpc.methods.machines import register_machines_methods
 from raven.rpc.methods.memory import register_memory_methods
 from raven.rpc.methods.model import register_model_methods
 from raven.rpc.methods.playbooks import register_playbooks_methods
@@ -263,6 +264,11 @@ def register_aligned_methods_except_system(
     # streaming half (browser.watch) needs the transport's notification sink;
     # a transport without one simply has no live view.
     register_browser_methods(dispatcher, send_frame=send_frame)
+    # machines.* -- the Agent Hub's machines tab over the machine registry,
+    # the same registry ``raven ops connection`` keeps. Registered
+    # unconditionally: the registry is a file, and the node pool is the
+    # process's own.
+    register_machines_methods(dispatcher)
 
 
 __all__ = [
@@ -281,6 +287,7 @@ __all__ = [
     "register_dag_methods",
     "register_console_methods",
     "register_knowledge_methods",
+    "register_machines_methods",
     "register_memory_methods",
     "register_playbooks_methods",
     "register_plughub_methods",

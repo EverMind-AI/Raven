@@ -210,3 +210,24 @@ class TestTheBuiltinNamesAreReserved:
         set_agents([], config_path=p)
 
         assert _entries(p) == []
+
+
+def test_agents_on_machine_names_the_entries_that_run_there(tmp_path: Path) -> None:
+    from raven.config.update_subagents import agents_on_machine
+
+    p = _cfg(tmp_path)
+    set_agents(
+        [
+            {"name": "claude_code", "kind": "cli", "command": "claude -p {prompt}"},
+            {"name": "claude_code@box", "kind": "cli", "command": "claude -p {prompt}", "machine": "box"},
+            {"name": "codex@box", "kind": "cli", "command": "codex -p {prompt}", "machine": "box", "enabled": False},
+            {"name": "hermes@gpu", "kind": "cli", "command": "hermes -p {prompt}", "machine": "gpu"},
+        ],
+        config_path=p,
+    )
+
+    assert agents_on_machine("box", config_path=p) == ["claude_code@box", "codex@box"]
+    assert agents_on_machine(" box ", config_path=p) == ["claude_code@box", "codex@box"]
+    # A disconnected entry dispatches nothing, so a removal is not refused over it.
+    assert agents_on_machine("box", only_enabled=True, config_path=p) == ["claude_code@box"]
+    assert agents_on_machine("nowhere", config_path=p) == []

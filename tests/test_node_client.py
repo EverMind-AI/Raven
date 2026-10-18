@@ -956,7 +956,7 @@ async def test_a_heartbeat_unanswered_loses_the_link_tells_its_agents_and_reconn
     await _until(lambda: len(tried) == 2 and pool.live() == ["box"] and endpoint.detached is None)
     again = pool._nodes["box"].client
     # Among the new link's requests, not its last: a heartbeat may well follow the attach.
-    attach = (protocol.AGENT_ATTACH, {"channel": 1, "task": endpoint.task, "after": 0})
+    attach = (protocol.AGENT_ATTACH, {"channel": 1, "task": endpoint.task, "after": 0, "stderr_after": 0})
     assert attach in [asked[:2] for asked in again.asked]
     assert pool.status("box").state == "connected" and pool._nodes["box"].channels[1] is endpoint
     await pool.close_all()
@@ -1139,7 +1139,7 @@ async def test_a_task_the_machine_no_longer_knows_ends_its_endpoint_when_the_lin
         "machine 'Lab box' (box) no longer runs 'echo@box' (task echo@box-1): no task 'echo@box-1' is running or recorded"
     )
     assert pool._parked.get("box", []) == [] and pool._nodes["box"].channels == {}
-    assert client.asked[-1][1] == {"channel": 1, "task": "echo@box-1", "after": 0}
+    assert client.asked[-1][1] == {"channel": 1, "task": "echo@box-1", "after": 0, "stderr_after": 0}
     await pool.close_all()
 
 
@@ -1224,7 +1224,10 @@ async def test_a_call_that_replaces_a_dead_link_attaches_the_parked_agents_again
     assert await pool.call("box", protocol.PING, {}) == {"text": "ok"}
 
     assert pool._parked.get("box", []) == [] and endpoint.detached is None
-    assert (protocol.AGENT_ATTACH, {"channel": 1, "task": endpoint.task, "after": 0}) in [a[:2] for a in again.asked]
+    assert (
+        protocol.AGENT_ATTACH,
+        {"channel": 1, "task": endpoint.task, "after": 0, "stderr_after": 0},
+    ) in [a[:2] for a in again.asked]
     assert pool._nodes["box"].client is again and pool._nodes["box"].channels[1] is endpoint
     await pool.close_all()
 
@@ -1255,7 +1258,10 @@ async def test_a_relaunch_that_fails_under_a_call_still_reconnects_for_the_parke
     )
 
     await _until(lambda: endpoint.detached is None and len(tried) == 2)
-    assert (protocol.AGENT_ATTACH, {"channel": 1, "task": endpoint.task, "after": 0}) in [a[:2] for a in again.asked]
+    assert (
+        protocol.AGENT_ATTACH,
+        {"channel": 1, "task": endpoint.task, "after": 0, "stderr_after": 0},
+    ) in [a[:2] for a in again.asked]
     assert pool.status("box").state == "connected"
     await pool.close_all()
 

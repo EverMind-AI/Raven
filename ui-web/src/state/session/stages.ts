@@ -257,7 +257,10 @@ export const STAGES: readonly Stage[] = [
     transcript.finishTurn(rt.st, rt.steps, duration(undefined, rt))
     rt.dispatch({ type: 'idle' })
     noteRow(p.message === 'turn_failed' ? transcript.failedTurnLabel() : (p.message || 'error'),
-      p.detail || p.reason || '', rt.lastAsk ? { retry: () => send(rt.lastAsk) } : null)
+      p.detail || p.reason || '', {
+        ...(rt.lastAsk ? { retry: () => send(rt.lastAsk) } : {}),
+        ...(p.full_detail ? { full: p.full_detail } : {}),
+      })
     transcript.artifacts(wsCurrentTurn())
     reset(rt)
     goState(); drawMeter(); sessionDraw()
