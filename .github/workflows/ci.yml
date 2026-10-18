@@ -407,6 +407,14 @@ jobs:
       - name: Test Windows ACP teardown
         run: uv run --frozen --python 3.13 --no-sync pytest tests/test_subagent_acp.py -k close_without_killpg -q -n 0 --tb=short
 
+      - name: Test conditional DAG paths
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/test_subagent_dag_core.py -k at_nodes -q -n 0 --tb=short
+
+      - name: Test DAG finish-text paths
+        run: |
+          $env:PATH = (Join-Path $env:ProgramFiles 'Git\usr\bin') + ';' + $env:PATH
+          uv run --frozen --python 3.13 --no-sync pytest tests/test_subagent_dag_runner.py -k 'test_the_finish_text or test_branch_e2e_one_tool_call' -q -n 0 --tb=short
+
       # On Windows the Mirasim desktop host is reached over the loopback port
       # and its token file, never a unix socket, and the unit shards run on
       # Linux only -- so the adapter's own road is exercised natively here.
