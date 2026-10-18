@@ -120,8 +120,29 @@ def test_an_error_status_falls_back_quietly(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_the_bundled_release_is_a_plain_release_past_the_known_gate() -> None:
-    """`gpt-6.1-sol` is served from 0.159.0 (#986); the floor must not sit below it."""
+    """`gpt-6.1-sol` is served from 0.159.0; the floor must not sit below it."""
     parts = tuple(int(p) for p in codex_client_version.FALLBACK_VERSION.split("."))
 
     assert len(parts) == 3
     assert parts >= (0, 159, 0)
+
+
+def _block_cache_dir(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """A cache that cannot be prepared: a regular file where the directory goes."""
+    (tmp_path / "cache").write_text("not a directory", encoding="utf-8")
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
+
+
+def test_an_unwritable_cache_keeps_the_release_it_fetched(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Persisting is best-effort; the answer this process has is not."""
+    _serve(monkeypatch, {"latest": "0.170.0"})
+    _block_cache_dir(monkeypatch, tmp_path)
+
+    assert codex_client_version.resolve() == "0.170.0"
+
+
+def test_an_unwritable_cache_falls_back_instead_of_raising(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    _serve(monkeypatch, error=httpx.ConnectError("offline"))
+    _block_cache_dir(monkeypatch, tmp_path)
+
+    assert codex_client_version.resolve() == codex_client_version.FALLBACK_VERSION

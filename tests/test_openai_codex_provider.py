@@ -472,6 +472,20 @@ async def test_a_turn_names_the_newest_published_release(monkeypatch: pytest.Mon
     assert sent[0]["version"] == "0.170.0"
 
 
+async def test_an_unwritable_cache_does_not_stop_a_turn(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Version bookkeeping is optional; the turn is not."""
+    from raven.providers import codex_client_version
+
+    (tmp_path / "cache").write_text("not a directory", encoding="utf-8")
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
+    monkeypatch.setattr(codex_client_version, "_fetch_latest", lambda *, timeout: "0.170.0")
+    sent = _capture_headers(monkeypatch)
+
+    await OpenAICodexProvider(default_model="openai-codex/gpt-6.1-sol").chat([{"role": "user", "content": "x"}])
+
+    assert sent[0]["version"] == "0.170.0"
+
+
 async def test_a_turn_offline_still_names_a_real_release(monkeypatch: pytest.MonkeyPatch) -> None:
     """npm unreachable (the suite's default) is the bundled release, never `0.0.0`
     or no version at all."""

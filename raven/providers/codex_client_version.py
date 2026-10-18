@@ -3,7 +3,7 @@
 The official CLI sends its own release on every request to the Codex backend, as
 a ``version`` header its built-in OpenAI provider carries
 (``create_openai_provider`` in ``codex-rs/model-provider-info``). The backend
-gates models by client version (#986), so a request that names an old release, or
+gates models by client version, so a request that names an old release, or
 none, can be refused a model the account is offered. Raven has no release of its
 own to send; it sends the newest one OpenAI has published.
 
@@ -27,13 +27,13 @@ import re
 import time
 from pathlib import Path
 
-from raven.config.paths import get_cache_dir
+from raven.home import raven_home
 
 DIST_TAGS_URL = "https://registry.npmjs.org/-/package/@openai/codex/dist-tags"
 
 #: The answer when npm has never been reached. A real release -- the backend may
 #: one day check -- and no older than the newest known generation-side gate:
-#: ``gpt-6.1-sol`` needs ``0.159.0`` (#986). Bump it with Codex CLI releases.
+#: ``gpt-6.1-sol`` needs ``0.159.0``. Bump it with Codex CLI releases.
 FALLBACK_VERSION = "0.163.0"
 
 CACHE_FILENAME = "codex-client-version.json"
@@ -85,7 +85,14 @@ def reset_cache() -> None:
 
 
 def cache_path() -> Path:
-    return get_cache_dir() / CACHE_FILENAME
+    """Where the last good answer is kept, under the same ``cache`` directory.
+
+    Not ``get_cache_dir()``: that helper creates the directory on the way out,
+    and a cache that cannot be prepared must cost the next process the last-good
+    value rather than this turn its answer. Resolution still touches the
+    environment, so both callers guard it.
+    """
+    return raven_home() / "cache" / CACHE_FILENAME
 
 
 def _fetch_latest(*, timeout: float) -> object:
@@ -128,11 +135,11 @@ def _recall() -> object:
 
 
 def _remember(version: str) -> None:
-    path = cache_path()
     try:
+        path = cache_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(f".{os.getpid()}.tmp")
         tmp.write_text(json.dumps({"version": version, "at": time.time()}), encoding="utf-8")
         os.replace(tmp, path)
-    except OSError:
+    except Exception:
         pass

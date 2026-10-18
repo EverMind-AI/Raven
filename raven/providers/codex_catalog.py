@@ -22,9 +22,8 @@ CATALOG_URL = "https://chatgpt.com/backend-api/codex/models"
 #: account is offered. The backend filters the catalogue by each model's own
 #: minimum client version, so a release hides every model gated above it: at
 #: `0.0.0` an account was offered 4 of its 7 models; `gpt-6-sol` / `gpt-6-luna`
-#: appear from `0.155.0`, `gpt-6.1-sol` from `0.159.0` (a live account, 2026-10-16,
-#: #986). `0.163.0` and `99.0.0` both returned all 7; leaving the parameter out is
-#: a 400. `99.0.0` also answered 200 for two accounts on 2026-10-08
+#: appear from `0.155.0`, `gpt-6.1-sol` from `0.159.0` (a live account, 2026-10-16).
+#: `0.163.0` and `99.0.0` both returned all 7; leaving the parameter out is a 400. `99.0.0` also answered 200 for two accounts on 2026-10-08
 #: (NousResearch/hermes-agent#135024), and opencodex discovers with it.
 #:
 #: Not a real release, deliberately: even the newest one would miss a model gated

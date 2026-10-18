@@ -75,7 +75,7 @@ def test_the_catalogue_is_asked_as_a_client_newer_than_any_release(monkeypatch: 
 
 def test_models_gated_above_an_old_client_are_offered(monkeypatch: pytest.MonkeyPatch, signed_in) -> None:
     """The backend drops every model whose minimum client version is above the one
-    sent; at `0.0.0` the newest models never reached the picker (#986). Asking as
+    sent; at `0.0.0` the newest models never reached the picker. Asking as
     the sentinel also lists a model gated above the newest release."""
     gates = {
         "gpt-7-preview": (0, 170, 0),
