@@ -411,8 +411,9 @@ class _PictureUnfetchableError(Exception):
     """A generation that answered with a picture URL this process cannot take.
 
     The URL is the picture, and the generation behind it is billed before it
-    answers: the answer must not read as ``no image``, or an orchestrating
-    model retries and pays for the picture twice.
+    answers: the answer must not read as ``no image`` or as the request's own
+    HTTP error, or an orchestrating model retries and pays for the picture
+    twice.
     """
 
     def __init__(self, url: str, detail: str) -> None:
@@ -842,8 +843,9 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         is as untrusted a place for a URL as a model's chat text).
 
         Behind a URL the generation is already billed, so a URL the guard
-        refuses or the network cannot deliver raises
-        :class:`_PictureUnfetchableError` rather than reading as no image at all."""
+        refuses, the network cannot deliver or the storage will not serve
+        raises :class:`_PictureUnfetchableError` rather than reading as no
+        image at all, or as the generation request failing."""
         if not isinstance(item, dict):
             return None
         if encoded := item.get("b64_json"):
@@ -859,7 +861,8 @@ class ImageGenerateTool(_OpenRouterMediaTool):
             raise _PictureUnfetchableError(url, str(e)) from e
         if fetched is None:
             raise _PictureUnfetchableError(url, "not a fetchable public target")
-        fetched.raise_for_status()
+        if not fetched.is_success:
+            raise _PictureUnfetchableError(url, f"HTTP {fetched.status_code} {fetched.text[:400]}".rstrip())
         mime = fetched.headers.get("content-type", "image/png").split(";", 1)[0].strip()
         return mime, fetched.content
 

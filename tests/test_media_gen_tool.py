@@ -511,6 +511,37 @@ async def test_a_generated_picture_a_dead_network_cannot_deliver_is_not_read_as_
 
 
 @pytest.mark.parametrize(
+    ("status", "body"),
+    [(403, "AccessDenied: Request has expired"), (404, "NoSuchKey"), (500, "InternalError")],
+    ids=["expired-signature", "gone", "storage-error"],
+)
+async def test_a_generated_picture_its_storage_will_not_serve_is_not_read_as_a_failed_request(
+    monkeypatch, tmp_path, status, body
+) -> None:
+    """The storage behind the URL can answer with an error status of its own --
+    a signature that expired, an object already gone -- after the generation is
+    billed. That is the same unfetchable picture, not the generation request
+    failing: read as the request's own HTTP 403, it told the model to retry."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/plan/v3/images/generations":
+            return httpx.Response(200, json={"data": [{"url": "https://1.2.3.4/tos/signed.jpeg"}]})
+        return httpx.Response(status, text=body)
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-5-0-pro",
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/plan/v3",
+    )
+    out = json.loads(await tool.execute("a poster"))
+    assert out["error"] == "generated, but the picture URL was refused or could not be fetched"
+    assert out["url"] == "https://1.2.3.4/tos/signed.jpeg"
+    assert out["detail"].startswith(f"HTTP {status}") and body in out["detail"]
+
+
+@pytest.mark.parametrize(
     "url",
     ["http://169.254.169.254/latest/meta-data/", "https://1.2.3.4/cdn/signed.png"],
     ids=["refused", "unreachable"],
