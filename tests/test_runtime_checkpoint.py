@@ -586,6 +586,78 @@ async def test_a_decomposed_name_the_snapshot_leaves_out_is_not_trackable(worksp
     assert [name for name in left_out if str(workspace / name) in kept] == []
 
 
+@pytest.mark.parametrize(
+    ("name", "spelled"),
+    [
+        ("cafe\u0301.py", "caf\u00e9.py"),
+        ("\u1112\u1161\u11ab.py", "\ud55c.py"),
+        # Marks out of canonical order stay where they are; NFC gives U+1EC7.
+        ("e\u0302\u0323.py", "\u00ea\u0323.py"),
+        # Nothing composes across a mark in between; NFC gives U+1EAC U+0316.
+        ("A\u0323\u0316\u0302.py", "\u1ea0\u0316\u0302.py"),
+        # A character NFC replaces on its own is kept, here U+0341.
+        ("=\u0338\u0341.py", "\u2260\u0341.py"),
+        # Compositions newer than Unicode 3.2 are not made, here Balinese U+1B06.
+        ("\u1b05\u1b35.py", "\u1b05\u1b35.py"),
+        ("\uf900.py", "\uf900.py"),
+    ],
+)
+def test_git_s_macos_spelling_composes_neighbours_by_unicode_3_2(name, spelled):
+    """Each spelling is what macOS's libiconv returned for the name, through
+    the UTF-8-MAC conversion git precomposes with."""
+    from raven.agent.loop.checkpoint import _precomposed
+
+    assert _precomposed(name) == spelled
+
+
+@pytest.mark.parametrize(
+    ("name", "rule"),
+    [
+        # How git matches off macOS, or with core.precomposeunicode off.
+        ("secret-cafe\u0301.py", "secret-cafe\u0301.py"),
+        # How a rule is usually typed, though git on macOS spells this name otherwise.
+        ("secret-e\u0302\u0323.py", "secret-\u1ec7.py"),
+        # How git on macOS spells it, which is neither.
+        ("secret-e\u0302\u0323.py", "secret-\u00ea\u0323.py"),
+    ],
+    ids=["as-given", "nfc", "git-on-macos"],
+)
+async def test_each_spelling_trackable_asks_about_withholds_a_name(workspace, name, rule):
+    """Judged on the rules alone, so the names need not exist."""
+    svc = CheckpointService(workspace)
+    (workspace / ".gitignore").write_text(f"{rule}\n", encoding="utf-8")
+    unruled = str(workspace / "notes.py")
+
+    assert await svc.trackable([str(workspace / name), unruled]) == {unruled}
+
+
+async def test_a_name_git_spells_as_neither_given_nor_nfc_is_judged_in_git_s_spelling(workspace):
+    """A rule written as git on macOS spells a name that is neither the name as
+    given nor its NFC must still withhold it: judged on the rules alone, and
+    held against the staged tree where git precomposes."""
+    svc = CheckpointService(workspace)
+    reordered, crossed, unruled = "secret-e\u0302\u0323.py", "token-A\u0323\u0316\u0302.py", "notes-e\u0302\u0323.py"
+    rules = ["secret-\u00ea\u0323.py", "token-\u1ea0\u0316\u0302.py"]
+    assert all(
+        rule not in {name, unicodedata.normalize("NFC", name)} for rule, name in zip(rules, (reordered, crossed))
+    )
+    (workspace / ".gitignore").write_text("".join(f"{rule}\n" for rule in rules), encoding="utf-8")
+    names = [reordered, crossed, unruled]
+    for name in names:
+        (workspace / name).write_text("x\n", encoding="utf-8")
+
+    assert await svc.trackable([str(workspace / name) for name in names]) == {str(workspace / unruled)}
+
+    tree = await svc.stage_tree()
+    assert tree is not None
+    _rc, out, _err = await svc._git("ls-tree", "-r", "-z", "--name-only", tree)
+    stored = {unicodedata.normalize("NFD", name) for name in out.split("\0") if name}
+    assert unicodedata.normalize("NFD", unruled) in stored
+    _rc, precompose, _err = await svc._git("config", "--bool", "core.precomposeunicode")
+    if sys.platform == "darwin" and precompose.strip() == "true":
+        assert not {unicodedata.normalize("NFD", name) for name in (reordered, crossed)} & stored
+
+
 async def test_trackable_vouches_for_nothing_when_git_cannot_answer(workspace, monkeypatch):
     svc = CheckpointService(workspace)
     (workspace / "notes.md").write_text("x\n", encoding="utf-8")

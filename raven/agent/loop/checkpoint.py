@@ -201,6 +201,31 @@ async def _within(staging: "concurrent.futures.Future[str | None]", deadline: fl
     return bool(done)
 
 
+def _precomposed(name: str) -> str:
+    """``name`` as git on macOS spells it before matching an ignore rule.
+
+    With ``core.precomposeunicode`` on, git respells a name it reads off the
+    disk through iconv's UTF-8-MAC, whose table is Unicode 3.2's compositions
+    and which composes only neighbours: unlike NFC it reorders no marks,
+    composes no pair a mark stands between, and makes no composition added
+    after Unicode 3.2. Checked against macOS's libiconv on the decomposition
+    of every decomposable character, reordered, partly composed, and with a
+    mark added.
+    """
+    if name.isascii():
+        return name
+    ucd = unicodedata.ucd_3_2_0
+    spelled: list[str] = []
+    for char in name:
+        if spelled:
+            pair = ucd.normalize("NFC", spelled[-1] + char)
+            if len(pair) == 1 and ucd.normalize("NFD", pair) == ucd.normalize("NFD", spelled[-1]) + char:
+                spelled[-1] = pair
+                continue
+        spelled.append(char)
+    return "".join(spelled)
+
+
 class CheckpointService:
     """Shadow-git working-tree snapshots, one commit per turn."""
 
@@ -646,16 +671,19 @@ class CheckpointService:
         reach a diff either. A path outside the work-tree is never trackable,
         and when git cannot answer nothing is.
 
-        A name is asked about as given and, where it differs, precomposed
-        (NFC), and either spelling being ignored withholds it. git on macOS
-        precomposes a name it reads off the disk before matching a rule
-        (``core.precomposeunicode``, which ``git init`` turns on there) but
-        takes a path read from ``--stdin`` as written, so a file the disk holds
-        decomposed would slip past a rule written precomposed. The name as
-        given still counts: NFC also rewrites what git leaves alone, a
-        compatibility ideograph among them. Off macOS git matches a decomposed
-        name as written, so one under a precomposed rule is stored there and
-        still withheld here: the safe side of the same mismatch.
+        A name is asked about in three spellings, and any of them being
+        ignored withholds it. As given is how git matches a name off macOS,
+        or with ``core.precomposeunicode`` off. On macOS, where ``git init``
+        turns that setting on, git precomposes a name it reads off the disk
+        before matching a rule but takes a path read from ``--stdin`` as
+        written, so the name is also asked about as git spells it
+        (``_precomposed``). That is not NFC: a name whose marks are out of
+        canonical order, or with a mark between a letter and the mark that
+        composes with it, comes out as neither. NFC, the spelling a rule is
+        usually typed in, is asked about as well, so such a rule withholds
+        the name even where git, matching another spelling, stores it: the
+        safe side of the mismatch, as off macOS for a decomposed name under a
+        precomposed rule.
         """
         if not await self._ensure_init():
             return set()
@@ -665,7 +693,7 @@ class CheckpointService:
                 rel = Path(path).resolve().relative_to(self._workspace).as_posix()
             except (OSError, ValueError):
                 continue
-            spellings[path] = {rel, unicodedata.normalize("NFC", rel)}
+            spellings[path] = {rel, unicodedata.normalize("NFC", rel), _precomposed(rel)}
         if not spellings:
             return set()
         query = "".join(f"{rel}\0" for rels in spellings.values() for rel in rels).encode(errors="surrogateescape")
