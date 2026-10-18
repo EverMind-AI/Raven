@@ -95,7 +95,7 @@ def _normalize_options(raw: Any, *, keep_unrendered: bool = False) -> list[Any]:
         return []
     if not isinstance(raw, list):
         raw = [raw]
-    return [o if keep_unrendered and isinstance(o, dict) and not _renders_whole(o) else _option_text(o) for o in raw]
+    return [o if keep_unrendered and isinstance(o, dict) and not _renders_whole(o) else option_text(o) for o in raw]
 
 
 _OPTION_TEXT_KEYS = ("option", "label", "text", "value", "title", "name")
@@ -103,7 +103,7 @@ _RENDERED_KEYS = frozenset((*_OPTION_TEXT_KEYS, "description", "recommended"))
 
 
 def _renders_whole(option: dict[str, Any]) -> bool:
-    """Whether `_option_text` keeps everything this option object says.
+    """Whether an option uses only the kernel's accepted rendering fields.
 
     It reads a name, a description and a flag. Live runs also nested a
     question-level field one level too deep -- a ``question`` on each option, the
@@ -117,16 +117,18 @@ def _renders_whole(option: dict[str, Any]) -> bool:
     )
 
 
-def _option_text(option: Any) -> str:
-    """One option as the words the user picks, whatever shape the model wrote it in.
+def option_text(option: Any) -> str:
+    """Render an option label for the kernel and product tools.
 
     The schema says strings; live runs wrote objects instead -- ``{"option": "dark",
     "description": "...", "recommended": true}``, and ``{"description": "...",
     "recommended": false}`` with no name at all -- and ``str()`` put each dict's repr
     on the user's screen as the thing to click. The option is the text under the
-    first key that names the answer, with its description after a dash so nothing
-    the model said is lost; an object that carries only a description is that
-    description. A flag on it is read by `_flagged`.
+    first key that names the answer, with its description after a dash; an object
+    that carries only a description is that description. Other fields are not
+    rendered. Callers choose whether to accept that loss or reject the object.
+    An object with no label or description keeps its historical repr fallback.
+    A flag on it is read separately by `_flagged`.
     """
     if not isinstance(option, dict):
         return str(option)

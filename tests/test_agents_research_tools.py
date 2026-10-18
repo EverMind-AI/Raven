@@ -1157,3 +1157,42 @@ async def test_a_thin_dataset_card_falls_back_to_the_metadata_the_table_needs(mo
 )
 def test_each_rewrite_names_the_same_document_at_an_address_that_carries_it(url, expected):
     assert fetch_fallbacks(url) == expected
+
+
+@pytest.mark.parametrize(
+    "option,expected",
+    [
+        ({"label": "EU only", "id": 1}, "EU only"),
+        ({"label": "EU only", "value": "eu"}, "EU only"),
+        ({"label": "EU only", "description": "European region", "id": 1}, "EU only -- European region"),
+        ({"description": "EU only"}, "EU only"),
+        ("EU only", "EU only"),
+    ],
+)
+async def test_research_option_labels_reach_the_broker_as_text(option, expected):
+    from raven.agent.tools.registry import ToolRegistry
+
+    class Broker:
+        default_timeout_s = 1.0
+
+        def __init__(self):
+            self.choices = []
+
+        async def await_question(self, cid, *, prompt, choices, **kwargs):
+            self.choices.append(choices)
+            return choices[0]
+
+    broker = Broker()
+    tool = DRAskUserTool(delivery="tool")
+    tool.set_broker(broker)
+    tool.set_context("test:research_options")
+    tool.grant_round_trip()
+    registry = ToolRegistry()
+    registry.register(tool)
+    params = {"questions": [{"question": "Region?", "options": [option, "Global"]}]}
+    original = json.loads(json.dumps(params))
+    result = await registry.execute("ask_user", params)
+    assert broker.choices == [[expected, "Global"]]
+    assert "User answered" in result and expected in result
+    assert params == original
+    assert not tool._take_round_trip_grant()

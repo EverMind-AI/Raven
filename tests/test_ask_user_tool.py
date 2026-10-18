@@ -1088,3 +1088,18 @@ def test_options_written_as_one_object_are_one_option() -> None:
     entry = AskUserTool().cast_params(payload)["questions"][0]
 
     assert entry["options"] == ["only"]
+
+
+async def test_kernel_options_with_unknown_metadata_are_rejected_before_the_broker():
+    tool, broker = _tool({"Region?": "Global"})
+    registry = ToolRegistry()
+    registry.register(tool)
+    result = await registry.execute(
+        "ask_user",
+        {
+            "questions": [{"question": "Region?", "options": [{"label": "EU only", "id": 1}, "Global"]}],
+        },
+    )
+    assert "Invalid parameters" in result
+    assert "options[0] should be string" in result and "id" in result
+    assert broker.asked == []
