@@ -477,6 +477,8 @@ route is selected, or when it depends on nodes of this graph that all may not ru
 of such a node is refused at submission: a node that was not executed leaves no file, and
 the reference would fail while the prompt was being rendered, with a missing-file error
 that hides the cause.
+This check matches the node id without regard to case on every host, even when the
+filesystem distinguishes case, because the session reserves node ids that way.
 
 And when a node reads something that may be missing, Raven tells it so: a note after the
 rendered template lists the nodes that may not run and repeats the sentence above. You do

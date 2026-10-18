@@ -3399,6 +3399,33 @@ def test_a_file_input_aimed_at_a_node_that_may_not_execute_is_refused() -> None:
 
 
 @pytest.mark.parametrize("kind", ["ref", "ref_path", "input"])
+@pytest.mark.parametrize("spelling", ["GATE", "gate", "gAtE"])
+def test_at_nodes_case_aliases_use_the_reserved_node_identity(kind: str, spelling: str) -> None:
+    path = f"@nodes/{spelling}.out.md"
+    template = "{{ inputs.k }}" if kind == "input" else "{{ " + kind + ":" + path + " }}"
+    inputs = {"k": {"file": path}} if kind == "input" else {}
+    errors = _branch_graph(
+        [
+            _decision(),
+            _branch_node(id="Gate", depends_on=["r"], when="r.a"),
+            _branch_node(id="reader", depends_on=["r", "Gate"], when="r.done", prompt_template=template, inputs=inputs),
+        ]
+    )
+    assert len(errors) == 1
+    assert "of node 'Gate', which may not execute" in errors[0]
+    assert "use {{ Gate.output }} instead" in errors[0]
+    assert (
+        _branch_graph(
+            [
+                _branch_node(id="Gate"),
+                _branch_node(id="reader", depends_on=["Gate"], prompt_template=template, inputs=inputs),
+            ]
+        )
+        == []
+    )
+
+
+@pytest.mark.parametrize("kind", ["ref", "ref_path", "input"])
 @pytest.mark.parametrize(
     "relative",
     [
@@ -3414,7 +3441,9 @@ def test_a_file_input_aimed_at_a_node_that_may_not_execute_is_refused() -> None:
         r"{drive}nested\..\GATE.out.md",
     ],
 )
-async def test_at_nodes_aliases_follow_the_local_filesystem(tmp_path: Path, kind: str, relative: str) -> None:
+async def test_at_nodes_aliases_respect_the_filesystem_and_reserved_ids(
+    tmp_path: Path, kind: str, relative: str
+) -> None:
     relative = relative.format(drive=tmp_path.drive or "C:")
     artifacts = tmp_path / "nodes"
     artifacts.mkdir()
@@ -3435,7 +3464,7 @@ async def test_at_nodes_aliases_follow_the_local_filesystem(tmp_path: Path, kind
             _branch_node(id="reader", depends_on=["r", "Gate"], when="r.done", prompt_template=template, inputs=inputs),
         ]
     )
-    if aliases_output:
+    if aliases_output or relative in ("GATE.out.md", "gate.out.md"):
         assert len(errors) == 1
         assert "of node 'Gate', which may not execute" in errors[0]
         assert "use {{ Gate.output }} instead" in errors[0]

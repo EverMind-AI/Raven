@@ -206,6 +206,8 @@ adds no titles of its own, so give each output that may be missing its own title
 block in the template. Read such a node with `{{ <id>.output }}`: a `ref:@nodes/`
 path or `{"file": ...}` input aimed at its artifacts is refused at submission,
 because a node that is not executed writes no file.
+The check matches node ids without regard to case on every host, as the session's
+node namespace does, so changing a filename's case cannot evade it.
 
 A decision node whose route cannot be established fails, with the reason recorded
 on the node; it does not fall back to a default route, and its dependents are

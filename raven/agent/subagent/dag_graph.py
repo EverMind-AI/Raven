@@ -973,7 +973,7 @@ def _nodes_path_errors(nodes: list[DagNodeSpec], by_id: dict[str, DagNodeSpec]) 
             order cannot be computed: the topological check reports that.
     """
     try:
-        skippable = {os.path.normcase(node_id): node_id for node_id in may_not_execute(nodes, by_id)}
+        skippable = {fold_node_id(node_id): node_id for node_id in may_not_execute(nodes, by_id)}
     except DagValidationError:
         return []
     errors: list[str] = []
@@ -1005,10 +1005,11 @@ def _nodes_path_target(path: str) -> str | None:
     """Return the node whose artifacts a ``@nodes/`` path names.
 
     Artifacts are flat files named ``<id>.`` plus a suffix and an id holds no
-    dot, so the id is whatever precedes the first one. Normalize with the local
-    backend's host path rules, including Windows separator and case aliases.
-    A drive-relative spelling can name the same file on that drive, so match
-    its relative suffix even before the artifact directory is known.
+    dot, so the id is whatever precedes the first one. Normalize separators
+    and drives with the host's path rules, then fold the id like the session
+    namespace does. The artifact directory's case sensitivity is not known
+    here, and macOS can alias case even though its path library does not.
+    A drive-relative spelling is likewise matched by its relative suffix.
 
     Args:
         path (`str`):
@@ -1022,7 +1023,7 @@ def _nodes_path_target(path: str) -> str | None:
     if root != "nodes":
         return None
     _, relative = os.path.splitdrive(relative)
-    return os.path.normcase(os.path.normpath(relative)).split(".", 1)[0]
+    return fold_node_id(os.path.normpath(relative).split(".", 1)[0])
 
 
 def _topological_order(by_id: dict[str, DagNodeSpec]) -> list[str]:
