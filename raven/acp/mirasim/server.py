@@ -853,6 +853,7 @@ class MirasimAgent:
         try:
             got = answer.result()
         except (HostUnavailableError, TimeoutError) as exc:
+            self._abandon_ref(turn)
             self._drop(turn)
             raise RefusalError(INTERNAL_ERROR, f"Mirasim did not take the {self.agent} turn: {_said(exc)}") from exc
         if got.get("type") != "accepted":

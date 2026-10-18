@@ -408,6 +408,48 @@ async def test_a_host_that_never_takes_the_prompt_is_an_error(
     assert "did not take the claude turn" in error["message"]
 
 
+@pytest.mark.parametrize("after_timeout", ["open", "close", "delete"])
+async def test_a_timed_out_first_prompt_is_stopped_and_its_conversation_settled(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, after_timeout: str
+) -> None:
+    monkeypatch.setattr(server_mod, "ACCEPT_TIMEOUT_S", 0.05)
+    harness.host.accepting = asyncio.Event()
+    harness.host.respond = script(("hold",))
+    sid = await harness.new()
+    await harness.refused("session/prompt", sessionId=sid, prompt=text("late"))
+    if after_timeout != "open":
+        await harness.ok(f"session/{after_timeout}", sessionId=sid)
+    harness.host.accepting.set()
+    await harness.host.wait_for(lambda: harness.host.frames("stop"), limit=1)
+    assert not harness.agent._turns
+    if after_timeout == "delete":
+        await harness.host.wait_for(lambda: not harness.host.sessions, limit=1)
+        assert harness.store.get(sid) is None
+    else:
+        await harness.host.wait_for(lambda: harness.host.session().running is None, limit=1)
+        binding = await harness.host.wait_for(lambda: harness.store.get(sid), limit=1)
+        assert binding.mirasim_key == harness.host.session().key
+
+
+async def test_a_timed_out_continuation_is_recalled_without_stopping_the_apps_turn(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = await harness.new()
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("first"))
+    session = harness.host.session()
+    harness.host.respond = script(("hold",))
+    session.running = asyncio.ensure_future(harness.host._run(session, {"prompt": "the app's"}, "task-app"))
+    await harness.host.wait_for(lambda: session.snapshot.get("taskId") == "task-app")
+    monkeypatch.setattr(server_mod, "ACCEPT_TIMEOUT_S", 0.05)
+    harness.host.accepting = asyncio.Event()
+    await harness.refused("session/prompt", sessionId=sid, prompt=text("late"))
+    harness.host.accepting.set()
+    await harness.host.wait_for(lambda: harness.host.frames("recall"), limit=1)
+    await harness.host.wait_for(lambda: not session.queue, limit=1)
+    assert session.running is not None and not session.running.done()
+    assert not harness.host.frames("stop")
+
+
 async def test_a_deleted_conversation_starts_again_once_and_says_so(harness: Harness) -> None:
     sid = await harness.new()
     await harness.ok("session/prompt", sessionId=sid, prompt=text("one"))
