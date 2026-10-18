@@ -41,15 +41,15 @@ class ExecFaceConfig(_Base):
 
 
 class ToolsConfig(_Base):
-    """The product's file checks and shell interface.
+    """Raven-Code's file checks and shell interface.
 
     ``enabled`` defaults False the D6 way, like the flow itself: an absent
     section hands the tools back to the host, and the model is served the
     built-ins unchanged.
 
     ``require_read_before_edit`` is the fork's "editing unread content is
-    rejected" rule; ``python_syntax_note`` appends the post-write syntax
-    verdict to a ``.py`` write or edit; ``restrict_to_workspace`` mirrors the
+    rejected" rule; ``python_syntax_note`` appends post-write Python
+    diagnostics to a ``.py`` write or edit; ``restrict_to_workspace`` mirrors the
     host's own ``tools.restrictToWorkspace`` -- a plugin factory cannot read
     that field (``ServiceLocator`` grants five things and this is not one), so
     the launcher renders the product's answer in here. Without it a product

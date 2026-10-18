@@ -6,7 +6,7 @@ descriptions), the accepted spellings (``cast_params`` maps the host's
 ``path`` / ``old_text`` / ``new_text`` onto the fork's names, so a call in
 either convention runs), and two pieces of conduct the fork measured its way
 to -- a read ledger that refuses to edit content unseen by the current session, and
-a post-write Python syntax verdict in the same tool result.
+post-write Python diagnostics in the same tool result.
 
 Everything else (path resolution against the bound working directory, the
 unified diff the UI renders, ``FileChange`` on the result, image reads) is
