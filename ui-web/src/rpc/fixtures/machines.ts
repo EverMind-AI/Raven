@@ -33,6 +33,7 @@ const REFUSALS: Record<string, [ResultOf<'machines.add'>['reason'], string]> = {
   locked: ['login', 'could not reach the machine: Permission denied (publickey).'],
   changed: ['hostkey', 'could not reach the machine: Host key verification failed.'],
   slow: ['timeout', 'could not reach the machine: no answer within 30s'],
+  windows: ['platform', 'registering with a password is not supported on Windows; use a key instead'],
 }
 
 export function createMachines(_env: FixtureEnv): { fixtures: Fixtures } {

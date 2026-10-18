@@ -3057,7 +3057,9 @@ class MachinesAddParams(_Strict):
 class MachinesAddResult(_Strict):
     ok: bool
     detail: str
-    reason: Literal["", "unreachable", "login", "hostkey", "timeout", "nossh", "duplicate", "invalid", "registry"]
+    reason: Literal[
+        "", "unreachable", "login", "hostkey", "timeout", "nossh", "platform", "duplicate", "invalid", "registry"
+    ]
     row: MachineRow | None = None
 
 

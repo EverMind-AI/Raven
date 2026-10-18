@@ -3494,7 +3494,7 @@ export interface MachinesAddResult {
    */
   detail: string;
   /**
-   * Why the row was not written, as a kind the page can explain: the machine could not be reached, refused the login, presented a changed host key, did not answer in time, ssh is missing here, the id is taken, the fields are not usable, or the registry file cannot be changed. Empty when it was written.
+   * Why the row was not written, as a kind the page can explain: the machine could not be reached, refused the login, presented a changed host key, did not answer in time, ssh is missing here, this computer cannot use the login picked (a password on Windows), the id is taken, the fields are not usable, or the registry file cannot be changed. Empty when it was written.
    */
   reason:
     | ''
@@ -3503,6 +3503,7 @@ export interface MachinesAddResult {
     | 'hostkey'
     | 'timeout'
     | 'nossh'
+    | 'platform'
     | 'duplicate'
     | 'invalid'
     | 'registry';
