@@ -67,6 +67,20 @@ export function createMachines(_env: FixtureEnv): { fixtures: Fixtures } {
       if (rows.some((r) => r.id === id)) return { ok: false, detail: `a machine with id '${id}' is registered already`, reason: 'duplicate' }
       const refusal = REFUSALS[id]
       if (refusal) return { ok: false, detail: refusal[1], reason: refusal[0] }
+      /* A password login: refused without one, and `wrong` is the password
+         the machine turns away -- with the second cause the server names. */
+      if (p.auth === 'password') {
+        if (!p.password) return { ok: false, detail: 'registering with a password needs the password; nothing was written', reason: 'invalid' }
+        if (p.password === 'wrong') {
+          return {
+            ok: false,
+            detail: 'could not reach the machine: Permission denied (password).\nThe password was refused, or this machine does not accept password logins (PasswordAuthentication is off in its sshd).',
+            reason: 'login',
+          }
+        }
+      } else if (!p.key) {
+        return { ok: false, detail: `${id}: 'key' is missing, so there is no way onto it`, reason: 'invalid' }
+      }
       const row: Row = {
         id, name: String(p.name || id), transport: 'ssh', state: 'off', detail: '', agents: 0,
         node_current: false, install: { running: false, detail: '' },

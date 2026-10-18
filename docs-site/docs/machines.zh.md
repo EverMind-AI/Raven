@@ -49,6 +49,12 @@ raven ops connection add --id gpu1 --name "GPU box 1" \
   旁边那份；再没有就是 Raven 主目录（`~/.raven`）里那份。注册表的细节见
   [Oncall](oncall.md#prepare-the-agent-and-machine)。
 - 记录的是私钥的**路径**，从不记录私钥本身。
+- 只能用密码登录的机器，在 Agent Hub 里把**登录方式**选成**密码**来登记。密码只用于这一次
+  ssh 登录：Raven 在这次登录里把自己生成的一把密钥（`ssh-keygen` 生成，存在
+  `~/.raven/keys/<id>_ed25519`）写进该账号的 `authorized_keys`，之后每次连接都用密钥，
+  登记表里记的也是这把密钥的路径。密码不保存、不进日志、不回显。机器的 sshd 必须允许
+  密码登录（`PasswordAuthentication yes`）这一步才能过，不允许的机器会拒绝，拒绝语里会说明。
+  本机是 Windows 时不提供。
 - 机器的主机密钥在第一次连接时接受并写进 `~/.ssh/known_hosts`。之后机器换了密钥，
   会被拒绝，直到你自己核实过。
 - `~/.ssh/config` 里会写入一段受管理的 `Host <id>`，这样本机的 `scp` 和 `rsync`
@@ -60,7 +66,8 @@ raven ops connection add --id gpu1 --name "GPU box 1" \
 
 ### 在 Agent Hub 里 { #from-the-agent-hub }
 
-不开终端也能登记：Agent Hub 的**机器**标签列出已登记的机器，**登记机器**打开一个表单，
+不开终端也能登记：Agent Hub 顶部与**智能体**、**渠道**并列的**机器**标签列出已登记的机器，
+**登记机器**打开一个表单，
 填名称、id、地址、端口、用户名和私钥路径，以及工作目录。页面和命令一样，写入之前先连一次，
 连不上的机器不会被记录；拒绝时会说明是哪一类（连不上、拒绝登录、主机密钥变了、没有按时应答）
 以及该怎么办。之后页面上显示的只是这台机器是什么——名称、id、链路、节点——从不显示地址、

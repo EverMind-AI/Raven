@@ -719,17 +719,13 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
   )
 }
 
-type Tab = 'all' | Section | 'machines'
+type Tab = 'all' | Section
 
 const TABS: Array<{ tab: Tab; label: string; empty: string }> = [
   { tab: 'all', label: 'gui.filter.all', empty: 'gui.agent.none' },
   { tab: 'on', label: 'gui.agent.g_on', empty: 'gui.agent.none' },
   { tab: 'avail', label: 'gui.agent.g_avail', empty: 'gui.agent.none_avail' },
   { tab: 'missing', label: 'gui.agent.g_missing', empty: 'gui.agent.none_missing' },
-  /* Where the agents may run besides this computer: the registered machines,
-     their links and nodes. Always offered, like All and Connected: a reader
-     with no machine yet is the one the register form is for. */
-  { tab: 'machines', label: 'gui.machine.g_machines', empty: 'gui.machine.none' },
 ]
 
 /* One row of the family picker: the agent, the model to run it on, and the one
@@ -904,24 +900,58 @@ export function ExtAgentsApp(): JSX.Element {
     )
   const entries: Record<Section | 'all', GridEntry[]> = { all: [], on: by('on'), avail: by('avail'), missing: by('missing') }
   entries.all = [...entries.on, ...entries.avail, ...entries.missing]
-  /* The machines tab counts registry rows; every other tab counts its cards. */
-  const count = (x: Tab): number => (x === 'machines' ? ms.rows.length : entries[x].length)
+  /* The count is the number of CARDS, which is what the reader counts on the
+     grid, so a family of nine counts once. */
+  const count = (x: Tab): number => entries[x].length
   const current = TABS.find((x) => x.tab === tab)!
   /* Before the first answer only: a later reload keeps showing the rows it
      has, the way the wizard's step does. */
   const scanning = s.loading && s.rows.length === 0
   const sheetRow = s.sheet ? s.rows.find((x) => x.name === s.sheet) : undefined
   const machineRow = s.msheet && s.msheet !== 'new' ? ms.rows.find((x) => x.id === s.msheet) : undefined
+  /* The drawer's content, whichever module is drawn: a machine's sheet or the
+     register form opens from the machines module, an agent's sheet or the
+     family picker from the agents module, and all of them portal into the one
+     drawer, so the page renders at most one. */
+  const sheets = (
+    <>
+      {s.msheet === 'new' ? (
+        <RegisterSheet key={`new:${s.epoch}`} ms={ms} />
+      ) : machineRow ? (
+        <MachineSheet key={`${machineRow.id}:${s.epoch}`} ms={ms} row={machineRow} />
+      ) : sheetRow ? (
+        <AgentSheet key={`${s.sheet}:${s.epoch}`} row={sheetRow} s={s} />
+      ) : null}
+      {s.picking ? <FamilyPicker family={s.picking} key={s.picking} s={s} /> : null}
+    </>
+  )
+  if (s.module === 'machines') {
+    /* Where the agents may run besides this computer: the registered
+       machines, their links and nodes. The hub's own tab, beside the agents
+       and the channels, with the register form as its one action: a reader
+       with no machine yet is the one that form is for. */
+    return (
+      <>
+        <HubHead current="machines" />
+        <div className="extAgents-tabs" role="toolbar">
+          <button className="mini extAgents-tabs-end" onClick={() => store.machineSheetOpen('new')} type="button">
+            {t('gui.machine.register')}
+          </button>
+        </div>
+        <MachinesGrid ms={ms} />
+        {sheets}
+      </>
+    )
+  }
   return (
     <>
       <HubHead current="agents" />
-      {/* All, Connected and Machines are always offered; the other two only
-          with agents in them, or while they are the tab being read -- so
-          connecting the last one leaves the reader on an emptied tab rather
-          than moving them. The count is the number of CARDS, which is what the
-          reader counts on the grid, so a family of nine counts once. */}
+      {/* All and Connected are always offered; the other two only with agents
+          in them, or while they are the tab being read -- so connecting the
+          last one leaves the reader on an emptied tab rather than moving
+          them. */}
       <div className="extAgents-tabs" role="tablist">
-        {TABS.filter((x) => x.tab === 'all' || x.tab === 'on' || x.tab === 'machines' || x.tab === tab || count(x.tab)).map((x) => (
+        {TABS.filter((x) => x.tab === 'all' || x.tab === 'on' || x.tab === tab || count(x.tab)).map((x) => (
           <button
             aria-selected={tab === x.tab}
             className="extAgents-tab"
@@ -931,24 +961,12 @@ export function ExtAgentsApp(): JSX.Element {
             type="button"
           >
             {t(x.label)}
-            {scanning && x.tab !== 'machines' ? <span className="extAgents-wbar extAgents-wtn" /> : <span className="extAgents-tn">{String(count(x.tab))}</span>}
+            {scanning ? <span className="extAgents-wbar extAgents-wtn" /> : <span className="extAgents-tn">{String(count(x.tab))}</span>}
           </button>
         ))}
-        {tab === 'machines' ? (
-          <button className="mini extAgents-tabs-end" onClick={() => store.machineSheetOpen('new')} type="button">
-            {t('gui.machine.register')}
-          </button>
-        ) : null}
       </div>
-      {tab === 'machines' ? <MachinesGrid ms={ms} /> : scanning ? <WaitGrid /> : <CardGrid empty={t(current.empty)} entries={entries[tab]} s={s} />}
-      {s.msheet === 'new' ? (
-        <RegisterSheet key={`new:${s.epoch}`} ms={ms} />
-      ) : machineRow ? (
-        <MachineSheet key={`${machineRow.id}:${s.epoch}`} ms={ms} row={machineRow} />
-      ) : sheetRow ? (
-        <AgentSheet key={`${s.sheet}:${s.epoch}`} row={sheetRow} s={s} />
-      ) : null}
-      {s.picking ? <FamilyPicker family={s.picking} key={s.picking} s={s} /> : null}
+      {scanning ? <WaitGrid /> : <CardGrid empty={t(current.empty)} entries={entries[tab]} s={s} />}
+      {sheets}
     </>
   )
 }

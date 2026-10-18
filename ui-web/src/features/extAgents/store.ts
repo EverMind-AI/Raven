@@ -6,6 +6,7 @@ import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
 import { show as toast } from '../../state/toast'
 import { familyOf } from './catalogue'
+import * as machines from './machines'
 import { isFound, remedyOf, runsAgent, sectionOf, stageOf } from './source'
 
 import type { ExtAgentActArgs, ExtAgentOp, ExtAgentRow, ExtAgentsSource, Remedy } from './types'
@@ -48,6 +49,10 @@ export const disconnects = (p: Pending): boolean => p.op === 'toggle' && p.args.
 
 export interface ExtAgentsState {
   rows: ExtAgentRow[]
+  /* Which of the page's two modules is drawn: the agents, or the machines
+     they may run on. Both live here because they share the cards, the
+     sheets and the drawer; the hub's header switches between them. */
+  module: 'agents' | 'machines'
   /* The one flag only the page can answer: which card is open. It is about what
      is drawn, so it does not belong to whichever source is answering. */
   sheet: string | null
@@ -112,6 +117,7 @@ export interface ExtAgentsState {
 
 const store = makeStore<ExtAgentsState>({
   rows: [],
+  module: 'agents',
   sheet: null,
   epoch: 0,
   testing: [],
@@ -183,10 +189,21 @@ export async function load(probe: boolean, rescan = false): Promise<void> {
 }
 
 export function open(): void {
+  set({ module: 'agents' })
+  hub.visited('agents')
   page.show('extAgentsPage')
   void load(true)
 }
 hub.onOpen('agents', open)
+
+/** The page's other module: the registered machines, their links and nodes. */
+export function openMachines(): void {
+  set({ module: 'machines' })
+  hub.visited('machines')
+  page.show('extAgentsPage')
+  void machines.load()
+}
+hub.onOpen('machines', openMachines)
 
 export function close(): void {
   page.show(null)

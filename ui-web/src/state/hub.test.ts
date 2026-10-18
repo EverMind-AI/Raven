@@ -64,4 +64,26 @@ describe('the connections hub', () => {
     hub.open('channels')
     expect(channels).toHaveBeenCalledTimes(1)
   })
+
+  /* The machines share the agents page, so the page switch cannot say which
+     of the two the reader was on: the island says it, and the rail row goes
+     back to that one -- and a switch onto the page from the channels lands on
+     the agents until the island says otherwise. */
+  it('goes back to the machines when the island said it showed them, on the page it shares', () => {
+    const agents = vi.fn()
+    const machines = vi.fn()
+    hub.onOpen('agents', agents)
+    hub.onOpen('channels', vi.fn())
+    hub.onOpen('machines', machines)
+    hub.visited('machines')
+    page.show('extAgentsPage')
+    page.show(null)
+    expect(hub.lastOpened()).toBe('machines')
+    hub.open()
+    expect(machines).toHaveBeenCalledTimes(1)
+    expect(agents).not.toHaveBeenCalled()
+    page.show('connectionsPage')
+    page.show('extAgentsPage')
+    expect(hub.lastOpened()).toBe('agents')
+  })
 })

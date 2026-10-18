@@ -3379,6 +3379,10 @@
       "en": "Channels",
       "zh": "渠道"
     },
+    "gui.hub.machines": {
+      "en": "Machines",
+      "zh": "机器"
+    },
     "gui.nav.conn": {
       "en": "Channels",
       "zh": "入口"
@@ -3606,6 +3610,10 @@
     "gui.page.conn_sub": {
       "en": "Raven joins the chat apps you already use, so you can hand it work and get results back from WeChat, Feishu, Telegram and more.",
       "zh": "Raven 可以接入你常用的聊天应用，在微信、飞书、Telegram 里也能直接给它派活、收结果"
+    },
+    "gui.page.machines_sub": {
+      "en": "The machines Raven can hand work to besides this computer: register one, put the node on it, then pick it when an agent is connected.",
+      "zh": "Raven 除本机之外还能把活派到这些机器上：先登记一台、装上节点，接入智能体时就能选它"
     },
     "gui.page.cron": {
       "en": "Schedules",
@@ -5240,7 +5248,6 @@
       "zh": "{name} 的预设改成走 {to} 了 · 会先移除再按新预设装回来，已经在跑的会话句柄会失效"
     },
     "gui.agent.on_machine": {"en": "On the registered machine {id}", "zh": "在登记机器 {id} 上"},
-    "gui.machine.g_machines": {"en": "Machines", "zh": "机器"},
     "gui.machine.register": {"en": "Register a machine", "zh": "登记机器"},
     "gui.machine.none": {"en": "No machine is registered yet. Register one, then install the node on it.", "zh": "还没有登记机器。先登记一台，再在它上面安装节点。"},
     "gui.machine.state_connected": {"en": "{n} agents running", "zh": "{n} 个 Agent 在跑"},
@@ -5270,10 +5277,15 @@
     "gui.machine.f_host": {"en": "Address", "zh": "地址"},
     "gui.machine.f_port": {"en": "Port", "zh": "端口"},
     "gui.machine.f_user": {"en": "User", "zh": "用户名"},
+    "gui.machine.f_auth": {"en": "Login", "zh": "登录方式"},
+    "gui.machine.auth_key": {"en": "Key", "zh": "密钥"},
+    "gui.machine.auth_password": {"en": "Password", "zh": "密码"},
     "gui.machine.f_key": {"en": "Private key path", "zh": "私钥路径"},
     "gui.machine.key_note": {"en": "Only the path is stored. The key never leaves this computer.", "zh": "只记录路径，私钥不离开这台电脑。"},
+    "gui.machine.f_password": {"en": "Password", "zh": "密码"},
+    "gui.machine.password_note": {"en": "The password is used once: at registration Raven puts a key of its own on the machine and logs in with that key from then on. The password is not stored and reaches no log.", "zh": "密码只用这一次：登记时 Raven 把自己的一把密钥装到机器上，之后一直用密钥登录。密码不保存，也不进日志。"},
     "gui.machine.f_paths": {"en": "Work directories on the machine, one per line (optional)", "zh": "机器上的工作目录，每行一个（可不填）"},
-    "gui.machine.add_hint": {"en": "The machine has to accept this key over ssh. Its host key is recorded at the first contact and checked after.", "zh": "机器要能用这把密钥 ssh 登录。第一次连接时记下它的主机密钥，之后每次核对。"},
+    "gui.machine.add_hint": {"en": "One ssh login, with a key or with a password that puts a key there. The machine's host key is recorded at the first contact and checked after.", "zh": "用密钥或密码 ssh 登录一次。第一次连接时记下它的主机密钥，之后每次核对。"},
     "gui.machine.add_do": {"en": "Reach it once and register", "zh": "连一次并登记"},
     "gui.machine.adding": {"en": "Reaching the machine", "zh": "正在连接机器"},
     "gui.machine.add_bad": {"en": "Not registered", "zh": "没有登记"},
@@ -5296,7 +5308,7 @@
     "gui.machine.load_bad": {"en": "The machine list could not be read", "zh": "机器列表读不出来"},
     "gui.machine.file_problems": {"en": "The registry file", "zh": "登记表文件"},
     "gui.machine.why_unreachable": {"en": "The machine could not be reached: check the address and port, and that the machine is on and reachable from this computer.", "zh": "连不上这台机器：检查地址和端口，确认机器开着、从这台电脑能连到它。"},
-    "gui.machine.why_login": {"en": "The machine refused the login: check the user name and the private key path, and that the key's public half is on the machine.", "zh": "机器拒绝了登录：检查用户名和私钥路径，确认对应的公钥已经放到机器上。"},
+    "gui.machine.why_login": {"en": "The machine refused the login. With a key: check the user name and the private key path, and that the key's public half is on the machine. With a password: check it, and that the machine accepts password logins at all.", "zh": "机器拒绝了登录。用密钥时：检查用户名和私钥路径，确认对应的公钥已经放到机器上。用密码时：检查密码，并确认这台机器允许密码登录。"},
     "gui.machine.why_hostkey": {"en": "The machine's host key differs from the one on record: check the machine before trusting it again, then take the old line out of ~/.ssh/known_hosts.", "zh": "机器的主机密钥和记录的不一样：先确认机器没问题，再把 ~/.ssh/known_hosts 里的旧记录删掉。"},
     "gui.machine.why_timeout": {"en": "The machine did not answer in time: check that it is on and that the port is open.", "zh": "机器没有按时应答：确认机器开着、端口放行。"},
     "gui.machine.why_nossh": {"en": "ssh is not installed on this computer: install OpenSSH, then try again.", "zh": "这台电脑没有 ssh：装好 OpenSSH 再试。"},

@@ -14,6 +14,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import stat
+import sys
 
 import pytest
 
@@ -514,3 +517,123 @@ def test_the_tool_reports_an_incomplete_managed_block_as_a_warning_not_a_refusal
     monkeypatch.setattr(adder, "write_ssh_alias", refuse)
     out = add()
     assert "wrote my-cpu-box" in out and "ssh alias not written" in out and "incomplete" in out
+
+
+# ---- a machine given by password: this computer's key goes on first ---------
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not available on Windows")
+def test_a_key_is_made_once_per_machine_under_the_home_and_only_the_owner_can_read_it(_home, monkeypatch):
+    monkeypatch.setenv("RAVEN_HOME", str(_home / "rhome"))
+    private, public_line = adder.generate_key("gpu1")
+
+    assert private == _home / "rhome" / "keys" / "gpu1_ed25519"
+    assert public_line.startswith("ssh-ed25519 ") and public_line.endswith(" raven@gpu1")
+    assert stat.S_IMODE(os.stat(private).st_mode) == 0o600
+    assert stat.S_IMODE(os.stat(private.parent).st_mode) == 0o700
+    again = adder.generate_key("gpu1")
+    assert again == (private, public_line), "registered again, the same pair serves"
+
+
+def test_without_ssh_keygen_no_key_is_made_and_the_sentence_says_so(_home, monkeypatch):
+    monkeypatch.setenv("RAVEN_HOME", str(_home / "rhome"))
+    monkeypatch.setattr(adder.shutil, "which", lambda name: None)
+    with pytest.raises(adder.TransportError, match="ssh-keygen not found"):
+        adder.generate_key("gpu1")
+    assert not (_home / "rhome" / "keys").exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the stand-in ssh-keygen is a POSIX shell script")
+def test_an_ssh_keygen_that_fails_is_one_sentence_and_leaves_no_half_pair(_home, monkeypatch):
+    monkeypatch.setenv("RAVEN_HOME", str(_home / "rhome"))
+    keygen = _home / "ssh-keygen"
+    keygen.write_text("#!/bin/sh\necho 'cannot write the key' >&2\nexit 1\n", encoding="utf-8")
+    keygen.chmod(0o700)
+    monkeypatch.setattr(adder.shutil, "which", lambda name: str(keygen))
+    with pytest.raises(adder.TransportError, match="could not make a key for 'gpu1': cannot write the key"):
+        adder.generate_key("gpu1")
+    assert not (_home / "rhome" / "keys" / "gpu1_ed25519").exists()
+
+
+def _fake_ssh_that_takes_a_password(tmp_path, monkeypatch, *, accept: str, body: str = "") -> dict:
+    """An ssh on PATH that asks the askpass program the way OpenSSH does, and records what it saw."""
+    record = tmp_path / "ssh-saw.json"
+    authorized = tmp_path / "authorized_keys"
+    _fake_ssh(
+        tmp_path,
+        monkeypatch,
+        f"""
+        # OpenSSH reads the password from SSH_ASKPASS when SSH_ASKPASS_REQUIRE=force.
+        given=$("$SSH_ASKPASS" "password:")
+        printf '{{"argv": "%s", "given": "%s", "require": "%s"}}\\n' "$*" "$given" "$SSH_ASKPASS_REQUIRE" > {record}
+        [ "$given" = '{accept}' ] || {{ echo 'Permission denied (password).' >&2; exit 255; }}
+        # The far side's shell: run the install script against a file here.
+        HOME={tmp_path}
+        export HOME
+        cmd=$(eval "echo \\"\\${{$#}}\\"")
+        sh -c "$cmd"
+        {body}
+        """,
+    )
+    return {"record": record, "authorized": tmp_path / ".ssh" / "authorized_keys"}
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="registering with a password is refused on Windows; the stand-in ssh is a POSIX shell script",
+)
+def test_the_public_key_goes_on_over_one_password_login_that_never_shows_the_password(tmp_path, monkeypatch):
+    import json
+
+    seen = _fake_ssh_that_takes_a_password(tmp_path, monkeypatch, accept="hunter2")
+    line = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKey raven@gpu1"
+
+    ok, said = adder.install_public_key("203.0.113.7", 2222, "alice", "hunter2", line, timeout=10)
+
+    assert ok and said == "installed a key on the machine"
+    saw = json.loads(seen["record"].read_text(encoding="utf-8"))
+    assert saw["given"] == "hunter2" and saw["require"] == "force"
+    assert "hunter2" not in saw["argv"], "the password is never on a command line"
+    assert "-o PubkeyAuthentication=no" in saw["argv"] and "alice@203.0.113.7" in saw["argv"]
+    assert "BatchMode" not in saw["argv"], "a password login is the one that may ask"
+    assert seen["authorized"].read_text(encoding="utf-8") == line + "\n"
+    # Again: added once, not twice.
+    ok, _ = adder.install_public_key("203.0.113.7", 2222, "alice", "hunter2", line, timeout=10)
+    assert ok and seen["authorized"].read_text(encoding="utf-8") == line + "\n"
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="registering with a password is refused on Windows; the stand-in ssh is a POSIX shell script",
+)
+def test_a_refused_password_is_one_sentence_that_names_the_other_cause_too(tmp_path, monkeypatch):
+    _fake_ssh_that_takes_a_password(tmp_path, monkeypatch, accept="right")
+
+    ok, said = adder.install_public_key("203.0.113.7", 2222, "alice", "wrong", "ssh-ed25519 AAAA x", timeout=10)
+
+    assert not ok
+    assert said.startswith("could not reach the machine: Permission denied")
+    assert "does not accept password logins" in said
+    assert "wrong" not in said.split("the password")[0] or "wrong" not in said
+
+
+def test_registering_with_a_password_is_refused_on_windows(monkeypatch):
+    monkeypatch.setattr(adder.sys, "platform", "win32")
+    ok, said = adder.install_public_key("203.0.113.7", 22, "alice", "pw", "ssh-ed25519 AAAA x")
+    assert not ok and "not supported on Windows" in said and "pw" not in said
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="registering with a password is refused on Windows; the stand-in ssh is a POSIX shell script",
+)
+def test_a_password_login_that_hangs_or_has_no_ssh_is_one_sentence_each(tmp_path, monkeypatch):
+    _fake_ssh(tmp_path, monkeypatch, "sleep 5")
+    ok, said = adder.install_public_key("203.0.113.7", 22, "alice", "pw", "ssh-ed25519 AAAA x", timeout=0.3)
+    assert not ok and said == "could not reach the machine: no answer within 0s"
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
+    ok, said = adder.install_public_key("203.0.113.7", 22, "alice", "pw", "ssh-ed25519 AAAA x", timeout=5)
+    assert not ok and said == "could not reach the machine: ssh not found on this computer"

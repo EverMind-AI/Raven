@@ -464,7 +464,8 @@ export const machinesSource: MachinesSource = {
       host: form.host,
       port: form.port || undefined,
       user: form.user,
-      key: form.key,
+      auth: form.auth,
+      ...(form.auth === 'password' ? { password: form.password } : { key: form.key }),
       paths: form.paths.length ? form.paths : undefined,
     })
     return { ok: !!got.ok, detail: got.detail || '', reason: got.reason }

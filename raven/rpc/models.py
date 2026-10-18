@@ -3038,7 +3038,19 @@ class MachinesAddParams(_Strict):
     host: str
     port: int | None = None
     user: str
-    key: str
+    auth: Literal["key", "password"] | None = Field(
+        default=None,
+        description=(
+            "How the machine is reached once: `key` (the default) with the private key at `key`; `password` with "
+            "`password`, used for that one login to put a key this computer makes onto the machine, after which "
+            "every connection is a key connection. The password is not stored, logged or answered back."
+        ),
+    )
+    key: str | None = Field(
+        default=None,
+        description="Path to the private key on this computer; the path is stored, never the key. Required with auth `key`.",
+    )
+    password: str | None = Field(default=None, description="The account's password, with auth `password`; used once.")
     paths: list[str] | None = None
 
 

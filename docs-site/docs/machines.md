@@ -61,6 +61,15 @@ What gets recorded, and where:
   [Oncall](oncall.md#prepare-the-agent-and-machine) describes the registry in
   more detail.
 - The **path** of the private key is stored, never the key itself.
+- A machine you can only reach with a password is registered from the Agent
+  Hub with **Login: Password**. The password is used for one ssh login, in
+  which Raven puts a key of its own (made with `ssh-keygen`, kept under
+  `~/.raven/keys/<id>_ed25519`) into the account's `authorized_keys`; from
+  then on every connection is a key connection, and the row stores that key's
+  path. The password is not stored, logged or shown back. The machine's sshd
+  has to accept password logins for this one step (`PasswordAuthentication
+  yes`); one that does not refuses it, and the refusal says so. Not available
+  when this computer is Windows.
 - The machine's host key is accepted on the first connection and kept in
   `~/.ssh/known_hosts`. A machine that later presents a different key is
   refused until you check it yourself.
@@ -74,7 +83,8 @@ zero, so read its output rather than its exit code.
 
 ### From the Agent Hub
 
-The same registration without a terminal: the Agent Hub's **Machines** tab
+The same registration without a terminal: the Agent Hub's **Machines** tab,
+beside **Agents** and **Channels** at the top of the hub,
 lists the registered machines, and **Register a machine** opens a form for
 the name, id, address, port, user name and private-key path, plus the work
 directories. The page reaches the machine once before writing anything, the

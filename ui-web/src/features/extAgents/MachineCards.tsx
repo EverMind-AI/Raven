@@ -314,9 +314,15 @@ export function RegisterSheet({ ms }: { ms: MachinesState }): JSX.Element {
   const portRef = useRef<HTMLInputElement>(null)
   const userRef = useRef<HTMLInputElement>(null)
   const keyRef = useRef<HTMLInputElement>(null)
+  const passwordRef = useRef<HTMLInputElement>(null)
   const pathsRef = useRef<HTMLTextAreaElement>(null)
   const noteRef = useRef<HTMLDivElement>(null)
   const [ready, setReady] = useState(false)
+  /* How the machine is reached once: with a key the owner already has, or
+     with a password, used for that one login to put a key of Raven's there.
+     Switching empties the other field with the form: what was typed for one
+     way in does not travel with the other. */
+  const [auth, setAuth] = useState<RegisterForm['auth']>('key')
   /* The form is longer than the sheet, so a refusal's note under it is
      brought into view; its kind is in the head line anyway, which never
      scrolls away. */
@@ -330,12 +336,21 @@ export function RegisterSheet({ ms }: { ms: MachinesState }): JSX.Element {
     host: hostRef.current?.value.trim() || '',
     port: Number(portRef.current?.value.trim() || 0) || 0,
     user: userRef.current?.value.trim() || '',
-    key: keyRef.current?.value.trim() || '',
+    auth,
+    key: auth === 'key' ? keyRef.current?.value.trim() || '' : '',
+    /* Not trimmed: a password is whatever was typed. */
+    password: auth === 'password' ? passwordRef.current?.value || '' : '',
     paths: (pathsRef.current?.value || '').split('\n').map((x) => x.trim()).filter(Boolean),
   })
   const check = (): void => {
     const f = read()
-    setReady(!!(f.id && f.name && f.host && f.user && f.key))
+    setReady(!!(f.id && f.name && f.host && f.user && (f.auth === 'password' ? f.password : f.key)))
+  }
+  const pickAuth = (which: RegisterForm['auth']): void => {
+    setAuth(which)
+    /* The field for the other way in unmounts empty, so the form is not ready
+       until something is typed into it. */
+    setReady(false)
   }
   const submit = async (): Promise<void> => {
     const f = read()
@@ -377,8 +392,38 @@ export function RegisterSheet({ ms }: { ms: MachinesState }): JSX.Element {
         {text(hostRef, t('gui.machine.f_host'), '', true)}
         {text(portRef, t('gui.machine.f_port'), '22', true)}
         {text(userRef, t('gui.machine.f_user'), '', true)}
-        {text(keyRef, t('gui.machine.f_key'), '~/.ssh/id_ed25519', true)}
-        <div className="extAgents-about">{t('gui.machine.key_note')}</div>
+        <div className="extAgents-fld">
+          <span className="extAgents-k">{t('gui.machine.f_auth')}</span>
+          <span aria-label={t('gui.machine.f_auth')} className="extAgents-seg" role="group">
+            <button aria-pressed={auth === 'key'} onClick={() => pickAuth('key')} type="button">
+              {t('gui.machine.auth_key')}
+            </button>
+            <button aria-pressed={auth === 'password'} onClick={() => pickAuth('password')} type="button">
+              {t('gui.machine.auth_password')}
+            </button>
+          </span>
+        </div>
+        {auth === 'key' ? (
+          <>
+            {text(keyRef, t('gui.machine.f_key'), '~/.ssh/id_ed25519', true)}
+            <div className="extAgents-about">{t('gui.machine.key_note')}</div>
+          </>
+        ) : (
+          <>
+            <label className="extAgents-fld">
+              <span className="extAgents-k">{t('gui.machine.f_password')}</span>
+              <input
+                aria-label={t('gui.machine.f_password')}
+                autoComplete="off"
+                className="extAgents-in"
+                onChange={check}
+                ref={passwordRef}
+                type="password"
+              />
+            </label>
+            <div className="extAgents-about">{t('gui.machine.password_note')}</div>
+          </>
+        )}
         <label className="extAgents-fld">
           <span className="extAgents-k">{t('gui.machine.f_paths')}</span>
           <textarea aria-label={t('gui.machine.f_paths')} onChange={check} placeholder="/data/alice/projects" ref={pathsRef} />

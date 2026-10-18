@@ -489,3 +489,11 @@
 /* The family card's own foot, which is a press rather than a verdict: it says
    what the card does, in the same slot every other card's verdict sits in. */
 .extAgents-card .extAgents-foot-quiet .extAgents-foot-k { color: var(--muted); }
+
+/* ── the register form's login pick ────────────────────────────────────────
+   The settings dialog's segmented control, drawn again under this domain's
+   own prefix: a class two domains name is a debt check-class-namespace
+   refuses to grow, and the dialog's sheet is not loaded on this page. */
+.extAgents-seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--ctl-r); overflow: hidden; background: var(--surface); height: var(--ctl-h); box-sizing: border-box; padding: 2px; gap: 2px; }
+.extAgents-seg button { font: inherit; font-size: 13px; border: 0; background: none; color: var(--muted); padding: 0 14px; cursor: pointer; border-radius: calc(var(--ctl-r) - 3px); white-space: nowrap; }
+.extAgents-seg button[aria-pressed="true"] { background: var(--paper); color: var(--text); font-weight: 500; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 0 0 1px rgba(0, 0, 0, 0.03); }

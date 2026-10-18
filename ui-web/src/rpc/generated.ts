@@ -3482,7 +3482,9 @@ export interface MachinesAddParams {
   host: string;
   port?: number;
   user: string;
-  key: string;
+  auth?: 'key' | 'password';
+  key?: string;
+  password?: string;
   paths?: string[];
 }
 export interface MachinesAddResult {
