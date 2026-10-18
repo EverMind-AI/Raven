@@ -461,6 +461,31 @@ async def test_a_timed_out_first_prompt_is_stopped_and_its_conversation_settled(
         assert binding.mirasim_key == harness.host.session().key
 
 
+async def test_a_prompt_accepted_while_timeout_unwinds_is_stopped_and_recorded(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(server_mod, "ACCEPT_TIMEOUT_S", 0.05)
+    harness.host.accepting = asyncio.Event()
+    harness.host.respond = script(("hold",))
+    sid = await harness.new()
+    request = harness.agent.host.request
+
+    async def accept_before_unwind(frame: dict[str, Any], reply: Any, *, timeout: float) -> dict[str, Any]:
+        try:
+            return await request(frame, reply, timeout=timeout)
+        except TimeoutError:
+            harness.host.accepting.set()
+            await harness.host.wait_for(lambda: harness.agent.sessions[sid].turn.task_id, limit=1)
+            raise
+
+    monkeypatch.setattr(harness.agent.host, "request", accept_before_unwind)
+    await harness.refused("session/prompt", sessionId=sid, prompt=text("late"))
+    await harness.host.wait_for(lambda: harness.host.session().running is None, limit=1)
+    assert harness.host.frames("stop")[0]["taskId"] == "task-1"
+    assert harness.store.get(sid).mirasim_key == harness.host.session().key
+    assert not harness.agent._turns
+
+
 async def test_a_timed_out_continuation_is_recalled_without_stopping_the_apps_turn(
     harness: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1680,6 +1705,35 @@ async def test_a_timed_out_steer_is_recalled_or_stopped_when_accepted_later(
         assert not harness.host.frames("stop")
         await harness.ok("session/cancel", sessionId=sid)
         await turn
+
+
+async def test_a_steer_accepted_while_timeout_unwinds_stops_only_its_own_task(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(server_mod, "STEER_TIMEOUT_S", 0.05)
+    harness.host.respond = script(("text", "busy"), ("hold",))
+    sid = await harness.new()
+    turn = asyncio.ensure_future(harness.ok("session/prompt", sessionId=sid, prompt=text("go")))
+    await harness.host.wait_for(lambda: harness.said(sid) == "busy")
+    harness.host.silent.add("prompt")
+    request = harness.agent.host.request
+
+    async def accept_before_unwind(frame: dict[str, Any], reply: Any, *, timeout: float) -> dict[str, Any]:
+        try:
+            return await request(frame, reply, timeout=timeout)
+        except TimeoutError:
+            await harness.ok("session/cancel", sessionId=sid)
+            await turn
+            await harness.host._prompt(harness.host.clients[0], frame)
+            await harness.host.wait_for(
+                lambda: harness.agent.sessions[sid].view.snapshot.get("taskId") == "task-2", limit=1
+            )
+            raise
+
+    monkeypatch.setattr(harness.agent.host, "request", accept_before_unwind)
+    assert await harness.ok("_raven/session/steer", sessionId=sid, text="late") == {"status": "no_turn"}
+    await harness.host.wait_for(lambda: harness.host.session().running is None, limit=1)
+    assert [f["taskId"] for f in harness.host.frames("stop")] == ["task-1", "task-2"]
 
 
 async def test_a_steer_send_failure_recalls_the_prompt_already_queued(

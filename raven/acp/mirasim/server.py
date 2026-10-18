@@ -854,7 +854,11 @@ class MirasimAgent:
             got = answer.result()
         except (HostUnavailableError, TimeoutError) as exc:
             self._abandon_ref(turn)
-            self._drop(turn)
+            try:
+                await self._cancel_turn(turn)
+                await self._persist(session)
+            finally:
+                self._drop(turn)
             raise RefusalError(INTERNAL_ERROR, f"Mirasim did not take the {self.agent} turn: {_said(exc)}") from exc
         if got.get("type") != "accepted":
             self._drop(turn)
@@ -972,6 +976,11 @@ class MirasimAgent:
         def outcome(frame: dict[str, Any]) -> bool:
             return frame.get("type") == "outbox" and ref in (_ref(frame.get("steered")), _ref(frame.get("dispatched")))
 
+        def dispatched(frame: dict[str, Any]) -> bool:
+            return (frame.get("type") == "accepted" and frame.get("clientRef") == ref) or (
+                frame.get("type") == "outbox" and _ref(frame.get("dispatched")) == ref
+            )
+
         catalog = await self.catalog(allow_stale=True)
         if self._shutting_down:
             return {"status": "no_turn"}
@@ -979,35 +988,41 @@ class MirasimAgent:
         frame: dict[str, Any] = {"type": "prompt", "clientRef": ref, "sessionKey": key, "prompt": text}
         if mirasim_model := catalog.mirasim_model(model):
             frame["model"] = mirasim_model
-        injected = False
-        try:
-            with self.host.listen(outcome) as outcomes:
-                answer = await self.host.request(
-                    frame,
-                    lambda f: f.get("clientRef") == ref and f.get("type") in ("accepted", "error", "goalError"),
-                    timeout=STEER_TIMEOUT_S,
-                )
-                if answer.get("type") != "accepted":
-                    return {"status": "no_turn"}
-                if started := _text(answer.get("taskId")):
-                    # The turn ended before the text arrived, and it started one of its own.
-                    await self._stop_task(key, started)
-                    return {"status": "no_turn"}
-                await self.host.send({"type": "steer", "sessionKey": key, "ref": ref})
-                got = await _outcome(outcomes.get(), turn.ended, timeout=STEER_TIMEOUT_S)
-            if isinstance(got, dict) and _ref(got.get("steered")) == ref:
-                injected = True
-                return {"status": "injected"}
-            if isinstance(got, dict) and (started := _text((got.get("dispatched") or {}).get("taskId"))):
-                await self._stop_task(key, started)
-            return {"status": "no_turn"}
-        except (HostUnavailableError, TimeoutError) as exc:
-            logger.warning("Mirasim adapter: a steer could not be delivered: {}", _said(exc))
-            return {"status": "no_turn"}
-        finally:
-            if not injected:
-                self._remember_abandoned(ref)
-                await self._quiet_send({"type": "recall", "sessionKey": key, "ref": ref})
+        with self.host.listen(dispatched) as dispatches:
+            injected = False
+            try:
+                with self.host.listen(outcome) as outcomes:
+                    answer = await self.host.request(
+                        frame,
+                        lambda f: f.get("clientRef") == ref and f.get("type") in ("accepted", "error", "goalError"),
+                        timeout=STEER_TIMEOUT_S,
+                    )
+                    if answer.get("type") != "accepted" or _text(answer.get("taskId")):
+                        return {"status": "no_turn"}
+                    await self.host.send({"type": "steer", "sessionKey": key, "ref": ref})
+                    got = await _outcome(outcomes.get(), turn.ended, timeout=STEER_TIMEOUT_S)
+                if isinstance(got, dict) and _ref(got.get("steered")) == ref:
+                    injected = True
+                    return {"status": "injected"}
+                return {"status": "no_turn"}
+            except (HostUnavailableError, TimeoutError) as exc:
+                logger.warning("Mirasim adapter: a steer could not be delivered: {}", _said(exc))
+                return {"status": "no_turn"}
+            finally:
+                if not injected:
+                    self._remember_abandoned(ref)
+                    # An acknowledgement may arrive while request's timeout unwinds.
+                    # Keep those task ids until late frames transfer to the abandoned ref.
+                    started: set[str] = set()
+                    while not dispatches.empty():
+                        observed = dispatches.get_nowait()
+                        if isinstance(observed, dict):
+                            run = observed.get("dispatched", observed)
+                            if isinstance(run, dict) and (task_id := _text(run.get("taskId"))):
+                                started.add(task_id)
+                    for task_id in started:
+                        await self._stop_task(key, task_id)
+                    await self._quiet_send({"type": "recall", "sessionKey": key, "ref": ref})
 
     async def _stop_task(self, key: str, task_id: str) -> None:
         await self._quiet_send({"type": "stop", "sessionKey": key, "taskId": task_id})

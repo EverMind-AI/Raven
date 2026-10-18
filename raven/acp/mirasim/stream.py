@@ -190,14 +190,14 @@ class TurnStream:
 
     def _content(self, snapshot: dict[str, Any]) -> list[dict[str, Any]]:
         sources: dict[str, _TextDelta] = {}
-        for key, segment, kind in (
+        for key, segment, update_kind in (
             ("reasoning", "thinking", "agent_thought_chunk"),
             ("text", "text", "agent_message_chunk"),
         ):
             previous = getattr(self, key)
             delta = self._grown(key, snapshot.get(key))
             sources[segment] = _TextDelta(
-                kind,
+                update_kind,
                 delta.encode("utf-16-le", errors="surrogatepass"),
                 len(previous.encode("utf-16-le", errors="surrogatepass")) // 2 if delta else 0,
             )
