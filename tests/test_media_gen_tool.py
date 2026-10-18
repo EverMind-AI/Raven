@@ -794,6 +794,29 @@ async def test_a_section_on_volcengine_speaks_ark_on_the_address_it_borrows(monk
     assert download.headers.get("authorization") is None
 
 
+async def test_an_edit_on_an_ark_base_is_refused_before_anything_is_sent(monkeypatch, tmp_path) -> None:
+    """Ark has no ``/images/edits`` route, so a call with references is answered
+    there in so many words instead of with the 404 the edit form would draw."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(404, text="Not Found")
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-5-0-pro",
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/v3",
+    )
+    ref = tmp_path / "logo.png"
+    ref.write_bytes(_PNG)
+    out = json.loads(await tool.execute("blend the logo in", images=[str(ref)]))
+    assert seen == []
+    assert "edit" in out["error"] and out["model"] == "doubao-seedream-5-0-pro"
+
+
 # ── the image path: several pictures in one call ──
 
 
