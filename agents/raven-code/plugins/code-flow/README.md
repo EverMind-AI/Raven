@@ -6,8 +6,8 @@ checks cover undefined names (`F821`), undefined exports (`F822`), and local
 variables used before assignment (`F823`). A direct edit compares with the
 previous content to suppress existing name findings. A syntax error still
 present after an edit remains visible, including after a rewrite that left
-the file unchanged. A baseline that cannot be parsed or decoded is unknown, so
-findings are not claimed to be newly introduced. Diagnostics never undo an
+the file unchanged. A baseline that cannot be parsed, decoded or analyzed is
+unknown, so findings are not claimed to be newly introduced. Diagnostics never undo an
 edit, automatically fix code, or change the command's exit status.
 These checks run only through the enabled code-flow replacement tools. Loading
 the plugin or installing Pyflakes does not modify the host's built-in tools;
@@ -68,8 +68,10 @@ work queue: when all workers are occupied, new diagnostic work is skipped or
 reported unavailable. A timeout or cancellation releases the caller but cannot
 interrupt an operating system read or Python check already running. Such work
 retains its worker slot until it finishes, preventing an accumulation of
-abandoned workers; daemon workers do not delay process shutdown. A failed check
-preserves the operation's result.
+abandoned workers; daemon workers do not delay process shutdown. A file check
+that fails, including on source nested too deeply for the parser or checker,
+reports diagnostics unavailable; post-command diagnostics that fail or overrun
+their wait as a whole are dropped. Either way the operation's result is kept.
 
 For existing files changed by a command, the original source is not
 available: feedback explicitly says findings may predate the command.

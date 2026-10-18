@@ -458,6 +458,42 @@ def test_checker_failure_does_not_turn_a_successful_write_into_a_failure(registr
     assert "Successfully wrote" in _text(result)
 
 
+@pytest.mark.parametrize("error", [RecursionError, MemoryError])
+def test_source_the_parser_cannot_finish_reports_diagnostics_unavailable(registry, tmp_path, monkeypatch, error):
+    """Python 3.12 raises RecursionError building the syntax tree of deeply
+    nested source (``compile`` too); that is no verdict, not a clean file."""
+    from code_flow.tools import diagnostics
+
+    def too_deep(*args, **kwargs):
+        raise error("nested too deeply")
+
+    monkeypatch.setattr(diagnostics, "ast", SimpleNamespace(parse=too_deep))
+    target = tmp_path / "deep.py"
+    result = _run(registry.execute("write_file", {"file_path": str(target), "content": "value = 1\n"}))
+    assert f"diagnostics unavailable ({error.__name__})" in _text(result)
+    assert target.read_text() == "value = 1\n"
+
+
+@pytest.mark.parametrize("error", [RecursionError, MemoryError])
+def test_replaced_source_the_parser_cannot_finish_is_an_unknown_baseline(registry, tmp_path, monkeypatch, error):
+    from code_flow.tools import diagnostics
+
+    parse = diagnostics.ast.parse
+
+    def deep_before(source, *args, **kwargs):
+        if "nested_before" in source:
+            raise error("nested too deeply")
+        return parse(source, *args, **kwargs)
+
+    target = tmp_path / "replaced.py"
+    target.write_text("value = nested_before\n")
+    monkeypatch.setattr(diagnostics, "ast", SimpleNamespace(parse=deep_before))
+    args = {"file_path": str(target), "content": "value = newly_missing\n"}
+    result = _text(_run(registry.execute("write_file", args)))
+    assert "newly_missing" in result and "baseline is unknown" in result
+    assert "new findings compared" not in result
+
+
 def test_identical_rewrite_does_not_repeat_diagnostics(registry, tmp_path):
     target = tmp_path / "same.py"
     args = {"file_path": str(target), "content": "value = missing\n"}

@@ -101,7 +101,7 @@ class PythonDiagnostics:
             row = exc.lineno or 1
             source = lines[row - 1] if 0 < row <= len(lines) else ""
             return [Finding("syntax", row, exc.offset or 1, exc.msg, source)]
-        except (ValueError, RecursionError):
+        except ValueError:
             return []
         if not self.lint:
             return []
@@ -131,9 +131,17 @@ class PythonDiagnostics:
             if before is None:
                 baseline = Counter()
             elif isinstance(before, str) and len(before.encode("utf-8")) <= MAX_SOURCE_BYTES:
-                earlier = self.findings(path, before)
+                # Source nested too deeply for the parser or checker raises
+                # rather than parsing to nothing: unavailable for the content
+                # written, an unknown baseline for the content replaced.
+                try:
+                    earlier = self.findings(path, before)
+                except Exception:  # noqa: BLE001 - an unanalyzable baseline is unknown, not clean
+                    earlier = None
                 baseline = (
-                    None if any(item.code == "syntax" for item in earlier) else Counter(item.key for item in earlier)
+                    None
+                    if earlier is None or any(item.code == "syntax" for item in earlier)
+                    else Counter(item.key for item in earlier)
                 )
             else:
                 baseline = None
