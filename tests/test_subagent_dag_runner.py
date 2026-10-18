@@ -8701,6 +8701,131 @@ async def test_a_replan_does_not_overwrite_a_pre_existing_failure_or_its_cascade
     assert result.replanned_into == "run-new"
 
 
+async def test_a_node_skipped_on_the_replan_pass_is_announced_on_that_pass(tmp_path) -> None:
+    """`_apply_replan` publishes the cascade's own skips too, not only its own.
+
+    The cascade marks `b` skipped off `a`'s failed verdict on the same pass
+    that discovers the replan the judge resolved for another ticket, and the
+    loop breaks at the replan before its sweep runs -- without this, `b` gets
+    no live frame and its registry row lands only when the run finalizes."""
+    from raven.agent.subagent.dag_adjudication import REPLAN, AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    frames: list[tuple[str, str]] = []
+
+    async def _capture(name: str, value: dict) -> None:
+        if name == "dag_node_updated":
+            frames.append((value["node"], value["status"]))
+
+    class _Backend:
+        async def run(self, prompt: str, **_kw: Any) -> str:
+            return "did it"
+
+    async def _judge(*, node, store, output, error, crashed, **_):
+        # A replan for a ticket of its own, resolved while `a`'s verdict is
+        # being decided, so the flag is discovered one pass after `a` has
+        # failed and the cascade has already skipped `b`.
+        desk.open("elsewhere")
+        desk.resolve("elsewhere", REPLAN, "the plan was wrong", plan=_replan_plan())
+        return Verdict(accomplished=node.id != "a", what_is_missing="nothing usable")
+
+    spec = parse_dag_spec(
+        {
+            "task_summary": "replan me",
+            "nodes": [
+                {"id": "a", "subagent": "x", "node_summary": "first", "prompt_template": "do a"},
+                {
+                    "id": "b",
+                    "subagent": "x",
+                    "node_summary": "downstream",
+                    "prompt_template": "do b",
+                    "depends_on": ["a"],
+                },
+            ],
+        }
+    )
+    result = await run_dag(
+        spec,
+        resolve=lambda node: _Backend(),
+        backend=LocalFileBackend(),
+        workdir=str(tmp_path),
+        run_root=str(tmp_path / "runs"),
+        nodes_root=str(tmp_path / "nodes"),
+        history_root=str(tmp_path),
+        desk=desk,
+        judge_node=_judge,
+        origin=_TEST_ORIGIN,
+        adjudication_timeout_s=5,
+        progress_publisher=_capture,
+    )
+
+    statuses = {entry["node"]: entry["status"] for entry in result.files}
+    assert statuses == {"a": "failed", "b": "skipped"}
+    assert ("b", "skipped") in frames, "the cascade's skip is announced on the pass that decides it"
+
+
+async def test_a_node_cancelled_on_the_replan_pass_is_announced_on_that_pass(tmp_path) -> None:
+    """The `cancelled` arm of the same publish: a stop and a replan landing on
+    one pass must not leave the stop's nodes unannounced either."""
+    from raven.agent.subagent.dag_adjudication import REPLAN, AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    cancel = asyncio.Event()
+    started = asyncio.Event()
+    frames: list[tuple[str, str]] = []
+
+    async def _capture(name: str, value: dict) -> None:
+        if name == "dag_node_updated":
+            frames.append((value["node"], value["status"]))
+
+    class _Backend:
+        async def run(self, prompt: str, **_kw: Any) -> str:
+            if "slowpoke" in prompt:
+                started.set()
+                await asyncio.sleep(30)
+            return "did it"
+
+    async def _judge(*, node, store, output, error, crashed, **_):
+        # Wait until the in-flight node is real, then land a stop and a replan
+        # on the same pass the runner will discover them.
+        await started.wait()
+        desk.open("elsewhere")
+        desk.resolve("elsewhere", REPLAN, "the plan was wrong", plan=_replan_plan())
+        cancel.set()
+        return Verdict(accomplished=node.id != "a", what_is_missing="nothing usable")
+
+    spec = parse_dag_spec(
+        {
+            "task_summary": "replan me",
+            "nodes": [
+                {"id": "a", "subagent": "x", "node_summary": "first", "prompt_template": "do a"},
+                {"id": "slowpoke", "subagent": "x", "node_summary": "slow", "prompt_template": "do slowpoke"},
+            ],
+        }
+    )
+    result = await run_dag(
+        spec,
+        resolve=lambda node: _Backend(),
+        backend=LocalFileBackend(),
+        workdir=str(tmp_path),
+        run_root=str(tmp_path / "runs"),
+        nodes_root=str(tmp_path / "nodes"),
+        history_root=str(tmp_path),
+        desk=desk,
+        judge_node=_judge,
+        origin=_TEST_ORIGIN,
+        adjudication_timeout_s=5,
+        cancel=cancel,
+        progress_publisher=_capture,
+    )
+
+    statuses = {entry["node"]: entry["status"] for entry in result.files}
+    assert statuses == {"a": "failed", "slowpoke": "cancelled"}
+    assert ("slowpoke", "cancelled") in frames, "the stop's cancel is announced on the pass that decides it"
+
+
 async def test_a_run_that_was_not_replanned_reports_no_successor(tmp_path) -> None:
     from raven.agent.subagent.dag_adjudication import AdjudicationDesk
     from raven.agent.subagent.dag_verdict import Verdict

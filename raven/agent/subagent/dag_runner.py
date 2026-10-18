@@ -982,6 +982,10 @@ async def _apply_replan(
     an unrelated cascade -- is untouched. A completed node's output is what the
     new run references; a failed or skipped node's status and error are the real
     reason it ended, and overwriting them with the replan's would erase that.
+    Such a node is still published here when this pass's break leaves the loop's
+    own sweep unrun: the cascade marks it skipped before the replan is even
+    discovered, and nothing else would give it a frame or a registry row on the
+    pass that decided it.
     """
     reason = f"Superseded by replan into run {plan.run_id}: {plan.reason}"
     now = _now_ms()
@@ -991,6 +995,23 @@ async def _apply_replan(
         # the replan's would erase why it actually ended, which is the one thing someone
         # reading this run afterwards is looking for. `_mark_stopped` guards the same way.
         if st not in ("running", "exception", "pending"):
+            # A node the cascade marked skipped on this very pass -- or a stop
+            # marked cancelled -- is otherwise announced by no one: the loop
+            # breaks at the replan before its own sweep runs, so publish it
+            # here, keeping the outcome it already earned.
+            if st in ("skipped", "cancelled") and nid not in published_terminal:
+                published_terminal.add(nid)
+                node_started_at.setdefault(nid, now)
+                # setdefault: a node stopped out of `running` already ended for
+                # real when its dispatch was cut off, and the manifest's duration
+                # should keep that instant, not this pass's.
+                node_ended_at.setdefault(nid, now)
+                await _emit(
+                    progress_publisher,
+                    "dag_node_updated",
+                    {"run_id": run_id, "node": nid, "status": st},
+                )
+                await _write_node_status(session_key, run_id, nid, by_id[nid].subagent, st)
             continue
         status[nid] = "skipped" if st == "pending" else ("cancelled" if st == "running" else "failed")
         errors[nid] = reason
