@@ -17,7 +17,16 @@ MAX_SOURCE_BYTES = 256 * 1024
 MAX_FINDINGS = 8
 CHECK_WAIT_SECONDS = 1.0
 UNKNOWN = object()
-_NOQA = re.compile(r"#\s*(?:(ruff|flake8):\s*)?noqa\b(?:\s*:\s*([A-Z]+\d+(?:[\s,]+[A-Z]+\d+)*))?", re.I)
+# A marker counts the way Ruff reads one: an optional lowercase ``ruff:`` or
+# ``flake8:`` prefix for the file-level form, ``noqa`` in any case, then either
+# a colon and codes or, with no colon, whitespace, another comment or the
+# comment's end. Anything else (a URL fragment, a quoted mention, a colon
+# without codes) is text. Unlike Ruff, which takes the first directive in a
+# comment, every directive in it counts.
+_NOQA = re.compile(
+    r"#\s*(?:(ruff|flake8)\s*:\s*)?(?i:noqa)"
+    r"(?:\s*:\s*([A-Z]+[0-9]+(?:[\s,]+[A-Z]+[0-9]+)*)|(?!\s*:)(?=[\s#]|$))"
+)
 
 
 @dataclass(frozen=True)

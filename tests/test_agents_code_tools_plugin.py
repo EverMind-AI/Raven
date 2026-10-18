@@ -423,6 +423,13 @@ def test_name_feedback_covers_exports_and_use_before_local_assignment(registry, 
         ("value = 1  # TODO # flake8: noqa\nother = injected_name\n", True),
         ("label = '# noqa'; value = injected_name\n", True),
         ("label = '# ruff: noqa'\nvalue = injected_name\n", True),
+        ("value = injected_name  # see https://example.com/page#noqa-section\n", True),
+        ('# Use "# ruff: noqa" only for generated files\nvalue = injected_name\n', True),
+        ("value = injected_name  # noqa: needed for registration\n", True),
+        ("value = injected_name  # noqa#reason\n", False),
+        ("# ruff: noqa: generated file\nvalue = injected_name\n", True),
+        ("# ruff : noqa\nvalue = injected_name\n", False),
+        ("# Ruff: noqa\nvalue = injected_name\n", True),
     ],
 )
 def test_explicit_noqa_comments_suppress_only_the_requested_checks(registry, tmp_path, source, warns):

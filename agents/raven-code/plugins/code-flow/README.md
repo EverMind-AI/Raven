@@ -25,8 +25,13 @@ The switches live under `plugins.config["code-flow"].tools`:
 
 The checks parse source without importing or executing it. They honor inline
 `# noqa` / `# noqa: F821` and file-level `# ruff: noqa` / `# flake8: noqa`
-comments for name/import checks; as in Ruff, a file-level directive counts
-only on a line of its own, and one trailing code suppresses nothing. They use
+comments for name/import checks, read as Ruff reads them: a file-level
+directive counts only on a line of its own, and one trailing code suppresses
+nothing; a marker counts only when a colon and codes follow it or, with no
+colon, whitespace, another comment or the end of the comment does, so a URL
+fragment such as `#noqa-section` or a colon with no codes is text. Unlike
+Ruff, which takes the first directive in a comment, every directive in it
+counts. They use
 the host's Python parser and builtins, not the project's complete Ruff/Flake8
 configuration or target interpreter;
 dynamic bindings and version differences can need human or agent judgment.
