@@ -38,7 +38,12 @@ dynamic bindings and version differences can need human or agent judgment.
 Syntax feedback names the parser version. Passing diagnostics do not prove
 that the patch is correct or replace project tests.
 
-Checks skip source over 256 KiB and report at most eight findings per file.
+Name checks skip source over 256 KiB, the syntax check source over 2 MiB, and
+a check skipped for size says so in one line. Source is decoded as Python
+decodes it, by its coding declaration or as UTF-8; bytes that do not decode
+are reported as the syntax error Python raises for them, at the line where
+decoding stops. A changed file that cannot be read reports diagnostics
+unavailable. Each file reports at most eight findings.
 Post-command checks consider at most eight visible changed Python files inside the
 command's working directory, with a 6,000-character diagnostic budget plus
 omission notices. The changed files come from the host's own write record for

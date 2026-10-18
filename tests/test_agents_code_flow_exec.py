@@ -219,7 +219,7 @@ def test_exec_without_a_write_record_reads_nothing(tmp_path, monkeypatch):
     tool = _diagnostic_tool(tmp_path)
     target = tmp_path / "home" / "recorded.py"
     reads, records = [], []
-    monkeypatch.setattr(diagnostics, "read_python", lambda path: reads.append(path))
+    monkeypatch.setattr(diagnostics, "read_source", lambda path: reads.append(path) or b"")
 
     async def host(*args, **kwargs):
         # With no record, as when the host's listing gave up: the output alone.
@@ -478,6 +478,38 @@ async def test_exec_diagnostics_do_not_stat_walk_or_open_files_on_the_event_loop
     assert on_loop == [] and walked == []
 
 
+@pytest.mark.asyncio
+async def test_exec_checks_a_changed_file_as_a_written_one_is_checked(tmp_path):
+    """Syntax past the name checks' bound, a line for each check that did not
+    run, and bytes Python cannot decode reported where decoding stops."""
+    from code_flow.tools.diagnostics import MAX_SOURCE_BYTES, MAX_SYNTAX_BYTES
+
+    from raven.contracts.tool import FileWrite, ToolOutput
+
+    class Shadow:
+        async def trackable(self, paths):
+            return set(paths)
+
+    tool = _diagnostic_tool(tmp_path)
+    tool.measure_writes(lambda root: Shadow())
+    home = tmp_path / "home"
+    rows = MAX_SOURCE_BYTES // len("value = 1\n") + 1
+    files = {
+        "large_broken.py": ("value = 1\n" * rows + "def broken(:\n").encode(),
+        "large_clean.py": ("value = 1\n" * rows).encode(),
+        "huge.py": b"#" * (MAX_SYNTAX_BYTES + 1),
+        "legacy.py": "# coding: gbk\nlabel = '\u4e2d'\n".encode(),
+    }
+    for name, raw in files.items():
+        (home / name).write_bytes(raw)
+    records = tuple(FileWrite(path=str(home / name), created=True, size=len(raw)) for name, raw in files.items())
+    note = await tool._diagnose_writes(home, ToolOutput("Exit code: 0", ok=True, written=records))
+    assert f"WARNING: line {rows + 1}, column 12: Python syntax error" in note
+    assert f"Python name checks skipped for {home / 'large_clean.py'}" in note
+    assert f"Python diagnostics skipped for {home / 'huge.py'}: the source is over 2 MiB" in note
+    assert "line 2, column 12: Python syntax error: 'gbk' codec can't decode byte 0xad" in note
+
+
 def test_exec_diagnostics_skip_symlinks_cache_and_non_python_files(tmp_path):
     tool = _diagnostic_tool(tmp_path)
     home = tmp_path / "home"
@@ -559,12 +591,12 @@ def test_exec_without_checkpoint_never_reads_changed_file_contents(tmp_path, mon
 
     def read(path):
         reads.append(path)
-        return path.read_text()
+        return path.read_bytes()
 
     async def host(*args, **kwargs):
         return ToolOutput("Exit code: 0", ok=True, written=(FileWrite(path=str(target), created=True, size=26),))
 
-    monkeypatch.setattr(diagnostics, "read_python", read)
+    monkeypatch.setattr(diagnostics, "read_source", read)
     monkeypatch.setattr(TrunkExecTool, "execute", host)
     out = _run(tool.execute(command="test command"))
     assert reads == [] and str(out) == "Exit code: 0"

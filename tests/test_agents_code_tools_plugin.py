@@ -510,7 +510,7 @@ def test_identical_rewrite_still_reports_a_syntax_error(registry, tmp_path):
 
 
 def test_diagnostics_bound_source_and_findings_without_executing_code(tmp_path):
-    from code_flow.tools.diagnostics import MAX_FINDINGS, MAX_SOURCE_BYTES, PythonDiagnostics
+    from code_flow.tools.diagnostics import MAX_FINDINGS, MAX_SOURCE_BYTES, MAX_SYNTAX_BYTES, PythonDiagnostics
 
     target = tmp_path / "source.py"
     sentinel = tmp_path / "must_not_exist"
@@ -518,10 +518,89 @@ def test_diagnostics_bound_source_and_findings_without_executing_code(tmp_path):
     diagnostics = PythonDiagnostics()
     assert diagnostics.note(target, text, before=None) == ""
     assert not sentinel.exists()
-    assert diagnostics.note(target, "#" * (MAX_SOURCE_BYTES + 1), before=None) == ""
+    assert diagnostics.note(target, "#" * (MAX_SOURCE_BYTES + 1), before=None) == (
+        f"\nPython name checks skipped for {target}: the source is over 256 KiB, so only its syntax was checked."
+    )
+    assert diagnostics.note(target, "#" * (MAX_SYNTAX_BYTES + 1), before=None) == (
+        f"\nPython diagnostics skipped for {target}: the source is over 2 MiB. Run targeted project checks."
+    )
+    assert PythonDiagnostics(lint=False).note(target, "#" * (MAX_SOURCE_BYTES + 1), before=None) == ""
     note = diagnostics.note(target, "\n".join(f"value_{i} = missing_{i}" for i in range(20)), before=None)
     assert note.count("WARNING:") == MAX_FINDINGS
     assert "12 more findings omitted" in note
+
+
+@pytest.mark.parametrize("tool", ["write_file", "edit_file"])
+def test_a_syntax_error_past_the_name_check_bound_is_still_reported(registry, tmp_path, tool):
+    """Name checks stop at 256 KiB and the syntax check runs on past it, so an
+    edit that breaks one of a project's large modules still hears about it."""
+    from code_flow.tools.diagnostics import MAX_SOURCE_BYTES
+
+    target = tmp_path / "large.py"
+    rows = MAX_SOURCE_BYTES // len("value = 1\n") + 1
+    body = "value = 1\n" * rows
+    if tool == "write_file":
+        args = {"file_path": str(target), "content": body + "def broken(:\n"}
+    else:
+        clean = {"file_path": str(target), "content": body + "def kept():\n    pass\n"}
+        assert "name checks skipped" in _text(_run(registry.execute("write_file", clean)))
+        args = {"file_path": str(target), "old_string": "def kept():", "new_string": "def broken(:"}
+    result = _text(_run(registry.execute(tool, args)))
+    assert f"WARNING: line {rows + 1}, column 12: Python syntax error" in result
+    assert "name checks skipped" not in result
+
+
+def test_an_append_python_cannot_decode_is_reported_where_decoding_stops(registry, tmp_path):
+    """UTF-8 appended to a file that declares GBK: Python refuses the file, so
+    the append hears that, at the line Python cannot decode."""
+    target = tmp_path / "legacy.py"
+    target.write_bytes('# coding: gbk\nname = "\u4e2d"\n'.encode("gbk"))
+    args = {"file_path": str(target), "content": 'label = "\u4e2d"\ndef broken(:\n', "mode": "append"}
+    result = _text(_run(registry.execute("write_file", args)))
+    assert "line 3, column 12: Python syntax error: 'gbk' codec can't decode byte 0xad" in result
+    assert "new findings compared with the content before this call" in result
+
+
+@pytest.mark.parametrize(
+    ("raw", "place", "message"),
+    [
+        # A declared encoding, where Python's parser reports line 0.
+        (
+            "# -*- coding: gbk -*-\nx = 1\nname = '\u4e2d\u6587'\n".encode(),
+            "line 3, column 11",
+            "'gbk' codec can't decode",
+        ),
+        # UTF-8 by default, a comment included, which Python 3.12's parser passes.
+        (b"a = 1\nb = 2\n# caf\xe9\n", "line 3, column 6", "'utf-8' codec can't decode byte 0xe9"),
+        # After a BOM, which its codec strips before decoding the rest.
+        (b"\xef\xbb\xbfa = 1\nb = '\xff'\n", "line 2, column 6", "'utf-8' codec can't decode byte 0xff"),
+        # The two lines a declaration may take are read before anything is decoded.
+        (b"name = 'caf\xe9'\n", "line 1, column 1", "invalid or missing encoding declaration"),
+        (b"#!/usr/bin/env python\n# coding: nope\nx = 1\n", "line 2, column 1", "unknown encoding: nope"),
+    ],
+    ids=["declared-encoding", "utf-8-comment", "after-a-bom", "first-line", "unknown-declaration"],
+)
+def test_bytes_python_cannot_decode_are_a_syntax_error_where_decoding_stops(tmp_path, raw, place, message):
+    from code_flow.tools.diagnostics import PythonDiagnostics
+
+    target = tmp_path / "undecodable.py"
+    target.write_bytes(raw)
+    note = _run(PythonDiagnostics().check(target, before=None))
+    assert f"WARNING: {place}: Python syntax error: {message}" in note
+
+
+def test_a_checked_file_is_decoded_by_its_declaration_and_read_to_one_past_the_bound(tmp_path):
+    from code_flow.tools.diagnostics import MAX_SYNTAX_BYTES, PythonDiagnostics, read_source
+
+    target = tmp_path / "encoded.py"
+    target.write_bytes(b"# coding: latin-1\nname = 'caf\xe9'\nvalue = missing_name\n")
+    assert "WARNING: line 3, column 9: F821" in _run(PythonDiagnostics().check(target, before=None))
+    target.write_bytes(b"#" * (MAX_SYNTAX_BYTES + 5))
+    assert len(read_source(target)) == MAX_SYNTAX_BYTES + 1
+    assert "diagnostics skipped" in _run(PythonDiagnostics().check(target, before=None))
+    for absent in (tmp_path / "absent.py", tmp_path):
+        with pytest.raises(FileNotFoundError):
+            read_source(absent)
 
 
 def test_python_source_read_is_bounded_and_respects_its_encoding(tmp_path):
