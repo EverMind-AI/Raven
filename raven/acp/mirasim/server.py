@@ -253,6 +253,8 @@ class Session:
     pending: int = 0
     """Prompts received and not yet answered, the running one included."""
     deleted: bool = False
+    closed: bool = False
+    """Dropped from this connection: a prompt captured before the close is answered ``cancelled``, not sent."""
     turn: Turn | None = None
     view: SessionView = field(default_factory=SessionView)
     stream: TurnStream = field(default_factory=TurnStream)
@@ -687,9 +689,16 @@ class MirasimAgent:
         return {}
 
     async def close_session(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Drop a session from this connection, ending its turn; the conversation itself stays."""
+        """Drop a session from this connection, ending its turn; the conversation itself stays.
+
+        A prompt that was already waiting on the session's lock when it closed is
+        answered ``cancelled`` too: it captured the session before the wait, so
+        removing it from the table alone would let that prompt start a host turn
+        whose snapshots nothing routes and whose request no one can cancel.
+        """
         session = self.sessions.pop(_required_text(params, "sessionId"), None)
         if session is not None:
+            session.closed = True
             await self._forget(session)
         return {}
 
@@ -774,7 +783,7 @@ class MirasimAgent:
             )
         retried = False
         while True:
-            if session.deleted or self._shutting_down:
+            if session.closed or session.deleted or self._shutting_down:
                 return {"stopReason": "cancelled"}
             turn = Turn(client_ref=f"raven-{uuid.uuid4().hex}", session=session, ended=_future())
             turn.notes = notes

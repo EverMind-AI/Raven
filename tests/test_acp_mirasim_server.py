@@ -1001,6 +1001,27 @@ async def test_closing_a_session_ends_its_turn_and_keeps_the_conversation(harnes
     assert await harness.ok("session/close", sessionId=sid) == {}
 
 
+async def test_a_prompt_waiting_when_its_session_closes_is_answered_cancelled(harness: Harness) -> None:
+    """The captured-session half of close: a prompt already waiting on the lock must not reach the host.
+
+    It read ``sessions`` before the close, so removing the session from the table
+    alone leaves it a live object: it would acquire the lock and start a turn whose
+    snapshots nothing routes and which ``session/cancel`` cannot reach.
+    """
+    harness.host.respond = script(("hold",))
+    sid = await harness.new()
+    first = asyncio.ensure_future(harness.ok("session/prompt", sessionId=sid, prompt=text("first")))
+    await harness.host.wait_for(lambda: (running := harness.agent.sessions[sid].turn) and running.task_id)
+    second = asyncio.ensure_future(harness.ok("session/prompt", sessionId=sid, prompt=text("second")))
+    session = harness.agent.sessions[sid]
+    # Parked on the lock: it has read its session and is waiting for the first turn.
+    await harness.host.wait_for(lambda: session.pending == 2 and session.lock.locked())
+    assert await harness.ok("session/close", sessionId=sid) == {}
+    assert await first == await asyncio.wait_for(second, 5) == {"stopReason": "cancelled"}
+    assert [frame["prompt"] for frame in harness.prompts()] == ["first"]
+    assert harness.agent._turns == {}
+
+
 async def first_prompt_held_at_the_host(harness: Harness, *steps: Any) -> tuple[str, asyncio.Future[Any]]:
     """A new session whose first prompt the host has received and not yet answered."""
     harness.host.respond = script(*steps)
