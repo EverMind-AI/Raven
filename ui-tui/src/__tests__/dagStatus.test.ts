@@ -603,17 +603,14 @@ describe('dagNodeOutcome', () => {
     )
   })
 
-  it.each(['constructor', '__proto__', 'toString'])(
-    'does not resolve %s through the prototype chain',
-    reason => {
-      // A reason is a server's word, so it is untrusted here: an inherited member
-      // looked up by bracket would print a function's source into the detail line.
-      const outcome = dagNodeOutcome({ reason: reason as never, status: 'not_executed' })
+  it.each(['constructor', '__proto__', 'toString'])('does not resolve %s through the prototype chain', reason => {
+    // A reason is a server's word, so it is untrusted here: an inherited member
+    // looked up by bracket would print a function's source into the detail line.
+    const outcome = dagNodeOutcome({ reason: reason as never, status: 'not_executed' })
 
-      expect(outcome).toBe('not executed')
-      expect(typeof outcome).toBe('string')
-    }
-  )
+    expect(outcome).toBe('not executed')
+    expect(typeof outcome).toBe('string')
+  })
 
   it('shows what a decision node selected, after its status', () => {
     expect(dagNodeOutcome({ selectedRoutes: ['question'], status: 'completed' })).toBe('→ question')
