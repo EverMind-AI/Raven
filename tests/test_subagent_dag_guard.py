@@ -8,9 +8,8 @@ from raven.agent.subagent.dag_guard import (
     KLEENE_OR,
     GuardError,
     evaluate,
-    negated_atoms,
+    impossible_guard_errors,
     parse_guard,
-    positive_atoms_under_and,
 )
 
 
@@ -192,49 +191,39 @@ def test_unknown_and_true_is_unknown():
     assert seen == ["a.x", "b.y"]
 
 
-def test_positive_atoms_under_and_sees_an_and_chain():
-    guard = parse_guard("t.bug and r.high and t.feature")
-    chains = [tuple(f"{a.node}.{a.name}" for a in chain) for chain in positive_atoms_under_and(guard)]
-    assert chains == [("t.bug", "r.high", "t.feature")]
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("r.a", []),
+        ("r.a and x.y and r.b", ["exclusive routes"]),
+        ("r.a and (r.b and x.y)", ["exclusive routes"]),
+        ("(r.a and x.y) or (r.b and x.z)", []),
+        ("r.a and not r.b", []),
+        ("(r.a or r.b) and x.y", []),
+        ("(r.a or r.b) and r.b", []),
+        ("x.y and (r.a and r.b or x.z)", []),
+        ("not r.done and (x.y or not x.z)", ["not done"]),
+        ("not (r.a and r.b)", []),
+        ("not (r.a and r.b) or x.y", []),
+        ("not not r.done", []),
+        ("not not not r.done", ["not done"]),
+        ("not (not r.done and r.a)", []),
+        ("not r.done or (r.a and r.b)", ["not done", "exclusive routes"]),
+        ("not (not r.a or not r.b)", ["exclusive routes"]),
+        ("not not (r.a and r.b)", ["exclusive routes"]),
+        ("r.a and not not r.b", ["exclusive routes"]),
+    ],
+)
+def test_contradictions_preserve_the_boolean_context(source, expected):
+    def check_conjunction(positive, negative):
+        errors = []
+        if {("r", "a"), ("r", "b")} <= {(atom.node, atom.name) for atom in positive}:
+            errors.append("exclusive routes")
+        if any(atom.name == "done" for atom in negative):
+            errors.append("not done")
+        return errors
 
-
-def test_positive_atoms_under_and_stops_at_an_or():
-    guard = parse_guard("(t.bug and r.high) or (t.feature and r.low)")
-    chains = [tuple(f"{a.node}.{a.name}" for a in chain) for chain in positive_atoms_under_and(guard)]
-    assert chains == [("t.bug", "r.high"), ("t.feature", "r.low")]
-
-
-def test_positive_atoms_under_and_skips_negated_atoms():
-    guard = parse_guard("t.bug and not t.feature")
-    chains = [tuple(a.name for a in chain) for chain in positive_atoms_under_and(guard)]
-    assert chains == [("bug",)]
-
-
-def _chains_of(source: str) -> set[tuple[str, ...]]:
-    return {tuple(f"{a.node}.{a.name}" for a in chain) for chain in positive_atoms_under_and(parse_guard(source))}
-
-
-def test_positive_atoms_under_and_yields_a_bare_atom_as_a_one_tuple():
-    assert _chains_of("t.a") == {("t.a",)}
-
-
-def test_positive_atoms_under_and_does_not_splice_an_or_arm_into_its_sibling():
-    assert _chains_of("(t.bug or t.feature) and r.high") == {("r.high",), ("t.bug",), ("t.feature",)}
-
-
-def test_positive_atoms_under_and_keeps_two_routes_of_one_node_apart():
-    """Spliced, the arm r.a would share a chain with r.b: two routes of one node, which the single-select
-    check reads as impossible, though the guard holds with r on b."""
-    assert _chains_of("(r.a or r.b) and r.b") == {("r.a",), ("r.b",)}
-
-
-def test_positive_atoms_under_and_searches_an_and_chain_inside_an_or():
-    assert _chains_of("x.y and (a.p and a.q or b.r)") == {("x.y",), ("a.p", "a.q"), ("b.r",)}
-
-
-def test_negated_atoms_finds_only_direct_negations():
-    guard = parse_guard("not r.done and (a.x or not b.y) and not (c.z and d.w)")
-    assert [f"{a.node}.{a.name}" for a in negated_atoms(guard)] == ["r.done", "b.y"]
+    assert impossible_guard_errors(parse_guard(source), check_conjunction) == expected
 
 
 def test_a_node_id_spelled_like_a_keyword_is_an_atom():
@@ -254,7 +243,8 @@ def test_a_keyword_standing_alone_is_still_an_operator():
     """The lookahead only changes what follows a dot; the words keep their meaning."""
     guard = parse_guard("not t.a and not (t.b or t.c)")
     assert [f"{a.node}.{a.name}" for a in guard.atoms] == ["t.a", "t.b", "t.c"]
-    assert [f"{a.node}.{a.name}" for a in negated_atoms(guard)] == ["t.a"]
+    assert evaluate(guard, lambda atom: False) is True
+    assert evaluate(guard, lambda atom: atom.name == "a") is False
 
 
 @pytest.mark.parametrize(
@@ -282,15 +272,3 @@ def test_an_atom_carries_its_extent():
     guard = parse_guard("  not ( r.a or s.done ) ")
     assert [(a.pos, a.end) for a in guard.atoms] == [(8, 11), (15, 21)]
     assert [guard.source[a.pos : a.end] for a in guard.atoms] == ["r.a", "s.done"]
-
-
-def test_an_and_chain_flattens_its_right_side_too():
-    """`a.x and (a.y and b.z)` is one chain of three: read as two, the last two
-    routes of the same single-select node would never be compared."""
-    assert _chains_of("a.x and (a.y and b.z)") == {("a.x", "a.y", "b.z")}
-
-
-def test_nothing_under_a_negated_and_chain_is_yielded():
-    """A negated chain cannot make the guard impossible, so it is not searched."""
-    assert _chains_of("not (r.a and r.b)") == set()
-    assert _chains_of("not (r.a and r.b) or x.y") == {("x.y",)}

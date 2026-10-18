@@ -3239,6 +3239,45 @@ def test_not_done_can_never_be_true() -> None:
     assert errors == ["node 'g' guard negates 'r.done', which is always true, so it can never be true"]
 
 
+@pytest.mark.parametrize(
+    "when",
+    [
+        "not not r.done",
+        "not not not not r.done",
+        "not (not r.done and r.a)",
+        "not (r.a and not r.done)",
+        "not r.done or r.b",
+        "r.b or not r.done",
+        "(r.a and r.b) or r.done",
+        "r.done or (r.a and r.b)",
+        "r.done and ((r.a and r.b) or r.b)",
+        "not (not r.done or r.a)",
+        "not not (r.a or r.b)",
+        "not (r.a and r.b)",
+    ],
+)
+def test_satisfiable_guards_survive_negation_and_disjunction(when: str) -> None:
+    assert _branch_graph([_decision(), _branch_node(id="g", depends_on=["r"], when=when)]) == []
+
+
+@pytest.mark.parametrize(
+    "when",
+    [
+        "not not not r.done",
+        "not r.done and r.a",
+        "r.a and not r.done",
+        "not r.done or (r.a and r.b)",
+        "(r.a and r.b) or not r.done",
+        "not not (r.a and r.b)",
+        "r.a and not not r.b",
+        "not (not r.a or not r.b)",
+    ],
+)
+def test_impossible_guards_are_still_rejected_in_boolean_context(when: str) -> None:
+    errors = _branch_graph([_decision(), _branch_node(id="g", depends_on=["r"], when=when)])
+    assert errors and all("can never be true" in error for error in errors)
+
+
 @pytest.mark.parametrize("when", ["not r.a", "r.a and not r.b"])
 def test_a_negated_route_is_an_ordinary_guard(when: str) -> None:
     """Only `not <n>.done` is dead. `not r.a` holds when `r` completed and selected something else."""

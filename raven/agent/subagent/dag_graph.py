@@ -9,7 +9,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pydantic.alias_generators import to_camel
 
-from raven.agent.subagent.dag_guard import DONE, Guard, GuardError, negated_atoms, parse_guard, positive_atoms_under_and
+from raven.agent.subagent.dag_guard import DONE, Atom, Guard, GuardError, impossible_guard_errors, parse_guard
 from raven.agent.subagent.dag_store import (
     NOT_EXECUTED,
     RUNNING,
@@ -914,10 +914,10 @@ def _dependency_errors(node: DagNodeSpec, names: dict[str, list[str]], decision_
 def _never_true_errors(node: DagNodeSpec, guard: Guard, by_id: dict[str, DagNodeSpec]) -> list[str]:
     """Refuse the two guards that cannot hold, without searching for satisfiability.
 
-    Two routes of one ``select: one`` node, both un-negated, in one ``and``
-    chain; and ``not <node>.done``, since ``done`` is always true. Only routes
-    the node declares count towards the first: ``done`` is not one, and an
-    undeclared name is already reported by :func:`_atom_errors`.
+    Two routes of one ``select: one`` node required together; and a negated
+    ``<node>.done``, since ``done`` is always true. Only declared routes count
+    towards the first. The expression walker preserves negation and requires
+    every arm of an ``or`` to be impossible before rejecting it.
 
     Args:
         node (`DagNodeSpec`):
@@ -929,12 +929,13 @@ def _never_true_errors(node: DagNodeSpec, guard: Guard, by_id: dict[str, DagNode
 
     Returns:
         `list[str]`:
-            One message per impossible term.
+            Contradictions that prove the whole guard cannot hold.
     """
-    errors: list[str] = []
-    for chain in positive_atoms_under_and(guard):
+
+    def check_conjunction(positive: tuple[Atom, ...], negative: tuple[Atom, ...]) -> list[str]:
+        errors: list[str] = []
         asked: dict[str, set[str]] = {}
-        for atom in chain:
+        for atom in positive:
             asked.setdefault(atom.node, set()).add(atom.name)
         for router_id, names in asked.items():
             router = by_id.get(router_id)
@@ -946,12 +947,14 @@ def _never_true_errors(node: DagNodeSpec, guard: Guard, by_id: dict[str, DagNode
                     f"node '{node.id}' guard requires {clashing} of single-select node "
                     f"'{router_id}' at once, which can never be true"
                 )
-    errors.extend(
-        f"node '{node.id}' guard negates '{atom.node}.done', which is always true, so it can never be true"
-        for atom in negated_atoms(guard)
-        if atom.name == DONE
-    )
-    return errors
+        errors.extend(
+            f"node '{node.id}' guard negates '{atom.node}.done', which is always true, so it can never be true"
+            for atom in negative
+            if atom.name == DONE
+        )
+        return errors
+
+    return impossible_guard_errors(guard, check_conjunction)
 
 
 def _nodes_path_errors(nodes: list[DagNodeSpec], by_id: dict[str, DagNodeSpec]) -> list[str]:

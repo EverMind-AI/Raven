@@ -3317,7 +3317,9 @@ this graph that is in the node's `depends_on`, and only a route that node declar
 `done`; every decision node of the graph in `depends_on` must appear in the guard, since a
 node cannot depend on a decision and stay silent about it. Two guards that can never hold
 are refused at submission: two un-negated routes of one `select: "one"` node in one `and`
-chain, and `not <node>.done`. The runner reads a guard once every dependency has settled,
+chain, and `not <node>.done`. These checks preserve surrounding negation and disjunction:
+an impossible arm does not reject an `or` whose other arm can hold. The runner reads a guard
+once every dependency has settled,
 and a dependency that failed or was skipped skips the node first, whatever the guard says.
 Unknown is a value and not false: a route of a decision node that was never executed is
 unknown, so `not` over it does not hold. A blank or unset `when` is no guard.

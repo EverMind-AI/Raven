@@ -13,7 +13,7 @@ and `dag_runner` evaluates with it.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 
 from raven.agent.subagent.prompt_errors import DagValidationError
@@ -265,52 +265,41 @@ def evaluate(guard: Guard, value_of: Callable[[Atom], Value]) -> Value:
     return walk(guard.expr)
 
 
-def positive_atoms_under_and(guard: Guard) -> Iterable[tuple[Atom, ...]]:
-    """One tuple per maximal ``and`` chain: the chain's conjuncts that are bare atoms.
+def impossible_guard_errors(
+    guard: Guard,
+    check_conjunction: Callable[[tuple[Atom, ...], tuple[Atom, ...]], list[str]],
+) -> list[str]:
+    """Report contradictions only when they prevent the whole guard from holding.
 
-    A chain is an ``and`` subtree flattened into its conjuncts. Its positive atoms are
-    the conjuncts that are atoms themselves -- an ``or`` among them is not one, and is
-    searched for chains of its own. Nothing under a ``not`` is yielded: a chain there
-    is negated, so it cannot make the guard impossible. A bare atom outside any ``and``
-    yields a one-tuple.
+    ``check_conjunction`` receives the positive and negative atoms required together
+    and returns any contradictions the graph can prove. Negation is carried down
+    with De Morgan's laws, which also hold in Kleene logic. An ``and`` needs every
+    term; an ``or`` is impossible only if both arms are. No distribution into DNF
+    is needed, so the walk remains bounded by the parsed expression's size.
     """
 
-    def conjuncts(node: Expr) -> list[Expr]:
-        if isinstance(node, _And):
-            return conjuncts(node.left) + conjuncts(node.right)
-        return [node]
-
-    def walk(node: Expr) -> Iterator[tuple[Atom, ...]]:
-        if isinstance(node, Atom):
-            yield (node,)
-        elif isinstance(node, _And):
-            parts = conjuncts(node)
-            positive = tuple(part for part in parts if isinstance(part, Atom))
-            if positive:
-                yield positive
-            for part in parts:
-                if not isinstance(part, Atom):
-                    yield from walk(part)
-        elif isinstance(node, _Or):
-            yield from walk(node.left)
-            yield from walk(node.right)
-
-    yield from walk(guard.expr)
-
-
-def negated_atoms(guard: Guard) -> tuple[Atom, ...]:
-    """Atoms negated directly -- ``not <node>.<name>`` -- in source order."""
-    found: list[Atom] = []
-
-    def walk(node: Expr) -> None:
+    def conjuncts(node: Expr, negated: bool) -> Iterator[tuple[Atom | _And | _Or, bool]]:
         if isinstance(node, _Not):
-            if isinstance(node.inner, Atom):
-                found.append(node.inner)
-            else:
-                walk(node.inner)
-        elif isinstance(node, (_And, _Or)):
-            walk(node.left)
-            walk(node.right)
+            yield from conjuncts(node.inner, not negated)
+        elif (isinstance(node, _And) and not negated) or (isinstance(node, _Or) and negated):
+            yield from conjuncts(node.left, negated)
+            yield from conjuncts(node.right, negated)
+        else:
+            yield node, negated
 
-    walk(guard.expr)
-    return tuple(found)
+    def walk(node: Expr, negated: bool = False) -> list[str]:
+        parts = list(conjuncts(node, negated))
+        positive = tuple(part for part, is_negated in parts if isinstance(part, Atom) and not is_negated)
+        negative = tuple(part for part, is_negated in parts if isinstance(part, Atom) and is_negated)
+        errors = check_conjunction(positive, negative)
+        for part, is_negated in parts:
+            if isinstance(part, Atom):
+                continue
+            left = walk(part.left, is_negated)
+            right = walk(part.right, is_negated)
+            if left and right:
+                errors.extend(left)
+                errors.extend(right)
+        return errors
+
+    return walk(guard.expr)
