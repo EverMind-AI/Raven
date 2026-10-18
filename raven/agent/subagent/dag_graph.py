@@ -1007,6 +1007,8 @@ def _nodes_path_target(path: str) -> str | None:
     Artifacts are flat files named ``<id>.`` plus a suffix and an id holds no
     dot, so the id is whatever precedes the first one. Normalize with the local
     backend's host path rules, including Windows separator and case aliases.
+    A drive-relative spelling can name the same file on that drive, so match
+    its relative suffix even before the artifact directory is known.
 
     Args:
         path (`str`):
@@ -1019,6 +1021,7 @@ def _nodes_path_target(path: str) -> str | None:
     root, relative = split_reference(path)
     if root != "nodes":
         return None
+    _, relative = os.path.splitdrive(relative)
     return os.path.normcase(os.path.normpath(relative)).split(".", 1)[0]
 
 

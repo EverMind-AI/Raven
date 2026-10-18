@@ -3409,9 +3409,13 @@ def test_a_file_input_aimed_at_a_node_that_may_not_execute_is_refused() -> None:
         r".\Gate.out.md",
         r"nested\..\Gate.out.md",
         "nested/Gate.out.md",
+        "{drive}Gate.out.md",
+        r"{drive}.\gate.out.md",
+        r"{drive}nested\..\GATE.out.md",
     ],
 )
 async def test_at_nodes_aliases_follow_the_local_filesystem(tmp_path: Path, kind: str, relative: str) -> None:
+    relative = relative.format(drive=tmp_path.drive or "C:")
     artifacts = tmp_path / "nodes"
     artifacts.mkdir()
     (artifacts / "nested").mkdir()
