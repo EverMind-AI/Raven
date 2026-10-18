@@ -1623,6 +1623,58 @@ async def test_a_steer_the_host_cannot_queue_is_no_turn(harness: Harness, monkey
     await turn
 
 
+@pytest.mark.parametrize("original_ended", [False, True])
+async def test_a_timed_out_steer_is_recalled_or_stopped_when_accepted_later(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, original_ended: bool
+) -> None:
+    monkeypatch.setattr(server_mod, "STEER_TIMEOUT_S", 0.05)
+    harness.host.respond = script(("text", "busy"), ("hold",))
+    sid = await harness.new()
+    turn = asyncio.ensure_future(harness.ok("session/prompt", sessionId=sid, prompt=text("go")))
+    await harness.host.wait_for(lambda: harness.said(sid) == "busy")
+    harness.host.silent.add("prompt")
+    assert await harness.ok("_raven/session/steer", sessionId=sid, text="late") == {"status": "no_turn"}
+    if original_ended:
+        await harness.ok("session/cancel", sessionId=sid)
+        await turn
+    harness.host.silent.discard("prompt")
+    late = harness.prompts()[-1]
+    await harness.host._prompt(harness.host.clients[0], late)
+    session = harness.host.session()
+    if original_ended:
+        await harness.host.wait_for(lambda: session.running is None, limit=1)
+        assert any(f.get("taskId") == "task-2" for f in harness.host.frames("stop"))
+    else:
+        await harness.host.wait_for(lambda: not session.queue, limit=1)
+        assert any(f.get("ref") == late["clientRef"] for f in harness.host.frames("recall"))
+        assert not harness.host.frames("stop")
+        await harness.ok("session/cancel", sessionId=sid)
+        await turn
+
+
+async def test_a_steer_send_failure_recalls_the_prompt_already_queued(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness.host.respond = script(("text", "busy"), ("hold",))
+    sid = await harness.new()
+    turn = asyncio.ensure_future(harness.ok("session/prompt", sessionId=sid, prompt=text("go")))
+    await harness.host.wait_for(lambda: harness.said(sid) == "busy")
+    send = harness.agent.host.send
+
+    async def fail_steer(frame: dict[str, Any]) -> None:
+        if frame["type"] == "steer":
+            raise server_mod.HostUnavailableError("steer send failed")
+        await send(frame)
+
+    monkeypatch.setattr(harness.agent.host, "send", fail_steer)
+    assert await harness.ok("_raven/session/steer", sessionId=sid, text="late") == {"status": "no_turn"}
+    await harness.host.wait_for(lambda: not harness.host.session().queue, limit=1)
+    assert harness.host.frames("recall")
+    assert not harness.host.frames("stop")
+    await harness.ok("session/cancel", sessionId=sid)
+    await turn
+
+
 async def test_a_steer_that_ran_as_a_turn_of_its_own_after_the_turn_ended_is_stopped(harness: Harness) -> None:
     harness.host.respond = script(("text", "busy"), ("hold",))
     sid = await harness.new()
