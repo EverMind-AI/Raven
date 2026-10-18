@@ -254,13 +254,19 @@ async def system_upgrade(params: dict) -> dict:
     import asyncio
 
     from raven.rpc.serve_control import SERVE
-    from raven.updates.upgrade import UpgradeError, plan_upgrade, spawn_detached_upgrade
+    from raven.updates.upgrade import UpgradeError, _is_editable_install, plan_upgrade, spawn_detached_upgrade
 
     # The dispatcher only lifts `detail` into error.data when no data dict is
     # given, so every refusal carries its own reason AND its human sentence --
     # the GUI shows that sentence verbatim next to the fallback command.
-    def _refuse(reason: str, detail: str) -> ConfigValidationError:
-        return ConfigValidationError(detail, data={"reason": reason, "detail": detail})
+    def _refuse(reason: str, detail: str, command: str | None = None) -> ConfigValidationError:
+        data: dict[str, object] = {"reason": reason, "detail": detail}
+        if command is not None:
+            # What the card copies instead of its default `raven upgrade`: the
+            # recovery differs by reason, and a wrong suggestion is worse than
+            # none.
+            data["command"] = command
+        return ConfigValidationError(detail, data=data)
 
     if SERVE.hosted_by_gateway:
         if SERVE.supervisor_pid is None:
@@ -271,6 +277,7 @@ async def system_upgrade(params: dict) -> dict:
                 "unsupervised",
                 "This Raven was started by hand, so nothing would bring it back after an upgrade. "
                 "Run `raven upgrade` in a terminal, then start Raven again.",
+                "raven upgrade\nraven web",
             )
         busy = SERVE.busy()
         if busy is not None:
@@ -284,6 +291,16 @@ async def system_upgrade(params: dict) -> dict:
     if not SERVE.running:
         raise _refuse("not_serving", "system.upgrade is only available while `raven serve` is running")
 
+    if _is_editable_install():
+        # A checkout tracks upstream `main`, so no release is ever "newer" for
+        # it in the sense the button means; and both `raven upgrade` and the
+        # page's default fallback refuse it. Name the two steps that do work.
+        raise _refuse(
+            "editable",
+            "This Raven is a source checkout, so released upgrades do not apply to it. "
+            "Update it with git, then reinstall.",
+            "git pull\n" + (r".\install.ps1" if os.name == "nt" else "./install.sh"),
+        )
     try:
         # Network-bound and synchronous (httpx), so keep it off the event loop.
         plan = await asyncio.to_thread(plan_upgrade)

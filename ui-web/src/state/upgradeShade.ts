@@ -19,7 +19,7 @@ export interface UpgradeShade {
   /** A line with how far the install has got: 0..1, or null while it cannot
       be measured (the bar goes back to sliding). */
   measure(text: string, fraction: number | null): void
-  fail(text: string, detail?: string): void
+  fail(text: string, detail?: string, command?: string): void
   close(): void
 }
 
@@ -30,6 +30,9 @@ export interface Failure {
   readonly sub: string
   readonly copy: string
   readonly close: string
+  /** The command this failure's card offers, taken when the failure happened;
+      absent means the default `raven upgrade` is still the right one. */
+  readonly command?: string
 }
 
 export interface Card {
@@ -57,8 +60,8 @@ export function dismiss(id: number): void {
   if (card && card.id === id) set(null)
 }
 
-export function copyCommand(): void {
-  if (navigator.clipboard) navigator.clipboard.writeText(COMMAND)
+export function copyCommand(command?: string): void {
+  if (navigator.clipboard) navigator.clipboard.writeText(command ?? COMMAND)
 }
 
 export function open(): UpgradeShade {
@@ -79,7 +82,7 @@ export function open(): UpgradeShade {
       const { progress: _drop, ...rest } = get()!
       set(fraction === null ? { ...rest, text } : { ...rest, text, progress: Math.max(0, Math.min(1, fraction)) })
     },
-    fail(text: string, detail?: string): void {
+    fail(text: string, detail?: string, command?: string): void {
       if (!mine()) return
       set({
         ...get()!,
@@ -88,6 +91,7 @@ export function open(): UpgradeShade {
           sub: detail ? `${detail}\n${t('gui.upg.manual')}` : t('gui.upg.manual'),
           copy: t('gui.dtl.copy'),
           close: t('gui.upg.close'),
+          command,
         },
       })
     },

@@ -238,6 +238,7 @@ def _plan(tmp_path, monkeypatch):
         target=upgrade_commands.ToolInstallTarget(tool_dir=tmp_path / "tools", bin_dir=bin_dir),
     )
     monkeypatch.setattr(upgrade_commands, "plan_upgrade", lambda: plan)
+    monkeypatch.setattr(upgrade_commands, "_is_editable_install", lambda: False)
     spawned: dict[str, object] = {}
     monkeypatch.setattr(
         upgrade_commands,
@@ -320,6 +321,7 @@ class TestUpgradingFromAGatewayHostedPage:
             SERVE.disarm()
 
         assert excinfo.value.data["reason"] == "unsupervised"
+        assert excinfo.value.data["command"] == "raven upgrade\nraven web"
         assert spawned == {}
 
     async def test_it_refuses_while_work_the_page_cannot_see_is_running(self, monkeypatch, tmp_path):
@@ -390,6 +392,7 @@ async def test_upgrade_refuses_when_the_install_cannot_self_upgrade(monkeypatch:
         raise upgrade_commands.UpgradeError("Editable Raven installations cannot be upgraded automatically")
 
     monkeypatch.setattr(upgrade_commands, "plan_upgrade", refuse)
+    monkeypatch.setattr(upgrade_commands, "_is_editable_install", lambda: False)
     SERVE.arm(18792, "tok", "cookie", asyncio.Event())
     try:
         with pytest.raises(ConfigValidationError) as excinfo:
@@ -397,6 +400,35 @@ async def test_upgrade_refuses_when_the_install_cannot_self_upgrade(monkeypatch:
     finally:
         SERVE.disarm()
     assert excinfo.value.data["reason"] == "not_upgradable"
+
+
+async def test_upgrade_names_a_checkouts_own_recovery_and_stops_there(monkeypatch: pytest.MonkeyPatch):
+    """A source checkout is never upgradable through releases, and the page's
+    default `raven upgrade` fallback refuses it too, so the card has to name
+    the two steps that do work instead."""
+    import asyncio
+    import os
+
+    from raven.cli.serve_commands import SERVE
+    from raven.rpc.methods.system import system_upgrade
+    from raven.updates import upgrade as upgrade_commands
+
+    def plan() -> None:
+        raise AssertionError("a checkout should be refused before the release lookup")
+
+    monkeypatch.setattr(upgrade_commands, "_is_editable_install", lambda: True)
+    monkeypatch.setattr(upgrade_commands, "plan_upgrade", plan)
+    SERVE.arm(18792, "tok", "cookie", asyncio.Event())
+    try:
+        with pytest.raises(ConfigValidationError) as excinfo:
+            await system_upgrade({})
+    finally:
+        SERVE.disarm()
+
+    assert excinfo.value.data["reason"] == "editable"
+    command = excinfo.value.data["command"]
+    assert command.startswith("git pull")
+    assert (".\\install.ps1" if os.name == "nt" else "./install.sh") in command
 
 
 async def test_upgrade_names_an_install_already_in_flight(monkeypatch: pytest.MonkeyPatch):
@@ -415,6 +447,7 @@ async def test_upgrade_names_an_install_already_in_flight(monkeypatch: pytest.Mo
         raise md.PackageNotFoundError("raven")
 
     monkeypatch.setattr(upgrade_commands, "plan_upgrade", mid_replacement)
+    monkeypatch.setattr(upgrade_commands, "_is_editable_install", lambda: False)
     SERVE.arm(18792, "tok", "cookie", asyncio.Event())
     try:
         with pytest.raises(ConfigValidationError) as excinfo:
@@ -439,6 +472,7 @@ async def test_upgrade_hands_off_then_stops_the_gateway(monkeypatch: pytest.Monk
         target=upgrade_commands.ToolInstallTarget(tool_dir=tmp_path / "tools", bin_dir=bin_dir),
     )
     monkeypatch.setattr(upgrade_commands, "plan_upgrade", lambda: plan)
+    monkeypatch.setattr(upgrade_commands, "_is_editable_install", lambda: False)
     spawned: dict[str, object] = {}
     monkeypatch.setattr(
         upgrade_commands,

@@ -1349,6 +1349,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.upg.why.not_serving': 'This page is not being served by a running Raven, so it has nothing here to upgrade.',
     'gui.upg.why.unsupervised':
       'This Raven was started by hand in a terminal, so nothing would bring it back after an upgrade. Run raven upgrade there, then start Raven again.',
+    'gui.upg.why.editable':
+      'This Raven is a source checkout, so released upgrades do not apply to it. Update it with git, then reinstall.',
     'gui.upg.working': 'Upgrading Raven...',
     'gui.wd.back': 'Back',
     'gui.wd.blocked': "Not a workspace: Raven's own data is here or beneath it. Its folders may still be.",
@@ -4729,6 +4731,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.upg.why.not_serving': '这个页面当前没有正在运行的 Raven 在托管，这里没有可以升级的对象。',
     'gui.upg.why.unsupervised':
       '这个 Raven 是在终端里手动启动的，升级后没有守护进程能把它重新拉起来。请在那个终端里运行 raven upgrade，然后重新启动 Raven。',
+    'gui.upg.why.editable': '这个 Raven 是源码检出,发布的升级包对它不适用。请用 git 更新代码后重新安装。',
     'gui.upg.working': '正在升级 Raven…',
     'gui.wd.back': '返回',
     'gui.wd.blocked': '这里不能作为工作区：Raven 自己的数据在此处或其下；里面的文件夹可以',

@@ -9,7 +9,7 @@
  * the bar and adds the three things only the reader can act on: what went
  * wrong, the command to run by hand, and a way to put the card down.
  */
-import { useSyncExternalStore } from 'react'
+import { Fragment, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
 import * as upgrade from '../state/upgradeShade'
@@ -31,8 +31,12 @@ export function UpgradeShade(): JSX.Element | null {
           <>
             <div className="sub">{failure.sub}</div>
             <div className="cmd">
-              <code>{upgrade.COMMAND}</code>
-              <button onClick={() => upgrade.copyCommand()}>{failure.copy}</button>
+              <code>
+                {(failure.command ?? upgrade.COMMAND).split('\n').map((line, i) => (
+                  <Fragment key={i}>{i > 0 && <br />}{line}</Fragment>
+                ))}
+              </code>
+              <button onClick={() => upgrade.copyCommand(failure.command)}>{failure.copy}</button>
             </div>
             <div className="foot">
               <button className="btn" onClick={() => upgrade.dismiss(card.id)}>{failure.close}</button>

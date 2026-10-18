@@ -154,6 +154,7 @@ export function resumeUpgrade(): void {
 const REFUSALS: Record<string, string> = {
   unsupervised: 'gui.upg.why.unsupervised',
   not_serving: 'gui.upg.why.not_serving',
+  editable: 'gui.upg.why.editable',
 }
 
 export function refusalText(err: { data?: { reason?: string; detail?: string }; message?: string }): string {
@@ -175,7 +176,7 @@ export async function runUpgrade(): Promise<void> {
   } catch (e) {
     /* The server saw an install already in flight. That is the dialog the
        reader wanted, not an error -- adopt the run instead of reporting it. */
-    const err = e as { data?: { reason?: string; detail?: string }; message?: string }
+    const err = e as { data?: { reason?: string; detail?: string; command?: string }; message?: string }
     if (err.data && err.data.reason === 'in_progress') {
       upMark(upLatest)
       watchUpgrade(shade)
@@ -191,7 +192,7 @@ export async function runUpgrade(): Promise<void> {
       return
     }
     upMarkClear()
-    shade.fail(t('gui.upg.failed'), refusalText(err))
+    shade.fail(t('gui.upg.failed'), refusalText(err), err.data && err.data.command)
     return
   }
   upMark(upLatest)

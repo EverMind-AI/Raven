@@ -55,6 +55,13 @@ describe('the upgrade shade writer', () => {
     )
     ;(document.querySelector('.cmd button') as HTMLButtonElement).click()
     expect(writeText).toHaveBeenCalledWith('raven upgrade')
+
+    /* A refusal that carries its own command: the card shows it line per line
+       and the copy button copies exactly it, not the default. */
+    shade.fail('Failed', 'source checkout', 'git pull\n./install.sh')
+    expect(document.querySelector('.cmd code')!.innerHTML).toBe('git pull<br>./install.sh')
+    ;(document.querySelector('.cmd button') as HTMLButtonElement).click()
+    expect(writeText).toHaveBeenCalledWith('git pull\n./install.sh')
     ;(document.querySelector('.foot button') as HTMLButtonElement).click()
     expect(document.querySelector('.upshade')).toBeNull()
   })
