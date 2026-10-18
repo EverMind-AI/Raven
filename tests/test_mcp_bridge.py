@@ -342,17 +342,33 @@ async def test_bridge_exits_when_a_stalled_endpoint_has_pending_writes(bridge_io
         await asyncio.gather(task, return_exceptions=True)
 
 
-async def test_bridge_aborts_only_a_close_that_did_not_finish(bridge_io):
+@pytest.mark.parametrize("cancels", ["once", "twice"])
+async def test_bridge_aborts_only_a_close_that_did_not_finish(bridge_io, monkeypatch, cancels):
     # A transport that drains its buffer inside close() runs connection_lost and
     # drops its loop; the selector loop's _force_close does not stop at a
     # finished connection, so aborting it there reaches call_soon on None. This
-    # is the Unix-socket path, and the stalled case above never reaches it.
+    # is the Unix-socket path, and the stalled case above never reaches it. The
+    # second cancel lands once the close has finished and before the bridge
+    # resumes, where a flag set after wait_closed() would still read unfinished.
+    # A bound far past this test's deadline leaves draining as the only way the
+    # close can finish in time.
+    monkeypatch.setattr(bridge, "_CLOSE_TIMEOUT_S", 30)
     task = asyncio.create_task(bridge.run_bridge("endpoint", bridge_io.stdout))
-    consumed = []
+    consumed, landed = [], []
 
     async def consume():
         while data := await bridge_io.peer_reader.read(65536):
             consumed.append(len(data))
+
+    if cancels == "twice":
+        protocol = bridge_io.writer.transport.get_protocol()
+        finish = protocol.connection_lost
+
+        def connection_lost(exc):
+            finish(exc)
+            landed.append(task.cancel())
+
+        protocol.connection_lost = connection_lost
 
     reader = None
     try:
@@ -372,7 +388,8 @@ async def test_bridge_aborts_only_a_close_that_did_not_finish(bridge_io):
             await asyncio.wait_for(task, 2)
         assert bridge_io.released.is_set()
         assert bridge_io.writer.transport.get_write_buffer_size() == 0
-        assert sum(consumed) > 0, "the close must have drained a write, not timed out"
+        assert sum(consumed) > 0, "the endpoint must have read the pending writes"
+        assert landed == ([True] if cancels == "twice" else []), "the second cancel must reach the running bridge"
     finally:
         if not bridge_io.writer.transport.is_closing():
             bridge_io.writer.transport.abort()
