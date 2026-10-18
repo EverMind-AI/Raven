@@ -1321,6 +1321,37 @@ async def test_a_stateful_node_is_reported_once_on_its_addressable_handle(_isola
     assert (row["runId"], row["nodeId"]) == ("r1", "research_a2a")
 
 
+async def test_a_stateful_decision_node_reports_its_selection_on_its_addressable_handle(
+    _isolated_registry: Any,
+) -> None:
+    """What a branch decided is on the node's ``dag-node`` row, and the pair is
+    reported on the ordinary row -- so the selection rides across with the status,
+    an empty one included, as a stateless node's own row carries it."""
+    from raven.rpc.models import SubagentsInstancesResult
+
+    await _isolated_registry.upsert_dag_node(
+        "s1", "r1", "triage", "hermes", "completed", selected_routes=["docs"], route_evidence="asks how to set it"
+    )
+    await _isolated_registry.link_dag_node("s1", "hermes", "triage-h", "r1", "triage")
+    await _isolated_registry.upsert_dag_node("s1", "r1", "scan", "hermes", "completed", selected_routes=[])
+    await _isolated_registry.link_dag_node("s1", "hermes", "scan-h", "r1", "scan")
+    await _isolated_registry.upsert_dag_node("s1", "r1", "reply", "hermes", "completed")
+    await _isolated_registry.link_dag_node("s1", "hermes", "reply-h", "r1", "reply")
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(_FakeManager())))
+
+    SubagentsInstancesResult.model_validate(out)
+    by_handle = {r["handle"]: r for r in out["instances"]}
+    assert set(by_handle) == {"triage-h", "scan-h", "reply-h"}
+    assert (by_handle["triage-h"]["selectedRoutes"], by_handle["triage-h"]["routeEvidence"]) == (
+        ["docs"],
+        "asks how to set it",
+    )
+    assert by_handle["scan-h"]["selectedRoutes"] == []
+    assert "routeEvidence" not in by_handle["scan-h"]
+    assert not {"reason", "selectedRoutes", "routeEvidence"} & set(by_handle["reply-h"])
+
+
 async def test_a_whole_fan_out_is_one_row_per_node(_isolated_registry: Any) -> None:
     nodes = ["research_a2a", "research_mcp", "research_acp", "synthesize"]
     for node in nodes:
@@ -1389,6 +1420,71 @@ async def test_a_cancelled_node_is_still_an_instance(_isolated_registry: Any) ->
     out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(_FakeManager())))
 
     assert [r["nodeId"] for r in out["instances"]] == ["research"]
+
+
+def test_a_not_executed_dag_node_row_is_filtered_like_a_skipped_one() -> None:
+    from raven.rpc.methods.instances import _drop_nodes_that_never_ran
+
+    rows = [
+        {"kind": "dag-node", "status": "skipped"},
+        {"kind": "dag-node", "status": "not_executed"},
+        {"kind": "dag-node", "status": "cancelled"},
+        {"kind": "spawn", "status": "skipped"},
+    ]
+
+    kept = _drop_nodes_that_never_ran(rows)
+
+    assert [(row["kind"], row["status"]) for row in kept] == [("dag-node", "cancelled"), ("spawn", "skipped")]
+
+
+async def test_a_node_on_a_branch_nobody_took_is_not_an_instance(_isolated_registry: Any) -> None:
+    """The runner writes a registry row for a node it decided will not execute,
+    the same way it does for a skipped one, and it has no more of a conversation:
+    it never spoke and never held a handle."""
+    await _isolated_registry.upsert_dag_node("s1", "r1", "triage", "hermes", "completed")
+    await _isolated_registry.upsert_dag_node("s1", "r1", "fix", "hermes", "not_executed")
+    await _isolated_registry.upsert_dag_node("s1", "r1", "design", "hermes", "not_executed")
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(_FakeManager())))
+
+    assert [r["nodeId"] for r in out["instances"]] == ["triage"]
+
+
+async def test_a_dag_node_row_a_branch_decided_is_a_valid_instance_row(_isolated_registry: Any) -> None:
+    """`InstanceRow` is a registry record verbatim and forbids unknown keys, so the
+    outcome a branch writes onto a `dag-node` row has to be on the model: a stateless
+    decision node's row is listed as it is stored."""
+    from raven.rpc.models import InstanceRow, SubagentsInstancesResult
+
+    await _isolated_registry.upsert_dag_node(
+        "s1", "r1", "triage", "hermes", "completed", selected_routes=["docs"], route_evidence="asks how to set it"
+    )
+    await _isolated_registry.upsert_dag_node("s1", "r1", "scan", "hermes", "completed", selected_routes=[])
+    await _isolated_registry.upsert_dag_node("s1", "r1", "fix", "hermes", "not_executed", reason="when_false")
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(_FakeManager())))
+
+    SubagentsInstancesResult.model_validate(out)
+    by_node = {r["nodeId"]: r for r in out["instances"]}
+    assert (by_node["triage"]["selectedRoutes"], by_node["triage"]["routeEvidence"]) == (["docs"], "asks how to set it")
+    assert by_node["scan"]["selectedRoutes"] == []
+    for row in _isolated_registry.list_instances("s1"):
+        InstanceRow.model_validate(row)
+
+
+async def test_a_not_executed_node_does_not_confuse_a_legacy_handle_row(_isolated_registry: Any) -> None:
+    """The filter runs before the pairing for this status too: a not-executed
+    ``synthesize`` beside a completed one is the same second answer a skipped one
+    was, and the completed run's handle row must still pair with its node."""
+    await _isolated_registry.upsert_dag_node("s1", "r-done", "synthesize", "hermes", "completed")
+    await _isolated_registry.commit("s1", "hermes", "synthesize", "agent-1")
+    await _isolated_registry.upsert_dag_node("s1", "r-branch", "synthesize", "hermes", "not_executed")
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(_FakeManager())))
+
+    assert [(r["handle"], r.get("status"), r.get("runId")) for r in out["instances"]] == [
+        ("synthesize", "completed", "r-done")
+    ]
 
 
 async def test_a_node_that_committed_under_its_own_id_is_paired_too(_isolated_registry: Any) -> None:

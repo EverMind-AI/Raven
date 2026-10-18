@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Any, Callable, Literal
 from loguru import logger
 from pydantic import ValidationError
 
+from raven.agent.subagent.dag_guard import parse_guard
 from raven.agent.subagent.prompt_placeholders import iter_placeholders
 from raven.observability.purpose import purpose as _llm_purpose
 from raven.playbook.agent_profiles import AgentProfileSource, validate_node_capabilities
@@ -283,6 +284,10 @@ def _namespace_run(spec_name: str, nodes: list[NodeSpec]) -> list[NodeSpec]:
     than a run counter: a counter would restart with the process while the
     session's id registry outlives it.
 
+    A ``when`` guard moves with the ids it names: each atom is ``<node>.<route>``
+    and only the node part is an id. The route names (and ``done``) are the
+    author's, so they stay as written.
+
     ``instance`` is namespaced with the same tag, so an author writing
     ``instance: researcher`` on three steps gets one session shared by those
     three steps *of this run* rather than one shared by every run of the
@@ -320,6 +325,18 @@ def _namespace_run(spec_name: str, nodes: list[NodeSpec]) -> list[NodeSpec]:
                 rewritten[key] = value
         return rewritten
 
+    def rewrite_guard(guard: str | None) -> str | None:
+        if guard is None or not guard.strip():
+            return guard
+        rewritten: list[str] = []
+        last = 0
+        for atom in parse_guard(guard).atoms:
+            rewritten.append(guard[last : atom.pos])
+            rewritten.append(f"{mapping.get(atom.node, atom.node)}.{atom.name}")
+            last = atom.end
+        rewritten.append(guard[last:])
+        return "".join(rewritten)
+
     return [
         n.model_copy(
             update={
@@ -328,6 +345,7 @@ def _namespace_run(spec_name: str, nodes: list[NodeSpec]) -> list[NodeSpec]:
                 "prompt_template": rewrite_refs(n.prompt_template),
                 "inputs": rewrite_inputs(n.inputs),
                 "instance": f"{prefix}-{tag}-{n.instance}" if n.instance else None,
+                "when": rewrite_guard(n.when),
             }
         )
         for n in nodes
@@ -625,6 +643,9 @@ class PlaybookExecutor:
                     **({"inputs": dict(run_node.inputs)} if run_node.inputs else {}),
                     **({"mcps": run_node.mcps} if run_node.mcps is not None else {}),
                     **({"instance": run_node.instance} if run_node.instance else {}),
+                    **({"routes": dict(run_node.routes)} if run_node.routes else {}),
+                    **({"select": run_node.select} if run_node.select else {}),
+                    **({"when": run_node.when} if run_node.when else {}),
                 }
             )
         receipt = await self._dag_tool.execute(

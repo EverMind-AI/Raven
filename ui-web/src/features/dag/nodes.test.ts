@@ -177,6 +177,33 @@ describe('merging one source onto another', () => {
     expect(merge(done, fromSnapshot([{ node: 'a', status: 'interrupted' }]))[0]?.status).toBe('interrupted')
   })
 
+  /* A node a branch left out is an ending like the others. Unranked it counts
+     as `pending`, and a `dag.get` read issued before the run reached it drags
+     it back to "in progress" for the rest of the run. */
+  it('ranks a not-executed node as terminal, so no earlier stage drags it back', () => {
+    const left = merge(args, fromSnapshot([{ node: 'a', status: 'not_executed' }]))
+
+    expect(left[0]?.status).toBe('not_executed')
+    for (const stale of ['pending', 'running', 'exception']) {
+      expect(merge(left, fromSnapshot([{ node: 'a', status: stale }]))[0]?.status).toBe('not_executed')
+    }
+  })
+
+  it('lets a not-executed status and another ending replace each other', () => {
+    const done = merge(args, fromSnapshot([{ node: 'a', status: 'completed' }]))
+    const left = merge(done, fromSnapshot([{ node: 'a', status: 'not_executed' }]))
+
+    expect(left[0]?.status).toBe('not_executed')
+    expect(merge(left, fromSnapshot([{ node: 'a', status: 'skipped' }]))[0]?.status).toBe('skipped')
+  })
+
+  it('takes a not-executed status from a node that was still waiting', () => {
+    const waiting = fromArgs({ nodes: [{ id: 'a', subagent: 'scout' }] })
+
+    expect(merge(waiting, fromSnapshot([{ node: 'a', status: 'not_executed' }]))[0]?.status).toBe('not_executed')
+    expect(applyUpdate(waiting, { node: 'a', status: 'not_executed' })[0]?.status).toBe('not_executed')
+  })
+
   it('appends a node the existing list never had', () => {
     /* A card whose arguments carried no graph at all: everything is new. */
     const merged = merge(args, fromSnapshot([{ node: 'b', status: 'pending' }]))

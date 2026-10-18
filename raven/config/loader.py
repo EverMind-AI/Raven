@@ -20,7 +20,7 @@ from raven.utils.atomic_io import atomic_replace, atomic_update
 # than on every load -- the watermark is what lets a user re-set by hand
 # whatever a migration cleared. Kept out of the schema on purpose: see
 # ``_stamp_path``.
-CURRENT_CONFIG_VERSION = 13
+CURRENT_CONFIG_VERSION = 14
 
 # The generation that introduced each run-once migration. Each is gated on its
 # own floor rather than on "is this config current", because those are not the
@@ -47,6 +47,7 @@ _RETIRED_DEEP_RESEARCH_MIGRATION = 10
 _SHIM_PIN_MIGRATION = 11
 _DISPLAY_ONLY_ADDRESS_MIGRATION = 12
 _PLANTED_CRON_TIMEZONE_MIGRATION = 13
+_RETIRED_VERDICT_SWITCH_MIGRATION = 14
 
 # The context window every pre-0.1.11 bootstrap wrote to disk verbatim: back
 # then ``AgentDefaults.context_window_tokens`` defaulted to this number and
@@ -404,6 +405,8 @@ def _persist_migrations(path: Path, from_version: int = 0, *, refresh_interprete
                 changed = _migrate_display_only_addresses(raw) or changed
             if from_version < _PLANTED_CRON_TIMEZONE_MIGRATION:
                 changed = _migrate_planted_cron_timezone(raw) or changed
+            if from_version < _RETIRED_VERDICT_SWITCH_MIGRATION:
+                changed = _migrate_retired_verdict_switch(raw) or changed
             if refresh_interpreters:
                 changed = _refresh_bundled_shim_interpreters(raw) or changed
         if not changed:
@@ -614,6 +617,34 @@ def _migrate_phantom_knobs(data: dict[str, Any], *, notify: bool = False) -> boo
             tw.pop(spelling)
             changed = True
             notice = f"Migrated: dropped tokenWise.{spelling} (a router this build never consulted)"
+            if notify and notice not in _migration_notices:
+                _migration_notices.append(notice)
+    return changed
+
+
+def _migrate_retired_verdict_switch(data: dict[str, Any], *, notify: bool = False) -> bool:
+    """Drop ``subagentDag.verdictEnabled``: node judgement is always on.
+
+    The key stopped meaning anything -- the switch had one reader and it is gone --
+    and the config models forbid unknown keys, so leaving it in a file would fail
+    the whole load rather than be ignored.
+    """
+    changed = False
+    for block_key in ("subagentDag", "subagent_dag"):
+        block = data.get(block_key)
+        if not isinstance(block, dict):
+            continue
+        for spelling in ("verdictEnabled", "verdict_enabled"):
+            if spelling not in block:
+                continue
+            was = block.pop(spelling)
+            changed = True
+            notice = (
+                f"Removed `{block_key}.{spelling}` from your config: a finished DAG node is always judged "
+                f"now. Routing a decision node depends on that judgement, so it is no longer optional."
+                if was is False
+                else f"Removed `{block_key}.{spelling}` from your config: a finished DAG node is always judged now."
+            )
             if notify and notice not in _migration_notices:
                 _migration_notices.append(notice)
     return changed
@@ -1329,6 +1360,8 @@ def _migrate_config(  # noqa: C901 (cc 45: pre-existing, above the ceiling)
         _migrate_display_only_addresses(data, notify=True)
     if from_version < _PLANTED_CRON_TIMEZONE_MIGRATION:
         _migrate_planted_cron_timezone(data, notify=True)
+    if from_version < _RETIRED_VERDICT_SWITCH_MIGRATION:
+        _migrate_retired_verdict_switch(data, notify=True)
 
     # Same for the session-title gate, which changed both name and unit:
     # ``min_input_chars`` counted code points, ``min_input_width`` counts

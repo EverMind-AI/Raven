@@ -25,7 +25,7 @@ import { layout } from '../dag/graph'
 import * as desk from '../desk/store'
 import { hasDiffBody } from '../workspace/store'
 import * as workspace from '../workspace/store'
-import { BoardCard } from './BoardCard'
+import { BoardCard, selectionText } from './BoardCard'
 import { fitChips } from './chipFit'
 import { Answer, StepList } from './NodeRecord'
 import * as store from './store'
@@ -33,7 +33,7 @@ import * as store from './store'
 import type { Dims } from '../dag/graph'
 import type { DagNode } from '../dag/types'
 import type { NodeRecord, NodeStep, SubagentRow, TaskFile, TaskNode, TaskRow } from './types'
-import type { JSX } from 'react'
+import type { JSX, ReactNode } from 'react'
 import './styles.css'
 
 /* The pane id the desk files this row's window under (features/desk/store.ts's
@@ -76,6 +76,7 @@ function nodeStatusWord(status: TaskNode['status']): string {
     case 'cancelled': return t('gui.tasks.node_st_cancelled')
     case 'interrupted': return t('gui.tasks.node_st_interrupted')
     case 'exception': return t('gui.tasks.node_st_exception')
+    case 'not_executed': return t('gui.tasks.node_st_not_executed')
   }
 }
 
@@ -97,12 +98,20 @@ function stepLine(row: TaskRow): string {
   const c = row.counts
   if (c.total <= 1) return ''
   if (row.status === 'running') return t('gui.tasks.step', { i: c.completed + 1, n: c.total })
-  if (row.status === 'completed') return t('gui.tasks.step_all_done', { n: c.total })
+  /* A node a branch left out never ran, so "all done" over a total that counts it would say the
+     run did what it did not: a task with one names what ran and what did not instead. */
+  if (row.status === 'completed') {
+    if (!c.not_executed) return t('gui.tasks.step_all_done', { n: c.total })
+    return [
+      t('gui.tasks.step_done', { n: c.completed }), t('gui.tasks.step_not_executed', { n: c.not_executed }),
+    ].join(' · ')
+  }
   if (row.status === 'interrupted') return t('gui.tasks.step_stopped', { d: c.completed, k: c.completed + 1 })
   const parts: string[] = []
   if (c.completed) parts.push(t('gui.tasks.step_done', { n: c.completed }))
   if (c.failed) parts.push(t('gui.tasks.step_failed', { n: c.failed }))
   if (c.skipped) parts.push(t('gui.tasks.step_skipped', { n: c.skipped }))
+  if (c.not_executed) parts.push(t('gui.tasks.step_not_executed', { n: c.not_executed }))
   return parts.join(' · ')
 }
 
@@ -261,6 +270,7 @@ function toDagNodes(row: TaskRow): DagNode[] {
     status: n.status, started_at: n.started_at ?? null, ended_at: n.ended_at ?? null,
     node_summary: n.node_summary ?? null, prompt_template: n.prompt_template ?? null,
     tool_call_count: n.tool_call_count ?? null,
+    ...(n.selected_routes !== undefined ? { selected_routes: n.selected_routes } : {}),
   }))
 }
 
@@ -337,6 +347,12 @@ interface RecordLoad {
    (TranscriptPage.tsx), so the two views of one run move together. */
 const READ_BEAT_MS = 1000
 
+/* A step that has not gone out to an agent, or never will: `pending` has not
+   been reached, `skipped` was passed over by a failure, and a node a branch left
+   out was passed over by the run's own choice. None of them has a record to read. */
+const neverSent = (node: TaskNode): boolean =>
+  node.status === 'pending' || node.status === 'skipped' || node.status === 'not_executed'
+
 /* Fetched once per (row, node) and shared by both tabs: the order tab's
    "instruction" is the same rendered prompt the context tab's dispatch is,
    and asking for it twice would be asking the gateway the same question
@@ -360,7 +376,7 @@ const READ_BEAT_MS = 1000
    rather than cleared back to `null` -- the reader is watching a node run,
    not watching it flicker blank once a second. */
 function useNodeRecord(row: TaskRow, node: TaskNode): RecordLoad {
-  const dispatched = node.status !== 'pending' && node.status !== 'skipped'
+  const dispatched = !neverSent(node)
   const version = useSyncExternalStore(store.subscribe, () => store.nodeVersion(row.kind, row.id, node.node_id))
   const [nonce, setNonce] = useState(0)
   const [state, setState] = useState<{ loading: boolean; record: NodeRecord | null; failed: boolean }>(
@@ -413,9 +429,11 @@ const fmtN = (n: number): string => n.toLocaleString('en-US')
    fact is there to push. A lane that never reported usage is a fact this
    line says nothing about, not a line that says "not reported"; the tool
    count is the board card's, and the calls themselves are the process
-   fold's, so neither is this line's. */
+   fold's, so neither is this line's. A decision's selection follows the
+   status word itself, being a fact about how the step ended. */
 function nodeSubtitleRest(node: TaskNode): string[] {
-  const parts = [nodeStatusWord(node.status)]
+  const chosen = selectionText(node.selected_routes)
+  const parts = [chosen ? `${nodeStatusWord(node.status)} ${chosen}` : nodeStatusWord(node.status)]
   const dur = node.started_at ? formatDuration((node.ended_at ?? Date.now()) - node.started_at) : ''
   if (dur) parts.push(dur)
   if (node.tokens_in != null || node.tokens_out != null) {
@@ -439,6 +457,7 @@ function NodeSubtitle({ node }: { node: TaskNode }): JSX.Element {
    interrupted step that never got as far as a record says the gateway went
    away first; pending just has not been reached yet. */
 function nodeWhyText(node: TaskNode, row: TaskRow): string {
+  if (node.status === 'not_executed') return t('gui.tasks.ctx_not_executed')
   if (node.status === 'interrupted') return t('gui.tasks.ctx_why_interrupted')
   if (node.status !== 'skipped') return ''
   const bad = node.depends_on
@@ -533,7 +552,7 @@ function Process({ steps, node, nodeKey }: { steps: NodeStep[]; node: TaskNode; 
 function ContextTab({ row, node, rec }: {
   row: TaskRow; node: TaskNode; rec: RecordLoad
 }): JSX.Element | null {
-  if (node.status === 'pending' || node.status === 'skipped') {
+  if (neverSent(node)) {
     return <p className="tkempty">{nodeWhyText(node, row) || t('gui.tasks.ctx_none')}</p>
   }
   /* Something on screen for the whole of the fetch, and on a failed one too:
@@ -653,7 +672,7 @@ function OrderTab({ row, node, roster, rec }: {
   /* A registered-but-disabled agent is still on this machine -- naming it
      missing here would be wrong in that case, not just imprecise. */
   const known = !node.agent || roster.some((r) => r.name === node.agent)
-  const dispatched = node.status !== 'pending' && node.status !== 'skipped'
+  const dispatched = !neverSent(node)
   const rendered = dispatched ? rec.record?.dispatch ?? null : null
   /* A dispatched node's record still in flight (and never yet read) is not
      "waiting on upstream to fill in" -- it already went out. Showing the raw
@@ -665,6 +684,9 @@ function OrderTab({ row, node, roster, rec }: {
   const text = rendered ?? (pendingFetch ? null : node.prompt_template ?? null)
   const inputs = node.inputs ? Object.entries(node.inputs) : []
   const external = externalDeps(node, row)
+  /* A step the run left out is not waiting to go out, which is what "not dispatched yet" says of
+     one that is: it was passed over, and the work order says so. A skipped step keeps its words. */
+  const left = node.status === 'not_executed'
   return (
     <div className="tkorder">
       <div className="tkfield">
@@ -716,11 +738,15 @@ function OrderTab({ row, node, roster, rec }: {
           <div className="tkfield">
             <div className="tkfk">{t('gui.tasks.instruction')}</div>
             <div className="tkfv">
-              {pendingFetch ? t('gui.tasks.instruction_loading') : t('gui.tasks.instruction_pending')}
+              {pendingFetch
+                ? t('gui.tasks.instruction_loading')
+                : (left ? t('gui.tasks.ctx_not_executed') : t('gui.tasks.instruction_pending'))}
             </div>
           </div>
         )}
-      {!rendered && !pendingFetch && node.prompt_template ? <p className="tknote">{t('gui.tasks.instruction_note')}</p> : null}
+      {!rendered && !pendingFetch && node.prompt_template
+        ? <p className="tknote">{left ? t('gui.tasks.ctx_not_executed') : t('gui.tasks.instruction_note')}</p>
+        : null}
       <div className="tkspecid">
         <span>{row.kind === 'spawn' ? t('gui.tasks.call_label') : t('gui.tasks.run_label')}</span>
         <b>{row.id}</b>
@@ -909,6 +935,55 @@ function useTailFollow(key: string, record: NodeRecord | null, live: boolean) {
   return box
 }
 
+/* The words for why a node a branch left out did not run. Looked up by own key
+   only: a reason this build has never heard of must read as no reason, not as
+   whatever `Object.prototype` has under that name. */
+const REASON_KEY: Record<string, string> = {
+  when_false: 'gui.tasks.node_reason_when_false',
+  when_unknown: 'gui.tasks.node_reason_when_unknown',
+  upstream_not_executed: 'gui.tasks.node_reason_upstream',
+}
+
+function BranchFact({ label, children }: { label: string; children: ReactNode }): JSX.Element {
+  return (
+    <div className="tkfield">
+      <div className="tkfk">{label}</div>
+      <div className="tkfv">{children}</div>
+    </div>
+  )
+}
+
+/* What a node's detail says about its branch: why it was left out, the guard it
+   carries, and the judge's evidence for what it selected -- in full, the wire
+   having capped it already. Above whichever tab is open, so neither tab hides it.
+   A node with none of these draws nothing here, so a run that never branches
+   shows no branch facts at all. */
+function BranchFacts({ node }: { node: TaskNode }): JSX.Element | null {
+  const reason = node.status === 'not_executed' && node.reason && Object.hasOwn(REASON_KEY, node.reason)
+    ? REASON_KEY[node.reason]
+    : undefined
+  if (!reason && !node.when && !node.route_evidence) return null
+  return (
+    <div className="tkbranch">
+      {reason ? <BranchFact label={t('gui.tasks.node_reason')}>{t(reason)}</BranchFact> : null}
+      {node.when
+        ? (
+          <BranchFact label={t('gui.tasks.node_guard')}>
+            <code className="tkguard">{node.when}</code>
+          </BranchFact>
+        )
+        : null}
+      {node.route_evidence
+        ? (
+          <BranchFact label={t('gui.tasks.node_evidence')}>
+            <span className="tkbrev">{node.route_evidence}</span>
+          </BranchFact>
+        )
+        : null}
+    </div>
+  )
+}
+
 function NodePanel({ row, node, paneId, roster }: {
   row: TaskRow; node: TaskNode; paneId: string; roster: SubagentRow[]
 }): JSX.Element {
@@ -921,6 +996,7 @@ function NodePanel({ row, node, paneId, roster }: {
       {/* The one scrolling child: the header above stays put rather than
          riding off the top of a long record. */}
       <div className="tkbody" ref={body}>
+        <BranchFacts node={node} />
         {tab === 'context'
           ? <ContextTab row={row} node={node} rec={rec} />
           : <OrderTab row={row} node={node} roster={roster} rec={rec} />}

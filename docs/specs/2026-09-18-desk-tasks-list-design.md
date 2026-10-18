@@ -33,7 +33,7 @@ them wrong reads a stopped run as still running:
 |---|---|---|---|
 | run dir | `<session_dir>/subagents/mas_dag/<run_id>/graph.json`, `manifest.json` | `DagRunStore.init`, `_finalize -> write_manifest` | the graph (edges, templates, `skills`, `mcps`, `inputs`, `instance`, `confirm`, top-level `replan`); per-node terminal state once finalized |
 | session node registry | `<session_dir>/subagents/nodes.json` (`dag_store.REGISTRY_FILENAME`) | `record_nodes`, `ensure_node_claimed`, `record_outcome` | `nodes{<id>: {kind: dag\|spawn, run_id?, status, started_at_ms, ended_at_ms?, has_output?}}`; the only place a hard-stopped run's `cancelled` / `skipped` land |
-| instance registry | `~/.raven/subagent_instances.json` (`raven.agent.subagent.instances.get_registry`) | `upsert_dag_node`, `upsert_spawn` | rows `kind in {cli, acp, dag-node}` with `runId`, `nodeId`, `status`, `createdAtMs`, `updatedAtMs` |
+| instance registry | `~/.raven/subagent_instances.json` (`raven.agent.subagent.instances.get_registry`) | `upsert_dag_node`, `upsert_spawn` | rows `kind in {cli, acp, dag-node}` with `runId`, `nodeId`, `status`, `createdAtMs`, `updatedAtMs`; a `dag-node` row a branch decided also carries `reason` / `selectedRoutes` / `routeEvidence` |
 
 Node files sit in the flat namespace `<session_dir>/subagents/nodes/<node_id>.{prompt,out,
 error}.md`, `.meta.json`, `.transcript.jsonl` (older records: `mas_dag/<run>/<node>.*`; the
@@ -70,7 +70,7 @@ field), `status` (`running` | `completed` | `failed` | `interrupted` | `cancelle
 `started_at` / `ended_at` (epoch ms), `agent` (spawn only),
 `handle` (spawn only; what `subagent.cancel_instance` takes), `counts` (`total`,
 `pending`, `running`, `completed`, `failed`, `skipped`, `cancelled`, `interrupted`,
-`exception`), `nodes[]`.
+`exception`, `not_executed`), `nodes[]`.
 
 `TaskNode`: `node_id`, `node_summary`, `agent`, `instance`, `status`
 (`DagSnapshotNodeStatus`), `depends_on` (may name a node outside this task: the id space
@@ -79,7 +79,14 @@ stores it uncapped; a spawn's is the head of `.error.md`, or of `.out.md` when `
 `tokens_in` / `tokens_out` (null = the lane cannot report; never zero), `tool_call_count`
 (null = zero or unreported, an acknowledged ambiguity of `as_meta`), `tool_failure_count`,
 `has_output`, `prompt_template`, `inputs`, `skills`, `mcps`, `files[]`
-(`{path, op: write|edit, add, del, size}`). While a node runs, the usage, the tool counts and
+(`{path, op: write|edit, add, del, size}`). A dag node of a branching graph also carries the
+six optional branch fields, each present on a node that has one: `reason` (`when_false` |
+`when_unknown` | `upstream_not_executed`, on a node the branch left out), `selected_routes`
+(a decision node's selection, always a list, possibly empty -- empty is a `select: "many"`
+choice, not an absent one), `route_evidence` (the judge's quote for it), and the request it
+was written with -- `routes`, `select`, `when` -- of which `select` is the effective value
+and `routes` the declared names alone. The three outcomes are the manifest's, and until it is
+written the node's `dag-node` row supplies them. While a node runs, the usage, the tool counts and
 the files are read off the activity being collected for it in this process (the same
 in-memory account `subagent.context` and `dag.node` serve a transcript from), since the record
 on disk carries them only once the run finishes; what the lane has not reported yet stays null,
@@ -110,6 +117,9 @@ Task status, first rule that matches: (0) `graph.json` carries `replan`: `starte
 `running` / `exception` -> `running`; (4) any `cancelled` or `skipped` -> `cancelled`;
 (5) `completed`. Rule 4 says *any*: `_mark_stopped` leaves completed nodes alone, so a
 run stopped after its first node finishes ends as `{completed, cancelled, skipped}`.
+`not_executed` is on no rung: a branch that was not taken did not stop the run, so a graph
+whose only other states are `completed` reads as `completed`. Like `skipped`, a
+`not_executed` node has its `started_at` / `ended_at` cleared, since it never ran.
 
 ### 3. Stop: reused
 

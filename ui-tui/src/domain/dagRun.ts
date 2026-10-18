@@ -12,6 +12,7 @@
 import type {
   DagNodeStatus,
   DagNodeUpdatedEvent,
+  DagNotExecutedReason,
   DagRunCompletedEvent,
   DagRunReplannedEvent,
   DagRunSnapshot,
@@ -23,7 +24,7 @@ import type { Msg } from '../types.js'
 export type DagEvent = DagNodeUpdatedEvent | DagRunCompletedEvent | DagRunReplannedEvent | DagRunStartedEvent
 
 /** The wire vocabulary plus `interrupted`, which the client infers rather than
- * receives: the runner only ever reports the four terminal states, so a node
+ * receives: the runner only ever reports the five terminal states, so a node
  * still called `running` when the run closed lost its terminal frame. */
 export type DagRunNodeStatus = DagNodeStatus | 'interrupted'
 
@@ -46,6 +47,20 @@ export interface DagRunNode {
   nodeSummary?: string
   outputFile?: string
   error?: string
+  /** Why a branch left this node out. Only on a `not_executed` node, and absent
+   * when the frame or the run dir that said so did not say why. */
+  reason?: DagNotExecutedReason
+  /** What a decision node selected. `[]` is a decision that chose nothing, which
+   * is not the same as `undefined`, a decision not made (or not made yet). */
+  selectedRoutes?: string[]
+  /** The judge's quote supporting the selection. */
+  routeEvidence?: string
+  /** The route names a decision node chooses between, in declaration order. */
+  routes?: string[]
+  /** How many routes the decision selects, `one` where the graph left it unset. */
+  select?: 'many' | 'one'
+  /** The guard: this node runs only if it holds once its dependencies settle. */
+  when?: string
 }
 
 export interface DagRunSummary {
@@ -54,6 +69,7 @@ export interface DagRunSummary {
   failed?: number
   skipped?: number
   cancelled?: number
+  not_executed?: number
 }
 
 export interface DagRunState {
@@ -92,15 +108,33 @@ const fromStart = (payload: DagRunStartedEvent['payload'], promptTemplates?: Rec
     ...(node.instance ? { instance: node.instance } : {}),
     ...(promptTemplates?.[node.id] ? { promptTemplate: promptTemplates[node.id] } : {}),
     ...(node.node_summary ? { nodeSummary: node.node_summary } : {}),
+    ...(node.routes !== undefined ? { routes: [...node.routes] } : {}),
+    ...(node.select !== undefined ? { select: node.select } : {}),
+    ...(node.when !== undefined ? { when: node.when } : {}),
     status: 'pending' as const
   }))
+})
+
+// What a frame or a manifest entry says a branch did to a node, copied by
+// presence and never by truthiness: `selected_routes: []` is a decision that
+// chose nothing, and dropping it would read as a decision never made. A frame
+// that says none of it adds none of it, so an earlier frame's word stands.
+const outcomeOf = (source: {
+  reason?: DagNotExecutedReason
+  route_evidence?: string
+  selected_routes?: string[]
+}): Pick<DagRunNode, 'reason' | 'routeEvidence' | 'selectedRoutes'> => ({
+  ...(source.reason !== undefined ? { reason: source.reason } : {}),
+  ...(source.selected_routes !== undefined ? { selectedRoutes: [...source.selected_routes] } : {}),
+  ...(source.route_evidence !== undefined ? { routeEvidence: source.route_evidence } : {})
 })
 
 const withNodeStatus = (
   run: DagRunState,
   id: string,
   status: DagRunNodeStatus,
-  times: { endedAt?: number; startedAt?: number } = {}
+  times: { endedAt?: number; startedAt?: number } = {},
+  outcome: Pick<DagRunNode, 'reason' | 'routeEvidence' | 'selectedRoutes'> = {}
 ): DagRunState => ({
   ...run,
   nodes: run.nodes.map(node =>
@@ -112,7 +146,8 @@ const withNodeStatus = (
           // frame reported: `ended_at` rides only the terminal frame, and
           // `started_at` only the one that started the node.
           ...(times.startedAt !== undefined ? { startedAt: times.startedAt } : {}),
-          ...(times.endedAt !== undefined ? { endedAt: times.endedAt } : {})
+          ...(times.endedAt !== undefined ? { endedAt: times.endedAt } : {}),
+          ...outcome
         }
       : node
   )
@@ -136,7 +171,8 @@ const fromCompletion = (run: DagRunState, payload: DagRunCompletedEvent['payload
         ...node,
         status: file ? file.status : node.status === 'running' ? 'interrupted' : node.status,
         ...(file?.output_file ? { outputFile: file.output_file } : {}),
-        ...(file?.error ? { error: file.error } : {})
+        ...(file?.error ? { error: file.error } : {}),
+        ...(file ? outcomeOf(file) : {})
       }
     })
   }
@@ -215,10 +251,13 @@ export const foldDagEvent = (
   }
 
   return prev.nodes.some(node => node.id === event.payload.node)
-    ? withNodeStatus(prev, event.payload.node, event.payload.status, {
-        endedAt: event.payload.ended_at,
-        startedAt: event.payload.started_at
-      })
+    ? withNodeStatus(
+        prev,
+        event.payload.node,
+        event.payload.status,
+        { endedAt: event.payload.ended_at, startedAt: event.payload.started_at },
+        outcomeOf(event.payload)
+      )
     : prev
 }
 
@@ -232,10 +271,12 @@ export const foldDagEvent = (
  *
  * `prev` contributes two things the snapshot may not have. The tool call the
  * graph was pinned to, which it never knows -- without carrying that over, a
- * repaired graph is orphaned from the transcript row that draws it. And a node's
- * prompt template or summary, which an older run dir did not record: letting
- * the snapshot win outright there would blank a row that was reading fine a
- * moment earlier.
+ * repaired graph is orphaned from the transcript row that draws it. And what a
+ * node's row was reading fine a moment earlier: its prompt template or summary,
+ * which an older run dir did not record, and what a branch did to it, which the
+ * snapshot of a run still going takes from the registry, where a write is
+ * best-effort and can be dropped. Letting the snapshot win outright there would
+ * blank the row.
  */
 export const foldDagSnapshot = (prev: DagRunState | null, snapshot: DagRunSnapshot): DagRunState => ({
   runId: snapshot.run_id,
@@ -244,8 +285,9 @@ export const foldDagSnapshot = (prev: DagRunState | null, snapshot: DagRunSnapsh
   dir: snapshot.dir,
   summary: { ...snapshot.summary },
   nodes: snapshot.files.map(file => {
-    const template = file.prompt_template ?? prev?.nodes.find(node => node.id === file.node)?.promptTemplate
-    const summary = file.node_summary ?? prev?.nodes.find(node => node.id === file.node)?.nodeSummary
+    const before = prev?.nodes.find(node => node.id === file.node)
+    const template = file.prompt_template ?? before?.promptTemplate
+    const summary = file.node_summary ?? before?.nodeSummary
 
     return {
       id: file.node,
@@ -258,7 +300,15 @@ export const foldDagSnapshot = (prev: DagRunState | null, snapshot: DagRunSnapsh
       ...(template ? { promptTemplate: template } : {}),
       ...(summary ? { nodeSummary: summary } : {}),
       ...(file.output_file ? { outputFile: file.output_file } : {}),
-      ...(file.error ? { error: file.error } : {})
+      ...(file.error ? { error: file.error } : {}),
+      ...(file.routes !== undefined ? { routes: [...file.routes] } : {}),
+      ...(file.select !== undefined ? { select: file.select } : {}),
+      ...(file.when !== undefined ? { when: file.when } : {}),
+      ...outcomeOf({
+        reason: file.reason ?? before?.reason,
+        route_evidence: file.route_evidence ?? before?.routeEvidence,
+        selected_routes: file.selected_routes ?? before?.selectedRoutes
+      })
     }
   })
 })

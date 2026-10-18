@@ -1539,18 +1539,15 @@ class SubagentDagConfig(_Base):
     and a graph that can now pause waiting for the main agent to decide.
     """
 
-    verdict_enabled: bool = True
-    """On by default. Off restores the previous behaviour exactly: a node that
-    returns is completed, whatever it returned."""
-
     verdict_model: str | None = None
     """Model for the judge call. None inherits the agent's own. Set a cheaper tier
     here: the task is one enum plus a sentence, not the reasoning the conversation
     needs."""
 
     verdict_timeout_seconds: float = 180.0
-    """Wall clock for one judge call. Past this the node is treated as having
-    accomplished its task, which is what the previous behaviour was.
+    """Wall clock for one judge call. Past this an ordinary node is treated as having
+    accomplished its task, which is what the previous behaviour was. A decision node,
+    one that declares routes, fails instead: there is no route to default to.
 
     It has to leave room for the retry ladder it contains: `chat_with_retry` makes
     four attempts with roughly 7s of jittered backoff between them, so a ceiling

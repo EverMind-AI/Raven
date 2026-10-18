@@ -258,7 +258,16 @@ node -- its ordinal, its own name, the agent that ran it and what it cost on the
 first, and the line it was dispatched with turned in under the name on the second,
 where its unmet dependencies and its error go too -- the turn-in mark standing in
 the ordinal's column so the text below starts exactly where the node's name does; then a hint naming both ways
-into a node. A node with nothing to say on the second line does not draw one. The card carries the call, so the transcript
+into a node. A node with nothing to say on the second line does not draw one. What a branch
+made of a node opens that same second line, ahead of the dependencies and the summary: why
+it was not executed, or what a decision selected (`→ docs`, or `→ (none)` for a `select:
+many` decision that chose nothing). The parts share the line's room in the order a reader
+needs them -- the error, then the branch outcome, then the dependencies, then the node's
+guard as written, then the judge's route evidence, then the summary with what is left -- so a
+node that does not branch draws exactly the line it drew before. The evidence is clipped
+here like everything else on one line, which is what `/dag <node>` is for: that page prints
+the guard, the outcome in words and the whole quote, each on its own line, from the state the
+panel already folded. The card carries the call, so the transcript
 row for a dag call is suppressed (`WorkSegment`): the row and the header said the
 same sentence twice. The summary is the one part of a row with no width of its
 own: it takes what its own line leaves once the error and the dependency list --

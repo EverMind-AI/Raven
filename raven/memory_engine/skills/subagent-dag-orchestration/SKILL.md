@@ -1,6 +1,6 @@
 ---
 name: subagent-dag-orchestration
-description: Use when a task breaks into several distinct steps that a separate sub-agent could each carry out. A DAG node dispatches to an agent on the roster and cannot call your own tools, so steps that are just your own tool calls (reading files, small edits, running commands) are not a DAG for being many - do those yourself. The bound is about who can carry the work, not what kind of work it is: when the roster carries a specialist for it (a coding agent for code changes, an on-call agent for long runs) and the request assigns the work that way, it clears the bound like any other. For work that clears it, test three things before running the steps one at a time: are two or more steps independent (they can run at once), does a step hand its result to the next (a graph wires that handoff with no turn of yours in between), do the steps want different specialists (the tool lists the roster). If any of the three holds, orchestrate the whole task as one run_subagent_dag call. Iteration is graphs in series, one graph per round, driven by you.
+description: Use when a task breaks into several distinct steps that a separate sub-agent could each carry out. A DAG node dispatches to an agent on the roster and cannot call your own tools, so steps that are just your own tool calls (reading files, small edits, running commands) are not a DAG for being many - do those yourself. The bound is about who can carry the work, not what kind of work it is: when the roster carries a specialist for it (a coding agent for code changes, an on-call agent for long runs) and the request assigns the work that way, it clears the bound like any other. For work that clears it, test three things before running the steps one at a time: are two or more steps independent (they can run at once), does a step hand its result to the next (a graph wires that handoff with no turn of yours in between), do the steps want different specialists (the tool lists the roster). If any of the three holds, orchestrate the whole task as one run_subagent_dag call. A step whose result decides what runs next is a decision node: give it routes, and guard what follows with when, all in one graph. Iteration is graphs in series, one graph per round, driven by you.
 metadata: {"raven":{"emoji":"🕸️","always":true,"inject":"description","requires":{"tools":["run_subagent_dag"]}}}
 ---
 
@@ -195,6 +195,9 @@ flag (default `true`) is described above.
 | `depends_on` | no | Upstream node ids that must finish before this node runs. May also name a task this conversation already finished — an earlier run's node, or a `spawn` — which only records the dependency. |
 | `inputs` | no | Object mapping a key to a literal string, to `{"file": "<path>"}`, or to `{"node": "<id>"}` for another node's output — exactly one of the three, with nothing else in the object. |
 | `instance` | no | A stable handle (e.g. `researcher`). Nodes sharing it run sequentially in id order and reuse one sub-agent session — only on an agent the roster tags `[stateful]`. |
+| `routes` | no | Makes this node a **decision**: route name to the condition, in plain words, under which its answer selects that route. See `Conditional branches`. |
+| `select` | no | `"one"` (the default where there are routes): exactly one route. `"many"`: any number, none included. Only with `routes`. |
+| `when` | no | Guard. This node runs only if it holds once its dependencies settle. See `Conditional branches`. |
 
 A handle reaches beyond one run: two graphs in the same conversation that name the same
 handle share one sub-agent session, in whichever order they reach it. Reuse a handle across
@@ -273,11 +276,12 @@ read better. `depends_on` is still *required* for a node of *this* graph, since 
 is what makes the upstream node run first.
 
 Only a task that **completed and wrote an output** can be named this way, in a placeholder
-or in `depends_on` alike. One that failed, was cancelled, was skipped, or is still running
-keeps its id — nothing else may take it — but has no output
+or in `depends_on` alike. One that failed, was cancelled, was skipped, was not executed, or
+is still running keeps its id — nothing else may take it — but has no output
 to read, and naming it is refused before any node of your graph is dispatched. The refusal
 says which case it is, because the fix differs: re-do work that failed, was cancelled or
-was skipped under a **new** id; where the run recorded no outcome for the node at all, read
+was skipped under a **new** id; carry on without a node a branch did not execute, or re-do
+that work under a new id too; where the run recorded no outcome for the node at all, read
 its file directly; and for a node of a run still in flight, submit again once that run
 reports its result.
 
@@ -349,6 +353,221 @@ Three things follow, and getting any of them wrong wastes a node's turn:
   the normal case, not a fault: a node that finds the file missing, or carrying
   `"status": "pending"`, should carry on without it. Do not add a node whose only job is
   to wait for one, and do not treat a missing record as a failed upstream.
+
+## Conditional branches
+
+One graph can decide where it goes next. Reach for this when what runs next depends on
+what a step concludes — a triage that settles whether an issue needs a code fix, a design,
+or only an answer; a scan that finds something and a review that only makes sense if it
+did. Without it the run has to finish, you read the result, and you submit a second graph,
+which costs a turn and a charge on the hourly dispatch allowance.
+
+Three fields do it. They are independent: a node may be a decision, guarded, both, or
+neither.
+
+| Field | On | Meaning |
+| --- | --- | --- |
+| `routes` | a decision node | Route name to the condition, in plain words, under which its answer selects that route. |
+| `select` | a decision node | `"one"` (the default) or `"many"`. How many routes one answer may select. |
+| `when` | any node | Guard. A boolean expression over what the decision nodes before it chose. |
+
+**The judge picks the route, not the node.** `routes` makes the node a *decision node*.
+Once it finishes, Raven's judge — the same call that decides whether the node accomplished
+its task — reads the node's answer against your conditions and selects the route. The
+conditions are shown to the judge and never to the node, and a route the node names in its
+own text is evidence like the rest of its answer, never the selection.
+
+Two rules the graph is refused for, so write to them the first time:
+
+- **Route names** use the node-id charset — letters, digits, `_`, `-` — and are matched
+  exactly; two names of one node may not differ only in case. `done` is reserved in any
+  letter case and cannot name a route.
+- **At least two routes** when `select` is `"one"`, at least one when it is `"many"`, and
+  no condition may be blank.
+
+Two more that no check enforces, and that the judge's reading depends on:
+
+- **A decision node's prompt asks for the conclusion, explicitly.** "Conclude in one
+  sentence whether this is a defect, a feature request, or a usage question" gives the
+  judge something to read the answer against. Note what that asks the node for: its
+  conclusion, not a route name.
+- **The conditions are mutually exclusive and decidable**, and a `select: "one"` decision
+  gets a catch-all route for everything else, so every answer the node could give selects
+  exactly one route. Make that catch-all one route whose condition is "anything else", and
+  name it in the node's `routes` alongside the specific ones: a single-select decision with
+  only narrow conditions and no such route fails the node for want of a route whenever its
+  answer fits none of them. Take two routes that call this out — one for a defect, one for
+  a feature request — and the node concludes something else; the graph stops there.
+
+**A guard reads only what the node depends on.** `when` names `<node>.<route>` — that
+decision node selected that route — or `<node>.done`, which means the node settled,
+whatever it chose. Only a decision node of this graph that is in this node's `depends_on`
+may be named, and only a route it declares. The atoms are joined by `not`, `and`, `or` and
+parentheses; `not` binds tightest, then `and`, then `or`, and the words are lowercase.
+Spacing between tokens is free; an atom is one token, written without spaces.
+
+**Every decision node in `depends_on` must appear in the node's `when`.** A node cannot
+depend on a decision and stay silent about it; `<node>.done` is how you say "whatever it
+chose". This holds for a decision node that depends on another decision node too — a
+nested branch names its parent in its own `when`, like any node.
+
+**Guard the entry node of a branch, and every node of the branch that also depends on
+something outside it.** A node whose every in-graph dependency was not executed is not
+executed either, so a branch node needs no guard beyond naming any decision node it
+depends on. A node of the branch that also depends on something outside it, such as the
+decision node itself or a node that runs whichever
+route is selected, is not left out that way: unless its own `when` names the branch's
+route, it can run when the branch does not, and read the fixed sentence for the input it
+missed. Name the route, as `<node>.<route>`, not `<node>.done`, which holds whichever
+route is selected; and list the decision node in its `depends_on` if it is not there yet,
+since a guard may only read a dependency. A merge node that should run on every route,
+like `reply` in the example below, keeps `<node>.done`.
+
+**What a guard decides, and what unknown means.** The guard is read once every dependency
+has settled; a dependency that failed or was skipped skips the node first, whatever its
+guard would say. True runs the node. False leaves it **not executed** with the reason
+`when_false`; unknown leaves it not executed with `when_unknown`. Unknown is not false: a
+route of a decision node that was never executed is *unknown*, so `not risk.high` does not
+hold when no risk was ever judged — nobody decided. A node the branch left out is never
+dispatched, never takes a concurrency slot, and writes no output. One whose every
+in-graph dependency was left out ends the same way, reason `upstream_not_executed` — that
+check comes first, so `<node>.done`, true whatever the decision did, cannot revive a node
+with no input left on that path.
+
+**A decision node whose route cannot be established fails.** If the judge cannot be
+called, its call fails or times out, or it names no usable route even after two
+corrections, the node fails with "The route could not be determined: <reason>", and its
+output is withdrawn. There is no fallback route. A decision node that did not accomplish
+its task is a different case, handled like any other node: it reports to you, and a
+`continue` judges the next attempt afresh, route included. A host with no model to judge
+with refuses such a graph at submission instead of running it down no branch.
+
+**Every decision node that completes reports what it selected.** The run's summary counts
+the nodes a branch left out (`3 not executed`), each of them carries its reason, and a
+decision node carries its `selected_routes`.
+
+**A missing input has a fixed stand-in.** When a node reads a dependency of the same graph
+that was not executed — `{{ X.output }}`, `{{ X.output_path }}`, or a node-shaped input —
+every one of those forms renders the sentence the runner writes:
+
+```
+<This task is not executed and the output is missing, please go on without this output.>
+```
+
+So a merge step reads that sentence where the branch it did not take would have been,
+and is told to carry on without it. That sentence is not a placeholder you write; it is
+what the reference resolves to, and it sits outside the fences a sub-agent's own words
+arrive in.
+
+For anything the node has to tell apart, write **one titled block per input that may be
+missing**. The runner adds no titles of its own, so the headings are yours:
+
+```
+## Bug fix result
+{{ fix.output }}
+
+## Design proposal
+{{ design.output }}
+```
+
+Reach a node that may not run with `{{ X.output }}`, **not** with `ref:@nodes/`. A node
+*may not run* when it has a `when` of its own, even `<node>.done`, which holds whichever
+route is selected, or when it depends on nodes of this graph that all may not run. A
+`ref:`/`ref_path:` placeholder, or a `{"file": ...}` input, whose path names the artifacts
+of such a node is refused at submission: a node that was not executed leaves no file, and
+the reference would fail while the prompt was being rendered, with a missing-file error
+that hides the cause.
+
+And when a node reads something that may be missing, Raven tells it so: a note after the
+rendered template lists the nodes that may not run and repeats the sentence above. You do
+not write that note — it is appended whether or not anything is missing this run, so the
+prompt keeps one shape across runs.
+
+### A worked example
+
+The owner asked: "Handle issue 123 — work out what kind of issue it is, do the work it
+needs, and draft the reply." What it needs depends on the triage, and how closely the
+change has to be reviewed depends on what it touches. One graph, two decisions, four
+guarded steps:
+
+```json
+{
+  "task_summary": "Handle issue 123",
+  "nodes": [
+    {
+      "id": "triage",
+      "subagent": "Raven",
+      "node_summary": "Classify the issue",
+      "prompt_template": "Owner's request, as written: \"Handle issue 123 — work out what kind of issue it is, do the work it needs, and draft the reply.\"\nYour part: read issue 123. Conclude in one sentence whether it is a defect in the code, a request for new behaviour, or something else such as a usage question. Give your reasoning after the conclusion.",
+      "routes": {
+        "bug": "the issue is caused by a defect in the code",
+        "feature": "the issue asks for new behaviour",
+        "question": "anything else: a usage question, or an issue that is neither a defect nor a request for new behaviour"
+      }
+    },
+    {
+      "id": "risk",
+      "subagent": "Raven",
+      "node_summary": "Judge the risk of changing this",
+      "prompt_template": "Owner's request, as written: \"Handle issue 123 — work out what kind of issue it is, do the work it needs, and draft the reply.\"\nYour part: read issue 123 and conclude in one sentence whether a change would touch authentication, billing or a data migration. Give your reasoning after the conclusion.",
+      "routes": {
+        "high": "a change would touch authentication, billing or a data migration",
+        "low": "a change would touch none of those"
+      }
+    },
+    {
+      "id": "fix",
+      "subagent": "Raven",
+      "node_summary": "Fix the defect",
+      "depends_on": ["triage"],
+      "when": "triage.bug",
+      "prompt_template": "Owner's request, as written: \"Handle issue 123 — work out what kind of issue it is, do the work it needs, and draft the reply.\"\nYour part: fix the defect.\nTriage: {{ triage.output }}"
+    },
+    {
+      "id": "design",
+      "subagent": "Raven",
+      "node_summary": "Write the design proposal",
+      "depends_on": ["triage"],
+      "when": "triage.feature",
+      "prompt_template": "Owner's request, as written: \"Handle issue 123 — work out what kind of issue it is, do the work it needs, and draft the reply.\"\nYour part: write the design proposal for the requested behaviour.\nTriage: {{ triage.output }}"
+    },
+    {
+      "id": "deep_review",
+      "subagent": "Raven",
+      "node_summary": "Review the change risk",
+      "depends_on": ["triage", "risk", "fix", "design"],
+      "when": "(triage.bug or triage.feature) and risk.high",
+      "prompt_template": "Owner's request, as written: \"Handle issue 123 — work out what kind of issue it is, do the work it needs, and draft the reply.\"\nYour part: review the change for impact on authentication, billing or a data migration.\n\n## Risk assessment\n{{ risk.output }}\n\n## Bug fix result\n{{ fix.output }}\n\n## Design proposal\n{{ design.output }}"
+    },
+    {
+      "id": "reply",
+      "subagent": "Raven",
+      "node_summary": "Draft the reply to the reporter",
+      "depends_on": ["triage", "fix", "design"],
+      "when": "triage.done",
+      "prompt_template": "Owner's request, as written: \"Handle issue 123 — work out what kind of issue it is, do the work it needs, and draft the reply.\"\nYour part: draft the reply to the reporter.\n\n## Triage\n{{ triage.output }}\n\n## Bug fix result\n{{ fix.output }}\n\n## Design proposal\n{{ design.output }}"
+    }
+  ]
+}
+```
+
+Read it the way the scheduler does. `triage` and `risk` have no dependencies, so they run
+at the same time. `fix` and `design` wait for `triage`; at most one of them runs, because
+`triage` selects one route, and neither does when it selects `question`. `deep_review`
+waits for all four and runs only for a bug or a feature that the risk assessment called
+high. `reply` is guarded by `triage.done`, so it runs whatever the triage chose — and if the
+triage said `question`, both `fix` and `design` were not executed, so `reply` reads the
+fixed sentence in both of their titled blocks and drafts the answer anyway.
+
+The routes here are worth copying: three decidable statements written to exclude each
+other, and `question` is the catch-all that takes every answer the other two do not cover.
+`fix`, `design` and `deep_review` each open a branch, and each carries that branch's
+guard. `deep_review` shows the guard rule above at work: it reads `fix` and `design`, but
+it also depends on `triage` and `risk`, which run on every route, so nothing leaves it out
+with the branches it reads; its own guard is what keeps it off the `question` path.
+`reply` merges a decision and two branches: the decision is named in its `when`, as
+`triage.done`, because it runs whatever was chosen; the two branch nodes are only in its
+`depends_on`, since neither is a decision.
 
 ## Examples
 
@@ -440,7 +659,13 @@ Terminal outputs:
 ```
 
 - `Node output files:` lists **every** node with its status and output path (failed or
-  skipped nodes show `(no output file)` plus an `error:` line).
+  skipped nodes show `(no output file)` plus an `error:` line). A node a branch left out
+  is listed too, as `[not_executed]` with a `reason:` line saying which of the three it was,
+  and a decision node carries a `selected_routes:` line — `(none)` when a `select: "many"`
+  decision selected nothing, which is a decision in its own right and not a missing one.
+- When a node completed and every one of its dependents was not executed, its output is a
+  terminal output of the run: on a path the branch cut short, that node's output is the last
+  word on it.
 - Only terminal-node outputs are inlined. To review any other node's work, `read_file`
   its output path.
 - Each node's `<node>.prompt.md` (the rendered prompt) sits beside its output under
@@ -469,3 +694,12 @@ Terminal outputs:
 - **Don't** guess `subagent` names — only names on the roster resolve.
 - **Don't** share an `instance` handle across nodes to "keep them in order" on a
   `[stateless]` agent — order without shared context is what `depends_on` already gives.
+- **Don't** ask a node to print a route marker for the graph to follow. The node's own text
+  selects nothing: the judge reads its answer against the conditions you wrote, and a
+  `route: bug` line in that answer is just more of the answer. Ask the node for its
+  conclusion instead.
+- **Don't** repeat the entry guard on every node inside a branch. A node whose dependencies
+  all lie inside the branch is left out with its entry, so a copy of the guard there says
+  nothing and is one more line to keep in step when the branch changes. The exception is a
+  node of the branch that also depends on something outside it, the decision node
+  included: it needs the branch's route in its own `when` (see `Conditional branches`).

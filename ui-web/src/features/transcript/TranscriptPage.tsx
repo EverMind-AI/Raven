@@ -729,13 +729,14 @@ const DagCard = memo(function DagCard({ lane, c }: { lane: Lane; c: CallData }):
     /* Before any node has started there is no graph clock yet, so this falls
        back to the call's -- which is the right answer for exactly that window. */
     : (c.done ? (c.ms ? store.durText(c.ms) : '') : '…')
-  const tally = { ok: 0, bad: 0, stop: 0, skip: 0, run: 0 }
+  const tally = { ok: 0, bad: 0, stop: 0, skip: 0, notx: 0, run: 0 }
   nodes.forEach((n) => {
     const d = store.DOT_OF[n.status]
     if (d === 'ok') tally.ok += 1
     else if (d === 'bad') tally.bad += 1
     else if (d === 'stop') tally.stop += 1
     else if (d === 'skip') tally.skip += 1
+    else if (d === 'notx') tally.notx += 1
     else if (d === 'run') tally.run += 1
   })
   const bits: string[] = []
@@ -751,6 +752,7 @@ const DagCard = memo(function DagCard({ lane, c }: { lane: Lane; c: CallData }):
        sits on the runner's own scale too. */
     if (tally.stop) bits.push(t('gui.deleg.dag_stopped', { n: String(tally.stop) }))
     if (tally.skip) bits.push(t('gui.deleg.dag_skip', { n: String(tally.skip) }))
+    if (tally.notx) bits.push(t('gui.deleg.dag_not_executed', { n: String(tally.notx) }))
     /* Last, because it is the one bit about what has NOT happened. Said even
        though the denominator implies it on a clean run: once a node has failed
        or been skipped the subtraction stops being obvious, and "still to go" is

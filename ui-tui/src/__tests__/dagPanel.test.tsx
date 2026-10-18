@@ -8,13 +8,15 @@ import React from 'react'
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import type { DagRunNodeStatus, DagRunState } from '../domain/dagRun.js'
+import type { DagNotExecutedReason } from '../rpc/index.js'
 import type { Msg } from '../types.js'
 
 import { DagPanel, fitDagHeader } from '../components/dagPanel.js'
 import { EpisodeView } from '../components/episodeView.js'
 import { $dagOpenNodes, dagNodeKey, dagNodeToggleKey, dagSpanToggleKey, toggleDagNode } from '../lib/dagOpenNodes.js'
+import { DAG_STATUS_GLYPH } from '../lib/dagStatus.js'
 import { stripAnsi } from '../lib/text.js'
-import { estimatedMsgHeight } from '../lib/virtualHeights.js'
+import { estimatedMsgHeight, messageHeightKey } from '../lib/virtualHeights.js'
 import { DEFAULT_THEME } from '../theme.js'
 
 const frame = (node: React.ReactElement) => stripAnsi(render(node).lastFrame() ?? '')
@@ -564,6 +566,59 @@ describe('the height the transcript reserves', () => {
 
     expect(estimatedMsgHeight(msgWith(RUN), 92, { compact: false, dagOpen: open, details: false })).toBe(drawn)
   })
+
+  // Nodes with no summary of their own, so that every line turned in under a
+  // row is there only because a branch put it there.
+  const BRANCHED: DagRunState = {
+    runId: 'dag-9',
+    done: false,
+    nodes: [
+      {
+        ...node('triage', 'completed', [], 'Raven-Code'),
+        routeEvidence: 'it asks how to configure the proxy',
+        selectedRoutes: ['docs']
+      },
+      { ...node('fix', 'not_executed', ['triage'], 'Raven-Code'), reason: 'when_false', when: 'triage.bug' },
+      { ...node('write', 'running', ['triage'], 'Raven-Code'), when: 'triage.docs' },
+      node('notify', 'not_executed', ['fix'], 'Raven-Code'),
+      node('plain', 'pending', [], 'Raven-Code')
+    ]
+  }
+
+  it.each([92, 60])('matches what the panel draws on a branching run, at %i columns', cols => {
+    $dagOpenNodes.set(new Set())
+
+    const drawn = frame(<EpisodeView cols={cols} episodes={msgWith(BRANCHED).episodes!} t={DEFAULT_THEME} />)
+      .split('\n')
+      .filter(line => line.trim()).length
+
+    expect(estimatedMsgHeight(msgWith(BRANCHED), cols, { compact: false, dagOpen: new Set(), details: false })).toBe(
+      drawn
+    )
+  })
+
+  it('re-keys when a node is left out, which puts a line under it', () => {
+    // Nothing the key already counted moves: no node starts or stops running
+    // and no error arrives. Without this the cached height outlives the line.
+    const waiting: DagRunState = {
+      runId: 'dag-9',
+      done: false,
+      nodes: [node('a', 'pending'), node('b', 'pending', ['a'])]
+    }
+    const left: DagRunState = {
+      ...waiting,
+      nodes: [waiting.nodes[0]!, { ...node('b', 'not_executed', ['a']), reason: 'when_false' }]
+    }
+
+    expect(messageHeightKey(msgWith(left))).not.toBe(messageHeightKey(msgWith(waiting)))
+  })
+
+  it('re-keys when a decision node reports what it selected', () => {
+    const deciding: DagRunState = { runId: 'dag-9', done: false, nodes: [node('a', 'completed')] }
+    const decided: DagRunState = { ...deciding, nodes: [{ ...node('a', 'completed'), selectedRoutes: [] }] }
+
+    expect(messageHeightKey(msgWith(decided))).not.toBe(messageHeightKey(msgWith(deciding)))
+  })
 })
 
 describe('fitDagHeader', () => {
@@ -591,5 +646,295 @@ describe('fitDagHeader', () => {
 
     expect(fitted).toMatchObject({ elapsed: '', runId: '', tally: '' })
     expect(stringWidth(fitted.left)).toBeLessThanOrEqual(20)
+  })
+})
+
+describe('DagPanel on a branching run', () => {
+  beforeEach(() => {
+    $dagOpenNodes.set(new Set())
+  })
+
+  const TRIAGE = {
+    ...node('triage', 'completed'),
+    routes: ['docs', 'bug'],
+    routeEvidence: 'it asks how to configure the proxy',
+    select: 'one' as const,
+    selectedRoutes: ['docs']
+  }
+
+  // The panel with its frame taken off, line by line.
+  const rows = (run: DagRunState, width = 100) =>
+    frame(<DagPanel now={20_000} run={run} t={DEFAULT_THEME} width={width} />)
+      .split('\n')
+      .map(line => line.replace(/^│ ?/, '').replace(/ ?│$/, '').trimEnd())
+
+  // A node's row opens with its mark, its ordinal and then its name.
+  const rowOf = (all: string[], id: string) => all.findIndex(line => new RegExp(`^\\S \\d+  ${id}\\b`).test(line))
+
+  // The line turned in under a node's name.
+  const under = (all: string[], id: string) => all[rowOf(all, id) + 1]
+
+  const LEFT_OUT = (reason?: DagNotExecutedReason): DagRunState => ({
+    runId: 'dag-b',
+    done: true,
+    nodes: [TRIAGE, { ...node('fix', 'not_executed', ['triage']), ...(reason ? { reason } : {}) }]
+  })
+
+  it('draws a node a branch left out with a dotted circle, on its row and in the picture', () => {
+    const f = frame(<DagPanel run={LEFT_OUT('when_false')} t={DEFAULT_THEME} />)
+
+    expect(f).toContain('◌ 2  fix')
+    expect(f).toContain('2 ◌ echo')
+  })
+
+  it('counts it in the header, apart from the nodes that ran', () => {
+    expect(frame(<DagPanel run={LEFT_OUT('when_false')} t={DEFAULT_THEME} />)).toContain('1✓ 1◌')
+  })
+
+  it.each([
+    ['when_false', 'not selected'],
+    ['when_unknown', 'decision missing'],
+    ['upstream_not_executed', 'upstream not executed']
+  ] as const)('says why it was left out, in words: %s reads %s', (reason, words) => {
+    const all = rows(LEFT_OUT(reason))
+
+    expect(under(all, 'fix')?.trim().startsWith('└')).toBe(true)
+    expect(under(all, 'fix')).toContain(words)
+  })
+
+  it('says only that it was not executed when no reason reached the client, and invents none', () => {
+    const line = under(rows(LEFT_OUT()), 'fix')
+
+    expect(line).toContain('not executed')
+    expect(line).not.toMatch(/not selected|decision missing|upstream/)
+  })
+
+  it('shows what a decision node selected, under its status', () => {
+    const all = rows(LEFT_OUT('when_false'))
+
+    expect(all[rowOf(all, 'triage')]!.startsWith('✓')).toBe(true)
+    expect(under(all, 'triage')).toContain('→ docs')
+  })
+
+  it('shows an empty selection as a selection of nothing', () => {
+    const all = rows({ runId: 'dag-b', done: true, nodes: [{ ...TRIAGE, selectedRoutes: [] }] })
+
+    expect(under(all, 'triage')).toContain('→ (none)')
+  })
+
+  it('shows no selection for a decision node that made none', () => {
+    const undecided = { ...node('triage', 'completed'), routes: ['docs', 'bug'], select: 'one' as const }
+    const f = frame(<DagPanel run={{ runId: 'dag-b', done: true, nodes: [undecided] }} t={DEFAULT_THEME} />)
+
+    expect(f).not.toContain('→')
+  })
+
+  it('shows the route evidence behind a selection', () => {
+    expect(under(rows(LEFT_OUT('when_false')), 'triage')).toContain('"it asks how to configure the proxy"')
+  })
+
+  it("shows a guarded node's guard", () => {
+    const all = rows({
+      runId: 'dag-b',
+      done: true,
+      nodes: [TRIAGE, { ...node('fix', 'completed', ['triage']), when: 'triage.bug or triage.docs' }]
+    })
+
+    expect(under(all, 'fix')).toContain('when triage.bug or triage.docs')
+  })
+
+  it('shows the reason and the guard together on a node that was left out', () => {
+    const all = rows({
+      runId: 'dag-b',
+      done: true,
+      nodes: [TRIAGE, { ...node('fix', 'not_executed', ['triage']), reason: 'when_false', when: 'triage.bug' }]
+    })
+
+    expect(under(all, 'fix')).toMatch(/not selected.*when triage\.bug/)
+  })
+
+  it('keeps the selection whole and cuts the evidence when the line is short of room', () => {
+    const line = under(rows(LEFT_OUT('when_false'), 44), 'triage')
+
+    expect(line).toContain('→ docs')
+    expect(line).toContain('…"')
+    expect(line).not.toContain('configure the proxy')
+  })
+
+  it('shows no time for a node a branch left out, and does not stretch the run for it', () => {
+    // `dag.get` hands back the stamps the sweep gave the node when it decided
+    // against it: before the run's first start and after its last end here.
+    const run: DagRunState = {
+      runId: 'dag-t',
+      done: true,
+      nodes: [
+        { ...node('a', 'completed'), startedAt: 1_000, endedAt: 4_000 },
+        { ...node('b', 'not_executed', ['a']), reason: 'when_false', startedAt: 500, endedAt: 90_000 }
+      ]
+    }
+    const all = rows(run)
+
+    expect(all.find(line => line.includes('run subagent dag'))).toContain('· 3s')
+    expect(all[rowOf(all, 'a')]).toMatch(/3s$/)
+    expect(all[rowOf(all, 'b')]).not.toMatch(/\d+s$/)
+  })
+
+  it.each(Object.keys(DAG_STATUS_GLYPH) as DagRunNodeStatus[])('draws a node in the %s state', status => {
+    // A status with no glyph is a node the render dies on, not a blank column.
+    const run: DagRunState = { runId: 'dag-s', done: false, nodes: [node('only', status)] }
+
+    expect(frame(<DagPanel run={run} t={DEFAULT_THEME} />)).toContain('only')
+  })
+
+  const BRANCHED_LOADED: DagRunState = {
+    runId: '20260826T06:11:02Z-ed3fc2c3',
+    done: false,
+    nodes: [
+      {
+        ...node('gem_triage', 'completed', [], 'Raven-Research'),
+        nodeSummary: 'Classify the issue as a defect, a feature request or a usage question.',
+        routeEvidence: 'The reporter describes a crash on startup and attaches a stack trace from the parser module.',
+        selectedRoutes: ['bug', 'regression']
+      },
+      {
+        ...node('gem_fix', 'completed', ['gem_triage'], 'Raven-Code'),
+        nodeSummary: 'Fix the defect',
+        when: 'gem_triage.bug and not gem_risk.high and gem_triage.regression'
+      },
+      {
+        ...node('gem_design', 'not_executed', ['gem_triage'], 'Raven-Code'),
+        nodeSummary: 'Write a design note for the new behaviour',
+        reason: 'when_false',
+        when: 'gem_triage.feature'
+      },
+      { ...node('gem_notify', 'not_executed', ['gem_design'], 'Raven-Code'), reason: 'upstream_not_executed' },
+      { ...node('gem_reply', 'pending', ['gem_fix'], 'Raven-Code'), error: 'exited 1' }
+    ]
+  }
+
+  it.each([28, 30, 36, 44, 60, 72, 88, 100])('draws every line to exactly its own width at %i columns', cols => {
+    const lines = frame(<DagPanel run={BRANCHED_LOADED} t={DEFAULT_THEME} width={cols} />)
+      .split('\n')
+      .filter(line => line.trim())
+
+    lines.forEach(line => expect(stringWidth(line)).toBe(Math.max(28, cols)))
+  })
+})
+
+describe('a run no branch touched', () => {
+  beforeEach(() => {
+    $dagOpenNodes.set(new Set())
+  })
+
+  // These frames are what the panel drew for runs like these before branches
+  // existed, taken from the code as it stood then. The braille cells are a
+  // running node's spinner, which turns with the clock.
+  const SPINNER = new RegExp(`[${String.fromCharCode(0x2800)}-${String.fromCharCode(0x28ff)}]`, 'g')
+  const drawn = (run: DagRunState, width: number) =>
+    frame(<DagPanel now={20_000} run={run} t={DEFAULT_THEME} width={width} />)
+      .replace(SPINNER, '~')
+      .trimEnd()
+
+  const FINISHED: DagRunState = {
+    runId: 'dag-fin',
+    done: true,
+    dir: '/w/mas_dag/dag-fin',
+    summary: { total: 5, completed: 1, failed: 1, skipped: 1, cancelled: 1 },
+    nodes: [
+      {
+        ...node('a', 'completed', [], 'claude'),
+        startedAt: 1_000,
+        endedAt: 4_000,
+        nodeSummary: 'read the pricing pages'
+      },
+      { ...node('b', 'failed', ['a'], 'claude'), startedAt: 4_000, endedAt: 9_000, error: 'CLI agent exited 1' },
+      { ...node('c', 'skipped', ['b']), startedAt: 9_000, endedAt: 9_000, nodeSummary: 'write the review note' },
+      { ...node('d', 'cancelled', ['a'], 'claude'), startedAt: 4_000, endedAt: 9_500 },
+      { ...node('e', 'interrupted', ['a'], 'claude'), startedAt: 4_000, nodeSummary: 'long running thing' }
+    ]
+  }
+
+  it('draws a finished run, with its timings and a skipped node, as it always did', () => {
+    expect(drawn(FINISHED, 100)).toBe(
+      [
+        '╭──────────────────────────────────────────────────────────────────────────────────────────────────╮',
+        '│ run subagent dag  5 nodes                                            dag-fin 1✓ 1✗ 1⊘ 1⊗ 1■ · 8s │',
+        '│ ──────────────────────────────────────────────────────────────────────────────────────────────── │',
+        '│ ╭────────────╮      ╭────────────╮      ╭────────────╮                                           │',
+        '│ │ 1 ✓ claude │──┬──▸│ 2 ✗ claude │─────▸│ 3 ⊘ echo   │                                           │',
+        '│ ╰────────────╯  │   ╰────────────╯      ╰────────────╯                                           │',
+        '│                 │   ╭────────────╮                                                               │',
+        '│                 ├──▸│ 4 ⊗ claude │                                                               │',
+        '│                 │   ╰────────────╯                                                               │',
+        '│                 │   ╭────────────╮                                                               │',
+        '│                 ╰──▸│ 5 ■ claude │                                                               │',
+        '│                     ╰────────────╯                                                               │',
+        '│ ✓ 1  a  claude                                                                                3s │',
+        '│   └  read the pricing pages                                                                      │',
+        '│ ✗ 2  b  claude                                                                                5s │',
+        '│   └  CLI agent exited 1                                                                          │',
+        '│ ⊘ 3  c  echo                                                                                  0s │',
+        '│   └  write the review note                                                                       │',
+        '│ ⊗ 4  d  claude                                                                                5s │',
+        '│ ■ 5  e  claude                                                                               16s │',
+        '│   └  long running thing                                                                          │',
+        '│ outputs in /w/mas_dag/dag-fin                                                                    │',
+        '│ ──────────────────────────────────────────────────────────────────────────────────────────────── │',
+        '│ click a node to open it · /dag 1-5 for a full trace                                              │',
+        '╰──────────────────────────────────────────────────────────────────────────────────────────────────╯'
+      ].join('\n')
+    )
+  })
+
+  it('draws it as it always did on a narrow terminal', () => {
+    expect(drawn(FINISHED, 50)).toBe(
+      [
+        '╭────────────────────────────────────────────────╮',
+        '│ run subagent dag  5 nodes  1✓ 1✗ 1⊘ 1⊗ 1■ · 8s │',
+        '│ ────────────────────────────────────────────── │',
+        '│ ╭─────╮      ╭─────╮      ╭─────╮              │',
+        '│ │ 1 ✓ │──┬──▸│ 2 ✗ │─────▸│ 3 ⊘ │              │',
+        '│ ╰─────╯  │   ╰─────╯      ╰─────╯              │',
+        '│          │   ╭─────╮                           │',
+        '│          ├──▸│ 4 ⊗ │                           │',
+        '│          │   ╰─────╯                           │',
+        '│          │   ╭─────╮                           │',
+        '│          ╰──▸│ 5 ■ │                           │',
+        '│              ╰─────╯                           │',
+        '│ ✓ 1  a  claude                              3s │',
+        '│   └  read the pricing pages                    │',
+        '│ ✗ 2  b  claude                              5s │',
+        '│   └  CLI agent exited 1                        │',
+        '│ ⊘ 3  c  echo                                0s │',
+        '│   └  write the review note                     │',
+        '│ ⊗ 4  d  claude                              5s │',
+        '│ ■ 5  e  claude                             16s │',
+        '│   └  long running thing                        │',
+        '│ outputs in /w/mas_dag/dag-fin                  │',
+        '│ ────────────────────────────────────────────── │',
+        '│ click a node to open it · /dag 1-5 for a full… │',
+        '╰────────────────────────────────────────────────╯'
+      ].join('\n')
+    )
+  })
+
+  it('draws a live run with no picture as it always did, naming what the picture could not draw', () => {
+    expect(drawn(DIAMOND, 36)).toBe(
+      [
+        '╭──────────────────────────────────╮',
+        '│ run subagent dag 4 nodes         │',
+        '│ ──────────────────────────────── │',
+        '│ ✓ 1  fetch    echo               │',
+        '│ ~ 2  parse_a  echo               │',
+        '│   └    ← fetch                   │',
+        '│ ○ 3  parse_b  echo        queued │',
+        '│   └    ← fetch                   │',
+        '│ ○ 4  report   echo        queued │',
+        '│   └    ← parse_a, parse_b        │',
+        '│ ──────────────────────────────── │',
+        '│ click a node to open it · /dag … │',
+        '╰──────────────────────────────────╯'
+      ].join('\n')
+    )
   })
 })

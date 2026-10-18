@@ -192,7 +192,9 @@ def _node_wire(node: Any) -> dict[str, Any]:
     deliberately different -- a blank ``subagent`` / ``node_summary`` /
     ``prompt_template`` is an empty string (the author left it for the caller to
     fill, and the field still exists), while an unwritten ``skills`` / ``mcps``
-    is an absent key (see below).
+    is an absent key (see below). ``routes`` / ``select`` / ``when`` are the
+    second kind: a node that declares none of them keeps exactly the keys it
+    always had, and a blank ``when`` is no guard.
     """
     wire: dict[str, Any] = {
         "id": node.id,
@@ -211,6 +213,14 @@ def _node_wire(node: Any) -> dict[str, Any]:
         wire["skills"] = list(node.skills)
     if node.mcps is not None:
         wire["mcps"] = list(node.mcps)
+    # Whole, conditions included: they are what re-running the graph judges
+    # against. `select` is as written, so an absent one still means "one".
+    if node.routes:
+        wire["routes"] = dict(node.routes)
+    if node.select is not None:
+        wire["select"] = node.select
+    if node.when and node.when.strip():
+        wire["when"] = node.when
     return wire
 
 

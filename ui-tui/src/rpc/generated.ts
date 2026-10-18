@@ -18,14 +18,22 @@
  */
 export type JsonValue = string | number | boolean | null | unknown[] | {};
 /**
- * Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal.
+ * Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal. 'not_executed' is a node a branch left out -- its guard was false or unknown, or every dependency of it was not executed. It never ran, and it is terminal.
  *
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "DagNodeStatus".
  */
-export type DagNodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled' | 'exception';
+export type DagNodeStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'skipped'
+  | 'cancelled'
+  | 'exception'
+  | 'not_executed';
 /**
- * Per-node status in a run read back off disk. Unlike the event vocabulary this includes 'interrupted', which the server infers for a node the registry still calls running on a run nothing is executing. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal.
+ * Per-node status in a run read back off disk. Unlike the event vocabulary this includes 'interrupted', which the server infers for a node the registry still calls running on a run nothing is executing. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal. 'not_executed' is a node a branch left out -- its guard was false or unknown, or every dependency of it was not executed. It never ran, and it is terminal.
  *
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "DagSnapshotNodeStatus".
@@ -38,7 +46,15 @@ export type DagSnapshotNodeStatus =
   | 'skipped'
   | 'cancelled'
   | 'interrupted'
-  | 'exception';
+  | 'exception'
+  | 'not_executed';
+/**
+ * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision that was never made. 'upstream_not_executed': every dependency of it in the graph was not executed.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DagNotExecutedReason".
+ */
+export type DagNotExecutedReason = 'when_false' | 'when_unknown' | 'upstream_not_executed';
 /**
  * Discriminated union of turn streaming events. The 'type' field is the discriminator.
  *
@@ -79,7 +95,7 @@ export type TurnEvent =
  */
 export type TaskKind = 'spawn' | 'dag';
 /**
- * A task's state, derived from its nodes' recorded states, first rule that matches: a run superseded by a replan that started is cancelled (one that did not start is failed); any failed node -> failed; any interrupted -> interrupted; any pending/running/exception -> running; any cancelled or skipped -> cancelled; else completed. A spawn is its one node's state.
+ * A task's state, derived from its nodes' recorded states, first rule that matches: a run superseded by a replan that started is cancelled (one that did not start is failed); any failed node -> failed; any interrupted -> interrupted; any pending/running/exception -> running; any cancelled or skipped -> cancelled; else completed. A spawn is its one node's state. A node a branch left out (not_executed) sits on none of these rungs: an unselected branch does not stop a run.
  *
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "TaskStatus".
@@ -1321,6 +1337,18 @@ export interface InstanceRow {
   agentId?: string;
   runId?: string;
   nodeId?: string;
+  /**
+   * Why the node did not execute. Present only on the dag-node row of a node that was not executed.
+   */
+  reason?: 'when_false' | 'when_unknown' | 'upstream_not_executed';
+  /**
+   * The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Present only on the row of a DAG node a branch decided: its dag-node row, or the ordinary row a stateful node is reported on.
+   */
+  selectedRoutes?: string[];
+  /**
+   * The judge's supporting quote for the selection, at most 500 characters. Present only when the judge gave one, and only on the row of a DAG node a branch decided: its dag-node row, or the ordinary row a stateful node is reported on.
+   */
+  routeEvidence?: string;
   createdAtMs?: number;
   updatedAtMs?: number;
   /**
@@ -1947,6 +1975,30 @@ export interface DagSnapshotNode {
   inputs?: {
     [k: string]: JsonValue;
   };
+  /**
+   * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision that was never made. 'upstream_not_executed': every dependency of it in the graph was not executed.
+   */
+  reason?: 'when_false' | 'when_unknown' | 'upstream_not_executed';
+  /**
+   * The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, and on one that failed to decide.
+   */
+  selected_routes?: string[];
+  /**
+   * The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none.
+   */
+  route_evidence?: string;
+  /**
+   * The route names a decision node chooses between, in declaration order; only the judge sees their conditions. Absent on a node that decides nothing.
+   */
+  routes?: string[];
+  /**
+   * How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.
+   */
+  select?: 'one' | 'many';
+  /**
+   * The guard: this node runs only if the expression holds once its dependencies settle. Absent on a node with no guard.
+   */
+  when?: string;
 }
 /**
  * One run rebuilt from its run dir. 'finalized' is false while it is still executing, in which case per-node state came from the instance registry overlay rather than a manifest.
@@ -1973,6 +2025,10 @@ export interface DagRunSnapshot {
     failed?: number;
     skipped?: number;
     cancelled?: number;
+    /**
+     * Nodes a branch left out. Present only when there is at least one, so a run that never branches carries the five counts it always did.
+     */
+    not_executed?: number;
   };
 }
 /**
@@ -1991,9 +2047,9 @@ export interface DagNodeDetail {
   output_chars: number;
   output_truncated: boolean;
   /**
-   * Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal.
+   * Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal. 'not_executed' is a node a branch left out -- its guard was false or unknown, or every dependency of it was not executed. It never ran, and it is terminal.
    */
-  status?: 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled' | 'exception';
+  status?: 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled' | 'exception' | 'not_executed';
   /**
    * Why the node failed. A failed node has no output, so without this it reads as unanswered.
    */
@@ -2042,6 +2098,18 @@ export interface DagRunStartedEvent {
        * One line, for the user, on what this node was asked to do. Absent on a run that predates the field.
        */
       node_summary?: string;
+      /**
+       * The route names a decision node chooses between, in declaration order; only the judge sees their conditions. Absent on a node that decides nothing.
+       */
+      routes?: string[];
+      /**
+       * How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.
+       */
+      select?: 'one' | 'many';
+      /**
+       * The guard: this node runs only if the expression holds once its dependencies settle. Absent on a node with no guard.
+       */
+      when?: string;
     }[];
   };
 }
@@ -2072,6 +2140,18 @@ export interface DagNodeUpdatedEvent {
     status: DagNodeStatus;
     started_at?: number;
     ended_at?: number;
+    /**
+     * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision that was never made. 'upstream_not_executed': every dependency of it in the graph was not executed.
+     */
+    reason?: 'when_false' | 'when_unknown' | 'upstream_not_executed';
+    /**
+     * The routes a decision node selected, on the frame that finishes it. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on every other frame, and when the node failed to decide.
+     */
+    selected_routes?: string[];
+    /**
+     * The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none.
+     */
+    route_evidence?: string;
   };
 }
 /**
@@ -2135,12 +2215,28 @@ export interface DagRunCompletedEvent {
       failed?: number;
       skipped?: number;
       cancelled?: number;
+      /**
+       * Nodes a branch left out. Present only when there is at least one, so a run that never branches carries the five counts it always did.
+       */
+      not_executed?: number;
     };
     files: {
       node: string;
       status: DagNodeStatus;
       output_file?: string;
       error?: string;
+      /**
+       * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision that was never made. 'upstream_not_executed': every dependency of it in the graph was not executed.
+       */
+      reason?: 'when_false' | 'when_unknown' | 'upstream_not_executed';
+      /**
+       * The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, and on one that failed to decide.
+       */
+      selected_routes?: string[];
+      /**
+       * The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none.
+       */
+      route_evidence?: string;
     }[];
   };
 }
@@ -2466,7 +2562,7 @@ export interface PlaybookParam {
  * be empty: those three are the fields an author may leave blank for the
  * caller to fill at run time. ``skills`` / ``mcps`` are three-state -- null
  * means the author said nothing, ``[]`` means the author wrote an empty list,
- * and a list names what to consider.
+ * and a list names what to consider. ``routes`` / ``select`` / ``when`` declare a branch and are absent unless the author wrote them.
  *
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "PlaybookNode".
@@ -2483,6 +2579,20 @@ export interface PlaybookNode {
   inputs: {
     [k: string]: JsonValue;
   };
+  /**
+   * Makes this node a decision: route name -> the condition, in plain words, under which its answer selects that route. Kept whole, because re-running the graph judges against the conditions.
+   */
+  routes?: {
+    [k: string]: string;
+  };
+  /**
+   * How many routes the decision selects, as the author wrote it. Absent means 'one'.
+   */
+  select?: 'one' | 'many';
+  /**
+   * The guard, as the author wrote it: this node runs only if it holds once its dependencies settle.
+   */
+  when?: string;
 }
 /**
  * One whole playbook: its identity, its runtime inputs, and the shape it runs as -- the graph (``mode: dag``), the assembly guidance a model turns into one (``mode: prompt``), or the roles and stopping rules of a multi-round run (``mode: stint``, under ``rounds``). ``path`` is the file this was read from.
@@ -2647,7 +2757,7 @@ export interface OkResult {
   ok: boolean;
 }
 /**
- * How many of the task's nodes sit in each state. Counted from graph.json, so skipped nodes are counted too.
+ * How many of the task's nodes sit in each state. Counted from graph.json, so skipped and not_executed nodes are counted too.
  *
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "TaskCounts".
@@ -2665,6 +2775,10 @@ export interface TaskCounts {
    * Nodes suspended on a verdict, waiting for resolve_dag_node. A running row with one of these is waiting on a decision, not working.
    */
   exception: number;
+  /**
+   * Nodes a branch left out. They never ran, and an unselected branch does not move the task's status: a run of completed and not_executed nodes is completed.
+   */
+  not_executed: number;
 }
 /**
  * Present only on a run a replan superseded, read from graph.json's top-level replan entry. started=false means the successor never began; error says why.
@@ -2773,6 +2887,30 @@ export interface TaskNode {
    * Same three-valued reading as skills.
    */
   mcps?: string[];
+  /**
+   * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision that was never made. 'upstream_not_executed': every dependency of it in the graph was not executed.
+   */
+  reason?: 'when_false' | 'when_unknown' | 'upstream_not_executed';
+  /**
+   * The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, and on one that failed to decide.
+   */
+  selected_routes?: string[];
+  /**
+   * The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none.
+   */
+  route_evidence?: string;
+  /**
+   * The route names a decision node chooses between, in declaration order; only the judge sees their conditions. Absent on a node that decides nothing.
+   */
+  routes?: string[];
+  /**
+   * How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.
+   */
+  select?: 'one' | 'many';
+  /**
+   * The guard: this node runs only if the expression holds once its dependencies settle. Absent on a node with no guard.
+   */
+  when?: string;
   files: TaskFile[];
 }
 /**

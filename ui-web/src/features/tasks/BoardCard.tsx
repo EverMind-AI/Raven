@@ -41,6 +41,17 @@ const SPOKES = [
   'M6.7 6.7l2.1 2.1', 'M15.2 15.2l2.1 2.1', 'M6.7 17.3l2.1-2.1', 'M15.2 8.8l2.1-2.1',
 ]
 
+/* The dotted circle a node a branch left out wears: twelve round dots on a circle's path, which is
+   a dashed stroke whose dashes are as long as the cap is wide. */
+function NotExecutedIcon(): JSX.Element {
+  return (
+    <svg className="tkrunicon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"
+      strokeLinecap="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="7.5" strokeDasharray="0.01 3.916" />
+    </svg>
+  )
+}
+
 function SpinIcon(): JSX.Element {
   return (
     <svg className="tkrunicon tkrunspin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
@@ -75,20 +86,42 @@ function Cluster({ node, now }: { node: DagNode; now: number }): JSX.Element {
     const dur = span(node.started_at, node.ended_at)
     return <span className="tkrunrt">{dur ? `${t('gui.tasks.node_st_failed')} ${dur}` : t('gui.tasks.node_st_failed')}</span>
   }
+  if (node.status === 'not_executed') {
+    return <span className="tkrunrt"><NotExecutedIcon />{t('gui.tasks.node_st_not_executed')}</span>
+  }
   const key = RT_WORD_KEY[node.status]
   return <span className="tkrunrt">{key ? t(key) : node.status}</span>
 }
 
+/* What a decision selected, as it reads after its status: an arrow and the route names, or the word
+   for none when the selection is empty. Absent means it has not decided, which is not the same as
+   deciding on nothing -- hence `undefined` and not length. */
+export function selectionText(selected: readonly string[] | undefined): string {
+  if (selected === undefined) return ''
+  return '\u2192 ' + (selected.length ? selected.join(', ') : t('gui.tasks.node_sel_none'))
+}
+
 export function BoardCard({ node, now }: { node: DagNode; now: number }): JSX.Element {
+  const chosen = selectionText(node.selected_routes)
+  const title = node.node_summary || node.id
+  const cluster = <Cluster node={node} now={now} />
+  /* The word of a node a branch left out is the longest of any status, wider than the room both lines
+     of every title keep for the cluster in the corner. The cluster stays in that corner, where no box
+     clips it, and a hidden copy of it floats inside the title for the lines to flow around: the first
+     line gives way to exactly as much as the word needs, in whichever language it is said, and the
+     second line keeps its whole width. The copy sits in a bare span because the clamping box cannot
+     be the one that holds a float. */
+  const leftOut = node.status === 'not_executed'
   return (
     <div className="tkrun">
-      <span className="tkrunl1">{node.node_summary || node.id}</span>
+      <span className="tkrunl1">{leftOut ? <span><span className="tkrunsp" aria-hidden="true">{cluster}</span>{title}</span> : title}</span>
       <span className="tkrunl2">
         <span className="tkrunag">{node.subagent}</span>
         {node.instance ? <span className="tkrunhandle">{'@' + node.instance}</span> : null}
         {node.tool_call_count ? <span className="tkrunchip">{t('gui.tasks.tools_n', { n: node.tool_call_count })}</span> : null}
+        {chosen ? <span className="tkrunsel" title={chosen}>{chosen}</span> : null}
       </span>
-      <Cluster node={node} now={now} />
+      {cluster}
     </div>
   )
 }

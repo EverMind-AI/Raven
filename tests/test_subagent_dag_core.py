@@ -7,8 +7,11 @@ render/store are exercised over a tiny in-memory duck-typed backend.
 from __future__ import annotations
 
 import json
+import pathlib
 import posixpath
+import re
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -17,7 +20,12 @@ from raven.agent.loop.bundles import SubagentWiring, ToolWiring, TurnPolicy
 from raven.agent.subagent.dag_capabilities import validate_capabilities
 from raven.agent.subagent.dag_graph import collect_static_graph_errors, parse_dag_spec, validate_and_order
 from raven.agent.subagent.dag_reader import DagReadError, read_node, read_run
-from raven.agent.subagent.dag_render import render_prompt
+from raven.agent.subagent.dag_render import (
+    MAYBE_MISSING_HEADING,
+    MISSING_OUTPUT_TEXT,
+    _upstream_memory_lines,
+    render_prompt,
+)
 from raven.agent.subagent.dag_store import DagRunStore, SessionNodes, make_run_id
 from raven.agent.subagent.dag_tool import _NODE_SCHEMA
 from raven.agent.subagent.prompt_backend import LocalFileBackend
@@ -26,6 +34,7 @@ from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.agent.subagent.prompt_paths import check_confined, split_reference
 from raven.agent.subagent.prompt_placeholders import parse_placeholders
 from raven.config.schema import ThirdPartyCliSubagentConfig
+from raven.security.trust import wrap_untrusted
 
 if TYPE_CHECKING:
     from raven.agent.subagent.dag_tool import SubAgentDagTool
@@ -734,6 +743,30 @@ def test_a_node_artifact_path_needs_no_run_id() -> None:
     assert output_path_in(be, "/hist/nodes", "market_scan") == "/hist/nodes/market_scan.out.md"
     assert memory_path_in(be, "/hist/nodes", "market_scan") == "/hist/nodes/market_scan.memory.json"
     assert nodes_root(Path("/sess")) == Path("/sess/subagents/nodes")
+
+
+def test_a_tally_counts_not_executed_only_when_a_node_is_in_it() -> None:
+    """A run without branches carries exactly five keys, in a fixed order; `not_executed` comes last when present."""
+    from raven.agent.subagent.dag_store import tally_node_statuses
+
+    plain = tally_node_statuses(["completed", "failed", "skipped", "cancelled", "exception"])
+    assert plain == {"total": 5, "completed": 1, "failed": 1, "skipped": 1, "cancelled": 1}
+    assert list(plain) == ["total", "completed", "failed", "skipped", "cancelled"]
+    branching = tally_node_statuses(iter(["completed", "not_executed", "not_executed"]))
+    assert branching == {"total": 3, "completed": 1, "failed": 0, "skipped": 0, "cancelled": 0, "not_executed": 2}
+    assert list(branching)[-1] == "not_executed"
+
+
+def test_the_tally_line_names_not_executed_only_when_there_is_one() -> None:
+    from raven.agent.subagent.dag_store import format_tally
+
+    assert format_tally({"total": 2, "completed": 2, "failed": 0, "skipped": 0, "cancelled": 0}) == (
+        "2 completed, 0 failed, 0 cancelled, 0 skipped (of 2)"
+    )
+    assert format_tally({"total": 7, "completed": 3, "failed": 1, "skipped": 0, "cancelled": 0, "not_executed": 3}) == (
+        "3 completed, 1 failed, 0 cancelled, 0 skipped, 3 not executed (of 7)"
+    )
+    assert format_tally({}) == "0 completed, 0 failed, 0 cancelled, 0 skipped (of 0)"
 
 
 # --- reader ---------------------------------------------------------------
@@ -1765,6 +1798,9 @@ def test_the_model_is_not_offered_skills_or_mcps() -> None:
     model directly. Asserted on the advertised schema rather than on the model,
     since that is the half a re-addition would show up in.
     """
+    # `routes`, `select` and `when` are the exception and the next test's subject:
+    # a node's branch fields have to be writable, since the schema is the only way
+    # a model can put one in a graph.
     assert set(_NODE_SCHEMA["properties"]) == {
         "id",
         "subagent",
@@ -1773,6 +1809,9 @@ def test_the_model_is_not_offered_skills_or_mcps() -> None:
         "depends_on",
         "inputs",
         "instance",
+        "routes",
+        "select",
+        "when",
     }
     # Still parseable, so a playbook's own nodes[] survives the round trip.
     spec = parse_dag_spec(
@@ -1782,6 +1821,145 @@ def test_the_model_is_not_offered_skills_or_mcps() -> None:
         }
     )
     assert spec.nodes[0].skills == ["s"]
+
+
+def test_the_node_schema_declares_the_three_branch_fields() -> None:
+    """The advertised schema is the only way a model writes a branch.
+
+    Each property is pinned to its shape and to the rules the validator enforces,
+    not just to its presence: a route name's charset, its reserved `done` and its
+    case rule, the route count each `select` needs, the enum, and the guard's atoms,
+    operators and depends_on rule. None is required: a graph that uses no branch
+    writes none of them.
+    """
+    properties = _NODE_SCHEMA["properties"]
+    assert not {"routes", "select", "when"} & set(_NODE_SCHEMA["required"])
+
+    assert properties["routes"]["type"] == "object"
+    assert properties["routes"]["additionalProperties"] == {"type": "string"}
+    routes_doc = properties["routes"]["description"]
+    assert "Raven's judge picks from its answer" in routes_doc
+    assert "nothing the node writes selects a route by itself" in routes_doc
+    assert '[A-Za-z0-9_-], not "done", and no two differing only in case' in routes_doc
+    # The count each `select` needs, stated against the select value that needs it.
+    assert 'two or more for "one", one or more for "many"' in routes_doc
+
+    assert properties["select"]["type"] == "string"
+    assert properties["select"]["enum"] == ["one", "many"]
+    select_doc = properties["select"]["description"]
+    assert '"one" (the default) -- exactly one' in select_doc
+    assert '"many" -- any number, including none' in select_doc
+    assert "Only on a node that declares routes" in select_doc
+
+    assert properties["when"]["type"] == "string"
+    when_doc = properties["when"]["description"]
+    assert "Atoms <node>.<route> and <node>.done" in when_doc
+    assert "not, and, or and parentheses" in when_doc
+    # `r.a AND r.b` does not parse, and `r.a or r.b and r.c` reads as `r.a or (r.b and r.c)`:
+    # the keywords are lowercase, and the guide body gives precedence in full.
+    assert "the keywords are lowercase" in when_doc
+    assert "Every decision node in depends_on must appear here" in when_doc
+    # The rule is that the decision node appears, not that `.done` will do: `.done` holds
+    # whichever route was selected, which is right for a merge and wrong for a branch node.
+    # Both readings of the old branch-half sentence are pinned out, since either one lets
+    # a branch node ride whichever route won.
+    assert "if it runs whichever route is selected" not in when_doc
+    assert "whose route does not matter" not in when_doc
+
+
+def test_the_when_description_says_which_nodes_of_a_branch_need_its_route() -> None:
+    """A node is left out with a branch only when every dependency it has in the graph
+    was left out. A node of the branch that also depends on something outside it --
+    the decision node itself included -- runs on the route not taken unless its own
+    guard names the route, so the schema may not tell the model that the entry's guard
+    covers it. The rule is the branch's own: a merge node meant to run on every route,
+    like the guide's `reply`, keeps `<node>.done`, and unscoped the rule would forbid it."""
+    when_doc = _NODE_SCHEMA["properties"]["when"]["description"]
+
+    assert "A branch node needs no guard beyond naming any decision node it depends on" in when_doc
+    assert (
+        "a node of the branch that also depends on something outside it, the decision node included, needs "
+        "the branch's route, not <node>.done"
+    ) in when_doc
+    assert "A merge node that should run on every route keeps <node>.done." in when_doc
+    assert "one that also depends on a node outside the branch" not in when_doc
+    assert "Only a branch's first node needs a guard" not in when_doc
+
+
+def _guide_text() -> str:
+    """The orchestration guide's own words, for rules that now live only there."""
+    import raven as raven_pkg
+
+    return (
+        pathlib.Path(raven_pkg.__file__).parent / "memory_engine/skills/subagent-dag-orchestration/SKILL.md"
+    ).read_text()
+
+
+def test_the_guide_gives_the_operator_precedence_the_schema_leaves_to_it() -> None:
+    """The schema states the operators and their lowercase spelling; the binding order
+    (`not` > `and` > `or`, so `r.a or r.b and r.c` reads as `r.a or (r.b and r.c)`) is
+    in the guide. A model that assumed left-to-right would read the same guard the other
+    way, so the rule keeps a pin wherever it is stated."""
+    guide = _guide_text()
+
+    assert "`not` binds tightest, then `and`, then `or`" in guide
+
+
+def test_the_guide_says_a_false_or_unknown_guard_leaves_the_node_not_executed() -> None:
+    """`not_executed` covers both a guard that came out false and one that came out
+    unknown, and the two reasons are distinguishable in the manifest. Unknown is not
+    false -- an atom naming a route of a decision that never ran is unknown, not
+    false -- so a guard `not risk.high` does not run the node when risk was never
+    judged, and the reason says which happened."""
+    guide = _guide_text()
+
+    assert "False leaves it **not executed** with the reason" in guide
+    assert "`when_false`" in guide
+    assert "unknown leaves it not executed with `when_unknown`" in guide
+    assert "Unknown is not false" in guide
+
+
+def test_the_prompt_template_description_says_a_missing_output_has_a_stand_in() -> None:
+    """A merge step reads one sentence where a branch's node was never run, and a
+    `ref:@nodes/` path to a node that may not run is refused.
+
+    Both are facts the graph's author has to design around: the first is the text
+    the dependent actually receives, and the second is a refusal it earns at
+    submission.
+    """
+    described = _NODE_SCHEMA["properties"]["prompt_template"]["description"]
+
+    assert MISSING_OUTPUT_TEXT in described
+    assert "write one titled block per output that may be missing" in described
+    assert "rather than a ref:@nodes/ path, which is refused" in described
+    # What "may not run" covers, which is what the refusal reads: `.done` counts, even
+    # though it holds whichever route is selected.
+    assert "A node may not run with a when of its own (<node>.done included)" in described
+    assert "in-graph dependencies all may not run" in described
+
+
+def test_the_stand_in_is_promised_only_for_a_node_of_the_same_graph() -> None:
+    """The fixed sentence stands in only for a node of the graph being submitted. A
+    node an earlier run did not execute is refused like one that failed, so the
+    schema, the guide and the glossary list it with the refused ones rather than
+    promising the sentence."""
+    described = _NODE_SCHEMA["properties"]["prompt_template"]["description"]
+
+    assert "failed, skipped, cancelled, not-executed or still-running one is refused, saying which" in described
+    assert "A node of this graph that was not executed (see when) leaves no output file" in described
+    assert "A node that was not executed (see when)" not in described
+
+    earlier = _flat(_heading_span(_repo_text(_SKILL), "### Reading a task this conversation already finished"))
+    assert "One that failed, was cancelled, was skipped, was not executed, or is still running keeps its id" in earlier
+
+    glossary = _repo_text("CONTEXT.md")
+    template = _flat(_glossary_entry(glossary, "**Prompt template**"))
+    assert (
+        "a node that failed, was skipped, was cancelled, was not executed or is still running is refused with "
+        "which of those it was"
+    ) in template
+    node_id = _flat(_glossary_entry(glossary, "**Node id**"))
+    assert "A failed, skipped, cancelled, not-executed or still-running one" in node_id
 
 
 # --- upstream memory records appended to a node's prompt ---------------------
@@ -1941,7 +2119,6 @@ def test_subagent_dag_config_defaults():
     from raven.config.raven import RavenConfig
 
     cfg = RavenConfig().subagent_dag
-    assert cfg.verdict_enabled is True
     assert cfg.verdict_model is None
     assert cfg.verdict_timeout_seconds == 180.0
     assert cfg.evidence_budget_chars == 8000
@@ -1976,7 +2153,6 @@ def test_dag_tool_without_a_provider_still_builds(tmp_path):
 
     tool = SubAgentDagTool(workspace=tmp_path)
     assert tool._provider_for is None
-    assert tool._verdict_config.verdict_enabled is True
 
 
 async def test_the_judge_resolves_its_provider_at_dispatch_not_at_construction(tmp_path):
@@ -2175,7 +2351,7 @@ def test_every_state_unreadable_answers_gets_a_sentence_of_its_own() -> None:
     present and the loss as what replanning would do, which is what the assertion
     below pins -- describing a replacement as done would be false every time.
 
-    The five settled states are the control. They are asserted here too, so a
+    The six settled states are the control. They are asserted here too, so a
     regression that flattens this function into one message cannot pass by
     answering only the two new ones.
     """
@@ -2192,6 +2368,7 @@ def test_every_state_unreadable_answers_gets_a_sentence_of_its_own() -> None:
     assert "stopped mid-run" in refusal("cancelled")
     assert "has not finished writing" in refusal("running")
     assert "recorded no outcome" in refusal("unrecorded")
+    assert "did not execute" in refusal("not_executed")
 
     # Redo, not wait: a replan that lands discards the run these two belong to,
     # so its remaining nodes never produce anything -- which is why they must not
@@ -2692,3 +2869,1950 @@ async def test_an_addressed_run_is_validated_against_the_conversation_it_names(t
         task_summary="probe",
     )
     assert asked[:1] == [None], "an unaddressed run still reads the turn's own registry"
+
+
+# --- branches: routes, select and when ---------------------------------------
+
+
+def _branch_node(**over: object) -> dict:
+    """A schema-valid node dict; keyword arguments override or add fields."""
+    base: dict = {"id": "n", "subagent": "x", "node_summary": "s", "prompt_template": "p"}
+    base.update(over)
+    return base
+
+
+def _decision(node_id: str = "r", **over: object) -> dict:
+    """A decision node with two routes, `a` and `b`."""
+    return _branch_node(id=node_id, routes={"a": "the first holds", "b": "the second holds"}, **over)
+
+
+def _branch_nodes(nodes: list[dict]) -> list:
+    return parse_dag_spec({"task_summary": "g", "nodes": nodes}).nodes
+
+
+# What a session knows once an earlier run has completed a node called `old`.
+_EARLIER_RUN_NODES = SessionNodes(state={"old": "completed"}, owner={"old": "r0"}, has_output={"old": True})
+
+
+def _branch_graph(nodes: list[dict], *, session_nodes: SessionNodes | None = None) -> list[str]:
+    return collect_static_graph_errors(_branch_nodes(nodes), session_nodes=session_nodes)
+
+
+def test_a_node_spec_carries_routes_select_and_when_and_defaults_them_off() -> None:
+    plain = _branch_nodes([_branch_node(id="a")])[0]
+    assert (plain.routes, plain.select, plain.when) == (None, None, None)
+    decision = _branch_nodes([_branch_node(id="r", select="many", routes={"a": "x"}, when="p.q")])[0]
+    assert (decision.routes, decision.select, decision.when) == ({"a": "x"}, "many", "p.q")
+
+
+def test_a_plain_node_dumps_without_the_branch_fields() -> None:
+    """A graph that uses no branch persists the same bytes as before the fields existed.
+
+    Playbook files and run records dump nodes with `exclude_none=True`, so a default of
+    `""` for `when` would have added a `"when": ""` key to every node of every graph.
+    """
+    keys = {"routes", "select", "when"}
+    plain = _branch_nodes([_branch_node(id="a")])[0]
+    assert not keys & set(plain.model_dump(exclude_none=True, by_alias=True))
+    branching = _branch_nodes([_branch_node(id="r", select="many", routes={"a": "x"}, when="p.q")])[0]
+    assert keys <= set(branching.model_dump(exclude_none=True, by_alias=True))
+
+
+@pytest.mark.parametrize("when", [None, "", "   "])
+def test_an_unset_or_blank_when_means_no_guard(when: str | None) -> None:
+    from raven.agent.subagent.dag_graph import guards_of, may_not_execute
+
+    nodes = _branch_nodes([_branch_node(id="a", when=when), _branch_node(id="b", depends_on=["a"], when=when)])
+    assert guards_of(nodes) == {}
+    assert may_not_execute(nodes, {n.id: n for n in nodes}) == frozenset()
+    assert collect_static_graph_errors(nodes) == []
+
+
+def test_select_accepts_only_one_or_many() -> None:
+    for value in ("one", "many"):
+        node = _branch_nodes([_branch_node(id="r", select=value, routes={"a": "x", "b": "y"})])[0]
+        assert node.select == value
+    with pytest.raises(DagValidationError):
+        _branch_nodes([_branch_node(id="r", select="some", routes={"a": "x", "b": "y"})])
+
+
+def test_a_decision_node_needs_two_routes_for_one_and_one_for_many() -> None:
+    one = _branch_graph([_branch_node(id="r", routes={"a": "cond a"})])
+    assert one == ["node 'r' declares 1 route(s); a decision node with select 'one' needs at least two routes"]
+    assert _branch_graph([_branch_node(id="r", select="many", routes={"a": "cond a"})]) == []
+    empty = _branch_graph([_branch_node(id="r", select="many", routes={})])
+    assert empty == ["node 'r' declares 0 route(s); a decision node with select 'many' needs at least one route"]
+
+
+@pytest.mark.parametrize("name", ["done", "Done", "DONE"])
+def test_a_route_named_done_is_reserved_in_any_letter_case(name: str) -> None:
+    """`r.Done` would sit one letter case away from `r.done`, which means the node settled;
+    the refusal names the spelling the author wrote."""
+    errors = _branch_graph([_branch_node(id="r", routes={name: "x", "b": "y"})])
+    assert errors == [
+        f"node 'r': '{name}' is reserved as a route name -- it means the node settled, whatever it selected"
+    ]
+
+
+def test_a_route_name_must_use_the_node_id_charset() -> None:
+    errors = _branch_graph([_branch_node(id="r", routes={"a b": "x", "c": "y"})])
+    assert any("route name" in e for e in errors)
+    trailing_newline = _branch_graph([_branch_node(id="r", routes={"a\n": "x", "c": "y"})])
+    assert any("route name" in e for e in trailing_newline)
+
+
+@pytest.mark.parametrize(
+    "routes",
+    [{"Bug": "x", "bug": "y"}, {"bug": "x", "Bug": "y"}],
+    ids=["capitalised_first", "lowercase_first"],
+)
+def test_two_route_names_of_one_node_may_not_differ_only_in_case(routes: dict[str, str]) -> None:
+    """Whichever of the two is declared first: the collision is between the names, not their order."""
+    errors = _branch_graph([_branch_node(id="r", routes=routes)])
+    assert len(errors) == 1 and "differ only in case" in errors[0]
+
+
+def test_a_route_condition_cannot_be_blank() -> None:
+    errors = _branch_graph([_branch_node(id="r", routes={"a": "  ", "b": "y"})])
+    assert len(errors) == 1 and "condition" in errors[0]
+
+
+def test_select_without_routes_is_refused() -> None:
+    errors = _branch_graph([_branch_node(id="n", select="one")])
+    assert any("select" in e and "routes" in e for e in errors)
+
+
+def test_a_guarded_node_may_name_a_decision_it_depends_on() -> None:
+    assert _branch_graph([_decision(), _branch_node(id="g", depends_on=["r"], when="r.a")]) == []
+
+
+def test_a_node_may_be_both_a_decision_and_guarded() -> None:
+    errors = _branch_graph(
+        [
+            _decision(),
+            _decision("r2", depends_on=["r"], when="r.a"),
+            _branch_node(id="g", depends_on=["r2"], when="r2.b"),
+        ]
+    )
+    assert errors == []
+
+
+def test_a_triage_graph_with_two_decisions_and_a_guarded_merge_is_accepted() -> None:
+    errors = _branch_graph(
+        [
+            _branch_node(
+                id="triage",
+                routes={"bug": "a defect", "feature": "new behaviour", "question": "no change needed"},
+            ),
+            _branch_node(id="risk", routes={"high": "touches auth or billing", "low": "touches neither"}),
+            _branch_node(id="fix", depends_on=["triage"], when="triage.bug"),
+            _branch_node(id="design", depends_on=["triage"], when="triage.feature"),
+            _branch_node(
+                id="deep_review",
+                depends_on=["triage", "risk", "fix", "design"],
+                when="(triage.bug or triage.feature) and risk.high",
+            ),
+            _branch_node(
+                id="reply",
+                depends_on=["triage", "fix", "design"],
+                when="triage.done",
+                prompt_template="## Fix\n{{ fix.output }}\n\n## Design\n{{ design.output }}",
+            ),
+        ]
+    )
+    assert errors == []
+
+
+def test_a_guard_naming_a_node_outside_depends_on_is_refused() -> None:
+    errors = _branch_graph([_decision(), _branch_node(id="g", when="r.a")])
+    assert len(errors) == 1 and "depends_on" in errors[0]
+
+
+def test_a_guard_naming_no_node_of_this_graph_says_so_first() -> None:
+    """Neither dependency nor graph holds the name, and the earlier-run cause is the
+    one to report: an author sent to fix depends_on would be fixing the wrong half."""
+    errors = _branch_graph([_branch_node(id="g", when="old.risky")])
+    assert errors == [
+        "node 'g' guard names 'old', which is not a node of this graph -- the routes of an earlier run are not "
+        "recorded, so name a decision node of this graph"
+    ]
+
+
+def test_a_node_of_this_graph_missing_from_depends_on_is_reported_as_that() -> None:
+    errors = _branch_graph([_decision(), _branch_node(id="g", when="r.a")])
+    assert errors == ["node 'g' guard names 'r', which is not in its depends_on -- a guard may only read a dependency"]
+
+
+def test_a_node_id_spelled_like_a_keyword_can_be_guarded_on() -> None:
+    """`not` is a legal node id, so a graph may name it -- and guard a dependent on it."""
+    errors = _branch_graph(
+        [
+            _decision("not"),
+            _branch_node(id="g", depends_on=["not"], when="not.a"),
+        ]
+    )
+    assert errors == []
+
+
+def test_a_node_named_by_several_atoms_is_reported_once() -> None:
+    errors = _branch_graph([_decision(), _branch_node(id="g", when="r.a or r.b or r.done")])
+    assert len(errors) == 1 and "depends_on" in errors[0]
+
+
+def test_an_undeclared_route_written_twice_is_reported_once() -> None:
+    errors = _branch_graph([_decision(), _branch_node(id="g", depends_on=["r"], when="r.c or r.c")])
+    assert len(errors) == 1 and "'c'" in errors[0]
+
+
+def test_a_guard_naming_an_undeclared_route_is_refused() -> None:
+    errors = _branch_graph([_decision(), _branch_node(id="g", depends_on=["r"], when="r.c")])
+    assert len(errors) == 1 and "'c'" in errors[0]
+
+
+def test_an_undeclared_route_refusal_lists_the_declared_routes_in_name_order() -> None:
+    errors = _branch_graph(
+        [
+            _branch_node(id="r", routes={"zeta": "z holds", "alpha": "a holds"}),
+            _branch_node(id="g", depends_on=["r"], when="r.c"),
+        ]
+    )
+    assert errors == ["node 'g' guard names route 'c', which node 'r' does not declare (it declares: alpha, zeta)"]
+
+
+def test_a_guard_naming_a_node_with_no_routes_is_refused() -> None:
+    errors = _branch_graph([_branch_node(id="plain"), _branch_node(id="g", depends_on=["plain"], when="plain.a")])
+    assert len(errors) == 1 and "declares no 'routes'" in errors[0]
+
+
+def test_a_decision_node_in_depends_on_must_appear_in_when() -> None:
+    """The refusal offers the route first. `.done` is only for a node that runs
+    whichever route is selected: offered alone, it steers a node that belongs to one
+    branch onto every route, where it reads the fixed sentence for that branch."""
+    errors = _branch_graph([_decision(), _branch_node(id="g", depends_on=["r"])])
+    assert errors == [
+        "node 'g' depends on decision node 'r', which must appear in when -- "
+        "write 'r.<route>' for the route(s) it runs on, or 'r.done' if it runs whichever route is selected"
+    ]
+
+
+def test_a_decision_node_that_depends_on_another_decision_must_name_it_in_when() -> None:
+    """A nested decision is bound like any other node: it says which route of its parent it wants."""
+    errors = _branch_graph([_decision(), _decision("r2", depends_on=["r"])])
+    assert errors == [
+        "node 'r2' depends on decision node 'r', which must appear in when -- "
+        "write 'r.<route>' for the route(s) it runs on, or 'r.done' if it runs whichever route is selected"
+    ]
+
+
+def test_a_guard_naming_one_decision_does_not_excuse_another_the_node_depends_on() -> None:
+    errors = _branch_graph(
+        [
+            _decision(),
+            _decision("s"),
+            _branch_node(id="g", depends_on=["r", "s"], when="r.a"),
+        ]
+    )
+    assert errors == [
+        "node 'g' depends on decision node 's', which must appear in when -- "
+        "write 's.<route>' for the route(s) it runs on, or 's.done' if it runs whichever route is selected"
+    ]
+
+
+def test_a_guarded_decision_depending_on_another_must_still_name_it() -> None:
+    """`r2` has a guard of its own, and that does not stand in for naming `r`: the
+    guard on `r2` is read only once `r` settles, so it cannot say which route."""
+    errors = _branch_graph(
+        [
+            _decision(),
+            _decision("r2", depends_on=["r"], when="r.a"),
+            _branch_node(id="g", depends_on=["r2"]),
+        ]
+    )
+    assert errors == [
+        "node 'g' depends on decision node 'r2', which must appear in when -- "
+        "write 'r2.<route>' for the route(s) it runs on, or 'r2.done' if it runs whichever route is selected"
+    ]
+
+
+def test_a_decision_depending_on_a_plain_node_must_still_be_named() -> None:
+    """`r2` needs no guard of its own -- `p` decides nothing -- but a node that
+    depends on `r2` still has to say which of its routes it runs on."""
+    errors = _branch_graph(
+        [
+            _branch_node(id="p"),
+            _decision("r2", depends_on=["p"]),
+            _branch_node(id="g", depends_on=["r2"]),
+        ]
+    )
+    assert errors == [
+        "node 'g' depends on decision node 'r2', which must appear in when -- "
+        "write 'r2.<route>' for the route(s) it runs on, or 'r2.done' if it runs whichever route is selected"
+    ]
+
+
+def test_a_node_that_declines_the_route_and_names_the_decision_is_allowed() -> None:
+    """Naming the decision is the whole obligation: `.done` is a node that runs on
+    every route, and it is accepted however the decision itself is guarded."""
+    assert (
+        _branch_graph(
+            [
+                _decision(),
+                _decision("r2", depends_on=["r"], when="r.a"),
+                _branch_node(id="g", depends_on=["r2"], when="r2.done"),
+            ]
+        )
+        == []
+    )
+
+
+def test_several_unnamed_decisions_are_reported_in_name_order() -> None:
+    """`validate_and_order` raises the first error, so the order must not follow the hash seed."""
+    decisions = [_decision(name) for name in ("d1", "d2", "d3", "d4", "d5")]
+    errors = _branch_graph([*decisions, _branch_node(id="g", depends_on=["d5", "d3", "d1", "d4", "d2"])])
+    assert errors == [
+        f"node 'g' depends on decision node '{name}', which must appear in when -- "
+        f"write '{name}.<route>' for the route(s) it runs on, or '{name}.done' if it runs whichever route is selected"
+        for name in ("d1", "d2", "d3", "d4", "d5")
+    ]
+
+
+def test_a_done_atom_satisfies_the_must_appear_rule() -> None:
+    assert _branch_graph([_decision(), _branch_node(id="g", depends_on=["r"], when="r.done")]) == []
+
+
+def test_two_routes_of_one_single_select_node_in_one_and_chain_is_refused() -> None:
+    errors = _branch_graph([_decision(), _branch_node(id="g", depends_on=["r"], when="r.a and r.b")])
+    assert len(errors) == 1 and "can never be true" in errors[0]
+
+
+def test_a_clash_among_several_routes_lists_them_in_name_order() -> None:
+    routes = {name: f"{name} holds" for name in "abcde"}
+    errors = _branch_graph(
+        [
+            _branch_node(id="r", routes=routes),
+            _branch_node(id="g", depends_on=["r"], when="r.e and r.c and r.a and r.d and r.b"),
+        ]
+    )
+    assert errors == [
+        "node 'g' guard requires ['a', 'b', 'c', 'd', 'e'] of single-select node 'r' at once, which can never be true"
+    ]
+
+
+def test_the_same_two_routes_under_an_or_are_fine() -> None:
+    assert _branch_graph([_decision(), _branch_node(id="g", depends_on=["r"], when="r.a or r.b")]) == []
+
+
+def test_two_routes_of_a_multi_select_node_may_both_hold() -> None:
+    errors = _branch_graph([_decision(select="many"), _branch_node(id="g", depends_on=["r"], when="r.a and r.b")])
+    assert errors == []
+
+
+def test_a_right_nested_and_chain_is_flattened_before_the_check() -> None:
+    errors = _branch_graph(
+        [
+            _decision(),
+            _branch_node(id="x", routes={"y": "y holds", "z": "z holds"}),
+            _branch_node(id="g", depends_on=["r", "x"], when="r.a and (x.y and r.b)"),
+        ]
+    )
+    assert len(errors) == 1 and "can never be true" in errors[0] and "'r'" in errors[0]
+
+
+def test_a_negated_and_chain_cannot_make_the_guard_impossible() -> None:
+    errors = _branch_graph([_decision(), _branch_node(id="g", depends_on=["r"], when="not (r.a and r.b)")])
+    assert errors == []
+
+
+def test_done_beside_a_route_of_the_same_node_is_satisfiable() -> None:
+    """`done` is not a route, so `r.a and r.done` holds whenever `r` selects `a`."""
+    errors = _branch_graph([_decision(), _branch_node(id="g", depends_on=["r"], when="r.a and r.done")])
+    assert errors == []
+
+
+def test_an_undeclared_route_is_not_also_reported_as_a_clash() -> None:
+    errors = _branch_graph([_decision(), _branch_node(id="g", depends_on=["r"], when="r.a and r.c")])
+    assert len(errors) == 1 and "'c'" in errors[0] and "never be true" not in errors[0]
+
+
+def test_not_done_can_never_be_true() -> None:
+    errors = _branch_graph([_decision(), _branch_node(id="g", depends_on=["r"], when="not r.done")])
+    assert errors == ["node 'g' guard negates 'r.done', which is always true, so it can never be true"]
+
+
+@pytest.mark.parametrize("when", ["not r.a", "r.a and not r.b"])
+def test_a_negated_route_is_an_ordinary_guard(when: str) -> None:
+    """Only `not <n>.done` is dead. `not r.a` holds when `r` completed and selected something else."""
+    assert _branch_graph([_decision(), _branch_node(id="g", depends_on=["r"], when=when)]) == []
+
+
+def test_a_done_atom_inside_a_negated_group_is_not_refused() -> None:
+    """Only `not <n>.done` itself is dead: `not (r.done and x.y)` is a live guard."""
+    errors = _branch_graph(
+        [
+            _decision(),
+            _branch_node(id="x", routes={"y": "y holds", "z": "z holds"}),
+            _branch_node(id="g", depends_on=["r", "x"], when="not (r.done and x.y)"),
+        ]
+    )
+    assert errors == []
+
+
+def test_a_guard_syntax_error_is_reported() -> None:
+    errors = _branch_graph([_branch_node(id="g", when="r.a and")])
+    assert len(errors) == 1 and errors[0].startswith("node 'g': guard:") and "position" in errors[0]
+
+
+def test_a_guard_error_position_indexes_the_text_as_written() -> None:
+    errors = _branch_graph([_branch_node(id="g", when="  r.a and")])
+    assert len(errors) == 1 and "position 9" in errors[0]
+
+
+def test_every_guard_syntax_error_is_reported_not_just_the_first() -> None:
+    errors = _branch_graph([_branch_node(id="g1", when="r.a and"), _branch_node(id="g2", when="(r.a")])
+    assert [e.split(":")[0] for e in errors] == ["node 'g1'", "node 'g2'"]
+
+
+def test_a_guard_that_does_not_parse_is_the_only_error_of_its_node() -> None:
+    """Its atoms are unknown, so the must-appear rule has nothing sound to say."""
+    errors = _branch_graph([_decision(), _branch_node(id="g", depends_on=["r"], when="r.a and")])
+    assert len(errors) == 1 and "position" in errors[0]
+
+
+def test_a_guard_may_not_name_a_decision_of_an_earlier_run() -> None:
+    errors = _branch_graph(
+        [_branch_node(id="g", depends_on=["old"], when="old.a")],
+        session_nodes=_EARLIER_RUN_NODES,
+    )
+    assert len(errors) == 1 and "earlier run" in errors[0]
+
+
+def test_guards_of_parses_every_non_blank_when_by_node_id() -> None:
+    from raven.agent.subagent.dag_graph import guards_of
+
+    nodes = _branch_nodes(
+        [
+            _decision(),
+            _branch_node(id="g", depends_on=["r"], when="r.a or r.b"),
+            _branch_node(id="blank", depends_on=["r"], when="   "),
+            _branch_node(id="plain"),
+        ]
+    )
+    guards = guards_of(nodes)
+    assert set(guards) == {"g"}
+    assert guards["g"].source == "r.a or r.b"
+    assert [(atom.node, atom.name) for atom in guards["g"].atoms] == [("r", "a"), ("r", "b")]
+
+
+def test_guards_of_lets_a_syntax_error_propagate() -> None:
+    from raven.agent.subagent.dag_graph import guards_of
+    from raven.agent.subagent.dag_guard import GuardError
+
+    with pytest.raises(GuardError, match="position"):
+        guards_of(_branch_nodes([_branch_node(id="g", when="r.a and")]))
+
+
+def test_may_not_execute_follows_guards_down_the_graph() -> None:
+    from raven.agent.subagent.dag_graph import may_not_execute
+
+    nodes = _branch_nodes(
+        [
+            _decision(),
+            _branch_node(id="g", depends_on=["r"], when="r.a"),
+            _branch_node(id="inside", depends_on=["g"]),
+            _branch_node(id="common", depends_on=["r"]),
+        ]
+    )
+    skippable = may_not_execute(nodes, {n.id: n for n in nodes})
+    assert "g" in skippable and "inside" in skippable
+    assert "r" not in skippable and "common" not in skippable
+
+
+def test_may_not_execute_needs_every_dependency_to_be_skippable() -> None:
+    from raven.agent.subagent.dag_graph import may_not_execute
+
+    nodes = _branch_nodes(
+        [
+            _decision(),
+            _branch_node(id="g", depends_on=["r"], when="r.a"),
+            _branch_node(id="done_guard", depends_on=["r"], when="r.done"),
+            _branch_node(id="plain", depends_on=["r"]),
+            _branch_node(id="mixed", depends_on=["g", "plain"]),
+            _branch_node(id="blank_when", depends_on=["r"], when="   "),
+            _branch_node(id="after_old_run", depends_on=["old"]),
+            _branch_node(id="g_and_old", depends_on=["g", "old"]),
+        ]
+    )
+    # `done_guard` is counted although `r.done` always holds: the set errs towards "may not run".
+    # `g_and_old` is too: `old` belongs to an earlier run, so it is no dependency in this graph and
+    # the only one that counts, `g`, may not execute. `after_old_run` has no dependency here at all.
+    assert may_not_execute(nodes, {n.id: n for n in nodes}) == frozenset({"g", "done_guard", "g_and_old"})
+
+
+def test_may_not_execute_raises_on_a_cycle() -> None:
+    from raven.agent.subagent.dag_graph import may_not_execute
+
+    nodes = _branch_nodes([_branch_node(id="p", depends_on=["q"]), _branch_node(id="q", depends_on=["p"])])
+    with pytest.raises(DagValidationError, match="cycle"):
+        may_not_execute(nodes, {n.id: n for n in nodes})
+
+
+def _reading_graph(template: str, **over: object) -> list[str]:
+    """Errors of a branching graph whose `reader` carries `template`.
+
+    `g`, `inside` and `g_and_old` may not execute. The last also depends on `old`, a node an earlier
+    run completed.
+    """
+    return _branch_graph(
+        [
+            _decision(),
+            _branch_node(id="g", depends_on=["r"], when="r.a"),
+            _branch_node(id="inside", depends_on=["g"]),
+            _branch_node(id="g_and_old", depends_on=["g", "old"]),
+            _branch_node(id="reader", depends_on=["r", "g"], when="r.b", prompt_template=template, **over),
+        ],
+        session_nodes=_EARLIER_RUN_NODES,
+    )
+
+
+@pytest.mark.parametrize(
+    ("template", "target"),
+    [
+        ("{{ ref:@nodes/g.out.md }}", "g"),
+        ("{{ ref_path:@nodes/g.out.md }}", "g"),
+        ("{{ ref:@nodes/g.prompt.md }}", "g"),
+        ("{{ ref:@nodes/./g.out.md }}", "g"),
+        ("{{ ref:@nodes/inside.out.md }}", "inside"),
+        ("{{ ref:@nodes/g_and_old.out.md }}", "g_and_old"),
+    ],
+)
+def test_an_at_nodes_reference_to_a_node_that_may_not_execute_is_refused(template: str, target: str) -> None:
+    errors = _reading_graph(template)
+    assert len(errors) == 1
+    assert f"of node '{target}', which may not execute in this graph" in errors[0]
+    assert f"use {{{{ {target}.output }}}} instead" in errors[0]
+
+
+def test_a_file_input_aimed_at_a_node_that_may_not_execute_is_refused() -> None:
+    errors = _reading_graph("{{ inputs.k }}", inputs={"k": {"file": "@nodes/g.out.md"}})
+    assert len(errors) == 1
+    assert "node 'reader' reads input 'k' of node 'g', which may not execute" in errors[0]
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "{{ ref:@nodes/r.out.md }}",
+        "{{ g.output }}",
+        "{{ ref:g.out.md }}",
+        "{{ ref:@nodes/old.out.md }}",
+        "{{ ref:@nodes/sub/g.out.md }}",
+    ],
+)
+def test_a_reference_that_cannot_land_on_a_missing_node_file_is_fine(template: str) -> None:
+    assert _reading_graph(template) == []
+
+
+def test_a_graph_with_duplicate_ids_gets_no_at_nodes_verdict() -> None:
+    """With two nodes called `g`, no one can say which a path names: only the duplicate is reported."""
+    errors = _branch_graph(
+        [
+            _decision(),
+            _branch_node(id="g", depends_on=["r"], when="r.a"),
+            _branch_node(id="g", depends_on=["r"], when="r.b"),
+            _branch_node(id="reader", depends_on=["r"], when="r.a", prompt_template="{{ ref:@nodes/g.out.md }}"),
+        ]
+    )
+    assert errors == ["duplicate node ids: ['g']"]
+
+
+def test_an_at_nodes_reference_in_a_graph_with_no_guard_is_left_alone() -> None:
+    reader = _branch_node(id="b", depends_on=["a"], prompt_template="{{ ref:@nodes/a.out.md }}")
+    assert _branch_graph([_branch_node(id="a"), reader]) == []
+
+
+def test_a_cycle_in_a_guarded_graph_is_reported_not_raised() -> None:
+    errors = _branch_graph(
+        [
+            _decision(),
+            _branch_node(id="p", depends_on=["q"]),
+            _branch_node(id="q", depends_on=["p"]),
+            _branch_node(id="g", depends_on=["r"], when="r.a", prompt_template="{{ ref:@nodes/p.out.md }}"),
+        ]
+    )
+    assert errors == ["graph contains a cycle"]
+
+
+def test_a_malformed_placeholder_beside_a_guard_is_reported_not_raised() -> None:
+    errors = _branch_graph(
+        [
+            _decision(),
+            _branch_node(id="g", depends_on=["r"], when="r.a"),
+            _branch_node(id="bad", prompt_template="{{ ref: }}"),
+        ]
+    )
+    assert errors == ["empty path in '{{ ref: }}'"]
+
+
+# --- branches: judging a decision node ---------------------------------------
+
+_TWO_ROUTES = {"a": "the first holds", "b": "the second holds"}
+
+
+class _NoFiles:
+    """The slice of a run store the judge closure reads: no prompt and no transcript."""
+
+    async def read_text(self, _path):
+        return ""
+
+    def transcript_path(self, _node_id):
+        return "t"
+
+    def prompt_path(self, _node_id):
+        return "p"
+
+
+class _Canned:
+    """A provider that answers every call with one report_verdict call, and records the calls."""
+
+    def __init__(self, **report: object) -> None:
+        self.calls: list[dict] = []
+        self._report = report
+
+    async def chat_with_retry(self, **kwargs: Any) -> Any:
+        self.calls.append(kwargs)
+        return SimpleNamespace(tool_calls=[SimpleNamespace(arguments=json.dumps(self._report))])
+
+
+async def _run_judge(judge_node: Any, node: Any, *, crashed: bool = False) -> Any:
+    return await judge_node(node=node, store=_NoFiles(), output="o", error="boom" if crashed else "", crashed=crashed)
+
+
+async def test_a_graph_with_routes_is_refused_on_a_host_that_cannot_judge(tmp_path) -> None:
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+
+    tool = SubAgentDagTool(workspace=tmp_path)
+    assert tool._judge_node() is None
+
+    out = await tool.execute(task_summary="g", nodes=[_decision()], background=True)
+
+    text = out if isinstance(out, str) else out.model_text
+    assert "no provider to judge" in text
+    assert "node 'r' declares routes" in text, "the refusal names the decision node"
+    assert "No sub-agent was run" in text
+
+
+async def test_a_refusal_names_every_decision_node_in_graph_order(tmp_path) -> None:
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+
+    tool = SubAgentDagTool(workspace=tmp_path)
+    nodes = [_decision("s"), _branch_node(id="plain"), _decision("r")]
+
+    out = await tool.execute(task_summary="g", nodes=nodes, background=True)
+
+    text = out if isinstance(out, str) else out.model_text
+    assert "nodes 's', 'r' declare routes" in text
+    assert "plain" not in text, "a node that declares no routes is not named"
+
+
+async def test_a_graph_with_routes_is_accepted_where_a_provider_is_bound(tmp_path) -> None:
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+
+    tool = SubAgentDagTool(
+        workspace=tmp_path,
+        provider_for=lambda: object(),
+        agents=[ThirdPartyCliSubagentConfig(name="x", command="true")],
+    )
+
+    pre = await tool._preflight(parse_dag_spec({"task_summary": "g", "nodes": [_decision()]}))
+
+    assert set(pre.backends) == {"r"}
+
+
+async def test_a_graph_without_routes_is_not_refused_on_a_host_that_cannot_judge(tmp_path) -> None:
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+
+    tool = SubAgentDagTool(workspace=tmp_path, agents=[ThirdPartyCliSubagentConfig(name="x", command="true")])
+    assert tool._judge_node() is None
+
+    pre = await tool._preflight(parse_dag_spec({"task_summary": "g", "nodes": [_branch_node(id="a")]}))
+
+    assert set(pre.backends) == {"a"}
+
+
+async def test_a_replacement_graph_with_routes_is_refused_on_a_host_that_cannot_judge(tmp_path) -> None:
+    tool, live = await _replannable_tool(tmp_path)
+    fresh = {**_node("fresh"), "routes": _TWO_ROUTES}
+
+    out = await tool.prepare_replan(_OLD_RUN_ID, "a", [fresh], "wrong", None, live)
+
+    assert isinstance(out, str)
+    assert "no provider to judge" in out
+
+
+async def test_a_replacement_graph_with_routes_is_accepted_where_a_provider_is_bound(tmp_path) -> None:
+    tool, live = await _replannable_tool(tmp_path, provider_for=lambda: object())
+    fresh = {**_node("fresh"), "routes": _TWO_ROUTES}
+
+    plan = await tool.prepare_replan(_OLD_RUN_ID, "a", [fresh], "wrong", None, live)
+
+    assert not isinstance(plan, str), plan
+    assert [n.id for n in plan.nodes] == ["fresh"]
+
+
+@pytest.mark.parametrize(
+    ("declared", "routes", "select"),
+    [
+        pytest.param({"routes": _TWO_ROUTES, "select": None}, _TWO_ROUTES, "one", id="decision-default-select"),
+        pytest.param({"routes": _TWO_ROUTES, "select": "many"}, _TWO_ROUTES, "many", id="decision-select-many"),
+        pytest.param({}, None, "one", id="bare-node-with-only-an-id"),
+        pytest.param({"routes": None, "select": None}, None, "one", id="ordinary-node"),
+        pytest.param({"routes": {}, "select": None}, None, "one", id="empty-routes"),
+    ],
+)
+async def test_the_judge_hands_the_nodes_declaration_to_the_verdict_call(
+    tmp_path, monkeypatch, declared, routes, select
+) -> None:
+    import raven.agent.subagent.dag_tool as tool_mod
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    seen: list[dict] = []
+
+    async def _fake_judge(provider, **kwargs):
+        seen.append(kwargs)
+        return Verdict(accomplished=True)
+
+    monkeypatch.setattr(tool_mod, "judge", _fake_judge)
+    tool = SubAgentDagTool(workspace=tmp_path, provider_for=lambda: object())
+
+    await _run_judge(tool._judge_node(), SimpleNamespace(id="n", **declared))
+
+    assert seen[0]["routes"] == routes
+    assert seen[0]["select"] == select
+
+
+async def test_a_decision_nodes_declaration_reaches_the_request_the_provider_sees(tmp_path) -> None:
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+
+    provider = _Canned(outcome="accomplished", route=["a"], route_evidence="the first holds")
+    tool = SubAgentDagTool(workspace=tmp_path, provider_for=lambda: provider)
+    node = SimpleNamespace(id="r", routes=_TWO_ROUTES, select="many")
+
+    verdict = await _run_judge(tool._judge_node(), node)
+
+    assert verdict.routes == ("a",)
+    assert verdict.route_evidence == "the first holds"
+    (call,) = provider.calls
+    route = call["tools"][0]["function"]["parameters"]["properties"]["route"]
+    assert route["type"] == "array"
+    assert route["items"]["enum"] == ["a", "b"]
+    assert "- a: the first holds" in call["messages"][-1]["content"]
+
+
+async def test_a_crashed_decision_node_is_described_without_asking_for_a_route(tmp_path) -> None:
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+
+    provider = _Canned(outcome="not_accomplished", category="tool_failure", what_is_missing="the tool died")
+    tool = SubAgentDagTool(workspace=tmp_path, provider_for=lambda: provider)
+    node = SimpleNamespace(id="r", routes=_TWO_ROUTES, select=None)
+
+    verdict = await _run_judge(tool._judge_node(), node, crashed=True)
+
+    assert verdict.accomplished is False
+    assert verdict.routes is None
+    assert "route" not in json.dumps(provider.calls[0]["tools"])
+
+
+async def test_a_decision_node_fails_when_no_provider_is_bound_at_call_time(tmp_path) -> None:
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+    from raven.agent.subagent.dag_verdict import RouteUndeterminedError
+
+    bound: list[object | None] = [object()]
+    tool = SubAgentDagTool(workspace=tmp_path, provider_for=lambda: bound[0])
+    judge_node = tool._judge_node()
+    assert judge_node is not None
+    bound[0] = None
+
+    with pytest.raises(RouteUndeterminedError, match="no provider is bound"):
+        await _run_judge(judge_node, SimpleNamespace(id="r", routes=_TWO_ROUTES, select=None))
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [
+        pytest.param({}, id="bare-node-with-only-an-id"),
+        pytest.param({"routes": None, "select": None}, id="ordinary-node"),
+    ],
+)
+async def test_an_ordinary_node_is_judged_accomplished_when_no_provider_is_bound_at_call_time(
+    tmp_path, declared
+) -> None:
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    bound: list[object | None] = [object()]
+    tool = SubAgentDagTool(workspace=tmp_path, provider_for=lambda: bound[0])
+    judge_node = tool._judge_node()
+    assert judge_node is not None
+    bound[0] = None
+
+    verdict = await _run_judge(judge_node, SimpleNamespace(id="n", **declared))
+
+    assert verdict == Verdict(accomplished=True)
+
+
+async def test_a_crashed_decision_node_keeps_its_own_failure_when_no_provider_is_bound(tmp_path) -> None:
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    bound: list[object | None] = [object()]
+    tool = SubAgentDagTool(workspace=tmp_path, provider_for=lambda: bound[0])
+    judge_node = tool._judge_node()
+    assert judge_node is not None
+    bound[0] = None
+
+    verdict = await _run_judge(judge_node, SimpleNamespace(id="r", routes=_TWO_ROUTES, select=None), crashed=True)
+
+    assert verdict == Verdict(accomplished=True), "no route is read from a node that crashed, so nothing is raised"
+
+
+# --- branches: a missing upstream reads as a fixed sentence ------------------------
+
+_FENCE = re.compile(r"\[BEGIN UNTRUSTED \S+ #(\w+) [^\n]*\n.*?\n\[END UNTRUSTED \S+ #\1\]", re.DOTALL)
+
+_REFERENCES_TO_R = {
+    "output": "{{ r.output }}",
+    "output_path": "{{ r.output_path }}",
+    "input": "{{ inputs.prev }}",
+    "input_path": "{{ inputs.prev.path }}",
+}
+
+
+def _merge_node(template: str, *, depends_on: list[str], inputs: dict[str, object] | None = None) -> Any:
+    spec = parse_dag_spec(
+        {
+            "task_summary": "merge what the branches left",
+            "nodes": [
+                {
+                    "id": "merge",
+                    "subagent": "x",
+                    "node_summary": "merge",
+                    "prompt_template": template,
+                    "depends_on": depends_on,
+                    "inputs": inputs or {},
+                }
+            ],
+        }
+    )
+    return spec.nodes[0]
+
+
+def _without_nonces(text: str) -> str:
+    return re.sub(r"#[0-9a-f]{8}", "#NONCE", text)
+
+
+@pytest.mark.parametrize("stale", [False, True], ids=["no-file", "stale-file"])
+@pytest.mark.parametrize("form", list(_REFERENCES_TO_R))
+async def test_a_not_executed_node_reads_as_the_fixed_sentence(form: str, stale: bool) -> None:
+    """The status decides, not the file: a node that was not executed wrote none, and
+    one that left a file under its id in an earlier run is still not this run's output."""
+    be = _FakeBackend()
+    if stale:
+        be.files["/nodes/r.out.md"] = b"STALE_R"
+    inputs = {"prev": {"node": "r"}} if form.startswith("input") else None
+    node = _merge_node(f"before {_REFERENCES_TO_R[form]} after", depends_on=["r"], inputs=inputs)
+
+    rendered = await render_prompt(node, backend=be, cwd="/w", nodes_root="/nodes", not_executed={"r"})
+
+    assert rendered == f"before {MISSING_OUTPUT_TEXT} after"
+
+
+async def test_only_a_reference_to_the_node_reads_as_the_sentence() -> None:
+    """An input key, a file path and a ref can all be spelled ``r`` without naming node ``r``."""
+    be = _FakeBackend()
+    be.files["/nodes/a.out.md"] = b"RESULT_A"
+    be.files["/w/notes.md"] = b"FILE_BODY"
+    be.files["/w/r"] = b"REF_R"
+    node = _merge_node(
+        "{{ inputs.r }} {{ ref:r }} {{ inputs.live }} {{ inputs.f }} {{ inputs.dead }}",
+        depends_on=["a", "r"],
+        inputs={"r": "LITERAL", "live": {"node": "a"}, "f": {"file": "notes.md"}, "dead": {"node": "r"}},
+    )
+
+    rendered = await render_prompt(node, backend=be, cwd="/w", nodes_root="/nodes", not_executed={"r"})
+
+    assert rendered.startswith("LITERAL ")
+    assert "REF_R" in rendered and "RESULT_A" in rendered and "FILE_BODY" in rendered
+    assert rendered.count(MISSING_OUTPUT_TEXT) == 1 and rendered.endswith(MISSING_OUTPUT_TEXT)
+
+
+async def test_the_fixed_sentence_is_written_outside_every_untrusted_fence() -> None:
+    be = _FakeBackend()
+    be.files["/nodes/write.out.md"] = b"WRITTEN_DOCS"
+    node = _merge_node("## Fix\n{{ fix.output }}\n\n## Docs\n{{ write.output }}", depends_on=["fix", "write"])
+
+    rendered = await render_prompt(node, backend=be, cwd="/w", nodes_root="/nodes", not_executed={"fix"})
+
+    fences = [m.group(0) for m in _FENCE.finditer(rendered)]
+    assert len(fences) == 1 and "WRITTEN_DOCS" in fences[0], "the executed upstream is still fenced"
+    assert MISSING_OUTPUT_TEXT in rendered
+    assert all(MISSING_OUTPUT_TEXT not in fence for fence in fences)
+
+
+async def test_an_upstream_that_writes_the_sentence_into_its_own_output_is_fenced_as_data() -> None:
+    be = _FakeBackend()
+    be.files["/nodes/write.out.md"] = MISSING_OUTPUT_TEXT.encode()
+    node = _merge_node("## Fix\n{{ fix.output }}\n\n## Docs\n{{ write.output }}", depends_on=["fix", "write"])
+
+    rendered = await render_prompt(node, backend=be, cwd="/w", nodes_root="/nodes", not_executed={"fix"})
+
+    fences = [m.group(0) for m in _FENCE.finditer(rendered)]
+    assert len(fences) == 1 and MISSING_OUTPUT_TEXT in fences[0], "the forged copy is inside a fence"
+    assert _FENCE.sub("", rendered).count(MISSING_OUTPUT_TEXT) == 1, "the runner's own copy is not"
+
+
+async def test_the_note_lists_only_the_nodes_the_template_actually_references() -> None:
+    be = _FakeBackend()
+    be.files["/nodes/fix.out.md"] = b"FIXED"
+    node = _merge_node("## Bug fix result\n{{ fix.output }}", depends_on=["fix", "write"])
+
+    rendered = await render_prompt(node, backend=be, cwd="/w", nodes_root="/nodes", may_not_execute={"fix", "write"})
+
+    assert rendered.count(MAYBE_MISSING_HEADING) == 1
+    body, _, note = rendered.partition(MAYBE_MISSING_HEADING)
+    assert "FIXED" in body, "nothing is missing in this run and the note is appended all the same"
+    assert "selects them: fix." in note
+    assert "write" not in note
+    assert note == (
+        "\n\nSome inputs above come from steps that run only when an earlier decision selects them: fix. "
+        f"A missing one reads exactly:\n{MISSING_OUTPUT_TEXT}\n"
+        "Continue with the inputs you have, and do not guess what a missing one would have said."
+    )
+
+
+async def test_the_note_names_each_referenced_node_once_in_template_order() -> None:
+    be = _FakeBackend()
+    be.files["/nodes/triage.out.md"] = b"TRIAGED"
+    node = _merge_node(
+        "{{ write.output }}\n{{ inputs.design }}\n{{ triage.output }}\n"
+        "{{ fix.output_path }}\n{{ inputs.audit_in.path }}\n{{ write.output_path }}",
+        depends_on=["triage", "write", "design_doc", "fix", "audit"],
+        inputs={"design": {"node": "design_doc"}, "audit_in": {"node": "audit"}},
+    )
+
+    rendered = await render_prompt(
+        node,
+        backend=be,
+        cwd="/w",
+        nodes_root="/nodes",
+        not_executed={"write", "design_doc", "fix", "audit"},
+        may_not_execute={"write", "design_doc", "fix", "audit", "unreferenced"},
+    )
+
+    assert "selects them: write, design_doc, fix, audit." in rendered
+
+
+async def test_a_file_input_keyed_like_a_not_executed_node_still_renders_the_file() -> None:
+    """The not-executed rule is about nodes: an `inputs` key that happens to be
+    spelled like one is a file, and its path form still names that file."""
+    be = _FakeBackend()
+    be.files["/w/notes.md"] = b"THE NOTES"
+    node = _merge_node(
+        "{{ inputs.r }} and {{ inputs.r.path }}",
+        depends_on=[],
+        inputs={"r": {"file": "notes.md"}},
+    )
+
+    rendered = await render_prompt(node, backend=be, cwd="/w", nodes_root="/nodes", not_executed={"r"})
+
+    assert MISSING_OUTPUT_TEXT not in rendered
+    assert "THE NOTES" in _without_nonces(rendered)
+    assert rendered.endswith("and /w/notes.md")
+
+
+async def test_a_node_read_through_both_forms_is_listed_once_in_the_note() -> None:
+    """`{{ x.output }}` and `{{ inputs.k }}` with `k` -> x name the same step."""
+    be = _FakeBackend()
+    be.files["/nodes/fix.out.md"] = b"FIXED"
+    node = _merge_node(
+        "{{ fix.output }} {{ inputs.fix_in }}",
+        depends_on=["fix"],
+        inputs={"fix_in": {"node": "fix"}},
+    )
+
+    rendered = await render_prompt(
+        node,
+        backend=be,
+        cwd="/w",
+        nodes_root="/nodes",
+        may_not_execute={"fix"},
+    )
+
+    assert "selects them: fix." in rendered
+    assert "selects them: fix, fix." not in rendered
+
+
+async def test_a_blank_line_before_the_note_heading_leaves_one_heading() -> None:
+    """A template that already ends in a blank line does not get a second one."""
+    be = _FakeBackend()
+    be.files["/nodes/fix.out.md"] = b"FIXED"
+    node = _merge_node("{{ fix.output }}\n\n", depends_on=["fix"])
+
+    rendered = await render_prompt(node, backend=be, cwd="/w", nodes_root="/nodes", may_not_execute={"fix"})
+
+    assert rendered.count(MAYBE_MISSING_HEADING) == 1
+    assert rendered.count(f"{MAYBE_MISSING_HEADING}\n\n") == 1
+
+
+async def test_a_node_with_no_branch_note_is_unchanged() -> None:
+    be = _FakeBackend()
+    be.files["/nodes/a.out.md"] = b"RESULT_A"
+    node = _merge_node("up: {{ a.output }}", depends_on=["a"])
+    expected = _without_nonces("up: " + wrap_untrusted("RESULT_A", source="subagent"))
+
+    plain = await render_prompt(node, backend=be, cwd="/w", nodes_root="/nodes")
+    unrelated = await render_prompt(node, backend=be, cwd="/w", nodes_root="/nodes", may_not_execute={"b"})
+
+    for rendered in (plain, unrelated):
+        assert "RESULT_A" in rendered
+        assert MAYBE_MISSING_HEADING not in rendered
+        assert MISSING_OUTPUT_TEXT not in rendered
+        assert _without_nonces(rendered) == expected
+
+
+async def test_the_note_comes_after_the_template_and_before_the_memory_block() -> None:
+    be = _FakeBackend()
+    be.files["/nodes/fix.out.md"] = b"FIXED"
+    spec = _memory_spec(
+        [
+            {"id": "fix", "subagent": "x", "prompt_template": "fix"},
+            {"id": "merge", "subagent": "x", "prompt_template": "{{ fix.output }}", "depends_on": ["fix"]},
+        ]
+    )
+    by_id = {n.id: n for n in spec.nodes}
+
+    rendered = await render_prompt(
+        by_id["merge"],
+        backend=be,
+        cwd="/w",
+        nodes_root="/nodes",
+        run_id="run1",
+        by_id=by_id,
+        may_not_execute={"fix"},
+    )
+
+    note_at = rendered.index(MAYBE_MISSING_HEADING)
+    assert rendered.index("FIXED") < note_at < rendered.index("## Upstream memory records")
+
+
+def test_an_unexecuted_upstream_gets_no_memory_line() -> None:
+    spec = _memory_spec(
+        [
+            {"id": "a", "subagent": "x", "prompt_template": "a"},
+            {"id": "b", "subagent": "x", "prompt_template": "b", "depends_on": ["a"]},
+            {"id": "c", "subagent": "x", "prompt_template": "c", "depends_on": ["a", "b"]},
+            {"id": "d", "subagent": "x", "prompt_template": "d", "depends_on": ["b"]},
+        ]
+    )
+    by_id = {n.id: n for n in spec.nodes}
+
+    def lines(node_id: str, not_executed: set[str]) -> list[str]:
+        return _upstream_memory_lines(
+            by_id[node_id],
+            backend=_FakeBackend(),
+            nodes_root="/nodes",
+            run_id="r1",
+            by_id=by_id,
+            capabilities=None,
+            not_executed=not_executed,
+        )
+
+    assert lines("b", {"a"}) == []
+    assert lines("c", {"a"}) == ["- b: /nodes/b.memory.json"], "only the one that was not executed is left out"
+    assert lines("d", {"b"}) == ["- a: /nodes/a.memory.json"], "the records beyond it are still named"
+
+
+async def test_a_memory_block_leaves_out_an_upstream_that_was_not_executed() -> None:
+    spec = _memory_spec(
+        [
+            {"id": "a", "subagent": "x", "prompt_template": "a"},
+            {"id": "b", "subagent": "x", "prompt_template": "second", "depends_on": ["a"]},
+        ]
+    )
+    by_id = {n.id: n for n in spec.nodes}
+    kwargs = {"backend": _FakeBackend(), "cwd": "/w", "nodes_root": "/nodes", "run_id": "r1", "by_id": by_id}
+
+    assert "/nodes/a.memory.json" in await render_prompt(by_id["b"], **kwargs)
+    assert await render_prompt(by_id["b"], not_executed={"a"}, **kwargs) == "second"
+
+
+# --- branches: what a later run and a reader make of a node that was not executed ------
+
+_FIX_WAS_NOT_EXECUTED = SessionNodes(state={"fix": "not_executed"}, owner={"fix": "r1"}, has_output={"fix": False})
+
+
+def test_referencing_a_not_executed_node_names_the_unselected_branch() -> None:
+    from raven.agent.subagent.dag_graph import _unreadable
+
+    message = _unreadable("later", "'fix'", "fix", _FIX_WAS_NOT_EXECUTED)
+
+    assert message is not None
+    assert "did not execute" in message
+    assert "failed" not in message
+    assert "skipped" not in message
+    assert message.startswith("node 'later' references 'fix', which run 'r1' did not execute")
+    assert "its branch was not selected, so it wrote no output" in message
+    assert "Continue without it" in message
+
+
+@pytest.mark.parametrize(
+    "later",
+    [
+        {"depends_on": ["fix"]},
+        {"prompt_template": "{{ fix.output }}"},
+        {"prompt_template": "{{ inputs.p }}", "inputs": {"p": {"node": "fix"}}},
+    ],
+    ids=["depends_on", "output reference", "node input"],
+)
+def test_a_later_graph_that_reads_a_not_executed_node_is_refused_with_the_branch_sentence(later: dict) -> None:
+    """Without the branch each call site fell back to a generic "unknown id" refusal for a node the session knows."""
+    spec = parse_dag_spec({"task_summary": "g", "nodes": [_branch_node(id="later", **later)]})
+
+    with pytest.raises(DagValidationError) as refusal:
+        validate_and_order(spec, session_nodes=_FIX_WAS_NOT_EXECUTED)
+
+    assert "which run 'r1' did not execute" in str(refusal.value)
+
+
+def test_a_caller_with_no_graph_gets_the_same_sentence_about_a_not_executed_node() -> None:
+    from raven.agent.subagent.dag_graph import check_node_refs
+
+    with pytest.raises(DagValidationError, match="which run 'r1' did not execute"):
+        check_node_refs("spawned", parse_placeholders("read {{ fix.output }}"), {}, _FIX_WAS_NOT_EXECUTED)
+
+
+# What a plain node reads back with, key for key: `dag.get` returns the reader's dict as it is.
+_PLAIN_NODE_KEYS = {
+    "node",
+    "subagent",
+    "depends_on",
+    "instance",
+    "status",
+    "started_at",
+    "ended_at",
+    "prompt_file",
+    "output_file",
+    "memory_file",
+    "error",
+    "prompt_template",
+    "node_summary",
+    "inputs",
+}
+
+_BRANCH_RUN_ID = "20261015T120000Z-0badc0de"
+
+
+def _branching_nodes() -> list[dict]:
+    """Two decisions (one `select: one`, one `select: many`), a guarded node, and a node inside its branch."""
+    return [
+        _branch_node(id="notes"),
+        _branch_node(
+            id="triage",
+            routes={"question": "it asks how", "bug": "it reports a defect", "feature": "it wants something new"},
+        ),
+        _branch_node(id="scan", select="many", routes={"docs": "it touches docs", "api": "it touches the api"}),
+        _branch_node(id="fix", depends_on=["triage"], when="triage.bug"),
+        _branch_node(id="verify", depends_on=["fix"], prompt_template="check {{ fix.output }}"),
+        _branch_node(id="reply", depends_on=["triage", "scan"], when="triage.done and scan.done"),
+    ]
+
+
+def _recorded(depends_on: list[str], status: str, **branched: Any) -> dict:
+    """One node's manifest entry as `_finalize` writes it; `branched` is what a branch added."""
+    return {
+        "status": status,
+        "subagent": "x",
+        "depends_on": depends_on,
+        "instance": None,
+        "instance_auto": False,
+        "started_at": 1000,
+        "ended_at": 2000,
+        "prompt_file": None,
+        "output_file": None,
+        "error": None,
+        **branched,
+    }
+
+
+def _store_branching_run(be: "_FakeBackend", *, finalized: bool = True) -> None:
+    """Write the run `_branching_nodes` describes the way `store.init` and `_finalize` write it.
+
+    `triage` selected `question`, so `fix` was not executed and `verify`, whose only dependency it is,
+    followed it; `scan` selected nothing.
+    """
+    nodes = _branching_nodes()
+    assert _branch_graph(nodes) == [], "the stored graph is one the validator accepts"
+    rdir = f"/hist/mas_dag/{_BRANCH_RUN_ID}"
+    be.files[f"{rdir}/graph.json"] = (
+        parse_dag_spec({"task_summary": "triage it", "nodes": nodes}).model_dump_json().encode()
+    )
+    if finalized:
+        manifest = {
+            "notes": _recorded([], "completed"),
+            "triage": _recorded(
+                [], "completed", selected_routes=["question"], route_evidence="the issue asks how to reproduce it"
+            ),
+            "scan": _recorded([], "completed", selected_routes=[]),
+            "fix": _recorded(["triage"], "not_executed", reason="when_false"),
+            "verify": _recorded(["fix"], "not_executed", reason="upstream_not_executed"),
+            "reply": _recorded(["triage", "scan"], "completed"),
+        }
+        be.files[f"{rdir}/manifest.json"] = json.dumps(manifest).encode()
+
+
+async def _read_branching_run(*, finalized: bool = True) -> dict:
+    be = _FakeBackend()
+    _store_branching_run(be, finalized=finalized)
+    return await read_run(be, "/hist/mas_dag", _BRANCH_RUN_ID, "/hist/nodes")
+
+
+async def test_read_run_counts_a_not_executed_node_in_its_summary() -> None:
+    run = await _read_branching_run()
+
+    assert run["summary"] == {"total": 6, "completed": 4, "failed": 0, "skipped": 0, "cancelled": 0, "not_executed": 2}
+
+
+async def test_read_run_gives_each_node_the_branch_fields_it_has_and_no_others() -> None:
+    """`dag.get` hands this dict over RPC as it is, so a node that has no selection, no reason and no
+    guard must not carry six null keys for them."""
+    run = await _read_branching_run()
+
+    by_node = {entry["node"]: entry for entry in run["files"]}
+    assert {node_id: set(entry) - _PLAIN_NODE_KEYS for node_id, entry in by_node.items()} == {
+        "notes": set(),
+        "triage": {"selected_routes", "route_evidence", "routes", "select"},
+        "scan": {"selected_routes", "routes", "select"},
+        "fix": {"reason", "when"},
+        "verify": {"reason"},
+        "reply": {"when"},
+    }
+    assert all(_PLAIN_NODE_KEYS <= set(entry) for entry in by_node.values()), "nothing the reader had is gone"
+
+
+async def test_read_run_reads_the_outcome_off_the_manifest_and_the_request_off_the_graph() -> None:
+    run = await _read_branching_run()
+
+    by_node = {entry["node"]: entry for entry in run["files"]}
+    assert by_node["fix"]["status"] == "not_executed"
+    assert by_node["fix"]["reason"] == "when_false"
+    assert by_node["verify"]["reason"] == "upstream_not_executed"
+    assert by_node["triage"]["selected_routes"] == ["question"]
+    assert by_node["triage"]["route_evidence"] == "the issue asks how to reproduce it"
+    assert by_node["fix"]["when"] == "triage.bug"
+    assert by_node["reply"]["when"] == "triage.done and scan.done"
+    assert by_node["scan"]["select"] == "many"
+    assert by_node["triage"]["select"] == "one", "left unset in the graph, it is the one that applies"
+
+
+async def test_read_run_keeps_an_empty_selection_as_an_empty_list() -> None:
+    """A `select: many` decision that chose nothing is still a decision: a falsy value is not an absent one."""
+    run = await _read_branching_run()
+
+    scan = next(entry for entry in run["files"] if entry["node"] == "scan")
+    assert scan["selected_routes"] == []
+    assert "route_evidence" not in scan, "no quote was recorded, so no key is invented"
+
+
+async def test_read_run_names_a_decisions_routes_in_declaration_order_and_not_their_conditions() -> None:
+    run = await _read_branching_run()
+
+    by_node = {entry["node"]: entry for entry in run["files"]}
+    assert by_node["triage"]["routes"] == ["question", "bug", "feature"], "declared order, which sorting would lose"
+    assert by_node["scan"]["routes"] == ["docs", "api"]
+    assert "it reports a defect" not in json.dumps(run), "a condition is the judge's, and no display needs it"
+
+
+async def _read_one_node(node: dict) -> dict:
+    """The reader's entry for one hand-written graph.json node, as a person editing the file could leave it."""
+    be = _FakeBackend()
+    graph = {"task_summary": "g", "nodes": [{"id": "n", "subagent": "x", **node}]}
+    be.files[f"/hist/mas_dag/{_BRANCH_RUN_ID}/graph.json"] = json.dumps(graph).encode()
+    return (await read_run(be, "/hist/mas_dag", _BRANCH_RUN_ID, "/hist/nodes"))["files"][0]
+
+
+@pytest.mark.parametrize(
+    ("node", "shown"),
+    [
+        ({"routes": _TWO_ROUTES}, {"routes": ["a", "b"], "select": "one"}),
+        ({"routes": _TWO_ROUTES, "select": None}, {"routes": ["a", "b"], "select": "one"}),
+        ({"routes": _TWO_ROUTES, "select": "one"}, {"routes": ["a", "b"], "select": "one"}),
+        ({"routes": _TWO_ROUTES, "select": "many"}, {"routes": ["a", "b"], "select": "many"}),
+        ({}, {}),
+        ({"routes": None, "select": None}, {}),
+        ({"routes": {}}, {}),
+        ({"routes": {}, "select": "many"}, {}),
+        ({"select": "many"}, {}),
+    ],
+    ids=["unset", "null", "one", "many", "plain", "plain-nulls", "empty-routes", "empty-routes-many", "stray-select"],
+)
+async def test_read_run_shows_routes_and_the_effective_select_only_on_a_node_that_branches(
+    node: dict, shown: dict
+) -> None:
+    """The run-started event says `select: one` for a decision that left it unset; the snapshot says the same.
+
+    A node branches when it has a route in `routes`, as the runner reads it, so an empty `routes` reads as none
+    and a stray `select` on a node with no routes is not shown.
+    """
+    entry = await _read_one_node(node)
+
+    assert {key: entry[key] for key in ("routes", "select") if key in entry} == shown
+
+
+@pytest.mark.parametrize("routes", [5, ["a"], "ab", True], ids=["number", "list", "string", "bool"])
+async def test_read_run_does_not_trip_over_routes_that_are_not_a_mapping(routes: object) -> None:
+    """A hand-edited graph.json must not raise out of `dag.get` -- `list(5)` does -- nor be read as a decision:
+    `list("ab")` would have made two routes of one string."""
+    entry = await _read_one_node({"routes": routes, "select": "many"})
+
+    assert not {"routes", "select"} & set(entry)
+
+
+async def test_an_unfinalized_branching_run_still_shows_what_each_node_was_asked_to_branch_on() -> None:
+    """Structure always comes from graph.json; only what happened waits for the manifest."""
+    run = await _read_branching_run(finalized=False)
+
+    by_node = {entry["node"]: entry for entry in run["files"]}
+    assert {node_id: set(entry) - _PLAIN_NODE_KEYS for node_id, entry in by_node.items()} == {
+        "notes": set(),
+        "triage": {"routes", "select"},
+        "scan": {"routes", "select"},
+        "fix": {"when"},
+        "verify": set(),
+        "reply": {"when"},
+    }
+    assert {entry["status"] for entry in run["files"]} == {"pending"}
+    assert run["summary"] == {"total": 6, "completed": 0, "failed": 0, "skipped": 0, "cancelled": 0}
+
+
+async def test_read_run_leaves_out_a_blank_guard() -> None:
+    """A blank `when` is no guard to the scheduler and to the run-started event, so the reader shows none.
+
+    Stored the way `store.init` stores a graph: every field dumped, a blank as the model gave it. The
+    guard that is real is the control, and it reads back as declared.
+    """
+    nodes = [
+        _decision("r"),
+        _branch_node(id="empty", when=""),
+        _branch_node(id="spaces", when="   "),
+        _branch_node(id="g", depends_on=["r"], when="  r.a "),
+    ]
+    assert _branch_graph(nodes) == [], "a blank guard is a valid graph"
+    stored = parse_dag_spec({"task_summary": "g", "nodes": nodes}).model_dump_json()
+    assert '"when":""' in stored and '"when":"   "' in stored, "the blanks reach graph.json as they were given"
+    be = _FakeBackend()
+    be.files[f"/hist/mas_dag/{_BRANCH_RUN_ID}/graph.json"] = stored.encode()
+
+    run = await read_run(be, "/hist/mas_dag", _BRANCH_RUN_ID, "/hist/nodes")
+
+    by_node = {entry["node"]: entry for entry in run["files"]}
+    assert {node_id: set(entry) - _PLAIN_NODE_KEYS for node_id, entry in by_node.items()} == {
+        "r": {"routes", "select"},
+        "empty": set(),
+        "spaces": set(),
+        "g": {"when"},
+    }
+    assert by_node["g"]["when"] == "  r.a "
+
+
+async def test_read_run_does_not_trip_over_a_guard_that_is_not_text() -> None:
+    """graph.json is a file a person can edit: a guard that is not text is no guard, and reading it must not raise."""
+    be = _FakeBackend()
+    graph = {"task_summary": "g", "nodes": [{"id": "n", "subagent": "x", "when": 5}]}
+    be.files[f"/hist/mas_dag/{_BRANCH_RUN_ID}/graph.json"] = json.dumps(graph).encode()
+
+    run = await read_run(be, "/hist/mas_dag", _BRANCH_RUN_ID, "/hist/nodes")
+
+    assert "when" not in run["files"][0]
+
+
+@pytest.mark.parametrize("finalized", [True, False], ids=["finalized", "in-flight"])
+@pytest.mark.parametrize("graph", ["hand-written", "dumped"])
+async def test_a_run_without_branches_reads_back_with_exactly_the_keys_it_always_had(
+    graph: str, finalized: bool
+) -> None:
+    """The "dumped" graph is what `store.init` really writes: every branch field present, as null."""
+    be = _FakeBackend()
+    run_id = "20260730T060242Z-6b0b89a3"
+    _seed_run(be, run_id, finalized=finalized)
+    if graph == "dumped":
+        path = f"/hist/mas_dag/{run_id}/graph.json"
+        be.files[path] = parse_dag_spec(json.loads(be.files[path])).model_dump_json().encode()
+        assert '"routes":null' in be.files[path].decode(), "the fixture carries the nulls this test is about"
+
+    run = await read_run(be, "/hist/mas_dag", run_id, "/hist/nodes")
+
+    assert [set(entry) for entry in run["files"]] == [_PLAIN_NODE_KEYS, _PLAIN_NODE_KEYS]
+    assert list(run["summary"]) == ["total", "completed", "failed", "skipped", "cancelled"]
+    assert set(run) == {
+        "run_id",
+        "dir",
+        "nodes_root",
+        "finalized",
+        "task_summary",
+        "files",
+        "terminal_outputs",
+        "summary",
+    }
+
+
+def _status_blocks(text: str) -> dict[str, list[str]]:
+    """`dag_status` text cut into the lines of each node, keyed by node id."""
+    blocks: dict[str, list[str]] = {}
+    current: list[str] | None = None
+    for line in text.splitlines():
+        if line.startswith("- "):
+            current = blocks.setdefault(line[2:].split(" [", 1)[0], [])
+        if current is not None and not line.startswith("Run dir:"):
+            current.append(line)
+    return blocks
+
+
+async def test_dag_status_renders_a_stored_branching_run_through_the_reader() -> None:
+    """The renderer's own tests feed it records shaped like the reader's; this is the reader's answer, whole."""
+    from raven.agent.subagent.dag_control_tools import _render_run
+
+    out = _render_run(await _read_branching_run())
+
+    assert out.splitlines()[0] == (
+        f"DAG run {_BRANCH_RUN_ID}: 4 completed, 0 failed, 0 cancelled, 0 skipped, 2 not executed (of 6)."
+    )
+    blocks = _status_blocks(out)
+    assert blocks["fix"][0] == "- fix [not_executed]"
+    assert "    reason: when_false" in blocks["fix"]
+    assert "    reason: upstream_not_executed" in blocks["verify"]
+    assert "    selected_routes: question" in blocks["triage"]
+    assert "    selected_routes: (none)" in blocks["scan"]
+    assert not [
+        line for node_id in ("notes", "reply") for line in blocks[node_id] if "reason" in line or "selected" in line
+    ]
+    assert "the issue asks how to reproduce it" not in out, "the judge's quote is not model-facing text"
+
+
+class _EchoAgent:
+    """A node backend that answers with its own id, whatever it is asked."""
+
+    async def run(self, task: str, *, task_id: str, **_: Any) -> str:
+        return f"OUT[{task_id}]"
+
+
+async def _run_a_branching_graph() -> tuple[Any, "_FakeBackend", list[tuple[str, dict]]]:
+    """Run for real: a router, a dependent of it that is not executed, a `select: many` router that chooses
+    nothing, and a node that runs. Returns the result, the store, and the progress events published."""
+    from raven.agent.subagent.dag_runner import run_dag
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    async def judge(*, node, store, output, error, crashed, output_limited=False):
+        if node.id == "triage":
+            return Verdict(accomplished=True, routes=("docs",), route_evidence="the issue is about the docs")
+        if node.id == "scan":
+            return Verdict(accomplished=True, routes=())
+        return Verdict(accomplished=True)
+
+    events: list[tuple[str, dict]] = []
+
+    async def publish(name: str, value: dict) -> None:
+        events.append((name, value))
+
+    be = _FakeBackend()
+    spec = parse_dag_spec(
+        {
+            "task_summary": "triage it",
+            "nodes": [
+                _branch_node(id="triage", routes={"docs": "a documentation gap", "bug": "a code defect"}),
+                _branch_node(id="fix", depends_on=["triage"], when="triage.bug"),
+                _branch_node(id="scan", select="many", routes={"a": "it touches a", "b": "it touches b"}),
+                _branch_node(id="reply", depends_on=["triage", "scan"], when="triage.done and scan.done"),
+            ],
+        }
+    )
+    result = await run_dag(
+        spec,
+        resolve=lambda node: _EchoAgent(),
+        backend=be,
+        workdir="/w",
+        run_root="/hist/mas_dag",
+        nodes_root="/hist/nodes",
+        history_root="/hist",
+        judge_node=judge,
+        progress_publisher=publish,
+    )
+    return result, be, events
+
+
+def _per_node(entries: Any, keys: tuple[str, ...]) -> dict[str, dict]:
+    """For each entry, those of `keys` it carries, and nothing else."""
+    return {entry["node"]: {key: entry[key] for key in keys if key in entry} for entry in entries}
+
+
+async def test_read_run_returns_the_outcomes_the_runner_wrote_under_the_names_it_wrote_them() -> None:
+    """The reader tests above read a manifest written by hand. This one reads what `_finalize` wrote, so the
+    writer's key names and the reader's cannot drift apart while each side's own tests stay green."""
+    result, be, _ = await _run_a_branching_graph()
+    manifest = json.loads(be.files[f"{result.dir}/manifest.json"])
+    outcome_keys = ("reason", "selected_routes", "route_evidence")
+
+    run = await read_run(be, "/hist/mas_dag", result.run_id, "/hist/nodes")
+
+    written = _per_node([{**entry, "node": node} for node, entry in manifest.items()], outcome_keys)
+    assert written == {
+        "triage": {"selected_routes": ["docs"], "route_evidence": "the issue is about the docs"},
+        "fix": {"reason": "when_false"},
+        "scan": {"selected_routes": []},
+        "reply": {},
+    }, "what the runner wrote, spelled out: a writer and a reader gone quiet together must not pass"
+    assert _per_node(result.files, outcome_keys) == written, "the record it returned says the same"
+    assert _per_node(run["files"], outcome_keys) == written
+
+
+async def test_read_run_describes_each_node_the_way_the_run_started_event_did() -> None:
+    """Both say `select: one` for a decision that left it unset, and neither says anything of a node that does
+    not branch: a client that read the event and one that read the snapshot must not disagree about a node."""
+    result, be, events = await _run_a_branching_graph()
+    started = next(value for name, value in events if name == "dag_run_started")["nodes"]
+    request_keys = ("routes", "select", "when")
+
+    run = await read_run(be, "/hist/mas_dag", result.run_id, "/hist/nodes")
+
+    announced = {node["id"]: {key: node[key] for key in request_keys if key in node} for node in started}
+    assert announced == {
+        "triage": {"routes": ["docs", "bug"], "select": "one"},
+        "fix": {"when": "triage.bug"},
+        "scan": {"routes": ["a", "b"], "select": "many"},
+        "reply": {"when": "triage.done and scan.done"},
+    }
+    assert _per_node(run["files"], request_keys) == announced
+
+
+# --- the model-facing text: the schema's sentences, the guide, the glossary -----
+
+
+def _repo_text(relative: str) -> str:
+    return (Path(__file__).resolve().parent.parent / relative).read_text(encoding="utf-8")
+
+
+def _heading_span(text: str, heading: str) -> str:
+    """The text from a heading to the next one at the same or a higher level.
+
+    A fenced block is skipped over: the examples these documents carry are full of
+    `#`-prefixed lines -- a prompt's own headings, a shell comment -- and none of
+    them is a heading of the document.
+    """
+    start = text.index(heading)
+    level = len(heading) - len(heading.lstrip("#"))
+    rest = text[start + len(heading) :]
+    fenced = False
+    for line in rest.splitlines():
+        if line.startswith("```"):
+            fenced = not fenced
+            continue
+        if not fenced and line.startswith("#") and len(line) - len(line.lstrip("#")) <= level:
+            return rest[: rest.index(line)]
+    return rest
+
+
+def _glossary_entry(text: str, term: str) -> str:
+    """One glossary entry, from its bold term to the next entry or heading.
+
+    The entry is where the term opens a line -- a glossary also names its terms
+    inside other entries. An entry may run over several paragraphs; what ends it is
+    a blank line followed by the next bold term or a heading.
+    """
+    start = re.search(rf"^{re.escape(term)}", text, re.M)
+    assert start is not None, f"no glossary entry opens with {term}"
+    rest = text[start.end() :]
+    end = re.search(r"\n\n(?=\*\*|#)", rest)
+    return rest[: end.start()] if end else rest
+
+
+def _flat(text: str) -> str:
+    """The text with every run of whitespace as one space, so a phrase matches
+    however the document happens to wrap it."""
+    return " ".join(text.split())
+
+
+_SKILL = "raven/memory_engine/skills/subagent-dag-orchestration/SKILL.md"
+
+
+def test_the_skill_documents_conditional_branches() -> None:
+    """The body a model reads before it writes a branching graph.
+
+    Every rule pinned here is one the runtime refuses a graph for, or one a graph
+    that follows the rest of the guide gets wrong without it.
+    """
+    section = _flat(_heading_span(_repo_text(_SKILL), "## Conditional branches"))
+
+    for field in ("`routes`", "`select`", "`when`"):
+        assert field in section
+    # The guard grammar: both atoms, the three operators, the parentheses.
+    for token in ("`<node>.<route>`", "`<node>.done`", "`not`", "`and`", "`or`", "parentheses"):
+        assert token in section, f"the guard grammar's {token} is not explained"
+    # Spaces separate tokens; inside an atom (`r . a`) the guard does not parse.
+    assert "Spacing between tokens is free; an atom is one token, written without spaces." in section
+    # A decision node's prompt asks for a conclusion; conditions are decidable and
+    # a single-select decision has a route for everything else.
+    assert "asks for the conclusion" in section
+    assert "mutually exclusive and decidable" in section
+    assert "catch-all" in section
+    # Every decision node a node depends on is named in its `when`: the general rule,
+    # and the same rule for one decision depending on another.
+    assert (
+        "**Every decision node in `depends_on` must appear in the node's `when`.** A node cannot depend on a "
+        "decision and stay silent about it"
+    ) in section
+    assert "decision node that depends on another decision node" in section
+    # One titled block per input that may be missing, and no `@nodes/` path to a
+    # node that may not run -- where "may not run" counts `.done` too.
+    assert "one titled block per input that may be" in section
+    assert "## Bug fix result" in section
+    assert "not** with `ref:@nodes/`" in section
+    assert (
+        "*may not run* when it has a `when` of its own, even `<node>.done`, which holds whichever route is "
+        "selected, or when it depends on nodes of this graph that all may not run"
+    ) in section
+    # The fixed sentence, verbatim, is what a dependent of the same graph reads.
+    assert MISSING_OUTPUT_TEXT in section
+    assert "When a node reads a dependency of the same graph that was not executed" in section
+    for reason in ("`when_false`", "`when_unknown`", "`upstream_not_executed`"):
+        assert reason in section
+    # Unknown is a value of its own, and the upstream check runs before the guard.
+    assert "Unknown is not false: a route of a decision node that was never executed is *unknown*" in section
+    assert (
+        "that check comes first, so `<node>.done`, true whatever the decision did, cannot revive a node with "
+        "no input left on that path"
+    ) in section
+
+
+def test_the_skill_says_which_nodes_of_a_branch_need_its_route() -> None:
+    """The runner leaves a node out with a branch only when every dependency it has in
+    the graph was left out. A node of the branch that also depends on something
+    outside it runs on the route not taken unless its own guard names the route -- and
+    `.done`, which holds whichever route is selected, does not -- so the guide may not
+    say the entry's guard covers the whole branch. The rule is the branch's own: a
+    merge node meant to run on every route, like the example's `reply`, keeps `.done`."""
+    section = _flat(_heading_span(_repo_text(_SKILL), "## Conditional branches"))
+
+    assert (
+        "**Guard the entry node of a branch, and every node of the branch that also depends on something outside it.**"
+    ) in section
+    assert "a branch node needs no guard beyond naming any decision node it depends on" in section
+    assert (
+        "A node of the branch that also depends on something outside it, such as the decision node itself or a "
+        "node that runs whichever route is selected, is not left out that way: unless its own `when` names the "
+        "branch's route, it can run when the branch does not"
+    ) in section
+    assert "Name the route, as `<node>.<route>`, not `<node>.done`, which holds whichever route is selected" in section
+    assert "since a guard may only read a dependency" in section
+    assert (
+        "A merge node that should run on every route, like `reply` in the example below, keeps `<node>.done`."
+    ) in section
+    assert "A node that also depends on something outside the branch" not in section
+    assert "Only a branch's entry node needs a guard" not in section
+
+
+def test_the_skill_says_when_a_route_failure_and_a_missing_judge_end_the_node() -> None:
+    """Two outcomes a graph's author cannot see from the schema: a decision node
+    whose route cannot be established fails, and a host with no judge refuses the
+    graph outright rather than running it down no branch."""
+    section = _flat(_heading_span(_repo_text(_SKILL), "## Conditional branches"))
+
+    assert '"The route could not be determined: <reason>"' in section
+    assert "A host with no model to judge with refuses" in section
+
+
+def test_the_skill_names_a_node_that_prints_a_route_as_an_anti_pattern() -> None:
+    """The node's own text selects nothing, which is the one thing a model reaching
+    for this feature is most likely to get wrong: it will ask the step to print its
+    answer as a route name unless the guide says not to."""
+    anti_patterns = _flat(_heading_span(_repo_text(_SKILL), "## Anti-patterns"))
+
+    assert "**Don't** ask a node to print a route marker" in anti_patterns
+    assert "**Don't** repeat the entry guard on every node inside a branch" in anti_patterns
+    # Qualified the way the rule is: a copy says nothing only where every dependency
+    # lies inside the branch.
+    assert "A node whose dependencies all lie inside the branch is left out with its entry" in anti_patterns
+    assert (
+        "The exception is a node of the branch that also depends on something outside it, the decision node "
+        "included: it needs the branch's route in its own `when`"
+    ) in anti_patterns
+    assert "The exception is a node that also depends on something outside the branch" not in anti_patterns
+
+
+def test_the_skills_resident_description_names_the_branch_in_one_graph() -> None:
+    """The description rides in every system prompt and is the only part of this
+    guide an ordinary turn reads, so a model that never opens the body still has to
+    learn here that one graph can branch rather than only run in series."""
+    import raven
+
+    skill = Path(raven.__file__).parent / "memory_engine" / "skills" / "subagent-dag-orchestration" / "SKILL.md"
+    head = skill.read_text(encoding="utf-8").split("---")[1]
+    description = next(line for line in head.splitlines() if line.startswith("description: "))
+
+    assert (
+        "A step whose result decides what runs next is a decision node: give it routes, and guard what follows "
+        "with when, all in one graph."
+    ) in description
+    # Loops are still graphs in series: a branch is a decision inside one graph, not a cycle.
+    assert "Iteration is graphs in series, one graph per round, driven by you." in description
+
+
+def test_the_skills_worked_example_is_a_graph_the_runtime_accepts() -> None:
+    """The example is copied, so it has to be a valid submission as written -- and
+    the one submission that exercises the whole feature: two decisions, a guarded
+    branch off each, a merge behind both, and a merge that reads a branch it did not
+    take."""
+    section = _heading_span(_repo_text(_SKILL), "## Conditional branches")
+    block = section.split("```json", 1)[1].split("```", 1)[0]
+    arguments = json.loads(block)
+
+    spec = parse_dag_spec(arguments)
+    order = validate_and_order(spec)
+    assert sorted(order) == sorted(node.id for node in spec.nodes)
+    position = {node_id: index for index, node_id in enumerate(order)}
+    assert all(position[dep] < position[node.id] for node in spec.nodes for dep in node.depends_on)
+    by_id = {node.id: node for node in spec.nodes}
+    # The prose around the example counts what it shows, and calls a guarded node a
+    # node that carries a guard rather than a guard.
+    prose = _flat(section)
+    assert "One graph, two decisions, four guarded steps:" in prose
+    assert sum(1 for node in spec.nodes if node.routes) == 2
+    assert sum(1 for node in spec.nodes if node.when) == 4
+    assert "`fix`, `design` and `deep_review` each open a branch, and each carries that branch's guard." in prose
+    assert by_id["triage"].routes == {
+        "bug": "the issue is caused by a defect in the code",
+        "feature": "the issue asks for new behaviour",
+        "question": "anything else: a usage question, or an issue that is neither a defect nor a request for new behaviour",
+    }
+    assert by_id["deep_review"].when == "(triage.bug or triage.feature) and risk.high"
+    assert "{{ fix.output }}" in by_id["reply"].prompt_template
+    assert "ref:@nodes/" not in by_id["reply"].prompt_template
+
+
+def test_context_md_defines_the_branch_terms() -> None:
+    """`CONTEXT.md` is where a new domain term is defined, and these four carry
+    meanings a reader cannot guess: which node decides, what a guard may read, and
+    why a node that never ran is a state of its own."""
+    text = _repo_text("CONTEXT.md")
+
+    decision = _flat(_glossary_entry(text, "**Decision node**"))
+    assert "`routes`" in decision and "`select`" in decision
+    guard = _flat(_glossary_entry(text, "**Guard**"))
+    assert "`when`" in guard and "`<node>.done`" in guard
+    assert "`not_executed`" in _glossary_entry(text, "**Not executed**")
+
+    route = _flat(_glossary_entry(text, "**Route (DAG branch)**"))
+    assert "_Avoid_" in route, "the entry has to rule out the routing-table rows and the runner's own route check"
+    assert "**Routing entry**" in route
+    assert "`_route_available`" in route
+
+
+def test_the_glossary_keeps_every_not_executed_consequence_with_the_state() -> None:
+    """Three things follow from the status, and two of them are defined where a
+    reader of another entry looks: the fixed sentence is written unfenced, and the
+    memory block leaves the node out."""
+    text = _repo_text("CONTEXT.md")
+
+    entry = _flat(_glossary_entry(text, "**Not executed**"))
+    for reason in ("`when_false`", "`when_unknown`", "`upstream_not_executed`"):
+        assert reason in entry
+    assert "`skipped`" in entry
+
+    fence = _flat(_glossary_entry(text, "**The fence rule**"))
+    assert "not executed: that is the runner's own words, so it is written unfenced" in fence
+
+    memory = _flat(_glossary_entry(text, "**Memory record**"))
+    assert "A node that was not executed gets no line" in memory
+
+
+def test_the_tui_glossary_says_what_the_turned_in_line_carries() -> None:
+    """The panel's second line is where a person reads what a branch did; the
+    glossary describes it field by field, so the description has to name the
+    branch parts or the next change to it reads as free."""
+    entry = _flat(_glossary_entry(_repo_text("ui-tui/CONTEXT.md"), "**DAG Panel**"))
+
+    assert "why it was not executed, or what a decision selected" in entry
+    assert "guard" in entry
+    assert "route evidence" in entry
+    assert "`/dag <node>`" in entry
+
+
+def test_the_tasks_list_design_keeps_the_counts_and_node_fields_the_reader_emits() -> None:
+    """`docs/specs/` is kept matching the code; `docs/plans/` is the archive."""
+    text = _repo_text("docs/specs/2026-09-18-desk-tasks-list-design.md")
+
+    counts = text[text.index("`counts` (") : text.index("`nodes[]`")]
+    assert "`not_executed`" in counts
+
+    task_node = text[text.index("`TaskNode`:") :]
+    task_node = task_node[: task_node.index("\n\n")]
+    for field in ("`reason`", "`selected_routes`", "`route_evidence`", "`routes`", "`select`", "`when`"):
+        assert field in task_node
+
+
+def test_the_playbook_spec_lists_the_branch_fields_and_drops_the_stale_limit() -> None:
+    """A playbook's node model is the graph's node model, so the playbook file
+    format has to carry the same fields -- and a branch is expressible, which the
+    "cannot be expressed" list used to deny."""
+    text = _repo_text("docs/specs/playbook-spec.md")
+
+    for field, kind in (("routes", "map"), ("select", "enum"), ("when", "string")):
+        assert f"| `{field}` | {kind} |" in text
+    assert "skills | mcps | instance | inputs | routes | select | when" in text
+    assert "conditional skipping" not in text
+    assert "**Two things that cannot be expressed**: cycles" in text, "loops are still not expressible"
+    # The run prefix moves the node part of every `when` atom with the ids, and only a
+    # dependent that runs reads the stand-in.
+    assert "`dependsOn`, `{{ id.output }}` and the node ids in `when` atoms rewritten in sync" in text
+    assert 'a dependent that still runs reads the fixed "not executed" sentence in its place' in text
+
+
+_DOCS_EN = "docs-site/docs/orchestration.md"
+_DOCS_ZH = "docs-site/docs/orchestration.zh.md"
+
+
+def _docs_section(text: str, title: str, anchor: str) -> str:
+    """One second-level section of a docs page: the English heading by its words, the
+    Chinese twin by the anchor it has to pin, since its own title slugifies to nothing."""
+    heading = next(
+        (
+            line
+            for line in text.splitlines()
+            if line == f"## {title}" or (line.startswith("## ") and f"{{ #{anchor} }}" in line)
+        ),
+        None,
+    )
+    assert heading is not None, f"the page has no section #{anchor}"
+    return _heading_span(text, heading)
+
+
+def _verdict_paragraph(text: str) -> str:
+    """The paragraph that introduces the verdict -- in either language, the one that bolds it."""
+    start = text.index("**verdict")
+    return text[text.rfind("\n\n", 0, start) + 2 : text.index("\n\n", start)]
+
+
+def _paragraph_with(text: str, marker: str) -> str:
+    """The first paragraph of ``text`` that contains ``marker``."""
+    paragraph = next((paragraph for paragraph in text.split("\n\n") if marker in paragraph), None)
+    assert paragraph is not None, f"no paragraph carries {marker}"
+    return paragraph
+
+
+def _code_spans(text: str) -> list[str]:
+    """Every inline code span, in order: the part of a sentence both languages spell alike."""
+    return re.findall(r"`[^`]+`", _flat(text))
+
+
+@pytest.mark.parametrize("page", [_DOCS_EN, _DOCS_ZH], ids=["en", "zh"])
+def test_the_docs_site_describes_branches(page: str) -> None:
+    """The published pages are the only place a user reads what `routes`, `select`
+    and `when` do, and the two languages have to say the same things.
+
+    Both pages are checked through what they share -- the fields, the atoms, the
+    statuses and the sentence are code in either language -- so this file names
+    no word of the Chinese page.
+    """
+    text = _repo_text(page)
+    raw_section = _docs_section(text, "Conditional branches", "conditional-branches")
+    section = _flat(raw_section)
+
+    for code in ("`routes`", "`select`", "`when`", "`<node>.<route>`", "`<node>.done`", "`depends_on`"):
+        assert code in section
+    for reason in ("`when_false`", "`when_unknown`", "`upstream_not_executed`"):
+        assert reason in section
+    assert "`not_executed`" in section
+    assert MISSING_OUTPUT_TEXT in section, "the stand-in sentence is quoted verbatim"
+    assert "`ref:@nodes/`" in section
+    # The two paragraphs that state rules rather than name fields -- which decision
+    # nodes a guard names and which nodes of a branch need one; what may not run and
+    # how to read it -- carry the same code, in the same order, as their twin.
+    twin = _DOCS_ZH if page == _DOCS_EN else _DOCS_EN
+    twin_section = _docs_section(_repo_text(twin), "Conditional branches", "conditional-branches")
+    for marker in ("`<node>.<route>`", "`ref:@nodes/`"):
+        assert _code_spans(_paragraph_with(raw_section, marker)) == _code_spans(
+            _paragraph_with(twin_section, marker)
+        ), f"the paragraph with {marker} says something its twin does not"
+    # A later graph gets a refusal, not the stand-in: the section points at the rule.
+    assert "(#node-contract-and-data-flow)" in section
+
+    contract = _docs_section(text, "Node contract and data flow", "node-contract-and-data-flow")
+    for field in ("routes", "select", "when"):
+        assert f"| `{field}` |" in contract, f"the node contract table lists `{field}`"
+    statuses = _docs_section(text, "Failure handling and replanning", "failure-handling-and-replanning")
+    assert "| `not_executed` |" in statuses, "the status table lists the new status"
+
+
+def test_the_english_docs_page_says_who_needs_a_guard_and_who_reads_the_stand_in() -> None:
+    """The rules the code-span check above holds the Chinese page to, in the English
+    page's own words: which nodes of a branch need its route, that the stand-in is
+    for the same graph only, and what "may not run" covers."""
+    text = _repo_text(_DOCS_EN)
+    section = _flat(_docs_section(text, "Conditional branches", "conditional-branches"))
+
+    assert "Every decision node in a node's `depends_on` must appear in its `when`" in section
+    assert "so a branch node needs no guard beyond naming any decision node it depends on" in section
+    assert (
+        "A node of the branch that also depends on something outside it, the decision node included, needs the "
+        "branch's route in its own `when`, as `<node>.<route>` rather than `<node>.done`"
+    ) in section
+    assert "A merge node that should run on every route keeps `<node>.done`." in section
+    assert "A node that also depends on a node outside the branch" not in section
+    assert "Only a branch's first node needs a guard" not in section
+    assert "A node of the same graph that reads one receives this sentence" in section
+    assert "a later graph that names a node an earlier run did not execute is refused" in section
+    assert (
+        "A node may not run when it has a `when` of its own, `<node>.done` included, or when it depends on "
+        "nodes of the graph that all may not run"
+    ) in section
+
+    contract = _flat(_docs_section(text, "Node contract and data flow", "node-contract-and-data-flow"))
+    assert "Earlier failed, skipped, canceled, interrupted, not-executed, or still-running nodes" in contract
+
+
+@pytest.mark.parametrize("page", [_DOCS_EN, _DOCS_ZH], ids=["en", "zh"])
+def test_the_docs_site_no_longer_offers_to_turn_the_judge_off(page: str) -> None:
+    """The switch is gone from the code and migrated out of configs, so a page that
+    still offers to turn the judge off describes a build nobody can run.
+
+    Read the same way in both languages: the verdict paragraph names the judge once
+    -- the ordinary node's call that may fail or time out; the switch was the second
+    mention -- and points at the branch rules for the decision node's exception, and
+    the `subagentDag` defaults list the judge's timeout and no verdict switch.
+    """
+    text = _repo_text(page)
+
+    paragraph = _verdict_paragraph(text)
+    assert paragraph.count("judge") == 1, paragraph
+    assert "(#conditional-branches)" in paragraph
+
+    settings = text[text.index("`subagentDag`") :]
+    assert "verdict" not in settings[: settings.index("180")], "the defaults no longer list a verdict switch"
+    assert "verdictEnabled" not in text
+
+
+def test_the_changelog_entry_names_the_feature_and_the_retired_switch() -> None:
+    """`## Unreleased` is hand-kept, so nothing but this test notices an entry the
+    feature should have had."""
+    unreleased = _heading_span(_repo_text("CHANGELOG.md"), "## Unreleased")
+    added = _flat(_heading_span(unreleased, "### Added"))
+
+    assert "`routes`" in added and "`when`" in added
+    assert "`not_executed`" in added
+    assert "a node of the same graph that reads one gets a fixed sentence" in added
+    assert "`subagentDag.verdictEnabled`" in added
+    # What retiring the switch does to a config that had judgement off, said plainly;
+    # the no-judge refusal is a fact of its own, not the reason the switch went.
+    assert (
+        "A config that turned judgement off now has every finished node judged: one more model call per node" in added
+    )
+    assert "A host with no model to judge with refuses a graph that declares routes." in added
+    assert "reads exactly as it did" not in added

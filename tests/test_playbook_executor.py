@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from raven.agent.subagent.dag_graph import parse_dag_spec, validate_and_order
 from raven.config.schema import MCPServerConfig
 from raven.contracts.llm_provider import ErrorClassification, LLMResponse
 from raven.playbook import (
@@ -26,6 +27,8 @@ from raven.playbook import (
     Triggers,
 )
 from raven.playbook.agent_profiles import PlaybookAgentProfile
+from raven.playbook.executor import _namespace_run
+from raven.playbook.prompt import SYSTEM_PROMPT, build_compose_prompt, build_revise_prompt
 
 COMPOSE_PROFILES = {
     "research-raven": PlaybookAgentProfile(
@@ -104,6 +107,35 @@ def _dag_spec(**over):
     )
     base.update(over)
     return PlaybookSpec(**base)
+
+
+def _branching_nodes() -> list[NodeSpec]:
+    """A decision, the branch one of its routes opens, and a step that waits on both."""
+    return [
+        NodeSpec(
+            id="triage",
+            subagent="data-raven",
+            node_summary="classify the issue",
+            prompt_template="classify the issue",
+            routes={"bug": "the issue is a defect", "other": "anything else"},
+        ),
+        NodeSpec(
+            id="fix",
+            subagent="content-raven",
+            node_summary="fix the defect",
+            prompt_template="fix the defect",
+            depends_on=["triage"],
+            when="triage.bug",
+        ),
+        NodeSpec(
+            id="reply",
+            subagent="content-raven",
+            node_summary="reply to the reporter",
+            prompt_template="reply using {{ fix.output }}",
+            depends_on=["triage", "fix"],
+            when="triage.done",
+        ),
+    ]
 
 
 # ---------------------------------------------------------------- executor
@@ -447,6 +479,66 @@ async def test_executor_namespaces_the_instance_handle_per_run():
     assert first != second
 
 
+async def test_a_playbook_node_keeps_its_routes_select_and_guard():
+    """``_dispatch`` rebuilds each node from a hand-written field list, and a field
+    missing from it is dropped without a word -- which is how ``skills`` and ``mcps``
+    were once lost.
+
+    Asserted on what the graph tool was handed, because that is the only place a
+    dropped field shows: the playbook still loads, validates and runs, as a graph
+    that never branches.
+    """
+    tool = FakeDagTool()
+    ex = PlaybookExecutor(dag_tool=tool)
+    playbook = _dag_spec(
+        nodes=[
+            NodeSpec(
+                id="triage",
+                subagent="data-raven",
+                node_summary="classify the issue",
+                prompt_template="classify the issue",
+                routes={"bug": "the issue is a defect", "other": "anything else"},
+            ),
+            NodeSpec(
+                id="scan",
+                subagent="data-raven",
+                node_summary="list what the change could affect",
+                prompt_template="list what the change could affect",
+                routes={"api": "the public api is affected", "cli": "the command line is affected"},
+                select="many",
+            ),
+            NodeSpec(
+                id="fix",
+                subagent="content-raven",
+                node_summary="fix the defect",
+                prompt_template="fix the defect",
+                depends_on=["triage", "scan"],
+                when="triage.bug and not scan.cli",
+            ),
+            NodeSpec(
+                id="note",
+                subagent="content-raven",
+                node_summary="write the closing note",
+                prompt_template="write the closing note",
+            ),
+        ]
+    )
+
+    plan = await ex.execute(playbook, params={"week_of": "w"})
+
+    assert plan.kind == "dag"
+    nodes = {n["id"].rsplit("-", 1)[-1]: n for n in tool.calls[0]["nodes"]}
+    triage, scan, fix, note = (nodes[name] for name in ("triage", "scan", "fix", "note"))
+    assert triage["routes"] == {"bug": "the issue is a defect", "other": "anything else"}
+    assert "select" not in triage and "when" not in triage
+    assert scan["routes"] == {"api": "the public api is affected", "cli": "the command line is affected"}
+    assert scan["select"] == "many"
+    assert fix["when"] == f"{triage['id']}.bug and not {scan['id']}.cli"
+    assert "routes" not in fix and "select" not in fix
+    assert not {"routes", "select", "when"} & set(note)
+    assert playbook.nodes[2].when == "triage.bug and not scan.cli"
+
+
 async def test_executor_asks_the_graph_tool_to_confirm_unless_the_caller_already_did():
     tool = FakeDagTool()
     ex = PlaybookExecutor(dag_tool=tool)
@@ -699,6 +791,109 @@ async def test_prompt_mode_bad_graph_gets_one_repair_then_degrades():
     assert plan.kind == "questions"
     assert "Graph assembly" in plan.reply
     assert len(provider.calls) == 2  # one repair round happened
+
+
+async def test_prompt_mode_repairs_a_branch_error_and_dispatches_the_branch():
+    """A composed graph goes through the same graph rules as a submitted one, so a
+    guard reading a node it does not depend on comes back to the composing model
+    with the rule's own words, and the corrected branch reaches the graph tool."""
+    decision = {
+        "id": "triage",
+        "subagent": "research-raven",
+        "nodeSummary": "classify the target company",
+        "promptTemplate": "classify AcmeAI",
+        "routes": {"risky": "the target looks risky", "fine": "the target looks fine"},
+    }
+    guarded = {
+        "id": "dig",
+        "subagent": "content-raven",
+        "nodeSummary": "dig into the risk",
+        "promptTemplate": "dig into the risk",
+        "when": "triage.risky",
+    }
+    bad = {"nodes": [decision, {**guarded, "dependsOn": []}]}
+    corrected = {"nodes": [decision, {**guarded, "dependsOn": ["triage"]}]}
+    tool = FakeDagTool()
+    provider = ComposeProvider([json.dumps(bad), json.dumps(corrected)])
+    ex = PlaybookExecutor(dag_tool=tool, provider=provider, compose_prompt_mode=True)
+    ex.set_agent_profiles(lambda: COMPOSE_PROFILES)
+
+    plan = await ex.execute(_prompt_spec(), params={"target": "AcmeAI"})
+
+    assert plan.kind == "dag"
+    assert len(provider.calls) == 2
+    assert "guard names 'triage', which is not in its depends_on" in provider.calls[1][-1]["content"]
+    nodes = {node["id"].rsplit("-", 1)[-1]: node for node in tool.calls[0]["nodes"]}
+    assert nodes["triage"]["routes"] == decision["routes"]
+    assert nodes["dig"]["when"] == f"{nodes['triage']['id']}.risky"
+
+
+# --- What the generation and composition prompts tell a model a playbook can express.
+
+
+def test_the_prompts_allow_a_branch_and_still_refuse_a_loop():
+    system = " ".join(SYSTEM_PROMPT.split())
+    assert "conditional fallbacks cannot be expressed" not in system
+    assert "other than a branch" in system
+    assert "a loop cannot be expressed" in system
+    assert "A conditional branch can: give a step routes, and guard what follows with when." in system
+
+    compose = " ".join(build_compose_prompt("assemble it", COMPOSE_PROFILES, []).split())
+    assert "no run-time branches" not in compose
+    assert "design no run-time loops (a conditional branch is expressible)" in compose
+
+
+def test_the_compose_prompt_gives_a_branch_its_fields_and_the_one_rule_about_them():
+    """A prompt that says a branch is expressible has to hand over the fields to write one
+    with, and the one rule a branch breaks when it is forgotten: a node that depends on
+    a decision names it in its guard."""
+    compose = " ".join(build_compose_prompt("assemble it", COMPOSE_PROFILES, []).split())
+
+    listed = {word.strip() for word in compose.split("camelCase fields:", 1)[-1].split(")", 1)[0].split("/")}
+    assert {"routes", "select", "when"} <= listed
+    assert (
+        "a node that depends on a decision node (one with routes) must name it in its when, "
+        "as <id>.<route> or <id>.done"
+    ) in compose
+
+
+def _shown_playbook(prompt: str) -> dict:
+    block = prompt.split("# Current playbook\n", 1)[1].split("\n\n# User feedback", 1)[0]
+    return json.loads(block)
+
+
+def test_a_playbook_without_a_branch_is_shown_to_the_revise_round_as_it_always_was():
+    """The revise prompt dumps every node field, nulls included. Three new optional
+    fields written as ``null`` on every node would change what a playbook with no
+    branch looks like to the model revising it, so they are left out until a node
+    sets one -- and the older optional fields keep their nulls."""
+    playbook = _dag_spec()
+
+    prompt = build_revise_prompt(playbook, "make it faster", COMPOSE_PROFILES)
+
+    as_before = playbook.model_dump(by_alias=True, exclude={"nodes": {"__all__": {"routes", "select", "when"}}})
+    shown = json.dumps(as_before, ensure_ascii=False, indent=2)
+    assert f"# Current playbook\n{shown}\n\n# User feedback\nmake it faster" in prompt
+    assert '"instance": null' in prompt and '"mcps": null' in prompt and '"skills": null' in prompt
+    assert not any(word in prompt for word in ('"routes"', '"select"', '"when"'))
+
+
+def test_a_branching_playbook_shows_the_revise_round_its_routes_and_guards():
+    nodes = _branching_nodes()
+    nodes[0] = nodes[0].model_copy(update={"select": "many"})
+    nodes.append(
+        NodeSpec(id="note", subagent="content-raven", node_summary="write the closing note", prompt_template="note")
+    )
+
+    prompt = build_revise_prompt(_dag_spec(nodes=nodes), "make it faster", COMPOSE_PROFILES)
+
+    shown = {node["id"]: node for node in _shown_playbook(prompt)["nodes"]}
+    assert shown["triage"]["routes"] == {"bug": "the issue is a defect", "other": "anything else"}
+    assert shown["triage"]["select"] == "many"
+    assert "when" not in shown["triage"]
+    assert shown["fix"]["when"] == "triage.bug"
+    assert "routes" not in shown["fix"] and "select" not in shown["fix"]
+    assert not {"routes", "select", "when"} & set(shown["note"])
 
 
 async def test_prompt_mode_provider_error_does_not_enter_content_repair():
@@ -1033,6 +1228,122 @@ async def test_rewrite_leaves_foreign_references_alone():
     # An id outside this graph is not ours to rewrite; the runner's own
     # whitelist decides what happens to it.
     assert "{{ elsewhere.output }}" in template
+
+
+def test_a_namespaced_guard_names_the_namespaced_nodes():
+    """Two runs of one playbook in one conversation: the second run's guard has to
+    follow the ids the namespace pass mints, or the graph is refused for naming a
+    node outside its depends_on -- the first run took the plain ids."""
+    nodes = [
+        NodeSpec(
+            id="r", subagent="x", node_summary="r", prompt_template="r", routes={"a": "a", "b": "b"}, depends_on=[]
+        ),
+        NodeSpec(id="g", subagent="x", node_summary="g", prompt_template="g", depends_on=["r"], when="r.a"),
+    ]
+
+    first = _namespace_run("pb", nodes)
+    second = _namespace_run("pb", nodes)
+
+    for run in (first, second):
+        router, guarded = run
+        assert guarded.depends_on == [router.id]
+        assert guarded.when == f"{router.id}.a"
+        assert router.routes == {"a": "a", "b": "b"}
+    assert first[0].id != second[0].id
+    assert first[0].id not in second[1].when
+    assert nodes[1].when == "r.a", "the playbook's own node is not rewritten in place"
+
+
+@pytest.mark.parametrize(
+    ("guard", "expected"),
+    [
+        ("r.a", "{r}.a"),
+        ("r.done", "{r}.done"),
+        ("not (r.a or  s.done)\tand\nr.b", "not ({r}.a or  {s}.done)\tand\n{r}.b"),
+        # A route may be named like another node: only the part before the dot is an id.
+        ("r.s and not s.r", "{r}.s and not {s}.r"),
+        # One id may be the front of another: each atom is read whole, not found by substring.
+        ("rr.a or r.a", "{rr}.a or {r}.a"),
+        # An id this playbook does not have is not ours to rename; the graph tool's own checks name it.
+        ("ghost.a", "ghost.a"),
+        ("  r.a  ", "  {r}.a  "),
+        ("   ", "   "),
+        ("", ""),
+        (None, None),
+    ],
+)
+def test_the_namespace_pass_moves_only_the_node_ids_inside_a_guard(guard, expected):
+    nodes = [
+        NodeSpec(id=name, subagent="x", node_summary=name, prompt_template=name, routes={"a": "a", "s": "s", "r": "r"})
+        for name in ("r", "s", "rr")
+    ]
+    nodes.append(NodeSpec(id="g", subagent="x", node_summary="g", prompt_template="g", when=guard))
+
+    run = _namespace_run("pb", nodes)
+
+    minted = {original.id: renamed.id for original, renamed in zip(nodes, run, strict=True)}
+    assert run[-1].when == (expected.format(**minted) if expected is not None else None)
+    assert [node.routes for node in run[:3]] == [node.routes for node in nodes[:3]]
+
+
+def test_the_namespace_pass_keeps_each_atom_of_a_repeated_route_to_its_own_node():
+    """Both nodes declare a route `x`, so the route name says nothing about where an
+    atom ends: a rename splicing by the name alone would take the wrong span."""
+    nodes = [
+        NodeSpec(
+            id=name, subagent="x", node_summary=name, prompt_template=name, routes={"x": "x holds", "y": "y holds"}
+        )
+        for name in ("alpha", "beta")
+    ]
+    nodes.append(NodeSpec(id="g", subagent="x", node_summary="g", prompt_template="g", when="alpha.x and beta.x"))
+
+    run = _namespace_run("pb", nodes)
+
+    minted = {original.id: renamed.id for original, renamed in zip(nodes, run, strict=True)}
+    assert run[-1].when == f"{minted['alpha']}.x and {minted['beta']}.x"
+
+
+async def test_a_branching_playbook_survives_the_library_and_reaches_the_graph_tool(tmp_path: Path):
+    """Saved, read back, validated and dispatched: the whole way a playbook travels,
+    with the guard following the node ids the dispatch mints."""
+    tool = FakeDagTool()
+    rt = _runtime(tmp_path, [_dag_spec(nodes=_branching_nodes())], dag_tool=tool)
+
+    plan = await rt.load("weekly-feedback", {"week_of": "w"})
+
+    assert plan.kind == "dag"
+    nodes = {n["id"].rsplit("-", 1)[-1]: n for n in tool.calls[0]["nodes"]}
+    triage, fix, reply = nodes["triage"], nodes["fix"], nodes["reply"]
+    assert triage["routes"] == {"bug": "the issue is a defect", "other": "anything else"}
+    assert fix["when"] == f"{triage['id']}.bug"
+    assert reply["when"] == f"{triage['id']}.done"
+    assert reply["depends_on"] == [triage["id"], fix["id"]]
+
+
+class ValidatingDagTool(FakeDagTool):
+    """Holds each dispatched graph to the checks the graph tool applies on submission."""
+
+    async def execute(self, nodes, task_summary="", **kwargs):
+        validate_and_order(parse_dag_spec({"task_summary": task_summary, "nodes": nodes}))
+        return await super().execute(nodes, task_summary=task_summary, **kwargs)
+
+
+async def test_two_runs_of_a_branching_playbook_each_pass_the_graph_tools_own_checks(tmp_path: Path):
+    """The second run in one conversation cannot reuse the plain ids the first took,
+    so its guard has to name its own nodes: a guard still naming the plain ones would
+    read a node outside its depends_on, and the graph tool would refuse the graph."""
+    tool = ValidatingDagTool()
+    rt = _runtime(tmp_path, [_dag_spec(nodes=_branching_nodes())], dag_tool=tool)
+
+    first = await rt.load("weekly-feedback", {"week_of": "w"})
+    second = await rt.load("weekly-feedback", {"week_of": "w"})
+
+    assert first.kind == second.kind == "dag"
+    first_ids, second_ids = ({node["id"] for node in call["nodes"]} for call in tool.calls)
+    assert first_ids.isdisjoint(second_ids)
+    for call in tool.calls:
+        nodes = {node["id"].rsplit("-", 1)[-1]: node for node in call["nodes"]}
+        assert nodes["fix"]["when"] == f"{nodes['triage']['id']}.bug"
 
 
 async def test_an_empty_skills_list_is_forwarded_without_changing_the_prompt():

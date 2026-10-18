@@ -187,11 +187,15 @@ export const dagRunIdFrom = (res: unknown): string | null =>
 export const DOT_OF: Record<string, string> = {
   pending: '', running: 'run', completed: 'ok',
   failed: 'bad', cancelled: 'stop', skipped: 'skip', interrupted: 'bad',
+  /* Its own value for the same reason: a node a branch left out is not a skip. A skipped node is one a
+     failure cascaded past, so a run that skipped went wrong somewhere; this one the run chose away,
+     and the run is none the worse for it. The tally says so in its own word. */
+  not_executed: 'notx',
 }
 
 /* A graph node that has stopped, whatever it stopped as. `pending` and
    `running` are the two that have not. */
-const NODE_SETTLED = new Set(['completed', 'failed', 'skipped', 'cancelled', 'interrupted'])
+const NODE_SETTLED = new Set(['completed', 'failed', 'skipped', 'cancelled', 'interrupted', 'not_executed'])
 
 /* Whether one node has stopped. Exported because the graph's own clock is not
    the only reader: the transcript card's state word is about the graph rather

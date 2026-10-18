@@ -482,3 +482,165 @@ describe('/dag <ordinal>', () => {
     return vi.waitFor(() => expect(rpc).toHaveBeenCalledWith('dag.node', expect.objectContaining({ node: '2' })))
   })
 })
+
+describe('/dag <node> on a branching run', () => {
+  // The longest quote a judge may give. The panel clips it to a line; the page
+  // `/dag` opens has room for all of it.
+  const EVIDENCE = `${'word '.repeat(99)}words`
+
+  const openBranching = (runId = 'dag-1', selected: string[] = ['docs']) => {
+    turnController.recordDagEvent({
+      type: 'dag.run_started',
+      payload: {
+        run_id: runId,
+        nodes: [
+          { id: 'triage', subagent: 'echo', depends_on: [], routes: ['docs', 'bug'], select: 'one' },
+          { id: 'fix', subagent: 'echo', depends_on: ['triage'], when: 'triage.bug' },
+          { id: 'reply', subagent: 'echo', depends_on: ['triage'] }
+        ]
+      }
+    })
+    turnController.recordDagEvent({
+      type: 'dag.node_updated',
+      payload: {
+        run_id: runId,
+        node: 'triage',
+        status: 'completed',
+        selected_routes: selected,
+        route_evidence: EVIDENCE
+      }
+    })
+    turnController.recordDagEvent({
+      type: 'dag.node_updated',
+      payload: { run_id: runId, node: 'fix', status: 'not_executed', reason: 'when_false' }
+    })
+  }
+
+  // What the command pages for `arg`, line by line, and what it asked the server.
+  const paged = async (arg: string, ctxHistory: Msg[] = []) => {
+    const page = vi.fn()
+    const rpc = vi.fn((_method: string, params: { node: string; run_id: string }) =>
+      Promise.resolve({
+        node: {
+          run_id: params.run_id,
+          node: params.node,
+          prompt: 'p',
+          output: 'o',
+          output_chars: 1,
+          output_truncated: false
+        }
+      })
+    )
+    const ctx = buildCtx(rpc, vi.fn(), ctxHistory)
+    ;(ctx.transcript as unknown as { page: unknown }).page = page
+
+    dagCmd.run(arg, ctx, 'dag')
+
+    await vi.waitFor(() => expect(page).toHaveBeenCalled())
+
+    return { lines: String(page.mock.calls[0]![0]).split('\n'), rpc, title: page.mock.calls[0]![1] as string }
+  }
+
+  it('pages what a decision node selected, and the evidence it gave in full', async () => {
+    turnController.reset()
+    openBranching()
+
+    const { lines } = await paged('triage')
+
+    expect(EVIDENCE).toHaveLength(500)
+    expect(lines.slice(0, 4)).toEqual([
+      '── triage @ dag-1 (1 chars) ──',
+      'selected: docs',
+      `evidence: "${EVIDENCE}"`,
+      'prompt:'
+    ])
+  })
+
+  it('pages a selection of nothing as one', async () => {
+    turnController.reset()
+    openBranching('dag-1', [])
+
+    expect((await paged('triage')).lines[1]).toBe('selected: (none)')
+  })
+
+  it("pages a left-out node's reason and its guard", async () => {
+    turnController.reset()
+    openBranching()
+
+    const { lines } = await paged('fix')
+
+    expect(lines.slice(0, 4)).toEqual([
+      '── fix @ dag-1 (1 chars) ──',
+      'when triage.bug',
+      'not executed: not selected',
+      'prompt:'
+    ])
+  })
+
+  it('finds the same node by the ordinal the graph prints', async () => {
+    turnController.reset()
+    openBranching()
+
+    expect((await paged('2')).lines.slice(1, 3)).toEqual(['when triage.bug', 'not executed: not selected'])
+  })
+
+  it('pages a node no branch touched exactly as it always did', async () => {
+    turnController.reset()
+    openBranching()
+
+    expect((await paged('reply')).lines).toEqual(['── reply @ dag-1 (1 chars) ──', 'prompt:', 'p', 'output:', 'o'])
+  })
+
+  it('reads the node out of the run that owns it, the latest one when two share an id', async () => {
+    turnController.reset()
+    openBranching('dag-1', ['docs'])
+    openBranching('dag-2', ['bug'])
+
+    const { lines, rpc, title } = await paged('triage')
+
+    expect(rpc).toHaveBeenCalledWith('dag.node', expect.objectContaining({ node: 'triage', run_id: 'dag-2' }))
+    expect(title).toBe('triage @ dag-2')
+    expect(lines[1]).toBe('selected: bug')
+  })
+
+  it('reads a run a resumed transcript carries just the same', async () => {
+    turnController.reset()
+    const history: Msg[] = [
+      {
+        episodes: [
+          {
+            index: 0,
+            tools: [
+              {
+                dag: {
+                  done: true,
+                  nodes: [
+                    { dependsOn: [], id: 'triage', status: 'completed', subagent: 'echo', selectedRoutes: ['bug'] },
+                    {
+                      dependsOn: ['triage'],
+                      id: 'fix',
+                      status: 'not_executed',
+                      subagent: 'echo',
+                      reason: 'when_unknown'
+                    }
+                  ],
+                  runId: 'dag-1'
+                },
+                id: 't0',
+                name: 'run_subagent_dag',
+                ok: true,
+                summary: 'dag'
+              }
+            ]
+          }
+        ],
+        kind: 'episodes',
+        role: 'assistant',
+        text: ''
+      }
+    ]
+
+    expect((await paged('triage', history)).lines[1]).toBe('selected: bug')
+    expect((await paged('fix', history)).lines[1]).toBe('not executed: decision missing')
+  })
+})

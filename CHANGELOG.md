@@ -83,6 +83,27 @@ All notable changes to Raven are documented here.
   style outright: it takes one when the request asks for dark, black, night or
   a technology register.
 
+- A DAG graph can decide where it goes next in one run. A node that declares
+  `routes` is a decision node: the verdict call then also picks, from the
+  node's answer and the conditions the graph's author wrote, the route it
+  selects -- for `select: many`, any number of routes, none included. A
+  downstream node carries `when`, a guard over `<node>.<route>` and
+  `<node>.done` atoms with `not`, `and`, `or` and parentheses, evaluated once
+  its dependencies settle. A node a branch left out ends `not_executed` with
+  its reason and is never dispatched; a node of the same graph that reads one
+  gets a fixed sentence in place of the missing output and a note naming the
+  inputs that may be missing, and a `ref:@nodes/` path to such a node is
+  refused. A decision node whose route cannot be determined fails rather than
+  guessing. Playbooks carry the same three fields, and the TUI's DAG panel and
+  the web tasks list show what each node's branch did.
+
+- Node judgement is always on. `subagentDag.verdictEnabled` no longer exists,
+  and a load-time migration removes it from the config file and says so once. A
+  config that turned judgement off now has every finished node judged: one more
+  model call per node, and a node judged not to have accomplished its task can
+  suspend as `exception` and report, as it does wherever judgement was on. A
+  host with no model to judge with refuses a graph that declares routes.
+
 ### Changed
 
 - Memory runs on EverOS 1.4.2, which fixes what a memory server that stays up

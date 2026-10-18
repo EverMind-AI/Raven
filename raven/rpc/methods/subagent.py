@@ -240,7 +240,9 @@ def _root_for(session_id: str, agent_loop_factory: "AgentLoopFactory | None") ->
 
 # `manifest.json` statuses, on the left, and what a client renders on the right.
 # A node that never ran reads as queued rather than as running: the graph knows
-# the difference and so should the list.
+# the difference and so should the list. `not_executed` has no entry on purpose:
+# `_dag_rows` drops its row before this table is consulted, so an unmapped value
+# -- which would read as `run` -- is never reached.
 _DAG_WIRE_STATUS = {
     "pending": "queued",
     "running": "run",
@@ -322,9 +324,11 @@ def _dag_rows(root: Path, session_id: str, live_runs: set[str]) -> list[dict[str
             # clock -- a row for it pads the list with entries that open onto
             # nothing. The graph view still shows it, where "skipped because
             # its upstream failed" is legible structure rather than noise. A
-            # cancelled node is the opposite case: it ran, so its row opens
-            # onto a real transcript and stays.
-            if status == "skipped":
+            # not-executed node is the same: a branch that was not taken never
+            # called a sub-agent, and the stamps it carries only date the
+            # moment that was decided. A cancelled node is the opposite case:
+            # it ran, so its row opens onto a real transcript and stays.
+            if status in ("skipped", "not_executed"):
                 continue
             tools = entry.get("tool_calls")
             rows.append(

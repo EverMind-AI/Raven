@@ -14,6 +14,8 @@ depending on which client asked.
 from collections.abc import Callable
 from typing import Any
 
+from raven.agent.subagent.dag_reader import registry_outcome
+from raven.agent.subagent.dag_store import tally_node_statuses
 from raven.agent.subagent.instances import get_registry
 
 
@@ -47,7 +49,9 @@ async def read_run_reconciled(
         `dict`:
             The manifest-shaped payload from :func:`dag_reader.read_run`, with
             per-node status/timestamps and the summary recomputed from the
-            overlay when the run had not finalized.
+            overlay when the run had not finalized, and each node's branch
+            outcome (``reason``, ``selected_routes``, ``route_evidence``) filled
+            from its row.
     """
     run = await tool.read_run(run_id, session_key)
     if run.get("finalized"):
@@ -77,12 +81,9 @@ async def read_run_reconciled(
             entry["started_at"] = entry["started_at"] or row.get("createdAtMs")
             if status not in ("pending", "running", "exception"):
                 entry["ended_at"] = entry["ended_at"] or row.get("updatedAtMs")
+            # Only the keys the entry lacks: a value it already has is the manifest's.
+            for key, value in registry_outcome(row).items():
+                entry.setdefault(key, value)
         statuses.append(entry["status"])
-    run["summary"] = {
-        "total": len(statuses),
-        "completed": statuses.count("completed"),
-        "failed": statuses.count("failed"),
-        "skipped": statuses.count("skipped"),
-        "cancelled": statuses.count("cancelled"),
-    }
+    run["summary"] = tally_node_statuses(statuses)
     return run

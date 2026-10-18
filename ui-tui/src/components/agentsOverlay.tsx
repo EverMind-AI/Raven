@@ -36,7 +36,7 @@ import {
 } from '../app/directChatStore.js'
 import { fetchDirectHistory, scheduleInstanceRefresh } from '../app/directChatSync.js'
 import { sendDirect } from '../app/directSend.js'
-import { $liveAgents, toSubagentProgress } from '../app/liveAgentsStore.js'
+import { $liveAgents, agentRows, toSubagentProgress } from '../app/liveAgentsStore.js'
 import { scheduleLiveAgentsRefresh } from '../app/liveAgentsSync.js'
 import { patchOverlayState } from '../app/overlayStore.js'
 import { $spawnDiff, $spawnHistory, clearDiffPair, type SpawnSnapshot } from '../app/spawnHistoryStore.js'
@@ -1077,7 +1077,8 @@ export function AgentsOverlay({ focusId = null, gw, initialHistoryIndex = 0, onC
   // The turn rows carry no record id or instance of their own, so those two
   // are borrowed from the live row of the same run.
   const liveSubagents = useMemo(() => {
-    const live = new Map(liveAgentRows.map(r => [r.id, toSubagentProgress(r)]))
+    const agents = agentRows(liveAgentRows)
+    const live = new Map(agents.map(r => [r.id, toSubagentProgress(r)]))
     const merged = turnSubagents.map(s => {
       const row = live.get(s.id)
 
@@ -1085,7 +1086,7 @@ export function AgentsOverlay({ focusId = null, gw, initialHistoryIndex = 0, onC
     })
     const seen = new Set(turnSubagents.map(s => s.id))
 
-    return [...merged, ...liveAgentRows.filter(r => !seen.has(r.id)).map(r => live.get(r.id)!)]
+    return [...merged, ...agents.filter(r => !seen.has(r.id)).map(r => live.get(r.id)!)]
   }, [liveAgentRows, turnSubagents])
 
   const direct = useStore($directChat)

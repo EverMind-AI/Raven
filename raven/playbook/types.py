@@ -164,8 +164,9 @@ class PlaybookSpec(CamelBase):
     nodes: list[NodeSpec] | None = None
     prompts: str | None = None
     """prompt mode: how to assemble the graph (layers, agents, per-node
-    skills/mcps, dependencies) — never runtime decision rules; a composed
-    graph is fixed once assembled."""
+    skills/mcps, dependencies). A branch is the one run-time decision a
+    composed graph can express; otherwise a composed graph is fixed once
+    assembled."""
 
     roles: list[RoleEntry] | None = None
     """rounds mode: who plays each part, every round. The round's graph is

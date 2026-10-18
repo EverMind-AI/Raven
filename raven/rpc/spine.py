@@ -83,7 +83,7 @@ def _dag_payload(name: str, payload: dict) -> dict:
                 "id": node.get("id"),
                 "subagent": node.get("subagent"),
                 "depends_on": list(node.get("depends_on") or []),
-                **_present(node, ("instance", "node_summary")),
+                **_present(node, ("instance", "node_summary", "routes", "select", "when")),
             }
             for node in payload.get("nodes") or []
         ]
@@ -97,7 +97,7 @@ def _dag_payload(name: str, payload: dict) -> dict:
             **common,
             "node": payload.get("node"),
             "status": payload.get("status"),
-            **_present(payload, ("started_at", "ended_at")),
+            **_present(payload, ("started_at", "ended_at", "reason", "selected_routes", "route_evidence")),
         }
     if name == "dag_run_replanned":
         return {
@@ -122,7 +122,11 @@ def _dag_payload(name: str, payload: dict) -> dict:
     # a closed graph rather than a crash, so the field must always be sent.
     manifest = payload.get("manifest") or {}
     files = [
-        {"node": entry.get("node"), "status": entry.get("status"), **_present(entry, ("output_file", "error"))}
+        {
+            "node": entry.get("node"),
+            "status": entry.get("status"),
+            **_present(entry, ("output_file", "error", "reason", "selected_routes", "route_evidence")),
+        }
         for entry in manifest.get("files") or []
     ]
     return {**common, "dir": manifest.get("dir", ""), "summary": manifest.get("summary") or {}, "files": files}
