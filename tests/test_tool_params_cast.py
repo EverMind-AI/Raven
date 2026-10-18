@@ -602,3 +602,21 @@ def test_zero_array_bounds_remain_constraints() -> None:
     schema = {"type": "object", "properties": {"items": {"type": "array", "maxItems": 0}}}
     assert _round(schema, {"items": []})[1] == []
     assert "at most 0 items" in _round(schema, {"items": ["a"]})[1][0]
+
+
+@pytest.mark.parametrize("extra", [False, {"type": "integer"}])
+def test_pattern_properties_keep_their_original_values_for_the_tool(extra) -> None:
+    schema = {
+        "type": "object",
+        "properties": {"count": {"type": "integer"}},
+        "required": ["count"],
+        "patternProperties": {"^x_": {"type": "string"}},
+        "additionalProperties": extra,
+    }
+    original = {"count": "2", "x_a": "007"}
+    cast, errors = _round(schema, original)
+    assert errors == []
+    assert cast == {"count": 2, "x_a": "007"}
+    assert original == {"count": "2", "x_a": "007"}
+    assert _round(schema, {"x_a": "v"})[1][0].startswith("missing required count")
+    assert _round(schema, {"count": "bad", "x_a": "v"})[1][0].startswith("count should be integer")

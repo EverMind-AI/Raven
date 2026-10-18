@@ -52,7 +52,7 @@ def _cast_object(obj: Any, schema: dict[str, Any]) -> dict[str, Any]:
         return obj
 
     props = schema.get("properties", {})
-    extra = schema.get("additionalProperties")
+    extra = _additional_properties(schema)
     result = {}
 
     for key, value in obj.items():
@@ -156,6 +156,11 @@ _LOCATE_SHOWN = 3
 _KEYS_SHOWN = 8
 _ERRORS_SHOWN = 8
 _SHAPE_CHARS = 300
+
+
+def _additional_properties(schema: dict[str, Any]) -> Any:
+    patterns = schema.get("patternProperties")
+    return None if isinstance(patterns, dict) and patterns else schema.get("additionalProperties")
 
 
 class ParamError(str):
@@ -273,7 +278,7 @@ def _validate(val: Any, schema: dict[str, Any], path: str, owner: tuple[str, dic
 def _validate_object(obj: dict[str, Any], schema: dict[str, Any], path: str) -> list[str]:
     """The object's own problems -- missing, misplaced and unknown keys -- then its values'."""
     props = schema.get("properties", {})
-    extra = schema.get("additionalProperties")
+    extra = _additional_properties(schema)
     # The provider's stand-in for arguments that did not parse: listing it as a
     # key the model sent sends the model after a field it never wrote.
     unknown = [key for key in obj if key not in props and key != RAW_ARGUMENTS_KEY]
