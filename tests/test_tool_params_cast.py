@@ -370,14 +370,11 @@ def test_an_enum_miss_names_the_value_that_arrived() -> None:
     assert "'content'" in errors[0]
 
 
-def test_a_declared_pattern_is_enforced() -> None:
+def test_schema_patterns_are_left_to_the_tools_own_validator() -> None:
     schema = {"type": "object", "properties": {"handle": {"type": "string", "pattern": r"^\S(?:.*\S)?$"}}}
 
     assert _round(schema, {"handle": "build-scanner"})[1] == []
-    errors = _round(schema, {"handle": " padded "})[1]
-    assert len(errors) == 1
-    assert errors[0].startswith("handle")
-    assert "pattern" in errors[0]
+    assert _round(schema, {"handle": " padded "})[1] == []
 
 
 def test_a_pattern_python_cannot_compile_is_skipped_rather_than_raising() -> None:
@@ -590,20 +587,6 @@ def test_an_item_that_cannot_be_compared_for_uniqueness_is_not_a_crash() -> None
     assert errors == [], "nothing to compare against yet, and no exception either"
 
 
-@pytest.mark.parametrize("keyword", ["minItems", "maxItems"])
-@pytest.mark.parametrize("bound", ["1", None, True, False, -1, 1.5, [], {}])
-def test_invalid_array_bounds_do_not_reject_valid_arguments(keyword, bound) -> None:
-    schema = {"type": "object", "properties": {"items": {"type": "array", keyword: bound}}}
-    assert _round(schema, {"items": []})[1] == []
-    assert _round(schema, {"items": ["a", "b"]})[1] == []
-
-
-def test_zero_array_bounds_remain_constraints() -> None:
-    schema = {"type": "object", "properties": {"items": {"type": "array", "maxItems": 0}}}
-    assert _round(schema, {"items": []})[1] == []
-    assert "at most 0 items" in _round(schema, {"items": ["a"]})[1][0]
-
-
 @pytest.mark.parametrize("extra", [False, {"type": "integer"}])
 def test_pattern_properties_keep_their_original_values_for_the_tool(extra) -> None:
     schema = {
@@ -620,3 +603,92 @@ def test_pattern_properties_keep_their_original_values_for_the_tool(extra) -> No
     assert original == {"count": "2", "x_a": "007"}
     assert _round(schema, {"x_a": "v"})[1][0].startswith("missing required count")
     assert _round(schema, {"count": "bad", "x_a": "v"})[1][0].startswith("count should be integer")
+
+
+@pytest.mark.parametrize("keyword", ["minItems", "maxItems"])
+@pytest.mark.parametrize("bound", ["1", None, True, False, -1, 1.5, [], {}])
+def test_invalid_array_bounds_do_not_reject_valid_arguments(keyword, bound) -> None:
+    schema = {"type": "object", "properties": {"items": {"type": "array", keyword: bound}}}
+    assert _round(schema, {"items": []})[1] == []
+    assert _round(schema, {"items": ["a", "b"]})[1] == []
+
+
+def test_zero_array_bounds_remain_constraints() -> None:
+    schema = {"type": "object", "properties": {"items": {"type": "array", "maxItems": 0}}}
+    assert _round(schema, {"items": []})[1] == []
+    assert "at most 0 items" in _round(schema, {"items": ["a"]})[1][0]
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_wide_schema_suggestions_have_a_call_wide_comparison_budget(monkeypatch, nested) -> None:
+    from raven.agent.tools import params as module
+
+    comparisons = []
+    original = module.difflib.get_close_matches
+
+    def counted(word, possibilities, **kwargs):
+        possibilities = list(possibilities)
+        comparisons.extend((word, candidate) for candidate in possibilities)
+        assert len(comparisons) <= 256, "diagnostic work must stop before comparing every pair"
+        assert len(word) <= 64 and all(len(p) <= 64 for p in possibilities)
+        return original(word, possibilities, **kwargs)
+
+    monkeypatch.setattr(module.difflib, "get_close_matches", counted)
+    schema = {
+        "type": "object",
+        "properties": {f"field_{i:04d}": {"type": "integer"} for i in range(400)},
+        "additionalProperties": False,
+    }
+    payload = {f"fielx_{i:04d}": i for i in range(400)}
+    if nested:
+        schema = {"type": "object", "properties": {"rows": {"type": "array", "items": schema}}}
+        payload = {"rows": [payload, payload]}
+    errors = validate_params(schema, payload)
+    assert errors and comparisons
+    assert any("fielx_0399 is not allowed" in error for error in errors)
+    valid = {"field_0399": 1}
+    assert validate_params(schema, {"rows": [valid, valid]} if nested else valid) == []
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_misplaced_key_search_has_a_budget_shared_by_missing_fields(nested) -> None:
+    class CountedDict(dict):
+        visits = 0
+
+        def __contains__(self, key):
+            type(self).visits += 1
+            assert type(self).visits <= 256, "wide input must not be walked for every missing field"
+            return super().__contains__(key)
+
+    payload = {"rows": [CountedDict({"other": i}) for i in range(1000)]}
+    schema = {"type": "object", "required": [f"k{i}" for i in range(25)]}
+    if nested:
+        schema = {"type": "object", "properties": {"groups": {"type": "array", "items": schema}}}
+        payload = {"groups": [payload, payload]}
+    errors = validate_params(schema, payload)
+    path = "groups[1]." if nested else ""
+    assert any(f"missing required {path}k24" in e for e in errors)
+    assert CountedDict.visits > 0
+
+
+def test_long_key_diagnostics_are_bounded_without_changing_lookup() -> None:
+    key = "nested_" + "z" * 2000
+    keys = [f"k{i}" for i in range(25)]
+    schema = {"type": "object", "required": keys, "properties": {k: {"type": "integer"} for k in keys}}
+    errors = validate_params(schema, {key: dict.fromkeys(keys, 1)})
+    text = render_param_errors(errors)
+    assert len(text) <= 3500
+    assert all(len(e) <= 512 for e in errors)
+    assert "missing required k0" in text and "nested_" in text and "..." in text
+    assert key not in text
+    exact = {"type": "object", "required": [key], "properties": {key: {"type": "integer"}}}
+    assert _round(exact, {key: "2"}) == ({key: 2}, [])
+
+
+def test_a_long_first_shape_field_and_path_cannot_expand_the_rejection() -> None:
+    key = "field_" + "z" * 10000
+    shape = {"type": "object", "properties": {key: {"type": "string"}}, "required": [key]}
+    text = render_param_errors([ParamError("x" * 10000, "rows." + key, shape)])
+    assert len(text) <= 3500
+    assert "Expected rows." in text and "field_" in text and "..." in text
+    assert key not in text

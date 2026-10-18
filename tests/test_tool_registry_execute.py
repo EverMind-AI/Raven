@@ -735,8 +735,72 @@ class _SchemaProbe(_Plain):
         return self._schema
 
 
+@pytest.mark.slow
+def test_a_server_pattern_does_not_block_the_registry_event_loop() -> None:
+    import os
+    import subprocess
+    import sys
+    import textwrap
+
+    script = textwrap.dedent("""
+        import asyncio, json, time
+        from raven.agent.tools.registry import ToolRegistry
+        from raven.contracts.tool import Tool
+
+        class Probe(Tool):
+            name = "pattern_probe"
+            description = "A schema-only probe."
+            timeout_seconds = 0.01
+            parameters = {"type": "object", "properties": {
+                "slug": {"type": "string", "pattern": "^([a-z0-9]+-?)+$"}}}
+            async def execute(self, **kwargs):
+                return "accepted"
+
+        async def main():
+            registry = ToolRegistry()
+            registry.register(Probe())
+            await registry.execute("pattern_probe", {"slug": "warmup"})
+            started = time.monotonic()
+            async def heartbeat():
+                await asyncio.sleep(0)
+                return time.monotonic() - started
+            beat = asyncio.create_task(heartbeat())
+            result = await registry.execute("pattern_probe", {"slug": "a" * 32 + "_"})
+            print(json.dumps({"result": result, "heartbeat": await beat}))
+        asyncio.run(main())
+    """)
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(map(str, sys.path))}
+    result = subprocess.run(
+        [sys._base_executable, "-c", script],
+        cwd=Path(__file__).resolve().parent.parent,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=True,
+    )
+    observed = json.loads(result.stdout)
+    assert observed["result"] == "accepted"
+    assert observed["heartbeat"] < 0.5
+
+
 @pytest.mark.asyncio
 async def test_an_invalid_array_bound_does_not_turn_a_call_into_an_execution_error():
     schema = {"type": "object", "properties": {"items": {"type": "array", "minItems": "1"}}}
     out = await _registry(_SchemaProbe(schema)).execute("plain", {"items": []})
     assert out == "plain output"
+
+
+@pytest.mark.asyncio
+async def test_repeated_long_paths_keep_the_registry_rejection_bounded():
+    from raven.agent.loop.failure_streak import failure_class
+
+    keys = [f"k{i}" for i in range(25)]
+    schema = {"type": "object", "required": keys, "properties": {k: {"type": "integer"} for k in keys}}
+    key = "nested_" + "z" * 2000
+    out = await _registry(_SchemaProbe(schema)).execute("plain", {key: dict.fromkeys(keys, 1)})
+    assert out.startswith("Error: Invalid parameters for tool 'plain':")
+    assert len(out) <= 4096
+    assert "missing required k0" in out and "nested_" in out
+    assert key not in out and "..." in out
+    assert failure_class(out) == "schema"
