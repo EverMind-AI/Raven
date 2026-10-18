@@ -722,3 +722,21 @@ class TestHowAnInvalidCallIsReported:
         out = await _registry(_Many()).execute("many", {})
 
         assert failure_class(out) == "schema"
+
+
+class _SchemaProbe(_Plain):
+    """A real registry dispatch with a supplied schema and no external effects."""
+
+    def __init__(self, schema: dict) -> None:
+        self._schema = schema
+
+    @property
+    def parameters(self) -> dict:
+        return self._schema
+
+
+@pytest.mark.asyncio
+async def test_an_invalid_array_bound_does_not_turn_a_call_into_an_execution_error():
+    schema = {"type": "object", "properties": {"items": {"type": "array", "minItems": "1"}}}
+    out = await _registry(_SchemaProbe(schema)).execute("plain", {"items": []})
+    assert out == "plain output"

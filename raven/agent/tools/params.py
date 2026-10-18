@@ -326,11 +326,11 @@ def _validate_array(
 ) -> list[str]:
     label = path or "parameter"
     errors: list[str] = []
-    if "minItems" in schema and len(items) < schema["minItems"]:
+    if _item_bound(schema.get("minItems")) and len(items) < schema["minItems"]:
         errors.append(
             ParamError(f"{label} should have at least {_items(schema['minItems'])}, got {len(items)}", *owner)
         )
-    if "maxItems" in schema and len(items) > schema["maxItems"]:
+    if _item_bound(schema.get("maxItems")) and len(items) > schema["maxItems"]:
         errors.append(ParamError(f"{label} should have at most {_items(schema['maxItems'])}, got {len(items)}", *owner))
     if schema.get("uniqueItems"):
         seen: dict[str, int] = {}
@@ -497,6 +497,10 @@ def _listing(items: list[str], limit: int) -> str:
 
 def _clip(text: str) -> str:
     return text if len(text) <= _PREVIEW_CHARS else text[:_PREVIEW_CHARS] + "..."
+
+
+def _item_bound(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 def _items(count: int) -> str:

@@ -588,3 +588,17 @@ def test_an_item_that_cannot_be_compared_for_uniqueness_is_not_a_crash() -> None
     errors = _round(schema, {"tags": [circular]})[1]
 
     assert errors == [], "nothing to compare against yet, and no exception either"
+
+
+@pytest.mark.parametrize("keyword", ["minItems", "maxItems"])
+@pytest.mark.parametrize("bound", ["1", None, True, False, -1, 1.5, [], {}])
+def test_invalid_array_bounds_do_not_reject_valid_arguments(keyword, bound) -> None:
+    schema = {"type": "object", "properties": {"items": {"type": "array", keyword: bound}}}
+    assert _round(schema, {"items": []})[1] == []
+    assert _round(schema, {"items": ["a", "b"]})[1] == []
+
+
+def test_zero_array_bounds_remain_constraints() -> None:
+    schema = {"type": "object", "properties": {"items": {"type": "array", "maxItems": 0}}}
+    assert _round(schema, {"items": []})[1] == []
+    assert "at most 0 items" in _round(schema, {"items": ["a"]})[1][0]
