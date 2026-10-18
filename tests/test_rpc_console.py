@@ -2173,6 +2173,17 @@ async def test_image_selection_saves_the_provider_it_names(settings_cfg):
     assert json.loads(settings_cfg.read_text())["tools"]["media"]["image"]["provider"] == ""
 
 
+async def test_the_image_role_may_run_on_volcengine(settings_cfg):
+    """VolcEngine's address is Volces Ark, whose Images dialect the image tool
+    speaks, so the roles card's pick of it is saved like any other provider's."""
+    import json
+
+    selection = {"model": "doubao-seedream-5-0-pro", "quality": "", "provider": "volcengine"}
+    await console_module.settings_set({"key": "tools.media.image", "value": selection})
+    image = json.loads(settings_cfg.read_text())["tools"]["media"]["image"]
+    assert (image["model"], image["provider"]) == ("doubao-seedream-5-0-pro", "volcengine")
+
+
 @pytest.mark.parametrize(
     "key,value",
     [

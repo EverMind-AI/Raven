@@ -762,6 +762,38 @@ async def test_a_section_on_a_named_provider_sends_the_id_that_provider_serves(m
     assert (body["model"], body["size"], body["quality"]) == ("gpt-image-2", "1536x1024", "low")
 
 
+async def test_a_section_on_volcengine_speaks_ark_on_the_address_it_borrows(monkeypatch, tmp_path) -> None:
+    """``provider: volcengine`` lends VolcEngine's address and key, and that address
+    is Volces Ark: the frame goes out as Ark's explicit pair, and the picture is
+    fetched from the URL the answer carries, without the key."""
+    from raven.config.loader import load_config
+
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.path == "/api/v3/images/generations":
+            return httpx.Response(200, json={"data": [{"url": "https://1.2.3.4/tos/signed.jpeg"}]})
+        return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=_JPG)
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+    config = load_config(tmp_path / "absent.json")
+    config.providers.volcengine.api_key = "ark-key"
+    config.tools.media.image.model = "volcengine/doubao-seedream-5-0-pro"
+    config.tools.media.image.provider = "volcengine"
+    tool = ImageGenerateTool(config.effective_media_config().image, workspace=tmp_path / "ws")
+    out = json.loads(await tool.execute("a poster", aspect_ratio="16:9"))
+    assert out["success"] and Path(out["paths"][0]).read_bytes() == _JPG
+    generation, download = seen
+    assert str(generation.url) == "https://ark.cn-beijing.volces.com/api/v3/images/generations"
+    assert generation.headers["authorization"] == "Bearer ark-key"
+    body = json.loads(generation.content)
+    assert body == {"model": "doubao-seedream-5-0-pro", "prompt": "a poster", "n": 1, "size": "2736x1539"}
+    assert download.headers.get("authorization") is None
+
+
 # ── the image path: several pictures in one call ──
 
 

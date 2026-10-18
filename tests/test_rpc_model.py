@@ -156,7 +156,7 @@ async def test_options_rows_say_which_providers_the_image_tool_runs_on(fake_home
     _write_config(fake_home, {"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}})
     result = await model_options({})
     serving = sorted(row["slug"] for row in result["providers"] if row["image_api"])
-    assert serving == ["custom", "openai", "openrouter"]
+    assert serving == ["custom", "openai", "openrouter", "volcengine"]
 
 
 async def test_options_rows_carry_every_prefix_that_names_the_provider(fake_home: Path) -> None:
