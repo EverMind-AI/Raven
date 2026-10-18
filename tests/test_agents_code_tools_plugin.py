@@ -444,6 +444,19 @@ def test_syntax_errors_are_not_hidden_by_noqa(registry, tmp_path):
     assert "Python syntax error" in out and "project's Python version" in out
 
 
+def test_the_tool_guide_gives_the_syntax_note_s_advice():
+    """The note and the seeded tool guide reach the model together, so the
+    guide must not tell it to fix outright what the note asks it to check
+    against the project's Python version first."""
+    from code_flow.tools.diagnostics import PythonDiagnostics
+
+    note = PythonDiagnostics().note(Path("broken.py"), "def f(:\n", before=None)
+    guide = " ".join((PLUGIN_DIR / "prompts" / "TOOLS_CODE.md").read_text(encoding="utf-8").split())
+    advice = "check the project's Python version before changing newer syntax"
+    assert advice in note and advice in guide
+    assert "fix it before moving on" not in guide
+
+
 def test_checker_failure_does_not_turn_a_successful_write_into_a_failure(registry, tmp_path, monkeypatch):
     from pyflakes import checker
 
