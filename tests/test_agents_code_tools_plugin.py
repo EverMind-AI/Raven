@@ -602,6 +602,41 @@ def test_bytes_python_cannot_decode_are_a_syntax_error_where_decoding_stops(tmp_
     assert f"WARNING: {place}: Python syntax error: {message}" in note
 
 
+def test_a_finding_already_there_stays_existing_under_a_coding_declaration(registry, tmp_path):
+    """The content an edit replaced is decoded as the content it wrote is, so
+    a finding on a line the declaration decodes the same way both times is
+    an existing finding, not a new one."""
+    target = tmp_path / "declared.py"
+    body = "# coding: latin-1\nlabel = 'caf\u00e9' + missing_one\nvalue = 1\n"
+    assert "missing_one" in _text(_run(registry.execute("write_file", {"file_path": str(target), "content": body})))
+    args = {"file_path": str(target), "old_string": "value = 1", "new_string": "value = 2"}
+    edited = _text(_run(registry.execute("edit_file", args)))
+    assert "Successfully edited" in edited and "missing_one" not in edited
+
+
+def test_replaced_text_over_the_name_check_bound_in_bytes_is_an_unknown_baseline(tmp_path):
+    from code_flow.tools.diagnostics import MAX_SOURCE_BYTES, PythonDiagnostics
+
+    # Fewer characters than the bound, more bytes once stored.
+    before = "# " + "\u00e9" * (MAX_SOURCE_BYTES // 2)
+    assert len(before) <= MAX_SOURCE_BYTES < len(before.encode("utf-8"))
+    note = PythonDiagnostics().note(tmp_path / "wide.py", "value = missing_name\n", before=before)
+    assert "missing_name" in note and "baseline is unknown" in note
+
+
+def test_text_is_checked_as_the_utf8_bytes_the_file_tool_stores(tmp_path):
+    """Each of these compiles when the string alone is parsed and not as the
+    bytes on disk, which is what Python runs."""
+    from code_flow.tools.diagnostics import PythonDiagnostics
+
+    text = "# coding: ascii\nname = 'caf\u00e9'\n"
+    note = _run(PythonDiagnostics().check(tmp_path / "declared.py", text=text, before=None))
+    assert "line 2, column 12: Python syntax error: 'ascii' codec" in note
+    declared = "# coding: latin-1\nname = 'caf\u00e9'\nvalue = missing_name\n"
+    note = _run(PythonDiagnostics().check(tmp_path / "latin.py", text=declared, before=None))
+    assert "line 3, column 9: F821" in note
+
+
 def test_a_checked_file_is_decoded_by_its_declaration_and_read_to_one_past_the_bound(tmp_path):
     from code_flow.tools.diagnostics import MAX_SYNTAX_BYTES, PythonDiagnostics, read_source
 
@@ -616,16 +651,65 @@ def test_a_checked_file_is_decoded_by_its_declaration_and_read_to_one_past_the_b
             read_source(absent)
 
 
-def test_python_source_read_is_bounded_and_respects_its_encoding(tmp_path):
+def test_a_baseline_is_read_as_bytes_and_bounded(tmp_path):
     from code_flow.tools.diagnostics import MAX_SOURCE_BYTES, UNKNOWN, read_python
 
     target = tmp_path / "encoded.py"
     assert read_python(target) is None
-    target.write_bytes(b"# coding: latin-1\nname = 'caf\xe9'\n")
-    assert "caf\N{LATIN SMALL LETTER E WITH ACUTE}" in read_python(target)
+    raw = b"# coding: latin-1\nname = 'caf\xe9'\n"
+    target.write_bytes(raw)
+    assert read_python(target) == raw
     target.write_bytes(b"x" * (MAX_SOURCE_BYTES + 1))
     assert read_python(target) is UNKNOWN
     assert read_python(tmp_path) is UNKNOWN
+
+
+@pytest.mark.asyncio
+async def test_a_baseline_read_runs_on_a_worker_and_gives_up_at_the_wait(tmp_path, monkeypatch):
+    """The content an append replaces is read as every diagnostic read is, on
+    a diagnostic worker: a stalled read leaves the event loop free and the
+    baseline unknown once the wait runs out."""
+    import time
+
+    from code_flow.tools import diagnostics
+
+    release = threading.Event()
+    readers = []
+
+    def stalled(path):
+        readers.append(threading.get_ident())
+        release.wait(5)
+        return b""
+
+    monkeypatch.setattr(diagnostics, "read_python", stalled)
+    monkeypatch.setattr(diagnostics, "CHECK_WAIT_SECONDS", 0.05)
+    try:
+        started = time.monotonic()
+        assert await diagnostics.read_before(tmp_path / "slow.py") is diagnostics.UNKNOWN
+        assert time.monotonic() - started < 1
+        assert readers and readers[0] != threading.get_ident()
+    finally:
+        release.set()
+
+
+@pytest.mark.parametrize("tool", ["write_file", "edit_file"])
+def test_a_coding_declaration_applies_to_the_text_a_write_or_edit_stores(registry, tmp_path, tool):
+    """The file tool stores its text as UTF-8, so a declaration in that text
+    governs the file Python reads: content the declaration cannot decode is
+    reported, as it is for the same bytes read back after an append."""
+    target = tmp_path / "declared.py"
+    body = "# coding: ascii\nname = 'x'\n"
+    if tool == "write_file":
+        args = {"file_path": str(target), "content": body.replace("'x'", "'caf\u00e9'")}
+    else:
+        assert "Successfully" in _text(
+            _run(registry.execute("write_file", {"file_path": str(target), "content": body}))
+        )
+        args = {"file_path": str(target), "old_string": "'x'", "new_string": "'caf\u00e9'"}
+    result = _text(_run(registry.execute(tool, args)))
+    assert "line 2, column 12: Python syntax error: 'ascii' codec can't decode byte 0xc3" in result
+    with pytest.raises(SyntaxError):
+        compile(target.read_bytes(), str(target), "exec")
 
 
 def test_an_unavailable_note_names_its_file(tmp_path, monkeypatch):

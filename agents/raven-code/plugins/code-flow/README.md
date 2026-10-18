@@ -39,10 +39,12 @@ Syntax feedback names the parser version. Passing diagnostics do not prove
 that the patch is correct or replace project tests.
 
 Name checks skip source over 256 KiB, the syntax check source over 2 MiB, and
-a check skipped for size says so in one line. Source is decoded as Python
-decodes it, by its coding declaration or as UTF-8; bytes that do not decode
-are reported as the syntax error Python raises for them, at the line where
-decoding stops. A changed file that cannot be read reports diagnostics
+a check skipped for size says so in one line. A file is checked as the bytes
+on disk, decoded as Python decodes a source file, by its coding declaration or
+as UTF-8; written or edited text, which the file tool stores as UTF-8, is
+checked as those bytes, so a declaration in it applies. Bytes that do not
+decode are reported as the syntax error Python raises for them, at the line
+where decoding stops. A changed file that cannot be read reports diagnostics
 unavailable. Each file reports at most eight findings.
 Post-command checks consider at most eight visible changed Python files inside the
 command's working directory, with a 6,000-character diagnostic budget plus

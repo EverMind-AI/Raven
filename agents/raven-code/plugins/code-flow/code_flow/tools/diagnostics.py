@@ -47,23 +47,6 @@ class Finding:
         return self.code, self.message, self.source.strip()
 
 
-def read_python(path: Path) -> str | None | object:
-    """Read bounded source; distinguish an absent file from an unavailable baseline."""
-    try:
-        if not path.exists():
-            return None
-        if not path.is_file() or path.stat().st_size > MAX_SOURCE_BYTES:
-            return UNKNOWN
-        with path.open("rb") as handle:
-            raw = handle.read(MAX_SOURCE_BYTES + 1)
-        if len(raw) > MAX_SOURCE_BYTES:
-            return UNKNOWN
-        encoding, _ = tokenize.detect_encoding(io.BytesIO(raw).readline)
-        return raw.decode(encoding)
-    except (OSError, UnicodeError, SyntaxError):
-        return UNKNOWN
-
-
 def read_source(path: Path) -> bytes:
     """A changed file's bytes for a check, at most one past the syntax bound.
 
@@ -74,6 +57,15 @@ def read_source(path: Path) -> bytes:
         raise FileNotFoundError(f"no regular file at {path}")
     with path.open("rb") as handle:
         return handle.read(MAX_SYNTAX_BYTES + 1)
+
+
+def _stored(content: str | bytes, limit: int) -> str | bytes:
+    """``content`` as the bytes the file tool stores it as: text in UTF-8.
+
+    Text longer than ``limit`` in characters is longer in bytes too, so it is
+    left unencoded, still over the limit by length.
+    """
+    return content.encode("utf-8") if isinstance(content, str) and len(content) <= limit else content
 
 
 def _refused(raw: bytes, exc: SyntaxError | UnicodeDecodeError) -> Finding:
@@ -102,7 +94,26 @@ def _refused(raw: bytes, exc: SyntaxError | UnicodeDecodeError) -> Finding:
     return Finding("syntax", raw.count(b"\n", 0, at) + 1, at - start + 1, message, line)
 
 
-async def read_before(path: Path) -> str | None | object:
+def read_python(path: Path) -> bytes | None | object:
+    """Read bounded source bytes; distinguish an absent file from an unavailable baseline.
+
+    Bytes, decoded by ``findings`` the way Python decodes a source file: text
+    decoded here would pick an encoding of its own and hide the file's coding
+    declaration from the comparison.
+    """
+    try:
+        if not path.exists():
+            return None
+        if not path.is_file() or path.stat().st_size > MAX_SOURCE_BYTES:
+            return UNKNOWN
+        with path.open("rb") as handle:
+            raw = handle.read(MAX_SOURCE_BYTES + 1)
+        return raw if len(raw) <= MAX_SOURCE_BYTES else UNKNOWN
+    except OSError:
+        return UNKNOWN
+
+
+async def read_before(path: Path) -> bytes | None | object:
     try:
         return await WORKERS.run(lambda: read_python(path), timeout=CHECK_WAIT_SECONDS)
     except Exception:  # noqa: BLE001 - an unavailable baseline must not block a write
@@ -179,31 +190,31 @@ class PythonDiagnostics:
             findings.append(Finding(code, row, message.col + 1, message.message % message.message_args, source))
         return sorted(findings, key=lambda item: (item.line, item.column, item.code))
 
-    def note(self, path: Path, content: str | bytes, *, before: str | None | object = UNKNOWN) -> str:
+    def note(self, path: Path, content: str | bytes, *, before: str | bytes | None | object = UNKNOWN) -> str:
         try:
             if path.suffix != ".py":
                 return ""
-            # Bytes as stored; text longer than the bound in characters is longer in bytes too.
-            size = (
-                len(content.encode("utf-8"))
-                if isinstance(content, str) and len(content) <= MAX_SYNTAX_BYTES
-                else len(content)
-            )
-            if size > MAX_SYNTAX_BYTES:
+            # Text is what the file tool writes, UTF-8, so it is checked as those
+            # bytes: Python reads the stored file, not the string in hand, and a
+            # coding declaration in the text applies to it. The content replaced
+            # is compared the same way, or one line would read two ways.
+            stored = _stored(content, MAX_SYNTAX_BYTES)
+            if len(stored) > MAX_SYNTAX_BYTES:
                 return (
                     f"\nPython diagnostics skipped for {path}: the source is over "
                     f"{MAX_SYNTAX_BYTES // 1024 // 1024} MiB. Run targeted project checks."
                 )
-            syntax_only = size > MAX_SOURCE_BYTES
-            findings = self.findings(path, content, syntax_only=syntax_only)
-            if before is None:
+            syntax_only = len(stored) > MAX_SOURCE_BYTES
+            findings = self.findings(path, stored, syntax_only=syntax_only)
+            replaced = _stored(before, MAX_SOURCE_BYTES) if isinstance(before, (str, bytes)) else before
+            if replaced is None:
                 baseline = Counter()
-            elif isinstance(before, str) and len(before.encode("utf-8")) <= MAX_SOURCE_BYTES:
+            elif isinstance(replaced, bytes) and len(replaced) <= MAX_SOURCE_BYTES:
                 # Source nested too deeply for the parser or checker raises
                 # rather than parsing to nothing: unavailable for the content
                 # written, an unknown baseline for the content replaced.
                 try:
-                    earlier = self.findings(path, before)
+                    earlier = self.findings(path, replaced)
                 except Exception:  # noqa: BLE001 - an unanalyzable baseline is unknown, not clean
                     earlier = None
                 baseline = (
