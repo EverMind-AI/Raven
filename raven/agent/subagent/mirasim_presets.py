@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from typing import Any
 
 from loguru import logger
@@ -81,6 +80,15 @@ MIRASIM_PRESETS: dict[str, dict[str, Any]] = {
 
 INSTALLED_QUERY = "{PYTHON} -P -m raven.acp.mirasim --installed"
 
+INSTALLED_NO_HOST_EXIT = 3
+"""The exit status of ``--installed`` when no Mirasim host could be reached to ask."""
+
+HOST_ENV_KEYS = ("RAVEN_MIRASIM_HOST", "MIRASIM_HOME")
+"""The variables the adapter finds its host by (``raven.acp.mirasim.host``).
+
+A row whose ``env`` sets one looks for a host of its own, which a question asked
+in the login shell's environment says nothing about."""
+
 INSTALLED_TIMEOUT_S = 60.0
 """How long the question may take: the host listing its agents, under the
 presets' own ``readyTimeoutMs`` for the same work."""
@@ -91,13 +99,22 @@ async def installed_agents(*, path: str | None) -> frozenset[str] | None:
 
     Asked before the boot handshakes the presets nobody has connected yet. One
     whose agent Mirasim lacks refuses its session, the boot keeps no preset's
-    failure, and so it was handshaken again at every start for nothing. ``None``
-    when no host is running to ask, which leaves the decision to the handshake.
+    failure, and so it was handshaken again at every start for nothing. With no
+    host running at all, none is installed as far as a handshake could tell --
+    each would fail on that same missing host -- so the answer is empty. A host
+    that does not answer in time is ``None``, which leaves it to the handshake.
+
+    Asked in the environment the presets' adapters are launched in, the login
+    shell's, so a ``RAVEN_MIRASIM_HOST`` set there is the one both read (a row
+    that sets one in its own ``env`` is answered for by its own handshake).
     ``path`` is the login shell's PATH, the one the presets' own check for
     ``mirasim`` resolves against.
     """
+    from raven.agent.subagent.backends.env import login_shell_env
+
     argv = command_argv(resolve_subagent_command(INSTALLED_QUERY, python=_resolved_python(), subagent_dir=""))
-    env = {**os.environ, "PATH": path} if path else None
+    login = await asyncio.to_thread(login_shell_env)
+    env = {**login, "PATH": path} if path else dict(login)
     try:
         proc = await asyncio.create_subprocess_exec(
             *argv,
@@ -116,6 +133,9 @@ async def installed_agents(*, path: str | None) -> frozenset[str] | None:
         await proc.wait()
         logger.debug("Mirasim did not say which agents it has within {:.0f}s", INSTALLED_TIMEOUT_S)
         return None
+    if proc.returncode == INSTALLED_NO_HOST_EXIT:
+        logger.debug("Mirasim lists no agents: {}", err.decode("utf-8", "replace").strip())
+        return frozenset()
     if proc.returncode != 0:
         logger.debug("Mirasim did not say which agents it has: {}", err.decode("utf-8", "replace").strip())
         return None

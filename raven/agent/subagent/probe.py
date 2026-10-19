@@ -1531,8 +1531,9 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured
                 if not mirasim_asked:
                     mirasim_asked = True
                     mirasim_has = await mirasim_presets.installed_agents(path=path)
-                if mirasim_has is not None and agent[0] not in mirasim_has:
-                    logger.debug("acp agent {!r}: Mirasim has no {} installed; not handshaken", name, agent[0])
+                own_host = any(key in (getattr(cfg, "env", None) or {}) for key in mirasim_presets.HOST_ENV_KEYS)
+                if mirasim_has is not None and agent[0] not in mirasim_has and not own_host:
+                    logger.debug("acp agent {!r}: Mirasim lists no {} on its host; not handshaken", name, agent[0])
                     continue
             result = await verify_agent(cfg, **_launch_kw(cfg))
             _note_menu_re_measured(result, name)

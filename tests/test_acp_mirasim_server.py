@@ -1612,12 +1612,18 @@ def test_main_wires_the_logger_the_stdout_claim_and_the_runner(monkeypatch: pyte
 
 
 async def test_the_entry_lists_the_agents_mirasim_has_installed(
-    host: FakeHost, capsys: pytest.CaptureFixture[str]
+    host: FakeHost, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from raven.agent.subagent.mirasim_presets import INSTALLED_NO_HOST_EXIT
+
     assert await server_mod._print_installed(lambda: host.address) == 0
     assert json.loads(capsys.readouterr().out) == ["claude", "codex", "qwen"]
-    assert await server_mod._print_installed(lambda: None) == 1
+    assert await server_mod._print_installed(lambda: None) == server_mod.NO_HOST_EXIT == INSTALLED_NO_HOST_EXIT
     assert "No Mirasim host is running" in capsys.readouterr().err
+    monkeypatch.setattr(server_mod, "CLIS_TIMEOUT_S", 0.2)
+    host.silent.add("listClis")
+    assert await server_mod._print_installed(lambda: host.address) == 1
+    assert "listed no agents" in capsys.readouterr().err
 
 
 # -- the menus when the host cannot say -----------------------------------------

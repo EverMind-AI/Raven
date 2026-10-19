@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import sys
 from pathlib import Path
@@ -249,18 +250,46 @@ async def test_the_live_preset_fixture_keeps_its_desktop_token_home(tmp_path: Pa
         await host.stop()
 
 
-async def test_the_agents_mirasim_has_are_asked_of_the_adapter(host: FakeHost, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The question the boot's verification asks before handshaking a preset: the host's agent list."""
+async def test_the_agents_mirasim_has_are_asked_of_the_adapter_in_the_login_shells_environment(
+    host: FakeHost, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The question the boot's verification asks before handshaking a preset: the host's agent list.
+
+    Asked where the presets' adapters look -- the login shell's environment -- not in raven's own.
+    """
+    from raven.agent.subagent.backends import env as backends_env
     from raven.agent.subagent.mirasim_presets import installed_agents
 
     assert host.address is not None
-    monkeypatch.setenv("RAVEN_MIRASIM_HOST", str(host.address.port))
+    monkeypatch.setenv("RAVEN_MIRASIM_HOST", f"unix:{tmp_path / 'not-this.sock'}" if sys.platform != "win32" else "1")
+    login = {**os.environ, "RAVEN_MIRASIM_HOST": str(host.address.port)}
+    monkeypatch.setattr(backends_env, "login_shell_env", lambda: login)
     assert await installed_agents(path=None) == frozenset({"claude", "codex", "qwen"})
 
 
-async def test_with_no_host_to_ask_the_adapter_answers_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Not an empty set: that would read as every agent missing, and skip the handshakes it was meant to spare."""
+async def test_with_no_host_running_the_adapter_lists_no_agent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """None is installed as far as any handshake could tell: each would fail on the same missing host."""
+    from raven.agent.subagent.backends import env as backends_env
     from raven.agent.subagent.mirasim_presets import installed_agents
 
-    monkeypatch.setenv("RAVEN_MIRASIM_HOST", f"unix:{tmp_path / 'no.sock'}" if sys.platform != "win32" else "1")
-    assert await installed_agents(path=None) is None
+    address = f"unix:{tmp_path / 'no.sock'}" if sys.platform != "win32" else "1"
+    monkeypatch.setattr(backends_env, "login_shell_env", lambda: {**os.environ, "RAVEN_MIRASIM_HOST": address})
+    assert await installed_agents(path=None) == frozenset()
+
+
+async def test_a_host_that_does_not_list_its_agents_in_time_leaves_it_to_the_handshake(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from raven.agent.subagent import mirasim_presets
+    from raven.agent.subagent.backends import env as backends_env
+
+    monkeypatch.setattr(backends_env, "login_shell_env", lambda: dict(os.environ))
+    monkeypatch.setattr(mirasim_presets, "INSTALLED_QUERY", '{PYTHON} -c "import sys; sys.exit(1)"')
+    assert await mirasim_presets.installed_agents(path=None) is None
+
+
+def test_the_host_variables_a_row_can_name_are_the_ones_the_adapter_reads() -> None:
+    from raven.acp.mirasim import host as host_mod
+    from raven.agent.subagent.mirasim_presets import HOST_ENV_KEYS
+
+    assert set(HOST_ENV_KEYS) == {host_mod.HOST_ENV, "MIRASIM_HOME"}

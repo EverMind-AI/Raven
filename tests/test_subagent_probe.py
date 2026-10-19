@@ -1068,15 +1068,22 @@ class TestAutomaticSnapshotVerification:
 
     @staticmethod
     def _mirasim_boot(
-        monkeypatch: pytest.MonkeyPatch, snapshot: object, installed: frozenset[str]
+        monkeypatch: pytest.MonkeyPatch, snapshot: object, installed: frozenset[str], own_host: str | None = None
     ) -> tuple[list, list]:
-        """A boot whose unconfigured presets are three Mirasim agents and one other; what it verified and asked."""
+        """A boot whose unconfigured presets are three Mirasim agents and one other; what it verified and asked.
+
+        ``own_host`` names the one Mirasim row whose ``env`` points it at a host of its own.
+        """
         from raven.agent.subagent import mirasim_presets
         from raven.agent.subagent.presets import third_party_subagent_preset
         from raven.config.schema import SubagentsConfig
 
         keys = ("mirasim_claude", "mirasim_zcode", "mirasim_qwen")
-        configs = SubagentsConfig(agents=[third_party_subagent_preset(key) for key in keys]).agents
+        rows = [
+            {**third_party_subagent_preset(key), **({"env": {"RAVEN_MIRASIM_HOST": "4971"}} if key == own_host else {})}
+            for key in keys
+        ]
+        configs = SubagentsConfig(agents=rows).agents
         verified: list[str] = []
         asked: list[str | None] = []
 
@@ -1114,6 +1121,17 @@ class TestAutomaticSnapshotVerification:
         verified, asked = self._mirasim_boot(monkeypatch, None, frozenset({"claude", "qwen"}))
         await schedule_snapshot_verification(_FakeManager([]))
         assert verified == ["Claude Code-Mirasim", "Qwen Code-Mirasim", "a-preset"]
+        assert len(asked) == 1
+
+    async def test_with_no_mirasim_host_running_only_a_row_that_names_its_own_host_is_handshaken(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every other handshake would fail on the same missing host, and be tried again at the next start."""
+        from raven.agent.subagent.probe import schedule_snapshot_verification
+
+        verified, asked = self._mirasim_boot(monkeypatch, None, frozenset(), own_host="mirasim_qwen")
+        await schedule_snapshot_verification(_FakeManager([]))
+        assert verified == ["Qwen Code-Mirasim", "a-preset"]
         assert len(asked) == 1
 
     async def test_mirasim_is_asked_only_when_one_of_its_presets_is_to_be_handshaken(

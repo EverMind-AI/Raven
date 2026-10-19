@@ -1686,12 +1686,22 @@ async def serve(
     await server.close()
 
 
+NO_HOST_EXIT = 3
+"""``--installed``'s exit status when no host could be reached, apart from one that did not answer in time.
+
+The caller (``INSTALLED_NO_HOST_EXIT`` in ``raven.agent.subagent.mirasim_presets``) reads it as no agent
+installed: every handshake would fail on the same missing host."""
+
+
 async def _print_installed(locate: Callable[[], HostAddress | None] = locate_host) -> int:
     """``--installed``: the agents the running host has installed, for a caller deciding which are worth a handshake."""
     host = HostConnection(on_frame=lambda frame: None, locate=locate)
     try:
         rows = await cli_rows(host)
-    except (HostUnavailableError, TimeoutError) as exc:
+    except HostUnavailableError as exc:
+        print(f"Mirasim could not list its agents: {_said(exc)}", file=sys.stderr)
+        return NO_HOST_EXIT
+    except TimeoutError as exc:
         print(f"Mirasim could not list its agents: {_said(exc)}", file=sys.stderr)
         return 1
     finally:
