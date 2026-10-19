@@ -520,6 +520,22 @@ async def test_a_deleted_conversation_starts_again_once_and_says_so(harness: Har
     )
 
 
+async def test_a_conversation_the_host_does_not_know_starts_again_once_and_says_so(harness: Harness) -> None:
+    sid = await harness.new()
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("one"))
+    old = harness.host.session().key
+    del harness.host.sessions[old]
+    assert await harness.ok("session/prompt", sessionId=sid, prompt=text("two")) == {"stopReason": "end_turn"}
+    new = harness.store.get(sid).mirasim_key
+    assert new != old and new in harness.host.sessions
+    assert harness.said(sid).endswith(
+        "[Mirasim] The Mirasim conversation this session continued is not one this Mirasim host can continue, so "
+        "this turn ran in a new one without the earlier context."
+    )
+    assert await harness.ok("session/prompt", sessionId=sid, prompt=text("three")) == {"stopReason": "end_turn"}
+    assert harness.store.get(sid).mirasim_key == new
+
+
 async def test_mcp_servers_handed_over_are_noted_once(harness: Harness) -> None:
     sid = await harness.new(mcpServers=[{"name": "docs", "command": "x", "args": [], "env": []}, "junk"])
     await harness.ok("session/prompt", sessionId=sid, prompt=text("one"))

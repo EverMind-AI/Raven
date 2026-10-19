@@ -64,6 +64,17 @@ CATALOGS: dict[str, dict[str, Any]] = {
     "qwen": {"defaultModel": "qwen-max", "models": [{"id": "qwen-max", "label": "Qwen Max"}], "effort": []},
 }
 
+DELETED = (
+    "This conversation was deleted, so it cannot be continued — sending here would recreate it under the same "
+    "session id. Start a new session to keep going."
+)
+FOREIGN = (
+    "This conversation is not one of this server's sessions, so it cannot be continued here — sending would only "
+    "start a new, empty conversation in another folder. Reconnect to the server it belongs to, or start a new session "
+    "on this one."
+)
+"""The host's refusals of a ``sessionKey`` it will not continue, verbatim from 0.0.537 and 0.0.558."""
+
 COMMANDS = [
     {"name": "branch", "description": "Fork this conversation into a new branch session", "source": "host"},
     {"name": "compact", "source": "builtin"},
@@ -370,21 +381,16 @@ class FakeHost:
         if self.accepting is not None:
             await self.accepting.wait()
         key = frame.get("sessionKey")
-        if key in self.deleted:
+        if key is not None and key not in self.sessions:
+            refused = DELETED if key in self.deleted else FOREIGN
             await self._send(
-                client,
-                {
-                    "type": "error",
-                    "clientRef": frame.get("clientRef"),
-                    "sessionKey": key,
-                    "message": "This conversation was deleted, so it cannot be continued.",
-                },
+                client, {"type": "error", "clientRef": frame.get("clientRef"), "sessionKey": key, "message": refused}
             )
             return
         if key is None:
             key = f"{frame.get('agent')}:{uuid.uuid4()}"
             self.sessions[key] = FakeSession(key=key, agent=frame.get("agent"), workdir=frame.get("workdir"))
-        session = self.sessions.setdefault(key, FakeSession(key=key, agent=key.split(":")[0], workdir=""))
+        session = self.sessions[key]
         if "route" in frame:
             session.route = frame["route"]
         session.prompts.append(frame)
@@ -555,4 +561,4 @@ class FakeHost:
                 session.wake.set()
 
 
-__all__ = ["CATALOGS", "COMMANDS", "ROWS", "RUNGS", "FakeHost", "FakeSession", "echo"]
+__all__ = ["CATALOGS", "COMMANDS", "DELETED", "FOREIGN", "ROWS", "RUNGS", "FakeHost", "FakeSession", "echo"]

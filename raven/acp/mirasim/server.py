@@ -202,6 +202,14 @@ HOST_VERBS = frozenset({"branch"})
 ``source: host``: a prompt that starts with one never reaches the agent. Measured on 0.0.537,
 ``/branch`` forks the conversation into a new one."""
 
+_GONE = (
+    ("not one of this server's sessions", "is not one this Mirasim host can continue"),
+    ("deleted", "was deleted"),
+)
+"""What the host's refusal of a ``prompt`` says when it will never continue the conversation, and what to tell
+the client. Measured on 0.0.537 and 0.0.558: ``ForeignSessionRefused`` for a key this host has no record of, and
+``SessionDeletedRefused``; the error frame carries only the message."""
+
 _IMAGE_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
 _AGENT_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _SESSION_KEY = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}:[0-9A-Za-z][0-9A-Za-z._-]{0,127}$")
@@ -791,20 +799,19 @@ class MirasimAgent:
             if answer is None:
                 return await self._finish(session, turn)
             said = " ".join((_text(answer.get("message")) or "the host gave no reason").split())
-            if not retried and session.mirasim_key is not None and "deleted" in said.lower():
-                # The record outlived the conversation (deleted in Mirasim), and
-                # the host refuses to recreate it under its old key. Re-dispatching
-                # cannot help -- the next load finds the same record -- so the turn
-                # starts a new one here and says so.
+            if not retried and session.mirasim_key is not None and (gone := _gone(said)):
+                # The record outlived the conversation -- deleted in Mirasim, or
+                # one this host never had -- and the host refuses to continue it
+                # under that key. Re-dispatching cannot help -- the next load
+                # finds the same record -- so the turn starts a new one here and
+                # says so.
                 logger.warning(
-                    "Mirasim adapter: {} conversation {} was deleted; starting a new one",
-                    self.agent,
-                    session.mirasim_key,
+                    "Mirasim adapter: {} conversation {} {}; starting a new one", self.agent, session.mirasim_key, gone
                 )
                 self._bind(session, None)
                 notes.append(
-                    "The Mirasim conversation this session continued was deleted, so this turn ran in a new one "
-                    "without the earlier context."
+                    f"The Mirasim conversation this session continued {gone}, so this turn ran in a new one without "
+                    "the earlier context."
                 )
                 retried = True
                 continue
@@ -1468,6 +1475,12 @@ def _ref(value: Any) -> str:
 
 def _said(exc: BaseException) -> str:
     return str(exc) or type(exc).__name__
+
+
+def _gone(refusal: str) -> str | None:
+    """Why the host will never continue a conversation, when its refusal of a prompt says so."""
+    lowered = refusal.lower()
+    return next((why for marker, why in _GONE if marker in lowered), None)
 
 
 def _is_count(value: Any) -> bool:
