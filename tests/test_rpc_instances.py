@@ -488,6 +488,30 @@ async def _history(session_dir: Path, agent: str, handle: str) -> list[dict[str,
     return out["turns"]
 
 
+@pytest.mark.parametrize("former", ["Raven", "raven"])
+@pytest.mark.parametrize("lane", ["spawn", "dag", "unfinished_dag"])
+async def test_legacy_record_history_is_visible_under_the_current_name(tmp_path, former, lane):
+    from raven.agent.subagent.instance_log import transcript_path
+
+    session_dir = tmp_path / "session"
+    if lane == "spawn":
+        _spawn(session_dir, agent=former, handle="h1", task="question", output="answer", at_ms=1)
+    else:
+        writer = _dag_run if lane == "dag" else _dead_dag_run
+        writer(
+            session_dir,
+            "run1",
+            {"n1": {"agent": former, "instance": "h1", "prompt": "question", "out": "answer", "at_ms": 1}},
+        )
+    _as_a_pre_log_conversation(session_dir)
+    assert not transcript_path(session_dir, GENERIC_AGENT, "h1").exists()
+
+    for name in (GENERIC_AGENT, "Raven", "raven"):
+        assert [turn["content"] for turn in await _history(session_dir, name, "h1")] == ["question", "answer"]
+    assert await _history(session_dir, "Other", "h1") == []
+    assert await _history(session_dir, GENERIC_AGENT, "other") == []
+
+
 async def test_history_includes_the_spawn_that_created_the_instance(tmp_path: Path) -> None:
     """An instance is nearly always spawned before anyone switches into it; a
     view that showed only direct turns would open empty on the exchange the
