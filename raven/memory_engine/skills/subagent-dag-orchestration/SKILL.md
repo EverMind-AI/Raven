@@ -394,10 +394,12 @@ Two more that no check enforces, and that the judge's reading depends on:
 - **The conditions are mutually exclusive and decidable**, and a `select: "one"` decision
   gets a catch-all route for everything else, so every answer the node could give selects
   exactly one route. Make that catch-all one route whose condition is "anything else", and
-  name it in the node's `routes` alongside the specific ones: a single-select decision with
-  only narrow conditions and no such route fails the node for want of a route whenever its
-  answer fits none of them. Take two routes that call this out — one for a defect, one for
-  a feature request — and the node concludes something else; the graph stops there.
+  name it in the node's `routes` alongside the specific ones. Without it, an answer that
+  fits none of the conditions leaves the judge no right route to report, and it is held to
+  the routes you declared: it may pick the nearest one, which sends the graph down a branch
+  the answer does not support, or report none, which fails the node. Give a decision only a
+  defect route and a feature-request route, and a node that concludes it is looking at a
+  usage question lands on one of the two, or stops the graph.
 
 **A guard reads only what the node depends on.** `when` names `<node>.<route>` — that
 decision node selected that route — or `<node>.done`, which means the node settled,
