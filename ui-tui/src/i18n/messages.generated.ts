@@ -1609,6 +1609,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.machine.connecting': 'Starting it on the machine',
     'gui.machine.connected_said': '{name} is connected; it is on the Agents page.',
     'gui.machine.connect_bad': 'Not connected',
+    'gui.machine.connect_bad_named': 'Not connected: {name}',
     'gui.machine.connect_do': 'Connect',
     'gui.machine.presets_none':
       'Nothing to connect: every agent that can run on a machine is already connected on this one.',
@@ -4942,6 +4943,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.machine.connecting': '正在机器上启动它',
     'gui.machine.connected_said': '已接入 {name}，到「智能体」页可以看到。',
     'gui.machine.connect_bad': '没有接入',
+    'gui.machine.connect_bad_named': '没有接入 {name}',
     'gui.machine.connect_do': '接入',
     'gui.machine.presets_none': '没有可接的：能跑在机器上的 Agent 都已经接在这台机器上了。',
     'gui.machine.presets_loading': '正在读取 Agent 列表',

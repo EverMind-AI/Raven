@@ -121,9 +121,16 @@ export interface ExtAgentsState {
      and the read's refusal beside it. */
   presets: PresetChoice[] | null
   presetsFailed: string
-  /* That form's own write, and its refusal -- the agent's words when it did
-     not answer on the machine. */
-  mconnecting: boolean
+  /* Each opening of that form is a generation, and the write in flight
+     carries the generation it was pressed in: the add's readiness ping can
+     take a minute, the drawer stays closable meanwhile, and a form closed or
+     replaced by then is left alone when the write ends -- its result is told
+     in a toast, not on whatever the reader is looking at now. `mconnectBusy`
+     is the generation with a write in flight, or null. */
+  mconnectGen: number
+  mconnectBusy: number | null
+  /* That form's refusal -- the agent's words when it did not answer on the
+     machine -- for the form it was pressed in. */
   mconnectFailed: string
 }
 
@@ -145,7 +152,8 @@ const store = makeStore<ExtAgentsState>({
   mconnect: null,
   presets: null,
   presetsFailed: '',
-  mconnecting: false,
+  mconnectGen: 0,
+  mconnectBusy: null,
   mconnectFailed: '',
 })
 
@@ -497,7 +505,18 @@ export function machineSheetOpen(id: string): void {
 /** The drawer on a machine's "connect an agent on this machine" form; the presets are read as it opens. */
 export function machineConnectOpen(id: string): void {
   detail.open('extAgents')
-  set({ mconnect: id, msheet: null, sheet: null, picking: null, presets: null, presetsFailed: '', mconnectFailed: '', epoch: get().epoch + 1 })
+  set({
+    mconnect: id,
+    msheet: null,
+    sheet: null,
+    picking: null,
+    presets: null,
+    presetsFailed: '',
+    mconnectGen: get().mconnectGen + 1,
+    mconnectBusy: null,
+    mconnectFailed: '',
+    epoch: get().epoch + 1,
+  })
   void loadPresets()
 }
 
@@ -510,25 +529,34 @@ async function loadPresets(): Promise<void> {
 }
 
 /* The add from the machine's side: the preset on that machine, under
-   `<preset name>@<machine>`. True when it landed; the roster is read again
-   then, with the probe, so the new card arrives with its verdict. A refusal
-   stays on the form, in the agent's own words. */
-export async function connectOnMachine(choice: PresetChoice, machine: string, remoteCwd: string): Promise<boolean> {
-  set({ mconnecting: true, mconnectFailed: '' })
+   `<preset name>@<machine>`. `landed` when it was written; the roster is read
+   again then, with the probe, so the new card arrives with its verdict.
+   `current` says whether the form it was pressed in is still the one open --
+   the same machine, the same opening -- which is the only form a refusal is
+   written to and the only drawer the caller may put the machine's sheet back
+   into: closed or replaced meanwhile, the write's end changes nothing on
+   screen. The busy mark is cleared only when it is still this write's. */
+export async function connectOnMachine(
+  choice: PresetChoice,
+  machine: string,
+  remoteCwd: string,
+): Promise<{ landed: boolean; current: boolean }> {
+  const gen = get().mconnectGen
+  const current = (): boolean => get().mconnect === machine && get().mconnectGen === gen
+  set({ mconnectBusy: gen, mconnectFailed: '' })
+  let refused: string | null
   try {
-    const refused = await source().connectOnMachine(choice, machine, remoteCwd)
-    if (refused !== null) {
-      set({ mconnectFailed: refused })
-      return false
-    }
-    await load(true)
-    return true
+    refused = await source().connectOnMachine(choice, machine, remoteCwd)
   } catch (e) {
-    set({ mconnectFailed: failure(e) })
-    return false
-  } finally {
-    set({ mconnecting: false })
+    refused = failure(e)
   }
+  if (get().mconnectBusy === gen) set({ mconnectBusy: null })
+  if (refused === null) {
+    await load(true)
+    return { landed: true, current: current() }
+  }
+  if (current()) set({ mconnectFailed: refused })
+  return { landed: false, current: current() }
 }
 
 export function closeSheet(): void {

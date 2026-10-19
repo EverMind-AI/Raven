@@ -355,15 +355,23 @@ export function MachineConnectSheet({ row, s }: { row: MachineRow; s: ExtAgentsS
   const choices = (s.presets ?? []).map((p) => ({ ...p, taken: p.on_machines.includes(row.id) }))
   const pickable = choices.filter((c) => !c.taken)
   const chosen: PresetChoice | undefined = pickable.find((c) => c.preset === picked) ?? pickable[0]
-  const busy = s.mconnecting
+  const busy = s.mconnectBusy !== null && s.mconnectBusy === s.mconnectGen
   const submit = async (): Promise<void> => {
     if (!chosen) return
-    const landed = await store.connectOnMachine(chosen, row.id, cwdRef.current?.value.trim() || '')
-    if (!landed) return
-    toast(t('gui.machine.connected_said', { name: `${chosen.name}@${row.id}` }))
-    /* The card's own line changes with it; back to the sheet that says so. */
-    void machines.load()
-    store.machineSheetOpen(row.id)
+    const name = `${chosen.name}@${row.id}`
+    const { landed, current } = await store.connectOnMachine(chosen, row.id, cwdRef.current?.value.trim() || '')
+    if (landed) {
+      toast(t('gui.machine.connected_said', { name }))
+      /* The card's own line changes with it; back to the sheet that says so --
+         if this form is still the one open. The reader may have closed the
+         drawer or opened another machine while the ping ran, and what they
+         look at now is theirs: the add landed either way, and the toast says. */
+      void machines.load()
+      if (current) store.machineSheetOpen(row.id)
+    } else if (!current) {
+      /* The form the refusal belongs to is gone, so one line instead. */
+      toast(t('gui.machine.connect_bad_named', { name }))
+    }
   }
   const label = (c: (typeof choices)[number]): string =>
     c.taken

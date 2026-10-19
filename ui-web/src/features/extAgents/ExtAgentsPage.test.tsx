@@ -2725,6 +2725,108 @@ describe('the machines module', () => {
     expect(acts).toEqual([['connect', 'codex', { machine: 'box' }]])
   })
 
+  /* A connect whose readiness ping is still running: the source answers only
+     when the test releases it, with the add's refusal or null. */
+  const heldConnect = (): { connect: () => Promise<string | null>; release: (why: string | null) => Promise<void> } => {
+    let release: (why: string | null) => void = () => {}
+    /* Releasing answers the source; the write's own continuation -- the roster
+       read, the toast -- is a few more turns of the loop. */
+    return {
+      connect: () => new Promise<string | null>((res) => { release = res }),
+      release: async (why) => {
+        await act(async () => {
+          release(why)
+        })
+        for (let i = 0; i < 4; i++) {
+          await act(async () => {
+            await new Promise((res) => setTimeout(res, 0))
+          })
+        }
+      },
+    }
+  }
+
+  it('leaves the drawer alone when a machine-side connect ends after the reader opened another machine', async () => {
+    const presets: PresetChoice[] = [{ preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, on_machines: [] }]
+    const held = heldConnect()
+    const { toasts, mcalls } = install([row()], {
+      machines: [ready(), ready({ id: 'gpu1', name: 'GPU 1' })],
+      presets: async () => presets,
+      connectOnMachine: () => held.connect(),
+    })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    await click(sheetAct('gui.machine.connect_do'))
+    expect(sheetStatus()).toBe('gui.machine.connecting')
+    /* Meanwhile the reader opens the other machine, then its connect form. */
+    await openSheet('GPU 1')
+    expect(sheetName()).toBe('GPU 1')
+    await click(sheetAct('gui.machine.connect_here'))
+    expect(sheetName()).toBe('gui.machine.connect_title {"name":"GPU 1"}')
+    expect(sheetStatus()).toBe('gui.machine.connect_hint')
+    const listsBefore = mcalls.filter((c) => c[0] === 'list').length
+    /* The first write lands: the add is told, the lists are read again, and
+       the drawer the reader is in now is not taken over. */
+    await held.release(null)
+    expect(sheetName()).toBe('gui.machine.connect_title {"name":"GPU 1"}')
+    expect(sheetStatus()).toBe('gui.machine.connect_hint')
+    expect(toasts).toEqual(['gui.machine.connected_said {"name":"Codex@box"}'])
+    expect(mcalls.filter((c) => c[0] === 'list').length).toBeGreaterThan(listsBefore)
+  })
+
+  it('tells a refusal that arrives after its form was replaced in a line, not on the form that replaced it', async () => {
+    const presets: PresetChoice[] = [{ preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, on_machines: [] }]
+    const held = heldConnect()
+    const { toasts } = install([row()], {
+      machines: [ready(), ready({ id: 'gpu1', name: 'GPU 1' })],
+      presets: async () => presets,
+      connectOnMachine: () => held.connect(),
+    })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    await click(sheetAct('gui.machine.connect_do'))
+    await openSheet('GPU 1')
+    await click(sheetAct('gui.machine.connect_here'))
+    await held.release('it is installed but has no usable credential')
+    expect(sheetName()).toBe('gui.machine.connect_title {"name":"GPU 1"}')
+    expect(sheetStatus()).toBe('gui.machine.connect_hint')
+    expect(note()).toBeNull()
+    expect((sheetAct('gui.machine.connect_do') as HTMLButtonElement).disabled).toBe(false)
+    expect(toasts).toEqual(['gui.machine.connect_bad_named {"name":"Codex@box"}'])
+  })
+
+  it('does not reopen a drawer the reader closed while a machine-side connect ran', async () => {
+    const presets: PresetChoice[] = [{ preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, on_machines: [] }]
+    const held = heldConnect()
+    const { toasts } = install([row()], { machines: [ready()], presets: async () => presets, connectOnMachine: () => held.connect() })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    await click(sheetAct('gui.machine.connect_do'))
+    /* The real close path: the drawer fades, then the island drops its card. */
+    await act(async () => {
+      detail.close()
+    })
+    await act(async () => {
+      await new Promise((res) => setTimeout(res, 300))
+    })
+    expect(store.get().mconnect).toBeNull()
+    await held.release(null)
+    expect(store.get().msheet).toBeNull()
+    expect(store.get().mconnect).toBeNull()
+    expect(detail.get().open).toBe(false)
+    expect(toasts).toEqual(['gui.machine.connected_said {"name":"Codex@box"}'])
+    /* Pressed again in a fresh form, the busy mark is the new form's own. */
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    expect(sheetStatus()).toBe('gui.machine.connect_hint')
+  })
+
   it('offers an absent agent no machine when none is registered', async () => {
     install([row({ name: 'codex', preset: 'codex', kind: 'cli', configured: false, enabled: false, probe_status: 'missing', probe_missing: 'codex' })])
     await mount()

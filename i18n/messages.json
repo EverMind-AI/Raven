@@ -5309,6 +5309,7 @@
     "gui.machine.connecting": {"en": "Starting it on the machine", "zh": "正在机器上启动它"},
     "gui.machine.connected_said": {"en": "{name} is connected; it is on the Agents page.", "zh": "已接入 {name}，到「智能体」页可以看到。"},
     "gui.machine.connect_bad": {"en": "Not connected", "zh": "没有接入"},
+    "gui.machine.connect_bad_named": {"en": "Not connected: {name}", "zh": "没有接入 {name}"},
     "gui.machine.connect_do": {"en": "Connect", "zh": "接入"},
     "gui.machine.presets_none": {"en": "Nothing to connect: every agent that can run on a machine is already connected on this one.", "zh": "没有可接的：能跑在机器上的 Agent 都已经接在这台机器上了。"},
     "gui.machine.presets_loading": {"en": "Reading the agents", "zh": "正在读取 Agent 列表"},
