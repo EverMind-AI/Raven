@@ -3491,18 +3491,24 @@ describe('the machines module', () => {
        so a form opened again on the same machine meanwhile sees the preset as free; pressed, that
        was a second ping ending in the duplicate refusal, with a toast saying connected and a form
        saying not. The add in flight is known by its name across openings. */
-    const presets: PresetChoice[] = [
-      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, on_machines: [] },
+    /* Once the add lands the server reports the machine among the preset's
+       `on_machines`, which is what the form greys on after the re-read. */
+    let on: string[] = []
+    const presets = async (): Promise<PresetChoice[]> => [
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, on_machines: on },
       { preset: 'opencode', name: 'OpenCode', kind: 'acp', description: 'd', connected_here: false, on_machines: [] }
     ]
     const held = heldConnect()
     let asked = 0
     const { toasts } = install([row()], {
       machines: [ready()],
-      presets: async () => presets,
-      connectOnMachine: () => {
+      presets,
+      connectOnMachine: async () => {
         asked += 1
-        return held.connect()
+        const got = await held.connect()
+        /* Reported as on this machine from the moment the write lands. */
+        on = ['box']
+        return got
       }
     })
     await mount()
@@ -3531,8 +3537,13 @@ describe('the machines module', () => {
     await held.release(null)
     expect(toasts).toEqual(['gui.machine.connected_said {"name":"codex@box"}'])
     expect(store.get().mconnectPending).toEqual([])
+    /* The choices are read again once the write lands, and that read is a turn
+       of its own after the toast; the options settle a moment later. */
+    await settle()
+    /* Read again when the write landed: the preset the server now reports on
+       this machine is greyed as taken, not offered once more. */
     const after = [...sheet()!.querySelectorAll('option')].map(o => [o.textContent, o.disabled])
-    expect(after[0]).toEqual(['Codex', false])
+    expect(after[0]).toEqual(['gui.machine.preset_on_machine {"name":"Codex"}', true])
     expect(asked).toBe(1)
   })
 

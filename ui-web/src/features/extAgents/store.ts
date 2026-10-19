@@ -575,6 +575,14 @@ export async function connectOnMachine(
   set({ mconnectPending: get().mconnectPending.filter(name => name !== pending) })
   if ('name' in got) {
     await load(true)
+    /* The preset just landed on the machine, so a form open on that machine
+       has to read its choices again -- whichever opening it is: one opened
+       while the write ran holds a copy that predates it, and would offer the
+       preset once more, which a press answers with a second add the server
+       refuses before any ping, right after a toast said connected (reviewed
+       2026-10-19). `current()` is the wrong test here: it is about the form
+       the write was pressed in, and the reader may have reopened it since. */
+    if (get().mconnect === machine) await loadPresets()
     return { landed: true, current: current(), name: got.name }
   }
   if (current()) set({ mconnectFailed: got.refused })
