@@ -1620,6 +1620,17 @@ def _bug_report_action(
     base_url = _resolved_upload_url()
     if base_url is None:
         return
+    if base_url and tcmd._receiver_problem(base_url) is not None:
+        # Nothing exists yet for the handler below to clean up, so Esc is answered here.
+        try:
+            go_on = _ask_action(
+                questionary.confirm(tcmd._CONTINUE_WITHOUT_RECEIVER, default=False, style=style, qmark=QMARK)
+            )
+        except _ActionCancelledError:
+            go_on = False
+        if not go_on:
+            console.print(_CANCELLED_MESSAGE)
+            return
     status = console.status("Collecting the trajectory snapshot...", spinner="dots")
 
     def _collected() -> None:
