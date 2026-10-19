@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import copy
 import json
 import math
 import os
@@ -208,6 +209,11 @@ class _OpenRouterMediaTool(Tool):
     def _model(self, override: str | None) -> str:
         cfg_model = getattr(self._config, "model", "") if self._config else ""
         return override or cfg_model or self.default_model
+
+    def _runs_on_minimax(self) -> bool:
+        from raven.config.schema import media_provider
+
+        return media_provider(self._config) in _MINIMAX_PROVIDERS
 
     def _output_path(self, ext: str, output_dir: str | None = None, stem: str | None = None) -> Path:
         base = workdir.current() or self._workspace
@@ -598,16 +604,15 @@ class ImageGenerateTool(_OpenRouterMediaTool):
 
     name = "image_generate"
     default_model = "openai/gpt-image-2.5-sunburst"
-    description = (
-        "Generate images from text prompts, optionally from input images (edited or varied "
-        "by most models; on MiniMax, the first is the character to keep). "
+    _DESCRIPTION = (
+        "Generate images from text prompts (optionally editing/varying input images). "
         "Several pictures in one call, generated at the same time: plan every picture "
         "the task needs, then ask for them together in `prompts` instead of one call "
         "each -- a call is a minute of waiting whether it carries one prompt or eight. "
         "Saves each image under the workspace and returns its file path; forward them "
         "to the user with the `message` tool's `media` field."
     )
-    parameters = {
+    _PARAMETERS = {
         "type": "object",
         "properties": {
             "prompt": {"type": "string", "description": "Text description of the image to create"},
@@ -621,9 +626,8 @@ class ImageGenerateTool(_OpenRouterMediaTool):
                 "type": "array",
                 "items": {"type": "string"},
                 "description": (
-                    "Optional input images to edit or vary, or on MiniMax the character to keep: local "
-                    "file paths, http(s) URLs, or data: URIs (max 6 for chat-routed models, 16 for "
-                    "gpt-image models, 1 on MiniMax)"
+                    "Optional input images to edit/vary: local file paths, http(s) URLs, or data: URIs "
+                    "(max 6 for chat-routed models, 16 for gpt-image models)"
                 ),
             },
             "aspect_ratio": {
@@ -679,7 +683,7 @@ class ImageGenerateTool(_OpenRouterMediaTool):
                         "images": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "Input images for this picture only",
+                            "description": "Input images to edit/vary for this picture only",
                         },
                         "aspect_ratio": {"type": "string", "enum": list(_SIZES)},
                         "quality": {"type": "string", "enum": ["low", "medium", "high"]},
@@ -689,6 +693,36 @@ class ImageGenerateTool(_OpenRouterMediaTool):
             },
         },
     }
+
+    # MiniMax keeps the character an input image shows rather than editing it, and
+    # takes one per request.
+    _MINIMAX_DESCRIPTION = _DESCRIPTION.replace(
+        "(optionally editing/varying input images)", "(optionally keeping the character an input image shows)"
+    )
+    _MINIMAX_IMAGES = (
+        "Optional reference image whose character MiniMax keeps, one per picture (any more are "
+        "not sent): a local file path, http(s) URL, or data: URI"
+    )
+
+    @property
+    def description(self) -> str:
+        return self._MINIMAX_DESCRIPTION if self._runs_on_minimax() else self._DESCRIPTION
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        if not self._runs_on_minimax():
+            return self._PARAMETERS
+        schema = copy.deepcopy(self._PARAMETERS)
+        schema["properties"]["images"]["description"] = self._MINIMAX_IMAGES
+        schema["properties"]["prompts"]["items"]["properties"]["images"]["description"] = (
+            "Reference image for this picture only"
+        )
+        return schema
+
+    def to_schema(self) -> dict[str, Any]:
+        # Authored, so the registry serves it live: the provider the section runs
+        # on may change between turns, and it decides what a reference is for.
+        return super().to_schema()
 
     def effective_quality(self, requested: str | None, model_id: str | None = None) -> str | None:
         """The quality a call sends: Settings' where it names one, else the request's.
@@ -1361,43 +1395,71 @@ class VideoGenerateTool(_OpenRouterMediaTool):
 
     name = "video_generate"
     default_model = "kwaivgi/kling-v3.0-std"  # Kling v3 Standard
-    description = (
-        "Generate a short video from a text prompt (async; takes a while), and, where the "
-        "video tool runs on MiniMax, from a first frame to animate. Saves the video under "
-        "the workspace and returns its path; forward it with the `message` tool's `media` field."
+    _DESCRIPTION = (
+        "Generate a short video from a text prompt (async; takes a while). Saves "
+        "the video under the workspace and returns its path; forward it with the "
+        "`message` tool's `media` field."
     )
-    parameters = {
+    _PARAMETERS = {
         "type": "object",
         "properties": {
             "prompt": {"type": "string", "description": "Text description of the video"},
             "model": {
                 "type": "string",
-                "description": (
-                    "Optional video model override (default: the configured one, else "
-                    "kwaivgi/kling-v3.0-std on OpenRouter and MiniMax-Hailuo-2.3 on MiniMax)"
-                ),
-            },
-            "first_frame_image": {
-                "type": "string",
-                "description": (
-                    "Where the video tool runs on MiniMax: an image to start the video from, as a "
-                    "local file path, http(s) URL, or data: URI"
-                ),
+                "description": "Optional OpenRouter video model override (default kwaivgi/kling-v3.0-std)",
             },
             "params": {
                 "type": "object",
                 "description": (
-                    "Optional provider params. On OpenRouter they are merged into the request, e.g. "
-                    '{"duration": 5, "aspect_ratio": "16:9"} (3-15s; 16:9/9:16/1:1). On MiniMax, '
-                    "MiniMax-H3 and MiniMax-H3-Max take duration, resolution, callback_url, extra and, "
-                    "without a first frame, ratio; the other MiniMax models take duration, "
-                    "resolution, prompt_optimizer, fast_pretreatment and callback_url; any other "
-                    "key is refused"
+                    "Optional extra provider params merged into the request, e.g. "
+                    '{"duration": 5, "aspect_ratio": "16:9"} (3-15s; 16:9/9:16/1:1)'
                 ),
             },
         },
         "required": ["prompt"],
     }
+    _MINIMAX_DESCRIPTION = (
+        "Generate a short video from a text prompt, or from a first frame to animate (async; "
+        "takes a while). Saves the video under the workspace and returns its path; forward it "
+        "with the `message` tool's `media` field."
+    )
+    _MINIMAX_PARAMETERS = {
+        "type": "object",
+        "properties": {
+            "prompt": {"type": "string", "description": "Text description of the video"},
+            "model": {
+                "type": "string",
+                "description": "Optional MiniMax video model override (default: the configured one, else MiniMax-Hailuo-2.3)",
+            },
+            "first_frame_image": {
+                "type": "string",
+                "description": "Optional image to start the video from: a local file path, http(s) URL, or data: URI",
+            },
+            "params": {
+                "type": "object",
+                "description": (
+                    "Optional MiniMax params. MiniMax-H3 and MiniMax-H3-Max take duration, resolution, "
+                    "callback_url, extra and, without a first frame, ratio (and aigc_watermark on "
+                    "MiniMax CN); the other models take duration, resolution, prompt_optimizer, "
+                    "fast_pretreatment and callback_url. Any other key is refused"
+                ),
+            },
+        },
+        "required": ["prompt"],
+    }
+
+    @property
+    def description(self) -> str:
+        return self._MINIMAX_DESCRIPTION if self._runs_on_minimax() else self._DESCRIPTION
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return self._MINIMAX_PARAMETERS if self._runs_on_minimax() else self._PARAMETERS
+
+    def to_schema(self) -> dict[str, Any]:
+        # Authored, so the registry serves it live: the provider the section runs
+        # on may change between turns, and only MiniMax takes a first frame.
+        return super().to_schema()
 
     _POLL_INTERVAL_S = 6.0
     _POLL_TIMEOUT_S = 600.0

@@ -2011,3 +2011,21 @@ async def test_a_minimax_picture_keeps_the_format_its_bytes_declare(monkeypatch,
     tool = _minimax_image_tool(monkeypatch, lambda _r: _minimax_answer(pictures=[jpeg]), tmp_path)
     out = json.loads(await tool.execute("portrait"))
     assert Path(out["paths"][0]).suffix == ".jpg" and Path(out["paths"][0]).read_bytes() == _JPG
+
+
+def test_the_image_tool_says_what_references_do_on_the_provider_it_runs_on() -> None:
+    """Edited or varied on most routes, kept as a character on MiniMax: the model reads
+    the one its section's provider applies, per turn."""
+    from raven.agent.tools.registry import ToolRegistry
+
+    section = SimpleNamespace(provider="", api_base="", api_key="k", model="")
+    registry = ToolRegistry()
+    registry.register(ImageGenerateTool(lambda: section, workspace=None))
+
+    def offered() -> dict:
+        return next(d["function"] for d in registry.get_definitions() if d["function"]["name"] == "image_generate")
+
+    assert "MiniMax" not in json.dumps(offered())
+    section.provider, section.api_base = "minimax", "https://api.minimax.io/v1"
+    assert "character" in offered()["parameters"]["properties"]["images"]["description"]
+    assert "edit" not in offered()["description"].split(".")[0]

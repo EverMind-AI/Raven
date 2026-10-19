@@ -326,3 +326,22 @@ async def test_a_minimax_key_only_in_the_environment_is_no_key_for_the_video_sec
 
     assert (tool.api_key, has_credential(cap, config)) == ("", False)
     assert "providers.minimax" in json.loads(await tool.execute(prompt="x"))["error"] and seen == []
+
+
+def test_the_video_tool_offers_a_first_frame_only_where_it_runs_on_minimax() -> None:
+    """The provider decides the route and what the model is offered, read per turn:
+    off MiniMax the model sees the OpenRouter tool, with nothing it would refuse."""
+    from raven.agent.tools.registry import ToolRegistry
+
+    section = SimpleNamespace(provider="", api_base="", api_key="k", model="")
+    registry = ToolRegistry()
+    registry.register(VideoGenerateTool(lambda: section))
+
+    def offered() -> dict:
+        return next(d["function"] for d in registry.get_definitions() if d["function"]["name"] == "video_generate")
+
+    assert "first_frame_image" not in offered()["parameters"]["properties"]
+    assert "MiniMax" not in json.dumps(offered())
+    section.provider, section.api_base = "minimax", "https://api.minimax.io/v1"
+    assert "first_frame_image" in offered()["parameters"]["properties"]
+    assert "MiniMax" in offered()["parameters"]["properties"]["params"]["description"]
