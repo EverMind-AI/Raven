@@ -1880,18 +1880,21 @@ async def test_a_minimax_key_only_in_the_environment_is_no_key_for_the_image_sec
     assert "providers.minimax" in json.loads(await tool.execute("a portrait"))["error"]
 
 
-async def test_a_minimax_address_with_no_provider_named_is_an_openai_compatible_base(monkeypatch, tmp_path) -> None:
+async def test_a_minimax_address_alone_never_selects_minimax_s_request_shape(monkeypatch, tmp_path) -> None:
     """MiniMax's own request shape follows the provider a section names, never its
-    address: a section naming none is any other OpenAI-compatible base."""
+    address: a section naming none is called as an OpenAI-compatible base, a path
+    MiniMax's API answers with its router's plain 404."""
     seen: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
-        return httpx.Response(200, json={"data": [{"b64_json": _B64}]})
+        return httpx.Response(404, text="404 page not found")
 
     tool = _image_tool(monkeypatch, handler, model="image-01", workspace=tmp_path, api_base="https://api.minimax.io/v1")
-    assert json.loads(await tool.execute("a portrait"))["success"]
+    out = json.loads(await tool.execute("a portrait"))
     assert [r.url.path for r in seen] == ["/v1/images/generations"]
+    assert (out["error"], out["detail"]) == ("HTTP 404", "404 page not found")
+    assert "MiniMax" not in json.dumps(tool.to_schema()), "nor does the address alone pick the schema"
 
 
 async def test_a_minimax_picture_keeps_one_character_and_a_local_one_travels_inline(monkeypatch, tmp_path) -> None:
