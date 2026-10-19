@@ -11632,6 +11632,18 @@
       "en": "Back to list",
       "zh": "返回列表"
     },
+    "gui.trajectory.details.pin": {
+      "en": "Pin this tab",
+      "zh": "锁定此页"
+    },
+    "gui.trajectory.details.unpin": {
+      "en": "Unpin this tab",
+      "zh": "取消锁定"
+    },
+    "gui.trajectory.details.pinned": {
+      "en": "Pinned",
+      "zh": "已锁定"
+    },
     "gui.trajectory.details.see_all": {
       "en": "See all",
       "zh": "查看全部"

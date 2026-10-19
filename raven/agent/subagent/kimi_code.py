@@ -38,10 +38,10 @@ import re
 import shutil
 import signal
 import subprocess
-import tempfile
 from typing import Any
 
 from raven.agent.subagent.probe_state import Remedy
+from raven.utils.scratch import ScratchDir
 
 PRESET = "kimi_code"
 
@@ -352,7 +352,7 @@ async def _run(cfg: Any, *args: str) -> tuple[int | None, str]:
     # connect ran, reading the same home and config.
     base = await asyncio.to_thread(login_shell_env)
     env = {**base, **host_identity_env(), **subagent_role_env(), **(getattr(cfg, "env", None) or {})}
-    with tempfile.TemporaryDirectory(prefix="raven_subagent_ask_") as cwd:
+    async with ScratchDir("raven_subagent_ask_") as cwd:
         try:
             proc = await asyncio.create_subprocess_exec(
                 *resolve_program(["kimi", *args], env),

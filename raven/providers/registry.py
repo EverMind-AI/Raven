@@ -172,7 +172,8 @@ class ProviderSpec:
 
     # The image tool can run on this provider's address and key: OpenRouter, its
     # default backend, or a vendor serving OpenAI's Images API
-    # (`/images/generations`, `/images/edits`). Declared here for the same reason
+    # (`/images/generations`, `/images/edits`) or Volces Ark's dialect of it,
+    # which has the generations route alone. Declared here for the same reason
     # as the field above: the roles card offering the image role and the save
     # refusing a provider must read one answer.
     image_api: bool = False
@@ -390,6 +391,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         default_api_base="https://ark.cn-beijing.volces.com/api/v3",
         strip_model_prefix=False,
         model_overrides=(),
+        image_api=True,
     ),
     # Poe resells whole vendor catalogues under one subscription key, so a model
     # id here names the model's maker and never Poe. Gateway for that reason:

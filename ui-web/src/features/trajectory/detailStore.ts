@@ -31,12 +31,14 @@
  *     new descriptor no longer has that tab.
  */
 
+import { slot } from '../../lib/persist'
 import { onTrajectoryEscape } from '../../state/escapeOrder'
 import { makeStore } from '../../state/store'
+import { INTERNAL_BLOCKS } from './blocks'
 import { isDisabled, isEntryGone, revisionChange, saysAbsent } from './source'
 import * as list from './store'
 
-import type { JsonValue, Renderer, TrajectoryBlockResult, TrajectoryDetailResult } from './types'
+import type { JsonValue, Renderer, TrajectoryBlockDescriptor, TrajectoryBlockResult, TrajectoryDetailResult } from './types'
 
 export interface Identity {
   sessionKey: string
@@ -170,6 +172,10 @@ export interface DetailsState {
   /** The list is not in a state the pane may read in (view, switch or snapshot away); mirrored so the pane redraws when it changes. */
   paused: boolean
   tabByEntry: Record<string, Tab>
+  /** The pinned tab by conversation: null once known to have none, absent until storage was asked. */
+  pins: Record<string, Tab | null>
+  /** The entry the pane just arrived at, whose tab the pin is still to decide. */
+  arrival: string | null
   /** Scroll offsets by entry and tab: an intention, kept across revisions. */
   scrollByEntryTab: Record<string, number>
   descriptors: Record<string, DescriptorRecord>
@@ -214,6 +220,8 @@ const initial: DetailsState = {
   pending: null,
   paused: true,
   tabByEntry: {},
+  pins: {},
+  arrival: null,
   scrollByEntryTab: {},
   descriptors: {},
   blocks: {},
@@ -367,14 +375,22 @@ export const narrow = (s: DetailsState = store.get()): boolean => s.areaWidth > 
 export function openDetails(): void {
   if (store.get().open) return
   bump()
-  patch({ open: true, unstable: false })
+  const s = store.get()
+  const entryId = list.get().selectedId
+  let next: DetailsState = { ...s, open: true, unstable: false, arrival: entryId }
+  /* Reopened on the entry it closed on: the descriptor is still the pane's and
+     nothing will read it again, so the pin decides here. A stale one is read
+     again first, and the pin decides against what the reader will see. */
+  const value = descriptor(s)
+  if (entryId !== null && value !== null && s.current?.entryId === entryId && !s.stale) next = land(next, entryId, value)
+  store.set(next)
 }
 
 /** Closes the pane; the selection stays, so the same row reopens it. */
 export function closeDetails(): void {
   if (!store.get().open) return
   bump()
-  patch({ open: false })
+  patch({ open: false, arrival: null })
 }
 
 export function setWidth(px: number): void {
@@ -402,6 +418,51 @@ export function setTabScroll(entryId: string, tab: Tab, top: number): void {
 }
 
 export const tabScroll = (entryId: string, tab: Tab): number => store.get().scrollByEntryTab[scrollKey(entryId, tab)] ?? 0
+
+/* ── the pinned tab ───────────────────────────────────────────────────── */
+
+/* One entry per conversation the reader pinned a tab in, each a tab id and
+   written only by their own click. No cap: a cap would drop a conversation's
+   pin while the tab still promises it back when the reader returns there. */
+const PINS = slot<Tab>('trajectory.pin', 1, Number.POSITIVE_INFINITY)
+
+/** The tabs the strip offers for a descriptor's blocks: the overview, then every block the pane does not keep for itself. */
+export function visibleTabs(blocks: ReadonlyArray<Pick<TrajectoryBlockDescriptor, 'id'>>): Tab[] {
+  return ['overview', ...blocks.filter((b) => !INTERNAL_BLOCKS.includes(b.id)).map((b) => b.id)]
+}
+
+/** The current conversation's pinned tab, or null. */
+export const pinned = (s: DetailsState = store.get()): Tab | null => {
+  const key = list.get().sessionKey
+  return key === null ? null : (s.pins[key] ?? null)
+}
+
+/* Storage is asked once per conversation per page; after that the pins in
+   memory are the answer, so a switch back never depends on storage. */
+function withPinOf(pins: Record<string, Tab | null>, sessionKey: string | null): Record<string, Tab | null> {
+  if (sessionKey === null || sessionKey in pins) return pins
+  return { ...pins, [sessionKey]: PINS.read(sessionKey) }
+}
+
+/* The pin decides the tab of an entry the pane has just arrived at, when that
+   entry has the tab; otherwise the entry keeps whatever it would show. */
+function land(s: DetailsState, entryId: string, value: TrajectoryDetailResult): DetailsState {
+  const pin = pinned(s)
+  const next = { ...s, arrival: null }
+  if (pin === null || !visibleTabs(value.blocks).includes(pin)) return next
+  return { ...next, tabByEntry: { ...next.tabByEntry, [entryId]: pin } }
+}
+
+/** Pins the entry's current tab for this conversation, or unpins it when it is the pinned one. */
+export function togglePin(entryId: string): void {
+  const key = list.get().sessionKey
+  if (key === null) return
+  const tab = tabOf(entryId)
+  const next = pinned() === tab ? null : tab
+  if (next === null) PINS.forget(key)
+  else PINS.write(key, next)
+  patch({ pins: { ...store.get().pins, [key]: next } })
+}
 
 /* ── the cache and its budget ─────────────────────────────────────────── */
 
@@ -614,6 +675,7 @@ function accept(result: TrajectoryDetailResult, t: number, g: number, mark: stri
     }
     next = { ...next, current: id }
   }
+  if (next.arrival === id.entryId) next = land(next, id.entryId, result)
   commit(next)
 }
 
@@ -1217,7 +1279,8 @@ function follow(): void {
     bump()
     inflight.clear()
     revisionHops = 0
-    store.set({ ...initial, paused: !now.permitted, width: store.get().width, areaWidth: store.get().areaWidth })
+    const d = store.get()
+    store.set({ ...initial, paused: !now.permitted, width: d.width, areaWidth: d.areaWidth, pins: withPinOf(d.pins, now.sessionKey) })
     return
   }
   /* The view left or came back, the switch flipped, the snapshot was let go:
@@ -1233,7 +1296,7 @@ function follow(): void {
     revisionHops = 0
     const d = store.get()
     const open = now.selectedId === null ? false : (now.selectedBy !== 'migrate' ? true : d.open)
-    patch({ open, current: null, stale: false, unstable: false, waitingEpoch: null, pending: null })
+    patch({ open, current: null, stale: false, unstable: false, waitingEpoch: null, pending: null, arrival: open ? now.selectedId : null })
     return
   }
   if (now.epoch !== was.epoch) {
@@ -1257,6 +1320,8 @@ export function install(): void {
   if (unfollow) return
   seen = seenNow()
   if (store.get().paused === seen.permitted) patch({ paused: !seen.permitted })
+  const pins = withPinOf(store.get().pins, seen.sessionKey)
+  if (pins !== store.get().pins) patch({ pins })
   unfollow = list.subscribe(follow)
 }
 
@@ -1281,8 +1346,10 @@ onTrajectoryEscape({
   },
 })
 
-export function _resetForTests(): void {
+/** `keepStorage` stands in for a reload: everything in memory goes, the tab's storage stays. */
+export function _resetForTests(opts: { keepStorage?: boolean } = {}): void {
   store._resetForTests()
+  if (!opts.keepStorage) PINS.clear()
   gen = 0
   clock = 0
   tokens = 0

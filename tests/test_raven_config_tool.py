@@ -167,6 +167,17 @@ async def test_a_settings_page_setting_goes_through_the_lent_caller(config_file)
 
 
 @pytest.mark.asyncio
+async def test_the_image_provider_may_be_set_to_volcengine(config_file):
+    """The choices are the registry's, so a provider the roles card offers the image
+    role is one a model may name here too."""
+    calls = Calls({"settings.set": {"applied": True, "previous": ""}})
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+    await _run(tool, action="set", path="tools.media.image.provider", value='"volcengine"')
+    assert calls.calls == [("settings.set", {"key": "tools.media.image.provider", "value": "volcengine"})]
+
+
+@pytest.mark.asyncio
 async def test_without_a_caller_a_settings_page_setting_is_refused(config_file):
     tool = RavenConfigTool()
     reply = await _run(tool, action="set", path="tools.exec.timeout", value="120")
