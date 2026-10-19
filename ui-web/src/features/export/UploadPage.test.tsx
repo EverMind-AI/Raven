@@ -37,6 +37,7 @@ const src: ExportSource = {
   start: () => Promise.reject(new Error('not scripted')),
   status: () => Promise.reject(new Error('not scripted')),
   cancel: async () => ({ ok: true }),
+  reportProbe: async () => ({ reachable: true, target: 'https://bugs.example', reason: '' }),
   reportStart: async () => ({ report_id: 'rs-1' }),
   reportStatus: async () => (answers.length > 1 ? answers.shift()! : answers[0]!),
   reportItem: () => Promise.reject(new Error('not scripted')),

@@ -72,12 +72,16 @@ function Primary({ s }: { s: ExportState }): JSX.Element {
     case 'export':
       if (s.job?.status?.state === 'done') return button(t('gui.export.finish'), store.close)
       return button(s.job ? t('gui.export.retry') : t('gui.export.start'), () => void store.start(), busy)
-    case 'problem':
+    case 'problem': {
+      if (s.probeWaiting) return button(t('gui.export.probe_checking'), () => undefined, true)
+      const blocked = busy || !s.problemReady || !s.selected.length
+      if (store.probeRefused(s)) return button(t('gui.export.probe_continue'), store.continueAnyway, blocked)
       return button(
         s.report && store.reportOver(s.report) ? t('gui.export.restart') : t('gui.export.next'),
         () => void store.startReport(),
-        busy || !s.problemReady || !s.selected.length,
+        blocked,
       )
+    }
     case 'decide':
       return button(
         s.acting ? t('gui.export.applying') : t('gui.export.next'),
@@ -98,6 +102,34 @@ function Primary({ s }: { s: ExportState }): JSX.Element {
       )
     }
   }
+}
+
+/* The receiver check, before a report starts: why the receiver cannot be used
+   and that the reader may still go on, or that a start is waiting on the check. */
+function ProbeNotice({ s }: { s: ExportState }): JSX.Element | null {
+  if (s.flow !== 'report' || s.report !== null) return null
+  const shown = store.probeShown(s)
+  if (shown?.state === 'down' || shown?.state === 'failed') {
+    const text = shown.state === 'down'
+      ? t('gui.export.probe_down', { target: shown.target, reason: shown.reason })
+      : shown.detail === null ? t('gui.export.probe_late') : t('gui.export.probe_failed', { error: shown.detail })
+    return (
+      <div className="export-warn export-probe" role="status">
+        <p>{text}</p>
+        <p>{t('gui.export.probe_note')}</p>
+        <button
+          type="button"
+          className="export-btn export-ghost"
+          disabled={s.probe?.state === 'checking'}
+          onClick={store.recheckProbe}
+        >
+          {t('gui.export.probe_recheck')}
+        </button>
+      </div>
+    )
+  }
+  if (s.probeWaiting) return <div className="export-warn export-probe" role="status">{t('gui.export.probe_checking')}</div>
+  return null
 }
 
 function Page({ s, begin }: { s: ExportState; begin: () => void }): JSX.Element {
@@ -156,10 +188,11 @@ export function ExportApp(): JSX.Element | null {
         </button>
       </header>
       <div className="export-main">
+        <ProbeNotice s={s} />
         <Page s={s} begin={begin} />
       </div>
       <footer className="export-foot">
-        {at > 0 && !busy && !done && s.page !== 'decide' && s.page !== 'upload' ? (
+        {at > 0 && !busy && !s.probeWaiting && !done && s.page !== 'decide' && s.page !== 'upload' ? (
           <button type="button" className="export-btn export-ghost" onClick={store.back}>{t('gui.export.back')}</button>
         ) : null}
         {s.page === 'decide' ? (

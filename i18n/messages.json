@@ -12769,6 +12769,34 @@
       "en": "No bug report receiver is configured on this gateway.",
       "zh": "该网关没有配置问题报告服务器。"
     },
+    "gui.export.probe_down": {
+      "en": "The bug report service at {target} cannot be reached: {reason}",
+      "zh": "无法连接问题报告服务 {target}：{reason}"
+    },
+    "gui.export.probe_failed": {
+      "en": "The bug report service could not be checked: {error}",
+      "zh": "无法检查问题报告服务：{error}"
+    },
+    "gui.export.probe_late": {
+      "en": "The bug report service did not answer the check in time.",
+      "zh": "问题报告服务未能及时响应检查。"
+    },
+    "gui.export.probe_note": {
+      "en": "You can still go on: if the upload fails, the package stays on this machine and can be sent again later.",
+      "zh": "仍可继续：上传失败时，报告包会保留在本机，之后可以重新发送。"
+    },
+    "gui.export.probe_recheck": {
+      "en": "Check again",
+      "zh": "重新检查"
+    },
+    "gui.export.probe_checking": {
+      "en": "Checking the bug report service...",
+      "zh": "正在检查问题报告服务…"
+    },
+    "gui.export.probe_continue": {
+      "en": "Continue anyway",
+      "zh": "仍然继续"
+    },
     "gui.export.report_limit": {
       "en": "Too many bug reports are in progress. Finish or cancel one first.",
       "zh": "进行中的问题报告过多，请先完成或取消一个。"

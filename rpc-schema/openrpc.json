@@ -11414,6 +11414,36 @@
       }
     },
     {
+      "name": "bugreport.probe",
+      "summary": "Ask whether the configured bug report receiver answers, before a report starts; an unreachable receiver is an answer, not an error.",
+      "params": [],
+      "result": {
+        "name": "BugReportProbeResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "reachable",
+            "target",
+            "reason"
+          ],
+          "properties": {
+            "reachable": {
+              "type": "boolean"
+            },
+            "target": {
+              "type": "string",
+              "description": "The receiver's scheme and host, as the page may show it."
+            },
+            "reason": {
+              "type": "string",
+              "description": "Why the receiver cannot be used; empty when it is reachable."
+            }
+          }
+        }
+      }
+    },
+    {
       "name": "bugreport.start",
       "summary": "Validate the problem fields and the turn selection, then start collecting a bug report; an invalid selection is refused with invalid_params naming each turn.",
       "params": [

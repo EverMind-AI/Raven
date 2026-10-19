@@ -206,6 +206,7 @@ describe('the chat column chrome and the trajectory view', () => {
     start: () => Promise.reject(new Error('not scripted')),
     status: () => Promise.reject(new Error('not scripted')),
     cancel: async () => ({ ok: true }),
+    reportProbe: async () => ({ reachable: true, target: 'https://bugs.example', reason: '' }),
     reportStart: () => Promise.reject(new Error('not scripted')),
     reportStatus: () => Promise.reject(new Error('not scripted')),
     reportItem: () => Promise.reject(new Error('not scripted')),

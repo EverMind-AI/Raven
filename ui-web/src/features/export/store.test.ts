@@ -7,7 +7,9 @@ import * as confirm from '../../state/confirm'
 import { resetSources, setSources } from '../../state/sources'
 import * as store from './store'
 
-import type { ExportSource, ExportStatus, ExportTurn, ExportTurns, ReportContexts, ReportItem, ReportStatus } from './types'
+import type {
+  ExportSource, ExportStatus, ExportTurn, ExportTurns, ReportContexts, ReportItem, ReportProbe, ReportStatus,
+} from './types'
 
 interface Deferred<T> {
   promise: Promise<T>
@@ -66,10 +68,14 @@ const rstatus = (phase: ReportStatus['phase'], patch: Partial<ReportStatus> = {}
   ...patch,
 })
 
+const REACHABLE: ReportProbe = { reachable: true, target: 'https://bugs.example', reason: '' }
+const DOWN: ReportProbe = { reachable: false, target: 'https://bugs.example', reason: 'could not reach bugs.example' }
+
 let calls: Array<[string, ...unknown[]]>
 let onTurns: () => Promise<ExportTurns>
 let onStart: () => Promise<{ job_id: string }>
 let onStatus: (jobId: string) => Promise<ExportStatus>
+let onReportProbe: () => Promise<ReportProbe>
 let onReportStart: () => Promise<{ report_id: string }>
 let onReportStatus: (reportId: string) => Promise<ReportStatus>
 let onReportItem: (reportId: string, itemId: string) => Promise<ReportContexts>
@@ -80,6 +86,7 @@ const fake: ExportSource = {
   start: (key, ids, name) => { calls.push(['start', key, ids, name]); return onStart() },
   status: (jobId) => { calls.push(['status', jobId]); return onStatus(jobId) },
   cancel: (jobId) => { calls.push(['cancel', jobId]); return Promise.resolve({ ok: true }) },
+  reportProbe: () => { calls.push(['reportProbe']); return onReportProbe() },
   reportStart: (key, ids, problem) => { calls.push(['reportStart', key, ids, problem]); return onReportStart() },
   reportStatus: (reportId) => { calls.push(['reportStatus', reportId]); return onReportStatus(reportId) },
   reportItem: (reportId, itemId) => { calls.push(['reportItem', reportId, itemId]); return onReportItem(reportId, itemId) },
@@ -112,6 +119,7 @@ beforeEach(() => {
   calls = []
   onStart = () => Promise.resolve({ job_id: 'exj-1' })
   onStatus = (jobId) => Promise.resolve(status('running', jobId))
+  onReportProbe = () => Promise.resolve(REACHABLE)
   onReportStart = () => Promise.resolve({ report_id: 'rs-1' })
   onReportStatus = () => Promise.resolve(rstatus('collecting'))
   onReportItem = (_id, itemId) => Promise.resolve({ groups: [{ label: 'a tool result', text: itemId, spans: [[0, 1]], count: 1 }], total_groups: 1 })
@@ -430,6 +438,160 @@ async function atUpload(phase: ReportStatus['phase'] = 'ready', patch: Partial<R
   await store.startReport()
   await settle()
 }
+
+describe('probing the receiver', () => {
+  it('checks once when a report opens, and never for an export', async () => {
+    await atProblemPage()
+    expect(of('reportProbe')).toHaveLength(1)
+    expect(store.get().probe).toEqual({ state: 'ok' })
+    store.close()
+    await openOn([turn(1)])
+    expect(of('reportProbe')).toHaveLength(1)
+    expect(store.get().probe).toBeNull()
+  })
+
+  it('waits for a check still running, then starts once it answers', async () => {
+    const answer = deferred<ReportProbe>()
+    onReportProbe = () => answer.promise
+    await atProblemPage()
+    const starting = store.startReport()
+    expect(store.get().probeWaiting).toBe(true)
+    expect(store.working()).toBe(false)
+    await store.startReport()
+    expect(of('reportStart')).toEqual([])
+    answer.resolve(REACHABLE)
+    await starting
+    expect(of('reportStart')).toHaveLength(1)
+    expect(store.get().probeWaiting).toBe(false)
+  })
+
+  it('does not start while the receiver is down, until the reader goes on', async () => {
+    const answer = deferred<ReportProbe>()
+    onReportProbe = () => answer.promise
+    await atProblemPage()
+    const starting = store.startReport()
+    answer.resolve(DOWN)
+    await starting
+    expect(of('reportStart')).toEqual([])
+    expect(store.get().probe).toEqual({ state: 'down', target: 'https://bugs.example', reason: 'could not reach bugs.example' })
+    expect(store.probeRefused()).toBe(true)
+    await store.startReport()
+    expect(of('reportStart')).toEqual([])
+    store.continueAnyway()
+    await settle()
+    expect(of('reportStart')).toHaveLength(1)
+    expect(store.get().probeAccepted).toBe(true)
+  })
+
+  it('lets the reader go on when the check itself fails', async () => {
+    onReportProbe = () => Promise.reject(new RpcError(-1, 'socket closed'))
+    await atProblemPage()
+    expect(store.get().probe).toEqual({ state: 'failed', detail: 'socket closed' })
+    await store.startReport()
+    expect(of('reportStart')).toEqual([])
+    store.continueAnyway()
+    await settle()
+    expect(of('reportStart')).toHaveLength(1)
+  })
+
+  it('gives up on a check that never answers and still lets the reader go on', async () => {
+    onReportProbe = () => new Promise<ReportProbe>(() => undefined)
+    await atProblemPage()
+    const starting = store.startReport()
+    await settle(store.PROBE_WAIT_MS)
+    await starting
+    expect(store.get().probe).toEqual({ state: 'failed', detail: null })
+    expect(store.get().probeWaiting).toBe(false)
+    expect(of('reportStart')).toEqual([])
+    store.continueAnyway()
+    await settle()
+    expect(of('reportStart')).toHaveLength(1)
+  })
+
+  it.each(['resolve', 'reject'] as const)(
+    'a late answer to a closed wizard leaves the new one its deadline (%s)',
+    async (how) => {
+      const first = deferred<ReportProbe>()
+      onReportProbe = () => first.promise
+      await atProblemPage()
+      store.close()
+      onReportProbe = () => new Promise<ReportProbe>(() => undefined)
+      await atProblemPage()
+      const starting = store.startReport()
+      if (how === 'resolve') first.resolve(DOWN)
+      else first.reject(new Error('late'))
+      await settle()
+      expect(store.get().probe).toMatchObject({ state: 'checking' })
+      await settle(store.PROBE_WAIT_MS)
+      await starting
+      expect(store.get().probe).toEqual({ state: 'failed', detail: null })
+      expect(store.get().probeWaiting).toBe(false)
+      expect(of('reportStart')).toEqual([])
+      store.continueAnyway()
+      await settle()
+      expect(of('reportStart')).toHaveLength(1)
+    },
+  )
+
+  it('a close ends a start waiting on the check, and the late answer changes nothing', async () => {
+    const answer = deferred<ReportProbe>()
+    onReportProbe = () => answer.promise
+    await atProblemPage()
+    let ended = false
+    void store.startReport().then(() => { ended = true })
+    store.close()
+    await settle()
+    expect(ended).toBe(true)
+    answer.resolve(REACHABLE)
+    await settle()
+    expect(of('reportStart')).toEqual([])
+    expect(store.get()).toMatchObject({ open: false, probe: null, probeWaiting: false })
+  })
+
+  it('keeps what the last check found on screen while checking again', async () => {
+    onReportProbe = () => Promise.resolve(DOWN)
+    await atProblemPage()
+    const again = deferred<ReportProbe>()
+    onReportProbe = () => again.promise
+    store.recheckProbe()
+    expect(store.get().probe).toEqual({ state: 'checking', last: store.probeShown() })
+    expect(store.probeShown()).toMatchObject({ state: 'down' })
+    expect(store.probeRefused()).toBe(true)
+    again.resolve(REACHABLE)
+    await settle()
+    expect(store.get().probe).toEqual({ state: 'ok' })
+    expect(store.probeRefused()).toBe(false)
+  })
+
+  it('a check that timed out cannot overwrite the next one when it answers late', async () => {
+    const stale = deferred<ReportProbe>()
+    onReportProbe = () => stale.promise
+    await atProblemPage()
+    await settle(store.PROBE_WAIT_MS)
+    expect(store.get().probe).toEqual({ state: 'failed', detail: null })
+    onReportProbe = () => Promise.resolve(REACHABLE)
+    store.recheckProbe()
+    await settle()
+    expect(store.get().probe).toEqual({ state: 'ok' })
+    stale.resolve(DOWN)
+    await settle()
+    expect(store.get().probe).toEqual({ state: 'ok' })
+  })
+
+  it('does not check again while a check runs, or once a report exists', async () => {
+    const answer = deferred<ReportProbe>()
+    onReportProbe = () => answer.promise
+    await atProblemPage()
+    store.recheckProbe()
+    expect(of('reportProbe')).toHaveLength(1)
+    answer.resolve(REACHABLE)
+    await store.startReport()
+    await settle()
+    expect(store.get().report).not.toBeNull()
+    store.recheckProbe()
+    expect(of('reportProbe')).toHaveLength(1)
+  })
+})
 
 describe('the bug report flow', () => {
   it('pages through the picker, the problem, the decisions and the upload', async () => {

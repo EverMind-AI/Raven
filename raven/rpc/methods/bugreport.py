@@ -1,5 +1,7 @@
 """``bugreport.*``: the web page's bug report, one Report Session per report.
 
+- ``bugreport.probe`` -- ask whether the receiver answers, before a report
+  starts; an unreachable receiver is an answer the page shows, not an error.
 - ``bugreport.start`` -- validate the problem fields and the turn selection, then
   start collecting; answers a handle the page polls.
 - ``bugreport.status`` -- the phase, the items to decide (each value in full and
@@ -9,12 +11,13 @@
   ``bugreport.cancel`` -- move the report on.
 
 Like ``trajectory.*`` they answer ``trajectory_disabled`` while the trajectory
-policy is off. ``bugreport.start`` also needs a valid upload URL, the same
-condition under which the handshake announces ``bugreport-v1``; the other
-methods do not, so a report already started can still finish or be cancelled.
-Every handler only reads or moves in-memory state, except the selection scan
-in ``bugreport.start``, which runs in a worker thread before the report
-exists.
+policy is off. ``bugreport.probe`` and ``bugreport.start`` also need a valid
+upload URL, the same condition under which the handshake announces
+``bugreport-v1``; the other methods do not, so a report already started can
+still finish or be cancelled. Every handler only reads or moves in-memory
+state, except the selection scan in ``bugreport.start``, which runs in a worker
+thread before the report exists, and ``bugreport.probe``, which awaits the
+receiver under the probe's own deadline without blocking the loop.
 """
 
 from __future__ import annotations
@@ -37,12 +40,14 @@ from raven.rpc.models import (
     BugReportCancelParams,
     BugReportDecideParams,
     BugReportItemParams,
+    BugReportProbeParams,
     BugReportRetryParams,
     BugReportStartParams,
     BugReportStatusParams,
     BugReportUploadParams,
 )
 from raven.trajectory import report_session, selection
+from raven.trajectory.upload import ProbeError, probe_receiver_async, resolve_upload_url, upload_target
 
 if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
@@ -68,6 +73,20 @@ def _guarded(call: Any) -> Any:
         raise _state(exc) from None
     except report_session.ReportConflictError as exc:
         raise ReviewConflictRpcError(str(exc), data={"item_ids": list(exc.item_ids)}) from None
+
+
+async def bugreport_probe(params: dict) -> dict:
+    _params(BugReportProbeParams, params)
+    _require_enabled()
+    if not bug_report_receiver_configured():
+        raise BugReportUnavailableError("no bug report receiver is configured")
+    url = resolve_upload_url()
+    target = upload_target(url)
+    try:
+        await probe_receiver_async(url)
+    except ProbeError as exc:
+        return {"reachable": False, "target": target, "reason": exc.reason}
+    return {"reachable": True, "target": target, "reason": ""}
 
 
 async def bugreport_start(params: dict, *, agent_loop_factory: Any = None) -> dict:
@@ -142,6 +161,7 @@ def register_bugreport_methods(dispatcher: "Dispatcher", *, agent_loop_factory: 
     async def _start(params: dict) -> dict:
         return await bugreport_start(params, agent_loop_factory=agent_loop_factory)
 
+    dispatcher.register("bugreport.probe", bugreport_probe)
     dispatcher.register("bugreport.start", _start)
     dispatcher.register("bugreport.status", bugreport_status)
     dispatcher.register("bugreport.item", bugreport_item)
@@ -155,6 +175,7 @@ __all__ = [
     "bugreport_cancel",
     "bugreport_decide",
     "bugreport_item",
+    "bugreport_probe",
     "bugreport_retry_upload",
     "bugreport_start",
     "bugreport_status",

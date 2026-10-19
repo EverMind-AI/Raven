@@ -94,6 +94,7 @@ export function createBugReport(env: FixtureEnv): BugReportFixture {
 
   return {
     fixtures: {
+      'bugreport.probe': () => ({ reachable: true, target: 'https://bugs.example', reason: '' }),
       'bugreport.start': () => {
         phase = 'deciding'
         return { report_id: ID }
