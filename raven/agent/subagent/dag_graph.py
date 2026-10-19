@@ -20,7 +20,7 @@ from raven.agent.subagent.dag_store import (
 )
 from raven.agent.subagent.history import NODE_ID_PATTERN
 from raven.agent.subagent.prompt_errors import DagValidationError
-from raven.agent.subagent.prompt_paths import check_confined, split_reference
+from raven.agent.subagent.prompt_paths import check_confined, resolve_reference, split_reference, within
 from raven.agent.subagent.prompt_placeholders import parse_placeholders
 from raven.agent.subagent.prompt_render import check_input_contract
 
@@ -324,6 +324,7 @@ def collect_static_graph_errors(
     session_nodes: SessionNodes | None = None,
     allowed_blank_fields: frozenset[str] = frozenset(),
     check_paths: bool = True,
+    nodes_root: str | None = None,
 ) -> list[str]:
     """Collect DAG errors that can be found before any node is dispatched.
 
@@ -336,6 +337,10 @@ def collect_static_graph_errors(
     It collects and never raises: a check that cannot be answered for this
     graph (the ``@nodes/`` rule on a cyclic one) is skipped, and the check that
     owns the underlying fault reports it.
+
+    ``nodes_root`` is the directory ``@nodes/`` resolves against. Given with
+    ``roots``, a reference that reaches it by another spelling -- an absolute
+    path, or one out of the workdir -- is held to the ``@nodes/`` rule too.
     """
     errors: list[str] = []
 
@@ -397,7 +402,7 @@ def collect_static_graph_errors(
 
     if unique_ids:
         capture(lambda: _topological_order(by_id))
-        errors.extend(_nodes_path_errors(nodes, by_id))
+        errors.extend(_nodes_path_errors(nodes, by_id, roots=roots, nodes_root=nodes_root))
     return errors
 
 
@@ -405,6 +410,8 @@ def validate_and_order(
     spec: SubAgentDagSpec,
     roots: tuple[str, ...] | None = None,
     session_nodes: SessionNodes | None = None,
+    *,
+    nodes_root: str | None = None,
 ) -> list[str]:
     """Validate graph structure and return a topological node order.
 
@@ -434,6 +441,10 @@ def validate_and_order(
             session, so this both refuses a graph that reuses one and
             makes an earlier run's *completed* node addressable by id
             alone.
+        nodes_root (`str | None`):
+            Where ``@nodes/`` resolves, inside the history root in ``roots``.
+            Given, a reference reaching a node's artifacts by any spelling is
+            checked as its ``@nodes/`` spelling is.
 
     Returns:
         `list[str]`:
@@ -443,7 +454,9 @@ def validate_and_order(
         `DagValidationError`:
             When any structural rule is violated.
     """
-    if errors := collect_static_graph_errors(spec.nodes, roots=roots, session_nodes=session_nodes):
+    if errors := collect_static_graph_errors(
+        spec.nodes, roots=roots, session_nodes=session_nodes, nodes_root=nodes_root
+    ):
         raise DagValidationError(errors[0])
     return _topological_order({node.id: node for node in spec.nodes})
 
@@ -957,8 +970,14 @@ def _never_true_errors(node: DagNodeSpec, guard: Guard, by_id: dict[str, DagNode
     return impossible_guard_errors(guard, check_conjunction)
 
 
-def _nodes_path_errors(nodes: list[DagNodeSpec], by_id: dict[str, DagNodeSpec]) -> list[str]:
-    """Refuse a ``@nodes/`` file reference to a node that may not execute.
+def _nodes_path_errors(
+    nodes: list[DagNodeSpec],
+    by_id: dict[str, DagNodeSpec],
+    *,
+    roots: tuple[str, ...] | None = None,
+    nodes_root: str | None = None,
+) -> list[str]:
+    """Refuse a file reference to the artifacts of a node that may not execute.
 
     A node that did not execute wrote no file, so the reader would fail while
     rendering with a missing-file error that hides the cause. ``{{ <id>.output }}``
@@ -969,6 +988,11 @@ def _nodes_path_errors(nodes: list[DagNodeSpec], by_id: dict[str, DagNodeSpec]) 
             The graph's nodes; ids must be unique.
         by_id (`dict[str, DagNodeSpec]`):
             The same nodes, keyed by id.
+        roots (`tuple[str, ...] | None`):
+            The roots a reference may resolve into, the first being the base of
+            a relative one.
+        nodes_root (`str | None`):
+            Where ``@nodes/`` resolves (see :func:`_nodes_path_target`).
 
     Returns:
         `list[str]`:
@@ -993,7 +1017,7 @@ def _nodes_path_errors(nodes: list[DagNodeSpec], by_id: dict[str, DagNodeSpec]) 
             if isinstance(value, dict) and "file" in value
         )
         for path, what in reads:
-            target = _nodes_path_target(path)
+            target = _nodes_path_target(path, roots=roots, nodes_root=nodes_root)
             if target is not None and target in skippable:
                 target = skippable[target]
                 errors.append(
@@ -1004,29 +1028,46 @@ def _nodes_path_errors(nodes: list[DagNodeSpec], by_id: dict[str, DagNodeSpec]) 
     return errors
 
 
-def _nodes_path_target(path: str) -> str | None:
-    """Return the node whose artifacts a ``@nodes/`` path names.
+def _nodes_path_target(path: str, *, roots: tuple[str, ...] | None = None, nodes_root: str | None = None) -> str | None:
+    """Return the node whose artifacts a reference names.
 
     Artifacts are flat files named ``<id>.`` plus a suffix and an id holds no
-    dot, so the id is whatever precedes the first one. Normalize separators
-    and drives with the host's path rules, then fold the id like the session
-    namespace does. The artifact directory's case sensitivity is not known
-    here, and macOS can alias case even though its path library does not.
-    A drive-relative spelling is likewise matched by its relative suffix.
+    dot, so the id is whatever precedes the first one. For ``@nodes/``,
+    normalize separators and drives with the host's path rules, then fold the
+    id like the session namespace does. The artifact directory's case
+    sensitivity is not known here, and macOS can alias case even though its
+    path library does not. A drive-relative spelling is likewise matched by its
+    relative suffix.
+
+    Any other reference names a node when it lands in ``nodes_root``, resolved
+    as ``check_confined`` resolves it: the history root around the node root is
+    a reference root of its own, so the same files are reachable by absolute
+    path, the way a finish text prints them, or from the workdir.
 
     Args:
         path (`str`):
             A ``ref:`` path or a ``{"file": ...}`` input value.
+        roots (`tuple[str, ...] | None`):
+            The roots a reference may resolve into; without them only
+            ``@nodes/`` is read.
+        nodes_root (`str | None`):
+            Where ``@nodes/`` resolves; without it only ``@nodes/`` is read.
 
     Returns:
         `str | None`:
-            The node id, or ``None`` for a path outside ``@nodes/``.
+            The folded node id, or ``None`` for a path outside the node root.
     """
     root, relative = split_reference(path)
-    if root != "nodes":
+    if root == "nodes":
+        _, relative = os.path.splitdrive(relative)
+        return fold_node_id(os.path.normpath(relative).split(".", 1)[0])
+    if not relative or not roots or not nodes_root:
         return None
-    _, relative = os.path.splitdrive(relative)
-    return fold_node_id(os.path.normpath(relative).split(".", 1)[0])
+    _, physical = resolve_reference(relative, roots)
+    artifacts = os.path.realpath(nodes_root)
+    if physical == artifacts or not within(physical, artifacts):
+        return None
+    return fold_node_id(physical[len(artifacts.rstrip("/")) + 1 :].split(".", 1)[0])
 
 
 def _topological_order(by_id: dict[str, DagNodeSpec]) -> list[str]:

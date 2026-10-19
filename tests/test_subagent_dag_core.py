@@ -7,6 +7,7 @@ render/store are exercised over a tiny in-memory duck-typed backend.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import posixpath
 import re
@@ -1050,6 +1051,17 @@ async def test_read_node_returns_its_own_transcript() -> None:
 
 # A real, well-formed run id: _check_run_id runs the moment prepare_replan
 # reads the old graph, well before anything this suite is actually about.
+# A workdir reference that lands in the node root only reaches the node-root rule where it
+# passes confinement first.
+_POSIX_REFERENCE_PATHS = pytest.mark.skipif(
+    os.name == "nt",
+    reason=(
+        "check_confined resolves a workdir reference with POSIX path rules, so on Windows it refuses "
+        "every such reference as outside the roots before the node-root rule is reached"
+    ),
+)
+
+
 _OLD_RUN_ID = "20260904T000000Z-00000001"
 
 
@@ -1242,6 +1254,27 @@ async def test_replanning_refuses_a_reference_to_a_live_completed_node_that_wrot
 
     assert isinstance(out, str), out
     assert "b" in out
+
+
+@_POSIX_REFERENCE_PATHS
+async def test_replanning_refuses_an_absolute_path_to_a_node_that_may_not_execute(tmp_path) -> None:
+    """A replacement graph is held to the rules a submitted one is, the node root by any
+    spelling included: refused here, it never becomes a run that fails on a missing file."""
+    tool, live = await _replannable_tool(tmp_path)
+    artifacts = f"{tool._history_root()}/nodes"
+    replacement = [
+        {**_node("r2"), "routes": {"a": "the first holds", "b": "the second holds"}},
+        {**_node("g2", depends_on=["r2"]), "when": "r2.a"},
+        {
+            **_node("reader2", depends_on=["r2", "g2"], prompt="{{ ref:" + artifacts + "/g2.out.md }}"),
+            "when": "r2.done",
+        },
+    ]
+
+    out = await tool.prepare_replan(_OLD_RUN_ID, "a", replacement, "the plan was wrong", None, live)
+
+    assert isinstance(out, str)
+    assert "of node 'g2', which may not execute" in out
 
 
 async def test_replanning_refuses_a_reference_to_a_node_that_did_not_complete(tmp_path) -> None:
@@ -3509,6 +3542,74 @@ async def test_at_nodes_aliases_respect_the_filesystem_and_reserved_ids(
         assert "use {{ Gate.output }} instead" in errors[0]
     else:
         assert errors == []
+
+
+@_POSIX_REFERENCE_PATHS
+@pytest.mark.parametrize("kind", ["ref", "ref_path", "input"])
+@pytest.mark.parametrize(
+    "spelling",
+    [
+        "{artifacts}/Gate.out.md",
+        "{artifacts}/sub/../Gate.out.md",
+        "{artifacts}/GATE.prompt.md",
+        "../session/subagents/nodes/Gate.out.md",
+    ],
+    ids=["absolute", "absolute-through-a-parent", "absolute-case-alias", "relative-out-of-the-workdir"],
+)
+def test_a_path_into_the_node_root_without_at_nodes_is_refused_too(tmp_path: Path, kind: str, spelling: str) -> None:
+    """`@nodes/` is one spelling of the node root. The history root around it is a reference
+    root of its own, so the same files can be named by absolute path, as every finish text
+    prints them, or from the workdir; a reference is judged by where it lands."""
+    workdir, history = tmp_path / "ws", tmp_path / "session" / "subagents"
+    artifacts = history / "nodes"
+    workdir.mkdir()
+    artifacts.mkdir(parents=True)
+    path = spelling.format(artifacts=artifacts)
+    template = "{{ inputs.k }}" if kind == "input" else "{{ " + kind + ":" + path + " }}"
+    inputs = {"k": {"file": path}} if kind == "input" else {}
+
+    def errors(nodes: list[dict]) -> list[str]:
+        roots = (str(workdir), str(history))
+        return collect_static_graph_errors(_branch_nodes(nodes), roots=roots, nodes_root=str(artifacts))
+
+    reader = {"id": "reader", "prompt_template": template, "inputs": inputs}
+    refused = errors(
+        [
+            _decision(),
+            _branch_node(id="Gate", depends_on=["r"], when="r.a"),
+            _branch_node(**reader, depends_on=["r", "Gate"], when="r.done"),
+        ]
+    )
+    assert len(refused) == 1
+    assert "of node 'Gate', which may not execute" in refused[0]
+    assert errors([_branch_node(id="Gate"), _branch_node(**reader, depends_on=["Gate"])]) == []
+
+
+@_POSIX_REFERENCE_PATHS
+@pytest.mark.parametrize(("link", "refused"), [(True, True), (False, False)], ids=["through-a-link", "same-name"])
+def test_a_workdir_reference_is_judged_by_the_file_its_read_would_open(
+    tmp_path: Path, link: bool, refused: bool
+) -> None:
+    """The read follows a symlink, so a link in the workdir pointing into the node root names
+    that node's artifact; a file of the same name that is not one names nothing."""
+    workdir, history = tmp_path / "ws", tmp_path / "session" / "subagents"
+    artifacts = history / "nodes"
+    workdir.mkdir()
+    artifacts.mkdir(parents=True)
+    if link:
+        try:
+            (workdir / "Gate.out.md").symlink_to(artifacts / "Gate.out.md")
+        except OSError:
+            pytest.skip("this host cannot create a symlink")
+    nodes = [
+        _decision(),
+        _branch_node(id="Gate", depends_on=["r"], when="r.a"),
+        _branch_node(id="reader", depends_on=["r", "Gate"], when="r.done", prompt_template="{{ ref:Gate.out.md }}"),
+    ]
+    errors = collect_static_graph_errors(
+        _branch_nodes(nodes), roots=(str(workdir), str(history)), nodes_root=str(artifacts)
+    )
+    assert bool(errors) is refused, errors
 
 
 @pytest.mark.parametrize(

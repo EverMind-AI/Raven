@@ -79,7 +79,7 @@ from raven.agent.subagent.dag_store import (
 )
 from raven.agent.subagent.dag_verdict import RouteUndeterminedError, Verdict, describe_failure, judge, tail
 from raven.agent.subagent.delegate import current_delegate, dispatch_charter
-from raven.agent.subagent.history import dag_root, nodes_root, session_history_root
+from raven.agent.subagent.history import dag_root, nodes_root, nodes_root_in, session_history_root
 from raven.agent.subagent.instances import mint_handle
 from raven.agent.subagent.prompt_backend import LocalFileBackend
 from raven.agent.subagent.prompt_errors import DagValidationError, RoundBudgetSpentError, RoundNotApprovedError
@@ -739,6 +739,16 @@ class SubAgentDagTool(Tool):
         if (history := self._history_root()) is not None:
             roots.append(history)
         return tuple(roots)
+
+    def _reference_nodes_root(self) -> str | None:
+        """Where ``@nodes/`` resolves, inside the history root ``_reference_roots`` names.
+
+        Validation reads it so a reference reaching a node's artifacts by an
+        absolute path is checked as its ``@nodes/`` spelling is. ``None`` with no
+        history root, where there are no artifacts to reach.
+        """
+        history = self._history_root()
+        return str(nodes_root_in(history)) if history is not None else None
 
     def set_tool_call_id(self, tool_call_id: str | None) -> None:
         """Turn-local: record which tool call this run's progress belongs to.
@@ -1580,7 +1590,7 @@ class SubAgentDagTool(Tool):
             # resumed from a terminal or an RPC has no turn, and checking the
             # turn's registry found none of the roles the record said finished.
             known = await (self.session_nodes(origin.conversation) if origin is not None else self._session_nodes())
-            validate_and_order(spec, self._reference_roots(), known)
+            validate_and_order(spec, self._reference_roots(), known, nodes_root=self._reference_nodes_root())
             pre = await self._preflight(spec)
             spec, dispatch_backends, notices, capabilities = pre.spec, pre.backends, pre.notices, pre.capabilities
         except DagValidationError as exc:
@@ -1801,7 +1811,9 @@ class SubAgentDagTool(Tool):
         that way.
         """
         spec = parse_dag_spec({"task_summary": plan.task_summary, "nodes": list(plan.nodes), "confirm": plan.confirm})
-        validate_and_order(spec, self._reference_roots(), await self._session_nodes())
+        validate_and_order(
+            spec, self._reference_roots(), await self._session_nodes(), nodes_root=self._reference_nodes_root()
+        )
         origin = self._origin.get() or self._default_origin
         session_dir = self._session_dir_for(self._turn_conversation())
         dirs = _RunDirs(
@@ -1854,7 +1866,12 @@ class SubAgentDagTool(Tool):
             raw_graph.pop("replan", None)
             old = parse_dag_spec(raw_graph)
             spec = parse_dag_spec({"task_summary": old.task_summary, "nodes": nodes, "confirm": old.confirm})
-            validate_and_order(spec, self._reference_roots(), await self._session_nodes_for_replan(run_id, live))
+            validate_and_order(
+                spec,
+                self._reference_roots(),
+                await self._session_nodes_for_replan(run_id, live),
+                nodes_root=self._reference_nodes_root(),
+            )
             pre = await self._preflight(spec)
         except DagValidationError as exc:
             return self._validation_error(exc)

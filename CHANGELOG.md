@@ -92,8 +92,8 @@ All notable changes to Raven are documented here.
   its dependencies settle. A node a branch left out ends `not_executed` with
   its reason and is never dispatched; a node of the same graph that reads one
   gets a fixed sentence in place of the missing output and a note naming the
-  inputs that may be missing, and a `ref:@nodes/` path to such a node is
-  refused. A decision node whose route cannot be determined fails rather than
+  inputs that may be missing, and a file reference to such a node's files,
+  however its path is spelled, is refused. A decision node whose route cannot be determined fails rather than
   guessing. Playbooks carry the same three fields, and the TUI's DAG panel and
   the web tasks list show what each node's branch did.
 

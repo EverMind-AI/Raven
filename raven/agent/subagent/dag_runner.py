@@ -474,7 +474,7 @@ async def run_dag(
     # name, which is exactly what the id being unique is supposed to rule out.
     async with index_guard(history_root):
         session_nodes = await read_session_nodes(backend, history_root)
-        validate_and_order(spec, roots, session_nodes)
+        validate_and_order(spec, roots, session_nodes, nodes_root=nodes_root)
         by_id: dict[str, DagNodeSpec] = {node.id: node for node in spec.nodes}
         # Resolved once per node, here, rather than per dispatch: a narrowed backend
         # is built for the node that asked for it, and the unknown-name check below
