@@ -91,7 +91,8 @@ list continues loading in the background. Gateways announce this read mode as
 gateways without that capability, the selection shares the full provider
 catalogue request and becomes usable when that response arrives. Opening the
 picker during that load shows a short loading notice. A refresh in the same
-conversation keeps its known selection usable; navigating to another
+conversation keeps its known selection usable, and so does a draft that has just
+become a conversation, since that is the same view; navigating to another
 conversation or a new draft waits for that view's selection. Settings role
 pickers can still open from their available lists while the composer's provider
 catalogue is refreshing. Loading the selection does not prevent opening a new
