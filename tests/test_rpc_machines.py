@@ -532,6 +532,50 @@ async def test_remove_takes_the_row_and_its_alias_out_closes_the_link_and_leaves
     assert pool.asked == [("close", "box")] and "box" not in rpc._INSTALLS
 
 
+@pytest.mark.parametrize("taken", [True, False], ids=["taken back", "machine away"])
+async def test_remove_takes_back_the_key_this_computer_made_and_says_when_it_could_not(
+    pool, _home, agents, monkeypatch, taken
+):
+    """A row registered with a password carries a key Raven made: its line goes
+    from the machine's authorized_keys and the pair here is deleted, either way."""
+    monkeypatch.setenv("RAVEN_HOME", str(_home / "rhome"))
+    private, _line = connection_add.generate_key("box")
+    _store({**BOX, "key": str(private)})
+    revoked: list[dict] = []
+    monkeypatch.setattr(
+        connection_add,
+        "revoke_public_key",
+        lambda row, **kw: (
+            revoked.append(row) or ((True, "") if taken else (False, "alice@203.0.113.7: Connection refused"))
+        ),
+    )
+
+    out = await rpc.machines_remove({"id": "box"})
+
+    _check("machines.remove", out)
+    assert out["removed"] and [r["id"] for r in revoked] == ["box"]
+    if taken:
+        assert out["detail"].endswith(
+            "; the key this computer made for it is taken back (its line is gone from authorized_keys there)"
+        )
+    else:
+        assert out["detail"].endswith(
+            "; the key this computer made for it could not be taken back (the machine: Connection refused): "
+            "the line ending raven@box stays in authorized_keys on the machine, the pair here is deleted"
+        )
+    assert not private.exists() and not private.with_name(private.name + ".pub").exists()
+    assert _rows() == []
+
+
+async def test_remove_leaves_the_owner_s_own_key_alone(pool, _home, agents, monkeypatch):
+    _store(BOX)
+    monkeypatch.setattr(connection_add, "revoke_public_key", lambda row, **kw: pytest.fail("reached the machine"))
+
+    out = await rpc.machines_remove({"id": "box"})
+
+    assert out["removed"] and "key" not in out["detail"]
+
+
 async def test_remove_refuses_while_agent_entries_name_the_machine_and_force_says_what_is_left_pointing_at_nothing(
     pool, agents
 ):
@@ -705,10 +749,10 @@ def supported_host(monkeypatch):
 async def test_add_by_password_puts_this_computer_s_key_on_then_proves_that_key_and_writes_its_path(
     supported_host, pool, keyed, monkeypatch
 ):
-    probed: list[tuple[dict, bool]] = []
+    probed: list[tuple[dict, bool, bool]] = []
 
     def probe(row, **kw):
-        probed.append((dict(row), bool(kw.get("isolate_key"))))
+        probed.append((dict(row), bool(kw.get("isolate_key")), bool(kw.get("keep_config"))))
         return True, "reached", {"cores": 8}
 
     monkeypatch.setattr(connection_add, "probe", probe)
@@ -719,11 +763,32 @@ async def test_add_by_password_puts_this_computer_s_key_on_then_proves_that_key_
     assert out["ok"] and out["reason"] == ""
     assert keyed["made"] == ["box"]
     assert keyed["installs"] == [("203.0.113.7", 2222, "alice", "hunter2", "ssh-ed25519 AAAA raven@box")]
-    ((row, isolated),) = probed
+    ((row, isolated, config_kept),) = probed
     assert row["key"] == str(keyed["private"]) and isolated, "the probe proves the key just made, and only it"
+    assert config_kept, "through the owner's ssh config, the way the install reached the machine"
     (stored,) = _rows()
     assert stored["key"] == str(keyed["private"]) and "password" not in stored and "auth" not in stored
     assert "hunter2" not in json.dumps(out) and "hunter2" not in json.dumps(_rows())
+
+
+async def test_a_password_registration_the_probe_refuses_says_the_installed_key_stays(
+    supported_host, pool, keyed, monkeypatch
+):
+    """The install went through, so the machine trusts a key no row records: said, with the line to look for."""
+    monkeypatch.setattr(
+        connection_add, "probe", lambda row, **kw: (False, "could not reach 203.0.113.7:2222: timed out", {})
+    )
+    _store()
+
+    out = await rpc.machines_add(BY_PASSWORD)
+
+    _check("machines.add", out)
+    assert not out["ok"] and out["reason"] == "timeout"
+    assert out["detail"].endswith(
+        "; the key this computer put on the machine stays in its authorized_keys (the line ending raven@box) "
+        "and is used again when you register it again"
+    )
+    assert "203.0.113.7" not in out["detail"] and _rows() == []
 
 
 async def test_add_by_password_without_one_is_refused_before_anything_is_made_or_reached(

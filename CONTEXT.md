@@ -430,8 +430,11 @@ as the command; or, with `auth: password`, one password login that puts a key th
 computer makes under `~/.raven/keys/` into the account's `authorized_keys`, after
 which the row carries that key's path and every connection is a key connection --
 the password is used once and neither stored, logged nor answered back,
-`connection_add.install_public_key`), install the node in the background, doctor, and remove
-(`raven ops connection remove`, refused while a connected agent entry names the machine);
+`connection_add.install_public_key`; the key is proved through the owner's ssh config,
+the way the login reached the machine, with only the agent kept out), install the node
+in the background, doctor, and remove (`raven ops connection remove`, refused while a
+connected agent entry names the machine; a key this computer made for the machine is
+taken back from its `authorized_keys` and deleted here, `connection_add.revoke_public_key`);
 none of it hands the page an address, an account or a key path, and
 `node_install` on a row is the node the last install or contact found there,
 which is how a listing says a machine has this Raven's node without reaching it.

@@ -69,10 +69,19 @@ What gets recorded, and where:
   path. The password is not stored, logged or shown back. The machine's sshd
   has to accept password logins for this one step (`PasswordAuthentication
   yes`); one that does not refuses it, and the refusal says so. Not available
-  when this computer is Windows.
+  when this computer is Windows. The key is added on a line of its own, after
+  whatever `authorized_keys` already holds; the check that follows reads your
+  ssh config the way the login did, so a machine you reach through a jump
+  host or an alias registers the same way. Removing the machine takes that
+  key back ([section 8](#8-remove-a-machine)); a registration refused after
+  the login leaves it there (the line ending `raven@<id>`) and uses it again
+  when you register the machine again.
 - The machine's host key is accepted on the first connection and kept in
   `~/.ssh/known_hosts`. A machine that later presents a different key is
-  refused until you check it yourself.
+  refused until you check it yourself. With a password that first connection
+  carries the password, so on a network you do not trust, connect once from a
+  terminal first (`ssh user@host` shows the fingerprint to confirm) and
+  register after, or register with a key.
 - A managed `Host <id>` block is written to `~/.ssh/config`, so `scp` and
   `rsync` on this computer can address the machine by its id.
 
@@ -383,8 +392,13 @@ disconnect those entries first (the Agent Hub, or the `subagents.agents`
 section of the config), or pass `--force` to remove the machine anyway and be
 told which entries are left pointing at nothing. A disconnected entry does not
 stand in the way; it is named, and connecting it again is refused until a
-machine is registered under that id again. Nothing on the machine changes: the node under its `node_dir` stays,
-and removing it is a matter of deleting that directory there by hand.
+machine is registered under that id again. The node under its `node_dir` stays on the machine,
+and removing it is a matter of deleting that directory there by hand. A key
+Raven made for the machine (a registration by password) is taken back: its
+line goes from the machine's `authorized_keys`, over one last key login, and
+the pair under `~/.raven/keys/` is deleted; a machine that cannot be reached
+keeps the line, the command says so, and the line ending `raven@<id>` is yours
+to take out there.
 
 The Agent Hub's **Remove machine**, in a machine's sheet, does the same after
 a confirmation, and also refuses while agents are running on the machine over

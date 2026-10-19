@@ -147,6 +147,16 @@ def _kill_process_tree(proc: subprocess.Popen, grace_s: float = 2.0) -> None:
 # IdentitiesOnly and no agent still resolved to three identities.
 ISOLATE_IDENTITY = ("-F", "/dev/null", "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none")
 
+# The same restriction with the owner's config still read: ``-i key`` plus
+# whatever ``IdentityFile`` that config names for the host, the agent kept
+# out. What a probe uses when the key it has to prove is one this computer
+# made and installed itself, and the machine may be one only the config
+# reaches (a ``ProxyJump``, a ``HostName`` behind an alias, an algorithm an
+# old host needs): the config's own identities for that host are offered on
+# every later connection anyway, so proving the key against them proves it
+# the way it will be used.
+OWN_IDENTITY = ("-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none")
+
 
 def ssh_argv(
     host: str,
@@ -156,6 +166,7 @@ def ssh_argv(
     user: str = "root",
     connect_timeout: int = 15,
     identities_only: bool = False,
+    keep_config: bool = False,
     extra: tuple[str, ...] = (),
 ) -> list[str]:
     """The ssh command line up to, and not including, the remote command.
@@ -165,7 +176,9 @@ def ssh_argv(
     (``raven.acp_client.remote``), so the two cannot drift on host-key policy or
     on never stopping to ask for a password. ``extra`` is placed before the
     destination, where ssh reads options; a caller that keeps the session open
-    passes its keepalives there.
+    passes its keepalives there. ``identities_only`` narrows auth to ``key``
+    (:data:`ISOLATE_IDENTITY`); with ``keep_config`` the owner's ssh config is
+    still read and only the agent is kept out (:data:`OWN_IDENTITY`).
     """
     argv = [
         "ssh",
@@ -181,7 +194,7 @@ def ssh_argv(
         "StrictHostKeyChecking=accept-new",
     ]
     if identities_only:
-        argv += list(ISOLATE_IDENTITY)
+        argv += list(OWN_IDENTITY if keep_config else ISOLATE_IDENTITY)
     argv += list(extra)
     argv.append(f"{user}@{host}")
     return argv
@@ -195,6 +208,7 @@ def make_ssh_runner(
     user: str = "root",
     connect_timeout: int = 15,
     identities_only: bool = False,
+    keep_config: bool = False,
     cap_seconds: float | None = None,
 ) -> CommandRunner:
     """Run a command over ssh. ``identities_only`` narrows auth to ``key`` alone.
@@ -214,12 +228,21 @@ def make_ssh_runner(
     session has to prove WHICH key opened it -- the registry probe trying the
     keys ssh named when the owner gave no path -- and it takes every option in
     :data:`ISOLATE_IDENTITY` to get there. The cost is that an alias or a jump
-    host in the owner's config is not in play for that one call.
+    host in the owner's config is not in play for that one call -- unless
+    ``keep_config`` says to read it: then only the agent is kept out
+    (:data:`OWN_IDENTITY`), for a key this computer made itself and has to
+    prove on a machine the config may be the only way to.
     """
 
     def run(cmd: str) -> tuple[int, str]:
         argv = ssh_argv(
-            host, port, key, user=user, connect_timeout=connect_timeout, identities_only=identities_only
+            host,
+            port,
+            key,
+            user=user,
+            connect_timeout=connect_timeout,
+            identities_only=identities_only,
+            keep_config=keep_config,
         ) + [cmd]
         try:
             # Its own stdin, never the caller's: ssh reads stdin for the far
