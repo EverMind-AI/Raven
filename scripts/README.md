@@ -18,7 +18,7 @@ scripts/
 | Script | Purpose | See |
 |---|---|---|
 | `boxlite_cli.py` | Manage boxlite OCI images + VMs (pull / ls / create / start / stop / rm / shell). Independent of Raven — works even when no agent is running, can inspect VMs owned by another boxlite home. | [`docs/sandbox/boxlite_cli.md`](../docs/sandbox/boxlite_cli.md) |
-| `check_mirasim_frames.py` | After Mirasim updates, check that its host still names every frame and field `raven/acp/mirasim/` speaks (`--against` an older bundle lists what changed). Reads the bundle as text and never runs it; exits 1 naming what is missing. | the module docstring |
+| `check_mirasim_frames.py` | After Mirasim updates, check that its host still names every frame and field `raven/acp/mirasim/` speaks. Run it `--against` the bundle that last worked: a name renamed in one of the places that say it then shows as occurring fewer times, which presence alone cannot see. Reads the bundles as text and never runs them; exits 1 naming what is missing or fewer, 2 when a bundle cannot be read. | the module docstring |
 
 `scripts/boxlite_cli.py` is **complementary** to the `raven sandbox`
 sub-command group (in `raven/cli/sandbox_commands.py`):
