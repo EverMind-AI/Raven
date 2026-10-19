@@ -45,7 +45,7 @@ const WHY: Record<Exclude<RegisterReason, ''>, string> = {
   platform: 'gui.machine.why_platform',
   duplicate: 'gui.machine.why_duplicate',
   invalid: 'gui.machine.why_invalid',
-  registry: 'gui.machine.why_registry'
+  registry: 'gui.machine.why_registry',
 }
 
 function MachineTile(): JSX.Element {
@@ -64,7 +64,7 @@ const LED: Record<MachineLink, string> = {
   idle: 'extAgents-led',
   lost: 'extAgents-led extAgents-led-warn',
   error: 'extAgents-led extAgents-led-bad',
-  off: ''
+  off: '',
 }
 
 function LinkLed({ row }: { row: MachineRow }): JSX.Element | null {
@@ -129,7 +129,7 @@ function MachineCard({ row, ms }: { row: MachineRow; ms: MachinesState }): JSX.E
       tabIndex={0}
       aria-current={store.get().msheet === row.id ? 'true' : undefined}
       onClick={open}
-      onKeyDown={e => {
+      onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault()
@@ -143,7 +143,7 @@ function MachineCard({ row, ms }: { row: MachineRow; ms: MachinesState }): JSX.E
           <span className="extAgents-t">{row.name}</span>
           <LinkLed row={row} />
         </div>
-        <div className="extAgents-ctl" onClick={e => e.stopPropagation()}>
+        <div className="extAgents-ctl" onClick={(e) => e.stopPropagation()}>
           {busy ? (
             <span className="extAgents-ctag">
               <Spin /> {t('gui.machine.installing')}
@@ -186,7 +186,7 @@ function RegisterCard(): JSX.Element {
 export function MachinesGrid({ ms }: { ms: MachinesState }): JSX.Element {
   if (!ms.loaded && ms.loading) return <WaitGrid />
   /* What the doctor says about the registry file itself, which no card can carry. */
-  const fileProblems = (ms.problems ?? []).filter(p => !p.id)
+  const fileProblems = (ms.problems ?? []).filter((p) => !p.id)
   return (
     <>
       {ms.loadFailed ? (
@@ -198,12 +198,12 @@ export function MachinesGrid({ ms }: { ms: MachinesState }): JSX.Element {
       {fileProblems.length ? (
         <div className="extAgents-note extAgents-note-warn">
           <div className="extAgents-note-t">{t('gui.machine.file_problems')}</div>
-          <div className="extAgents-note-said">{fileProblems.map(p => p.detail).join('\n')}</div>
+          <div className="extAgents-note-said">{fileProblems.map((p) => p.detail).join('\n')}</div>
         </div>
       ) : null}
       {ms.rows.length === 0 ? <div className="extAgents-empty">{t('gui.machine.none')}</div> : null}
       <div className="extAgents-grid">
-        {ms.rows.map(row => (
+        {ms.rows.map((row) => (
           <MachineCard key={row.id} ms={ms} row={row} />
         ))}
         <RegisterCard />
@@ -229,8 +229,8 @@ export function MachineSheet({ row, ms }: { row: MachineRow; ms: MachinesState }
   const removing = ms.busy[row.id] === 'remove'
   const failed = ms.failed[row.id]
   const bad = !!failed || row.state === 'error'
-  const problems = (ms.problems ?? []).filter(p => p.id === row.id)
-  const shownProblems = ms.problems ? problems.map(p => p.detail) : row.problems
+  const problems = (ms.problems ?? []).filter((p) => p.id === row.id)
+  const shownProblems = ms.problems ? problems.map((p) => p.detail) : row.problems
   const hosts = canHost(row, ms)
   const install = (): void => void machines.installNode(row.id, dirRef.current?.value.trim() || '')
   const remove = (): void =>
@@ -239,10 +239,10 @@ export function MachineSheet({ row, ms }: { row: MachineRow; ms: MachinesState }
       t(row.auth === 'password' ? 'gui.machine.remove_body_password' : 'gui.machine.remove_body', { name: row.name, id: row.id }),
       t('gui.machine.remove_do'),
       () => {
-        void machines.remove(row.id).then(gone => {
+        void machines.remove(row.id).then((gone) => {
           if (gone) store.closeSheet()
         })
-      }
+      },
     )
   return createPortal(
     <div className="extAgents-sheet" aria-label={row.name} role="document">
@@ -274,15 +274,11 @@ export function MachineSheet({ row, ms }: { row: MachineRow; ms: MachinesState }
           </div>
         ) : null}
         <Field k="id">{row.id}</Field>
-        <Field k={t('gui.machine.f_transport')}>
-          {row.transport === 'local' ? t('gui.machine.transport_local') : t('gui.machine.transport_ssh')}
-        </Field>
+        <Field k={t('gui.machine.f_transport')}>{row.transport === 'local' ? t('gui.machine.transport_local') : t('gui.machine.transport_ssh')}</Field>
         {row.transport === 'ssh' ? (
           <div className="extAgents-fld">
             <span className="extAgents-k">{t('gui.machine.f_auth')}</span>
-            <p className="extAgents-ro">
-              {row.auth === 'password' ? t('gui.machine.auth_stored') : t('gui.machine.auth_key')}
-            </p>
+            <p className="extAgents-ro">{row.auth === 'password' ? t('gui.machine.auth_stored') : t('gui.machine.auth_key')}</p>
             {/* A password machine gets no ssh alias, which is the one thing the
                 owner would otherwise expect of a registered machine. */}
             {row.auth === 'password' ? <div className="extAgents-about">{t('gui.machine.auth_note')}</div> : null}
@@ -316,9 +312,7 @@ export function MachineSheet({ row, ms }: { row: MachineRow; ms: MachinesState }
             <div className="extAgents-about">{t('gui.machine.node_dir_hint')}</div>
           </label>
         ) : null}
-        <Field k={t('gui.machine.paths')}>
-          {row.paths.length ? row.paths.join('\n') : t('gui.machine.paths_none')}
-        </Field>
+        <Field k={t('gui.machine.paths')}>{row.paths.length ? row.paths.join('\n') : t('gui.machine.paths_none')}</Field>
         {row.transport === 'ssh' ? (
           <Field k={t('gui.machine.agents_here')}>
             {row.agents_here.length ? row.agents_here.join('\n') : t('gui.machine.agents_here_none')}
@@ -478,7 +472,7 @@ export function MachineConnectSheet({ row, s }: { row: MachineRow; s: ExtAgentsS
         </button>
       </div>
     </div>,
-    dHost
+    dHost,
   )
 }
 
@@ -516,10 +510,7 @@ export function RegisterSheet({ ms }: { ms: MachinesState }): JSX.Element {
     key: auth === 'key' ? keyRef.current?.value.trim() || '' : '',
     /* Not trimmed: a password is whatever was typed. */
     password: auth === 'password' ? passwordRef.current?.value || '' : '',
-    paths: (pathsRef.current?.value || '')
-      .split('\n')
-      .map(x => x.trim())
-      .filter(Boolean)
+    paths: (pathsRef.current?.value || '').split('\n').map((x) => x.trim()).filter(Boolean),
   })
   const check = (): void => {
     const f = read()
@@ -550,12 +541,7 @@ export function RegisterSheet({ ms }: { ms: MachinesState }): JSX.Element {
     const f = read()
     if (await machines.register(f)) store.machineSheetOpen(f.id)
   }
-  const text = (
-    ref: React.RefObject<HTMLInputElement | null>,
-    label: string,
-    placeholder = '',
-    mono = false
-  ): JSX.Element => (
+  const text = (ref: React.RefObject<HTMLInputElement | null>, label: string, placeholder = '', mono = false): JSX.Element => (
     <label className="extAgents-fld">
       <span className="extAgents-k">{label}</span>
       <input
@@ -651,12 +637,7 @@ export function RegisterSheet({ ms }: { ms: MachinesState }): JSX.Element {
         )}
         <label className="extAgents-fld">
           <span className="extAgents-k">{t('gui.machine.f_paths')}</span>
-          <textarea
-            aria-label={t('gui.machine.f_paths')}
-            onChange={check}
-            placeholder="/data/alice/projects"
-            ref={pathsRef}
-          />
+          <textarea aria-label={t('gui.machine.f_paths')} onChange={check} placeholder="/data/alice/projects" ref={pathsRef} />
         </label>
         {ms.addFailed ? (
           <div className="extAgents-note extAgents-note-warn" ref={noteRef}>
@@ -672,7 +653,7 @@ export function RegisterSheet({ ms }: { ms: MachinesState }): JSX.Element {
         </button>
       </div>
     </div>,
-    dHost
+    dHost,
   )
 }
 
@@ -684,28 +665,20 @@ export function RegisterSheet({ ms }: { ms: MachinesState }): JSX.Element {
 export function WhereField({ row, ms }: { row: { name: string; kind: string }; ms: MachinesState }): JSX.Element {
   const where = store.whereOf(row.name)
   const pick = (machine: string): void => store.setWhere(row.name, machine, where.remote_cwd)
-  const pickable = ms.rows.filter(m => m.transport === 'ssh')
+  const pickable = ms.rows.filter((m) => m.transport === 'ssh')
   return (
     <>
       <label className="extAgents-fld">
         <span className="extAgents-k">{t('gui.machine.where')}</span>
-        <select
-          aria-label={t('gui.machine.where')}
-          className="extAgents-in"
-          onChange={e => pick(e.target.value)}
-          value={where.machine}
-        >
+        <select aria-label={t('gui.machine.where')} className="extAgents-in" onChange={(e) => pick(e.target.value)} value={where.machine}>
           <option value="">{t('gui.machine.where_here')}</option>
-          {pickable.map(m => (
+          {pickable.map((m) => (
             <option disabled={!m.node_current} key={m.id} value={m.id}>
-              {m.name} ({m.id})
-              {m.node_current ? '' : ` - ${t(m.node_version ? 'gui.machine.needs_update' : 'gui.machine.needs_node')}`}
+              {m.name} ({m.id}){m.node_current ? '' : ` - ${t(m.node_version ? 'gui.machine.needs_update' : 'gui.machine.needs_node')}`}
             </option>
           ))}
         </select>
-        {ms.loaded && pickable.length === 0 ? (
-          <div className="extAgents-about">{t('gui.machine.where_none')}</div>
-        ) : null}
+        {ms.loaded && pickable.length === 0 ? <div className="extAgents-about">{t('gui.machine.where_none')}</div> : null}
       </label>
       {where.machine && row.kind !== 'openai' ? (
         <label className="extAgents-fld">
@@ -714,7 +687,7 @@ export function WhereField({ row, ms }: { row: { name: string; kind: string }; m
             aria-label={t('gui.machine.remote_cwd')}
             className="extAgents-in extAgents-in-mono"
             defaultValue={where.remote_cwd}
-            onChange={e => store.setWhere(row.name, where.machine, e.target.value.trim())}
+            onChange={(e) => store.setWhere(row.name, where.machine, e.target.value.trim())}
             placeholder="~/raven-work"
             type="text"
           />

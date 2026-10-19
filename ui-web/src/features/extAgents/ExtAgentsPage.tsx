@@ -92,7 +92,7 @@ function GoodAt({ row, saved, readOnly }: { row: ExtAgentRow; saved: string; rea
       <textarea
         aria-label={t('gui.agent.good_at')}
         onBlur={commit}
-        onChange={e => setDraft(e.target.value)}
+        onChange={(e) => setDraft(e.target.value)}
         value={draft}
       />
     </label>
@@ -165,12 +165,12 @@ function pickerProvidersFor(row: ExtAgentRow): PickerProvider[] {
        stopped listing, would otherwise open a picker with nothing marked. */
     const held = shownModel(row)
     return hostProviders()
-      .filter(p => p.on)
-      .map(p => ({
+      .filter((p) => p.on)
+      .map((p) => ({
         id: p.id,
         name: p.name,
         models: withCurrent(p, offered(p, 'text'), held && held.provider === p.id ? held.id : null),
-        labels: p.labels
+        labels: p.labels,
       }))
   }
   if (row.model_source !== 'agent') return []
@@ -191,7 +191,7 @@ function pickerProvidersFor(row: ExtAgentRow): PickerProvider[] {
 function shownModel(row: ExtAgentRow): { id: string; by: string; provider: string } | null {
   if (!row.model) return null
   if (row.model_source === 'agent') {
-    const hit = (row.model_choices || []).find(c => c.value === row.model)
+    const hit = (row.model_choices || []).find((c) => c.value === row.model)
     if (hit) return { id: hit.name || row.model, by: hit.group || '', provider: hit.group || row.name }
     /* Not one of its choices. One of Raven's own can be carrying a host id it
        took while its menu was still empty -- it is measured behind the page,
@@ -206,12 +206,8 @@ function shownModel(row: ExtAgentRow): { id: string; by: string; provider: strin
      host list keys it by config slug (`openai_codex`). The two differ by the
      separator alone, so the lookup compares them in one spelling and the
      picker gets the slug back, which is what its tick matches. */
-  const known = hostProviders().find(p => slugOf(p.id) === slugOf(head))
-  return {
-    id: cut > 0 ? row.model.slice(cut + 1) : row.model,
-    by: known ? known.name : head,
-    provider: known ? known.id : head
-  }
+  const known = hostProviders().find((p) => slugOf(p.id) === slugOf(head))
+  return { id: cut > 0 ? row.model.slice(cut + 1) : row.model, by: known ? known.name : head, provider: known ? known.id : head }
 }
 
 const slugOf = (name: string): string => name.toLowerCase().replace(/-/g, '_')
@@ -255,13 +251,12 @@ function ModelPill({ row, busy }: { row: ExtAgentRow; busy: boolean }): JSX.Elem
   /* `fixed` outranks ownership: one of raven's own whose folder carries its own
      chat credential runs on that key and the model beside it, so "follows the
      main Raven" was the one thing it does not do. */
-  const unset =
-    own && !fixed ? 'gui.agent.model_follow' : menuless ? 'gui.agent.model_managed' : 'gui.agent.model_own_default'
+  const unset = own && !fixed ? 'gui.agent.model_follow' : menuless ? 'gui.agent.model_managed' : 'gui.agent.model_own_default'
   const cls = [
     'extAgents-pill',
     menuless ? 'extAgents-pill-fixed' : busy ? 'extAgents-pill-busy' : '',
     shown ? '' : 'extAgents-pill-dim',
-    shown ? 'extAgents-pill-clearable' : ''
+    shown ? 'extAgents-pill-clearable' : '',
   ]
     .filter(Boolean)
     .join(' ')
@@ -309,11 +304,7 @@ function ModelPill({ row, busy }: { row: ExtAgentRow; busy: boolean }): JSX.Elem
       {open ? (
         <ModelPicker
           anchor={pill.current}
-          current={
-            shown
-              ? { model: row.model_source === 'agent' ? row.model || '' : shown.id, provider: shown.provider }
-              : null
-          }
+          current={shown ? { model: row.model_source === 'agent' ? row.model || '' : shown.id, provider: shown.provider } : null}
           emptyNote={t(row.model_source === 'raven' ? 'gui.agent.model_no_provider' : 'gui.agent.model_managed')}
           onClose={() => setOpen(false)}
           onPick={(model, provider) => {
@@ -340,12 +331,8 @@ const FIX_SAY: Record<
 > = {
   sign_in: (v, command) => (command ? t('gui.agent.fix_sign_in', v) : t('gui.agent.fix_sign_in_bare', v)),
   setup: (v, command, then) =>
-    !command
-      ? t('gui.agent.fix_sign_in_bare', v)
-      : then
-        ? t('gui.agent.fix_setup_then', v)
-        : t('gui.agent.fix_setup', v),
-  api_key: v => t('gui.agent.fix_api_key', v),
+    !command ? t('gui.agent.fix_sign_in_bare', v) : then ? t('gui.agent.fix_setup_then', v) : t('gui.agent.fix_setup', v),
+  api_key: (v) => t('gui.agent.fix_api_key', v),
   download: (v, command) => (command ? t('gui.agent.fix_download', v) : t('gui.agent.fix_download_bare', v)),
   model: (v, command) => (command ? t('gui.agent.fix_model', v) : t('gui.agent.fix_model_bare', v)),
   billing: (v, command) => (command ? t('gui.agent.fix_billing', v) : t('gui.agent.fix_billing_bare', v)),
@@ -353,7 +340,7 @@ const FIX_SAY: Record<
   network: (v, command) => (command ? t('gui.agent.fix_network', v) : t('gui.agent.fix_network_bare', v)),
   silent: (v, command) => (command ? t('gui.agent.fix_silent', v) : t('gui.agent.fix_silent_bare', v)),
   upgrade: (v, command) => (command ? t('gui.agent.fix_upgrade', v) : t('gui.agent.fix_upgrade_bare', v)),
-  exited: v => t('gui.agent.fix_exited', v),
+  exited: (v) => t('gui.agent.fix_exited', v),
   /* Both versions or neither: without them the sentence would name no Node.js,
      and what is left is a launch that quit. */
   runtime: (v, command, _then, r) =>
@@ -363,7 +350,7 @@ const FIX_SAY: Record<
         ? t('gui.agent.fix_runtime', { ...v, needs: r.needs, found: r.found })
         : t('gui.agent.fix_runtime_bare', { ...v, needs: r.needs, found: r.found }),
   plan: (v, command) => (command ? t('gui.agent.fix_plan', v) : t('gui.agent.fix_plan_bare', v)),
-  config: (v, command) => (command ? t('gui.agent.fix_config', v) : t('gui.agent.fix_config_bare', v))
+  config: (v, command) => (command ? t('gui.agent.fix_config', v) : t('gui.agent.fix_config_bare', v)),
 }
 
 /* What to do about the last thing that went wrong, as the block at the top of
@@ -396,11 +383,7 @@ interface NoteSpec {
    the server's own sentence, since a generic title ("connect failed") says
    nothing the prompt does not already. */
 function askFor(key: string, agent: string, spec: NoteSpec, classified: boolean): NoteSpec['ask'] {
-  const said =
-    spec.raw
-      .split('\n')
-      .find(l => l.trim())
-      ?.trim() || ''
+  const said = spec.raw.split('\n').find((l) => l.trim())?.trim() || ''
   const reason = classified || !said ? spec.title : said.length > 160 ? `${said.slice(0, 157)}...` : said
   return { key, agent, reason }
 }
@@ -449,16 +432,10 @@ function noteOf(row: ExtAgentRow, s: ExtAgentsState, shown: Shown, press: string
     const spec = remedied(agent, failed.remedy || null, press, failed.detail)
     if (spec) return { ...spec, ask: askFor(key, agent, spec, true) }
     const plain: NoteSpec = {
-      title:
-        write === 'save'
-          ? t('gui.agent.bad_save')
-          : t(write === 'disconnect' ? 'gui.agent.bad_disconnect' : 'gui.agent.bad_connect', { agent }),
-      lead:
-        write === 'save'
-          ? t('gui.agent.said_save')
-          : t(write === 'disconnect' ? 'gui.agent.said_disconnect' : 'gui.agent.said_connect', { button: press }),
+      title: write === 'save' ? t('gui.agent.bad_save') : t(write === 'disconnect' ? 'gui.agent.bad_disconnect' : 'gui.agent.bad_connect', { agent }),
+      lead: write === 'save' ? t('gui.agent.said_save') : t(write === 'disconnect' ? 'gui.agent.said_disconnect' : 'gui.agent.said_connect', { button: press }),
       raw: failed.detail,
-      folded: false
+      folded: false,
     }
     return { ...plain, ask: askFor(key, agent, plain, false) }
   }
@@ -468,13 +445,7 @@ function noteOf(row: ExtAgentRow, s: ExtAgentsState, shown: Shown, press: string
     const when = ago(row.last_test_at_ms)
     const spec = remedied(agent, row.last_test_remedy || null, button, row.last_test_detail || '')
     if (spec) return { ...spec, when, ask: askFor('gui.agent.ask_test', agent, spec, true) }
-    const plain: NoteSpec = {
-      title: t('gui.agent.st_test_bad'),
-      when,
-      lead: t('gui.agent.said_test', { button }),
-      raw: row.last_test_detail || '',
-      folded: false
-    }
+    const plain: NoteSpec = { title: t('gui.agent.st_test_bad'), when, lead: t('gui.agent.said_test', { button }), raw: row.last_test_detail || '', folded: false }
     return { ...plain, ask: askFor('gui.agent.ask_test', agent, plain, false) }
   }
   /* Connected, but the last check found something: the same block as a
@@ -492,7 +463,7 @@ function noteOf(row: ExtAgentRow, s: ExtAgentsState, shown: Shown, press: string
       : t('gui.agent.warn_lead_bare'),
     raw: row.probe_detail || '',
     folded: true,
-    warn: true
+    warn: true,
   }
   return { ...warn, ask: askFor('gui.agent.ask_check', agent, warn, signIn) }
 }
@@ -506,10 +477,7 @@ function Note({ title, when, lead, command, then, raw, folded, warn, ask }: Note
           {when ? <span className="extAgents-note-when">{when}</span> : null}
         </div>
         {ask ? (
-          <button
-            className="extAgents-note-ask"
-            onClick={() => store.handToRaven(ask.key, ask.agent, { reason: ask.reason })}
-          >
+          <button className="extAgents-note-ask" onClick={() => store.handToRaven(ask.key, ask.agent, { reason: ask.reason })}>
             {t('gui.agent.ask_raven')}
           </button>
         ) : null}
@@ -627,9 +595,7 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
      it, and say what they would have said otherwise. */
   const failed = s.failed[row.name]
   const refusalStands = !keyTyped || !failed || refusedWrite(failed) === 'connect'
-  const lineState = refusalStands
-    ? s
-    : { ...s, failed: Object.fromEntries(Object.entries(s.failed).filter(([name]) => name !== row.name)) }
+  const lineState = refusalStands ? s : { ...s, failed: Object.fromEntries(Object.entries(s.failed).filter(([name]) => name !== row.name)) }
   const note = noteOf(row, lineState, shownOf(row, lineState), t(verb))
   const primary = (): void => {
     if (keyTyped) saveKey()
@@ -760,8 +726,8 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
                 <span className="extAgents-k">{t('gui.agent.key')}</span>
                 <KeyInput
                   aria-label={t('gui.agent.key')}
-                  onChange={e => setKeyTyped(!!e.target.value.trim())}
-                  onKeyDown={e => {
+                  onChange={(e) => setKeyTyped(!!e.target.value.trim())}
+                  onKeyDown={(e) => {
                     if (e.key === 'Enter' && keyTyped && !primaryDisabled) saveKey()
                   }}
                   placeholder={row.has_api_key ? t('gui.agent.key_set') : ''}
@@ -774,7 +740,7 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
       </div>
       <div className="extAgents-act">{actions}</div>
     </div>,
-    dHost
+    dHost,
   )
 }
 
@@ -784,7 +750,7 @@ const TABS: Array<{ tab: Tab; label: string; empty: string }> = [
   { tab: 'all', label: 'gui.filter.all', empty: 'gui.agent.none' },
   { tab: 'on', label: 'gui.agent.g_on', empty: 'gui.agent.none' },
   { tab: 'avail', label: 'gui.agent.g_avail', empty: 'gui.agent.none_avail' },
-  { tab: 'missing', label: 'gui.agent.g_missing', empty: 'gui.agent.none_missing' }
+  { tab: 'missing', label: 'gui.agent.g_missing', empty: 'gui.agent.none_missing' },
 ]
 
 /* One row of the family picker: the agent, the model to run it on, and the one
@@ -825,48 +791,41 @@ function PickRow({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Eleme
   const cls = [
     'extAgents-pill',
     menuless ? 'extAgents-pill-fixed' : busy ? 'extAgents-pill-busy' : '',
-    shown ? '' : 'extAgents-pill-dim'
+    shown ? '' : 'extAgents-pill-dim',
   ]
     .filter(Boolean)
     .join(' ')
   /* A refusal takes the line, in red, with the reason when the server named
      one -- most often the model, which is the one thing this row can change
      before pressing again. */
-  const line = failed
-    ? [refusedLabel(failed), failed.remedy ? whyOf(failed.remedy) : ''].filter(Boolean).join(' · ')
-    : oneLine(row)
+  const line = failed ? [refusedLabel(failed), failed.remedy ? whyOf(failed.remedy) : ''].filter(Boolean).join(' · ') : oneLine(row)
   return (
     <>
       <div className="extAgents-pickrow" ref={rowEl}>
         <Tile plain row={row} />
         <div className="extAgents-pickwho">
           <span className="extAgents-picknm">{row.name}</span>
-          <span
-            className={'extAgents-pickone' + (failed ? ' extAgents-pickone-bad' : '')}
-            title={failed ? failed.detail : line}
-          >
+          <span className={'extAgents-pickone' + (failed ? ' extAgents-pickone-bad' : '')} title={failed ? failed.detail : line}>
             {line}
           </span>
         </div>
-        {missing ? null : (
-          <div className="extAgents-pickpill">
-            <span className={cls}>
-              <button
-                aria-expanded={open}
-                aria-label={t('gui.agent.model_change')}
-                className="extAgents-pm"
-                disabled={menuless || busy}
-                onClick={() => setOpen(true)}
-                type="button"
-              >
-                <span className="extAgents-mid">
-                  {shown ? shown.id : t(menuless ? 'gui.agent.model_managed' : 'gui.agent.model_own_default')}
-                </span>
-                {menuless ? null : <span className="extAgents-mch">{'⌄'}</span>}
-              </button>
-            </span>
-          </div>
-        )}
+        {missing ? null : <div className="extAgents-pickpill">
+          <span className={cls}>
+            <button
+              aria-expanded={open}
+              aria-label={t('gui.agent.model_change')}
+              className="extAgents-pm"
+              disabled={menuless || busy}
+              onClick={() => setOpen(true)}
+              type="button"
+            >
+              <span className="extAgents-mid">
+                {shown ? shown.id : t(menuless ? 'gui.agent.model_managed' : 'gui.agent.model_own_default')}
+              </span>
+              {menuless ? null : <span className="extAgents-mch">{'⌄'}</span>}
+            </button>
+          </span>
+        </div>}
         <button
           className="extAgents-pickgo mini go"
           disabled={busy || refused}
@@ -887,7 +846,7 @@ function PickRow({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Eleme
                 ? 'gui.agent.go_install'
                 : refused
                   ? 'gui.agent.unauthorized'
-                  : 'gui.agent.connect'
+                  : 'gui.agent.connect',
           )}
         </button>
       </div>
@@ -900,7 +859,7 @@ function PickRow({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Eleme
           current={pick && shown ? { model: pick, provider: shown.provider } : null}
           emptyNote={t('gui.agent.model_managed')}
           onClose={() => setOpen(false)}
-          onPick={model => {
+          onPick={(model) => {
             setOpen(false)
             store.pickModel(row, model)
           }}
@@ -922,7 +881,7 @@ function PickRow({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Eleme
    the row, not a flag this drawer set. */
 function FamilyPicker({ family, s }: { family: string; s: ExtAgentsState }): JSX.Element {
   const dHost = store.detailHost()
-  const members = ordered(s.rows.filter(row => familyOf(row) === family && !row.configured))
+  const members = ordered(s.rows.filter((row) => familyOf(row) === family && !row.configured))
   return createPortal(
     <div className="extAgents-sheet" aria-label={t('gui.agent.fam_mirasim')} role="document">
       <div className="extAgents-head">
@@ -936,13 +895,13 @@ function FamilyPicker({ family, s }: { family: string; s: ExtAgentsState }): JSX
       </div>
       <div className="extAgents-body">
         <div className="extAgents-picklist">
-          {members.map(row => (
+          {members.map((row) => (
             <PickRow key={row.name} row={row} s={s} />
           ))}
         </div>
       </div>
     </div>,
-    dHost
+    dHost,
   )
 }
 
@@ -960,24 +919,22 @@ export function ExtAgentsApp(): JSX.Element {
      position of its first member, so the sort has to have decided where that
      is. `ordered` is stable, so within a tab the server's own order survives. */
   const by = (section: Section): GridEntry[] =>
-    gridEntries(ordered(s.rows.filter(row => sectionOf(row) === section)), section)
-  const entries: Record<Section | 'all', GridEntry[]> = {
-    all: [],
-    on: by('on'),
-    avail: by('avail'),
-    missing: by('missing')
-  }
+    gridEntries(
+      ordered(s.rows.filter((row) => sectionOf(row) === section)),
+      section,
+    )
+  const entries: Record<Section | 'all', GridEntry[]> = { all: [], on: by('on'), avail: by('avail'), missing: by('missing') }
   entries.all = [...entries.on, ...entries.avail, ...entries.missing]
   /* The count is the number of CARDS, which is what the reader counts on the
      grid, so a family of nine counts once. */
   const count = (x: Tab): number => entries[x].length
-  const current = TABS.find(x => x.tab === tab)!
+  const current = TABS.find((x) => x.tab === tab)!
   /* Before the first answer only: a later reload keeps showing the rows it
      has, the way the wizard's step does. */
   const scanning = s.loading && s.rows.length === 0
-  const sheetRow = s.sheet ? s.rows.find(x => x.name === s.sheet) : undefined
-  const machineRow = s.msheet && s.msheet !== 'new' ? ms.rows.find(x => x.id === s.msheet) : undefined
-  const connectOn = s.mconnect ? ms.rows.find(x => x.id === s.mconnect) : undefined
+  const sheetRow = s.sheet ? s.rows.find((x) => x.name === s.sheet) : undefined
+  const machineRow = s.msheet && s.msheet !== 'new' ? ms.rows.find((x) => x.id === s.msheet) : undefined
+  const connectOn = s.mconnect ? ms.rows.find((x) => x.id === s.mconnect) : undefined
   /* The drawer's content, whichever module is drawn: a machine's sheet or the
      register form opens from the machines module, an agent's sheet or the
      family picker from the agents module, and all of them portal into the one
@@ -1024,7 +981,7 @@ export function ExtAgentsApp(): JSX.Element {
           last one leaves the reader on an emptied tab rather than moving
           them. */}
       <div className="extAgents-tabs" role="tablist">
-        {TABS.filter(x => x.tab === 'all' || x.tab === 'on' || x.tab === tab || count(x.tab)).map(x => (
+        {TABS.filter((x) => x.tab === 'all' || x.tab === 'on' || x.tab === tab || count(x.tab)).map((x) => (
           <button
             aria-selected={tab === x.tab}
             className="extAgents-tab"
@@ -1034,11 +991,7 @@ export function ExtAgentsApp(): JSX.Element {
             type="button"
           >
             {t(x.label)}
-            {scanning ? (
-              <span className="extAgents-wbar extAgents-wtn" />
-            ) : (
-              <span className="extAgents-tn">{String(count(x.tab))}</span>
-            )}
+            {scanning ? <span className="extAgents-wbar extAgents-wtn" /> : <span className="extAgents-tn">{String(count(x.tab))}</span>}
           </button>
         ))}
       </div>
