@@ -15,7 +15,13 @@ All notable changes to Raven are documented here.
   working directory there. `raven ops connection remove <id>` is the command
   behind the removal, and `install-node` now records the node it put on the
   machine (`node_install` on the row), which is how the tab says a machine has
-  the node before any link is up. New RPC group
+  the node before any link is up. The form, and `raven ops connection add
+  --auth password --password-stdin`, register a machine by password as well:
+  the password is kept on this computer for Raven's own logins
+  (`~/.raven/keys/<id>.password`, readable by the owner alone), handed to ssh
+  on every connection through its askpass hook, and never on a command line,
+  in a log or in an answer; such a machine gets no ssh alias, and the mode is
+  not offered on Windows. New RPC group
   `machines.{list,add,install_node,doctor,remove}`.
 
 - The bug report review remembers your redaction decisions. Every keep or

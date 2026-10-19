@@ -18,11 +18,13 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
-from raven.ops.connections import LOCAL, transport_of
+from raven.ops.connections import LOCAL, password_auth, password_path, transport_of
 
 CommandRunner = Callable[[str], tuple[int, str]]
 
@@ -157,6 +159,31 @@ ISOLATE_IDENTITY = ("-F", "/dev/null", "-o", "IdentitiesOnly=yes", "-o", "Identi
 # the way it will be used.
 OWN_IDENTITY = ("-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none")
 
+# How ssh is told to log in with the password kept for the machine instead of
+# a key: no identity offered, the password methods first, and one try, since
+# the answer comes from a program rather than a person who might retype it.
+PASSWORD_AUTH = (
+    "-o",
+    "PubkeyAuthentication=no",
+    "-o",
+    "PreferredAuthentications=password,keyboard-interactive",
+    "-o",
+    "NumberOfPasswordPrompts=1",
+)
+
+#: The variable the askpass helper reads the password file's path from.
+ASKPASS_FILE_ENV = "RAVEN_MACHINE_PASSWORD_FILE"
+
+# The helper itself: OpenSSH runs it when ``SSH_ASKPASS_REQUIRE=force`` and
+# reads the password from its stdout. It prints the one line of the file the
+# environment names, so the password is in no process's environment and on no
+# command line; the file is readable by the owner alone.
+_ASKPASS = (
+    "#!/bin/sh\n"
+    "# Raven: hands ssh the password kept for a registered machine. Managed; rewritten when it differs.\n"
+    f'exec cat "${ASKPASS_FILE_ENV}"\n'
+)
+
 
 def ssh_argv(
     host: str,
@@ -167,6 +194,7 @@ def ssh_argv(
     connect_timeout: int = 15,
     identities_only: bool = False,
     keep_config: bool = False,
+    password: bool = False,
     extra: tuple[str, ...] = (),
 ) -> list[str]:
     """The ssh command line up to, and not including, the remote command.
@@ -178,26 +206,70 @@ def ssh_argv(
     destination, where ssh reads options; a caller that keeps the session open
     passes its keepalives there. ``identities_only`` narrows auth to ``key``
     (:data:`ISOLATE_IDENTITY`); with ``keep_config`` the owner's ssh config is
-    still read and only the agent is kept out (:data:`OWN_IDENTITY`).
+    still read and only the agent is kept out (:data:`OWN_IDENTITY`). With
+    ``password`` no key is offered and ``BatchMode`` is off, so ssh asks --
+    the askpass helper :func:`ssh_env` names, never a terminal
+    (:data:`PASSWORD_AUTH`); ``key`` is then unread.
     """
-    argv = [
-        "ssh",
-        "-i",
-        key,
-        "-p",
-        str(port),
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        f"ConnectTimeout={connect_timeout}",
-        "-o",
-        "StrictHostKeyChecking=accept-new",
-    ]
-    if identities_only:
+    argv = ["ssh"]
+    if not password:
+        argv += ["-i", key]
+    argv += ["-p", str(port)]
+    if not password:
+        argv += ["-o", "BatchMode=yes"]
+    argv += ["-o", f"ConnectTimeout={connect_timeout}", "-o", "StrictHostKeyChecking=accept-new"]
+    if password:
+        argv += list(PASSWORD_AUTH)
+    elif identities_only:
         argv += list(OWN_IDENTITY if keep_config else ISOLATE_IDENTITY)
     argv += list(extra)
     argv.append(f"{user}@{host}")
     return argv
+
+
+def askpass_helper(keys_dir: Path) -> Path:
+    """The askpass helper under ``keys_dir`` (:data:`_ASKPASS`), made or brought up to date; the owner's alone."""
+    path = keys_dir / "askpass"
+    keys_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        current = path.read_text(encoding="utf-8")
+    except OSError:
+        current = None
+    if current != _ASKPASS:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o700)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(_ASKPASS)
+    os.chmod(path, 0o700)
+    return path
+
+
+def ssh_env(row: dict[str, Any]) -> dict[str, str]:
+    """What a password row's ssh needs in its environment; ``{}`` for a key row.
+
+    The askpass helper, the order to use it (``SSH_ASKPASS_REQUIRE=force``,
+    OpenSSH 8.4+), the password file it reads, and a ``DISPLAY``, which ssh
+    requires to consult askpass at all and never looks at. The password itself
+    is in none of it. Refused, by name, when no password is kept here for the
+    machine -- registering it again puts one back -- and on Windows, whose
+    OpenSSH has no askpass to hand the password to.
+    """
+    if not password_auth(row):
+        return {}
+    label = str(row.get("id") or "?").strip()
+    if sys.platform == "win32":
+        raise TransportError(
+            f"machine {label!r} was registered with a password, which this computer (Windows) cannot hand to ssh; "
+            "use a key instead"
+        )
+    secret = password_path(label)
+    if not secret.is_file():
+        raise TransportError(f"no password is kept here for machine {label!r} ({secret}); register it again")
+    return {
+        "SSH_ASKPASS": str(askpass_helper(secret.parent)),
+        "SSH_ASKPASS_REQUIRE": "force",
+        ASKPASS_FILE_ENV: str(secret),
+        "DISPLAY": os.environ.get("DISPLAY") or "raven-askpass",
+    }
 
 
 def make_ssh_runner(
@@ -210,6 +282,8 @@ def make_ssh_runner(
     identities_only: bool = False,
     keep_config: bool = False,
     cap_seconds: float | None = None,
+    password: bool = False,
+    env: dict[str, str] | None = None,
 ) -> CommandRunner:
     """Run a command over ssh. ``identities_only`` narrows auth to ``key`` alone.
 
@@ -232,6 +306,9 @@ def make_ssh_runner(
     ``keep_config`` says to read it: then only the agent is kept out
     (:data:`OWN_IDENTITY`), for a key this computer made itself and has to
     prove on a machine the config may be the only way to.
+
+    ``password`` logs in with the password kept for the machine, through the
+    askpass helper ``env`` carries (:func:`ssh_env`); ``key`` is then unread.
     """
 
     def run(cmd: str) -> tuple[int, str]:
@@ -243,12 +320,15 @@ def make_ssh_runner(
             connect_timeout=connect_timeout,
             identities_only=identities_only,
             keep_config=keep_config,
+            password=password,
         ) + [cmd]
         try:
             # Its own stdin, never the caller's: ssh reads stdin for the far
             # side, and under ``raven acp`` the caller's stdin carries ACP
             # frames, which a one-shot ssh would otherwise swallow.
-            proc = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=cap_seconds)
+            proc = subprocess.run(
+                argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=cap_seconds, env=env
+            )
         except subprocess.TimeoutExpired as exc:
             got = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
             return TIMED_OUT_RC, got
@@ -276,6 +356,14 @@ def runner_from(row: dict[str, Any], *, cap_seconds: float | None = None) -> Com
         return make_local_runner(cap_seconds) if cap_seconds else make_local_runner()
 
     host, port, key, user = ssh_target(row)
+    if password_auth(row):
+        # Judged here, before ssh is started: a password that is not kept here
+        # any more, or a Windows host, is a refusal with a name, not a login
+        # that fails minutes into a dispatch.
+        extra = ssh_env(row)
+        return make_ssh_runner(
+            host, port, "", user=user, cap_seconds=cap_seconds, password=True, env={**os.environ, **extra}
+        )
     return make_ssh_runner(host, port, key, user=user, cap_seconds=cap_seconds)
 
 

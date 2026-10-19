@@ -3087,7 +3087,7 @@
               "password"
             ]
           },
-          "description": "How the machine is reached once: `key` (the default) with the private key at `key`; `password` with `password`, used for that one login to put a key this computer makes onto the machine, after which every connection is a key connection. The password is not stored, logged or answered back."
+          "description": "How Raven logs in: key (the default; `key` names the private key's path) or password (`password` is kept here and used on every connection; such a row gets no ssh alias)."
         },
         {
           "name": "key",
@@ -3103,7 +3103,7 @@
           "schema": {
             "type": "string"
           },
-          "description": "The account's password, with auth `password`; used once."
+          "description": "The account's password, with auth `password`: kept on this computer for Raven's own logins, readable by the owner alone and used on every connection; never in the registry, a log or an answer. Not offered on Windows."
         },
         {
           "name": "paths",
@@ -18184,6 +18184,14 @@
           "node_current": {
             "type": "boolean",
             "description": "Whether the node named by node_version is this Raven's own code, which a dispatch there needs; false when none is known."
+          },
+          "auth": {
+            "type": "string",
+            "enum": [
+              "key",
+              "password"
+            ],
+            "description": "How this computer logs in to an ssh row: key (the path the row carries) or password (kept on this computer for Raven's own logins). Absent for a local row."
           },
           "install": {
             "type": "object",

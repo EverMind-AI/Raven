@@ -6,7 +6,10 @@ so these pin what the runner sent before the two shared it.
 
 from __future__ import annotations
 
+import os
 import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -67,3 +70,100 @@ def test_a_row_fills_in_the_registry_s_defaults():
 def test_a_row_with_no_host_is_refused_by_name():
     with pytest.raises(TransportError, match="'m' has no address"):
         ssh_target({"id": "m", "port": 22})
+
+
+# ---- a machine registered with a password: askpass answers for ssh, every connection ----
+
+KEY_ROW = {"id": "box", "transport": "ssh", "host": "203.0.113.7", "port": 2222, "user": "alice", "key": "/k"}
+PASSWORD_ROW = {
+    "id": "box",
+    "transport": "ssh",
+    "host": "203.0.113.7",
+    "port": 2222,
+    "user": "alice",
+    "auth": "password",
+}
+
+
+def test_a_password_row_s_argv_offers_no_key_and_leaves_the_asking_to_askpass():
+    argv = ssh_argv("203.0.113.7", 2222, "", user="alice", password=True)
+
+    assert "-i" not in argv and "BatchMode=yes" not in argv
+    assert argv[-1] == "alice@203.0.113.7"
+    for option in (
+        "PubkeyAuthentication=no",
+        "PreferredAuthentications=password,keyboard-interactive",
+        "NumberOfPasswordPrompts=1",
+    ):
+        assert option in argv, option
+    assert "StrictHostKeyChecking=accept-new" in argv and "ConnectTimeout=15" in argv
+    # A key row's line is what it always was.
+    assert ssh_argv("203.0.113.7", 2222, "/k", user="alice") == BASE + ["alice@203.0.113.7"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not available on Windows")
+def test_the_askpass_environment_names_the_helper_and_the_password_file_never_the_password(tmp_path, monkeypatch):
+    from raven.ops.connection_add import store_password
+
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    monkeypatch.delenv("DISPLAY", raising=False)
+    store_password("box", "hunter2")
+
+    env = transport.ssh_env(PASSWORD_ROW)
+
+    helper = Path(env["SSH_ASKPASS"])
+    assert helper == tmp_path / "rhome" / "keys" / "askpass" and oct(helper.stat().st_mode & 0o777) == "0o700"
+    assert env["SSH_ASKPASS_REQUIRE"] == "force" and env["DISPLAY"]
+    assert env["RAVEN_MACHINE_PASSWORD_FILE"] == str(tmp_path / "rhome" / "keys" / "box.password")
+    assert "hunter2" not in "".join(env.values())
+    # The helper answers ssh with the file's line, whichever machine the environment names.
+    out = subprocess.run([str(helper), "password:"], capture_output=True, text=True, env={**os.environ, **env})
+    assert out.stdout == "hunter2\n", out.stderr
+    assert transport.ssh_env(KEY_ROW) == {}
+    before = helper.read_text(encoding="utf-8")
+    assert transport.ssh_env(PASSWORD_ROW)["SSH_ASKPASS"] == str(helper), "made once; found as it is after"
+    assert helper.read_text(encoding="utf-8") == before
+
+
+def test_a_password_row_with_no_password_kept_here_is_refused_by_name(tmp_path, monkeypatch):
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+
+    with pytest.raises(TransportError, match="no password is kept here for machine 'box'.*register it again"):
+        transport.ssh_env(PASSWORD_ROW)
+    with pytest.raises(TransportError, match="no password is kept here"):
+        transport.runner_from(PASSWORD_ROW)
+
+
+def test_a_password_row_is_refused_on_windows_before_ssh_is_started(tmp_path, monkeypatch):
+    from raven.ops.connection_add import store_password
+
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    store_password("box", "hunter2")
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    with pytest.raises(TransportError, match="Windows.*use a key"):
+        transport.ssh_env(PASSWORD_ROW)
+
+
+def test_the_runner_hands_ssh_the_askpass_environment_for_a_password_row_and_nothing_for_a_key_row(
+    tmp_path, monkeypatch
+):
+    from raven.ops.connection_add import store_password
+
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    store_password("box", "hunter2")
+    sent: list[tuple[list[str], dict | None]] = []
+
+    def run(argv, **kwargs):
+        sent.append((argv, kwargs.get("env")))
+        return subprocess.CompletedProcess(argv, 0, "out", "")
+
+    monkeypatch.setattr(transport.subprocess, "run", run)
+
+    assert transport.runner_from(PASSWORD_ROW)("true") == (0, "out")
+    assert transport.runner_from(KEY_ROW)("true") == (0, "out")
+
+    (argv_pw, env_pw), (argv_key, env_key) = sent
+    assert env_pw["SSH_ASKPASS_REQUIRE"] == "force" and env_pw["RAVEN_MACHINE_PASSWORD_FILE"].endswith("box.password")
+    assert "PubkeyAuthentication=no" in argv_pw and "-i" not in argv_pw and "hunter2" not in " ".join(argv_pw)
+    assert env_key is None and "-i" in argv_key

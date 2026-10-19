@@ -504,3 +504,25 @@ def test_the_env_var_still_outranks_every_default(tmp_path, monkeypatch):
     monkeypatch.setenv(connections.CONNECTIONS_ENV, str(elsewhere))
 
     assert connections.store_path() == elsewhere
+
+
+def test_a_row_registered_with_a_password_needs_no_key_and_an_auth_nobody_knows_is_refused():
+    from raven.ops.connections import row_problems
+
+    base = {
+        "id": "box",
+        "display_name": "Box",
+        "transport": "ssh",
+        "host": "h",
+        "port": 22,
+        "user": "u",
+        "software": "x",
+        "budget_unit": "minute",
+        "concurrency": 1,
+    }
+    assert [p.text for p in row_problems({**base, "auth": "password"}) if p.blocking] == []
+    assert [p.text for p in row_problems({**base, "auth": "key", "key": "/k"}) if p.blocking] == []
+    assert [p.text for p in row_problems(base) if p.blocking] == ["box: 'key' is missing, so there is no way onto it"]
+    assert [p.text for p in row_problems({**base, "auth": "token"}) if p.blocking] == [
+        "box: 'auth' must be key or password, not 'token'"
+    ]

@@ -21,12 +21,15 @@ is. Three things follow:
     budget is counted in, and how many jobs it will run at once, were being
     restated in every campaign's meta and in the task statement itself.
 
-Credentials stay a reference -- a path to a key the owner already has, or to
-one this computer made for the machine. A password is never stored (2026-08-17,
-deliberate: storing one means a keychain or a master password); since
-2026-10-19 one is taken ONCE, at registration, to put this computer's key on
-the machine (``connection_add.install_public_key``), after which every
-connection is a key connection and the row carries that key's path.
+Credentials are a reference -- a path to a key the owner already has -- or,
+since 2026-10-19, a password this computer keeps for the machine (``auth:
+password``): under ``<home>/keys/<id>.password``, readable by the owner alone,
+handed to ssh through its askpass hook on every connection, and never in this
+file, on a command line or in a log. The 2026-08-17 ruling had kept passwords
+out until a platform needed one, since keeping one means a keychain or a master
+password; the owner's 2026-10-19 decision accepted the protection a 0600 file
+gives -- the same the provider keys in ``config.json`` have -- over either, for
+a service that restarts and runs at night with nobody there to unlock it.
 
 Read-only here: the file is written by hand or through
 :mod:`raven.ops.connection_add`, the one door behind both ``raven ops
@@ -92,6 +95,25 @@ _MISSPELLED = {
 def transport_of(row: dict[str, Any]) -> str:
     """``ssh`` or ``local``. Absent means ssh, which is what the runner assumes."""
     return LOCAL if str(row.get("transport") or SSH).strip().lower() == LOCAL else SSH
+
+
+AUTH_KEY, AUTH_PASSWORD = "key", "password"
+
+
+def password_auth(row: dict[str, Any]) -> bool:
+    """Whether the row logs in with a password this computer keeps (``auth: password``). Absent means a key."""
+    return str(row.get("auth") or AUTH_KEY).strip().lower() == AUTH_PASSWORD
+
+
+#: Where this Raven keeps what it holds for machines beside the home the registry lives in.
+KEY_DIRNAME = "keys"
+
+
+def password_path(conn_id: str) -> Path:
+    """Where the password kept for ``conn_id`` lives: ``<home>/keys/<id>.password``, the owner's alone."""
+    from raven.home import raven_home
+
+    return raven_home() / KEY_DIRNAME / f"{str(conn_id or '').strip()}.password"
 
 
 # How many devices a ``device`` line written as "2 x NVIDIA A800..." names.
@@ -197,8 +219,16 @@ def row_problems(row: dict[str, Any]) -> list[Problem]:
         if wrong in row and right not in row:
             out.append(Problem(f"{label}: '{wrong}' is not a field this reads; it is spelled '{right}'"))
     kind = transport_of(row)
+    auth = str(row.get("auth") or AUTH_KEY).strip().lower()
+    if kind == SSH and auth not in (AUTH_KEY, AUTH_PASSWORD):
+        out.append(Problem(f"{label}: 'auth' must be key or password, not {row.get('auth')!r}", blocking=True))
     blocking = _BLOCKING + (_BLOCKING_SSH if kind == SSH else ())
     for field in blocking:
+        if field == "key" and auth != AUTH_KEY:
+            # With a password the way onto it is the one kept here, judged
+            # when ssh is started (``transport.ssh_env``); with an auth nobody
+            # knows, the one problem above is the whole of it.
+            continue
         if field != "id" and row.get(field) in (None, ""):
             out.append(Problem(f"{label}: '{field}' is missing, so there is no way onto it", blocking=True))
     for field in _WANTED:

@@ -2838,6 +2838,9 @@ class MachineRow(_Strict):
     """Live while a link is up, else as recorded at the last install or contact; None when none is known."""
     node_current: bool
     """Whether that node is this Raven's own code, which a dispatch there needs."""
+    auth: Literal["key", "password"] | None = None
+    """How this computer logs in to an ssh row: with the key whose path the row carries, or with the password kept
+    here for it. Absent for a local row."""
     install: MachineInstall
     paths: list[str]
     problems: list[str]
@@ -2861,16 +2864,22 @@ class MachinesAddParams(_Strict):
     auth: Literal["key", "password"] | None = Field(
         default=None,
         description=(
-            "How the machine is reached once: `key` (the default) with the private key at `key`; `password` with "
-            "`password`, used for that one login to put a key this computer makes onto the machine, after which "
-            "every connection is a key connection. The password is not stored, logged or answered back."
+            "How Raven logs in: `key` (the default; `key` names the private key's path) or `password` (`password` "
+            "is kept here and used on every connection; such a row gets no ssh alias)."
         ),
     )
     key: str | None = Field(
         default=None,
         description="Path to the private key on this computer; the path is stored, never the key. Required with auth `key`.",
     )
-    password: str | None = Field(default=None, description="The account's password, with auth `password`; used once.")
+    password: str | None = Field(
+        default=None,
+        description=(
+            "The account's password, with auth `password`: kept on this computer for Raven's own logins, readable by "
+            "the owner alone and used on every connection; never in the registry, a log or an answer. Not offered on "
+            "Windows."
+        ),
+    )
     paths: list[str] | None = None
 
 
