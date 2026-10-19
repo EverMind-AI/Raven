@@ -48,6 +48,7 @@ from raven.agent.subagent_memory import (
     started_backend,
     trace_session_id,
 )
+from raven.config.agent_names import canonical_agent_name
 from raven.config.paths import get_sandbox_dir
 from raven.config.schema import TIER_LADDER, ExecToolConfig
 from raven.context_engine.segments.render import dispatch_language_line
@@ -948,7 +949,7 @@ class SubagentManager:
         context verbatim with no truncation -- showing the rendered text there
         would re-inject the whole file.
         """
-        agent = agent or GENERIC_AGENT
+        agent = canonical_agent_name(agent or GENERIC_AGENT)
         # Shutdown before pause: a host that is both answers with the terminal
         # reason. The pause text tells the model to ask the user to resume, and
         # during a shutdown nobody can.
@@ -1120,6 +1121,7 @@ class SubagentManager:
         cannot then see. ``upsert_spawn`` already tolerates a failed flush on its
         own, so only a genuine failure reaches the caller.
         """
+        agent = canonical_agent_name(agent)
         self.remember_session(session_key)
         self._require_addressable(agent, doing="create a new instance")
 
@@ -1177,6 +1179,7 @@ class SubagentManager:
         computer and copies nothing (``remote.files_note``), so the attachments
         are kept for it to name, and the page's bullets are spelled the same way.
         """
+        agent = canonical_agent_name(agent)
         self.remember_session(session_key)
         self._require_addressable(agent, doing=f"chat with instance {handle!r}")
         row = self.registry.get(agent)
@@ -1303,7 +1306,7 @@ class SubagentManager:
         turn down with them.
         """
         task = asyncio.current_task()
-        key = (session_key or "default", agent, handle)
+        key = (session_key or "default", canonical_agent_name(agent), handle)
 
         if task is None:
             yield
@@ -1347,7 +1350,7 @@ class SubagentManager:
 
     def instance_mode(self, session_key: str | None, agent: str, handle: str) -> str | None:
         """Which mode this instance's turns run in, or ``None`` for the agent's own."""
-        return self._instance_modes.get((session_key or "", agent, handle))
+        return self._instance_modes.get((session_key or "", canonical_agent_name(agent), handle))
 
     def resolve_mode(
         self,
@@ -1435,7 +1438,7 @@ class SubagentManager:
 
     def instance_model(self, session_key: str | None, agent: str, handle: str) -> str | None:
         """Which model this instance's turns run on, or ``None`` for the agent's own."""
-        return self._instance_models.get((session_key or "", agent, handle))
+        return self._instance_models.get((session_key or "", canonical_agent_name(agent), handle))
 
     def row_default_model(self, agent: str) -> str | None:
         """A third-party acp row's own configured ``model``, absent an instance override.
@@ -1496,7 +1499,7 @@ class SubagentManager:
         provider-qualified ids and guessing at one is how a reader asks for a
         model the agent will refuse.
         """
-        key = (session_key or "", agent, handle)
+        key = (session_key or "", canonical_agent_name(agent), handle)
         if model is None:
             self._instance_models.pop(key, None)
             return None
@@ -1526,7 +1529,7 @@ class SubagentManager:
         ``None`` clears the override. Raises ``ValueError`` naming what the
         agent does offer, so a caller is never left guessing at the vocabulary.
         """
-        key = (session_key or "", agent, handle)
+        key = (session_key or "", canonical_agent_name(agent), handle)
         if mode is None:
             self._instance_modes.pop(key, None)
             return None
@@ -2463,7 +2466,7 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
                 session_key,
             )
             return
-        key = (session_key, agent, handle)
+        key = (session_key, canonical_agent_name(agent), handle)
         now = time.monotonic()
         last = self._unprompted_wake_at.get(key)
         if last is not None and now - last < self._UNPROMPTED_WAKE_DEBOUNCE_S:
@@ -2614,7 +2617,7 @@ Read it against the plan this instance serves. If it reports finished work, resu
         most recent. Returns whether any live task was found.
         """
         quota_key = session_key or "default"
-        task_ids = self._instance_tasks.get((quota_key, agent, handle), set())
+        task_ids = self._instance_tasks.get((quota_key, canonical_agent_name(agent), handle), set())
         live = {tid: t for tid in task_ids if (t := self._running_tasks.get(tid)) is not None and not t.done()}
         if not live:
             return False

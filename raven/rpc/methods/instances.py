@@ -40,6 +40,7 @@ from raven.agent.subagent.instance_log import instance_title, message_rows
 from raven.agent.subagent.instance_records import stitched_turns
 from raven.agent.subagent.instances import get_registry, reconcile_instance_rows
 from raven.agent.subagent.tool_vocabulary import normalize_row
+from raven.config.agent_names import canonical_agent_name
 from raven.rpc.errors import ConfigValidationError
 from raven.rpc.methods.session import _wire_tool_calls
 
@@ -454,7 +455,7 @@ async def instances_history(
     if session_dir is None:
         return {"turns": []}
 
-    agent = str(params.get("agent") or "")
+    agent = canonical_agent_name(str(params.get("agent") or ""))
     handle = str(params.get("handle") or "")
 
     logged = message_rows(session_dir, agent, handle)
@@ -647,7 +648,7 @@ async def instances_forget(
     """
     registry = get_registry()
     session_key = str(params.get("session_key") or "")
-    agent = str(params.get("agent") or "")
+    agent = canonical_agent_name(str(params.get("agent") or ""))
     handle = str(params.get("handle") or "")
 
     rows = registry.list_instances(session_key)
@@ -736,7 +737,7 @@ async def instances_set_mode(
     - ``mode: "<id>"``: switch, from the instance's next turn on.
     """
     manager = _manager(agent_loop_factory)
-    agent = str(params.get("agent") or "")
+    agent = canonical_agent_name(str(params.get("agent") or ""))
     handle = str(params.get("handle") or "")
     session_key = str(params.get("session_key") or "")
     raw = params.get("mode")
@@ -814,7 +815,7 @@ async def instances_set_model(
     - ``model: "<value>"``: switch, from the instance's next turn on.
     """
     manager = _manager(agent_loop_factory)
-    agent = str(params.get("agent") or "")
+    agent = canonical_agent_name(str(params.get("agent") or ""))
     handle = str(params.get("handle") or "")
     session_key = str(params.get("session_key") or "")
     raw = params.get("model")

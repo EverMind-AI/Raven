@@ -184,3 +184,37 @@ class TestARowWrittenUnderAFormerNameOfItsAgent:
 
         (row,) = InstanceRegistry(path).list_instances("s1")
         assert row["agentId"] == "newer"
+
+    @pytest.mark.parametrize("former", ["raven", "Raven"])
+    async def test_alias_binding_reads_and_writes_agree_before_and_after_reload(self, tmp_path: Path, former: str):
+        path = tmp_path / "reg.json"
+        registry = InstanceRegistry(path)
+        await registry.commit("s1", former, "h1", "sess-1", kind="acp")
+
+        for reader in (registry, InstanceRegistry(path)):
+            for name in (GENERIC_AGENT, "Raven", "raven"):
+                assert await reader.lookup("s1", name, "h1", kind="acp") == "sess-1"
+        assert await registry.bind_if_absent("s1", GENERIC_AGENT, "h1", "other", kind="acp") == "sess-1"
+        assert await registry.unbind("s1", former, "h1")
+        assert await registry.lookup("s1", GENERIC_AGENT, "h1", kind="acp") is None
+        assert await registry.forget("s1", former, "h1")
+        assert InstanceRegistry(path).list_instances("s1") == []
+
+    @pytest.mark.parametrize("former", ["raven", "Raven"])
+    async def test_alias_status_and_dag_link_update_the_existing_record(self, tmp_path: Path, former: str):
+        path = tmp_path / "reg.json"
+        _write(path, [self._old_row(former)])
+        registry = InstanceRegistry(path)
+
+        await registry.upsert_spawn("s1", former, "h1", "running")
+        await registry.link_dag_node("s1", former, "h1", "run1", "node1")
+
+        for reader in (registry, InstanceRegistry(path)):
+            (record,) = reader.list_instances("s1")
+            assert (record["agent"], record["agentId"], record["kind"]) == (GENERIC_AGENT, "sess-1", "acp")
+            assert (record["status"], record["runId"], record["nodeId"]) == ("running", "run1", "node1")
+
+        await registry.upsert_dag_node("s1", "run1", "node1", former, "running")
+        await registry.upsert_dag_node("s1", "run1", "node1", GENERIC_AGENT, "completed")
+        assert len(registry.list_instances("s1")) == 2
+        assert {record["agent"] for record in registry.list_instances("s1")} == {GENERIC_AGENT}

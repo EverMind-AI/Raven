@@ -150,6 +150,23 @@ def test_equally_dated_messages_prefer_the_current_agent_name(tmp_path):
         ]
 
 
+def test_instance_preferences_follow_the_agent_alias(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    manager = _direct_chat_manager(tmp_path, monkeypatch)
+    monkeypatch.setattr(manager, "agent_modes", lambda agent: (SimpleNamespace(id="plan"),))
+    manager.set_instance_mode("s1", "Raven", "h1", "plan")
+    manager.set_instance_model("s1", "raven", "h1", "model-a", offered=["model-a"])
+
+    for name in (GENERIC_AGENT, "Raven", "raven"):
+        assert manager.resolve_mode("s1", name, "h1") == "plan"
+        assert manager.session_model_for("s1", name, "h1") == "model-a"
+    manager.set_instance_mode("s1", GENERIC_AGENT, "h1", None)
+    manager.set_instance_model("s1", "Raven", "h1", None)
+    assert manager.instance_mode("s1", "raven", "h1") is None
+    assert manager.instance_model("s1", GENERIC_AGENT, "h1") is None
+
+
 @pytest.mark.parametrize("former", ["Raven", "raven"])
 async def test_alias_chat_turns_share_the_lock_and_preserve_both_turns(tmp_path, monkeypatch, former):
     manager = _direct_chat_manager(tmp_path, monkeypatch)
@@ -686,8 +703,8 @@ async def test_create_instance_writes_one_idle_registry_row(tmp_path, monkeypatc
     created = await manager.create_instance(session_key="s1", agent="raven")
 
     rows = registry.list_instances("s1")
-    assert [(r["agent"], r["handle"], r["status"]) for r in rows] == [("raven", created.handle, "idle")]
-    assert created.agent == "raven"
+    assert [(r["agent"], r["handle"], r["status"]) for r in rows] == [(GENERIC_AGENT, created.handle, "idle")]
+    assert created.agent == GENERIC_AGENT
     assert created.created_at_ms > 0
 
 
@@ -1297,7 +1314,7 @@ async def test_a_running_direct_chat_is_reported_live(tmp_path, monkeypatch):
     release.set()
     await asyncio.wait_for(turn, timeout=2)
 
-    assert seen[0] == {("raven", "notes")}
+    assert seen[0] == {(GENERIC_AGENT, "notes")}
     # And released when it lands, or the row would read live forever.
     assert manager.live_handles("s1") == set()
 
@@ -1884,7 +1901,7 @@ async def test_a_spawn_queued_behind_a_direct_chat_stays_pending_and_leaves_the_
             break
         await asyncio.sleep(0.01)
     live = manager.live_direct_turns("s1")
-    assert [(a, h) for a, h, _ in live] == [("raven", "notes")]
+    assert [(a, h) for a, h, _ in live] == [(GENERIC_AGENT, "notes")]
     answering = activity.live_instance("s1", "raven", "notes")
     assert answering is not None
 
@@ -1924,7 +1941,7 @@ async def test_a_direct_chat_queued_behind_the_handle_is_not_reported_as_answeri
     async with hold_handle("s1", "raven", "notes"):
         direct = asyncio.create_task(manager.chat(session_key="s1", agent="raven", handle="notes", text="hi"))
         await asyncio.sleep(0.1)
-        assert manager._instance_tasks.get(("s1", "raven", "notes")), "the slot is taken while it waits"
+        assert manager._instance_tasks.get(("s1", GENERIC_AGENT, "notes")), "the slot is taken while it waits"
         assert manager.live_direct_turns("s1") == [], "but it is not answering yet"
         before = int(time.time() * 1000)
     for _ in range(200):
@@ -1932,7 +1949,7 @@ async def test_a_direct_chat_queued_behind_the_handle_is_not_reported_as_answeri
             break
         await asyncio.sleep(0.01)
     live = manager.live_direct_turns("s1")
-    assert [(a, h) for a, h, _ in live] == [("raven", "notes")] and live[0][2] >= before
+    assert [(a, h) for a, h, _ in live] == [(GENERIC_AGENT, "notes")] and live[0][2] >= before
     release.set()
     await direct
     assert manager.live_direct_turns("s1") == []

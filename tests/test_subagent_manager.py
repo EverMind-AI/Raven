@@ -785,6 +785,40 @@ def _stub_mgr(monkeypatch, **kw) -> SubagentManager:
     return mgr
 
 
+@pytest.mark.parametrize("former", ["Raven", "raven"])
+@pytest.mark.parametrize("cancel_with_alias", [False, True])
+async def test_alias_spawn_is_listed_running_and_cancellable_after_registry_reload(
+    tmp_path, monkeypatch, former, cancel_with_alias
+):
+    from raven.agent.subagent.instances import InstanceRegistry, reconcile_instance_rows
+    from raven.config.agent_names import GENERIC_AGENT
+
+    path = tmp_path / "registry.json"
+    registry = InstanceRegistry(path)
+    monkeypatch.setattr(manager_mod, "get_registry", lambda: registry)
+    mgr = _stub_mgr(monkeypatch)
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def running(task_id, task, task_summary, origin, provider, model, mcp_grant=None):
+        await registry.upsert_spawn(origin["session_key"], origin["agent"], origin["handle"], "running")
+        started.set()
+        await release.wait()
+
+    monkeypatch.setattr(mgr, "_run_subagent", running)
+    await mgr.spawn(task="continue", session_key="s1", agent=former, instance="h1")
+    try:
+        await asyncio.wait_for(started.wait(), timeout=2)
+        rows = InstanceRegistry(path).list_instances("s1")
+        (record,) = reconcile_instance_rows(rows, live_handles=mgr.live_handles, active_run_ids=set)
+        assert (record["agent"], record["status"]) == (GENERIC_AGENT, "running")
+        assert mgr.live_handles("s1") == {(GENERIC_AGENT, "h1")}
+        assert await mgr.cancel_by_instance("s1", former if cancel_with_alias else record["agent"], "h1")
+        assert mgr.get_running_count() == 0
+    finally:
+        await mgr.cancel_all()
+
+
 async def test_spawn_rate_limit_refuses_within_window(monkeypatch):
     """N spawns/window allowed; the next is refused even as concurrency frees up."""
     _fixed_clock(monkeypatch)

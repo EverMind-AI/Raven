@@ -16,6 +16,7 @@ import pytest
 
 from raven.agent.subagent import activity as run_activity
 from raven.agent.subagent import instances as instances_mod
+from raven.config.agent_names import GENERIC_AGENT
 from raven.rpc.errors import ConfigValidationError
 from raven.rpc.methods.instances import (
     instances_create,
@@ -1180,7 +1181,7 @@ async def test_instance_create_returns_the_row_the_strip_will_draw(tmp_path: Pat
     out = await instances_create({"session_key": "s1", "agent": "raven"}, agent_loop_factory=_factory(loop))
 
     row = out["instance"]
-    assert row["agent"] == "raven"
+    assert row["agent"] == GENERIC_AGENT
     assert row["status"] == "idle"
     assert row["sessionKey"] == "s1"
     assert row["handle"].startswith("raven-")
@@ -1261,7 +1262,7 @@ async def test_a_creation_is_announced_to_the_main_agent(tmp_path: Path) -> None
     assert out["pending_handoff_count"] == 1
 
     block = loop._direct_handoff.take("s1")
-    assert f"raven / {created['instance']['handle']}" in block
+    assert f"{GENERIC_AGENT} / {created['instance']['handle']}" in block
     assert "created by the user at" in block
 
 

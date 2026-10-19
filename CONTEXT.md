@@ -330,7 +330,12 @@ which the merge discards, so a seed row cannot be taken off the roster at all. A
 one for the other. A name a seed used to answer to resolves to it (`LEGACY_AGENT_ALIASES`;
 `raven` and `Raven` -> `Raven-General`), so stored instance rows, instance logs, direct-chat
 records and dag nodes written before a rename still find their agent -- exact match first,
-and the roster never offers an alias back. Read under the
+and the roster never offers an alias back. Instance records, handle locks and live indexes
+use the current name, including when a request carries an alias. Existing message state
+and instance logs are read from the most recently written store across those names; a
+chat directory without saved messages cannot hide one with resumable state. Equal
+timestamps prefer the current name, then the most recent former name. No files are moved.
+Read under the
 older key `thirdParty` too; the write path emits `agents`.
 _Avoid_: "third-party registry" — the table holds raven's own agents as well, which is the
 point of it: `spawn` and a DAG node pick from one roster, so an agent reachable from one

@@ -158,7 +158,7 @@ class InstanceRegistry:
         Defaults to ``cli`` so every existing caller keeps its behaviour.
         """
         async with self._lock:
-            rec = self._load().get((session_key, agent, handle))
+            rec = self._load().get((session_key, canonical_agent_name(agent), handle))
         if not rec or rec.get("kind") != kind:
             return None
         return rec.get("agentId")
@@ -166,7 +166,7 @@ class InstanceRegistry:
     async def commit(self, session_key: str, agent: str, handle: str, agent_id: str, *, kind: str = "cli") -> None:
         async with self._lock:
             with write_transaction(self._path):
-                self._bind(self._load(), (session_key, agent, handle), agent_id, kind)
+                self._bind(self._load(), (session_key, canonical_agent_name(agent), handle), agent_id, kind)
 
     async def bind_if_absent(
         self, session_key: str, agent: str, handle: str, agent_id: str, *, kind: str = "cli"
@@ -191,7 +191,7 @@ class InstanceRegistry:
         async with self._lock:
             with write_transaction(self._path):
                 records = self._load()
-                key = (session_key, agent, handle)
+                key = (session_key, canonical_agent_name(agent), handle)
                 rec = records.get(key)
                 if rec and rec.get("kind") == kind and rec.get("agentId") and rec["agentId"] != agent_id:
                     return str(rec["agentId"])
@@ -235,6 +235,7 @@ class InstanceRegistry:
         when not given, so a status write after a successful create does not
         erase the session id ``commit`` already stored for that handle.
         """
+        agent = canonical_agent_name(agent)
         async with self._lock:
             with write_transaction(self._path):
                 records = self._load()
@@ -289,6 +290,7 @@ class InstanceRegistry:
         row always says what the latest write said: a write without them leaves
         none behind.
         """
+        agent = canonical_agent_name(agent)
         handle = f"{run_id}/{node_id}"
         async with self._lock:
             with write_transaction(self._path):
@@ -335,6 +337,7 @@ class InstanceRegistry:
         still the node's, and a reader that saw only the ``dag-node`` row would
         report the graph twice.
         """
+        agent = canonical_agent_name(agent)
         async with self._lock:
             with write_transaction(self._path):
                 records = self._load()
@@ -379,7 +382,7 @@ class InstanceRegistry:
         async with self._lock:
             with write_transaction(self._path):
                 records = self._load()
-                key = (session_key, agent, handle)
+                key = (session_key, canonical_agent_name(agent), handle)
                 rec = records.get(key)
                 if rec is None or rec.get("agentId") is None:
                     return False
@@ -398,7 +401,7 @@ class InstanceRegistry:
         async with self._lock:
             with write_transaction(self._path):
                 records = self._load()
-                key = (session_key, agent, handle)
+                key = (session_key, canonical_agent_name(agent), handle)
                 if key not in records:
                     return False
                 del records[key]
@@ -477,8 +480,10 @@ def reconcile_instance_rows(
             # without this branch such a row read "running" forever.
             session_key = row.get("sessionKey", "")
             if session_key not in live_by_session:
-                live_by_session[session_key] = live_handles(session_key)
-            if (row.get("agent"), row.get("handle")) not in live_by_session[session_key]:
+                live_by_session[session_key] = {
+                    (canonical_agent_name(agent), handle) for agent, handle in live_handles(session_key)
+                }
+            if (canonical_agent_name(row.get("agent", "")), row.get("handle")) not in live_by_session[session_key]:
                 out.append({**row, "status": "interrupted"})
                 continue
         out.append(row)
