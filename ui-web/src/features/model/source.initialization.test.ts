@@ -58,7 +58,7 @@ describe('model initialization', () => {
     expect(h.store.loadStatus()).toBe('loading')
   })
 
-  it('shows the configured model and permits sending while the catalogue is pending', async () => {
+  it('shows the configured model and permits sending while the provider catalogue is pending', async () => {
     const h = await live()
     const load = h.source.loadProviders(null)
     expect(h.reads.map((read) => read.params)).toEqual([{ include_providers: false }, {}])
@@ -75,7 +75,7 @@ describe('model initialization', () => {
     expect(h.source.modelSource.loading?.()).toBe(false)
   })
 
-  it('keeps a usable selection when the catalogue fails and offers a retry', async () => {
+  it('keeps a usable selection when the provider catalogue fails and offers a retry', async () => {
     const h = await live()
     const load = h.source.loadProviders()
     h.reads[0]!.resolve(h.answer())
@@ -259,7 +259,7 @@ describe('model initialization', () => {
     expect(h.store.current()).toBe('draft-model')
   })
 
-  it.each([null, 'bound-session'])('shares one legacy catalogue read and restores sending for session %s', async (session) => {
+  it.each([null, 'bound-session'])('shares one legacy provider catalogue read and restores sending for session %s', async (session) => {
     const h = await live({ selectionOnly: false })
     const load = h.source.loadProviders(session)
     expect(h.reads.map((read) => read.params)).toEqual([session ? { session_id: session } : {}])

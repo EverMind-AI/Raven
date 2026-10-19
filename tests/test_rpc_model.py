@@ -71,7 +71,7 @@ async def test_options_selection_skips_catalogue(fake_home: Path, monkeypatch, p
     _write_config(fake_home, {"agents": {"defaults": defaults}})
 
     def unexpected(*args, **kwargs):
-        raise AssertionError("selection-only reads must not build or warm catalogues")
+        raise AssertionError("selection-only reads must not build provider rows or warm the rate table")
 
     monkeypatch.setattr(model_module, "_entries_off_loop", unexpected)
     monkeypatch.setattr("raven.providers.rates.warm_catalog_in_background", unexpected)
@@ -95,7 +95,9 @@ async def test_options_selection_respects_session_binding(fake_home: Path, monke
         has_session_binding=lambda key: own_binding,
         session_model=lambda key: "deepseek/deepseek-chat",
     )
-    monkeypatch.setattr(model_module, "_entries_off_loop", lambda *args: pytest.fail("unexpected catalogue read"))
+    monkeypatch.setattr(
+        model_module, "_entries_off_loop", lambda *args: pytest.fail("unexpected provider catalogue read")
+    )
     result = await model_options(
         {"session_id": "web:selection", "include_providers": False},
         agent_loop_factory=lambda: loop,

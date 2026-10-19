@@ -54,7 +54,7 @@ describe('model roles', () => {
   it.each([
     ['title', 'claude-sonnet-4-5', 'Anthropic'],
     ['embedding', 'text-embedding-3-small', 'OpenRouter'],
-  ])('allows the %s role to change during a composer catalogue refresh', async (slot, model, provider) => {
+  ])('allows the %s role to change during a composer provider catalogue refresh', async (slot, model, provider) => {
     const { calls } = install()
     setSources({ model: {
       providers: modelSource.providers,

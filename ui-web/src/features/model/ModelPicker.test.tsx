@@ -130,7 +130,7 @@ describe('the model picker', () => {
     expect(pick()).toBeNull()
   })
 
-  it('waits for the composer catalogue before opening its picker', () => {
+  it('waits for the composer\'s provider catalogue before opening its picker', () => {
     const h = install({ loading: () => true })
     mount()
     openIt()
@@ -138,7 +138,7 @@ describe('the model picker', () => {
     expect(h.toasts).toEqual(['gui.model.provider_catalogue_loading'])
   })
 
-  it('opens a settings picker while the composer catalogue is pending', async () => {
+  it('opens a settings picker while the composer\'s provider catalogue is pending', async () => {
     const h = install({ loading: () => true })
     mount()
     openIt(document.getElementById('modelChip'))
