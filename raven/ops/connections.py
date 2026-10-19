@@ -110,10 +110,22 @@ KEY_DIRNAME = "keys"
 
 
 def password_path(conn_id: str) -> Path:
-    """Where the password kept for ``conn_id`` lives: ``<home>/keys/<id>.password``, the owner's alone."""
+    """Where the password kept for ``conn_id`` lives: ``<home>/keys/<id>.password``, the owner's alone.
+
+    Refused for an id the registry refuses (:data:`_ID`): the id is a path
+    segment here, and ``../x`` or ``/x`` put the file -- and the askpass
+    helper beside it -- outside ``keys/``, where nothing scrubs or removes it
+    (reviewed 2026-10-19). One owner for the rule, so a door that keeps a
+    password before it judges the id cannot keep it anywhere else.
+    """
     from raven.home import raven_home
 
-    return raven_home() / KEY_DIRNAME / f"{str(conn_id or '').strip()}.password"
+    cleaned = str(conn_id or "").strip()
+    if not _ID.match(cleaned):
+        raise ValueError(
+            f"{conn_id!r} is not an id a password can be kept under (lowercase letters, digits, '-' or '_')"
+        )
+    return raven_home() / KEY_DIRNAME / f"{cleaned}.password"
 
 
 # How many devices a ``device`` line written as "2 x NVIDIA A800..." names.

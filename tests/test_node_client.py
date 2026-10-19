@@ -1667,6 +1667,7 @@ def _password_row() -> dict[str, Any]:
 
 
 async def test_the_link_to_a_password_machine_logs_in_through_askpass_and_offers_no_key(box, pool, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")  # the mode is refused on Windows first of all
     from raven.ops.connection_add import store_password
 
     monkeypatch.setenv("RAVEN_HOME", str(box.root / "rhome"))
@@ -1685,6 +1686,7 @@ async def test_the_link_to_a_password_machine_logs_in_through_askpass_and_offers
 async def test_a_password_the_machine_refuses_ends_the_link_with_the_login_named_and_nothing_else(
     box, pool, monkeypatch
 ):
+    monkeypatch.setattr(sys, "platform", "linux")  # the mode is refused on Windows first of all
     from raven.ops.connection_add import store_password
 
     monkeypatch.setenv("RAVEN_HOME", str(box.root / "rhome"))
@@ -1704,6 +1706,7 @@ async def test_a_password_the_machine_refuses_ends_the_link_with_the_login_named
 async def test_a_password_machine_whose_password_is_not_kept_here_is_refused_before_ssh_is_started(
     box, pool, monkeypatch
 ):
+    monkeypatch.setattr(sys, "platform", "linux")  # the mode is refused on Windows first of all
     monkeypatch.setenv("RAVEN_HOME", str(box.root / "rhome"))
     box.rows([_password_row()])
     box.node()

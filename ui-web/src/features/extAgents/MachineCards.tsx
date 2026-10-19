@@ -15,7 +15,7 @@
  * reader's language what to do about it, with the server's sentence under it.
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 import { Glyph } from '../../components/Ico'
@@ -413,13 +413,16 @@ export function RegisterSheet({ ms }: { ms: MachinesState }): JSX.Element {
             </button>
           </span>
         </div>
+        {/* Keyed, so the pick swaps the element rather than patching one
+            input's type: unkeyed, React kept the DOM node and what was typed
+            as a password went out as a key path (reviewed 2026-10-19). */}
         {auth === 'key' ? (
-          <>
+          <Fragment key="key">
             {text(keyRef, t('gui.machine.f_key'), '~/.ssh/id_ed25519', true)}
             <div className="extAgents-about">{t('gui.machine.key_note')}</div>
-          </>
+          </Fragment>
         ) : (
-          <>
+          <Fragment key="password">
             <label className="extAgents-fld">
               <span className="extAgents-k">{t('gui.machine.f_password')}</span>
               <input
@@ -432,7 +435,7 @@ export function RegisterSheet({ ms }: { ms: MachinesState }): JSX.Element {
               />
             </label>
             <div className="extAgents-about">{t('gui.machine.password_note')}</div>
-          </>
+          </Fragment>
         )}
         <label className="extAgents-fld">
           <span className="extAgents-k">{t('gui.machine.f_paths')}</span>

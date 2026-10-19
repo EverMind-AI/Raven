@@ -25,6 +25,10 @@ from raven.security.redact import redact_home_config_read
 #: Shorter strings are too likely to be ordinary text ("true", a port). Six,
 #: not eight: a mailbox password (``hunter2``) is a credential too.
 _MIN_LEN = 6
+#: The floor a machine's password is held to when it is kept
+#: (``raven.ops.connection_add.store_password``): one shorter would pass the
+#: scrubber as ordinary text, so the doors refuse it rather than keep it.
+PASSWORD_MIN_LEN = _MIN_LEN
 #: Values a credential field holds when it holds nothing.
 _PLACEHOLDERS = frozenset({"EMPTY", "empty", "dummy", "changeme", "not-needed", "sk-xxx"})
 

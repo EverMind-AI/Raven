@@ -727,6 +727,39 @@ async def test_add_by_password_keeps_the_password_here_proves_it_through_the_pro
     assert not (rhome.parent / ".ssh" / "config").exists(), "no alias: an ssh config has nowhere to carry a password"
 
 
+async def test_add_by_password_refuses_a_password_shorter_than_the_scrubbers_floor_before_the_probe(
+    supported_host, pool, rhome, monkeypatch
+):
+    monkeypatch.setattr(connection_add, "probe", lambda row, **kw: pytest.fail("the probe is not reached"))
+
+    out = await rpc.machines_add({**BY_PASSWORD, "password": "root1"})
+
+    _check("machines.add", out)
+    assert (out["ok"], out["reason"]) == (False, "invalid")
+    assert "shorter than 6 characters cannot be kept" in out["detail"] and "root1" not in out["detail"]
+    assert not (rhome / "keys").exists(), "nothing was kept, not even the directory"
+    assert not connections.store_path().exists(), "and no row was written"
+
+
+async def test_a_password_kept_for_a_registration_whose_write_fails_is_forgotten(
+    supported_host, pool, rhome, monkeypatch
+):
+    """A registration of the same id landing between the duplicate check and the write: the write refuses, and the
+    password kept a moment ago goes with the refusal rather than outliving a row that was never written."""
+    monkeypatch.setattr(connection_add, "probe", lambda row, **kw: (True, "reached", {}))
+
+    def refuse(row):
+        raise ValueError(f"a machine with id {row['id']!r} is already listed in the registry")
+
+    monkeypatch.setattr(connection_add, "write", refuse)
+
+    out = await rpc.machines_add(BY_PASSWORD)
+
+    _check("machines.add", out)
+    assert (out["ok"], out["reason"]) == (False, "duplicate")
+    assert not connection_add.password_path("box").exists()
+
+
 async def test_a_password_the_machine_refuses_is_forgotten_here_and_named_as_a_login_refusal(
     supported_host, pool, rhome, monkeypatch
 ):
