@@ -1033,6 +1033,20 @@ async def test_a_turn_running_in_the_app_is_forwarded_after_the_history_a_load_r
     await harness.host.wait_for(lambda: harness.said(session.key).endswith("steered: x"))
 
 
+async def test_a_list_or_a_history_the_host_fails_is_refused_at_once_with_its_reason(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(server_mod, "QUERY_TIMEOUT_S", 1.0)
+    session = harness.host.add_session("claude", str(harness.tmp_path), [{"taskId": "t0", "prompt": "p", "text": "a"}])
+    harness.store.put(Binding(session_id="acp-1", cwd=str(harness.tmp_path), mirasim_key=session.key))
+    harness.host.refuse["listSessions"] = "the session index is locked"
+    error = await harness.refused("session/list", cwd=str(harness.tmp_path))
+    assert error["message"] == "Mirasim could not list its sessions: the session index is locked"
+    harness.host.refuse["getHistory"] = "the history is unreadable"
+    error = await harness.refused("session/load", sessionId="acp-1", cwd=str(harness.tmp_path), mcpServers=[])
+    assert error["message"] == "Mirasim could not read the session's history: the history is unreadable"
+
+
 async def test_resume_reopens_without_replaying(harness: Harness) -> None:
     session = harness.host.add_session(
         "claude", str(harness.tmp_path), [{"taskId": "t0", "prompt": "old", "text": "x"}]

@@ -620,13 +620,11 @@ class MirasimAgent:
         else:
             frame["scope"] = "global"
         try:
-            answer = await self.host.request(
-                frame,
-                lambda f: f.get("type") == "sessions" and f.get("reqId") == request_id,
-                timeout=QUERY_TIMEOUT_S,
-            )
+            answer = await self.host.request(frame, _answered("sessions", request_id), timeout=QUERY_TIMEOUT_S)
         except (HostUnavailableError, TimeoutError) as exc:
             raise RefusalError(INTERNAL_ERROR, f"Mirasim could not list its sessions: {_said(exc)}") from exc
+        if answer.get("type") == "error":
+            raise RefusalError(INTERNAL_ERROR, f"Mirasim could not list its sessions: {_reason(answer)}")
         return [
             row
             for row in answer.get("sessions") or ()
@@ -657,15 +655,13 @@ class MirasimAgent:
             if before is not None:
                 frame["before"] = before
             try:
-                answer = await self.host.request(
-                    frame,
-                    lambda f, rid=request_id: f.get("type") == "history" and f.get("reqId") == rid,
-                    timeout=QUERY_TIMEOUT_S,
-                )
+                answer = await self.host.request(frame, _answered("history", request_id), timeout=QUERY_TIMEOUT_S)
             except (HostUnavailableError, TimeoutError) as exc:
                 raise RefusalError(
                     INTERNAL_ERROR, f"Mirasim could not read the session's history: {_said(exc)}"
                 ) from exc
+            if answer.get("type") == "error":
+                raise RefusalError(INTERNAL_ERROR, f"Mirasim could not read the session's history: {_reason(answer)}")
             turns = [turn for turn in answer.get("turns") or () if isinstance(turn, dict)]
             oldest = (_text(turns[0].get("taskId")) or _text(turns[0].get("anchor"))) if turns else ""
             if oldest in read:
@@ -1504,6 +1500,21 @@ def _ref(value: Any) -> str:
 
 def _said(exc: BaseException) -> str:
     return str(exc) or type(exc).__name__
+
+
+def _answered(kind: str, request_id: str) -> Callable[[dict[str, Any]], bool]:
+    """The reply of type ``kind`` to the request ``request_id``, or the error the host's catch-all sends for it.
+
+    A handler that throws is answered ``error`` with the request's ``reqId`` as its ``clientRef``.
+    """
+    return lambda f: (
+        (f.get("type") == kind and f.get("reqId") == request_id)
+        or (f.get("type") == "error" and f.get("clientRef") == request_id)
+    )
+
+
+def _reason(error: dict[str, Any]) -> str:
+    return " ".join(_text(error.get("message")).split()) or "it gave no reason"
 
 
 def _gone(refusal: str) -> str | None:

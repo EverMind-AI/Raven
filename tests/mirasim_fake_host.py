@@ -279,9 +279,9 @@ class FakeHost:
         if kind in self.silent:
             return
         if kind in self.refuse:
-            await self._send(
-                client, {"type": "error", "message": self.refuse[kind], "clientRef": frame.get("clientRef")}
-            )
+            # The host's catch-all answers a request by whichever of its two keys it carries.
+            ref = frame.get("reqId") if frame.get("reqId") is not None else frame.get("clientRef")
+            await self._send(client, {"type": "error", "message": self.refuse[kind], "clientRef": ref})
             return
         if kind == "setStreamCadence":
             return
