@@ -48,10 +48,11 @@ _HANDSHAKE_TIMEOUT_S = 120.0
 # agent-side cleanup must not hold it up past a moment.
 _DELETE_TIMEOUT_S = 10.0
 
-# Backstop only: `AcpClient.close` bounds its own two waits, so reaching this is
-# pathology rather than a slow child. Cancelling a close from out here is what
-# leaves its subprocess transport unreleased, so the budget stays well clear of
-# the internal one instead of racing it.
+# Backstop only: `AcpClient.close` bounds its own waits -- the agent's grace (five
+# seconds at most), the drain and the reap -- so reaching this is pathology rather
+# than a slow child. The budget stays well clear of the internal one instead of
+# racing it: a close cancelled from out here ends the tree and lets go of its
+# transport, but no longer reaps the child.
 _CLOSE_TIMEOUT_S = 10.0
 
 # How long a connection may sit silent before a reuse pays for a probe. Under

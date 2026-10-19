@@ -159,6 +159,7 @@ const STAGE: Record<string, number> = {
   completed: 3,
   failed: 3,
   skipped: 3,
+  not_executed: 3,
   cancelled: 3,
   interrupted: 3,
 }

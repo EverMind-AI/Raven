@@ -87,9 +87,7 @@ def check_confined(path: str, *, what: str, roots: tuple[str, ...] | None = None
         _check_shape(path, relative, what=what, root=root)
         return
 
-    base = posixpath.normpath(roots[0])
-    resolved = posixpath.normpath(relative if posixpath.isabs(relative) else posixpath.join(base, relative))
-    physical = os.path.realpath(resolved)
+    resolved, physical = resolve_reference(relative, roots)
     if not any(within(physical, os.path.realpath(candidate)) for candidate in roots):
         # Only name the resolved path when it says something the given one does
         # not -- for an absolute reference the two are the same string. The
@@ -99,6 +97,29 @@ def check_confined(path: str, *, what: str, roots: tuple[str, ...] | None = None
         raise DagValidationError(
             f"{what} path {where} is outside the session workdir and its sub-agent history",
         )
+
+
+def resolve_reference(relative: str, roots: tuple[str, ...]) -> tuple[str, str]:
+    """Where a reference outside ``@nodes/`` lands, as written out and on disk.
+
+    A relative path resolves against the first root. The second path is the first
+    through ``realpath``: the read follows a symlink, so a question about where a
+    reference lands is asked of that one. Shared by every such question, so two
+    rules about one reference cannot resolve it two ways.
+
+    Args:
+        relative (`str`):
+            The reference with its root split off (``split_reference``).
+        roots (`tuple[str, ...]`):
+            The roots a reference may resolve into; at least one.
+
+    Returns:
+        `tuple[str, str]`:
+            The normalized path, then its physical form.
+    """
+    base = posixpath.normpath(roots[0])
+    resolved = posixpath.normpath(relative if posixpath.isabs(relative) else posixpath.join(base, relative))
+    return resolved, os.path.realpath(resolved)
 
 
 def _check_shape(path: str, relative: str, *, what: str, root: str) -> None:

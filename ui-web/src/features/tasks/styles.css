@@ -240,6 +240,24 @@
   color: var(--faint);
 }
 
+/* What a branch left on a node, above the open tab: a field per fact, in the work order's own
+   field boxes. The guard is the expression as written, and the evidence a quote that may run to
+   five hundred characters, so both break wherever they have to rather than widen the pane. */
+.tkbranch {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.tkguard {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+.tkbrev {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* The work-order tab: one row per field, the missing-agent warning, and the
    footer naming the call/run id. */
 .tkorder {
@@ -680,6 +698,28 @@
 }
 .tkfork .nd[data-st="pending"] .tkrun { opacity: .62; border-style: dashed; }
 .tkfork .nd[data-st="skipped"] .tkrun { opacity: .45; border-style: dashed; }
+/* A node a branch left out: muted and dotted, a notch fainter than a pending one and not the
+   dashed skipped box -- the run chose it away, which is neither waiting nor a failure's cascade.
+   Its cluster carries a dotted circle and a longer word than any other, wider than the room both
+   lines of a title keep for it. The real cluster stays in the corner like every other status, and a
+   hidden copy of it floats inside the title (BoardCard.tsx): the same box in the same place, so the
+   first line gives way to exactly as much as the word needs, whatever the language, while the second
+   line keeps the whole width. To put the copy where the corner is, the title reaches 5px out into
+   its card's padding and the copy rises 3px above the title; it takes the corner's weight and line
+   height rather than the title's, so it measures the same as the real one. A first word wider than
+   the room beside the copy would be moved below it, leaving the first line blank and the second
+   line, ellipsis and all, outside the box, so the title may break a word where that room ends. */
+.tkfork .nd[data-st="not_executed"] .tkrun { opacity: .5; border-style: dotted; }
+.tkfork .nd[data-st="not_executed"] .tkrunl1 { margin-right: -5px; padding-right: 0; overflow-wrap: anywhere; }
+.tkrunsp {
+  display: flex;
+  float: right;
+  visibility: hidden;
+  margin: -3px 0 0 6px;
+  font-weight: 400;
+  line-height: 15px;
+}
+.tkrunsp .tkrunrt { position: static; }
 
 /* The title (`.l1`, proto.css:1503-1506): two lines, clamped, with the right
    margin the status cluster needs (proto.css:1082). */
@@ -716,6 +756,17 @@
   border: 1px solid var(--line);
   border-radius: 5px;
   padding: 0 5px;
+}
+/* What a decision node selected, at the end of the agent line. It clips rather than pushing the
+   card's edge out, and its title holds the whole selection. */
+.tkrunsel {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--moss);
 }
 
 /* The top-right status cluster (`.rt`, proto.css:1083-1091): icon-or-word

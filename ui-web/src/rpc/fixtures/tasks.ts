@@ -31,7 +31,7 @@ function node(over: Partial<TaskNode> & Pick<TaskNode, 'node_id' | 'agent' | 'st
 function counts(nodes: readonly TaskNode[]): TaskCounts {
   const c: TaskCounts = {
     total: nodes.length, pending: 0, running: 0, completed: 0, failed: 0, skipped: 0,
-    cancelled: 0, interrupted: 0, exception: 0,
+    cancelled: 0, interrupted: 0, exception: 0, not_executed: 0,
   }
   nodes.forEach((n) => {
     switch (n.status) {
@@ -43,6 +43,7 @@ function counts(nodes: readonly TaskNode[]): TaskCounts {
       case 'cancelled': c.cancelled += 1; break
       case 'interrupted': c.interrupted += 1; break
       case 'exception': c.exception += 1; break
+      case 'not_executed': c.not_executed += 1; break
     }
   })
   return c
@@ -344,6 +345,54 @@ function scenarioSkippedLayer(env: FixtureEnv): TaskRow[] {
   })]
 }
 
+/* Scenario 7, session 'f': a graph that branched. The router chose one route of two, so the
+   other branch -- and the step that waited only on it -- was left out; a second decision, which
+   may choose any number of routes, chose none. The task is simply completed: a branch the run
+   did not take is not a step that went wrong. */
+function scenarioBranched(env: FixtureEnv): TaskRow[] {
+  const now = env.now()
+  const started = now - 25 * MIN
+  const nodes = [
+    node({
+      node_id: 'triage', agent: 'Raven', status: 'completed',
+      node_summary: 'Decide whether the report is a question or a bug',
+      started_at: started, ended_at: started + 20 * SEC, tokens_in: 420, tokens_out: 60,
+      tool_call_count: 1, tool_failure_count: 0, has_output: true,
+      routes: ['question', 'bug'], select: 'one', selected_routes: ['question'],
+      route_evidence: 'The user asks how to reset a password; nothing in the message describes a failure.',
+    }),
+    node({
+      node_id: 'answer', agent: 'Raven', status: 'completed', depends_on: ['triage'], when: 'triage.question',
+      node_summary: 'Answer the question from the docs',
+      started_at: started + 21 * SEC, ended_at: started + 66 * SEC, tokens_in: 900, tokens_out: 310,
+      tool_call_count: 3, tool_failure_count: 0, has_output: true,
+    }),
+    node({
+      node_id: 'reproduce', agent: 'Raven-Code', status: 'not_executed', depends_on: ['triage'], when: 'triage.bug',
+      node_summary: 'Reproduce the failure', reason: 'when_false',
+    }),
+    node({
+      node_id: 'patch', agent: 'Raven-Code', status: 'not_executed', depends_on: ['reproduce'],
+      node_summary: 'Write a patch for it', reason: 'upstream_not_executed',
+    }),
+    node({
+      node_id: 'label', agent: 'Raven', status: 'completed', depends_on: ['answer'],
+      node_summary: 'Add any labels that apply',
+      started_at: started + 67 * SEC, ended_at: started + 80 * SEC, tokens_in: 300, tokens_out: 40,
+      tool_call_count: 1, tool_failure_count: 0, has_output: true,
+      routes: ['docs', 'billing'], select: 'many', selected_routes: [],
+    }),
+    node({
+      node_id: 'tag_docs', agent: 'Raven', status: 'not_executed', depends_on: ['label'], when: 'label.docs',
+      node_summary: 'Tag the thread as docs', reason: 'when_false',
+    }),
+  ]
+  return [row({
+    id: '20260918T091000000000Z-branch5e', kind: 'dag', status: 'completed', nodes,
+    task_summary: 'Triage an incoming support message', started_at: started, ended_at: started + 80 * SEC,
+  })]
+}
+
 export interface TasksFixture {
   fixtures: Fixtures
 }
@@ -359,6 +408,7 @@ export function createTasks(env: FixtureEnv): TasksFixture {
     ['h', scenarioTwoSpawns(env)],
     ['d', scenarioInterrupted(env)],
     ['c', scenarioSkippedLayer(env)],
+    ['f', scenarioBranched(env)],
   ])
 
   const findRow = (id: string, kind?: string): { rows: TaskRow[]; at: number; row: TaskRow } | null => {

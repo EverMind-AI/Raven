@@ -1832,3 +1832,80 @@ def test_a_row_naming_another_interpreter_that_still_exists_is_left_alone(tmp_pa
 
     assert [a.command for a in cfg.subagents.agents] == [command]
     assert p.read_bytes() == before
+
+
+def test_the_verdict_switch_goes_and_says_why(tmp_path: Path) -> None:
+    """Up to this release `subagentDag.verdictEnabled` could turn node judgement off.
+    Judgement is always on now, and the strict config models refuse an unknown key, so
+    a config that still carries it would not load at all. The floor drops either
+    spelling, tells the user once, and leaves the neighbours alone."""
+    p = tmp_path / "config.json"
+    _write(p, {"subagentDag": {"verdictEnabled": False, "verdictModel": "cheap/tier"}})
+    _stamp_path(p).write_text(json.dumps({"version": 13}), encoding="utf-8")
+
+    drain_migration_notices()
+    load_config(p)
+
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    assert on_disk["subagentDag"] == {"verdictModel": "cheap/tier"}
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+    notices = drain_migration_notices()
+    assert len([n for n in notices if "verdictEnabled" in n]) == 1, notices
+
+    load_config(p)
+    assert drain_migration_notices() == []
+
+
+def test_the_verdict_switch_goes_under_its_snake_spelling_too() -> None:
+    from raven.config import loader
+
+    loader._migration_notices.clear()
+    snake = {"subagent_dag": {"verdict_enabled": True, "max_continuations": 3}}
+    assert loader._migrate_retired_verdict_switch(snake, notify=True) is True
+    assert snake == {"subagent_dag": {"max_continuations": 3}}
+    assert len(loader.drain_migration_notices()) == 1
+
+
+def test_the_verdict_switch_is_dropped_from_the_extension_blocks_in_memory_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`load_raven_config` reads the file again for the extension blocks, after the
+    base loader has persisted its rewrite. Its pass has to drop the retired switch
+    itself: the file it reads may still carry it, and the extension model forbids
+    unknown keys, so a pass that only persisted would raise instead of loading."""
+    from raven.config import loader
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"subagentDag": {"verdictEnabled": False, "verdictModel": "cheap/tier"}})
+    _stamp_path(p).write_text(json.dumps({"version": 13}), encoding="utf-8")
+    # The disk rewrite is not what is under test here, and a file left as it is
+    # keeps the in-memory pass's own strip the only thing that can make this load.
+    monkeypatch.setattr(loader, "_persist_migrations", lambda *args, **kwargs: None)
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    assert cfg.subagent_dag.verdict_model == "cheap/tier"
+    assert json.loads(p.read_text(encoding="utf-8"))["subagentDag"]["verdictEnabled"] is False, (
+        "the disk rewrite was switched off, so a load that succeeded proves the in-memory strip"
+    )
+    assert len([n for n in drain_migration_notices() if "verdictEnabled" in n]) == 1
+
+
+def test_the_verdict_switch_set_again_after_its_floor_still_loads(tmp_path: Path) -> None:
+    """The switch can come back to a config its floor already cleaned: the build before
+    this one reads the stamp as current, keeps it, and accepts the key, so a rollback, or
+    a second install sharing the home, can write it again. The extension model would then
+    refuse the whole config, so the strip holds on every load, without a second notice."""
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"subagentDag": {"verdictEnabled": False, "verdictModel": "cheap/tier"}})
+    _stamp_path(p).write_text(json.dumps({"version": CURRENT_CONFIG_VERSION}), encoding="utf-8")
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    assert cfg.subagent_dag.verdict_model == "cheap/tier"
+    assert [n for n in drain_migration_notices() if "verdictEnabled" in n] == []

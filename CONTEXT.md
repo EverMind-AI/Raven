@@ -2636,7 +2636,8 @@ below does, does not need wrapping: the path is raven-minted, only the file's co
 A DAG node is told where its upstream records are: every node whose sub-agent can open
 local paths gets an `## Upstream memory records` block appended to its rendered prompt,
 listing each transitive upstream's node id and the absolute path of its record. Paths only --
-nothing injects a record's text. Suppressed entirely for a sub-agent the roster tags
+nothing injects a record's text. A node that was not executed gets no line: it never ran, so
+it has no record to point at. Suppressed entirely for a sub-agent the roster tags
 [no-local-files], gated the same as a `_path` placeholder (Prompt template, below). The
 listed files usually do not exist yet when the node starts, because the record is written by a
 fire-and-forget poller after the upstream finished while the runner starts the next wave
@@ -2653,9 +2654,9 @@ same two ways, and `ref:<path>` / `ref_path:<path>` do it for an arbitrary file 
 form always injects content, the `_path` form always injects a location. `output` and
 `output_path` name a node by the id it ran under, and both surfaces resolve them against the
 same flat node root, so a spawn may name a graph's node and a graph may name a spawn's. The
-id must already be readable: a node that failed, was skipped, was cancelled or is still
-running is refused with which of those it was, rather than handed the leftover file a bare
-path would resolve to. A `{{ ... }}` body
+id must already be readable: a node that failed, was skipped, was cancelled, was not
+executed or is still running is refused with which of those it was, rather than handed the
+leftover file a bare path would resolve to. A `{{ ... }}` body
 matching none of the six is not a mistyped placeholder -- it is ordinary text, carried
 through untouched, so template syntax from another system (Jinja, Vue, Handlebars) can sit
 in a prompt with no escape form needed. A body that does match a shape still fails
@@ -2700,7 +2701,10 @@ node-shaped `inputs.<k>` entry, both `run_subagent_dag` only -- is wrapped with
 a run fetched or a checkout brought in, and a node's output is sub-agent-authored by
 construction. A literal `inputs.<k>` string is not fenced, because the author typed it into
 the call, and neither is any `_path` form or the `## Upstream memory records` block -- those
-carry a raven-minted path rather than content.
+carry a raven-minted path rather than content. Neither is the sentence that stands in for a
+node that was not executed: that is the runner's own words, so it is written unfenced too,
+and an upstream that writes the same sentence into its own output has it land inside a
+nonce-tagged fence, where it reads as data.
 This rule replaces one that keyed on location: a read whose resolved path landed under
 Subagent history was fenced, and every other read was not. That left the contents of a file
 in the working directory reaching a prompt bare, which is the wrong way round -- a checkout
@@ -2767,9 +2771,10 @@ never fetched; its preset names the bare executable (`opencode acp`, `hermes acp
 build that answers is the one the user installed, at the version they chose, holding the login
 they already granted. `SHIM_LAUNCHED_PRESETS` declares that split per preset and a test holds
 every acp command to it. A **bundled shim** (`BUNDLED_SHIM_PRESETS`) is one Raven ships rather
-than fetches: `raven.acp.mirasim` serves an agent Mirasim runs, over `mirasim ui-cli`, launched
-on Raven's own interpreter (`{PYTHON}`, expanded when the preset is read), so there is no pin;
-the executable its probe asks after is `mirasim` (`SHIM_REQUIRED_EXECUTABLES`).
+than fetches: `raven.acp.mirasim` serves an agent Mirasim runs, as one more client of the
+Mirasim host running on the machine (its WebSocket protocol), launched on Raven's own
+interpreter (`{PYTHON}`, expanded when the preset is read), so there is no pin; the executable
+its probe asks after is `mirasim` (`SHIM_REQUIRED_EXECUTABLES`).
 _Avoid_: inferring it from the command shape. An agent whose own CLI happens to ship on npm
 (`opencode-ai`) is not a shim, and fetching it would run a second copy beside the user's
 install and report the agent as present on a machine that does not have it - `_probe_acp`
@@ -3254,9 +3259,9 @@ refused, so an id names one task and one output. Compared case-folded, because a
 artifacts are files named after it and `Plan` and `plan` are one file on macOS and Windows.
 An id is claimed at dispatch and kept whatever the outcome, but referencing it needs both a
 `completed` status and an output file actually written — a task can finish having written
-nothing, which the status alone does not say. A failed, skipped, cancelled or still-running
-one — or, as a replan validating its replacement sees it, one still pending or awaiting a
-decision — keeps its id and is refused with which of those it is. A run stopped
+nothing, which the status alone does not say. A failed, skipped, cancelled, not-executed or
+still-running one — or, as a replan validating its replacement sees it, one still pending
+or awaiting a decision — keeps its id and is refused with which of those it is. A run stopped
 by `/stop` or a shutdown records its still-running nodes as `cancelled` and its pending
 ones as `skipped` on the way out, so "still-running" means what it says rather than
 outliving the run that claimed it. Distinct from an
@@ -3288,6 +3293,71 @@ verdict said the task was not accomplished. Non-terminal: its dependents stay
 _Avoid_: it is not a synonym for a Python exception. A raised exception is only one
 of the two routes into this status, and `status[node.id] = "exception"` sits next to
 `except Exception as exc` in `_run_node` for that reason.
+
+**Decision node** (`routes` on `DagNodeSpec`, `raven/agent/subagent/dag_graph.py`):
+A node that decides where the graph goes next. `routes` maps a route name to the condition,
+in the graph author's own words, under which the node's answer selects it; the conditions
+are shown to the judge and never to the node.
+Nothing the node writes selects a route: the same constrained verdict call that judges it
+also picks the route, as a tool argument, and a selection is valid only if the judge reports
+one of the declared names, so a node that writes "route: bug" into its own answer has said
+nothing about the branch. `select` says how many an answer may take: `"one"` — exactly one,
+and what unset means once `routes` is set — or `"many"`, any number including none. A node
+may be a decision and guarded at once, which is a nested branch. Its selection is recorded
+per run (`selected_routes`, plus the judge's `route_evidence`) and read by clients beside
+the status. Where an ordinary node's judge failure or timeout reads as accomplished, a
+decision node whose route cannot be established fails ("The route could not be determined:
+..."), its output withdrawn and its dependents skipped, with no fallback route and no
+adjudication. For the same reason a graph declaring routes is refused on a host with no
+provider to judge with.
+
+**Route (DAG branch)** (a key of `routes`; `raven/agent/subagent/dag_graph.py`):
+One branch a decision node chooses between, named by the graph's author. A guard names it
+exactly as declared; the judge's report is matched to the declared names without regard to
+case and recorded under the declared spelling, which is why two names of one node may not
+differ only in case. The charset is the node id's, `^[A-Za-z0-9_-]+$`, since a route name is
+written into a guard beside a node id; `done` is reserved in any letter case because an atom
+ending in it means something else entirely; a condition cannot be blank; and the count is
+checked — at least two routes for `select: "one"`, at least one for `"many"`.
+_Avoid_: the routing-table rows of a **Routing entry** (`routes` on an agent table row,
+which pick the backend a task runs on), and the runner's unrelated `_route_available`
+(`raven/agent/subagent/dag_runner.py`), which asks whether the main agent has any way to
+call `resolve_dag_node` — neither is a branch of a graph.
+
+**Guard** (`when` on `DagNodeSpec`; `raven/agent/subagent/dag_guard.py`):
+The condition under which a node runs, as a three-valued expression over atoms
+`<node>.<route>` and `<node>.done`, combined with `not`, `and`, `or` and parentheses
+(`not` binds tightest, then `and`, then `or`; the keywords are lowercase). Parsed and
+evaluated by a hand-written parser, never `eval`. An atom may name only a decision node of
+this graph that is in the node's `depends_on`, and only a route that node declares or
+`done`; every decision node of the graph in `depends_on` must appear in the guard, since a
+node cannot depend on a decision and stay silent about it. Two guards that can never hold
+are refused at submission: two un-negated routes of one `select: "one"` node in one `and`
+chain, and `not <node>.done`. These checks preserve surrounding negation and disjunction:
+an impossible arm does not reject an `or` whose other arm can hold. The runner reads a guard
+once every dependency has settled,
+and a dependency that failed or was skipped skips the node first, whatever the guard says.
+Unknown is a value and not false: a route of a decision node that was never executed is
+unknown, so `not` over it does not hold. A blank or unset `when` is no guard.
+_Avoid_: the agent loop's guards (`NoProgressGuard`, the failure streak), which stop a call
+that keeps repeating; a Guard is a DAG node's run condition, read against what the decision
+nodes chose.
+
+**Not executed** (`not_executed`, `raven/agent/subagent/dag_runner.py`):
+A terminal node status for a node a branch left out: it was never dispatched, never took a
+concurrency slot, and wrote no output — no prompt file, no output file, no memory record.
+Distinct from `skipped`, which says something went wrong and poisons its dependents; a
+`not_executed` dependency poisons nothing, so a merge node with one input left out is not
+stopped by it and reads the fixed sentence in its place. Three reasons, recorded beside the
+status and read back as `reason`: `when_false` (the guard is false — the branch was not
+selected), `when_unknown` (the guard is unknown — a decision it names was never made), and
+`upstream_not_executed` (every dependency this node has in the graph was left out, which is
+decided before the guard and is why `<node>.done`, true whatever the decision did, cannot
+revive a node with no input left on that path). Terminal in every reader: it is never
+rewritten to `interrupted`, a replan and a stop leave it as it is, and a later run naming
+one is refused with "its branch was not selected, so it wrote no output" — the id stays
+claimed. The run's tally counts it only when there is one, so a run without branches tallies
+exactly as before.
 
 **replan** (adjudication decision; `raven/agent/subagent/dag_adjudication.py`) -- the answer
 to an exception report that replaces the plan instead of the node: the agent hands

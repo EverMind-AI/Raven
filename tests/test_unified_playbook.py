@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -24,7 +25,7 @@ from raven.playbook.runtime import PlaybookRuntime
 from raven.playbook.store import PlaybookStore
 from raven.playbook.types import ParamSpec
 from raven.playbook.unified import InputSchema, PlaybookMatch, UnifiedPlaybookSpec, WorkflowSpec
-from raven.playbook.workflow_compiler import EMIT_WORKFLOW, WorkflowCompiler
+from raven.playbook.workflow_compiler import EMIT_WORKFLOW, WorkflowCompiler, _preservation_errors
 from raven.providers.base import LLMResponse, ToolCallRequest
 
 
@@ -326,6 +327,188 @@ async def test_workflow_compiler_accepts_reversible_prompt_parameterization() ->
     assert compiled.workflow is not None
     assert compiled.workflow.nodes[0].prompt_template == "Research ${params.topic}"
     assert compiled.input_schema.properties["topic"].default == "Acme"
+
+
+def _branching_dag() -> SubAgentDagSpec:
+    return SubAgentDagSpec(
+        task_summary="Triage",
+        confirm=False,
+        nodes=[
+            DagNodeSpec(
+                id="r",
+                subagent="analyst",
+                node_summary="Classify",
+                prompt_template="Classify the issue",
+                routes={"a": "it is a", "b": "it is b"},
+            ),
+            DagNodeSpec(
+                id="g",
+                subagent="analyst",
+                node_summary="Handle a",
+                prompt_template="Handle a",
+                depends_on=["r"],
+                when="r.a",
+            ),
+        ],
+    )
+
+
+def _compiled_from(dag: SubAgentDagSpec, nodes: list[DagNodeSpec]) -> UnifiedPlaybookSpec:
+    return UnifiedPlaybookSpec(
+        name="research-team",
+        description="Research a topic with cited evidence",
+        match=PlaybookMatch(summary="Research a topic", keywords=["research topic"]),
+        harness=_harness(),
+        workflow=WorkflowSpec(summary=dag.task_summary, confirm=dag.confirm, nodes=nodes),
+    )
+
+
+def _emitted_from(dag: SubAgentDagSpec, nodes: list[dict]) -> dict:
+    return {
+        "name": "research-team",
+        "description": "Research a topic with cited evidence",
+        "match": {"summary": "Research a topic", "keywords": ["research topic"]},
+        "inputSchema": {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+        "workflow": {"summary": dag.task_summary, "confirm": dag.confirm, "nodes": nodes},
+    }
+
+
+def test_compilation_that_keeps_the_branch_fields_is_preserving() -> None:
+    accepted = _branching_dag()
+
+    assert _preservation_errors(accepted, _compiled_from(accepted, accepted.nodes)) == []
+
+
+@pytest.mark.parametrize(
+    ("index", "changed"),
+    [
+        (0, {"routes": {"a": "it is a", "b": "something else entirely"}}),
+        (0, {"routes": {"a": "it is a", "b": "it is b", "c": "a route nobody asked for"}}),
+        (0, {"routes": None}),
+        (0, {"select": "many"}),
+        (1, {"when": "r.b"}),
+        (1, {"when": None}),
+    ],
+)
+def test_compilation_preserving_is_checked_for_the_branch_fields(index: int, changed: dict) -> None:
+    accepted = _branching_dag()
+    nodes = list(accepted.nodes)
+    nodes[index] = nodes[index].model_copy(update=changed)
+    [field] = changed
+
+    errors = _preservation_errors(accepted, _compiled_from(accepted, nodes))
+
+    assert errors == [f"node {accepted.nodes[index].id!r}: {field} changed during compilation"]
+
+
+def test_a_restated_default_select_is_not_a_change() -> None:
+    """A model that writes `select: "one"` beside routes has said what the omitted
+    field already meant, and a repair round for it would spend the compile twice."""
+    accepted = _branching_dag()
+    nodes = list(accepted.nodes)
+    nodes[0] = nodes[0].model_copy(update={"select": "one"})
+
+    assert _preservation_errors(accepted, _compiled_from(accepted, nodes)) == []
+
+
+@pytest.mark.parametrize("blank", ["", "  "], ids=["empty", "spaces"])
+@pytest.mark.parametrize("branches", [True, False], ids=["branching", "plain"])
+def test_a_blank_when_is_not_a_change(branches: bool, blank: str) -> None:
+    """An unguarded node's `when` may come back empty, as spaces or as None; all mean no guard."""
+    if branches:
+        accepted = SubAgentDagSpec(
+            task_summary="Triage",
+            confirm=False,
+            nodes=[
+                DagNodeSpec(
+                    id="r",
+                    subagent="analyst",
+                    node_summary="Classify",
+                    prompt_template="Classify the issue",
+                    routes={"a": "it is a", "b": "it is b"},
+                ),
+                DagNodeSpec(
+                    id="g", subagent="analyst", node_summary="Handle", prompt_template="Handle", depends_on=["r"]
+                ),
+            ],
+        )
+    else:
+        accepted = SubAgentDagSpec(
+            task_summary="Fetch",
+            confirm=False,
+            nodes=[DagNodeSpec(id="a", subagent="analyst", node_summary="Fetch", prompt_template="Fetch")],
+        )
+    nodes = [node.model_copy(update={"when": blank}) for node in accepted.nodes]
+
+    assert _preservation_errors(accepted, _compiled_from(accepted, nodes)) == []
+
+
+@pytest.mark.asyncio
+async def test_workflow_compiler_keeps_a_branching_graph_whole() -> None:
+    dag = _branching_dag()
+    emitted = _emitted_from(dag, [node.model_dump(by_alias=True, exclude_none=True) for node in dag.nodes])
+    provider = _Provider(_call(EMIT_WORKFLOW, emitted))
+
+    compiled = await WorkflowCompiler(provider, "stub").compile(
+        query="Triage the issue",
+        dag=dag,
+        run_id="pb-branching",
+        harness=_harness(),
+    )
+
+    assert len(provider.calls) == 1
+    assert compiled.workflow is not None
+    assert [node.model_dump() for node in compiled.workflow.nodes] == [node.model_dump() for node in dag.nodes]
+    schema = provider.calls[0]["tools"][0]["function"]["parameters"]
+    items = schema["properties"]["workflow"]["properties"]["nodes"]["items"]
+    assert {"routes", "select", "when"} <= set(items["properties"])
+
+
+@pytest.mark.asyncio
+async def test_the_compiler_tells_the_model_to_keep_a_graphs_branches() -> None:
+    """The preservation check refuses a compiled graph whose routes, select or guards
+    changed, so the model has to be told they are among the things to keep, by the
+    names the graph it is handed carries them under."""
+    dag = _branching_dag()
+    dag.nodes[0] = dag.nodes[0].model_copy(update={"select": "many"})
+    emitted = _emitted_from(dag, [node.model_dump(by_alias=True, exclude_none=True) for node in dag.nodes])
+    provider = _Provider(_call(EMIT_WORKFLOW, emitted))
+
+    await WorkflowCompiler(provider, "stub").compile(
+        query="Triage the issue",
+        dag=dag,
+        run_id="pb-branch-prompt",
+        harness=_harness(),
+    )
+
+    system, user = provider.calls[0]["messages"]
+    kept = " ".join(system["content"].split()).split("Preserve", 1)[1].split(". ", 1)[0]
+    carried = {key for node in json.loads(user["content"])["acceptedDag"]["nodes"] for key in node}
+    for field in ("routes", "select", "when"):
+        assert field in carried
+        assert re.search(rf"\b{field}\b", kept), f"the preserve list does not name {field}: {kept!r}"
+
+
+@pytest.mark.asyncio
+async def test_workflow_compiler_rejects_a_guard_rewritten_into_another_valid_one() -> None:
+    """The change the graph rules cannot see: ``r.b`` is as sound a guard as ``r.a``."""
+    dag = _branching_dag()
+    nodes = [node.model_dump(by_alias=True, exclude_none=True) for node in dag.nodes]
+    nodes[1]["when"] = "r.b"
+    emitted = _emitted_from(dag, nodes)
+    provider = _Provider(_call(EMIT_WORKFLOW, emitted), _call(EMIT_WORKFLOW, emitted))
+
+    compiled = await WorkflowCompiler(provider, "stub").compile(
+        query="Triage the issue",
+        dag=dag,
+        run_id="pb-rewritten-guard",
+        harness=_harness(),
+    )
+
+    assert len(provider.calls) == 2
+    assert "node 'g': when changed during compilation" in provider.calls[1]["messages"][-1]["content"]
+    assert compiled.workflow is not None
+    assert compiled.workflow.nodes == dag.nodes
 
 
 def test_workflow_capture_accepts_only_a_clean_completed_dag() -> None:

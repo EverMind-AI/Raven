@@ -2,22 +2,27 @@
 
 A turn that needs a person -- a question the agent asks, or a tool it wants
 approved -- shows up in the turn's snapshot as an *interaction* and waits there
-until ``ui-cli answer`` resolves it. This module is the pure half of relaying
+until an ``interact`` frame resolves it. This module is the pure half of relaying
 one: reading the interaction, building the request that puts it in front of
 the client, and reading the client's reply back into an answer. The shapes
-were read from Mirasim 0.0.465's host code and seen live:
+were read from Mirasim 0.0.465's and 0.0.537's host code and seen live:
 
 - an interaction is ``{promptId, kind, title, hint, questions, currentIndex,
   step}``; ``kind`` is ``"permission"`` for a tool approval and
   ``"user-input"`` for everything else, an MCP server's approval included;
 - a question is ``{id, header, text, type, choices, multiSelect,
   allowFreeform, allowEmpty}``, ``type`` being ``"select"`` or ``"text"`` and
-  each choice ``{label, description}``;
+  each choice ``{label, description}`` -- plus, for an approval an ACP agent
+  asked, ``value`` (the agent's option id) and ``intent`` (``allow_once``,
+  ``allow_always``, ``reject_once`` or ``reject_always``);
 - an ask of several questions is put one question at a time, each under a
   prompt id of its own, and ``currentIndex`` names the question an answer goes
   to;
-- the answer is one string whatever the action, so several choices travel
-  joined -- the way Claude Code's ``AskUserQuestion`` joins them itself.
+- the answer is ``interact {promptId, action, value}``, its value one string
+  whatever the action, so several choices travel joined -- the way Claude
+  Code's ``AskUserQuestion`` joins them itself. The host answers the question
+  ``currentIndex`` names with ``[value]``, ``skip`` with nothing chosen, and
+  ``cancel`` by dismissing it.
 
 A tool approval goes out as ``session/request_permission``, the request every
 ACP client answers; anything else goes out as ``elicitation/create``, which a
@@ -42,11 +47,12 @@ and the one raven's client folds into the question, so a person who types an
 answer of their own is asked once rather than twice."""
 
 _REFUSING = {"deny", "decline", "reject", "no", "cancel"}
+_INTENTS = frozenset({"allow_once", "allow_always", "reject_once", "reject_always"})
 
 
 @dataclass(frozen=True)
 class Reply:
-    """One ``ui-cli answer``: its ``--action`` and, for an answer, its ``--value``."""
+    """One ``interact`` frame: its ``action`` and, for an answer, its ``value``."""
 
     action: str
     value: str | None = None
@@ -131,18 +137,28 @@ def read_elicitation(interaction: dict[str, Any], result: Any) -> Reply:
 
 
 def permission_request(session_id: str, interaction: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
-    """The ``session/request_permission`` params for a tool approval, and the label each option id stands for.
+    """The ``session/request_permission`` params for a tool approval, and the answer each option id stands for.
 
     Option ids are minted per request, so an id from an earlier request, or one
-    a client made up, selects nothing.
+    a client made up, selects nothing. A choice that carries its ``intent`` is
+    offered as exactly that kind; one without -- Claude Code's ``Allow`` and
+    ``Deny`` -- is read off its label. The answer is the choice's own ``value``
+    where it has one, the option id of the ACP agent behind it, else its label.
     """
     asked = question(interaction)
     offered: dict[str, str] = {}
     options: list[dict[str, Any]] = []
-    for index, label in enumerate(_labels(asked) or ["Allow", "Deny"]):
+    choices = (
+        [choice for choice in asked.get("choices") or () if isinstance(choice, dict) and _text(choice.get("label"))]
+        if isinstance(asked.get("choices"), list)
+        else []
+    )
+    for index, choice in enumerate(choices or [{"label": "Allow"}, {"label": "Deny"}]):
+        label = _text(choice.get("label"))
         option_id = f"choice-{index}-{uuid4().hex}"
-        offered[option_id] = label
-        kind = "reject_once" if label.lower() in _REFUSING else "allow_once"
+        offered[option_id] = _text(choice.get("value")) or label
+        intent = choice.get("intent")
+        kind = intent if intent in _INTENTS else "reject_once" if label.lower() in _REFUSING else "allow_once"
         options.append({"optionId": option_id, "name": label, "kind": kind})
     title = _text(asked.get("text")) or _text(interaction.get("title")) or "Approve tool use?"
     params = {
@@ -159,7 +175,7 @@ def permission_request(session_id: str, interaction: dict[str, Any]) -> tuple[di
 
 
 def read_permission(result: Any, offered: dict[str, str]) -> Reply:
-    """The answer a client's ``session/request_permission`` reply stands for: the label it selected, or a dismissal."""
+    """The answer a client's ``session/request_permission`` reply stands for: the choice it selected, or a dismissal."""
     outcome = result.get("outcome") if isinstance(result, dict) else None
     if isinstance(outcome, dict) and outcome.get("outcome") == "selected":
         label = offered.get(outcome.get("optionId"))
@@ -204,7 +220,7 @@ def _labels(asked: dict[str, Any]) -> list[str]:
 
 
 def _said(value: Any) -> str:
-    """A form value as the one string ``ui-cli answer`` takes; empty for no answer."""
+    """A form value as the one string an ``interact`` frame takes; empty for no answer."""
     if isinstance(value, bool) or value is None:
         return ""
     if isinstance(value, (int, float)):

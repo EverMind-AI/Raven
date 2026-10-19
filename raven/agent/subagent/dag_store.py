@@ -6,7 +6,7 @@ import json
 import time
 import uuid
 import weakref
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -319,8 +319,9 @@ class SessionNodes:
             a node with no run.
         state (`dict[str, str]`):
             Node id to ``"completed"``, ``"failed"``, ``"skipped"``,
-            ``"cancelled"``, or one of :data:`RUNNING` / :data:`UNRECORDED` for
-            a run whose per-node outcome the registry does not carry.
+            ``"cancelled"``, :data:`NOT_EXECUTED`, or one of :data:`RUNNING` /
+            :data:`UNRECORDED` for a run whose per-node outcome the registry
+            does not carry.
         has_output (`dict[str, bool]`):
             Node id to whether an output file was written. Absent for an entry
             written before this field existed, which reads as ``False``.
@@ -388,6 +389,59 @@ async def read_session_nodes(backend: Any, root: str) -> SessionNodes:
         state[node_id] = str(entry.get("status") or UNRECORDED)
         has_output[node_id] = bool(entry.get("has_output"))
     return SessionNodes(owner=owner, state=state, has_output=has_output)
+
+
+NOT_EXECUTED = "not_executed"
+"""A node whose branch was not taken: terminal, never dispatched, and without output."""
+
+_TALLY_ORDER = ("completed", "failed", "skipped", "cancelled", NOT_EXECUTED)
+
+
+def tally_node_statuses(statuses: Iterable[str]) -> dict[str, int]:
+    """Count a run's nodes by terminal state.
+
+    ``not_executed`` appears only when at least one node is in it, so a run without
+    branches carries exactly ``total``, ``completed``, ``failed``, ``skipped`` and
+    ``cancelled``.
+
+    Args:
+        statuses (`Iterable[str]`):
+            One status per node of the run.
+
+    Returns:
+        `dict[str, int]`:
+            ``total``, then one count per terminal state, in a fixed order.
+    """
+    counted = list(statuses)
+    tally: dict[str, int] = {"total": len(counted)}
+    for status in _TALLY_ORDER:
+        count = counted.count(status)
+        if status == NOT_EXECUTED and not count:
+            continue
+        tally[status] = count
+    return tally
+
+
+def format_tally(summary: Mapping[str, int]) -> str:
+    """One run's tallies as one line, naming the not-executed count only when there is one.
+
+    Args:
+        summary (`Mapping[str, int]`):
+            A tally as :func:`tally_node_statuses` builds it; a missing count reads as 0.
+
+    Returns:
+        `str`:
+            E.g. ``"1 completed, 0 failed, 0 cancelled, 0 skipped, 1 not executed (of 2)"``.
+    """
+    parts = [
+        f"{summary.get('completed', 0)} completed",
+        f"{summary.get('failed', 0)} failed",
+        f"{summary.get('cancelled', 0)} cancelled",
+        f"{summary.get('skipped', 0)} skipped",
+    ]
+    if summary.get(NOT_EXECUTED):
+        parts.append(f"{summary[NOT_EXECUTED]} not executed")
+    return ", ".join(parts) + f" (of {summary.get('total', 0)})"
 
 
 def make_run_id() -> str:

@@ -53,8 +53,9 @@ from raven.utils.scratch import ScratchDir
 
 _FILENAME = "subagent_acp_capabilities.json"
 
-# Teardown budget. A killpg'd process group should be reaped at once; the bound
-# exists so a wedged child can never hold a verify open indefinitely.
+# Teardown budget. A close gives the agent its grace (at most five seconds, and
+# none past the moment it exits), then ends the tree, so this bound only exists so
+# a wedged child can never hold a verify open indefinitely.
 _CLOSE_TIMEOUT_S = 10.0
 
 # The same four values as ``probe.ProbeStatus``, deliberately: the /subagents UI

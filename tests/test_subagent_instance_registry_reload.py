@@ -113,3 +113,28 @@ class TestOurOwnWritesDoNotCauseARereadThatLosesThem:
         on_disk = json.loads(path.read_text(encoding="utf-8"))
         handles = sorted(str(r["handle"]) for r in on_disk["instances"])
         assert handles == ["first", "from-elsewhere", "mine"]
+
+
+class TestARowTheFileCannotHoldGoesNoFurther:
+    @pytest.mark.asyncio
+    async def test_a_later_write_from_another_session_still_lands(self, tmp_path: Path) -> None:
+        """A text the file cannot encode fails its own write, and that write alone.
+
+        Every session of the process shares the cache, and ``_flush`` writes the whole of it
+        back: a row left in it after its own write failed made every later write fail the same
+        way, whichever session made it, until the process restarted.
+        """
+        path = tmp_path / "reg.json"
+        _write(path, [_row("s1", "first")])
+        registry = InstanceRegistry(path)
+        unencodable = "asks how " + chr(0xD83D) + " to configure it"
+
+        with pytest.raises(UnicodeEncodeError):
+            await registry.upsert_dag_node(
+                "s2", "r1", "triage", "Raven-Research", "completed", route_evidence=unencodable
+            )
+        await registry.commit("s1", "Raven-Research", "mine", "agent-id-1")
+
+        on_disk = json.loads(path.read_text(encoding="utf-8"))
+        assert sorted(str(r["handle"]) for r in on_disk["instances"]) == ["first", "mine"]
+        assert registry.list_instances("s2") == []

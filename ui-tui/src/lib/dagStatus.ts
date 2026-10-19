@@ -9,7 +9,7 @@
 import { stringWidth } from '@hermes/ink'
 
 import type { DagRunNode, DagRunNodeStatus, DagRunState } from '../domain/dagRun.js'
-import type { DagNodeDetail } from '../rpc/index.js'
+import type { DagNodeDetail, DagNotExecutedReason } from '../rpc/index.js'
 import type { Theme } from '../theme.js'
 
 import {
@@ -31,12 +31,51 @@ export const DAG_STATUS_GLYPH: Record<DagRunNodeStatus, { color: (t: Theme) => s
   completed: { color: t => t.color.statusGood, glyph: '✓' },
   failed: { color: t => t.color.error, glyph: '✗' },
   skipped: { color: t => t.color.muted, glyph: '⊘' },
+  not_executed: { color: t => t.color.muted, glyph: '◌' },
   cancelled: { color: t => t.color.error, glyph: '⊗' },
   interrupted: { color: t => t.color.warn, glyph: '■' },
   exception: { color: t => t.color.warn, glyph: '⚠' }
 }
 
 const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? '' : 's'}`
+
+// Why a branch left a node out, in the words a row has room for.
+const REASON_WORDS: Record<DagNotExecutedReason, string> = {
+  upstream_not_executed: 'upstream not executed',
+  when_false: 'not selected',
+  when_unknown: 'decision missing'
+}
+
+// Empty for a reason this client has no words for, which reads as no reason. `hasOwn`
+// rather than a truthy lookup: `constructor` and `__proto__` are not reasons, and the
+// prototype's values for them are not text a row can print.
+const reasonWords = (reason: DagNotExecutedReason | undefined): string =>
+  (reason && Object.hasOwn(REASON_WORDS, reason) && REASON_WORDS[reason]) || ''
+
+// `[]` is a decision that chose nothing, and is said so.
+const routesText = (routes: readonly string[]): string => (routes.length > 0 ? routes.join(', ') : '(none)')
+
+/**
+ * What a branch did to a node, as the short text that opens its detail line:
+ * why it was left out, or what a decision node selected.
+ *
+ * A not-executed node whose reason never reached the client says only that. A
+ * run reloaded before it finished reads its reasons off registry rows, whose
+ * writes are best-effort and can be dropped, and a cause is not something to
+ * guess at. `selectedRoutes` is read by presence: `[]` is a decision that chose
+ * nothing, `undefined` one not made.
+ */
+export const dagNodeOutcome = (node: Pick<DagRunNode, 'reason' | 'selectedRoutes' | 'status'>): string => {
+  if (node.status === 'not_executed') {
+    return reasonWords(node.reason) || 'not executed'
+  }
+
+  if (node.selectedRoutes === undefined) {
+    return ''
+  }
+
+  return `→ ${routesText(node.selectedRoutes)}`
+}
 
 // Markdown furniture opening a line: a heading marker, a bullet, an ordered-list
 // number, or a blockquote. The line reads as prose without it, and a row this
@@ -165,6 +204,7 @@ export const dagRunTally = (run: DagRunState): { count: number; status: DagRunNo
     ['pending', counted('pending')],
     ['failed', fromManifest('failed', run.summary?.failed)],
     ['skipped', fromManifest('skipped', run.summary?.skipped)],
+    ['not_executed', fromManifest('not_executed', run.summary?.not_executed)],
     ['cancelled', fromManifest('cancelled', run.summary?.cancelled)],
     ['interrupted', counted('interrupted')]
   ]
@@ -179,10 +219,18 @@ export const dagRunTally = (run: DagRunState): { count: number; status: DagRunNo
  * would read as a node that did nothing. A node that has not started says what
  * it is waiting as instead -- the column then reads down as time-or-state
  * rather than going blank for the half of the graph that has not run yet.
+ *
+ * Empty for a node a branch left out whatever it carries: `dag.get` hands back
+ * the stamps the sweep gave it when it decided against it, which date that
+ * decision and not a run.
  */
 export const dagNodeElapsed = (node: Pick<DagRunNode, 'endedAt' | 'startedAt' | 'status'>, now: number): string => {
   if (node.status === 'pending') {
     return 'queued'
+  }
+
+  if (node.status === 'not_executed') {
+    return ''
   }
 
   if (node.startedAt === undefined) {
@@ -200,9 +248,14 @@ export const dagNodeElapsed = (node: Pick<DagRunNode, 'endedAt' | 'startedAt' | 
  * only thing either transport (live frames, `dag.get` snapshot) timestamps.
  * `undefined` when nothing has started, which is also every run whose dir
  * predates the timestamps.
+ *
+ * Only the nodes that ran count: one a branch left out carries the stamp of the
+ * sweep that decided against it, which must not widen the window of the nodes
+ * that did.
  */
 export const dagRunElapsedMs = (run: DagRunState, now: number): number | undefined => {
-  const starts = run.nodes.map(node => node.startedAt).filter((ms): ms is number => ms !== undefined)
+  const ran = run.nodes.filter(node => node.status !== 'not_executed')
+  const starts = ran.map(node => node.startedAt).filter((ms): ms is number => ms !== undefined)
 
   if (starts.length === 0) {
     return undefined
@@ -210,7 +263,7 @@ export const dagRunElapsedMs = (run: DagRunState, now: number): number | undefin
 
   const started = Math.min(...starts)
   const live = run.nodes.some(node => node.status === 'running' || node.status === 'pending')
-  const ends = run.nodes.map(node => node.endedAt).filter((ms): ms is number => ms !== undefined)
+  const ends = ran.map(node => node.endedAt).filter((ms): ms is number => ms !== undefined)
 
   if (live || ends.length === 0) {
     return Math.max(0, now - started)
@@ -242,29 +295,76 @@ export const dagTraceBoxRows = (status: DagRunNodeStatus): number =>
 export const dagDetailRoom = (inner: number, ordinalWidth: number): number =>
   Math.max(0, inner - (2 + ordinalWidth + 2))
 
+export interface DagRowDetail {
+  deps: string
+  error: string
+  evidence: string
+  guard: string
+  outcome: string
+  summary: string
+}
+
+/** Whether a node's row has anything to say under its name at all. */
+export const hasDagRowDetail = (detail: DagRowDetail): boolean => Object.values(detail).some(Boolean)
+
 /**
- * What a node's row says under its name: the line it was dispatched with, what
- * it is still waiting on, and how it failed.
+ * What a node's row says under its name: what a branch did to it, the line it
+ * was dispatched with, what it is still waiting on, the guard it runs under,
+ * the evidence behind its selection, and how it failed.
  *
  * One place, because the panel draws it and the transcript's height model has
  * to know whether it exists. Clipped in cells here rather than left to ink's
  * `truncate-end`, which is a no-op on the nested Texts this is drawn as.
  *
- * The three share `room` in the order a reader needs them: the error first,
- * then the dependency list, then the summary with what is left.
+ * The parts share `room` in the order a reader needs them: the error first,
+ * then what a branch did (why the node was left out, or what it selected), the
+ * dependency list, the guard, the evidence, and the summary with what is left.
+ * With no branch part present the error, the dependencies and the summary share
+ * `room` exactly as they would alone.
  */
 export const dagRowDetail = (
-  node: Pick<DagRunNode, 'dependsOn' | 'error' | 'id' | 'nodeSummary' | 'promptTemplate'>,
+  node: Pick<
+    DagRunNode,
+    | 'dependsOn'
+    | 'error'
+    | 'id'
+    | 'nodeSummary'
+    | 'promptTemplate'
+    | 'reason'
+    | 'routeEvidence'
+    | 'selectedRoutes'
+    | 'status'
+    | 'when'
+  >,
   drawn: ReadonlySet<string> | null,
   room: number
-): { deps: string; error: string; summary: string } => {
+): DagRowDetail => {
   const error = node.error ? clipToWidth(node.error, Math.max(0, room)) : ''
-  const afterError = room - (error ? stringWidth(error) : 0)
+  const outcomeText = dagNodeOutcome(node)
+  const guardText = node.when?.trim() ? `when ${node.when.trim()}` : ''
+  const evidenceText = node.routeEvidence?.trim() ?? ''
+  // The error's own two-cell gap is not part of the budgets below. Beside a
+  // branch's parts it is taken here, or a full line runs past its frame.
+  const afterError =
+    room - (error ? stringWidth(error) : 0) - (error && (outcomeText || guardText || evidenceText) ? 2 : 0)
+  const outcome = outcomeText && afterError > 4 ? clipToWidth(outcomeText, afterError - 2) : ''
+  const afterOutcome = afterError - (outcome ? stringWidth(outcome) + 2 : 0)
   const wanted = dagNodeDeps(node, drawn).trim()
-  const deps = wanted && afterError > 4 ? clipToWidth(wanted, afterError - 2) : ''
-  const left = afterError - (deps ? stringWidth(deps) + 2 : 0)
+  const deps = wanted && afterOutcome > 4 ? clipToWidth(wanted, afterOutcome - 2) : ''
+  const afterDeps = afterOutcome - (deps ? stringWidth(deps) + 2 : 0)
+  const guard = guardText && afterDeps > 4 ? clipToWidth(guardText, afterDeps - 2) : ''
+  const afterGuard = afterDeps - (guard ? stringWidth(guard) + 2 : 0)
+  const evidence = evidenceText && afterGuard > 8 ? `"${clipToWidth(evidenceText, afterGuard - 4)}"` : ''
+  const left = afterGuard - (evidence ? stringWidth(evidence) + 2 : 0)
 
-  return { deps, error, summary: left > 4 ? dagNodeSummary(node.nodeSummary, node.promptTemplate, left) : '' }
+  return {
+    deps,
+    error,
+    evidence,
+    guard,
+    outcome,
+    summary: left > 4 ? dagNodeSummary(node.nodeSummary, node.promptTemplate, left) : ''
+  }
 }
 
 /**
@@ -280,6 +380,7 @@ export const dagRunHeadline = (run: DagRunState): string => {
   const completed = run.done ? (run.summary?.completed ?? counted('completed')) : counted('completed')
   const failed = run.done ? (run.summary?.failed ?? counted('failed')) : counted('failed')
   const skipped = run.done ? (run.summary?.skipped ?? counted('skipped')) : counted('skipped')
+  const notExecuted = run.done ? (run.summary?.not_executed ?? counted('not_executed')) : counted('not_executed')
   const cancelled = run.done ? (run.summary?.cancelled ?? counted('cancelled')) : counted('cancelled')
 
   const parts = [plural(total, 'node'), `${completed} done`]
@@ -298,6 +399,10 @@ export const dagRunHeadline = (run: DagRunState): string => {
 
   if (skipped > 0) {
     parts.push(`${skipped} skipped`)
+  }
+
+  if (notExecuted > 0) {
+    parts.push(`${notExecuted} not executed`)
   }
 
   if (cancelled > 0) {
@@ -361,6 +466,33 @@ const traceLines = (detail: DagNodeDetail): string[] => {
   return out
 }
 
+/** What a node's paged view reads off the run the command found it in: what a
+ *  branch made of it. `dag.node` carries none of this. */
+export type DagNodeBranch = Pick<DagRunNode, 'reason' | 'routeEvidence' | 'selectedRoutes' | 'status' | 'when'>
+
+// The lines under a paged node's title that say what a branch made of it, each
+// only when it did. The evidence is whole here, where the panel's one line has to
+// clip it: the page scrolls, and the quote is how a reader checks the judge's
+// reading against the node's own words.
+const branchLines = (node: DagNodeBranch | undefined): string[] => {
+  const guard = node?.when?.trim()
+  const evidence = node?.routeEvidence?.trim()
+  const reason = reasonWords(node?.reason)
+
+  const outcome =
+    node?.status === 'not_executed'
+      ? `not executed${reason ? `: ${reason}` : ''}`
+      : node?.selectedRoutes === undefined
+        ? ''
+        : `selected: ${routesText(node.selectedRoutes)}`
+
+  return [
+    ...(guard ? [`when ${guard}`] : []),
+    ...(outcome ? [outcome] : []),
+    ...(evidence ? [`evidence: "${evidence}"`] : [])
+  ]
+}
+
 /**
  * One node's rendered prompt, its trace, and its output, as a transcript block.
  *
@@ -371,8 +503,12 @@ const traceLines = (detail: DagNodeDetail): string[] => {
  *
  * Between prompt and output sits the trace: every step the node took to get
  * from one to the other, or nothing at all when it took none.
+ *
+ * Under the title, when the node has them: its guard, what a branch did to it
+ * (why it was left out, or what it selected) and the evidence behind a
+ * selection. A node with none of these pages as it always did.
  */
-export const formatDagNodeDetail = (detail: DagNodeDetail): string => {
+export const formatDagNodeDetail = (detail: DagNodeDetail, branch?: DagNodeBranch): string => {
   const size = detail.output_truncated
     ? ` (${detail.output_chars} chars, truncated)`
     : detail.output_chars > 0
@@ -382,6 +518,7 @@ export const formatDagNodeDetail = (detail: DagNodeDetail): string => {
 
   return [
     `── ${detail.node} @ ${detail.run_id}${size} ──`,
+    ...branchLines(branch),
     'prompt:',
     detail.prompt ?? '  (no prompt — the node never ran)',
     ...(trace.length > 0 ? ['trace:', ...trace] : []),

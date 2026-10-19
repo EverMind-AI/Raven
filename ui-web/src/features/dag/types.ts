@@ -14,6 +14,7 @@ export type NodeStatus =
   | 'failed'
   | 'skipped'
   | 'interrupted'
+  | 'not_executed'
 
 /* Where one of a node's inputs came from. A bare string is a literal the caller
    wrote inline; the other two name something to read. Kept as a union rather
@@ -47,6 +48,11 @@ export interface DagNode {
      read the same on every surface that draws this field. Only the tasks
      board's own card reads it; every other DagNode caller leaves it unset. */
   tool_call_count?: number | null
+  /* What a decision node selected, once it has decided -- the one branch fact a graph node holds. The
+     tasks board fills it from its rows and `BoardCard` reads it. An empty list is a decision that
+     chose nothing; absent is a node that has not decided (or never decides), and a plain node never
+     carries the key. */
+  selected_routes?: string[]
 }
 
 /* What `dag.run_completed` reports. `total` is the server's count and can

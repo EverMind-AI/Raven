@@ -1549,6 +1549,120 @@ class TestDagProgressSink:
             "ended_at": 42,
         }
 
+    async def test_run_started_carries_the_declaration_of_a_node_that_branches(self):
+        """What a decision node chooses between and what a guarded node waits on
+        are the graph's structure, so the live graph can draw them before any
+        node reports. The runner sends each key only where the node declares it;
+        a plain node's entry keeps exactly the keys it had."""
+        emitter = FakeEmitter()
+        sink = make_dag_progress_sink(emitter)
+
+        await sink(
+            "tui:c1",
+            "dag_run_started",
+            {
+                "run_id": "dag-1",
+                "nodes": [
+                    {"id": "triage", "subagent": "echo", "depends_on": [], "routes": ["bug", "docs"], "select": "one"},
+                    {"id": "fix", "subagent": "echo", "depends_on": ["triage"], "when": "triage.bug"},
+                    {
+                        "id": "audit",
+                        "subagent": "echo",
+                        "depends_on": ["triage"],
+                        "routes": ["a", "b"],
+                        "select": "many",
+                        "when": "triage.bug or triage.docs",
+                    },
+                    {"id": "reply", "subagent": "echo", "depends_on": ["triage"]},
+                ],
+            },
+        )
+
+        triage, fix, audit, reply = emitter.emitted[0][1]["payload"]["nodes"]
+        assert triage == {
+            "id": "triage",
+            "subagent": "echo",
+            "depends_on": [],
+            "routes": ["bug", "docs"],
+            "select": "one",
+        }
+        assert fix == {"id": "fix", "subagent": "echo", "depends_on": ["triage"], "when": "triage.bug"}
+        assert (audit["routes"], audit["select"], audit["when"]) == (["a", "b"], "many", "triage.bug or triage.docs")
+        assert reply == {"id": "reply", "subagent": "echo", "depends_on": ["triage"]}
+
+    async def test_run_started_without_a_declaration_is_what_it_was_before_branches(self):
+        emitter = FakeEmitter()
+        sink = make_dag_progress_sink(emitter)
+
+        await sink(
+            "tui:c1",
+            "dag_run_started",
+            {"run_id": "dag-1", "nodes": [{"id": "a", "subagent": "x", "depends_on": []}]},
+        )
+
+        assert emitter.emitted[0][1]["payload"] == {
+            "run_id": "dag-1",
+            "nodes": [{"id": "a", "subagent": "x", "depends_on": []}],
+        }
+
+    async def test_node_updated_carries_the_reason_and_the_selection(self):
+        emitter = FakeEmitter()
+        sink = make_dag_progress_sink(emitter)
+
+        await sink(
+            "tui:c1",
+            "dag_node_updated",
+            {"run_id": "dag-1", "node": "fix", "status": "not_executed", "reason": "when_false"},
+        )
+        await sink(
+            "tui:c1",
+            "dag_node_updated",
+            {
+                "run_id": "dag-1",
+                "node": "triage",
+                "status": "completed",
+                "started_at": 10,
+                "ended_at": 42,
+                "selected_routes": ["docs"],
+                "route_evidence": "the reporter asks how to configure it",
+            },
+        )
+
+        not_executed, decided = (event["payload"] for _key, event in emitter.emitted)
+        assert not_executed == {"run_id": "dag-1", "node": "fix", "status": "not_executed", "reason": "when_false"}
+        assert decided["selected_routes"] == ["docs"]
+        assert decided["route_evidence"] == "the reporter asks how to configure it"
+        assert (decided["started_at"], decided["ended_at"]) == (10, 42)
+
+    async def test_an_empty_selection_is_sent_as_a_selection(self):
+        """A `select: many` decision that chose nothing has still decided. The
+        frame keeps `[]`, so a client can tell it from a node that carries no
+        selection at all -- which is what dropping a falsy value would say."""
+        emitter = FakeEmitter()
+        sink = make_dag_progress_sink(emitter)
+
+        await sink(
+            "tui:c1",
+            "dag_node_updated",
+            {"run_id": "dag-1", "node": "triage", "status": "completed", "selected_routes": []},
+        )
+
+        assert emitter.emitted[0][1]["payload"]["selected_routes"] == []
+
+    async def test_node_updated_is_assembled_field_by_field(self):
+        """A key the wire has no field for does not ride along: the guard is the
+        run-started frame's, and the contract declares it nowhere else."""
+        emitter = FakeEmitter()
+        sink = make_dag_progress_sink(emitter)
+
+        await sink(
+            "tui:c1",
+            "dag_node_updated",
+            {"run_id": "dag-1", "node": "fix", "status": "running", "when": "triage.bug", "routes": ["x", "y"]},
+        )
+
+        assert emitter.emitted[0][1]["payload"] == {"run_id": "dag-1", "node": "fix", "status": "running"}
+
     async def test_run_completed_flattens_the_manifest_and_drops_node_output_text(self):
         """``terminal_outputs`` holds every sink node's full text -- already in the
         tool result the model and the transcript both get. Repeating it here would
@@ -1582,6 +1696,124 @@ class TestDagProgressSink:
             {"node": "b", "status": "failed", "error": "boom"},
         ]
         assert "terminal_outputs" not in payload
+
+    async def test_run_completed_carries_the_not_executed_count_and_status(self):
+        emitter = FakeEmitter()
+        sink = make_dag_progress_sink(emitter)
+
+        await sink(
+            "tui:c1",
+            "dag_run_completed",
+            {
+                "run_id": "dag-1",
+                "manifest": {
+                    "dir": "/w/.ravenx_dag/dag-1",
+                    "summary": {
+                        "total": 2,
+                        "completed": 1,
+                        "failed": 0,
+                        "skipped": 0,
+                        "cancelled": 0,
+                        "not_executed": 1,
+                    },
+                    "files": [
+                        {"node": "triage", "status": "completed", "selected_routes": ["docs"]},
+                        {"node": "fix", "status": "not_executed", "reason": "when_false"},
+                    ],
+                },
+            },
+        )
+
+        payload = emitter.emitted[0][1]["payload"]
+        assert payload["summary"]["not_executed"] == 1
+        assert [(f["node"], f["status"]) for f in payload["files"]] == [
+            ("triage", "completed"),
+            ("fix", "not_executed"),
+        ]
+
+    async def test_run_completed_files_carry_what_each_node_decided(self):
+        """The completion frame closes the graph from `files`, so a file entry that
+        dropped the reason and the selection would let a client overwrite what the
+        node frames had already told it. `[]` is a selection: a `select: many`
+        decision that chose nothing has still decided."""
+        emitter = FakeEmitter()
+        sink = make_dag_progress_sink(emitter)
+
+        await sink(
+            "tui:c1",
+            "dag_run_completed",
+            {
+                "run_id": "dag-1",
+                "manifest": {
+                    "dir": "/w/.ravenx_dag/dag-1",
+                    "files": [
+                        {
+                            "node": "triage",
+                            "status": "completed",
+                            "selected_routes": ["docs"],
+                            "route_evidence": "the reporter asks how to configure it",
+                        },
+                        {"node": "scan", "status": "completed", "selected_routes": []},
+                        {"node": "fix", "status": "not_executed", "reason": "when_false"},
+                        {"node": "reply", "status": "completed", "output_file": "/w/.ravenx_dag/dag-1/reply.out.md"},
+                    ],
+                },
+            },
+        )
+
+        triage, scan, fix, reply = emitter.emitted[0][1]["payload"]["files"]
+        assert triage == {
+            "node": "triage",
+            "status": "completed",
+            "selected_routes": ["docs"],
+            "route_evidence": "the reporter asks how to configure it",
+        }
+        assert scan == {"node": "scan", "status": "completed", "selected_routes": []}
+        assert fix == {"node": "fix", "status": "not_executed", "reason": "when_false"}
+        assert reply == {"node": "reply", "status": "completed", "output_file": "/w/.ravenx_dag/dag-1/reply.out.md"}
+
+    async def test_run_completed_files_are_assembled_field_by_field(self):
+        """A manifest entry holds far more than the wire declares for a file (the
+        clocks, the paths, the instance), under `additionalProperties: false`. A
+        no-branch entry keeps exactly the four keys it had, whatever else rides on it."""
+        emitter = FakeEmitter()
+        sink = make_dag_progress_sink(emitter)
+        entry = {
+            "subagent": "echo",
+            "depends_on": ["a"],
+            "instance": "shared",
+            "instance_auto": False,
+            "started_at": 1,
+            "ended_at": 2,
+            "prompt_file": "/w/p.md",
+        }
+
+        await sink(
+            "tui:c1",
+            "dag_run_completed",
+            {
+                "run_id": "dag-1",
+                "manifest": {
+                    "dir": "/w/.ravenx_dag/dag-1",
+                    "files": [
+                        {"node": "a", "status": "completed", "output_file": "/w/a.out.md", "error": None, **entry},
+                        {"node": "b", "status": "failed", "error": "boom", **entry},
+                        {
+                            "node": "c",
+                            "status": "completed",
+                            "selected_routes": ["x"],
+                            "route_evidence": None,
+                            **entry,
+                        },
+                    ],
+                },
+            },
+        )
+
+        a, b, c = emitter.emitted[0][1]["payload"]["files"]
+        assert a == {"node": "a", "status": "completed", "output_file": "/w/a.out.md"}
+        assert b == {"node": "b", "status": "failed", "error": "boom"}
+        assert c == {"node": "c", "status": "completed", "selected_routes": ["x"]}, "a null quote is no key"
 
     async def test_run_completed_always_carries_files_even_with_no_manifest_to_flatten(self):
         """A run that ends without a manifest still has to close its graph.

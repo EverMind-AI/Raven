@@ -26,7 +26,7 @@ import json
 import re
 from typing import Any
 
-from raven.agent.subagent.dag_store import memory_path_in, output_path_in, prompt_path_in
+from raven.agent.subagent.dag_store import memory_path_in, output_path_in, prompt_path_in, tally_node_statuses
 
 # Both ids are minted by raven itself (``make_run_id`` / the graph schema's
 # ``_ID_PATTERN``), but they arrive here straight off a web request, so they
@@ -132,6 +132,67 @@ async def _artifact_paths(backend: Any, entry: dict, nodes_root: str, node_id: s
     )
 
 
+def branch_fields(entry: dict, node: dict) -> dict:
+    """The per-node fields only a run that branches has, each present only when something carries it.
+
+    What happened -- ``reason``, ``selected_routes``, ``route_evidence`` -- is the
+    manifest's, or its registry row's until the manifest lands (``registry_outcome``).
+    What the node was asked to branch on -- ``routes``, ``select``, ``when`` -- is
+    ``graph.json``'s, because the manifest records outcomes and not requests. Public
+    because two reads answer for the same node and hand this dict over RPC as it is,
+    ``dag.get`` and ``tasks.list``; deriving it twice is how they would come to
+    disagree. A node with nothing to say here gets no key rather than a null, and a
+    run that never branches has only the keys of a plain node. An empty
+    ``selected_routes`` stays: a ``select: many`` decision that chose nothing has
+    still decided.
+
+    A node branches when ``routes`` is a mapping with a route in it, which is how the
+    runner reads it. Such a node gets ``routes``, the names in declaration order (the
+    conditions are the judge's alone), and the ``select`` that applies, ``"one"`` when
+    the graph left it unset: the run-started event says the same, so no client derives
+    the default. Any other node gets neither, whatever else the file says. A blank
+    ``when`` is no guard, to the scheduler and to the run-started event alike, so it
+    is left out like a null; one that is real is kept as declared.
+
+    Args:
+        entry (`dict`):
+            The node's manifest entry. For a node the manifest does not name (a run
+            that has not finalized), the outcome its registry row carries, or ``{}``.
+        node (`dict`):
+            The node as ``graph.json`` records it.
+    """
+    routes, when = node.get("routes"), node.get("when")
+    names = list(routes) if isinstance(routes, dict) else []
+    fields = {
+        "reason": entry.get("reason"),
+        "selected_routes": entry.get("selected_routes"),
+        "route_evidence": entry.get("route_evidence"),
+        "routes": names or None,
+        "select": (node.get("select") or "one") if names else None,
+        "when": when if isinstance(when, str) and when.strip() else None,
+    }
+    return {key: value for key, value in fields.items() if value is not None}
+
+
+def registry_outcome(row: dict) -> dict:
+    """A ``dag-node`` registry row's branch outcome, in the manifest entry's spelling.
+
+    The runner writes ``reason``, ``selectedRoutes`` and ``routeEvidence`` on the row
+    of a node a branch decided, and until the manifest lands that row is the only
+    record of the decision. Public, beside ``branch_fields`` and for the same reason:
+    ``dag.get`` and ``tasks.list`` both read an unfinalized run's outcome off the row,
+    and deriving it twice is how they would come to disagree. Only the keys the row
+    carries; an empty ``selected_routes`` stays, since a decision that chose nothing
+    has still decided.
+
+    Args:
+        row (`dict`):
+            The node's ``dag-node`` row in the instance registry.
+    """
+    spelled = {"reason": "reason", "selectedRoutes": "selected_routes", "routeEvidence": "route_evidence"}
+    return {ours: row[theirs] for theirs, ours in spelled.items() if row.get(theirs) is not None}
+
+
 async def read_run(backend: Any, root: str, run_id: str, nodes_root: str) -> dict:
     """Rebuild one run's manifest-shaped payload from its run dir.
 
@@ -140,6 +201,10 @@ async def read_run(backend: Any, root: str, run_id: str, nodes_root: str) -> dic
     renderer. ``prompt_template`` and ``inputs`` are added per node -- they live
     only in ``graph.json``, and together they are what the caller shows as a
     node's input: the template alone leaves every ``{{ inputs.k }}`` unexplained.
+    A run that branches adds ``reason``, ``selected_routes``, ``route_evidence``,
+    ``routes``, ``select`` and ``when`` to the nodes that have them, and
+    ``not_executed`` to ``summary`` when a node is in it; a run that does not has
+    neither.
 
     ``finalized`` says whether ``manifest.json`` was present. When it was not,
     every node reports ``pending`` and the caller is expected to overlay live
@@ -201,10 +266,10 @@ async def read_run(backend: Any, root: str, run_id: str, nodes_root: str) -> dic
                 # about where k came from. Only from graph.json -- the manifest
                 # records what happened, not what was requested.
                 "inputs": node.get("inputs") if isinstance(node.get("inputs"), dict) else None,
+                **branch_fields(entry, node),
             }
         )
 
-    statuses = [f["status"] for f in files]
     return {
         "run_id": run_id,
         "dir": rdir,
@@ -219,13 +284,7 @@ async def read_run(backend: Any, root: str, run_id: str, nodes_root: str) -> dic
         "task_summary": graph.get("task_summary"),
         "files": files,
         "terminal_outputs": [],
-        "summary": {
-            "total": len(files),
-            "completed": statuses.count("completed"),
-            "failed": statuses.count("failed"),
-            "skipped": statuses.count("skipped"),
-            "cancelled": statuses.count("cancelled"),
-        },
+        "summary": tally_node_statuses(f["status"] for f in files),
     }
 
 
@@ -329,4 +388,4 @@ async def _read_transcript(backend: Any, path: str) -> list[dict]:
     return entries
 
 
-__all__ = ["DagReadError", "read_node", "read_run", "run_dir_of"]
+__all__ = ["DagReadError", "branch_fields", "read_node", "read_run", "registry_outcome", "run_dir_of"]

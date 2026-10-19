@@ -87,6 +87,23 @@ A bound rather than an estimate: the walk returns well inside a second, and
 ``close`` has to finish whatever ``taskkill`` does.
 """
 
+_TEARDOWN_GRACE_S = 1.0
+"""How long a local agent is given, once its stdin closes, to end on its own before its process tree is.
+
+What an agent that holds work outside its own process -- a turn on a host it is a client of --
+needs to call that work off before it goes. One that exits at once costs nothing: the wait
+ends when the agent does.
+"""
+
+_TEARDOWN_GRACE_MAX_S = 5.0
+"""The most grace an agent can ask for (``SHUTDOWN_GRACE_META``).
+
+Callers bound a whole close at ten seconds (the pool's drop, the probe's
+handshake), and the drain and the reap after the grace take up to two more.
+"""
+
+_GRACE_POLL_S = 0.02
+
 
 async def _end(pgid: int, proc: Any) -> None:
     """End the server and what it started: the process group where there is one, else the tree by pid.
@@ -122,6 +139,12 @@ async def _end(pgid: int, proc: Any) -> None:
         proc.kill()
     except OSError:
         pass
+
+
+def _retrieved(task: asyncio.Task) -> None:
+    """Read the outcome of a task nobody waits on, so a failure is not reported as never retrieved."""
+    if not task.cancelled():
+        task.exception()
 
 
 class Endpoint(Protocol):
@@ -160,6 +183,8 @@ class _ProcessEndpoint:
     def __init__(self, proc: asyncio.subprocess.Process, pgid: int, job: windows.JobObject | None = None) -> None:
         self.proc = proc
         self._job = job
+        self.grace: float | None = None
+        """The grace ``end`` gives the agent, when its handshake asked for one; else ``_TEARDOWN_GRACE_S``."""
         # Captured at spawn by the caller, not re-derived here: with
         # start_new_session the launcher's pid doubles as the group's pgid, and
         # once the launcher exits its pid can be recycled onto an unrelated
@@ -195,10 +220,33 @@ class _ProcessEndpoint:
         return await self.proc.stderr.readline()
 
     async def end(self) -> None:
-        if self._job is not None:
-            self._job.close()
-        else:
-            await _end(self._pgid, self.proc)
+        try:
+            # PID-only cleanup needs a live launcher for taskkill to walk its children.
+            owns_tree = self._job is not None or hasattr(os, "killpg")
+            if owns_tree and self.proc.returncode is None and self.proc.stdin is not None:
+                try:
+                    self.proc.stdin.close()
+                except OSError:
+                    pass
+                else:
+                    await self._exited_within(_TEARDOWN_GRACE_S if self.grace is None else self.grace)
+        finally:
+            if self._job is not None:
+                self._job.close()
+            else:
+                await _end(self._pgid, self.proc)
+
+    async def _exited_within(self, grace: float) -> None:
+        """Wait up to ``grace`` for the agent itself to exit.
+
+        Polled rather than awaited: ``Process.wait`` settles only once every pipe
+        has closed as well, so a descendant that inherited the agent's stdout
+        would hold the wait to its end after the agent was long gone.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + grace
+        while self.proc.returncode is None and loop.time() < deadline:
+            await asyncio.sleep(_GRACE_POLL_S)
 
     async def wait(self) -> int | None:
         return await self.proc.wait()
@@ -353,6 +401,8 @@ class AcpClient:
         self._unsettled_cancels: set[str] = set()
         self._stderr: deque[str] = deque(maxlen=_STDERR_LINES)
         self._closed = False
+        # What the agent's last `initialize` answer asked for under SHUTDOWN_GRACE_META.
+        self._asked_grace: float | None = None
         self._reader_task: asyncio.Task | None = None
         self._stderr_task: asyncio.Task | None = None
         # Answering runs off the read loop: a handler may block on a human
@@ -514,8 +564,10 @@ class AcpClient:
         outside stops before releasing the subprocess transport, whose
         ``__del__`` then runs after the loop is closed and prints
         ``RuntimeError: Event loop is closed`` over whatever the user is looking
-        at. So both waits below give up on their own and the teardown always
-        runs to its end.
+        at. So the waits below give up on their own, and a close cancelled
+        while the agent is given its grace (``_TEARDOWN_GRACE_S``) still lets
+        go of everything it held before the cancellation goes on: the tree is
+        ended by then either way, and a retry would find the client closed.
 
         A close that is cancelled part-way leaves its launch record on disk, which
         is harmless: the group it names was killed first, and the first sweep after
@@ -524,18 +576,19 @@ class AcpClient:
         if self._closed:
             return
         self._closed = True
-        await self._endpoint.end()
-        for task in (self._reader_task, self._stderr_task):
-            if task is not None:
-                task.cancel()
-        answer_tasks = list(self._answer_tasks)
-        for task in answer_tasks:
-            task.cancel()
+        if isinstance(self._endpoint, _ProcessEndpoint):
+            self._endpoint.grace = self._granted_grace()
+        try:
+            await self._endpoint.end()
+        except asyncio.CancelledError:
+            for task in self._stop_tasks():
+                task.add_done_callback(_retrieved)
+            self._let_go()
+            raise
+        pending_tasks = self._stop_tasks()
         # Awaited, not just cancelled: an un-awaited cancelled task logs a
         # "Task exception was never retrieved" warning on some paths, and the
         # child must be reaped here rather than left as a zombie.
-        pending_tasks = [t for t in (self._reader_task, self._stderr_task) if t is not None]
-        pending_tasks.extend(answer_tasks)
         if pending_tasks:
             done, _ = await asyncio.wait(pending_tasks, timeout=_TEARDOWN_DRAIN_S)
             for task in done:
@@ -550,6 +603,28 @@ class AcpClient:
                     self.name,
                     _TEARDOWN_REAP_S,
                 )
+        self._let_go()
+
+    def _heard_initialize(self, result: Any) -> None:
+        caps = result.get("agentCapabilities") if isinstance(result, dict) else None
+        meta = caps.get("_meta") if isinstance(caps, dict) else None
+        asked = meta.get(protocol.SHUTDOWN_GRACE_META) if isinstance(meta, dict) else None
+        self._asked_grace = float(asked) if isinstance(asked, (int, float)) and not isinstance(asked, bool) else None
+
+    def _granted_grace(self) -> float:
+        if self._asked_grace is None:
+            return _TEARDOWN_GRACE_S
+        return max(_TEARDOWN_GRACE_S, min(self._asked_grace, _TEARDOWN_GRACE_MAX_S))
+
+    def _stop_tasks(self) -> list[asyncio.Task]:
+        """Cancel the read loops and every answer in progress; the tasks, to wait out."""
+        tasks = [t for t in (self._reader_task, self._stderr_task) if t is not None]
+        tasks.extend(self._answer_tasks)
+        for task in tasks:
+            task.cancel()
+        return tasks
+
+    def _let_go(self) -> None:
         self._endpoint.release()
         self._fail_pending(AcpConnectionError(f"acp agent {self.name!r}: connection closed"))
         # Last, so the frames the teardown itself produced are in the file.
@@ -686,8 +761,12 @@ class AcpClient:
                 sent(request_id)
             await self._send(protocol.request(request_id, method, params))
             if timeout is None:
-                return await asyncio.shield(future)
-            return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
+                result = await asyncio.shield(future)
+            else:
+                result = await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
+            if method == "initialize":
+                self._heard_initialize(result)
+            return result
         except asyncio.TimeoutError:
             raise AcpTimeoutError(
                 f"acp agent {self.name!r}: {method} timed out after {timeout}s", method=method

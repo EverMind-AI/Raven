@@ -14,7 +14,7 @@ import asyncio
 import contextlib
 import json
 import time
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
@@ -32,16 +32,26 @@ from raven.agent.subagent.dag_adjudication import (
     deliver_report,
 )
 from raven.agent.subagent.dag_capabilities import AgentCapabilities
-from raven.agent.subagent.dag_graph import DagNodeSpec, SubAgentDagSpec, graph_deps, validate_and_order
+from raven.agent.subagent.dag_graph import (
+    DagNodeSpec,
+    SubAgentDagSpec,
+    graph_deps,
+    guards_of,
+    may_not_execute,
+    validate_and_order,
+)
+from raven.agent.subagent.dag_guard import DONE, Atom, Guard, Value, evaluate
 from raven.agent.subagent.dag_render import render_prompt
 from raven.agent.subagent.dag_store import (
+    NOT_EXECUTED,
     DagRunStore,
     index_guard,
     make_run_id,
     node_live_key,
     read_session_nodes,
+    tally_node_statuses,
 )
-from raven.agent.subagent.dag_verdict import Verdict
+from raven.agent.subagent.dag_verdict import RouteUndeterminedError, Verdict
 from raven.agent.subagent.instances import get_registry, hold_handle
 from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.agent.subagent_memory import (
@@ -54,6 +64,7 @@ from raven.agent.subagent_memory import (
 )
 from raven.context_engine.segments.render import dispatch_language_line
 from raven.contracts.subagent_backend import SubagentNoAnswerError
+from raven.providers.base import bound_llm_detail
 
 # In-context cap for terminal outputs returned to the main agent; the on-disk
 # .out.md always holds the full text.
@@ -196,7 +207,17 @@ async def _watch_stall(
             logger.opt(exception=True).debug("stall watch for node {} skipped a beat", node.id)
 
 
-async def _write_node_status(session_key: str | None, run_id: str, node_id: str, agent: str, status: str) -> None:
+async def _write_node_status(
+    session_key: str | None,
+    run_id: str,
+    node_id: str,
+    agent: str,
+    status: str,
+    *,
+    reason: str | None = None,
+    selected_routes: list[str] | None = None,
+    route_evidence: str | None = None,
+) -> None:
     """Best-effort registry write for one node's status, swallowing any failure.
 
     A status row is never worth failing -- or hanging -- a node over, the same
@@ -206,12 +227,24 @@ async def _write_node_status(session_key: str | None, run_id: str, node_id: str,
     as a ``UnicodeDecodeError`` from ``_load`` -- and it can stall behind lock
     contention; neither may abort or block the node (or, when this runs from
     ``_finalize``'s reconciliation pass, the whole completed run).
+
+    ``reason``, ``selected_routes`` and ``route_evidence`` are the node's branch
+    outcome, present on the same terms as on its finish event and in the manifest.
+    A terminal write passes them, so a run read back before it finalizes still says
+    what a branch decided.
     """
     if not session_key:
         return
+    # Forwarded only when present: a write with no outcome -- every write of a
+    # graph without branches -- passes no keyword, only the five positional arguments.
+    outcome = {
+        key: value
+        for key, value in (("reason", reason), ("selected_routes", selected_routes), ("route_evidence", route_evidence))
+        if value is not None
+    }
     try:
         await asyncio.wait_for(
-            get_registry().upsert_dag_node(session_key, run_id, node_id, agent, status),
+            get_registry().upsert_dag_node(session_key, run_id, node_id, agent, status, **outcome),
             timeout=_REGISTRY_WRITE_TIMEOUT_S,
         )
     except Exception:  # noqa: BLE001 - a status row must never fail or hang a node
@@ -248,6 +281,40 @@ class DagRunResult:
     files: list[dict] = field(default_factory=list)
     summary: dict = field(default_factory=dict)
     replanned_into: str | None = None
+
+
+WHEN_FALSE = "when_false"
+"""Why a node was not executed: its guard is false, so its branch was not selected."""
+WHEN_UNKNOWN = "when_unknown"
+"""Why a node was not executed: its guard is unknown, because a decision it names was never made."""
+UPSTREAM_NOT_EXECUTED = "upstream_not_executed"
+"""Why a node was not executed: no dependency it has in the graph was executed."""
+
+
+@dataclass
+class BranchState:
+    """Everything branching needs, built once per run and threaded like ``unsettled``.
+
+    Attributes:
+        guards (`dict[str, Guard]`):
+            Each guarded node's parsed ``when``, by node id.
+        skippable (`frozenset[str]`):
+            The nodes that may not execute (``dag_graph.may_not_execute``).
+        chosen (`dict[str, tuple[str, ...]]`):
+            Each decision node's selection once its verdict has landed, in declared
+            order. ``()`` is a selection -- a ``select: many`` node that found no
+            condition met -- and is not the same as no entry at all.
+        evidence (`dict[str, str]`):
+            The judge's quote supporting a selection, when it gave one.
+        reasons (`dict[str, str]`):
+            Why each not-executed node was not executed.
+    """
+
+    guards: dict[str, Guard]
+    skippable: frozenset[str]
+    chosen: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    evidence: dict[str, str] = field(default_factory=dict)
+    reasons: dict[str, str] = field(default_factory=dict)
 
 
 async def run_dag(
@@ -407,7 +474,7 @@ async def run_dag(
     # name, which is exactly what the id being unique is supposed to rule out.
     async with index_guard(history_root):
         session_nodes = await read_session_nodes(backend, history_root)
-        validate_and_order(spec, roots, session_nodes)
+        validate_and_order(spec, roots, session_nodes, nodes_root=nodes_root)
         by_id: dict[str, DagNodeSpec] = {node.id: node for node in spec.nodes}
         # Resolved once per node, here, rather than per dispatch: a narrowed backend
         # is built for the node that asked for it, and the unknown-name check below
@@ -473,6 +540,19 @@ async def run_dag(
     for nid, in_graph in deps.items():
         for dep in in_graph:
             dependents[dep].append(nid)
+    branch = BranchState(guards=guards_of(spec.nodes), skippable=may_not_execute(spec.nodes, by_id))
+    publish_terminal = partial(
+        _publish_terminal,
+        status=status,
+        branch=branch,
+        published_terminal=published_terminal,
+        node_started_at=node_started_at,
+        node_ended_at=node_ended_at,
+        by_id=by_id,
+        session_key=session_key,
+        run_id=store.run_id,
+        progress_publisher=progress_publisher,
+    )
 
     # `store.init` above made this run's claim on its node ids durable, so every
     # await from here on has to be covered: a stop delivered on any of them would
@@ -498,6 +578,10 @@ async def run_dag(
                         "node_summary": node.node_summary,
                         "depends_on": node.depends_on,
                         "instance": node.instance,
+                        # Only on a node that branches: a graph without routes or
+                        # guards carries none of these keys.
+                        **({"routes": list(node.routes), "select": node.select or "one"} if node.routes else {}),
+                        **({"when": node.when} if node.id in branch.guards else {}),
                     }
                     for node in spec.nodes
                 ],
@@ -514,6 +598,11 @@ async def run_dag(
                 # Before `_apply_replan`, so the `cancelled` it records is true.
                 await _reap_carried(carried)
                 carried = set()
+                # The second settle pass announces what it decides before the ready
+                # set, so this finds nothing; it keeps this exit, which skips the
+                # sweep below, from relying on that. Only `not_executed`: a graph
+                # without routes or guards gets no event from this line.
+                await publish_terminal((NOT_EXECUTED,))
                 plan = desk.take_plan()
                 if plan is not None:
                     await _apply_replan(
@@ -531,21 +620,14 @@ async def run_dag(
                     replanned_into = plan.run_id
                 desk.replanned.clear()
                 break
-            for nid, st in status.items():
-                if st not in ("skipped", "cancelled") or nid in published_terminal:
-                    continue
-                published_terminal.add(nid)
-                now = _now_ms()
-                # A cancelled node already has a real start time from its
-                # dispatch; only a skipped one needs both stamps invented.
-                node_started_at.setdefault(nid, now)
-                node_ended_at[nid] = now
-                await _emit(
-                    progress_publisher,
-                    "dag_node_updated",
-                    {"run_id": store.run_id, "node": nid, "status": st},
-                )
-                await _write_node_status(session_key, store.run_id, nid, by_id[nid].subagent, st)
+            # Below the stop and the replan, not beside the cascade: a decision node
+            # either one cut off mid-judgement reads `completed` with no route, and
+            # deciding its branches now would record a decision nobody made where the
+            # stop or the replan is why they never ran. Ahead of the sweep, so the
+            # sweep announces in this same pass what this pass decides -- the run's
+            # last decisions included, which no later pass would announce.
+            settle_branches(deps, status, branch, unsettled)
+            await publish_terminal(("skipped", "cancelled", NOT_EXECUTED))
             carried_ids = {nid for nids in owned.values() for nid in nids}
             # Cleared where the desk's own flag is, and for its reason: a node
             # settling while this pass is still deciding has to leave the flag
@@ -557,12 +639,26 @@ async def run_dag(
                 # still deciding has to leave the flag set, so that the round
                 # this pass goes on to dispatch wakes on it too.
                 desk.continued.clear()
+            # A second pass, because the sweep above awaits: a carried decision node can
+            # land its verdict meanwhile, and the ready rule reads dependencies, not
+            # guards, so a node whose guard the first pass could not yet read must be
+            # decided before the ready set is computed. What it decides is announced
+            # here, ahead of the ready set: a pass with nothing ready leaves through the
+            # break below, and a later sweep would never announce it. Publishing awaits,
+            # so a verdict can land inside it; the pair then runs again and stops on the
+            # first pass that decides nothing, which leaves no await between the last
+            # settle and the ready set.
+            while True:
+                settle_branches(deps, status, branch, unsettled)
+                if not any(st == NOT_EXECUTED and nid not in published_terminal for nid, st in status.items()):
+                    break
+                await publish_terminal((NOT_EXECUTED,))
             ready = [
                 nid
                 for nid, st in status.items()
                 if st == "pending"
                 and nid not in carried_ids
-                and all(status[d] == "completed" and d not in unsettled for d in deps[nid])
+                and all(_satisfied(d, status, unsettled) for d in deps[nid])
             ]
             if not ready:
                 suspended = [nid for nid, st in status.items() if st == "exception"]
@@ -623,6 +719,7 @@ async def run_dag(
                         node_ended_at=node_ended_at,
                         node_activity=node_activity,
                         semaphore=gate,
+                        branch=branch,
                         settled=settled,
                         unsettled=unsettled,
                         progress_publisher=progress_publisher,
@@ -676,6 +773,7 @@ async def run_dag(
             store,
             session_key,
             auto_instances,
+            branch=branch,
         )
         result.replanned_into = replanned_into
         return result
@@ -819,6 +917,46 @@ async def _run_ready_groups(
     return handed_on
 
 
+async def _publish_terminal(
+    states: tuple[str, ...],
+    *,
+    status: dict[str, str],
+    branch: BranchState,
+    published_terminal: set[str],
+    node_started_at: dict[str, int],
+    node_ended_at: dict[str, int],
+    by_id: dict[str, DagNodeSpec],
+    session_key: str | None,
+    run_id: str,
+    progress_publisher: ProgressPublisher | None,
+) -> None:
+    """Announce, once each, every node the scheduler itself put in one of ``states``.
+
+    `_run_node` announces the nodes it ran; a node the scheduler skipped, cancelled
+    or left unexecuted is announced here or by `_apply_replan`, never by both. Two
+    cases are announced by neither: a node the cascade or a stop marked in the pass
+    that meets a replan (that pass sweeps only `not_executed`), and the nodes
+    stopped by cancelling the run's task.
+    """
+    for nid, st in status.items():
+        if st not in states or nid in published_terminal:
+            continue
+        published_terminal.add(nid)
+        now = _now_ms()
+        # A cancelled node already has a real start time from its
+        # dispatch; only a skipped or not-executed one needs both
+        # stamps invented.
+        node_started_at.setdefault(nid, now)
+        node_ended_at[nid] = now
+        outcome = {"reason": branch.reasons[nid]} if st == NOT_EXECUTED else {}
+        await _emit(
+            progress_publisher,
+            "dag_node_updated",
+            {"run_id": run_id, "node": nid, "status": st, **outcome},
+        )
+        await _write_node_status(session_key, run_id, nid, by_id[nid].subagent, st, **outcome)
+
+
 async def _apply_replan(
     plan: Any,
     *,
@@ -835,9 +973,10 @@ async def _apply_replan(
     """Give this run's unfinished nodes their outcome, the replan being their cause.
 
     Publishes each transition here rather than leaving it to the loop's own sweep:
-    that sweep only announces `skipped` and `cancelled`, and widening it to
-    `failed` would double-publish every node that failed on its own merit --
-    `_run_node` already announces those and does not record them as published.
+    that sweep only announces `skipped`, `cancelled` and `not_executed`, and
+    widening it to `failed` would double-publish every node that failed on its own
+    merit -- `_run_node` already announces those and does not record them as
+    published.
 
     A node already terminal on its own merit -- completed, failed, or skipped by
     an unrelated cascade -- is untouched. A completed node's output is what the
@@ -868,13 +1007,7 @@ async def _apply_replan(
 
 def _tally(status: dict[str, str]) -> dict:
     """Count this run's nodes by terminal state."""
-    return {
-        "total": len(status),
-        "completed": sum(1 for s in status.values() if s == "completed"),
-        "failed": sum(1 for s in status.values() if s == "failed"),
-        "skipped": sum(1 for s in status.values() if s == "skipped"),
-        "cancelled": sum(1 for s in status.values() if s == "cancelled"),
-    }
+    return tally_node_statuses(status.values())
 
 
 def _route_available(control_reachable: "Callable[[], bool] | None") -> bool:
@@ -980,6 +1113,33 @@ def _exception_report(
     return "\n".join(lines)
 
 
+def _fail_undetermined_route(
+    node_id: str, reason: str, *, status: dict[str, str], errors: dict[str, str], output_paths: dict[str, str]
+) -> None:
+    """Fail a decision node whose route could not be established, and withdraw its output.
+
+    No report and no adjudication: there is no route to default to, and the failure
+    only stops this node's own descendants, through the ordinary cascade.
+    """
+    status[node_id] = "failed"
+    errors[node_id] = f"The route could not be determined: {reason}"
+    output_paths.pop(node_id, None)
+
+
+def _selection_fields(node_id: str, branch: BranchState) -> dict[str, Any]:
+    """A decision node's recorded selection, as its finish event and its run record carry it.
+
+    Empty for a node with nothing recorded: a graph without routes carries no
+    selection keys.
+    """
+    if node_id not in branch.chosen:
+        return {}
+    fields: dict[str, Any] = {"selected_routes": list(branch.chosen[node_id])}
+    if node_id in branch.evidence:
+        fields["route_evidence"] = branch.evidence[node_id]
+    return fields
+
+
 async def _apply_verdict(
     node: DagNodeSpec,
     *,
@@ -997,6 +1157,7 @@ async def _apply_verdict(
     origin: dict | None,
     dependents: dict[str, list[str]],
     adjudication_timeout_s: float,
+    branch: BranchState,
     control_reachable: "Callable[[], bool] | None" = None,
     control_advert: "Callable[[str], str | None] | None" = None,
     output_limited: bool = False,
@@ -1006,6 +1167,9 @@ async def _apply_verdict(
     The last attempt reports too: the agent learns this line of the graph is dead
     while other branches are still running, rather than at the closing announce an
     hour later.
+
+    A decision node's selection is recorded into ``branch`` here, before the node
+    leaves ``unsettled``, so no guard naming it is ever read without it.
     """
     if status[node.id] not in ("completed", "failed"):
         return
@@ -1019,6 +1183,14 @@ async def _apply_verdict(
             crashed=crashed,
             output_limited=output_limited,
         )
+    except RouteUndeterminedError as exc:
+        # Ahead of the fail-open below, which is an ordinary node's: there is no route
+        # to default to, so the node fails, and its error says why. A crashed node
+        # reads no route, and keeps the failure it already has.
+        logger.warning("DAG decision node {} could not settle a route: {}", node.id, exc)
+        if not crashed:
+            _fail_undetermined_route(node.id, str(exc), status=status, errors=errors, output_paths=output_paths)
+        return
     except TypeError as exc:
         # Not fail-open, and not raised either: raising here is swallowed further
         # out and the node stays `completed`, which is the failure this guards
@@ -1027,14 +1199,56 @@ async def _apply_verdict(
         # system off with nothing anywhere failing, so the node fails instead
         # and says why.
         logger.opt(exception=True).error("DAG node {} judge call does not accept what the runner passes", node.id)
+        if node.routes:
+            # A decision node fails for want of a route, like every other way its
+            # judgement can be lost; a crashed one keeps the failure it already has.
+            if not crashed:
+                _fail_undetermined_route(
+                    node.id,
+                    f"the DAG judge could not be called: {exc}",
+                    status=status,
+                    errors=errors,
+                    output_paths=output_paths,
+                )
+            return
         status[node.id] = "failed"
         errors[node.id] = f"the DAG judge could not be called, so this node was never judged: {exc}"
         output_paths.pop(node.id, None)
         return
-    except Exception as exc:  # noqa: BLE001 - matches _verdict.judge's own fail-open contract
+    except Exception as exc:  # noqa: BLE001 - as _verdict.judge: an ordinary node fails open, a decision node fails
+        if node.routes:
+            # The fail-open is an ordinary node's alone. Read as accomplished, a decision
+            # node would still fail for want of a route, under a reason that hides this
+            # one; a crashed one keeps the failure it already has.
+            logger.opt(exception=True).warning("DAG decision node {} verdict call raised: {}", node.id, exc)
+            if not crashed:
+                detail = bound_llm_detail(f"{type(exc).__name__}: {exc}")
+                _fail_undetermined_route(
+                    node.id,
+                    f"the judge call raised: {detail}",
+                    status=status,
+                    errors=errors,
+                    output_paths=output_paths,
+                )
+            return
         logger.opt(exception=True).warning("DAG node {} verdict call raised, judging it accomplished: {}", node.id, exc)
         verdict = Verdict(accomplished=True)
     if verdict.accomplished:
+        # A crashed node keeps the failure it has: no route is read from a node that did
+        # not finish. `()` is a selection; only a missing one fails the node.
+        if node.routes and not crashed:
+            if verdict.routes is None:
+                _fail_undetermined_route(
+                    node.id,
+                    "the judge reported the task accomplished without selecting a route",
+                    status=status,
+                    errors=errors,
+                    output_paths=output_paths,
+                )
+            else:
+                branch.chosen[node.id] = tuple(verdict.routes)
+                if verdict.route_evidence:
+                    branch.evidence[node.id] = verdict.route_evidence
         return
     reason = verdict.what_is_missing or "The node did not accomplish its task."
     errors[node.id] = reason
@@ -1167,6 +1381,78 @@ def _cascade_failures(deps: dict[str, list[str]], status: dict[str, str]) -> Non
             # must stay pending, because the adjudication may yet continue it.
             if any(status[d] in ("failed", "skipped") for d in in_graph):
                 status[nid] = "skipped"
+                changed = True
+
+
+def _satisfied(dep: str, status: Mapping[str, str], unsettled: set[str]) -> bool:
+    """Whether a dependency lets its dependent go on: completed with its verdict final, or not executed."""
+    return (status[dep] == "completed" and dep not in unsettled) or status[dep] == NOT_EXECUTED
+
+
+def _atom_value(atom: Atom, status: Mapping[str, str], branch: BranchState) -> Value:
+    """One atom's value: a route of a node that did not run is unknown, never false."""
+    state = status.get(atom.node)
+    if state == NOT_EXECUTED:
+        return True if atom.name == DONE else None
+    if state != "completed":
+        return None
+    if atom.name == DONE:
+        return True
+    chosen = branch.chosen.get(atom.node)
+    if chosen is None:
+        # Completed with no selection on record -- its verdict never landed -- so
+        # nothing was decided, and nothing may be read as selected. Presence, not
+        # truth: `()` is a selection, and it makes every route false.
+        return None
+    return atom.name in chosen
+
+
+def settle_branches(
+    deps: dict[str, list[str]],
+    status: dict[str, str],
+    branch: BranchState,
+    unsettled: set[str],
+) -> None:
+    """Decide every pending node whose dependencies have all settled.
+
+    A fixed-point pass, run after `_cascade_failures` and before the ready set is
+    computed, so a whole dead subtree is marked in one round. The first matching rule
+    decides the node:
+
+    1. a failed or skipped dependency skips it -- `_cascade_failures` has already
+       done that, and this pass leaves such a node alone;
+    2. every in-graph dependency was not executed, so this node was not either;
+    3. a guard decides: true runs it, false and unknown do not, and the two are
+       recorded apart;
+    4. otherwise it stays pending and the ready rule will take it.
+
+    Rule 2 comes before rule 3 on purpose. `<node>.done` is true whatever the decision
+    node did, and it must not revive a node every one of whose inputs lies on a dead path.
+
+    A dependency in ``unsettled`` reads ``completed`` before its judge has ruled, so it
+    has not settled: no guard is read while a route it names may still be landing.
+    """
+    changed = True
+    while changed:
+        changed = False
+        for nid, st in status.items():
+            if st != "pending":
+                continue
+            in_graph = deps[nid]
+            if in_graph and all(status[d] == NOT_EXECUTED for d in in_graph):
+                status[nid] = NOT_EXECUTED
+                branch.reasons[nid] = UPSTREAM_NOT_EXECUTED
+                changed = True
+                continue
+            guard = branch.guards.get(nid)
+            # A dependency that failed, was skipped or is still out leaves the node to the
+            # cascade or to a later pass: rule 1 holds whatever the guard would say.
+            if guard is None or not all(_satisfied(d, status, unsettled) for d in in_graph):
+                continue
+            value = evaluate(guard, partial(_atom_value, status=status, branch=branch))
+            if value is not True:
+                status[nid] = NOT_EXECUTED
+                branch.reasons[nid] = WHEN_FALSE if value is False else WHEN_UNKNOWN
                 changed = True
 
 
@@ -1353,6 +1639,7 @@ async def _run_group(
     node_ended_at: dict[str, int],
     node_activity: dict[str, dict],
     semaphore: asyncio.Semaphore,
+    branch: BranchState,
     settled: asyncio.Event | None = None,
     unsettled: set[str] | None = None,
     state_for: "Callable[[str, str | None, str], Any] | None" = None,
@@ -1408,6 +1695,7 @@ async def _run_group(
                 node_ended_at=node_ended_at,
                 node_activity=node_activity,
                 semaphore=semaphore,
+                branch=branch,
                 state_for=state_for,
                 memory_for=memory_for,
                 mode_for=mode_for,
@@ -1563,6 +1851,7 @@ async def _run_node(
     node_ended_at: dict[str, int],
     node_activity: dict[str, dict],
     semaphore: asyncio.Semaphore,
+    branch: BranchState,
     state_for: "Callable[[str, str | None, str], Any] | None" = None,
     memory_for: "Callable[[str], MemoryScope | None] | None" = None,
     mode_for: "Callable[[str, str | None, str], str | None] | None" = None,
@@ -1627,6 +1916,8 @@ async def _run_node(
                 run_id=store.run_id,
                 by_id=by_id,
                 capabilities=capabilities,
+                not_executed={nid for nid, st in status.items() if st == NOT_EXECUTED},
+                may_not_execute=branch.skippable,
             )
             prompt = rendered_prompt
             if follow_up is not None:
@@ -1815,6 +2106,7 @@ async def _run_node(
                 origin=origin,
                 dependents=dependents or {},
                 adjudication_timeout_s=adjudication_timeout_s,
+                branch=branch,
                 control_reachable=control_reachable,
                 control_advert=control_advert,
                 # Read off the dispatch's own activity rather than the transcript:
@@ -1823,9 +2115,20 @@ async def _run_node(
                 # produced nothing" and "it was stopped before it could".
                 output_limited=bool(getattr(did, "output_limited", False)),
             )
+        elif node.routes and status[node.id] == "completed":
+            # Nobody to select a route, and none to default to. The tool refuses such a
+            # graph on a host with no judge; `run_dag` called directly does not.
+            _fail_undetermined_route(
+                node.id,
+                "this run has no judge to select a route",
+                status=status,
+                errors=errors,
+                output_paths=output_paths,
+            )
         turn = await _add_node_to_instance_log(subagents_root, node, did, session_key, errors.get(node.id), node_output)
         ended_at_ms = _now_ms()
         node_ended_at[node.id] = ended_at_ms
+        selection = _selection_fields(node.id, branch)
         await _emit(
             progress_publisher,
             "dag_node_updated",
@@ -1835,9 +2138,10 @@ async def _run_node(
                 "status": status[node.id],
                 "started_at": started_at_ms,
                 "ended_at": ended_at_ms,
+                **selection,
             },
         )
-        await _write_node_status(session_key, store.run_id, node.id, node.subagent, status[node.id])
+        await _write_node_status(session_key, store.run_id, node.id, node.subagent, status[node.id], **selection)
     # Scheduled after the `async with semaphore` above has already exited, so a
     # node's slot is released the moment its own work is done -- not held for
     # however long the recorder's poll budget takes.
@@ -1976,6 +2280,8 @@ async def _finalize(
     store: DagRunStore,
     session_key: str | None = None,
     auto_instances: frozenset[str] = frozenset(),
+    *,
+    branch: BranchState,
 ) -> DagRunResult:
     """Assemble the result, write the manifest, and update the registry.
 
@@ -1989,6 +2295,7 @@ async def _finalize(
     """
     files: list[dict] = []
     manifest: dict = {}
+    outcomes: dict[str, dict[str, Any]] = {}
     for node in spec.nodes:
         nid = node.id
         prompt_file = store.prompt_path(nid) if nid in prompt_written else None
@@ -1996,6 +2303,12 @@ async def _finalize(
         error = errors.get(nid)
         if error is not None and len(error) > _MAX_ERROR_CHARS:
             error = error[:_MAX_ERROR_CHARS] + "... (truncated)"
+        # Present only where a branch put them: a graph without routes or guards carries none.
+        branched = {
+            **({"reason": branch.reasons[nid]} if nid in branch.reasons else {}),
+            **_selection_fields(nid, branch),
+        }
+        outcomes[nid] = branched
         files.append(
             {
                 "node": nid,
@@ -2009,6 +2322,7 @@ async def _finalize(
                 "prompt_file": prompt_file,
                 "output_file": output_file,
                 "error": error,
+                **branched,
             },
         )
         manifest[nid] = {
@@ -2022,6 +2336,7 @@ async def _finalize(
             "prompt_file": prompt_file,
             "output_file": output_file,
             "error": errors.get(nid),
+            **branched,
             # What the node did on the way, on the same terms a spawned call
             # records it: absent keys mean the transport could not say, not zero.
             **node_activity.get(nid, {}),
@@ -2032,21 +2347,32 @@ async def _finalize(
         # timeout (_REGISTRY_WRITE_TIMEOUT_S), so awaiting them one at a time
         # would make teardown scale as N x that timeout under a contended
         # registry. Run them all at once so the worst case is roughly one
-        # timeout window regardless of node count.
+        # timeout window regardless of node count. Each carries the node's outcome:
+        # the row is rebuilt on every write, so a bare status here would erase it.
         await asyncio.gather(
             *(
-                _write_node_status(session_key, store.run_id, node.id, node.subagent, status[node.id])
+                _write_node_status(
+                    session_key, store.run_id, node.id, node.subagent, status[node.id], **outcomes[node.id]
+                )
                 for node in spec.nodes
             )
         )
 
     terminal_outputs: list[dict] = []
     for nid in by_id:
-        if not dependents[nid] and status[nid] == "completed":
-            text = await store.read_text(output_paths[nid])
-            if len(text) > _MAX_OUTPUT_CHARS:
-                text = text[:_MAX_OUTPUT_CHARS] + "\n... (output truncated)"
-            terminal_outputs.append({"node": nid, "text": text})
+        # A completed node whose dependents all stayed unexecuted is the last word on its
+        # path -- a `select: many` router that selected nothing is the case. Only an
+        # unexecuted dependent ends the path there: one that failed, was skipped or was
+        # cancelled is a path the run did not finish, so the node it depends on stays an
+        # intermediate result.
+        if status[nid] != "completed":
+            continue
+        if any(status[dep] != NOT_EXECUTED for dep in dependents[nid]):
+            continue
+        text = await store.read_text(output_paths[nid])
+        if len(text) > _MAX_OUTPUT_CHARS:
+            text = text[:_MAX_OUTPUT_CHARS] + "\n... (output truncated)"
+        terminal_outputs.append({"node": nid, "text": text})
 
     summary = _tally(status)
     await store.write_manifest(manifest)

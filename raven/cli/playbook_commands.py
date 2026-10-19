@@ -463,7 +463,9 @@ def playbook_run(
     _require_known(store, name)
 
     from raven.agent.subagent.dag_tool import SubAgentDagTool
+    from raven.agent.subagent.dag_verdict import judge_provider
     from raven.agent.subagent.manager import SubagentManager
+    from raven.config.raven import load_raven_config
     from raven.playbook import PlaybookExecutor, PlaybookRuntime, agent_profiles_from_registry
     from raven.playbook.credentials import credential_scope, stored_secret_params
     from raven.playbook.mcp import (
@@ -489,6 +491,7 @@ def playbook_run(
         spec = None
 
     provider = make_provider(config)
+    pool = ProviderPool(config)
     manager = SubagentManager(
         provider=provider,
         workspace=config.workspace_path,
@@ -497,8 +500,9 @@ def playbook_run(
         restrict_to_workspace=config.tools.restrict_to_workspace,
         sandbox_config=config.tools.sandbox,
         agents=config.subagents.agents,
-        provider_pool=ProviderPool(config),
+        provider_pool=pool,
     )
+    verdicts = load_raven_config().subagent_dag
     # The manager's table, so a node here resolves to the same agent it would in
     # a conversation -- built-in rows included, which is what lets the CLI run a
     # playbook at all now that no synthetic per-node backend is built for it.
@@ -518,6 +522,13 @@ def playbook_run(
         # `confirm` means on the command line for every playbook is its own
         # decision, and a script that runs one unattended would start failing.
         ask=ask_at_the_terminal if spec is not None and spec.mode == "stint" else None,
+        # Judged as a conversation judges a node. A decision node chooses its route
+        # through the judge, so without one a playbook that branches cannot run here.
+        provider_for=lambda: judge_provider(provider, pool, verdicts.verdict_model),
+        verdict_config=verdicts,
+        # Nobody here can answer a node that falls short, so it fails on its judge's
+        # reason; suspended, it would wait on an answer that cannot come.
+        control_reachable=lambda: False,
     )
     executor = PlaybookExecutor(
         dag_tool=dag_tool,

@@ -1995,6 +1995,41 @@ async def test_registry_upsert_dag_node_roundtrip(tmp_path: Path) -> None:
     assert rows[0]["createdAtMs"] == created
 
 
+async def test_registry_dag_node_row_carries_a_branch_outcome_until_a_write_without_one(tmp_path: Path) -> None:
+    """Until the manifest is written, the row is the only record of what a branch
+    decided. Each key is there only when given -- an empty selection is given -- and
+    the row is rebuilt on every write, so it says what the latest write said."""
+    path = tmp_path / "inst.json"
+    reg = InstanceRegistry(path=path)
+    await reg.upsert_dag_node(
+        "web:s1", "run-1", "triage", "claude_code", "completed", selected_routes=["docs"], route_evidence="asks how"
+    )
+    await reg.upsert_dag_node("web:s1", "run-1", "scan", "claude_code", "completed", selected_routes=[])
+    await reg.upsert_dag_node("web:s1", "run-1", "fix", "claude_code", "not_executed", reason="when_false")
+
+    rows = {r["nodeId"]: r for r in InstanceRegistry(path=path).list_instances("web:s1")}
+    assert (rows["triage"]["selectedRoutes"], rows["triage"]["routeEvidence"]) == (["docs"], "asks how")
+    assert "reason" not in rows["triage"]
+    assert rows["scan"]["selectedRoutes"] == [], "a decision that chose nothing has still decided"
+    assert "routeEvidence" not in rows["scan"]
+    assert rows["fix"]["reason"] == "when_false"
+    assert not {"selectedRoutes", "routeEvidence"} & set(rows["fix"])
+
+    await reg.upsert_dag_node("web:s1", "run-1", "triage", "claude_code", "running")
+    row = next(r for r in reg.list_instances("web:s1") if r["nodeId"] == "triage")
+    assert set(row) == {
+        "kind",
+        "sessionKey",
+        "agent",
+        "handle",
+        "runId",
+        "nodeId",
+        "status",
+        "createdAtMs",
+        "updatedAtMs",
+    }, "a write without an outcome leaves none behind"
+
+
 async def test_registry_dag_node_persists_and_coexists_with_cli(tmp_path: Path) -> None:
     path = tmp_path / "inst.json"
     reg = InstanceRegistry(path=path)
@@ -2619,8 +2654,9 @@ def test_only_the_measured_non_isolating_preset_withholds_session_mcp() -> None:
     assert declared["OpenCode"] is False
     # And nothing else withholds. Asserted as "the only false" rather than by
     # listing every other preset, so adding one cannot quietly arrive as a false.
-    # The Mirasim rows are a measured exception of another kind: ui-cli takes no
-    # MCP servers at all, so withholding them is the honest declaration there.
+    # The Mirasim rows are a measured exception of another kind: the Mirasim host
+    # takes no MCP servers for one session, so withholding them is the honest
+    # declaration there.
     mirasim = {row["name"] for row in MIRASIM_PRESETS.values()}
     assert {name for name, isolates in declared.items() if not isolates} == {"OpenCode"} | mirasim
 

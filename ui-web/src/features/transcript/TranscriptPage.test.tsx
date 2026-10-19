@@ -4081,6 +4081,75 @@ describe('transcript island, delegated calls', () => {
     expect(state).not.toContain('gui.deleg.dag_done')
   })
 
+  /* The tally's bits one by one, off the translator's own `en:` prefix, so the line's exact
+     contents are asserted rather than a substring of it. */
+  const bitsOf = (line: string): string[] => line.split(' \u00b7 ').map((bit) => bit.replace(/^en:/, ''))
+
+  it('counts a node a branch left out in its own word, and does not read the run as still going', () => {
+    /* A branch the run did not take never starts and never reports a stamp, so it matches none of
+       the tally's cases unless `DOT_OF` names it -- and it is outstanding for as long as the settled
+       set leaves it out, which kept a finished run reading "running" with "1 to go". It is neither a
+       skip (the run chose it away rather than a failure cascading past it) nor a stop. */
+    act(() => {
+      const st = mount.step()
+      const h = st.tool('run_subagent_dag', {
+        nodes: [
+          { id: 'triage', subagent: 'router' },
+          { id: 'answer', subagent: 'writer', depends_on: ['triage'] },
+          { id: 'fix', subagent: 'coder', depends_on: ['triage'] },
+        ],
+      })
+      mount.dagFeed('dag.run_started', { run_id: 'r10', nodes: [{ id: 'triage' }, { id: 'answer' }, { id: 'fix' }] })
+      mount.dagFeed('dag.node_updated', { run_id: 'r10', node: 'triage', status: 'completed' })
+      mount.dagFeed('dag.node_updated', { run_id: 'r10', node: 'answer', status: 'completed' })
+      mount.dagFeed('dag.node_updated', { run_id: 'r10', node: 'fix', status: 'not_executed' })
+      h.done(true, 'submitted', 40)
+      st.seal()
+    })
+    const card = openDagCard()
+    const nodeRow = dagField(card, 'gui.deleg.d_nodes') || ''
+    expect(bitsOf(nodeRow)).toEqual(['gui.deleg.dag_done {"ok":"2","n":"3"}', 'gui.deleg.dag_not_executed {"n":"1"}'])
+    expect(dagField(card, 'gui.deleg.d_state')).toContain('gui.deleg.st_ok')
+  })
+
+  it('says what a branch left out before what is still to go, while the graph runs', () => {
+    act(() => {
+      const st = mount.step()
+      st.tool('run_subagent_dag', {
+        nodes: [
+          { id: 'triage', subagent: 'router' },
+          { id: 'fix', subagent: 'coder', depends_on: ['triage'] },
+          { id: 'review', subagent: 'writer', depends_on: ['triage'] },
+        ],
+      })
+      mount.dagFeed('dag.run_started', { run_id: 'r12', nodes: [{ id: 'triage' }, { id: 'fix' }, { id: 'review' }] })
+      mount.dagFeed('dag.node_updated', { run_id: 'r12', node: 'triage', status: 'completed' })
+      mount.dagFeed('dag.node_updated', { run_id: 'r12', node: 'fix', status: 'not_executed' })
+      mount.dagFeed('dag.node_updated', { run_id: 'r12', node: 'review', status: 'running' })
+    })
+    const card = openDagCard()
+    expect(bitsOf(dagField(card, 'gui.deleg.d_nodes') || '')).toEqual([
+      'gui.deleg.dag_done {"ok":"1","n":"3"}', 'gui.deleg.dag_not_executed {"n":"1"}', 'gui.deleg.dag_left {"n":"1"}',
+    ])
+    expect(dagField(card, 'gui.deleg.d_state')).toContain('gui.deleg.st_run')
+  })
+
+  it('tallies a run that never branches exactly as before', () => {
+    act(() => {
+      const st = mount.step()
+      const h = st.tool('run_subagent_dag', {
+        nodes: [{ id: 'scan', subagent: 'scout' }, { id: 'brief', subagent: 'writer', depends_on: ['scan'] }],
+      })
+      mount.dagFeed('dag.run_started', { run_id: 'r11', nodes: [{ id: 'scan' }, { id: 'brief' }] })
+      mount.dagFeed('dag.node_updated', { run_id: 'r11', node: 'scan', status: 'completed' })
+      mount.dagFeed('dag.node_updated', { run_id: 'r11', node: 'brief', status: 'skipped' })
+      h.done(true, 'done', 40)
+      st.seal()
+    })
+    const nodeRow = dagField(openDagCard(), 'gui.deleg.d_nodes') || ''
+    expect(bitsOf(nodeRow)).toEqual(['gui.deleg.dag_done {"ok":"1","n":"2"}', 'gui.deleg.dag_skip {"n":"1"}'])
+  })
+
   it('keeps the failure reason on a run the nodes cannot explain', () => {
     /* `run_subagent_dag` can raise mid-run (a backend write failing, say) after
        some nodes have already completed. `okOf` calls a dag result bad only when

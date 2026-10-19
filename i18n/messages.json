@@ -583,6 +583,10 @@
       "en": "{n} skipped",
       "zh": "跳过 {n}"
     },
+    "gui.deleg.dag_not_executed": {
+      "en": "{n} not executed",
+      "zh": "未执行 {n}"
+    },
     "gui.act.ing.text_to_speech": {
       "en": "Generating speech",
       "zh": "正在生成语音"
@@ -8861,6 +8865,10 @@
       "en": "{n} not dispatched",
       "zh": "{n} 步没派"
     },
+    "gui.tasks.step_not_executed": {
+      "en": "{n} not executed",
+      "zh": "{n} 步未执行"
+    },
     "gui.tasks.running_n": {
       "en": "{n} running",
       "zh": "{n} 个任务在跑"
@@ -8913,6 +8921,38 @@
       "en": "Awaiting a decision",
       "zh": "待裁决"
     },
+    "gui.tasks.node_st_not_executed": {
+      "en": "Not executed",
+      "zh": "未执行"
+    },
+    "gui.tasks.node_reason_when_false": {
+      "en": "Not selected",
+      "zh": "分支未选中"
+    },
+    "gui.tasks.node_reason_when_unknown": {
+      "en": "Decision missing",
+      "zh": "缺少分支决策"
+    },
+    "gui.tasks.node_reason_upstream": {
+      "en": "Upstream not executed",
+      "zh": "上游未执行"
+    },
+    "gui.tasks.node_reason": {
+      "en": "Reason",
+      "zh": "原因"
+    },
+    "gui.tasks.node_guard": {
+      "en": "Runs only if",
+      "zh": "执行条件"
+    },
+    "gui.tasks.node_evidence": {
+      "en": "Route evidence",
+      "zh": "选路依据"
+    },
+    "gui.tasks.node_sel_none": {
+      "en": "(none)",
+      "zh": "（无）"
+    },
     "gui.tasks.tokens_n": {
       "en": "{n} tokens",
       "zh": "{n} tokens"
@@ -8960,6 +9000,10 @@
     "gui.tasks.ctx_none": {
       "en": "Not started yet.",
       "zh": "还没开始。"
+    },
+    "gui.tasks.ctx_not_executed": {
+      "en": "This step was not executed, so there is no record of it.",
+      "zh": "这一步没有执行，所以没有记录。"
     },
     "gui.tasks.ctx_console": {
       "en": "This node is running over the CLI channel, which keeps no live transcript.",

@@ -14327,6 +14327,21 @@
           "nodeId": {
             "type": "string"
           },
+          "reason": {
+            "description": "Why the node did not execute. Present only on the dag-node row of a node that was not executed.",
+            "$ref": "#/components/schemas/DagNotExecutedReason"
+          },
+          "selectedRoutes": {
+            "description": "The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Present only on the row of a DAG node a branch decided: its dag-node row, or the ordinary row a stateful node is reported on.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "routeEvidence": {
+            "description": "The judge's supporting quote for the selection, at most 500 characters. Present only when the judge gave one, and only on the row of a DAG node a branch decided: its dag-node row, or the ordinary row a stateful node is reported on.",
+            "type": "string"
+          },
           "createdAtMs": {
             "type": "integer"
           },
@@ -15464,7 +15479,7 @@
         }
       },
       "DagNodeStatus": {
-        "description": "Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal.",
+        "description": "Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal. 'not_executed' is a node a branch left out -- its guard was false or unknown, or every dependency of it was not executed. It never ran, and it is terminal.",
         "type": "string",
         "enum": [
           "pending",
@@ -15473,11 +15488,12 @@
           "failed",
           "skipped",
           "cancelled",
-          "exception"
+          "exception",
+          "not_executed"
         ]
       },
       "DagSnapshotNodeStatus": {
-        "description": "Per-node status in a run read back off disk. Unlike the event vocabulary this includes 'interrupted', which the server infers for a node the registry still calls running on a run nothing is executing. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal.",
+        "description": "Per-node status in a run read back off disk. Unlike the event vocabulary this includes 'interrupted', which the server infers for a node the registry still calls running on a run nothing is executing. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal. 'not_executed' is a node a branch left out -- its guard was false or unknown, or every dependency of it was not executed. It never ran, and it is terminal.",
         "type": "string",
         "enum": [
           "pending",
@@ -15487,7 +15503,17 @@
           "skipped",
           "cancelled",
           "interrupted",
-          "exception"
+          "exception",
+          "not_executed"
+        ]
+      },
+      "DagNotExecutedReason": {
+        "description": "Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision that was never made. 'upstream_not_executed': every dependency of it in the graph was not executed.",
+        "type": "string",
+        "enum": [
+          "when_false",
+          "when_unknown",
+          "upstream_not_executed"
         ]
       },
       "DagSnapshotNode": {
@@ -15544,6 +15570,40 @@
             "additionalProperties": {
               "$ref": "#/components/schemas/JsonValue"
             }
+          },
+          "reason": {
+            "description": "Why the node did not execute. Present only with status not_executed.",
+            "$ref": "#/components/schemas/DagNotExecutedReason"
+          },
+          "selected_routes": {
+            "description": "The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, and on one that failed to decide.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "route_evidence": {
+            "description": "The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none.",
+            "type": "string"
+          },
+          "routes": {
+            "description": "The route names a decision node chooses between, in declaration order; only the judge sees their conditions. Absent on a node that decides nothing.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "select": {
+            "description": "How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.",
+            "type": "string",
+            "enum": [
+              "one",
+              "many"
+            ]
+          },
+          "when": {
+            "description": "The guard: this node runs only if the expression holds once its dependencies settle. Absent on a node with no guard.",
+            "type": "string"
           }
         }
       },
@@ -15614,6 +15674,10 @@
                 "type": "integer"
               },
               "cancelled": {
+                "type": "integer"
+              },
+              "not_executed": {
+                "description": "Nodes a branch left out. Present only when there is at least one, so a run that never branches carries the five counts it always did.",
                 "type": "integer"
               }
             }
@@ -15745,6 +15809,25 @@
                     "node_summary": {
                       "description": "One line, for the user, on what this node was asked to do. Absent on a run that predates the field.",
                       "type": "string"
+                    },
+                    "routes": {
+                      "description": "The route names a decision node chooses between, in declaration order; only the judge sees their conditions. Absent on a node that decides nothing.",
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "select": {
+                      "description": "How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.",
+                      "type": "string",
+                      "enum": [
+                        "one",
+                        "many"
+                      ]
+                    },
+                    "when": {
+                      "description": "The guard: this node runs only if the expression holds once its dependencies settle. Absent on a node with no guard.",
+                      "type": "string"
                     }
                   }
                 }
@@ -15804,6 +15887,21 @@
               },
               "ended_at": {
                 "type": "integer"
+              },
+              "reason": {
+                "description": "Why the node did not execute. Sent only with status not_executed.",
+                "$ref": "#/components/schemas/DagNotExecutedReason"
+              },
+              "selected_routes": {
+                "description": "The routes a decision node selected, on the frame that finishes it. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on every other frame, and when the node failed to decide.",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "route_evidence": {
+                "description": "The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none.",
+                "type": "string"
               }
             }
           }
@@ -15951,6 +16049,10 @@
                   },
                   "cancelled": {
                     "type": "integer"
+                  },
+                  "not_executed": {
+                    "description": "Nodes a branch left out. Present only when there is at least one, so a run that never branches carries the five counts it always did.",
+                    "type": "integer"
                   }
                 }
               },
@@ -15974,6 +16076,21 @@
                       "type": "string"
                     },
                     "error": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "description": "Why the node did not execute. Sent only with status not_executed.",
+                      "$ref": "#/components/schemas/DagNotExecutedReason"
+                    },
+                    "selected_routes": {
+                      "description": "The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, and on one that failed to decide.",
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "route_evidence": {
+                      "description": "The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none.",
                       "type": "string"
                     }
                   }
@@ -16700,6 +16817,25 @@
               "$ref": "#/components/schemas/JsonValue"
             },
             "type": "object"
+          },
+          "routes": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "description": "Makes this node a decision: route name -> the condition, in plain words, under which its answer selects that route. Kept whole, because re-running the graph judges against the conditions."
+          },
+          "select": {
+            "enum": [
+              "one",
+              "many"
+            ],
+            "type": "string",
+            "description": "How many routes the decision selects, as the author wrote it. Absent means 'one'."
+          },
+          "when": {
+            "type": "string",
+            "description": "The guard, as the author wrote it: this node runs only if it holds once its dependencies settle."
           }
         },
         "required": [
@@ -16712,7 +16848,7 @@
           "inputs"
         ],
         "type": "object",
-        "description": "One step, whole. ``subagent`` / ``node_summary`` / ``prompt_template`` may\nbe empty: those three are the fields an author may leave blank for the\ncaller to fill at run time. ``skills`` / ``mcps`` are three-state -- null\nmeans the author said nothing, ``[]`` means the author wrote an empty list,\nand a list names what to consider."
+        "description": "One step, whole. ``subagent`` / ``node_summary`` / ``prompt_template`` may\nbe empty: those three are the fields an author may leave blank for the\ncaller to fill at run time. ``skills`` / ``mcps`` are three-state -- null\nmeans the author said nothing, ``[]`` means the author wrote an empty list,\nand a list names what to consider. ``routes`` / ``select`` / ``when`` declare a branch and are absent unless the author wrote them."
       },
       "PlaybookDetail": {
         "additionalProperties": false,
@@ -16959,7 +17095,7 @@
         ]
       },
       "TaskStatus": {
-        "description": "A task's state, derived from its nodes' recorded states, first rule that matches: a run superseded by a replan that started is cancelled (one that did not start is failed); any failed node -> failed; any interrupted -> interrupted; any pending/running/exception -> running; any cancelled or skipped -> cancelled; else completed. A spawn is its one node's state.",
+        "description": "A task's state, derived from its nodes' recorded states, first rule that matches: a run superseded by a replan that started is cancelled (one that did not start is failed); any failed node -> failed; any interrupted -> interrupted; any pending/running/exception -> running; any cancelled or skipped -> cancelled; else completed. A spawn is its one node's state. A node a branch left out (not_executed) sits on none of these rungs: an unselected branch does not stop a run.",
         "type": "string",
         "enum": [
           "running",
@@ -16970,7 +17106,7 @@
         ]
       },
       "TaskCounts": {
-        "description": "How many of the task's nodes sit in each state. Counted from graph.json, so skipped nodes are counted too.",
+        "description": "How many of the task's nodes sit in each state. Counted from graph.json, so skipped and not_executed nodes are counted too.",
         "type": "object",
         "additionalProperties": false,
         "required": [
@@ -16982,7 +17118,8 @@
           "skipped",
           "cancelled",
           "interrupted",
-          "exception"
+          "exception",
+          "not_executed"
         ],
         "properties": {
           "total": {
@@ -17012,6 +17149,10 @@
           "exception": {
             "type": "integer",
             "description": "Nodes suspended on a verdict, waiting for resolve_dag_node. A running row with one of these is waiting on a decision, not working."
+          },
+          "not_executed": {
+            "type": "integer",
+            "description": "Nodes a branch left out. They never ran, and an unselected branch does not move the task's status: a run of completed and not_executed nodes is completed."
           }
         }
       },
@@ -17215,6 +17356,40 @@
               "type": "string"
             },
             "description": "Same three-valued reading as skills."
+          },
+          "reason": {
+            "description": "Why the node did not execute. Present only with status not_executed.",
+            "$ref": "#/components/schemas/DagNotExecutedReason"
+          },
+          "selected_routes": {
+            "description": "The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, and on one that failed to decide.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "route_evidence": {
+            "description": "The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none.",
+            "type": "string"
+          },
+          "routes": {
+            "description": "The route names a decision node chooses between, in declaration order; only the judge sees their conditions. Absent on a node that decides nothing.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "select": {
+            "description": "How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.",
+            "type": "string",
+            "enum": [
+              "one",
+              "many"
+            ]
+          },
+          "when": {
+            "description": "The guard: this node runs only if the expression holds once its dependencies settle. Absent on a node with no guard.",
+            "type": "string"
           },
           "files": {
             "type": "array",

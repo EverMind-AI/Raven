@@ -150,6 +150,7 @@ async def test_a_real_spawn_is_one_completed_task(workspace: Path) -> None:
         "cancelled": 0,
         "interrupted": 0,
         "exception": 0,
+        "not_executed": 0,
     }
     node = row["nodes"][0]
     assert node["agent"]
@@ -485,7 +486,429 @@ async def test_a_hard_stop_reads_cancelled_from_the_node_registry_not_all(worksp
         "cancelled": 1,
         "interrupted": 0,
         "exception": 0,
+        "not_executed": 0,
     }
+
+
+def test_counts_carry_the_new_status() -> None:
+    counts = tasks_mod._counts(["not_executed", "completed"])
+
+    assert counts["not_executed"] == 1
+    assert counts["completed"] == 1
+    assert counts["total"] == 2
+    assert tasks_mod._counts(["completed"])["not_executed"] == 0, "present on every row, zero when nothing branched"
+
+
+def test_a_run_whose_only_oddity_is_an_unselected_branch_reads_as_completed() -> None:
+    assert tasks_mod._task_status(["completed", "not_executed"]) == "completed"
+    assert tasks_mod._task_status(["not_executed"]) == "completed"
+
+
+def test_an_unselected_branch_moves_no_rung_of_the_status_ladder() -> None:
+    """The rungs it sits beside answer as they did: it is not a state that
+    stopped the run, so it neither adds to a cancelled run nor hides a failure."""
+    assert tasks_mod._task_status(["completed", "skipped"]) == "cancelled"
+    assert tasks_mod._task_status(["completed", "cancelled", "not_executed"]) == "cancelled"
+    assert tasks_mod._task_status(["failed", "not_executed"]) == "failed"
+    assert tasks_mod._task_status(["running", "not_executed"]) == "running"
+    assert tasks_mod._task_status(["interrupted", "not_executed"]) == "interrupted"
+
+
+_BRANCHING_GRAPH = {
+    "task_summary": "handle an issue",
+    "nodes": [
+        {
+            "id": "triage",
+            "subagent": "Raven",
+            "node_summary": "classify",
+            "depends_on": [],
+            "routes": {"bug": "a defect", "docs": "a question"},
+        },
+        {"id": "fix", "subagent": "Raven", "node_summary": "patch it", "depends_on": ["triage"], "when": "triage.bug"},
+        {"id": "reply", "subagent": "Raven", "node_summary": "answer", "depends_on": ["triage"]},
+    ],
+}
+
+
+async def test_a_run_with_an_unselected_branch_is_a_completed_task(workspace: Path) -> None:
+    session_dir = _session_dir(workspace)
+    store = await _make_run(session_dir, RUN_ID, _BRANCHING_GRAPH, ["triage", "fix", "reply"])
+    await store.write_manifest(
+        {
+            "triage": _manifest_entry(status="completed", selected_routes=["docs"]),
+            "fix": _manifest_entry(
+                status="not_executed", depends_on=["triage"], started_at=9_000, ended_at=9_500, reason="when_false"
+            ),
+            "reply": _manifest_entry(status="completed", depends_on=["triage"]),
+        }
+    )
+    async with index_guard(store.registry_root):
+        await store.record_outcome({"triage": "completed", "fix": "not_executed", "reply": "completed"}, summary="ok")
+
+    result = await tasks_list({"session_key": SESSION})
+    TasksListResult.model_validate(result)
+
+    row = result["tasks"][0]
+    assert row["status"] == "completed"
+    assert (row["counts"]["total"], row["counts"]["completed"], row["counts"]["not_executed"]) == (3, 2, 1)
+    assert row["counts"]["skipped"] == 0
+    fix = row["nodes"][1]
+    assert fix["status"] == "not_executed"
+    # The runner stamps a node it decided will not run with the moment it decided,
+    # which is not a clock the node had: no stamp of its own, and none stretching the task's window.
+    assert fix["started_at"] is None and fix["ended_at"] is None
+    assert (row["started_at"], row["ended_at"]) == (1_000, 2_000)
+
+
+_BRANCH_KEYS = {"reason", "selected_routes", "route_evidence", "routes", "select", "when"}
+
+
+def _branch_part(node: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in node.items() if key in _BRANCH_KEYS}
+
+
+async def test_a_branching_runs_nodes_carry_what_they_asked_and_what_was_decided(workspace: Path) -> None:
+    """A task's node detail shows the reason, the selection, the quote and
+    the guard, and `tasks.list` is the only read it reloads from. What happened is
+    the manifest's; what each node was asked to branch on is graph.json's. An empty
+    selection is a selection, and a plain node carries none of the six."""
+    graph = {
+        "task_summary": "handle an issue",
+        "nodes": [
+            {"id": "triage", "subagent": "Raven", "routes": {"bug": "a defect", "docs": "a question"}},
+            {
+                "id": "scan",
+                "subagent": "Raven",
+                "depends_on": ["triage"],
+                "routes": {"docs": "mentions docs", "api": "mentions the api"},
+                "select": "many",
+            },
+            {"id": "fix", "subagent": "Raven", "depends_on": ["triage"], "when": "triage.bug"},
+            {"id": "verify", "subagent": "Raven", "depends_on": ["fix"]},
+            {"id": "reply", "subagent": "Raven", "depends_on": ["triage"]},
+        ],
+    }
+    session_dir = _session_dir(workspace)
+    store = await _make_run(session_dir, RUN_ID, graph, ["triage", "scan", "fix", "verify", "reply"])
+    await store.write_manifest(
+        {
+            "triage": _manifest_entry(
+                status="completed", selected_routes=["docs"], route_evidence="the reporter asks how to configure it"
+            ),
+            "scan": _manifest_entry(status="completed", depends_on=["triage"], selected_routes=[]),
+            "fix": _manifest_entry(status="not_executed", depends_on=["triage"], reason="when_false"),
+            "verify": _manifest_entry(status="not_executed", depends_on=["fix"], reason="upstream_not_executed"),
+            "reply": _manifest_entry(status="completed", depends_on=["triage"]),
+        }
+    )
+    async with index_guard(store.registry_root):
+        await store.record_outcome(
+            {
+                "triage": "completed",
+                "scan": "completed",
+                "fix": "not_executed",
+                "verify": "not_executed",
+                "reply": "completed",
+            },
+            summary="ok",
+        )
+
+    result = await tasks_list({"session_key": SESSION})
+    TasksListResult.model_validate(result)
+
+    by_node = {n["node_id"]: n for n in result["tasks"][0]["nodes"]}
+    assert _branch_part(by_node["triage"]) == {
+        "routes": ["bug", "docs"],
+        "select": "one",
+        "selected_routes": ["docs"],
+        "route_evidence": "the reporter asks how to configure it",
+    }
+    assert _branch_part(by_node["scan"]) == {"routes": ["docs", "api"], "select": "many", "selected_routes": []}
+    assert _branch_part(by_node["fix"]) == {"reason": "when_false", "when": "triage.bug"}
+    assert _branch_part(by_node["verify"]) == {"reason": "upstream_not_executed"}
+    assert _branch_part(by_node["reply"]) == {}
+    assert "it reports a defect" not in json.dumps(result), "a route's condition is the judge's and goes nowhere"
+
+
+async def test_a_run_that_never_branched_has_exactly_the_node_keys_it_always_had(workspace: Path) -> None:
+    """The tasks tab reads this for every run, so one without routes or guards answers with
+    none of the six branch keys -- not null, not empty -- and nothing else moves."""
+    session_dir = _session_dir(workspace)
+    store = await _make_run(session_dir, RUN_ID, _GRAPH, ["n1", "n2"])
+    await store.write_manifest(
+        {
+            "n1": _manifest_entry(status="completed"),
+            "n2": _manifest_entry(status="failed", depends_on=["n1"], error="boom"),
+        }
+    )
+    async with index_guard(store.registry_root):
+        await store.record_outcome({"n1": "completed", "n2": "failed"}, summary="failed")
+
+    row = (await tasks_list({"session_key": SESSION}))["tasks"][0]
+
+    always = {
+        "node_id",
+        "node_summary",
+        "agent",
+        "instance",
+        "status",
+        "depends_on",
+        "started_at",
+        "ended_at",
+        "error",
+        "tokens_in",
+        "tokens_out",
+        "tool_call_count",
+        "tool_failure_count",
+        "has_output",
+        "prompt_template",
+        "inputs",
+        "files",
+    }
+    assert [set(node) for node in row["nodes"]] == [always, always]
+
+
+async def test_tasks_list_builds_the_branch_keys_with_the_helper_dag_get_does(workspace: Path) -> None:
+    """One helper answers for both reads, and the shapes a person editing
+    graph.json can leave are where two derivations would part: a list for `routes`,
+    an empty map, a stray `select`, a blank or non-text guard, an unset `select`."""
+    from raven.agent.subagent.dag_reader import branch_fields, read_run
+
+    two = {"a": "the first holds", "b": "the second holds"}
+    shapes = {
+        "unset": {"routes": two},
+        "null_select": {"routes": two, "select": None},
+        "many": {"routes": two, "select": "many"},
+        "empty_routes": {"routes": {}, "select": "many"},
+        "list_routes": {"routes": ["a", "b"]},
+        "stray_select": {"select": "many"},
+        "blank_when": {"when": "   "},
+        "non_text_when": {"when": 5},
+        "real_when": {"when": "unset.a"},
+        "plain": {},
+    }
+    graph = {
+        "task_summary": "hand edited",
+        "nodes": [{"id": nid, "subagent": "Raven", "depends_on": [], **extra} for nid, extra in shapes.items()],
+    }
+    manifest = {
+        nid: _manifest_entry(status="completed", **({"selected_routes": ["a"]} if "routes" in extra else {}))
+        for nid, extra in shapes.items()
+    }
+    manifest["real_when"] = _manifest_entry(status="not_executed", reason="when_unknown")
+    session_dir = _session_dir(workspace)
+    store = await _make_run(session_dir, RUN_ID, graph, list(shapes))
+    await store.write_manifest(manifest)
+    async with index_guard(store.registry_root):
+        await store.record_outcome({nid: entry["status"] for nid, entry in manifest.items()}, summary="ok")
+
+    row = (await tasks_list({"session_key": SESSION}))["tasks"][0]
+    run = await read_run(LocalFileBackend(), str(dag_root(session_dir)), RUN_ID, str(nodes_root(session_dir)))
+
+    ours = {node["node_id"]: _branch_part(node) for node in row["nodes"]}
+    dag_get = {entry["node"]: _branch_part(entry) for entry in run["files"]}
+    assert ours == dag_get
+    assert ours == {gnode["id"]: branch_fields(manifest[gnode["id"]], gnode) for gnode in graph["nodes"]}
+    assert ours["unset"]["select"] == "one", "the effective value, as the run-started event says it"
+    for nid in ("list_routes", "empty_routes", "stray_select", "plain"):
+        assert not {"routes", "select"} & set(ours[nid]), f"{nid} is no decision, whatever else the file says"
+    for nid in ("blank_when", "non_text_when", "plain"):
+        assert "when" not in ours[nid], f"{nid} has no guard"
+    assert ours["real_when"] == {"when": "unset.a", "reason": "when_unknown"}
+
+
+async def test_a_run_not_yet_finalized_names_what_it_asked_and_not_yet_what_it_decided(workspace: Path) -> None:
+    """With no manifest and no decision on any registry row there is no outcome to
+    read: the declarations are graph.json's and are there from the first poll, and
+    the reason and selection arrive with the row that records the decision. Every
+    field stays optional on the wire for exactly this."""
+    session_dir = _session_dir(workspace)
+    await _make_run(session_dir, RUN_ID, _BRANCHING_GRAPH, ["triage", "fix", "reply"])
+    loop = _loop_stub(live_run_ids=frozenset({RUN_ID}))
+
+    row = (await tasks_list({"session_key": SESSION}, agent_loop_factory=_factory(loop)))["tasks"][0]
+
+    by_node = {n["node_id"]: n for n in row["nodes"]}
+    assert _branch_part(by_node["triage"]) == {"routes": ["bug", "docs"], "select": "one"}
+    assert _branch_part(by_node["fix"]) == {"when": "triage.bug"}
+    assert _branch_part(by_node["reply"]) == {}
+
+
+async def test_a_run_not_yet_finalized_reads_what_a_branch_decided_off_its_registry_rows(workspace: Path) -> None:
+    """Until the manifest is written, a node's registry row is the only record of what
+    a branch decided, and the tasks tab reads it from there after a reload."""
+    from raven.agent.subagent.instances import get_registry
+
+    session_dir = _session_dir(workspace)
+    await _make_run(session_dir, RUN_ID, _BRANCHING_GRAPH, ["triage", "fix", "reply"])
+    registry = get_registry()
+    await registry.upsert_dag_node(
+        SESSION, RUN_ID, "triage", "Raven", "completed", selected_routes=["docs"], route_evidence="asks how to set it"
+    )
+    await registry.upsert_dag_node(SESSION, RUN_ID, "fix", "Raven", "not_executed", reason="when_false")
+    await registry.upsert_dag_node(SESSION, RUN_ID, "reply", "Raven", "running")
+    loop = _loop_stub(live_run_ids=frozenset({RUN_ID}))
+
+    result = await tasks_list({"session_key": SESSION}, agent_loop_factory=_factory(loop))
+    TasksListResult.model_validate(result)
+
+    by_node = {n["node_id"]: n for n in result["tasks"][0]["nodes"]}
+    assert _branch_part(by_node["triage"]) == {
+        "routes": ["bug", "docs"],
+        "select": "one",
+        "selected_routes": ["docs"],
+        "route_evidence": "asks how to set it",
+    }
+    assert _branch_part(by_node["fix"]) == {"reason": "when_false", "when": "triage.bug"}
+    assert _branch_part(by_node["reply"]) == {}
+
+
+async def test_a_nodes_manifest_entry_outranks_its_registry_row(workspace: Path) -> None:
+    """Once the manifest names a node it is that node's whole account, even where its row says more."""
+    from raven.agent.subagent.instances import get_registry
+
+    session_dir = _session_dir(workspace)
+    store = await _make_run(session_dir, RUN_ID, _BRANCHING_GRAPH, ["triage", "fix", "reply"])
+    await store.write_manifest(
+        {
+            "triage": _manifest_entry(status="completed"),
+            "fix": _manifest_entry(status="completed", depends_on=["triage"]),
+            "reply": _manifest_entry(status="completed", depends_on=["triage"]),
+        }
+    )
+    await get_registry().upsert_dag_node(SESSION, RUN_ID, "triage", "Raven", "completed", selected_routes=["bug"])
+    await get_registry().upsert_dag_node(SESSION, RUN_ID, "fix", "Raven", "not_executed", reason="when_false")
+
+    row = (await tasks_list({"session_key": SESSION}))["tasks"][0]
+
+    by_node = {n["node_id"]: n for n in row["nodes"]}
+    assert _branch_part(by_node["triage"]) == {"routes": ["bug", "docs"], "select": "one"}
+    assert _branch_part(by_node["fix"]) == {"when": "triage.bug"}
+
+
+async def test_a_real_branching_run_reaches_the_wire_and_the_task_row_alike(workspace: Path) -> None:
+    """The tests above feed the spine and the reader dicts typed by hand. This one
+    takes what the runner really emits and really writes, so a key the runner
+    renamed fails here instead of in a client, and the three surfaces -- the live
+    frames, the closing frame and the reloaded row -- have to say the same thing."""
+    from pydantic import TypeAdapter
+
+    from raven.agent.subagent.dag_graph import parse_dag_spec
+    from raven.agent.subagent.dag_runner import run_dag
+    from raven.agent.subagent.dag_verdict import Verdict
+    from raven.rpc.models import TurnEvent
+    from raven.rpc.spine import _DAG_WIRE_EVENT, _dag_payload
+
+    class _Echo:
+        async def run(self, task: str, *, task_id: str, workspace: Any, executor: Any, **kwargs: Any) -> str:
+            return f"OUT[{task_id}]"
+
+    async def judge(*, node: Any, store: Any, output: Any, error: Any, crashed: Any, output_limited: bool = False):
+        if node.routes:
+            return Verdict(accomplished=True, routes=("docs",), route_evidence="the reporter asks how to configure it")
+        return Verdict(accomplished=True)
+
+    published: list[tuple[str, dict[str, Any]]] = []
+
+    async def publish(name: str, payload: dict[str, Any]) -> None:
+        published.append((name, payload))
+
+    def node(node_id: str, **extra: Any) -> dict[str, Any]:
+        return {"id": node_id, "subagent": "x", "node_summary": node_id, "prompt_template": node_id, **extra}
+
+    spec = parse_dag_spec(
+        {
+            "task_summary": "handle an issue",
+            "nodes": [
+                node("triage", routes={"bug": "a defect", "docs": "a question"}),
+                node("fix", depends_on=["triage"], when="triage.bug"),
+                node("verify", depends_on=["fix"]),
+                node("reply", depends_on=["triage"], when="triage.docs"),
+            ],
+        }
+    )
+    session_dir = _session_dir(workspace)
+    result = await run_dag(
+        spec,
+        resolve=lambda _node: _Echo(),
+        backend=LocalFileBackend(),
+        workdir=str(workspace),
+        run_root=str(dag_root(session_dir)),
+        nodes_root=str(nodes_root(session_dir)),
+        history_root=str(session_history_root(session_dir)),
+        judge_node=judge,
+        progress_publisher=publish,
+        session_key=SESSION,
+    )
+    # `run_subagent_dag` publishes this one, from the run's own result.
+    published.append(
+        (
+            "dag_run_completed",
+            {
+                "run_id": result.run_id,
+                "manifest": {"dir": result.dir, "files": result.files, "summary": result.summary},
+            },
+        )
+    )
+    frames = [(name, _dag_payload(name, payload)) for name, payload in published]
+    for name, frame in frames:
+        TypeAdapter(TurnEvent).validate_python({"type": _DAG_WIRE_EVENT[name], "payload": frame})
+
+    started = next(frame for name, frame in frames if name == "dag_run_started")
+    declared = {n["id"]: _branch_part(n) for n in started["nodes"]}
+    assert declared == {
+        "triage": {"routes": ["bug", "docs"], "select": "one"},
+        "fix": {"when": "triage.bug"},
+        "verify": {},
+        "reply": {"when": "triage.docs"},
+    }
+
+    updates = {(f["node"], f["status"]): f for name, f in frames if name == "dag_node_updated"}
+    assert _branch_part(updates["triage", "completed"]) == {
+        "selected_routes": ["docs"],
+        "route_evidence": "the reporter asks how to configure it",
+    }
+    assert _branch_part(updates["fix", "not_executed"]) == {"reason": "when_false"}
+    assert _branch_part(updates["verify", "not_executed"]) == {"reason": "upstream_not_executed"}
+
+    closing = next(frame for name, frame in frames if name == "dag_run_completed")
+    outcome = ("reason", "selected_routes", "route_evidence")
+    closed = {f["node"]: {k: f[k] for k in outcome if k in f} for f in closing["files"]}
+    assert closed == {
+        "triage": {"selected_routes": ["docs"], "route_evidence": "the reporter asks how to configure it"},
+        "fix": {"reason": "when_false"},
+        "verify": {"reason": "upstream_not_executed"},
+        "reply": {},
+    }
+    assert closing["summary"]["not_executed"] == 2
+
+    reloaded = await tasks_list({"session_key": SESSION})
+    TasksListResult.model_validate(reloaded)
+    row = reloaded["tasks"][0]
+    assert row["status"] == "completed"
+    assert row["counts"]["not_executed"] == 2
+    assert {n["node_id"]: {k: n[k] for k in outcome if k in n} for n in row["nodes"]} == closed
+    assert {n["node_id"]: {k: n[k] for k in ("routes", "select", "when") if k in n} for n in row["nodes"]} == {
+        "triage": {"routes": ["bug", "docs"], "select": "one"},
+        "fix": {"when": "triage.bug"},
+        "verify": {},
+        "reply": {"when": "triage.docs"},
+    }
+
+
+async def test_a_hard_stopped_run_clears_the_stamp_of_a_not_executed_node_too(workspace: Path) -> None:
+    session_dir = _session_dir(workspace)
+    store = await _make_run(session_dir, RUN_ID, _BRANCHING_GRAPH, ["triage", "fix", "reply"])
+    async with index_guard(store.registry_root):
+        await store.record_outcome(
+            {"triage": "completed", "fix": "not_executed", "reply": "cancelled"}, summary="stopped"
+        )
+
+    row = (await tasks_list({"session_key": SESSION}))["tasks"][0]
+
+    assert [n["status"] for n in row["nodes"]] == ["completed", "not_executed", "cancelled"]
+    assert row["nodes"][1]["started_at"] is None and row["nodes"][1]["ended_at"] is None
+    assert row["counts"]["not_executed"] == 1
 
 
 async def test_a_dead_runs_claimed_node_reads_interrupted(workspace: Path) -> None:

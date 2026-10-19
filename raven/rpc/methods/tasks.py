@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from raven.agent.subagent import activity as run_activity
 from raven.agent.subagent.activity import merge_file_change
+from raven.agent.subagent.dag_reader import branch_fields, registry_outcome
 from raven.agent.subagent.dag_store import REGISTRY_FILENAME, RUNNING, UNRECORDED, node_live_key
 from raven.agent.subagent.history import dag_root, nodes_root, session_history_root, spawn_live_key
 from raven.agent.subagent.instances import get_registry
@@ -56,7 +57,17 @@ _SPAWN_META_STATUS = {
     "cancelled": "cancelled",
 }
 
-_COUNT_KEYS = ("pending", "running", "completed", "failed", "skipped", "cancelled", "interrupted", "exception")
+_COUNT_KEYS = (
+    "pending",
+    "running",
+    "completed",
+    "failed",
+    "skipped",
+    "cancelled",
+    "interrupted",
+    "exception",
+    "not_executed",
+)
 
 
 def _head(path: Path, limit: int) -> str | None:
@@ -145,7 +156,11 @@ def _counts(statuses: list[str]) -> dict[str, int]:
 
 
 def _task_status(statuses: list[str]) -> str:
-    """The task-status ladder, first rule that matches (contract section 2.5)."""
+    """The task-status ladder, first rule that matches (contract section 2.5).
+
+    ``not_executed`` is on no rung: a branch that was not taken is not a state
+    that stopped the run, so a graph whose only oddity is one reads as completed.
+    """
     present = set(statuses)
     if "failed" in present:
         return "failed"
@@ -380,9 +395,10 @@ def _dag_row(
         status, started, ended = _dag_node_state(run_dir.name, nid, entry, registry_nodes, by_node)
         if status in _NOT_LIVE_PENDING and not live:
             status = "interrupted"
-        if status == "skipped":
+        if status in ("skipped", "not_executed"):
             # Never ran: the registry stamps it with the moment the run was
-            # finalized, which is not a clock this node ever had.
+            # finalized, and the runner with the moment the branch was decided,
+            # neither of which is a clock this node ever had.
             started = ended = None
         call_count, failure_count = _tool_counts(account)
         node: dict[str, Any] = {
@@ -409,6 +425,9 @@ def _dag_row(
             node["skills"] = list(gnode["skills"])
         if gnode.get("mcps") is not None:
             node["mcps"] = list(gnode["mcps"])
+        # The reader `dag.get` answers from, so the two reads cannot name a branch differently.
+        # Until the manifest names the node, what a branch decided is on its registry row.
+        node.update(branch_fields(entry if entry is not None else registry_outcome(by_node.get(nid) or {}), gnode))
         _overlay_live(node, run_activity.live(live_key))
         nodes.append(node)
         statuses.append(status)

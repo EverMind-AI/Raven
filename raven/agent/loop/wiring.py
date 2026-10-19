@@ -1880,12 +1880,9 @@ class WiringMixin:
         credential -- a bare model id sent through another vendor's provider
         fails, and the judge fails open, so verdicts would go quietly off.
         """
-        pinned = self.subagent_dag_config.verdict_model
-        if pinned and self._provider_pool is not None:
-            binding = self._provider_pool.bind_pin(pinned)
-            if binding is not None:
-                return binding.provider
-        return self.provider
+        from raven.agent.subagent.dag_verdict import judge_provider
+
+        return judge_provider(self.provider, self._provider_pool, self.subagent_dag_config.verdict_model)
 
     async def _confirm_graph(self, conversation_id: str, question: str) -> bool:
         """The graph-level ``confirm`` gate's route to a human.

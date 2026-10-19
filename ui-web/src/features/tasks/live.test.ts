@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   applyNodeUpdated, applyRunCompleted, applyRunReplanned, applyRunStarted, applySubagentStatus,
-  countsOf, deriveStatus, startOfRunId,
+  carryOutcome, countsOf, deriveStatus, startOfRunId,
 } from './live'
 
 import type { TaskNode, TaskRow } from './types'
@@ -49,6 +49,42 @@ describe('countsOf / deriveStatus', () => {
   })
 })
 
+/* A node a branch left out never ran, so it is counted -- the total is the
+   graph's, and it adds up -- and it moves nothing: an unselected branch is the
+   run working as written, not a run that was stopped. */
+describe('a node a branch left out', () => {
+  const nodes = [node({ node_id: 'a', status: 'completed' }), node({ node_id: 'b', status: 'not_executed' })]
+
+  it('is counted on its own and in the total', () => {
+    expect(countsOf(nodes)).toStrictEqual({
+      total: 2, pending: 0, running: 0, completed: 1, failed: 0, skipped: 0, cancelled: 0, interrupted: 0,
+      exception: 0, not_executed: 1,
+    })
+  })
+
+  it('keeps the task completed', () => {
+    expect(deriveStatus(nodes)).toBe('completed')
+    expect(deriveStatus([node({ node_id: 'b', status: 'not_executed' })])).toBe('completed')
+  })
+
+  it('hides neither a failure, a stop nor work still to do beside it', () => {
+    const left = node({ node_id: 'x', status: 'not_executed' })
+    expect(deriveStatus([left, node({ node_id: 'a', status: 'failed' })])).toBe('failed')
+    expect(deriveStatus([left, node({ node_id: 'a', status: 'interrupted' })])).toBe('interrupted')
+    expect(deriveStatus([left, node({ node_id: 'a', status: 'running' })])).toBe('running')
+    expect(deriveStatus([left, node({ node_id: 'a', status: 'pending' })])).toBe('running')
+    expect(deriveStatus([left, node({ node_id: 'a', status: 'skipped' })])).toBe('cancelled')
+  })
+
+  it('leaves the counts of a run that never branches exactly as they were', () => {
+    const plain = [node({ node_id: 'a', status: 'completed' }), node({ node_id: 'b', status: 'running' })]
+    expect(JSON.stringify(countsOf(plain))).toBe(
+      '{"total":2,"pending":0,"running":1,"completed":1,"failed":0,"skipped":0,"cancelled":0,"interrupted":0,'
+      + '"exception":0,"not_executed":0}',
+    )
+  })
+})
+
 describe('applyRunStarted', () => {
   const payload = {
     run_id: '20260717T031500123456Z-1a2b3c4d', task_summary: 'Ship the release',
@@ -75,6 +111,42 @@ describe('applyRunStarted', () => {
     const once = applyRunStarted([], payload)
     const twice = applyRunStarted(once, payload)
     expect(twice).toHaveLength(1)
+  })
+
+  it("carries a decision node's routes and select, and a guarded node's guard", () => {
+    const [row] = applyRunStarted([], {
+      run_id: 'r1',
+      nodes: [
+        { id: 'triage', subagent: 'Router', depends_on: [], routes: ['question', 'bug'], select: 'one' },
+        { id: 'answer', subagent: 'Writer', depends_on: ['triage'], when: 'triage.question' },
+      ],
+    })
+    expect(row!.nodes[0]).toMatchObject({ routes: ['question', 'bug'], select: 'one' })
+    expect(row!.nodes[0]).not.toHaveProperty('when')
+    expect(row!.nodes[1]).toMatchObject({ when: 'triage.question' })
+    expect(row!.nodes[1]).not.toHaveProperty('routes')
+    expect(row!.nodes[1]).not.toHaveProperty('select')
+  })
+
+  it("leaves a decision's empty selection alone when the run's own frame is replayed", () => {
+    const started = {
+      run_id: 'r1',
+      nodes: [{ id: 'triage', subagent: 'Router', depends_on: [], routes: ['a', 'b'], select: 'many' as const }],
+    }
+    const decided = applyNodeUpdated(applyRunStarted([], started), {
+      run_id: 'r1', node: 'triage', status: 'completed', selected_routes: [],
+    }).rows
+    expect(applyRunStarted(decided, started)[0]!.nodes[0]!.selected_routes).toEqual([])
+  })
+
+  /* A key an event never carried is not a key at all: a row built from a run
+     that never branches is the row it always was, down to its keys. */
+  it('gives a node with no branch fields exactly the keys it always had', () => {
+    const [row] = applyRunStarted([], payload)
+    expect(Object.keys(row!.nodes[0]!).sort()).toEqual([
+      'agent', 'depends_on', 'ended_at', 'error', 'files', 'has_output', 'instance', 'node_id', 'node_summary',
+      'prompt_template', 'started_at', 'status', 'tokens_in', 'tokens_out', 'tool_call_count', 'tool_failure_count',
+    ])
   })
 })
 
@@ -117,9 +189,92 @@ describe('applyNodeUpdated', () => {
     expect(applyNodeUpdated(base, { run_id: 'r1', node: 'a', status: 'running', tool_call_id: 'c1' }).refetch).toBeUndefined()
     /* `interrupted` is the reader's own word for a run the gateway lost, never
        a frame's, so the wire type does not carry it. */
-    for (const status of ['completed', 'failed', 'skipped', 'cancelled', 'exception'] as const) {
+    for (const status of ['completed', 'failed', 'skipped', 'cancelled', 'exception', 'not_executed'] as const) {
       expect(applyNodeUpdated(base, { run_id: 'r1', node: 'a', status }).refetch).toEqual({ kind: 'dag', id: 'r1' })
     }
+  })
+})
+
+/* The two frames that say how a branch came out: a decision node's own finish
+   frame carries what it selected, and a node a branch left out is announced
+   with the reason it was. Both are copied field by field and only when the frame
+   carries them -- an empty `selected_routes` is a decision that chose nothing,
+   which is not the same as a node that decided nothing. */
+describe('applyNodeUpdated on a branch', () => {
+  const base: TaskRow[] = [{
+    id: 'r1', kind: 'dag', task_summary: null, status: 'running', agent: null, handle: null,
+    started_at: 1000, ended_at: null,
+    counts: countsOf([
+      node({ node_id: 'triage', status: 'running' }), node({ node_id: 'answer', status: 'pending' }),
+      node({ node_id: 'fix', status: 'pending' }),
+    ]),
+    nodes: [
+      node({ node_id: 'triage', status: 'running', started_at: 1000 }),
+      node({ node_id: 'answer', status: 'pending', depends_on: ['triage'] }),
+      node({ node_id: 'fix', status: 'pending', depends_on: ['triage'] }),
+    ],
+  }]
+
+  it("stores a decision's selection and the evidence for it from its finish frame", () => {
+    const { rows } = applyNodeUpdated(base, {
+      run_id: 'r1', node: 'triage', status: 'completed', ended_at: 2000,
+      selected_routes: ['question'], route_evidence: 'The user asked how to reset a password.',
+    })
+    expect(rows[0]!.nodes[0]).toMatchObject({
+      status: 'completed', selected_routes: ['question'], route_evidence: 'The user asked how to reset a password.',
+    })
+  })
+
+  it('keeps an empty selection: a decision that chose nothing has still decided', () => {
+    const { rows } = applyNodeUpdated(base, {
+      run_id: 'r1', node: 'triage', status: 'completed', ended_at: 2000, selected_routes: [],
+    })
+    expect(rows[0]!.nodes[0]!.selected_routes).toEqual([])
+    expect(Array.isArray(rows[0]!.nodes[0]!.selected_routes)).toBe(true)
+  })
+
+  it('writes no branch key at all for a frame that carries none', () => {
+    const { rows } = applyNodeUpdated(base, { run_id: 'r1', node: 'triage', status: 'completed', ended_at: 2000 })
+    const keys = Object.keys(rows[0]!.nodes[0]!)
+    expect(keys).not.toContain('selected_routes')
+    expect(keys).not.toContain('route_evidence')
+    expect(keys).not.toContain('reason')
+  })
+
+  it('does not lose a selection to a later frame that says nothing about it', () => {
+    const decided = applyNodeUpdated(base, {
+      run_id: 'r1', node: 'triage', status: 'completed', ended_at: 2000, selected_routes: [],
+    }).rows
+    const later = applyNodeUpdated(decided, { run_id: 'r1', node: 'triage', status: 'completed', ended_at: 2000 }).rows
+    expect(later[0]!.nodes[0]!.selected_routes).toEqual([])
+  })
+
+  it('marks a node a branch left out with the reason it was, and asks for a reconcile', () => {
+    const result = applyNodeUpdated(base, { run_id: 'r1', node: 'fix', status: 'not_executed', reason: 'when_false' })
+    expect(result.rows[0]!.nodes[2]).toMatchObject({ status: 'not_executed', reason: 'when_false' })
+    expect(result.rows[0]!.counts.not_executed).toBe(1)
+    expect(result.refetch).toEqual({ kind: 'dag', id: 'r1' })
+  })
+
+  it('reads the task as completed once only an unselected branch is left', () => {
+    const decided = applyNodeUpdated(base, {
+      run_id: 'r1', node: 'triage', status: 'completed', ended_at: 2000, selected_routes: ['question'],
+    }).rows
+    const answered = applyNodeUpdated(decided, { run_id: 'r1', node: 'answer', status: 'completed', ended_at: 3000 }).rows
+    expect(answered[0]!.status).toBe('running')
+    const left = applyNodeUpdated(answered, { run_id: 'r1', node: 'fix', status: 'not_executed', reason: 'when_false' }).rows
+    expect(left[0]!.status).toBe('completed')
+    expect(left[0]!.counts).toMatchObject({ total: 3, completed: 2, not_executed: 1 })
+  })
+
+  it('replaying the same frame lands on the same rows', () => {
+    const frame = {
+      run_id: 'r1', node: 'triage', status: 'completed' as const, ended_at: 2000,
+      selected_routes: [] as string[], route_evidence: 'nothing applied',
+    }
+    const once = applyNodeUpdated(base, frame)
+    const twice = applyNodeUpdated(once.rows, frame)
+    expect(twice.rows).toEqual(once.rows)
   })
 })
 
@@ -162,6 +317,123 @@ describe('applyRunCompleted', () => {
     })
     expect(twice.rows[0]!.ended_at).toBe(once.rows[0]!.ended_at)
     vi.useRealTimers()
+  })
+})
+
+/* The closing frame repeats the outcome of every node it names, and a client
+   folding it must neither drop what the node frames already said nor swallow an
+   empty selection. */
+describe('applyRunCompleted on a branch', () => {
+  const row = (nodes: TaskNode[]): TaskRow[] => [{
+    id: 'r1', kind: 'dag', task_summary: null, status: 'running', agent: null, handle: null,
+    started_at: 1000, ended_at: null, counts: countsOf(nodes), nodes,
+  }]
+  const bare = row([
+    node({ node_id: 'triage', status: 'running' }), node({ node_id: 'fix', status: 'pending', depends_on: ['triage'] }),
+  ])
+  const told = row([
+    node({ node_id: 'triage', status: 'completed', selected_routes: ['question'], route_evidence: 'asked a question' }),
+    node({ node_id: 'fix', status: 'not_executed', reason: 'when_false', depends_on: ['triage'] }),
+  ])
+
+  it("folds a decision's selection and a left-out node's reason out of the files", () => {
+    const result = applyRunCompleted(bare, {
+      run_id: 'r1', dir: '/d', summary: { total: 2, completed: 1, not_executed: 1 },
+      files: [
+        { node: 'triage', status: 'completed', selected_routes: ['question'], route_evidence: 'asked a question' },
+        { node: 'fix', status: 'not_executed', reason: 'when_unknown' },
+      ],
+    })
+    expect(result.rows[0]!.nodes[0]).toMatchObject({ selected_routes: ['question'], route_evidence: 'asked a question' })
+    expect(result.rows[0]!.nodes[1]).toMatchObject({ status: 'not_executed', reason: 'when_unknown' })
+    expect(result.rows[0]!.counts).toMatchObject({ total: 2, completed: 1, not_executed: 1 })
+    expect(result.rows[0]!.status).toBe('completed')
+  })
+
+  it('keeps an empty selection out of the files', () => {
+    const result = applyRunCompleted(bare, {
+      run_id: 'r1', dir: '/d', summary: {}, files: [{ node: 'triage', status: 'completed', selected_routes: [] }],
+    })
+    expect(result.rows[0]!.nodes[0]!.selected_routes).toEqual([])
+  })
+
+  it('does not drop what the node frames said when the files say nothing of it', () => {
+    const result = applyRunCompleted(told, {
+      run_id: 'r1', dir: '/d', summary: {},
+      files: [{ node: 'triage', status: 'completed' }, { node: 'fix', status: 'not_executed' }],
+    })
+    expect(result.rows[0]!.nodes[0]).toMatchObject({ selected_routes: ['question'], route_evidence: 'asked a question' })
+    expect(result.rows[0]!.nodes[1]).toMatchObject({ reason: 'when_false' })
+  })
+
+  it('lets a file correct what a node frame said', () => {
+    const result = applyRunCompleted(told, {
+      run_id: 'r1', dir: '/d', summary: {}, files: [{ node: 'triage', status: 'completed', selected_routes: ['bug'] }],
+    })
+    expect(result.rows[0]!.nodes[0]!.selected_routes).toEqual(['bug'])
+  })
+
+  it('gives a node of a run that never branches the keys it had', () => {
+    const before = Object.keys(bare[0]!.nodes[0]!).sort()
+    const result = applyRunCompleted(bare, {
+      run_id: 'r1', dir: '/d', summary: {}, files: [{ node: 'triage', status: 'completed' }],
+    })
+    expect(Object.keys(result.rows[0]!.nodes[0]!).sort()).toEqual(before)
+  })
+
+  it('replaying the same completion frame lands on the same rows', () => {
+    const frame = {
+      run_id: 'r1', dir: '/d', summary: {},
+      files: [{ node: 'triage', status: 'completed' as const, selected_routes: [] as string[] }],
+    }
+    const once = applyRunCompleted(bare, frame)
+    expect(applyRunCompleted(once.rows, frame).rows[0]!.nodes).toEqual(once.rows[0]!.nodes)
+  })
+})
+
+/* While a run goes, `tasks.list` takes a decision's selection and a left-out
+   node's reason from registry rows, a best-effort write that can be dropped,
+   so a read taken then can answer those nodes without them. The frames already
+   said both, and the read must not take them back. */
+describe('carryOutcome', () => {
+  const rowOf = (nodes: TaskNode[]): TaskRow => ({
+    id: 'r1', kind: 'dag', task_summary: null, status: 'running', agent: null, handle: null,
+    started_at: 1000, ended_at: null, counts: countsOf(nodes), nodes,
+  })
+  const held = rowOf([
+    node({ node_id: 'triage', status: 'completed', selected_routes: [], route_evidence: 'nothing applied' }),
+    node({ node_id: 'fix', status: 'not_executed', reason: 'when_false' }),
+  ])
+
+  it('puts back what a read taken mid-run leaves out', () => {
+    const got = rowOf([node({ node_id: 'triage', status: 'completed' }), node({ node_id: 'fix', status: 'not_executed' })])
+    const carried = carryOutcome(held, got)
+    expect(carried.nodes[0]).toMatchObject({ selected_routes: [], route_evidence: 'nothing applied' })
+    expect(carried.nodes[1]).toMatchObject({ reason: 'when_false' })
+  })
+
+  it('carries an empty selection, which is a decision, as it carries any other', () => {
+    const got = rowOf([node({ node_id: 'triage', status: 'completed' })])
+    expect(carryOutcome(held, got).nodes[0]!.selected_routes).toEqual([])
+  })
+
+  it('takes what the read says wherever it says anything, an empty selection included', () => {
+    const decided = rowOf([node({ node_id: 'triage', status: 'completed', selected_routes: ['bug'] })])
+    const none = rowOf([node({ node_id: 'triage', status: 'completed', selected_routes: [] })])
+    expect(carryOutcome(decided, none).nodes[0]!.selected_routes).toEqual([])
+    expect(carryOutcome(held, decided).nodes[0]!.selected_routes).toEqual(['bug'])
+  })
+
+  it('leaves a node alone that is no longer in the state the outcome was about', () => {
+    const got = rowOf([node({ node_id: 'triage', status: 'running' })])
+    expect(carryOutcome(held, got).nodes[0]).not.toHaveProperty('selected_routes')
+  })
+
+  it('hands back the row it was given when there is nothing to carry', () => {
+    const plainHeld = rowOf([node({ node_id: 'a', status: 'completed' })])
+    const plainGot = rowOf([node({ node_id: 'a', status: 'completed' })])
+    expect(carryOutcome(plainHeld, plainGot)).toBe(plainGot)
+    expect(carryOutcome(undefined, plainGot)).toBe(plainGot)
   })
 })
 

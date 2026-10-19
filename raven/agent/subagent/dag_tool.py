@@ -67,17 +67,19 @@ from raven.agent.subagent.dag_reader import run_dir_of
 from raven.agent.subagent.dag_runner import DagRunResult, ExceptionAnnouncer, ProgressPublisher, run_dag
 from raven.agent.subagent.dag_skills import fold_skills
 from raven.agent.subagent.dag_store import (
+    NOT_EXECUTED,
     RUNNING,
     DagRunStore,
     SessionNodes,
+    format_tally,
     index_guard,
     make_run_id,
     read_registry,
     read_session_nodes,
 )
-from raven.agent.subagent.dag_verdict import Verdict, describe_failure, judge, tail
+from raven.agent.subagent.dag_verdict import RouteUndeterminedError, Verdict, describe_failure, judge, tail
 from raven.agent.subagent.delegate import current_delegate, dispatch_charter
-from raven.agent.subagent.history import dag_root, nodes_root, session_history_root
+from raven.agent.subagent.history import dag_root, nodes_root, nodes_root_in, session_history_root
 from raven.agent.subagent.instances import mint_handle
 from raven.agent.subagent.prompt_backend import LocalFileBackend
 from raven.agent.subagent.prompt_errors import DagValidationError, RoundBudgetSpentError, RoundNotApprovedError
@@ -177,7 +179,7 @@ def _successful_final(event: Any) -> bool:
     summary = event.result.summary or {}
     return (
         bool(summary.get("total"))
-        and summary.get("completed") == summary.get("total")
+        and summary.get("completed", 0) + summary.get(NOT_EXECUTED, 0) == summary.get("total")
         and not any(summary.get(key, 0) for key in ("failed", "cancelled", "skipped"))
     )
 
@@ -444,11 +446,7 @@ _NODE_SCHEMA: dict[str, Any] = {
         "id": {
             "type": "string",
             "description": (
-                "Node id (^[A-Za-z0-9_-]+$), unique across this whole conversation -- not just this "
-                "graph, and not just this tool: a graph node and a spawn's node_id share one namespace. "
-                "It is how a later task of either kind names this node's output. Reusing an id is "
-                "rejected -- pick a fresh one (plan_v2, research_pricing) rather than repeating a generic "
-                "one, and to re-do work under the same name give the node a new id."
+                "Node id (^[A-Za-z0-9_-]+$), unique across this conversation -- not just this tool: a graph node and a spawn's node_id share one namespace, and a later task of either kind names this node's output."
             ),
         },
         "subagent": {
@@ -458,48 +456,23 @@ _NODE_SCHEMA: dict[str, Any] = {
         "node_summary": {
             "type": "string",
             "minLength": 1,
-            "description": (
-                "A short title for this step, written before its prompt -- the length of a "
-                "chat title, under ten words, not a sentence and not a summary of the "
-                "prompt. It is this node's row in the run, read by someone watching the "
-                "graph, so name the step and leave the detail to the prompt."
-            ),
+            "description": "A short title, under ten words.",
         },
         "prompt_template": {
             "type": "string",
             "description": (
-                "Node prompt. Placeholders: {{ <node>.output }} / {{ <node>.output_path }} inject a "
-                "node's output text/path; {{ inputs.<k> }} / {{ inputs.<k>.path }} inject an input; "
-                "{{ ref:<path> }} / {{ ref_path:<path> }} read a file. <node> is either a node of this "
-                "graph listed in this node's depends_on, or any task this conversation already "
-                "completed and left an output. One that failed, was skipped, was cancelled or is "
-                "still running keeps its id but is refused, saying which. To read a node's files "
-                "directly, "
-                "{{ ref:@nodes/<node>.out.md }} or {{ ref:@nodes/<node>.prompt.md }}. The _path forms need a "
-                "sub-agent the roster tags [local-files]; for a [no-local-files] one use the contents "
-                "forms instead, and every _path form must name a file that already exists. "
-                "Every key in inputs must be referenced by a placeholder. A long prompt belongs in a "
-                "file referenced with {{ ref:<path> }}, so the graph JSON stays small enough to write "
-                "in one reply."
+                "Node prompt. {{ <node>.output }} / .output_path a node's output, {{ inputs.<k> }} / .path an input, {{ ref:<path> }} a file; the _path forms need a [local-files] agent naming an existing file, not a [no-local-files] one. A node is readable if it is this graph's and listed in its depends_on, or a task this conversation completed and left an output; a failed, skipped, cancelled, not-executed or still-running one is refused, saying which. A node of this graph that was not executed (see when) leaves no output file, and its placeholders render \"<This task is not executed and the output is missing, please go on without this output.>\" instead: write one titled block per output that may be missing. A node may not run with a when of its own (<node>.done included), or when its in-graph dependencies all may not run; reach it with {{ <node>.output }} rather than a ref:@nodes/ path, which is refused. Every key in inputs must be referenced by a placeholder. A long prompt belongs in a file."
             ),
         },
         "depends_on": {
             "type": "array",
             "items": {"type": "string"},
-            "description": (
-                "Ids this node depends on. A node of this graph runs first; a task this conversation "
-                "already completed with an output is already done, so listing it only records the "
-                "dependency. Either way you may read it with {{ <node>.output }}."
-            ),
+            "description": "Ids this node depends on; an earlier task completed with an output is already done.",
         },
         "inputs": {
             "type": "object",
             "description": (
-                'Per-key literal string, {"file": <path>}, or {"node": <id>} to take another node\'s '
-                "output -- a dependency of this node, or any task this conversation already completed "
-                "with an output. Exactly one of those three and nothing else in the object: no second "
-                "key beside file or node, no empty path or id, and a number, boolean or list is "
-                "refused. {{ inputs.<k> }} injects the text, {{ inputs.<k>.path }} the file path."
+                'Per-key literal string, {"file": <path>}, or {"node": <id>} for a node completed with an output. Exactly one of those three and nothing else in the object: no second key beside file or node, no empty path or id, and a number, boolean or list is refused. {{ inputs.<k> }} injects the text, .path the path.'
             ),
         },
         "instance": {
@@ -507,14 +480,27 @@ _NODE_SCHEMA: dict[str, Any] = {
             "minLength": 1,
             "pattern": r"^\S(?:.*\S)?$",
             "description": (
-                "Optional stable handle; nodes sharing it run sequentially and reuse one sub-agent "
-                "session, including across separate runs in this conversation. Only give the same "
-                "handle to several nodes of a sub-agent the roster tags [stateful] -- elsewhere it "
-                "carries no context and the graph is rejected. Omit it and a [stateful] "
-                "sub-agent's node is given one automatically, reported in the run summary when "
-                "the node finishes, so that node can be continued later; a node on any other "
-                "sub-agent gets none and cannot be continued. To order nodes without sharing a "
-                "session, use depends_on."
+                "Optional handle: nodes sharing it run in sequence. Only on a [stateful] sub-agent; omitted, its nodes get one automatically, reported and continuable; others get none."
+            ),
+        },
+        "routes": {
+            "type": "object",
+            "additionalProperties": {"type": "string"},
+            "description": (
+                'Makes this node a decision: route name -> the condition under which its answer selects that route. Raven\'s judge picks from its answer; nothing the node writes selects a route by itself. Names [A-Za-z0-9_-], not "done", and no two differing only in case; two or more for "one", one or more for "many".'
+            ),
+        },
+        "select": {
+            "type": "string",
+            "enum": ["one", "many"],
+            "description": (
+                'How many routes its answer may select: "one" (the default) -- exactly one, so give it a catch-all route for everything else; "many" -- any number, including none. Only on a node that declares routes.'
+            ),
+        },
+        "when": {
+            "type": "string",
+            "description": (
+                "Set this node's guard: run it only if the guard holds once every dependency settles. Atoms <node>.<route> and <node>.done name a decision node in depends_on and combine with not, and, or and parentheses; the keywords are lowercase. Every decision node in depends_on must appear here. A branch node needs no guard beyond naming any decision node it depends on; a node of the branch that also depends on something outside it, the decision node included, needs the branch's route, not <node>.done. A merge node that should run on every route keeps <node>.done."
             ),
         },
     },
@@ -753,6 +739,16 @@ class SubAgentDagTool(Tool):
         if (history := self._history_root()) is not None:
             roots.append(history)
         return tuple(roots)
+
+    def _reference_nodes_root(self) -> str | None:
+        """Where ``@nodes/`` resolves, inside the history root ``_reference_roots`` names.
+
+        Validation reads it so a reference reaching a node's artifacts by an
+        absolute path is checked as its ``@nodes/`` spelling is. ``None`` with no
+        history root, where there are no artifacts to reach.
+        """
+        history = self._history_root()
+        return str(nodes_root_in(history)) if history is not None else None
 
     def set_tool_call_id(self, tool_call_id: str | None) -> None:
         """Turn-local: record which tool call this run's progress belongs to.
@@ -1204,6 +1200,8 @@ class SubAgentDagTool(Tool):
             parts.append(f"{cancelled} cancelled")
         if skipped := summary.get("skipped", 0):
             parts.append(f"{skipped} skipped")
+        if not_executed := summary.get(NOT_EXECUTED, 0):
+            parts.append(f"{not_executed} not executed")
         return f"DAG {result.run_id}: {', '.join(parts)} -- outputs in {result.dir}"
 
     @property
@@ -1288,16 +1286,13 @@ class SubAgentDagTool(Tool):
                         "summary. Name the goal, not the nodes."
                     ),
                 },
-                "nodes": {"type": "array", "items": self._node_schema(), "description": "The DAG nodes (a flat list)."},
+                "nodes": {"type": "array", "items": self._node_schema(), "description": "The nodes."},
                 "background": {
                     "type": "boolean",
                     "description": (
-                        "Default true: return as soon as the run starts and get the result as an "
-                        "announcement when the graph finishes, leaving you free to work meanwhile. "
-                        "Set false only when you cannot continue without the outputs: the call then "
-                        "blocks until the graph finishes or a node reports it could not accomplish "
-                        "its task, whichever comes first, and answering that report with "
-                        "resolve_dag_node resumes the wait."
+                        "Default true: return at once and get the result announced when the graph "
+                        "finishes. False blocks until it finishes or a node reports it could not "
+                        "accomplish its task; answer that report with resolve_dag_node."
                     ),
                 },
                 "confirm": {
@@ -1595,7 +1590,7 @@ class SubAgentDagTool(Tool):
             # resumed from a terminal or an RPC has no turn, and checking the
             # turn's registry found none of the roles the record said finished.
             known = await (self.session_nodes(origin.conversation) if origin is not None else self._session_nodes())
-            validate_and_order(spec, self._reference_roots(), known)
+            validate_and_order(spec, self._reference_roots(), known, nodes_root=self._reference_nodes_root())
             pre = await self._preflight(spec)
             spec, dispatch_backends, notices, capabilities = pre.spec, pre.backends, pre.notices, pre.capabilities
         except DagValidationError as exc:
@@ -1816,7 +1811,9 @@ class SubAgentDagTool(Tool):
         that way.
         """
         spec = parse_dag_spec({"task_summary": plan.task_summary, "nodes": list(plan.nodes), "confirm": plan.confirm})
-        validate_and_order(spec, self._reference_roots(), await self._session_nodes())
+        validate_and_order(
+            spec, self._reference_roots(), await self._session_nodes(), nodes_root=self._reference_nodes_root()
+        )
         origin = self._origin.get() or self._default_origin
         session_dir = self._session_dir_for(self._turn_conversation())
         dirs = _RunDirs(
@@ -1869,7 +1866,12 @@ class SubAgentDagTool(Tool):
             raw_graph.pop("replan", None)
             old = parse_dag_spec(raw_graph)
             spec = parse_dag_spec({"task_summary": old.task_summary, "nodes": nodes, "confirm": old.confirm})
-            validate_and_order(spec, self._reference_roots(), await self._session_nodes_for_replan(run_id, live))
+            validate_and_order(
+                spec,
+                self._reference_roots(),
+                await self._session_nodes_for_replan(run_id, live),
+                nodes_root=self._reference_nodes_root(),
+            )
             pre = await self._preflight(spec)
         except DagValidationError as exc:
             return self._validation_error(exc)
@@ -2036,6 +2038,17 @@ class SubAgentDagTool(Tool):
         ``DagValidationError`` for a refusal; a capability or MCP gap comes back
         as a notice instead, on the terms those two already had.
         """
+        # First, ahead of anything that reads the registry: a decision node cannot
+        # choose a route without a judge, so this host could never run the graph.
+        decisions = [node.id for node in spec.nodes if node.routes]
+        if decisions and self._judge_node() is None:
+            names = ", ".join(repr(node_id) for node_id in decisions)
+            subject = f"node {names} declares" if len(decisions) == 1 else f"nodes {names} declare"
+            raise DagValidationError(
+                f"{subject} routes, but this host has no provider to judge a node with, and a decision "
+                "node cannot choose a route without one. Remove the routes, or run the graph where an "
+                "agent loop is attached."
+            )
         capabilities = self._capability_map()
         # Resolve this turn's generated worker labels like spawn does before
         # any registry-dependent validation. The runner then receives real
@@ -2296,24 +2309,32 @@ class SubAgentDagTool(Tool):
 
         None rather than a no-op: the runner reads it as "do not judge", which is
         the previous behaviour, and an unwired host (a test, an offline entry
-        point) gets that behaviour without configuring anything.
+        point) gets that behaviour without configuring anything. A graph with a
+        decision node cannot take that path -- see ``_preflight``.
         """
         cfg = self._verdict_config
         # Bound here rather than read off self inside the closure: the guard
         # below must hold for the call, and an attribute re-read later is a
         # different value.
         provider_for = self._provider_for
-        if provider_for is None or not cfg.verdict_enabled:
+        if provider_for is None:
             return None
 
         async def _judge(
             *, node: Any, store: Any, output: str, error: str, crashed: bool, output_limited: bool = False
         ) -> Verdict:
+            # Read defensively: a caller may hand over a node that carries only its id.
+            routes = getattr(node, "routes", None) or None
+            select = getattr(node, "select", None) or "one"
             # Resolved here, not when this tool was built: the loop's provider is
             # a property over the running turn's binding, so a session that
             # switched model must reach the judge.
             provider = provider_for()
             if provider is None:
+                # A decision node has no route to default to, so it fails here. A crashed
+                # one reads no route and keeps the failure it already has.
+                if routes and not crashed:
+                    raise RouteUndeterminedError("no provider is bound to judge this node")
                 return Verdict(accomplished=True)
             evidence, complete = await self._node_evidence(store, node.id, cfg.evidence_budget_chars)
             prompt = await self._node_prompt(store, node.id)
@@ -2337,6 +2358,8 @@ class SubAgentDagTool(Tool):
                 model=cfg.verdict_model,
                 timeout_s=cfg.verdict_timeout_seconds,
                 output_limited=output_limited,
+                routes=routes,
+                select=select,
             )
 
         return _judge
@@ -2512,11 +2535,7 @@ class SubAgentDagTool(Tool):
             return result
 
         lines: list[str] = [
-            f"DAG run {result.run_id} finished: "
-            f"{result.summary.get('completed', 0)} completed, "
-            f"{result.summary.get('failed', 0)} failed, "
-            f"{result.summary.get('cancelled', 0)} cancelled, "
-            f"{result.summary.get('skipped', 0)} skipped (of {result.summary.get('total', 0)}).",
+            f"DAG run {result.run_id} finished: {format_tally(result.summary)}.",
             f"Run dir: {result.dir}",
             "",
             "Node output files:",
@@ -2528,6 +2547,11 @@ class SubAgentDagTool(Tool):
             lines.append(f"- {entry['node']} [{entry['status']}]{tag}: {of}")
             if entry.get("error"):
                 lines.append(f"    error: {entry['error']}")
+            if entry.get("reason"):
+                lines.append(f"    reason: {entry['reason']}")
+            # `is not None`, not truthiness: an empty selection is still a decision.
+            if entry.get("selected_routes") is not None:
+                lines.append(f"    selected_routes: {', '.join(entry['selected_routes']) or '(none)'}")
         if result.terminal_outputs:
             lines.append("")
             lines.append("Terminal outputs:")

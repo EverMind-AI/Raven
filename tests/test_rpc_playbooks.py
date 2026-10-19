@@ -388,6 +388,75 @@ async def test_get_keeps_a_blank_field_blank(library: PlaybookStore) -> None:
     METHOD_MODELS["playbooks.get"][1].model_validate({"playbook": got})
 
 
+def _branching_spec() -> PlaybookSpec:
+    spec = _spec()
+    spec.nodes += [
+        NodeSpec(
+            id="triage",
+            subagent="Raven",
+            node_summary="classify the issue",
+            prompt_template="classify",
+            routes={"bug": "the issue reports a defect", "docs": "the issue asks a question"},
+        ),
+        NodeSpec(
+            id="audit",
+            subagent="Raven",
+            node_summary="audit the fix",
+            prompt_template="audit",
+            depends_on=["triage"],
+            routes={"safe": "no risk found"},
+            select="many",
+            when="triage.bug",
+        ),
+        NodeSpec(
+            id="reply",
+            subagent="Raven",
+            node_summary="answer",
+            prompt_template="reply",
+            depends_on=["triage"],
+            when="triage.docs",
+        ),
+    ]
+    return spec
+
+
+async def test_get_carries_the_routes_and_the_guard_a_node_declares(library: PlaybookStore) -> None:
+    """A playbook has to keep the condition of every route: it is what re-running
+    the graph judges against, so the wire carries the whole map and not the names."""
+    library.save(_branching_spec(), overwrite=True)
+
+    got = (await mod.playbooks_get({"name": "competitor-scan"}))["playbook"]
+
+    by_id = {n["id"]: n for n in got["nodes"]}
+    assert by_id["triage"]["routes"] == {"bug": "the issue reports a defect", "docs": "the issue asks a question"}
+    assert by_id["audit"]["routes"] == {"safe": "no risk found"}
+    assert by_id["audit"]["select"] == "many"
+    assert by_id["audit"]["when"] == "triage.bug"
+    assert by_id["reply"]["when"] == "triage.docs"
+    # `select` is reported as written: no `select` on the file means the default, "one".
+    assert "select" not in by_id["triage"]
+    assert "routes" not in by_id["reply"] and "select" not in by_id["reply"]
+    METHOD_MODELS["playbooks.get"][1].model_validate({"playbook": got})
+
+
+async def test_get_leaves_the_branch_keys_off_a_node_that_declares_none(library: PlaybookStore) -> None:
+    """Absent, the way an unwritten `skills` / `mcps` is, and not blank: a graph
+    that never branches reads back with exactly the keys it always had."""
+    spec = _spec()
+    spec.nodes.append(NodeSpec(id="angle", when="   "))
+    library.save(spec, overwrite=True)
+
+    got = (await mod.playbooks_get({"name": "competitor-scan"}))["playbook"]
+
+    for node in got["nodes"]:
+        assert not {"routes", "select", "when"} & set(node), node["id"]
+    market = [n for n in got["nodes"] if n["id"] == "market"][0]
+    assert set(market) == {"id", "subagent", "node_summary", "prompt_template", "depends_on", "instance", "inputs"}
+    METHOD_MODELS["playbooks.get"][1].model_validate({"playbook": got})
+    # The store refuses an empty map, but a hand-edited file may carry one: no routes, as the runner reads it.
+    assert "routes" not in mod._node_wire(NodeSpec(id="hand_edited", routes={}))
+
+
 async def test_get_refuses_an_unknown_name(library: PlaybookStore) -> None:
     with pytest.raises(RpcError):
         await mod.playbooks_get({"name": "nope"})

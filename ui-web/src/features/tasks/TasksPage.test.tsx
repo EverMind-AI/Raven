@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { resetTranslator, setTranslator } from '../../i18n/t'
+import { I18N, resetTranslator, setTranslator } from '../../i18n/t'
 import { setCurrent } from '../../lib/session'
 import * as lang from '../../state/lang'
 import { resetSources, setSources } from '../../state/sources'
@@ -24,7 +24,7 @@ let record: NodeRecord = { dispatch: null, steps: [], answer: null, outputTrunca
 let stopped: TaskRow[] = []
 
 const counts = (over: Partial<TaskRow['counts']> = {}) => (
-  { total: 0, pending: 0, running: 0, completed: 0, failed: 0, skipped: 0, cancelled: 0, interrupted: 0, exception: 0, ...over }
+  { total: 0, pending: 0, running: 0, completed: 0, failed: 0, skipped: 0, cancelled: 0, interrupted: 0, exception: 0, not_executed: 0, ...over }
 )
 
 const node = (over: Partial<TaskNode> & Pick<TaskNode, 'node_id' | 'status'>): TaskNode => ({
@@ -278,6 +278,59 @@ describe('a task pane', () => {
     render(<TaskPane task={task({ id: 'a', kind: 'dag', status: 'completed' })} />)
     expect(document.querySelector('.tkhalt')).toBeNull()
     expect(document.querySelector('.tkmeta')?.textContent?.split(' \u00b7 ')[0]).toBe('gui.tasks.st_completed')
+  })
+
+  /* The header's last fact says how far the steps got, read off the row's counts. A node a branch
+     left out never ran, so "all done" over a total that counts it would say the run did what it
+     did not: the line names what ran and what did not. */
+  describe('its step line', () => {
+    const facts = (row: TaskRow): string[] => {
+      render(<TaskPane task={row} />)
+      return (document.querySelector('.tkmeta')?.textContent ?? '').split(' \u00b7 ')
+    }
+
+    it('names what a branch left out beside what ran, on a completed task', () => {
+      const row = task({
+        id: 'a', kind: 'dag', status: 'completed', counts: counts({ total: 6, completed: 3, not_executed: 3 }),
+      })
+      expect(facts(row)).toEqual([
+        'gui.tasks.st_completed', 'gui.tasks.step_done {"n":3}', 'gui.tasks.step_not_executed {"n":3}',
+      ])
+    })
+
+    it('still says all done on a completed task nothing was left out of', () => {
+      const row = task({ id: 'a', kind: 'dag', status: 'completed', counts: counts({ total: 3, completed: 3 }) })
+      expect(facts(row)).toEqual(['gui.tasks.st_completed', 'gui.tasks.step_all_done {"n":3}'])
+    })
+
+    it.each(['failed', 'cancelled'] as const)('lists the part after the skipped one on a %s task', (status) => {
+      const row = task({
+        id: 'a', kind: 'dag', status,
+        counts: counts({ total: 6, completed: 2, failed: 1, skipped: 1, not_executed: 2 }),
+      })
+      expect(facts(row)).toEqual([
+        `gui.tasks.st_${status}`, 'gui.tasks.step_done {"n":2}', 'gui.tasks.step_failed {"n":1}',
+        'gui.tasks.step_skipped {"n":1}', 'gui.tasks.step_not_executed {"n":2}',
+      ])
+    })
+
+    it('lists a failed task as it always did when nothing was left out', () => {
+      const row = task({
+        id: 'a', kind: 'dag', status: 'failed', counts: counts({ total: 4, completed: 2, failed: 1, skipped: 1 }),
+      })
+      expect(facts(row)).toEqual([
+        'gui.tasks.st_failed', 'gui.tasks.step_done {"n":2}', 'gui.tasks.step_failed {"n":1}',
+        'gui.tasks.step_skipped {"n":1}',
+      ])
+    })
+
+    it('leaves the running line as it was, whatever has been left out', () => {
+      const row = task({
+        id: 'a', kind: 'dag', status: 'running', started_at: Date.now() - 5000,
+        counts: counts({ total: 5, completed: 2, running: 1, pending: 1, not_executed: 1 }),
+      })
+      expect(facts(row).at(-1)).toBe('gui.tasks.step {"i":3,"n":5}')
+    })
   })
 
   it('stop dispatches by kind: a dag calls subagent.interrupt through the source', async () => {
@@ -820,6 +873,222 @@ describe('the node panel', () => {
     const meta = document.querySelector('.pane-head-meta')?.textContent ?? ''
     expect(meta.split(' \u00b7 ')[0]).toBe('coder')
     expect(meta).not.toContain('x1')
+  })
+
+  /* A node a branch left out says so, and its detail says why; a decision node shows what it
+     selected after its status and the judge's evidence in its detail; a guarded node shows its
+     guard. A node carrying none of those fields is drawn exactly as it was. */
+  describe('a branching run', () => {
+    const run = (nodes: TaskNode[]): TaskRow => task({ id: 'a', kind: 'dag', status: 'completed', nodes })
+    const decider = (over: Partial<TaskNode> = {}): TaskNode => node({
+      node_id: 'triage', status: 'completed', started_at: 1000, ended_at: 2000, routes: ['question', 'bug'], select: 'one', ...over,
+    })
+    const left = (over: Partial<TaskNode> = {}): TaskNode => node({
+      node_id: 'fix', status: 'not_executed', depends_on: ['triage'], ...over,
+    })
+    const meta = (): string | null | undefined => document.querySelector('.pane-head-meta')?.textContent
+    const facts = (): Array<[string | null | undefined, string | null | undefined]> =>
+      [...document.querySelectorAll('.tkbranch .tkfield')]
+        .map((f): [string | null | undefined, string | null | undefined] =>
+          [f.querySelector('.tkfk')?.textContent, f.querySelector('.tkfv')?.textContent])
+
+    it('draws a node a branch left out with its own word and no clock', () => {
+      pick(run([decider(), left({ reason: 'when_false' })]), 1)
+      expect(meta()).toBe('raven · gui.tasks.node_st_not_executed')
+    })
+
+    it.each([
+      ['when_false', 'gui.tasks.node_reason_when_false'],
+      ['when_unknown', 'gui.tasks.node_reason_when_unknown'],
+      ['upstream_not_executed', 'gui.tasks.node_reason_upstream'],
+    ] as const)('says why it was left out in words: %s', (reason, word) => {
+      pick(run([decider(), left({ reason })]), 1)
+      expect(facts()).toEqual([['gui.tasks.node_reason', word]])
+    })
+
+    /* A reason this build has never heard of reads as no reason -- and so does a name `Object.prototype`
+       happens to own, which a plain lookup resolves to a function and draws as a row. */
+    it.each(['constructor', '__proto__', 'toString', 'a_reason_added_later'])(
+      'reads an unknown reason as no reason: %s',
+      (reason) => {
+        pick(run([decider(), left({ reason: reason as TaskNode['reason'] })]), 1)
+        expect(document.querySelector('.tkbranch')).toBeNull()
+        expect(meta()).toBe('raven · gui.tasks.node_st_not_executed')
+      },
+    )
+
+    /* A run still going takes a left-out node's reason from its registry row, a best-effort write that
+       can be dropped, so it can hand the task pane that node with no reason. The pane says what it knows
+       and invents nothing. */
+    it('says only that it was not executed when no reason came with it', () => {
+      pick(run([decider(), left()]), 1)
+      expect(meta()).toBe('raven · gui.tasks.node_st_not_executed')
+      expect(document.querySelector('.tkbranch')).toBeNull()
+      expect(document.body.textContent).not.toContain('gui.tasks.node_reason')
+      expect(document.querySelector('.tkempty')?.textContent).toBe('gui.tasks.ctx_not_executed')
+    })
+
+    /* A node's own frame never clears a field it does not carry, so a reason a node was left out
+       with outlives that status if the node is ever run after all. */
+    it('shows no reason on a node that is no longer left out', () => {
+      pick(run([decider(), left({ status: 'completed', reason: 'when_false' })]), 1)
+      expect(document.querySelector('.tkbranch')).toBeNull()
+    })
+
+    it('never asks for a record of a node that never ran', async () => {
+      let asked = 0
+      setSources({ tasks: { ...source(), node: async () => { asked += 1; return record } } })
+      pick(run([decider(), left({ reason: 'when_false' })]), 1)
+      await act(async () => {})
+      expect(asked).toBe(0)
+      expect(document.querySelector('.tkempty')?.textContent).toBe('gui.tasks.ctx_not_executed')
+    })
+
+    it('puts the reason where the reader is, on either tab', () => {
+      pick(run([decider(), left({ reason: 'when_false' })]), 1)
+      act(() => { (document.querySelectorAll('.pane-head-seg button')[1] as HTMLElement).click() })
+      expect(facts()).toEqual([['gui.tasks.node_reason', 'gui.tasks.node_reason_when_false']])
+    })
+
+    it('shows what a decision selected after its status', () => {
+      pick(run([decider({ selected_routes: ['question'] })]))
+      expect(meta()).toBe('raven · gui.tasks.node_st_completed → question · 1s')
+    })
+
+    it('shows an empty selection as none, which is a decision and not a blank', () => {
+      pick(run([decider({ selected_routes: [] })]))
+      expect(meta()).toBe('raven · gui.tasks.node_st_completed → gui.tasks.node_sel_none · 1s')
+    })
+
+    it('shows no selection for a decision that has not decided', () => {
+      pick(run([decider({ status: 'running', ended_at: null })]))
+      expect(meta()).not.toContain('→')
+      cleanup()
+      pick(run([decider()]))
+      expect(meta()).toBe('raven · gui.tasks.node_st_completed · 1s')
+    })
+
+    it("shows a decision's route evidence in full in its detail", () => {
+      const evidence = `${'a'.repeat(249)} ${'b'.repeat(250)}`
+      pick(run([decider({ selected_routes: ['question'], route_evidence: evidence })]))
+      expect(facts()).toEqual([['gui.tasks.node_evidence', evidence]])
+      expect(evidence).toHaveLength(500)
+    })
+
+    it('shows no evidence for a decision that gave none', () => {
+      pick(run([decider({ selected_routes: ['question'] })]))
+      expect(document.querySelector('.tkbranch')).toBeNull()
+    })
+
+    it("shows a guarded node's guard in its detail", () => {
+      pick(run([decider(), node({
+        node_id: 'answer', status: 'completed', depends_on: ['triage'], when: 'triage.question and not triage.bug',
+      })]), 1)
+      expect(facts()).toEqual([['gui.tasks.node_guard', 'triage.question and not triage.bug']])
+      expect(document.querySelector('.tkbranch .tkguard')?.textContent).toBe('triage.question and not triage.bug')
+    })
+
+    it('shows the reason, then the guard, then the evidence, when a node has all three', () => {
+      pick(run([decider(), left({
+        reason: 'when_false', when: 'triage.bug', selected_routes: [], route_evidence: 'nothing matched',
+      })]), 1)
+      expect(facts().map(([label]) => label))
+        .toEqual(['gui.tasks.node_reason', 'gui.tasks.node_guard', 'gui.tasks.node_evidence'])
+    })
+
+    it('draws a node with none of these fields exactly as it always did', () => {
+      pick(run([node({ node_id: 'n1', status: 'completed', started_at: 1000, ended_at: 2000 })]))
+      expect(meta()).toBe('raven · gui.tasks.node_st_completed · 1s')
+      expect(document.querySelector('.tkbranch')).toBeNull()
+      expect(document.querySelector('.tkbody')?.firstElementChild?.classList.contains('tkbranch')).toBe(false)
+    })
+
+    /* Presence reaches the board too: a decision that chose nothing draws "none", and one that has
+       not decided draws no selection at all. */
+    it('draws an empty selection on the board as none, and no selection before a decision is made', () => {
+      render(<TaskPane task={run([
+        decider({ selected_routes: [] }),
+        decider({ node_id: 'later', status: 'running', ended_at: null, depends_on: ['triage'] }),
+      ])} full />)
+      expect(document.querySelector('.daggraph .nd[data-node="triage"] .tkrunsel')?.textContent)
+        .toBe('\u2192 gui.tasks.node_sel_none')
+      expect(document.querySelector('.daggraph .nd[data-node="later"] .tkrunsel')).toBeNull()
+    })
+
+    /* The work order of a step the run left out says it was not executed, where a step still waiting
+       to go out says it has not been dispatched yet -- which is not what happened to this one. A
+       skipped step keeps the words it always had. */
+    describe('its work order', () => {
+      const order = (row: TaskRow): void => {
+        pick(row, 1)
+        act(() => { (document.querySelectorAll('.pane-head-seg button')[1] as HTMLElement).click() })
+      }
+      const words = (): string => document.body.textContent ?? ''
+
+      it('says a left-out step was not executed, under its template', () => {
+        order(run([decider(), left({ prompt_template: 'Fix {{ triage.output }}.' })]))
+        expect(document.querySelector('.tknote')?.textContent).toBe('gui.tasks.ctx_not_executed')
+        expect(words()).not.toContain('gui.tasks.instruction_note')
+      })
+
+      it('says a left-out step was not executed, where its instruction would be', () => {
+        order(run([decider(), left()]))
+        const field = [...document.querySelectorAll('.tkfield')].find((f) => f.querySelector('.tkfk')?.textContent === 'gui.tasks.instruction')
+        expect(field?.querySelector('.tkfv')?.textContent).toBe('gui.tasks.ctx_not_executed')
+        expect(words()).not.toContain('gui.tasks.instruction_pending')
+      })
+
+      it('leaves a skipped step with its own words', () => {
+        order(run([decider(), left({ status: 'skipped', prompt_template: 'Fix {{ triage.output }}.' })]))
+        expect(document.querySelector('.tknote')?.textContent).toBe('gui.tasks.instruction_note')
+        expect(words()).not.toContain('gui.tasks.ctx_not_executed')
+        cleanup()
+        order(run([decider(), left({ status: 'skipped' })]))
+        expect(words()).toContain('gui.tasks.instruction_pending')
+        expect(words()).not.toContain('gui.tasks.ctx_not_executed')
+      })
+    })
+
+    it('draws the board with the left-out node muted and the selection on its decision', () => {
+      render(<TaskPane task={run([decider({ selected_routes: ['question'] }), left({ reason: 'when_false' })])} full />)
+      expect(document.querySelector('.daggraph .nd[data-st="not_executed"] .tkrun > .tkrunrt')?.textContent)
+        .toBe('gui.tasks.node_st_not_executed')
+      expect(document.querySelector('.daggraph .nd[data-node="triage"] .tkrunsel')?.textContent).toBe('→ question')
+      expect(document.querySelector('.daggraph .nd[data-node="fix"] .tkrunsel')).toBeNull()
+    })
+  })
+
+  /* The words themselves, from the message catalogue rather than echoed back: the keys above prove which
+     word goes where, and these prove what the words are, in both languages. */
+  describe('the words a branch adds', () => {
+    const keys = [
+      'gui.tasks.node_st_not_executed', 'gui.tasks.node_reason_when_false', 'gui.tasks.node_reason_when_unknown',
+      'gui.tasks.node_reason_upstream', 'gui.tasks.node_reason', 'gui.tasks.node_guard', 'gui.tasks.node_evidence',
+      'gui.tasks.node_sel_none', 'gui.tasks.ctx_not_executed', 'gui.deleg.dag_not_executed',
+      'gui.tasks.step_not_executed',
+    ]
+
+    it('reads in English as the words of the message catalogue', () => {
+      expect(I18N.ui['gui.tasks.node_st_not_executed']?.en).toBe('Not executed')
+      expect(I18N.ui['gui.tasks.node_reason_when_false']?.en).toBe('Not selected')
+      expect(I18N.ui['gui.tasks.node_reason_when_unknown']?.en).toBe('Decision missing')
+      expect(I18N.ui['gui.tasks.node_reason_upstream']?.en).toBe('Upstream not executed')
+      expect(I18N.ui['gui.tasks.node_sel_none']?.en).toBe('(none)')
+      expect(I18N.ui['gui.deleg.dag_not_executed']?.en).toBe('{n} not executed')
+      expect(I18N.ui['gui.tasks.step_not_executed']?.en).toBe('{n} not executed')
+    })
+
+    it('has both languages, and an English that is only English', () => {
+      for (const key of keys) {
+        const entry = I18N.ui[key]
+        expect(entry?.en, key).toBeTruthy()
+        expect(entry?.zh, key).toMatch(/\p{Script=Han}/u)
+        expect(entry?.en, key).not.toMatch(/\p{Script=Han}/u)
+      }
+      for (const key of ['gui.deleg.dag_not_executed', 'gui.tasks.step_not_executed']) {
+        expect(I18N.ui[key]?.zh, key).toContain('{n}')
+      }
+    })
   })
 
   describe('a cross-run dependency', () => {

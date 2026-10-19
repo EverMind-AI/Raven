@@ -147,6 +147,30 @@ async def test_a_suspended_node_of_a_dead_run_reads_back_interrupted() -> None:
     assert by_node["node-a"]["status"] == "interrupted"
 
 
+async def test_a_not_executed_node_of_a_dead_run_stays_not_executed_and_is_counted() -> None:
+    """A branch that was not taken is finished, not interrupted: nothing was ever going to run it."""
+    registry = instances_mod.get_registry()
+    await registry.upsert_dag_node("tui:s1", RUN_ID, "node-a", "claude_code", "not_executed")
+    await registry.upsert_dag_node("tui:s1", RUN_ID, "node-b", "claude_code", "running")
+
+    result = await dag_get(
+        {"run_id": RUN_ID, "session_key": "tui:s1"},
+        agent_loop_factory=_factory(_FakeDagTool(finalized=False, live=False)),
+    )
+
+    by_node = {f["node"]: f for f in result["run"]["files"]}
+    assert by_node["node-a"]["status"] == "not_executed"
+    assert by_node["node-b"]["status"] == "interrupted", "the control: a node that was running still reads interrupted"
+    assert result["run"]["summary"] == {
+        "total": 2,
+        "completed": 0,
+        "failed": 0,
+        "skipped": 0,
+        "cancelled": 0,
+        "not_executed": 1,
+    }
+
+
 async def test_dag_node_returns_the_rendered_prompt_and_output() -> None:
     tool = _FakeDagTool(finalized=True)
 
@@ -312,6 +336,179 @@ async def test_a_live_tool_still_wins(one_run_on_disk) -> None:
 
     assert tool.node_calls, "it read the disk instead of asking the live tool"
     assert answer["node"]["prompt"] != "look at the notes"
+
+
+# ---------------------------------------------------------------------------
+# a run that branches, read back through the real reader
+#
+# `_FakeDagTool` hands the handler a canned payload, so the field names a
+# branching run carries would be whatever the test typed. These read a run dir
+# written the way the runner writes one, through `dag_reader.read_run`, so the
+# keys the reader puts on the wire are held to the contract the models declare.
+# ---------------------------------------------------------------------------
+
+_BRANCH_KEYS = {"reason", "selected_routes", "route_evidence", "routes", "select", "when"}
+
+
+class _ReadsTheRunDir(_FakeDagTool):
+    """The live tool's ``read_run``, over a real run dir instead of a stub."""
+
+    def __init__(self, run_dir: Path, nodes_dir: Path) -> None:
+        super().__init__(finalized=True)
+        self._run_dir = run_dir
+        self._nodes_dir = nodes_dir
+
+    async def read_run(self, run_id: str, session_key: str | None = None) -> dict:
+        from raven.agent.subagent.dag_reader import read_run
+        from raven.agent.subagent.prompt_backend import LocalFileBackend
+
+        return await read_run(LocalFileBackend(), str(self._run_dir.parent), run_id, str(self._nodes_dir))
+
+
+def _write_a_branching_run(run_dir: Path) -> None:
+    (run_dir / "graph.json").write_text(
+        json.dumps(
+            {
+                "nodes": [
+                    {"id": "triage", "subagent": "R", "routes": {"bug": "a defect", "docs": "a question"}},
+                    {"id": "audit", "subagent": "R", "depends_on": ["triage"], "routes": {"a": "x"}, "select": "many"},
+                    {"id": "fix", "subagent": "R", "depends_on": ["triage"], "when": "triage.bug"},
+                    {"id": "reply", "subagent": "R", "depends_on": ["triage"]},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    done = {"status": "completed", "subagent": "R", "started_at": 1, "ended_at": 2}
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "triage": {
+                    **done,
+                    "selected_routes": ["docs"],
+                    "route_evidence": "the reporter asks how to configure it",
+                },
+                "audit": {**done, "selected_routes": []},
+                "fix": {"status": "not_executed", "subagent": "R", "reason": "when_false"},
+                "reply": done,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+async def test_dag_get_carries_what_a_run_that_branches_decided(one_run_on_disk) -> None:
+    from raven.rpc.models import DagRunSummary, DagSnapshotNode
+
+    _write_a_branching_run(one_run_on_disk.run)
+    tool = _ReadsTheRunDir(one_run_on_disk.run, one_run_on_disk.nodes)
+
+    run = (await dag_get({"run_id": RUN_ID, "session_key": "tui:live"}, agent_loop_factory=_factory(tool)))["run"]
+
+    by_node = {f["node"]: f for f in run["files"]}
+    assert by_node["triage"]["routes"] == ["bug", "docs"] and by_node["triage"]["select"] == "one"
+    assert by_node["triage"]["selected_routes"] == ["docs"]
+    assert by_node["triage"]["route_evidence"] == "the reporter asks how to configure it"
+    assert by_node["audit"]["select"] == "many" and by_node["audit"]["selected_routes"] == []
+    assert by_node["fix"]["status"] == "not_executed"
+    assert (by_node["fix"]["reason"], by_node["fix"]["when"]) == ("when_false", "triage.bug")
+    assert not _BRANCH_KEYS & set(by_node["reply"]), "a plain node carries none of the keys"
+    assert run["summary"]["not_executed"] == 1
+    # The contract's half of the same read: every one of those keys, and the status,
+    # is one the strict wire models declare. The handler validates nothing itself.
+    for node in run["files"]:
+        DagSnapshotNode.model_validate({k: v for k, v in node.items() if k in _BRANCH_KEYS | {"node", "status"}})
+    DagRunSummary.model_validate(run["summary"])
+
+
+async def test_dag_get_of_a_run_that_never_branched_has_no_branch_keys(one_run_on_disk) -> None:
+    (one_run_on_disk.run / "manifest.json").write_text(
+        json.dumps({"survey": {"status": "completed", "subagent": "R"}}), encoding="utf-8"
+    )
+    tool = _ReadsTheRunDir(one_run_on_disk.run, one_run_on_disk.nodes)
+
+    run = (await dag_get({"run_id": RUN_ID, "session_key": "tui:live"}, agent_loop_factory=_factory(tool)))["run"]
+
+    assert not any(_BRANCH_KEYS & set(f) for f in run["files"])
+    assert "not_executed" not in run["summary"]
+
+
+async def test_dag_get_of_an_unfinalized_branching_run_reads_each_decision_off_its_row(one_run_on_disk) -> None:
+    """No manifest until the run finalizes, so a client that reloads mid-run rebuilds the
+    graph from the rows: why a node did not run and what a decision node selected,
+    an empty selection included, come off the node's own row."""
+    from raven.rpc.models import DagSnapshotNode
+
+    _write_a_branching_run(one_run_on_disk.run)
+    (one_run_on_disk.run / "manifest.json").unlink()
+    registry = instances_mod.get_registry()
+    await registry.upsert_dag_node(
+        "tui:live", RUN_ID, "triage", "R", "completed", selected_routes=["docs"], route_evidence="asks how to set it"
+    )
+    await registry.upsert_dag_node("tui:live", RUN_ID, "audit", "R", "completed", selected_routes=[])
+    await registry.upsert_dag_node("tui:live", RUN_ID, "fix", "R", "not_executed", reason="when_false")
+    await registry.upsert_dag_node("tui:live", RUN_ID, "reply", "R", "running")
+    tool = _ReadsTheRunDir(one_run_on_disk.run, one_run_on_disk.nodes)
+
+    run = (await dag_get({"run_id": RUN_ID, "session_key": "tui:live"}, agent_loop_factory=_factory(tool)))["run"]
+
+    assert run["finalized"] is False
+    by_node = {f["node"]: f for f in run["files"]}
+    outcome = {"reason", "selected_routes", "route_evidence"}
+    assert {k: v for k, v in by_node["triage"].items() if k in outcome} == {
+        "selected_routes": ["docs"],
+        "route_evidence": "asks how to set it",
+    }
+    assert {k: v for k, v in by_node["audit"].items() if k in outcome} == {"selected_routes": []}
+    assert {k: v for k, v in by_node["fix"].items() if k in outcome} == {"reason": "when_false"}
+    assert not outcome & set(by_node["reply"]), "a node still running has decided nothing"
+    for node in run["files"]:
+        DagSnapshotNode.model_validate({k: v for k, v in node.items() if k in _BRANCH_KEYS | {"node", "status"}})
+
+
+class _CarriesAnOutcome(_FakeDagTool):
+    """An unfinalized read whose ``node-a`` already holds an outcome, as a manifest entry would."""
+
+    async def read_run(self, run_id: str, session_key: str | None = None) -> dict:
+        run = await super().read_run(run_id, session_key)
+        run["files"][0].update(selected_routes=["bug"], route_evidence="from the manifest")
+        return run
+
+
+async def test_an_outcome_the_entry_already_holds_wins_over_the_row() -> None:
+    registry = instances_mod.get_registry()
+    for node in ("node-a", "node-b"):
+        await registry.upsert_dag_node(
+            "tui:s1", RUN_ID, node, "claude_code", "completed", selected_routes=["docs"], route_evidence="from the row"
+        )
+
+    result = await dag_get(
+        {"run_id": RUN_ID, "session_key": "tui:s1"},
+        agent_loop_factory=_factory(_CarriesAnOutcome(finalized=False)),
+    )
+
+    by_node = {f["node"]: f for f in result["run"]["files"]}
+    assert (by_node["node-a"]["selected_routes"], by_node["node-a"]["route_evidence"]) == (["bug"], "from the manifest")
+    assert (by_node["node-b"]["selected_routes"], by_node["node-b"]["route_evidence"]) == (["docs"], "from the row")
+
+
+async def test_dag_node_answers_for_a_node_that_was_not_executed(one_run_on_disk) -> None:
+    """The node never ran, so it has no prompt and no output -- and the status the
+    answer names has to be one the wire models accept, since the handler does not check."""
+    (one_run_on_disk.run / "manifest.json").write_text(
+        json.dumps({"survey": {"status": "not_executed", "subagent": "R", "reason": "when_false"}}), encoding="utf-8"
+    )
+    for leftover in ("survey.prompt.md", "survey.out.md"):
+        (one_run_on_disk.nodes / leftover).unlink()
+
+    answer = await dag_node(
+        {"run_id": RUN_ID, "node": "survey", "session_key": "tui:live"},
+        agent_loop_factory=_factory(None),
+    )
+
+    assert answer["node"]["status"] == "not_executed"
+    assert answer["node"]["prompt"] is None and answer["node"]["output"] is None
+    METHOD_MODELS["dag.node"][1].model_validate(answer)
 
 
 # ---------------------------------------------------------------------------

@@ -192,8 +192,9 @@ const UNSENT = new Set([
   'cron.list.jobs[].at_ms', 'cron.list.jobs[].every_ms', 'cron.list.jobs[].last_error', 'cron.list.jobs[].tz',
   // cron.save: 4
   'cron.save.job.at_ms', 'cron.save.job.every_ms', 'cron.save.job.last_error', 'cron.save.job.tz',
-  // dag.get: 10
-  'dag.get.run.files[].error', 'dag.get.run.files[].instance', 'dag.get.run.files[].node_summary', 'dag.get.run.files[].output_file', 'dag.get.run.files[].prompt_file', 'dag.get.run.summary.cancelled', 'dag.get.run.summary.failed', 'dag.get.run.summary.skipped', 'dag.get.run.task_summary', 'dag.get.run.terminal_outputs',
+  // dag.get: 17 -- seven of them (reason, route_evidence, routes, select, selected_routes, when and
+  // summary.not_executed) are what a run that branches adds, and no run on this canvas branches.
+  'dag.get.run.files[].error', 'dag.get.run.files[].instance', 'dag.get.run.files[].node_summary', 'dag.get.run.files[].output_file', 'dag.get.run.files[].prompt_file', 'dag.get.run.files[].reason', 'dag.get.run.files[].route_evidence', 'dag.get.run.files[].routes', 'dag.get.run.files[].select', 'dag.get.run.files[].selected_routes', 'dag.get.run.files[].when', 'dag.get.run.summary.cancelled', 'dag.get.run.summary.failed', 'dag.get.run.summary.not_executed', 'dag.get.run.summary.skipped', 'dag.get.run.task_summary', 'dag.get.run.terminal_outputs',
   // dag.node: 6
   'dag.node.node.error', 'dag.node.node.messages', 'dag.node.node.output', 'dag.node.node.output_file', 'dag.node.node.prompt', 'dag.node.node.prompt_file',
   // deliverables.list: 1

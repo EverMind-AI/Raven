@@ -243,6 +243,171 @@ async def test_dag_status_reads_one_run_back_with_every_node_field() -> None:
     assert "Run dir: /tmp/runs/r1" in out
 
 
+async def test_dag_status_of_a_graph_without_branches_prints_exactly_what_it_always_did() -> None:
+    out = await DagStatusTool(loop=_Loop(tool=_DagTool(_finished_run()))).execute("r1")
+
+    assert out == "\n".join(
+        [
+            "DAG run r1: 1 completed, 1 failed, 0 cancelled, 0 skipped (of 2).",
+            "task_summary: Plan, then write, then review.",
+            "- a [completed]",
+            "    node_summary: Draft the plan.",
+            "    subagent: Coder",
+            '    inputs: {"topic": "x"}',
+            "    prompt_template: line1",
+            *(f"    line{i}" for i in range(2, 11)),
+            "    ... (truncated, 2 more lines; full prompt in /tmp/nodes/a.prompt.md)",
+            "    instance: i-1",
+            "    output_file: /tmp/nodes/a.out.md",
+            "    memory_file: /tmp/nodes/a.memory.json",
+            "    started_at: 1000",
+            "    ended_at: 3000",
+            "- b [failed]",
+            "    node_summary: (none)",
+            "    subagent: Writer",
+            "    inputs: (none)",
+            "    prompt_template: (none)",
+            "    instance: (none)",
+            "    output_file: (none)",
+            "    memory_file: (none)",
+            "    started_at: (none)",
+            "    ended_at: (none)",
+            "    error: boom",
+            "Run dir: /tmp/runs/r1",
+        ]
+    )
+
+
+async def test_dag_status_counts_the_nodes_itself_when_the_record_has_no_total() -> None:
+    run = _finished_run()
+    run["summary"] = {"completed": 1, "failed": 1}
+
+    out = await DagStatusTool(loop=_Loop(tool=_DagTool(run))).execute("r1")
+
+    assert "DAG run r1: 1 completed, 1 failed, 0 cancelled, 0 skipped (of 2)." in out
+
+
+def _branching_run() -> dict[str, Any]:
+    """A finished run that took one branch: `fix` was not executed, one `select: many`
+    decision picked two routes and another picked none."""
+    return {
+        "run_id": "r2",
+        "dir": "/tmp/runs/r2",
+        "nodes_root": "/tmp/nodes",
+        "finalized": True,
+        "task_summary": "Triage, then fix or write.",
+        "files": [
+            {
+                "node": "triage",
+                "status": "completed",
+                "subagent": "Coder",
+                "selected_routes": ["docs"],
+                "route_evidence": "the judge's quote of the sub-agent",
+            },
+            {"node": "fix", "status": "not_executed", "subagent": "Coder", "reason": "when_false"},
+            {"node": "write", "status": "completed", "subagent": "Writer"},
+            {"node": "scan", "status": "completed", "subagent": "Coder", "selected_routes": ["a", "b"]},
+            {"node": "sweep", "status": "completed", "subagent": "Coder", "selected_routes": []},
+        ],
+        "terminal_outputs": [],
+        "summary": {"total": 5, "completed": 4, "failed": 0, "cancelled": 0, "skipped": 0, "not_executed": 1},
+    }
+
+
+def _node_block(out: str, node: str) -> list[str]:
+    """The lines `dag_status` printed for one node: its `- id [status]` line up to the next node's."""
+    lines = out.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith(f"- {node} ["))
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith(("- ", "Run dir:"))), len(lines))
+    return lines[start:end]
+
+
+async def test_dag_status_counts_a_node_that_was_not_executed_and_says_why() -> None:
+    out = await DagStatusTool(loop=_Loop(tool=_DagTool(_branching_run()))).execute("r2")
+
+    assert "DAG run r2: 4 completed, 0 failed, 0 cancelled, 0 skipped, 1 not executed (of 5)." in out
+    assert "    reason: when_false" in _node_block(out, "fix")
+    assert [line for line in out.splitlines() if line.startswith("    reason:")] == ["    reason: when_false"]
+
+
+async def test_dag_status_counts_the_not_executed_nodes_of_a_record_with_no_total() -> None:
+    run = _branching_run()
+    run["summary"] = {"completed": 4, "not_executed": 1}
+
+    out = await DagStatusTool(loop=_Loop(tool=_DagTool(run))).execute("r2")
+
+    assert "DAG run r2: 4 completed, 0 failed, 0 cancelled, 0 skipped, 1 not executed (of 5)." in out
+
+
+async def test_dag_status_shows_what_each_decision_selected() -> None:
+    out = await DagStatusTool(loop=_Loop(tool=_DagTool(_branching_run()))).execute("r2")
+
+    assert "    selected_routes: docs" in _node_block(out, "triage")
+    assert "    selected_routes: a, b" in _node_block(out, "scan")
+    assert "    selected_routes: (none)" in _node_block(out, "sweep"), "selecting nothing is itself a decision"
+    assert [line for line in out.splitlines() if line.startswith("    selected_routes:")] == [
+        "    selected_routes: docs",
+        "    selected_routes: a, b",
+        "    selected_routes: (none)",
+    ]
+
+
+async def test_dag_status_treats_a_null_selected_routes_as_no_selection() -> None:
+    run = _branching_run()
+    run["files"] = [{"node": "x", "status": "completed", "subagent": "Coder", "selected_routes": None}]
+
+    out = await DagStatusTool(loop=_Loop(tool=_DagTool(run))).execute("r2")
+
+    assert "selected_routes" not in out
+
+
+async def test_dag_status_never_prints_the_judges_route_evidence() -> None:
+    out = await DagStatusTool(loop=_Loop(tool=_DagTool(_branching_run()))).execute("r2")
+
+    assert "the judge's quote" not in out
+    assert "route_evidence" not in out
+
+
+def _unfinalized_branching_run() -> dict[str, Any]:
+    """`_branching_run()`'s first two nodes as read before the manifest exists: every node pending."""
+    files = [
+        {"node": node, "status": "pending", "subagent": "Coder", "started_at": None, "ended_at": None}
+        for node in ("triage", "fix")
+    ]
+    return {"run_id": "r3", "dir": "/tmp/runs/r3", "nodes_root": "/tmp/nodes", "finalized": False, "files": files}
+
+
+async def test_dag_status_of_a_run_still_going_says_what_a_branch_decided_but_never_the_quote(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mid-run the outcome comes off the registry rows, quote and all, and the model
+    still reads only the reason and the selection: the quote is sub-agent text."""
+    from raven.agent.subagent import instances as instances_mod
+    from raven.agent.subagent.dag_resume import read_run_reconciled
+
+    registry = instances_mod.InstanceRegistry(path=tmp_path / "inst.json")
+    monkeypatch.setattr(instances_mod, "_registry", registry)
+    quote = "the judge's quote of the sub-agent"
+    await registry.upsert_dag_node(
+        "tui:s1", "r3", "triage", "Coder", "completed", selected_routes=["docs"], route_evidence=quote
+    )
+    await registry.upsert_dag_node("tui:s1", "r3", "fix", "Coder", "not_executed", reason="when_false")
+
+    reconciled = await read_run_reconciled(
+        _DagTool(_unfinalized_branching_run()), "r3", "tui:s1", live_runs=lambda: {"r3"}
+    )
+    assert reconciled["files"][0]["route_evidence"] == quote, "the quote is on the run the renderer is handed"
+
+    tool = DagStatusTool(loop=_Loop(live={"r3"}, tool=_DagTool(_unfinalized_branching_run())))
+    tool.set_context("tui", "s1", session_key="tui:s1")
+    out = await tool.execute("r3")
+
+    assert "    selected_routes: docs" in _node_block(out, "triage")
+    assert "    reason: when_false" in _node_block(out, "fix")
+    assert quote not in out
+    assert "route_evidence" not in out
+
+
 async def test_dag_status_derives_the_prompt_path_when_truncated_without_one() -> None:
     run = _finished_run()
     run["files"][0]["prompt_file"] = None

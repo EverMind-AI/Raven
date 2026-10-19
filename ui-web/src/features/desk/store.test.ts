@@ -34,7 +34,7 @@ const taskRow = (id: string): TaskRow => ({
   id, kind: 'spawn', task_summary: id, status: 'running', agent: 'raven', handle: id,
   counts: {
     total: 0, pending: 0, running: 0, completed: 0, failed: 0, skipped: 0, cancelled: 0,
-    interrupted: 0, exception: 0,
+    interrupted: 0, exception: 0, not_executed: 0,
   },
   nodes: [],
 })

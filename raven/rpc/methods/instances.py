@@ -53,6 +53,9 @@ if TYPE_CHECKING:
 # write access to the home directory can put a segment into.
 _RUN_ID_RE = re.compile(r"^[0-9]{8}T[0-9]{6}(?:[0-9]{6})?Z-[0-9a-f]{8}$")
 
+# What a branch decided about a node, spelled as its ``dag-node`` row spells it.
+_BRANCH_OUTCOME_KEYS = ("reason", "selectedRoutes", "routeEvidence")
+
 
 def _loop(agent_loop_factory: "AgentLoopFactory | None") -> Any:
     """The live agent loop, or ``None``.
@@ -98,7 +101,9 @@ def _collapse_dag_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     reportable: the ordinary row never receives a status, because the DAG path
     does not go through ``spawn``, and the ``dag-node`` handle names a node
     rather than a conversation, so it cannot be resumed. The pair is therefore
-    reported as the addressable row wearing the node's status.
+    reported as the addressable row wearing the node's status, and what a branch
+    decided about the node (``reason``, ``selectedRoutes``, ``routeEvidence``)
+    the way a stateless node's own row reports it.
 
     A stateless node runs on no handle and keeps its ``dag-node`` row -- with
     no ordinary row to fall back to, dropping it would take that node off the
@@ -143,6 +148,7 @@ def _collapse_dag_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "status": node.get("status") or row.get("status"),
                 "runId": node.get("runId"),
                 "nodeId": node.get("nodeId"),
+                **{key: node[key] for key in _BRANCH_OUTCOME_KEYS if node.get(key) is not None},
             }
         )
     out.extend(node for key, node in by_node.items() if key not in claimed)
@@ -266,6 +272,10 @@ def _drop_nodes_that_never_ran(rows: list[dict[str, Any]]) -> list[dict[str, Any
     anything. The graph sheet still draws them, out of the graph, where a node
     that did not run is worth seeing next to the one that stopped it.
 
+    ``not_executed`` is the same state reached by a decision rather than a
+    failure: a branch that was not taken. The runner writes its registry row as it
+    does a skipped node's, and the node has no conversation either.
+
     ``cancelled`` is deliberately kept. The runner distinguishes the two -- a
     cancelled node "already has a real start time from its dispatch" -- so it
     ran, however briefly, and what it managed to do before the stop is a real
@@ -280,7 +290,7 @@ def _drop_nodes_that_never_ran(rows: list[dict[str, Any]]) -> list[dict[str, Any
     and the skipped row was dropped only afterwards, too late to stop having
     caused it. Filtered first, it never takes part in the pairing.
     """
-    return [r for r in rows if not (r.get("kind") == "dag-node" and r.get("status") == "skipped")]
+    return [r for r in rows if not (r.get("kind") == "dag-node" and r.get("status") in ("skipped", "not_executed"))]
 
 
 async def instances_list(

@@ -130,7 +130,14 @@ class InstanceRegistry:
     def _flush(self) -> None:
         assert self._records is not None  # noqa: S101
         data = {"version": 1, "instances": list(self._records.values())}
-        atomic_replace(self._path, json.dumps(data, indent=2, ensure_ascii=False))
+        try:
+            atomic_replace(self._path, json.dumps(data, indent=2, ensure_ascii=False))
+        except (TypeError, ValueError):
+            # A value the file cannot hold, such as text UTF-8 cannot encode. Each write
+            # flushes the whole cache, so a row left in it would fail every later write in
+            # the process, whichever session made it; the next read reloads the file instead.
+            self._records = None
+            raise
         # Our own write is not a reason to re-read on the next call.
         self._stamp = self._file_stamp()
 
@@ -249,11 +256,30 @@ class InstanceRegistry:
                         e,
                     )
 
-    async def upsert_dag_node(self, session_key: str, run_id: str, node_id: str, agent: str, status: str) -> None:
-        """Record or update one DAG node's status.
+    async def upsert_dag_node(
+        self,
+        session_key: str,
+        run_id: str,
+        node_id: str,
+        agent: str,
+        status: str,
+        *,
+        reason: str | None = None,
+        selected_routes: list[str] | None = None,
+        route_evidence: str | None = None,
+    ) -> None:
+        """Record or update one DAG node's status, and what a branch decided about it.
 
         The handle is namespaced by run id so a node can never collide with a
         user-chosen CLI instance handle.
+
+        ``reason``, ``selected_routes`` and ``route_evidence`` are written as
+        ``reason``, ``selectedRoutes`` and ``routeEvidence``, each only when given;
+        an empty selection is given, since a decision that chose nothing has still
+        decided. Until the run's manifest is written they are the only durable
+        record of a branch's outcome. The record is rebuilt on every write, so the
+        row always says what the latest write said: a write without them leaves
+        none behind.
         """
         handle = f"{run_id}/{node_id}"
         async with self._lock:
@@ -270,6 +296,9 @@ class InstanceRegistry:
                     "runId": run_id,
                     "nodeId": node_id,
                     "status": status,
+                    **({"reason": reason} if reason is not None else {}),
+                    **({"selectedRoutes": list(selected_routes)} if selected_routes is not None else {}),
+                    **({"routeEvidence": route_evidence} if route_evidence is not None else {}),
                     "createdAtMs": existing.get("createdAtMs", now),
                     "updatedAtMs": now,
                 }

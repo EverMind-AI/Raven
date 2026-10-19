@@ -253,7 +253,11 @@ class InstanceRow(_Strict):
 
     ``runId`` / ``nodeId`` name the DAG node an instance belongs to. They are on
     a ``dag-node`` row and also on the ordinary row of a stateful node, which is
-    what lets one invocation's two rows be reported as one.
+    what lets one invocation's two rows be reported as one. What a branch decided
+    about that node travels the same way: ``selectedRoutes`` / ``routeEvidence``
+    are on a decision node's ``dag-node`` row and on the ordinary row a stateful
+    node is reported on, and ``reason`` is on the ``dag-node`` row of a node that
+    was not executed.
 
     ``resumable`` is the exception to "verbatim": the registry does not store it,
     because whether a row can be talked to depends on the agent's configured
@@ -272,6 +276,28 @@ class InstanceRow(_Strict):
     agent_id: str | None = Field(default=None, alias="agentId")
     run_id: str | None = Field(default=None, alias="runId")
     node_id: str | None = Field(default=None, alias="nodeId")
+    reason: DagNotExecutedReason | None = Field(
+        default=None,
+        description="Why the node did not execute. Present only on the dag-node row of a node that was not executed.",
+    )
+    selected_routes: list[str] | None = Field(
+        default=None,
+        alias="selectedRoutes",
+        description=(
+            "The routes a decision node selected. An empty list is a decision that chose nothing, which a "
+            "'many' selection may. Present only on the row of a DAG node a branch decided: its dag-node "
+            "row, or the ordinary row a stateful node is reported on."
+        ),
+    )
+    route_evidence: str | None = Field(
+        default=None,
+        alias="routeEvidence",
+        description=(
+            "The judge's supporting quote for the selection, at most 500 characters. Present only when the "
+            "judge gave one, and only on the row of a DAG node a branch decided: its dag-node row, or the "
+            "ordinary row a stateful node is reported on."
+        ),
+    )
     created_at_ms: int | None = Field(default=None, alias="createdAtMs")
     updated_at_ms: int | None = Field(default=None, alias="updatedAtMs")
     resumable: bool | None = None
@@ -899,7 +925,11 @@ class SubagentStatusEvent(_Strict):
     payload: SubagentStatusPayload
 
 
-DagNodeStatus = Literal["pending", "running", "completed", "failed", "skipped", "cancelled", "exception"]
+DagNodeStatus = Literal[
+    "pending", "running", "completed", "failed", "skipped", "cancelled", "exception", "not_executed"
+]
+
+DagNotExecutedReason = Literal["when_false", "when_unknown", "upstream_not_executed"]
 
 
 class _FromAStint(_Strict):
@@ -936,6 +966,27 @@ class DagRunStartedNode(_Strict):
     depends_on: list[str]
     instance: str | None = None
     node_summary: str | None = None
+    routes: list[str] | None = Field(
+        default=None,
+        description=(
+            "The route names a decision node chooses between, in declaration order; only the judge sees "
+            "their conditions. Absent on a node that decides nothing."
+        ),
+    )
+    select: Literal["one", "many"] | None = Field(
+        default=None,
+        description=(
+            "How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). "
+            "Always sent with routes, 'one' where the graph left it unset."
+        ),
+    )
+    when: str | None = Field(
+        default=None,
+        description=(
+            "The guard: this node runs only if the expression holds once its dependencies settle. "
+            "Absent on a node with no guard."
+        ),
+    )
 
 
 class DagRunStartedPayload(_FromAStint):
@@ -963,6 +1014,22 @@ class DagNodeUpdatedPayload(_FromAStint):
     status: DagNodeStatus
     started_at: int | None = None
     ended_at: int | None = None
+    reason: DagNotExecutedReason | None = Field(
+        default=None,
+        description="Why the node did not execute. Sent only with status not_executed.",
+    )
+    selected_routes: list[str] | None = Field(
+        default=None,
+        description=(
+            "The routes a decision node selected, on the frame that finishes it. An empty list is a decision "
+            "that chose nothing, which a 'many' selection may. Absent on every other frame, and when the node "
+            "failed to decide."
+        ),
+    )
+    route_evidence: str | None = Field(
+        default=None,
+        description="The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none.",
+    )
 
 
 class DagNodeUpdatedEvent(_Strict):
@@ -1004,13 +1071,40 @@ class DagRunSummary(_Strict):
     failed: int | None = None
     skipped: int | None = None
     cancelled: int | None = None
+    not_executed: int | None = Field(
+        default=None,
+        description=(
+            "Nodes a branch left out. Present only when there is at least one, so a run that never "
+            "branches carries the five counts it always did."
+        ),
+    )
 
 
 class DagRunFile(_Strict):
+    """One node of a finished run, as the completion frame closes the graph from it.
+
+    The reason and the selection repeat what the node's own frame said: a client
+    that settles every node from this list would otherwise overwrite them."""
+
     node: str
     status: DagNodeStatus
     output_file: str | None = None
     error: str | None = None
+    reason: DagNotExecutedReason | None = Field(
+        default=None,
+        description="Why the node did not execute. Sent only with status not_executed.",
+    )
+    selected_routes: list[str] | None = Field(
+        default=None,
+        description=(
+            "The routes a decision node selected. An empty list is a decision that chose nothing, which a "
+            "'many' selection may. Absent on a node that decides nothing, and on one that failed to decide."
+        ),
+    )
+    route_evidence: str | None = Field(
+        default=None,
+        description="The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none.",
+    )
 
 
 class DagRunCompletedPayload(_FromAStint):
@@ -1034,7 +1128,7 @@ class DagRunCompletedEvent(_Strict):
 # server infers for a node the registry still calls running on a run nothing is
 # executing. Nothing on the event wire may claim that.
 DagSnapshotNodeStatus = Literal[
-    "pending", "running", "completed", "failed", "skipped", "cancelled", "interrupted", "exception"
+    "pending", "running", "completed", "failed", "skipped", "cancelled", "interrupted", "exception", "not_executed"
 ]
 
 
@@ -1056,6 +1150,45 @@ class DagSnapshotNode(_Strict):
         description=(
             "What this node was handed, per key: a literal string, {file: path}, or {node: id}. "
             "The other half of prompt_template -- a template's {{ inputs.k }} does not say where k came from."
+        ),
+    )
+    reason: DagNotExecutedReason | None = Field(
+        default=None,
+        description="Why the node did not execute. Present only with status not_executed.",
+    )
+    selected_routes: list[str] | None = Field(
+        default=None,
+        description=(
+            "The routes a decision node selected. An empty list is a decision that chose nothing, which a "
+            "'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, "
+            "and on one that failed to decide."
+        ),
+    )
+    route_evidence: str | None = Field(
+        default=None,
+        description=(
+            "The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none."
+        ),
+    )
+    routes: list[str] | None = Field(
+        default=None,
+        description=(
+            "The route names a decision node chooses between, in declaration order; only the judge sees "
+            "their conditions. Absent on a node that decides nothing."
+        ),
+    )
+    select: Literal["one", "many"] | None = Field(
+        default=None,
+        description=(
+            "How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). "
+            "Always sent with routes, 'one' where the graph left it unset."
+        ),
+    )
+    when: str | None = Field(
+        default=None,
+        description=(
+            "The guard: this node runs only if the expression holds once its dependencies settle. "
+            "Absent on a node with no guard."
         ),
     )
 
@@ -1159,6 +1292,13 @@ class TaskCounts(_Strict):
             "is waiting on a decision, not working."
         ),
     )
+    not_executed: int = Field(
+        ...,
+        description=(
+            "Nodes a branch left out. They never ran, and an unselected branch does not move the task's "
+            "status: a run of completed and not_executed nodes is completed."
+        ),
+    )
 
 
 class TaskReplan(_Strict):
@@ -1206,6 +1346,45 @@ class TaskNode(_Strict):
     inputs: dict[str, Any] | None = None
     skills: list[str] | None = None
     mcps: list[str] | None = None
+    reason: DagNotExecutedReason | None = Field(
+        default=None,
+        description="Why the node did not execute. Present only with status not_executed.",
+    )
+    selected_routes: list[str] | None = Field(
+        default=None,
+        description=(
+            "The routes a decision node selected. An empty list is a decision that chose nothing, which a "
+            "'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, "
+            "and on one that failed to decide."
+        ),
+    )
+    route_evidence: str | None = Field(
+        default=None,
+        description=(
+            "The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none."
+        ),
+    )
+    routes: list[str] | None = Field(
+        default=None,
+        description=(
+            "The route names a decision node chooses between, in declaration order; only the judge sees "
+            "their conditions. Absent on a node that decides nothing."
+        ),
+    )
+    select: Literal["one", "many"] | None = Field(
+        default=None,
+        description=(
+            "How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). "
+            "Always sent with routes, 'one' where the graph left it unset."
+        ),
+    )
+    when: str | None = Field(
+        default=None,
+        description=(
+            "The guard: this node runs only if the expression holds once its dependencies settle. "
+            "Absent on a node with no guard."
+        ),
+    )
     files: list[TaskFile]
 
 
@@ -5539,7 +5718,8 @@ class PlaybookNode(_Strict):
     three are the fields an author may leave blank for the caller to fill at run
     time. ``skills`` / ``mcps`` are three-state -- null means the author said
     nothing, ``[]`` means the author wrote an empty list, and a list names what
-    to consider."""
+    to consider. ``routes`` / ``select`` / ``when`` declare a branch and are
+    absent unless the author wrote them."""
 
     id: str
     subagent: str
@@ -5550,6 +5730,21 @@ class PlaybookNode(_Strict):
     mcps: list[str] | None = None
     instance: str
     inputs: dict[str, Any]
+    routes: dict[str, str] | None = Field(
+        default=None,
+        description=(
+            "Makes this node a decision: route name -> the condition, in plain words, under which its "
+            "answer selects that route. Kept whole, because re-running the graph judges against the conditions."
+        ),
+    )
+    select: Literal["one", "many"] | None = Field(
+        default=None,
+        description="How many routes the decision selects, as the author wrote it. Absent means 'one'.",
+    )
+    when: str | None = Field(
+        default=None,
+        description="The guard, as the author wrote it: this node runs only if it holds once its dependencies settle.",
+    )
 
 
 class PlaybookRole(_Strict):
