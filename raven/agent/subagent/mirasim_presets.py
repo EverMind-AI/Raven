@@ -62,8 +62,12 @@ def _row(key: str, agent: str, label: str, what: str) -> dict[str, Any]:
         "command": f"{{PYTHON}} -P -m raven.acp.mirasim --agent {agent}",
         # The first session waits on the host listing its agents, which it
         # answers progressively: measured at about two seconds, with the rows
-        # probing every agent CLI on the machine.
-        "readyTimeoutMs": 60000,
+        # probing every agent CLI on the machine. The budget covers the
+        # adapter's own limits instead -- reaching the host (15 s), then the
+        # agent list and the menus (60 s), twice when the first list says the
+        # agent is not installed -- so a slow host is refused by the adapter,
+        # saying why, rather than timed out as an agent that hung.
+        "readyTimeoutMs": 150000,
         # The Mirasim host takes no MCP servers for one session, so nothing
         # handed over could reach the agent. False is the one declaration that
         # withholds them and also tells the roster none arrive, so a DAG node's

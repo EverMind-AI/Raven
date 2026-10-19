@@ -288,6 +288,20 @@ async def test_a_host_that_does_not_list_its_agents_in_time_leaves_it_to_the_han
     assert await mirasim_presets.installed_agents(path=None) is None
 
 
+def test_a_rows_budgets_cover_the_adapters_own_slowest_answers() -> None:
+    """Past its own limits the adapter refuses and says why; a budget under them reads as an agent that hung."""
+    from raven.acp.mirasim import host as host_mod
+    from raven.acp.mirasim import server as server_mod
+    from raven.agent.subagent import mirasim_presets
+
+    connect = host_mod.HEALTH_TIMEOUT_S + host_mod.CONNECT_TIMEOUT_S
+    menus = server_mod.CLIS_TIMEOUT_S + server_mod.QUERY_TIMEOUT_S
+    # A session/new may read the menus twice: again when the first read says the agent is not installed.
+    for row in MIRASIM_PRESETS.values():
+        assert row["readyTimeoutMs"] / 1000 > connect + 2 * menus
+    assert mirasim_presets.INSTALLED_TIMEOUT_S > connect + server_mod.CLIS_TIMEOUT_S
+
+
 def test_the_host_variables_a_row_can_name_are_the_ones_the_adapter_reads() -> None:
     from raven.acp.mirasim import host as host_mod
     from raven.agent.subagent.mirasim_presets import HOST_ENV_KEYS
