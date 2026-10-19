@@ -97,9 +97,7 @@ def ssh_defaults(host: str, *, port: int = 0, user: str = "") -> dict[str, Any]:
     return out
 
 
-def probe(
-    row: dict[str, Any], *, timeout: float = 30.0, isolate_key: bool = False, keep_config: bool = False
-) -> tuple[bool, str, dict[str, Any]]:
+def probe(row: dict[str, Any], *, timeout: float = 30.0, isolate_key: bool = False) -> tuple[bool, str, dict[str, Any]]:
     """Reach the machine and read what it is. ``(reached, message, detected)``.
 
     The reaching is the point and the reading is the bonus. A row that cannot be
@@ -116,9 +114,7 @@ def probe(
     a session a different key authenticated, and the registry would then hold
     a path that stops working the day that agent or config changes. The agent
     tool trying the keys ssh named, when the owner gave no path, isolates
-    fully: no config read at all; ``keep_config`` keeps the owner's ssh config
-    in play -- a jump host, an alias, an old host's algorithms -- and keeps
-    only the agent out. A password row (``auth: password``) is reached the one
+    fully: no config read at all. A password row (``auth: password``) is reached the one
     way every later connection reaches it, through the askpass helper
     (``transport.ssh_env``), and ``isolate_key`` does not apply: there is no
     key to prove.
@@ -131,9 +127,7 @@ def probe(
             # The row read the one way every other route onto a machine reads
             # it; only the key restriction is added.
             host, port, key, user = ssh_target(row)
-            runner = make_ssh_runner(
-                host, port, key, user=user, identities_only=True, keep_config=keep_config, cap_seconds=timeout
-            )
+            runner = make_ssh_runner(host, port, key, user=user, identities_only=True, cap_seconds=timeout)
         else:
             runner = runner_from(row, cap_seconds=timeout)
         code, out = runner(PROBE_SCRIPT)

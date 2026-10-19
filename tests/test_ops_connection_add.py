@@ -225,39 +225,6 @@ def test_an_isolated_candidate_leaves_ssh_exactly_one_identity_to_offer(tmp_path
     assert str(other_a) in agent_only and str(other_b) in agent_only
 
 
-def test_a_key_proved_with_the_config_kept_reaches_the_host_the_config_names_and_offers_no_agent(tmp_path, monkeypatch):
-    """A password registration proves the key it just installed, on a machine
-    its config may be the only way to (a jump host, an alias): the probe reads
-    the owner's config -- the alias resolves, as it did for the install a
-    moment before -- and keeps the agent out. The config's own identities for
-    that host stay in play, which is what every later connection offers too."""
-    import subprocess
-
-    from raven.ops.transport import make_ssh_runner
-
-    cand, other = tmp_path / "cand", tmp_path / "other"
-    for f in (cand, other):
-        f.write_text("")
-    config = tmp_path / "config"
-    config.write_text(f"Host target\n  HostName 127.0.0.1\n  Port 2200\n  IdentityFile {other}\n")
-    seen: list[list[str]] = []
-    monkeypatch.setattr(
-        subprocess, "run", lambda argv, **kw: seen.append(argv) or subprocess.CompletedProcess(argv, 0, "", "")
-    )
-    make_ssh_runner("target", 22, str(cand), user="u", identities_only=True, keep_config=True)("true")
-    monkeypatch.undo()
-    argv = seen[0]
-    assert "-F" not in argv, "the config is read"
-    assert "IdentitiesOnly=yes" in argv and "IdentityAgent=none" in argv
-
-    out = subprocess.run(["ssh", "-G", "-F", str(config)] + argv[1:-2] + [argv[-2]], capture_output=True, text=True)
-    resolved = dict(ln.split(None, 1) for ln in out.stdout.splitlines() if " " in ln)
-    identities = [ln.split(None, 1)[1] for ln in out.stdout.splitlines() if ln.startswith("identityfile ")]
-    assert resolved["hostname"] == "127.0.0.1", "the alias in the owner's config is in play"
-    assert resolved["identitiesonly"] == "yes" and resolved["identityagent"] == "none"
-    assert identities == [str(cand), str(other)], "the key under proof, and what the config names for the host"
-
-
 def test_the_ask_is_one_text_the_on_call_listing_and_the_tool_share():
     """Spelled once: the on-call plugin's empty-registry reply carries trunk's
     ASK_OWNER, so the questions cannot drift between the two products."""

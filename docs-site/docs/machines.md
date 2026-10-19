@@ -68,7 +68,11 @@ What gets recorded, and where:
   on the command line). The password is kept on this computer, under
   `~/.raven/keys/<id>.password`, readable by your account alone (mode 0600),
   and handed to ssh on every connection through OpenSSH's askpass hook: it is
-  in no registry row, log or answer, and never on a command line. The row
+  in no registry row, log or answer, and never on a command line. Each of
+  those connections logs in on its own (connection sharing from your ssh
+  config, `ControlMaster`, is turned off for them), so a registration proves
+  the password it keeps and a password changed on the machine is noticed at
+  the next connection. The row
   carries `auth: password` and no key path. The machine's sshd has to accept
   password logins (`PasswordAuthentication yes`); one that does not refuses
   every connection, and the refusal says so. A password the machine refuses at

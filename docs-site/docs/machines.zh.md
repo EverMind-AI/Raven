@@ -53,7 +53,9 @@ raven ops connection add --id gpu1 --name "GPU box 1" \
   `raven ops connection add --auth password --password-stdin`（密码从标准输入的第一行读，
   不走命令行）。密码保存在本机的 `~/.raven/keys/<id>.password`，只有你的账号能读
   （权限 0600）；每次连接时经 OpenSSH 的 askpass 钩子交给 ssh，不进登记表、不进日志、
-  不回显、不上命令行。登记表里这一行记 `auth: password`，没有密钥路径。机器的 sshd 必须允许
+  不回显、不上命令行。这些连接每一条都自己登录（你 ssh 配置里的连接共享 `ControlMaster`
+  对它们不生效），所以登记时证明的就是保存下来的这个密码，机器改了密码也会在下一次连接时
+  发现。登记表里这一行记 `auth: password`，没有密钥路径。机器的 sshd 必须允许
   密码登录（`PasswordAuthentication yes`），不允许的机器每次连接都会拒绝，拒绝语里会说明。
   登记时被机器拒绝的密码不会保存。机器改了密码，先移除这台机器再重新登记（id 已在用的登记
   会被拒）。本机是 Windows 时不提供：
