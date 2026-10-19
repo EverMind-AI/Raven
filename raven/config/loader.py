@@ -1362,6 +1362,12 @@ def _migrate_config(  # noqa: C901 (cc 45: pre-existing, above the ceiling)
         _migrate_planted_cron_timezone(data, notify=True)
     if from_version < _RETIRED_VERDICT_SWITCH_MIGRATION:
         _migrate_retired_verdict_switch(data, notify=True)
+    elif _migrate_retired_verdict_switch(data):
+        # The key can come back after its floor ran: the build before this one reads the
+        # stamp as current, keeps it, and accepts the key, so a rollback or a second install
+        # sharing the home can write it again. ``SubagentDagConfig`` forbids it, so it goes
+        # on every load; the user was told once, when the floor ran.
+        _log.info("Migrated: dropped the retired subagentDag.verdictEnabled switch again")
 
     # Same for the session-title gate, which changed both name and unit:
     # ``min_input_chars`` counted code points, ``min_input_width`` counts

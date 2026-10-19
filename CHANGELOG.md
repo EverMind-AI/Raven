@@ -98,11 +98,12 @@ All notable changes to Raven are documented here.
   the web tasks list show what each node's branch did.
 
 - Node judgement is always on. `subagentDag.verdictEnabled` no longer exists,
-  and a load-time migration removes it from the config file and says so once. A
-  config that turned judgement off now has every finished node judged: one more
-  model call per node, and a node judged not to have accomplished its task can
-  suspend as `exception` and report, as it does wherever judgement was on. A
-  host with no model to judge with refuses a graph that declares routes.
+  and a load-time migration removes it from the config file and says so once;
+  set again later, by an older build sharing the config, it is dropped on every
+  load. A config that turned judgement off now has every finished node judged:
+  one more model call per node, and a node judged not to have accomplished its
+  task can suspend as `exception` and report, as it does wherever judgement was
+  on. A host with no model to judge with refuses a graph that declares routes.
 
 ### Changed
 

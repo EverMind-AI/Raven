@@ -1891,3 +1891,21 @@ def test_the_verdict_switch_is_dropped_from_the_extension_blocks_in_memory_too(
         "the disk rewrite was switched off, so a load that succeeded proves the in-memory strip"
     )
     assert len([n for n in drain_migration_notices() if "verdictEnabled" in n]) == 1
+
+
+def test_the_verdict_switch_set_again_after_its_floor_still_loads(tmp_path: Path) -> None:
+    """The switch can come back to a config its floor already cleaned: the build before
+    this one reads the stamp as current, keeps it, and accepts the key, so a rollback, or
+    a second install sharing the home, can write it again. The extension model would then
+    refuse the whole config, so the strip holds on every load, without a second notice."""
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"subagentDag": {"verdictEnabled": False, "verdictModel": "cheap/tier"}})
+    _stamp_path(p).write_text(json.dumps({"version": CURRENT_CONFIG_VERSION}), encoding="utf-8")
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    assert cfg.subagent_dag.verdict_model == "cheap/tier"
+    assert [n for n in drain_migration_notices() if "verdictEnabled" in n] == []
