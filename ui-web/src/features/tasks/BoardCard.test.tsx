@@ -256,10 +256,29 @@ describe('the card of a node a branch left out, as the stylesheet draws it', () 
     expect(style(card.querySelector('.tkrunl1')).paddingRight).toBe('0px')
   })
 
+  /* The copy shortens only the title's first line, and a line too short for the word it would start
+     with is moved below a float: the title then starts under a blank line, and its second line, where
+     the ellipsis goes, falls outside the box. A word that may break where the room ends keeps the
+     title beside the copy. */
+  it('lets a first word wider than the room beside the copy break there, not drop below it', () => {
+    const card = drawn('not_executed')
+    expect(['anywhere', 'break-word']).toContain(style(card.querySelector('.tkrunl1')).overflowWrap)
+  })
+
   it('leaves the title of every other status as it was', () => {
     const card = drawn('completed')
     expect(style(card.querySelector('.tkrunl1')).paddingRight).toBe('46px')
     expect(style(card.querySelector('.tkrunl1')).marginRight).not.toBe('-5px')
     expect(style(card.querySelector('.tkrunrt')).position).toBe('absolute')
+  })
+
+  it('lets no other status break a word in its title', () => {
+    const others = ['pending', 'running', 'completed', 'failed', 'skipped', 'cancelled', 'interrupted', 'exception']
+    for (const status of others) {
+      const card = drawn(status)
+      expect(['anywhere', 'break-word'], status).not.toContain(style(card.querySelector('.tkrunl1')).overflowWrap)
+      cleanup()
+      sheet?.remove()
+    }
   })
 })
