@@ -121,8 +121,8 @@ def local_keys() -> list[str]:
     ``.pub`` beside it, by name. Nothing is read beyond the directory listing.
     The paths are spelled with ``~`` the way ``ssh -G`` spells them, which the
     transport hands to ssh unchanged and ssh expands itself. Empty when there
-    is no ``~/.ssh`` or nothing in it looks like a key; a password
-    registration makes one then.
+    is no ``~/.ssh`` or nothing in it looks like a key; the owner then types a
+    path, or registers the machine with its password.
     """
     ssh_dir = Path(os.path.expanduser("~/.ssh"))
     try:

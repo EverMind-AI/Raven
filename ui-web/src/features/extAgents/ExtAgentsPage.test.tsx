@@ -3547,6 +3547,119 @@ describe('the machines module', () => {
     expect(asked).toBe(1)
   })
 
+  it('keeps a landed preset greyed until the form has read its presets again', async () => {
+    /* The add lands and the form opened again while it ran reads its presets again; until that
+       read answers, the preset stays greyed as being connected rather than offered for a press the
+       server would refuse as a duplicate. */
+    const presets: PresetChoice[] = [
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, on_machines: [] },
+      { preset: 'opencode', name: 'OpenCode', kind: 'acp', description: 'd', connected_here: false, on_machines: [] }
+    ]
+    const held = heldConnect()
+    let reads = 0
+    let answerRead: () => void = () => {}
+    const { toasts } = install([row()], {
+      machines: [ready()],
+      presets: async () => {
+        reads += 1
+        /* The read the landed add asks for is held, to look at the form while it runs. */
+        if (reads === 3) await new Promise<void>(res => (answerRead = res))
+        return presets.map(p => ({ ...p }))
+      },
+      connectOnMachine: async () => {
+        const got = await held.connect()
+        if ('name' in got) presets[0]!.on_machines = ['box']
+        return got
+      }
+    })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    await click(sheetAct('gui.machine.connect_do'))
+    await act(async () => {
+      detail.close()
+    })
+    await act(async () => {
+      await new Promise(res => setTimeout(res, 300))
+    })
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    await held.release(null)
+    expect(reads).toBe(3)
+    const during = [...sheet()!.querySelectorAll('option')].map(o => [o.textContent, o.disabled])
+    expect(during).toEqual([
+      ['gui.machine.preset_connecting {"name":"Codex"}', true],
+      ['OpenCode', false]
+    ])
+    expect(store.get().mconnectPending).toEqual(['codex@box'])
+    await act(async () => {
+      answerRead()
+    })
+    await settle()
+    expect(toasts).toEqual(['gui.machine.connected_said {"name":"codex@box"}'])
+    expect(store.get().mconnectPending).toEqual([])
+    const after = [...sheet()!.querySelectorAll('option')].map(o => [o.textContent, o.disabled])
+    expect(after).toEqual([
+      ['gui.machine.preset_on_machine {"name":"Codex"}', true],
+      ['OpenCode', false]
+    ])
+  })
+
+  it('keeps the presets a landed add read over an older read that answers after it', async () => {
+    /* The form opened again while the add ran asks for its presets; that read can answer after
+       the one the landed add asks for, with what the server said before the write. */
+    const presets: PresetChoice[] = [
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, on_machines: [] },
+      { preset: 'opencode', name: 'OpenCode', kind: 'acp', description: 'd', connected_here: false, on_machines: [] }
+    ]
+    const held = heldConnect()
+    let reads = 0
+    let answerOpening: () => void = () => {}
+    install([row()], {
+      machines: [ready()],
+      presets: async () => {
+        reads += 1
+        const said = presets.map(p => ({ ...p }))
+        if (reads === 2) await new Promise<void>(res => (answerOpening = res))
+        return said
+      },
+      connectOnMachine: async () => {
+        const got = await held.connect()
+        if ('name' in got) presets[0]!.on_machines = ['box']
+        return got
+      }
+    })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    await click(sheetAct('gui.machine.connect_do'))
+    await act(async () => {
+      detail.close()
+    })
+    await act(async () => {
+      await new Promise(res => setTimeout(res, 300))
+    })
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    await held.release(null)
+    await settle()
+    expect(reads).toBe(3)
+    const landed = [...sheet()!.querySelectorAll('option')].map(o => [o.textContent, o.disabled])
+    expect(landed).toEqual([
+      ['gui.machine.preset_on_machine {"name":"Codex"}', true],
+      ['OpenCode', false]
+    ])
+    /* The opening's read answers last, with the machine not yet having the preset. */
+    await act(async () => {
+      answerOpening()
+    })
+    await settle()
+    const after = [...sheet()!.querySelectorAll('option')].map(o => [o.textContent, o.disabled])
+    expect(after).toEqual(landed)
+  })
+
   it('offers an absent agent no machine when none is registered', async () => {
     install([
       row({

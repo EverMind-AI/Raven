@@ -1623,7 +1623,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.machine.presets_loading': 'Reading the agents',
     'gui.machine.keys_found': 'Found on this computer and filled in; pick another or type a path.',
     'gui.machine.keys_none':
-      'No ssh key was found on this computer. Type a path, or pick Password: Raven then makes a key.',
+      'No ssh key was found on this computer. Type a path, or pick Password: Raven then keeps the password on this computer and logs in with it.',
     'gui.machine.missing_but_machine':
       'Not installed on this computer, but it can run on a registered machine where it is installed and signed in.',
     'gui.machine.connect_on': 'Connect on {name}',
@@ -4972,7 +4972,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.machine.presets_none': '没有可接的：能跑在机器上的 Agent 都已经接在这台机器上了。',
     'gui.machine.presets_loading': '正在读取 Agent 列表',
     'gui.machine.keys_found': '已填入这台电脑上找到的密钥，也可以换一把或自己填路径。',
-    'gui.machine.keys_none': '这台电脑上没找到 ssh 密钥。可以自己填路径，或改选「密码」，Raven 会生成一把。',
+    'gui.machine.keys_none':
+      '这台电脑上没找到 ssh 密钥。可以自己填路径，或改选「密码」：Raven 会把密码保存在本机，每次用它登录。',
     'gui.machine.missing_but_machine': '本机没装也可以跑在一台登记机器上，那台机器上要装好并登录它。',
     'gui.machine.connect_on': '接入到 {name}',
     'gui.agent.tag_stale': '需迁移',
