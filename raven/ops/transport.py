@@ -262,15 +262,18 @@ def ssh_env(row: dict[str, Any]) -> dict[str, str]:
     requires to consult askpass at all and never looks at. The password itself
     is in none of it. Refused, by name, when no password is kept here for the
     machine -- registering it again puts one back -- and on Windows, whose
-    OpenSSH has no askpass to hand the password to.
+    OpenSSH runs an askpass helper but not a POSIX one: the helper here is a
+    shell script, and Windows cannot execute it (measured 2026-10-19,
+    OpenSSH_for_Windows_9.5p2: a ``.cmd`` helper is run, a ``#!/bin/sh`` one
+    fails with ``CreateProcessW failed error:193``).
     """
     if not password_auth(row):
         return {}
     label = str(row.get("id") or "?").strip()
     if sys.platform == "win32":
         raise TransportError(
-            f"machine {label!r} was registered with a password, which this computer (Windows) cannot hand to ssh; "
-            "use a key instead"
+            f"machine {label!r} was registered with a password, and this computer (Windows) cannot run the script "
+            "that hands it to ssh; use a key instead"
         )
     try:
         secret = password_path(label)

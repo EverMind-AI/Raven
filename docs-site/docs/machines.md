@@ -88,11 +88,12 @@ What gets recorded, and where:
   every connection, and the refusal says so. A password the machine refuses at
   registration is not kept. When the machine's password changes, remove the
   machine and register it again (a registration under an id in use is
-  refused). Not available when this computer is Windows, whose OpenSSH has no
-  askpass. Such a machine gets no `Host <id>` alias in `~/.ssh/config`: `scp`
-  and `rsync` from a terminal ask for the password, and an agent reads and
-  writes its files through Raven's own file tools. Removing the machine
-  deletes the password kept here ([section 8](#8-remove-a-machine)).
+  refused). Not available when this computer is Windows, whose OpenSSH cannot
+  run the POSIX script that hands ssh the password. Such a machine gets no
+  `Host <id>` alias in `~/.ssh/config`: `scp` and `rsync` from a terminal ask
+  for the password, and an agent reads and writes its files through Raven's
+  own file tools. Removing the machine deletes the password kept here
+  ([section 8](#8-remove-a-machine)).
 - The machine's host key is accepted on the first connection and kept in
   `~/.ssh/known_hosts`. A machine that later presents a different key is
   refused until you check it yourself. With a password that first connection
