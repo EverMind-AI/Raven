@@ -103,20 +103,18 @@ def held_secrets() -> tuple[tuple[str, str], ...]:
 
     The config's credentials, re-read when the file changes, and the passwords
     kept for registered machines, read on every call: they are a few tiny
-    files, and an in-place rewrite can keep the old mtime (reviewed
-    2026-10-19 -- a stamp on mtime let a replaced password reach a model
-    verbatim until something else invalidated the cache).
+    files, and an in-place rewrite can keep the old mtime, so a stamp on it
+    would hold a replaced password's old value until something else
+    invalidated the cache.
     """
     global _cache
     path = get_config_path()
     try:
         mtime = path.stat().st_mtime
     except OSError:
-        # No config file. That used to end the whole call, which also skipped
-        # the machine passwords below -- and those live under the Raven home
-        # independently of any config: a configless Raven can register a
-        # password machine, and a tool printing keys/<id>.password then passed
-        # it to the model verbatim (reviewed 2026-10-19).
+        # No config file: an empty set of config credentials, not the end of
+        # the call. The machine passwords below live under the Raven home on
+        # their own, and a missing config does not imply they are absent.
         mtime = None
     if mtime is None:
         config_held: tuple[tuple[str, str], ...] = ()

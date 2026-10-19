@@ -61,8 +61,7 @@ def test_a_password_rewritten_in_place_with_the_same_mtime_is_still_the_one_scru
 
 def test_a_machine_password_is_scrubbed_even_with_no_config_file(tmp_path, monkeypatch):
     """The config and the kept passwords live independently under the Raven home: a configless Raven can register a
-    password machine, and its password must still be scrubbed (reviewed 2026-10-19 -- the missing config used to end
-    the whole call before the passwords were read)."""
+    password machine, and a missing config does not imply its password is absent -- it is scrubbed all the same."""
     from raven.config import held_secrets
     from raven.ops.connection_add import store_password
 
