@@ -611,6 +611,34 @@ def test_remove_asks_then_takes_the_row_and_its_alias_out_and_says_the_node_stay
     assert "Host box" not in (tmp_path / ".ssh" / "config").read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize("taken", [True, False], ids=["taken back", "machine away"])
+def test_remove_takes_back_the_key_this_computer_made_and_says_when_it_could_not(store, monkeypatch, tmp_path, taken):
+    point_home(monkeypatch, tmp_path)
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    _named(monkeypatch)
+    from raven.cli import ops_connection_commands as cli
+    from raven.ops.connection_add import generate_key
+
+    private, _line = generate_key("box")
+    _box_row(store, key=str(private))
+    monkeypatch.setattr(
+        cli,
+        "_revoke_public_key",
+        lambda row, **kw: (True, "") if taken else (False, "alice@203.0.113.7: Connection refused"),
+    )
+
+    out = remove("box", answer="y\n")
+
+    assert out.exit_code == 0, out.output
+    if taken:
+        assert "the key this computer made for it is taken back from its authorized_keys" in said(out)
+    else:
+        assert "could not be taken back (alice@203.0.113.7: Connection refused)" in said(out)
+        assert "the line ending raven@box stays in authorized_keys on the machine" in said(out)
+    assert not private.exists() and not private.with_name(private.name + ".pub").exists()
+    assert json.loads(store.read_text(encoding="utf-8"))["connections"] == []
+
+
 def test_remove_refuses_while_agent_entries_name_the_machine_unless_forced(store, monkeypatch, tmp_path):
     point_home(monkeypatch, tmp_path)
     _named(monkeypatch, "claude_code@box")

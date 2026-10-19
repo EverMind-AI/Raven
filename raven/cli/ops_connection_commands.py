@@ -38,9 +38,12 @@ from rich.table import Table
 # ``add`` reads them as its own globals -- which is also what a test that
 # stands in a reachable machine patches.
 from raven.ops.connection_add import NODE_FIELD, probe
+from raven.ops.connection_add import forget_key as _forget_key
+from raven.ops.connection_add import own_key as _own_key
 from raven.ops.connection_add import parse_probe as _parse_probe  # noqa: F401 -- re-export, the tests read it here
 from raven.ops.connection_add import remove as _remove
 from raven.ops.connection_add import remove_ssh_alias as _remove_ssh_alias
+from raven.ops.connection_add import revoke_public_key as _revoke_public_key
 from raven.ops.connection_add import write as _write
 from raven.ops.connection_add import write_ssh_alias as _write_ssh_alias
 
@@ -262,7 +265,9 @@ def remove_connection(
     does not refuse the removal; it is named, since connecting it again is
     refused until the machine is registered again. What the install put on the machine is not touched:
     this computer stops knowing the way there, and ``<node_dir>`` on the
-    machine is the owner's to remove by hand.
+    machine is the owner's to remove by hand. A key this computer made for
+    the machine (a password registration) is taken back: its line goes from
+    the machine's ``authorized_keys``, the pair here is deleted.
     """
     from pydantic import ValidationError
 
@@ -309,6 +314,16 @@ def remove_connection(
     console.print(
         "The Raven node installed on it, if any, stays there: remove its node directory on the machine by hand."
     )
+    if _own_key(rows[0]):
+        taken, why = _revoke_public_key(rows[0])
+        _forget_key(wanted)
+        if taken:
+            console.print("[green]the key this computer made for it is taken back from its authorized_keys[/green]")
+        else:
+            console.print(
+                f"[yellow]the key this computer made for it could not be taken back ({why}); "
+                f"the line ending raven@{wanted} stays in authorized_keys on the machine (the pair here is deleted)[/yellow]"
+            )
     if named:
         console.print(
             f"[yellow]{', '.join(named)} still name{'s' if len(named) == 1 else ''} this machine and "

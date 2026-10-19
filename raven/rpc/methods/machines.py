@@ -283,10 +283,22 @@ async def machines_add(params: dict) -> dict:
             # sentence; the replace is the guarantee rather than the belief.
             return _refused(_scrubbed(said, row).replace(password, "the password"), _reason(said))
     # With a key this computer just made, the probe proves THAT key opens the
-    # session rather than some other identity ssh would also offer.
-    reached, message, detected = await asyncio.to_thread(connection_add.probe, row, isolate_key=by_password)
+    # session rather than one the agent would also offer -- through the
+    # owner's ssh config, which is how the install reached the machine a
+    # moment ago and how every later connection will.
+    reached, message, detected = await asyncio.to_thread(
+        connection_add.probe, row, isolate_key=by_password, keep_config=by_password
+    )
     if not reached:
-        return _refused(_scrubbed(message, row), _reason(message))
+        said = _scrubbed(message, row)
+        if by_password:
+            # The install went through, so the key is there now; said, since
+            # no row records it, and reused by the next registration.
+            said += (
+                f"; the key this computer put on the machine stays in its authorized_keys "
+                f"(the line ending raven@{conn_id}) and is used again when you register it again"
+            )
+        return _refused(said, _reason(message))
     row.update(detected)
     row["software"] = ""
     row["budget_unit"] = "gpu-minute" if row.get("kind") == "gpu" else "core-minute"
@@ -307,6 +319,20 @@ async def machines_add(params: dict) -> dict:
     except (OSError, ValueError) as exc:
         detail += f"; its ssh alias was not written to ~/.ssh/config ({exc}), so scp and rsync cannot address it by id"
     return {"ok": True, "detail": detail, "reason": "", "row": _row_out(row)}
+
+
+def _take_key_back(row: dict[str, Any], conn_id: str) -> str:
+    """For a row registered with a password: the key this computer made goes, on the machine and here; one clause."""
+    if not connection_add.own_key(row):
+        return ""
+    taken, why = connection_add.revoke_public_key(row)
+    connection_add.forget_key(conn_id)
+    if taken:
+        return "; the key this computer made for it is taken back (its line is gone from authorized_keys there)"
+    return (
+        f"; the key this computer made for it could not be taken back ({_scrubbed(why, row)}): "
+        f"the line ending raven@{conn_id} stays in authorized_keys on the machine, the pair here is deleted"
+    )
 
 
 async def _install(conn_id: str, node_dir: str, rec: _Install) -> None:
@@ -425,6 +451,7 @@ async def machines_remove(params: dict) -> dict:
     if transport_of(rows[0]) == SSH:
         await pool.close(conn_id)
         detail += "; the node installed on it stays there"
+        detail += await asyncio.to_thread(_take_key_back, rows[0], conn_id)
     _INSTALLS.pop(conn_id, None)
     if named:
         detail += (

@@ -1568,7 +1568,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
       'Fix what the line says, then press Install node again. Nothing was left on the machine.',
     'gui.machine.remove_do': 'Remove machine',
     'gui.machine.remove_body':
-      '{name} ({id}) is taken out of the registry and its ssh alias goes with it. Agent entries that run there have to be disconnected first. The node installed on the machine stays there.',
+      '{name} ({id}) is taken out of the registry and its ssh alias goes with it. Agent entries that run there have to be disconnected first. The node installed on the machine stays there; a key Raven made for it is taken back.',
     'gui.machine.removing': 'Removing',
     'gui.machine.removed': '{name} was removed',
     'gui.machine.load_bad': 'The machine list could not be read',
@@ -4916,7 +4916,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.machine.install_bad_hint': '按这一行的提示处理后，再点一次「安装节点」。机器上没有留下东西。',
     'gui.machine.remove_do': '移除机器',
     'gui.machine.remove_body':
-      '{name}（{id}）会从登记表里去掉，ssh 别名一起去掉；在它上面跑的 Agent 条目要先断开。装在机器上的节点会留在那里。',
+      '{name}（{id}）会从登记表里去掉，ssh 别名一起去掉；在它上面跑的 Agent 条目要先断开。装在机器上的节点会留在那里；Raven 为它生成的密钥会收回。',
     'gui.machine.removing': '正在移除',
     'gui.machine.removed': '已移除 {name}',
     'gui.machine.load_bad': '机器列表读不出来',

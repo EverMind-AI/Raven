@@ -226,6 +226,39 @@ def test_an_isolated_candidate_leaves_ssh_exactly_one_identity_to_offer(tmp_path
     assert str(other_a) in agent_only and str(other_b) in agent_only
 
 
+def test_a_key_proved_with_the_config_kept_reaches_the_host_the_config_names_and_offers_no_agent(tmp_path, monkeypatch):
+    """A password registration proves the key it just installed, on a machine
+    its config may be the only way to (a jump host, an alias): the probe reads
+    the owner's config -- the alias resolves, as it did for the install a
+    moment before -- and keeps the agent out. The config's own identities for
+    that host stay in play, which is what every later connection offers too."""
+    import subprocess
+
+    from raven.ops.transport import make_ssh_runner
+
+    cand, other = tmp_path / "cand", tmp_path / "other"
+    for f in (cand, other):
+        f.write_text("")
+    config = tmp_path / "config"
+    config.write_text(f"Host target\n  HostName 127.0.0.1\n  Port 2200\n  IdentityFile {other}\n")
+    seen: list[list[str]] = []
+    monkeypatch.setattr(
+        subprocess, "run", lambda argv, **kw: seen.append(argv) or subprocess.CompletedProcess(argv, 0, "", "")
+    )
+    make_ssh_runner("target", 22, str(cand), user="u", identities_only=True, keep_config=True)("true")
+    monkeypatch.undo()
+    argv = seen[0]
+    assert "-F" not in argv, "the config is read"
+    assert "IdentitiesOnly=yes" in argv and "IdentityAgent=none" in argv
+
+    out = subprocess.run(["ssh", "-G", "-F", str(config)] + argv[1:-2] + [argv[-2]], capture_output=True, text=True)
+    resolved = dict(ln.split(None, 1) for ln in out.stdout.splitlines() if " " in ln)
+    identities = [ln.split(None, 1)[1] for ln in out.stdout.splitlines() if ln.startswith("identityfile ")]
+    assert resolved["hostname"] == "127.0.0.1", "the alias in the owner's config is in play"
+    assert resolved["identitiesonly"] == "yes" and resolved["identityagent"] == "none"
+    assert identities == [str(cand), str(other)], "the key under proof, and what the config names for the host"
+
+
 def test_the_ask_is_one_text_the_on_call_listing_and_the_tool_share():
     """Spelled once: the on-call plugin's empty-registry reply carries trunk's
     ASK_OWNER, so the questions cannot drift between the two products."""
@@ -583,7 +616,9 @@ def _fake_ssh_that_takes_a_password(tmp_path, monkeypatch, *, accept: str, body:
         f"""
         # OpenSSH reads the password from SSH_ASKPASS when SSH_ASKPASS_REQUIRE=force.
         given=$("$SSH_ASKPASS" "password:")
-        printf '{{"argv": "%s", "given": "%s", "require": "%s"}}\\n' "$*" "$given" "$SSH_ASKPASS_REQUIRE" > {record}
+        # The install script carries a quoted command substitution now; the record is JSON, so escape it.
+        argv=$(printf '%s' "$*" | sed 's/\\\\/\\\\\\\\/g; s/"/\\\\"/g')
+        printf '{{"argv": "%s", "given": "%s", "require": "%s"}}\\n' "$argv" "$given" "$SSH_ASKPASS_REQUIRE" > {record}
         [ "$given" = '{accept}' ] || {{ echo 'Permission denied (password).' >&2; exit 255; }}
         # The far side's shell: run the install script against a file here.
         HOME={tmp_path}
@@ -633,6 +668,73 @@ def test_a_refused_password_is_one_sentence_that_names_the_other_cause_too(tmp_p
     assert said.startswith("could not reach the machine: Permission denied")
     assert "does not accept password logins" in said
     assert "wrong" not in said.split("the password")[0] or "wrong" not in said
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="registering with a password is refused on Windows; the stand-in ssh is a POSIX shell script",
+)
+@pytest.mark.parametrize(
+    "last",
+    ["ssh-ed25519 AAAAOWNER alice@laptop", "ssh-ed25519 AAAAOWNER"],
+    ids=["with a comment", "without one"],
+)
+def test_the_public_key_lands_on_its_own_line_when_the_file_s_last_line_has_no_newline(tmp_path, monkeypatch, last):
+    """A file written with ``echo -n``, or by an editor that adds no final
+    newline: appended straight after, the key landed inside the owner's last
+    line -- unreadable itself, and without a comment field to absorb it the
+    owner's key was unreadable too (reproduced on a real machine, 2026-10-19).
+    The script puts the missing newline first, as ``ssh-copy-id`` does."""
+    seen = _fake_ssh_that_takes_a_password(tmp_path, monkeypatch, accept="hunter2")
+    seen["authorized"].parent.mkdir()
+    seen["authorized"].write_text(last, encoding="utf-8")
+    line = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKey raven@gpu1"
+
+    ok, _ = adder.install_public_key("203.0.113.7", 2222, "alice", "hunter2", line, timeout=10)
+
+    assert ok and seen["authorized"].read_text(encoding="utf-8") == f"{last}\n{line}\n"
+    ok, _ = adder.install_public_key("203.0.113.7", 2222, "alice", "hunter2", line, timeout=10)
+    assert ok and seen["authorized"].read_text(encoding="utf-8") == f"{last}\n{line}\n", "once, still"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the stand-in ssh is a POSIX shell script")
+def test_the_key_this_computer_made_is_taken_back_line_for_line_and_the_pair_here_goes(tmp_path, monkeypatch):
+    """The other half of the install: ``remove`` drops the one exact line from
+    the machine's authorized_keys -- the owner's own lines, and the file's mode,
+    stay as they were -- and deletes the pair here. A machine that cannot be
+    reached keeps the line, and the sentence says so."""
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    private, line = adder.generate_key("gpu1")
+    assert adder.own_key({"id": "gpu1", "key": str(private)})
+    assert not adder.own_key({"id": "gpu1", "key": "~/.ssh/id_rsa"}) and not adder.own_key({"key": str(private)})
+    # The far side: the row's key login runs the script against a file here.
+    _fake_ssh(tmp_path, monkeypatch, f'HOME={tmp_path}\nexport HOME\ncmd=$(eval "echo \\"\\${{$#}}\\"")\nsh -c "$cmd"')
+    authorized = tmp_path / ".ssh" / "authorized_keys"
+    authorized.parent.mkdir()
+    authorized.write_text(f"ssh-ed25519 AAAAOWNER alice@laptop\n{line}\nssh-rsa AAAAOTHER bob\n", encoding="utf-8")
+    authorized.chmod(0o600)
+    row = {"id": "gpu1", "transport": "ssh", "host": "203.0.113.7", "port": 2222, "user": "alice", "key": str(private)}
+
+    assert adder.revoke_public_key(row) == (True, "")
+
+    assert authorized.read_text(encoding="utf-8") == "ssh-ed25519 AAAAOWNER alice@laptop\nssh-rsa AAAAOTHER bob\n"
+    assert stat.S_IMODE(authorized.stat().st_mode) == 0o600
+    assert adder.revoke_public_key(row) == (True, ""), "a line already gone is nothing to take back"
+    authorized.write_text(f"{line}\n", encoding="utf-8")
+    assert adder.revoke_public_key(row) == (True, "") and authorized.read_text(encoding="utf-8") == ""
+    authorized.unlink()
+    assert adder.revoke_public_key(row) == (True, ""), "no file, nothing to take back"
+
+    _fake_ssh(
+        tmp_path, monkeypatch, "echo 'ssh: connect to host 203.0.113.7 port 2222: Connection refused' >&2; exit 255"
+    )
+    taken, why = adder.revoke_public_key(row)
+    assert not taken and why == "ssh: connect to host 203.0.113.7 port 2222: Connection refused"
+
+    assert adder.forget_key("gpu1") and not private.exists() and not private.with_name(private.name + ".pub").exists()
+    assert not adder.forget_key("gpu1")
+    taken, why = adder.revoke_public_key(row)
+    assert not taken and why == "the public half of the key is not here to name the line"
 
 
 def test_registering_with_a_password_is_refused_on_windows(monkeypatch):
