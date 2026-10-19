@@ -1237,10 +1237,11 @@ class SubAgentDagTool(Tool):
         # information as picking one for a spawn, and more of it — a node's
         # `instance` field only makes sense once you know which agents are
         # stateful, and a downstream node's prompt_template has to be written
-        # against the shape of what the upstream one returns. Rendered once in
-        # the array: at the end of spawn's description when spawn is listed,
-        # here otherwise. A turn's worker labels are not on spawn's roster, so
-        # they are always listed here.
+        # against the shape of what the upstream one returns. That is no reason
+        # for two copies, since the model reads the whole array: rendered once,
+        # at the end of spawn's description when spawn is listed, here otherwise.
+        # A turn's worker labels are not on spawn's roster, so they are always
+        # listed here.
         table = self._worker_table_for()
         if table:
             lines = []

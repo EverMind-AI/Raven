@@ -136,9 +136,12 @@ class SpawnTool(Tool):
                 "than the answer it gave you -- written after the call, so absence is normal."
             )
             # Right before the roster: it is a rule about which name to pass, so it
-            # sits with the list it picks from. Withheld when the table holds
-            # nothing but the generic row, which would make it name a specialist
-            # the model cannot pick.
+            # sits with the list it picks from. It used to come ahead of the DAG
+            # pointer, so that a model which stops reading early still met it; with
+            # the roster closing the description, a model that stops before the rule
+            # has no name to pass either. Withheld when the table holds nothing but
+            # the generic row, which would make it name a specialist the model
+            # cannot pick.
             if any(a.name != GENERIC_AGENT for a in agents):
                 base += (
                     " Prefer delegation over doing it yourself: when a single specialist on the "
