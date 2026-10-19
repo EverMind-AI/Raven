@@ -2054,7 +2054,7 @@ class TestSubagentRoster:
     def test_the_tags_are_explained_once_in_the_field_that_they_gate(self, tmp_path: Path) -> None:
         """Tags the model cannot interpret are just noise, and the pre-check would
         then reject graphs over a rule it was never told. The field descriptions
-        are that explanation -- they ride in the same payload as the roster (both
+        are that explanation -- they ride wherever the node schema does (both
         `to_schema()` and a tool_search hit carry description + parameters), so a
         second copy in the tool description is prose the model pays for twice."""
         tool = SubAgentDagTool(
