@@ -517,8 +517,12 @@ _Avoid_: "transfer", "sync", "collect" (nothing moves on its own); "shared disk"
 registry fact (it is not recorded: a path either reads on a machine or does not).
 
 **Roster** (`format_agent_listing`):
-The agent table rendered as the text spliced into `spawn`'s and `run_subagent_dag`'s tool
-descriptions — `name [stateful, local-files, live-progress] (description)`. The model's only
+The agent table rendered as the text that closes `spawn`'s tool description — `name [stateful,
+local-files, live-progress] (description)`. Rendered once per tool array: the registry lists
+`run_subagent_dag` and then `spawn` after every other tool (`ToolRegistry.list_last`), and the
+graph tool points at the end of `spawn`'s description instead of repeating it -- it renders the
+roster itself only when `spawn` is not on offer, and always lists a turn's worker labels, which
+the roster does not carry. The model's only
 account of which agents exist, so an agent absent from it cannot be chosen; the `enum` on
 the `subagent` parameter constrains the same set. All three capabilities render positive *or*
 negative, because "no tag" and "the roster does not say" are indistinguishable otherwise. A

@@ -571,6 +571,7 @@ class SubAgentDagTool(Tool):
         provider_for: "Callable[[], Any] | None" = None,
         binding_for: "Callable[[], tuple[Any, str | None]] | None" = None,
         worker_table_for: "Callable[[], DelegateTable | None] | None" = None,
+        spawn_offered: "Callable[[], bool] | None" = None,
         sandbox_for: "Callable[[Path], Any] | None" = None,
         verdict_config: "SubagentDagConfig | None" = None,
         stint_driver: StintDriver | None = None,
@@ -642,6 +643,12 @@ class SubAgentDagTool(Tool):
         # DAG tools may inject an empty source when their graph came from a
         # stored Playbook and must retain the agents and prompts it authored.
         self._worker_table_for = worker_table_for or current_delegate
+        # Whether this turn's tool array carries `spawn`, whose description ends
+        # with the roster: the description then points there instead of rendering
+        # a second copy. Injected by the loop (the registry's offer predicate);
+        # unwired hosts render the roster here, the old contract a test or an
+        # offline entry point expects.
+        self._spawn_offered = spawn_offered
         # The spawn paths' own sandbox, handed over as a builder so a graph can
         # give each node its VM the way a spawn gives each sub-agent one; None
         # keeps node exec on the host exactly as before this seam existed.
@@ -1226,11 +1233,14 @@ class SubAgentDagTool(Tool):
 
     @property
     def description(self) -> str:
-        # Same roster rendering as ``spawn``: picking the agent for a node needs
-        # the same information as picking one for a spawn, and more of it — a
-        # node's `instance` field only makes sense once you know which agents
-        # are stateful, and a downstream node's prompt_template has to be
-        # written against the shape of what the upstream one returns.
+        # Same roster as ``spawn``: picking the agent for a node needs the same
+        # information as picking one for a spawn, and more of it — a node's
+        # `instance` field only makes sense once you know which agents are
+        # stateful, and a downstream node's prompt_template has to be written
+        # against the shape of what the upstream one returns. Rendered once in
+        # the array: at the end of spawn's description when spawn is listed,
+        # here otherwise. A turn's worker labels are not on spawn's roster, so
+        # they are always listed here.
         table = self._worker_table_for()
         if table:
             lines = []
@@ -1243,7 +1253,11 @@ class SubAgentDagTool(Tool):
                 lines.append(f"- {label}: {brief}{tail}" if brief else f"- {label}{tail}")
             names = "\n".join(lines)
         else:
-            names = self._registry.roster_text() or "(none configured)"
+            roster = self._registry.roster_text()
+            if roster and self._spawn_offered is not None and self._spawn_offered():
+                names = "the roster at the end of the `spawn` tool's description"
+            else:
+                names = roster or "(none configured)"
         guide = ""
         if self._guide_skill_id:
             guide = (

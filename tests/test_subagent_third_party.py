@@ -1280,14 +1280,25 @@ def test_spawn_tool_omits_the_delegation_preference_when_no_specialist_exists(tm
     assert "is not a specialist" not in desc
 
 
-def test_spawn_tool_states_the_preference_between_the_roster_and_the_dag_pointer(tmp_path: Path) -> None:
-    """Order is the whole point: a rule about which agent to name has to sit
-    with the roster it applies to, and ahead of the pointer that sends the
-    model to a different tool."""
+def test_spawn_tool_ends_with_the_roster_and_the_rule_that_picks_from_it(tmp_path: Path) -> None:
+    """Order is the whole point. The roster is the last thing spawn says, which
+    makes it the last thing the tool array says: spawn is listed after every other
+    tool and ``run_subagent_dag`` points here rather than repeating it. The rule
+    about which agent to name sits right before the roster it applies to, so the
+    DAG pointer and the record guidance come first, and nothing comes between."""
     cli = ThirdPartyCliSubagentConfig(name="Scribe", command="scribe {prompt}", description="builds decks")
-    desc = SpawnTool(manager=_mgr(tmp_path, [cli])).description
-    assert desc.index("choose deliberately from") < desc.index("Prefer delegation")
-    assert desc.index("Prefer delegation") < desc.index("run_subagent_dag")
+    mgr = _mgr(tmp_path, [cli])
+    desc = SpawnTool(manager=mgr).description
+    listing = format_agent_listing(mgr.list_agents())
+
+    assert desc.endswith(
+        "Pick the agent for the job with `subagent` -- there is no default, so choose deliberately from "
+        f"the roster, which `run_subagent_dag` nodes pick from as well: {listing}."
+    )
+    assert desc.count(listing) == 1
+    assert desc.index("use `run_subagent_dag` instead") < desc.index("The result names a `Record:` path")
+    assert desc.index("The result names a `Record:` path") < desc.index("Prefer delegation")
+    assert "only when no specialist covers the work. Pick the agent for the job" in desc
 
 
 async def test_spawn_tool_forwards_agent(tmp_path: Path) -> None:

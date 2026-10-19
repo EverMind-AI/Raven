@@ -1497,9 +1497,14 @@ class WiringMixin:
                 control_advert=self.dag_control_advert,
                 provider_for=self._verdict_provider,
                 binding_for=self._turn_binding,
+                spawn_offered=lambda: self.tools.offers_by_name("spawn"),
                 verdict_config=self.subagent_dag_config,
             )
         )
+        # The two close the array, in this order, so the roster spawn's
+        # description ends with is the last thing the array says and the graph
+        # tool's pointer to it lands on the tool read right after.
+        self.tools.list_last("run_subagent_dag", "spawn")
         # The graph tool's own acceptance text is the only advertisement these
         # three get: hidden from the schema so the per-turn tool list carries
         # nothing a conversation that never starts a DAG has any use for, they

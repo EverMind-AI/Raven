@@ -1,6 +1,6 @@
 ---
 name: subagent-dag-orchestration
-description: Use when a task breaks into several distinct steps that a separate sub-agent could each carry out. A DAG node dispatches to an agent on the roster and cannot call your own tools, so steps that are just your own tool calls (reading files, small edits, running commands) are not a DAG for being many - do those yourself. The bound is about who can carry the work, not what kind of work it is: when the roster carries a specialist for it (a coding agent for code changes, an on-call agent for long runs) and the request assigns the work that way, it clears the bound like any other. For work that clears it, test three things before running the steps one at a time: are two or more steps independent (they can run at once), does a step hand its result to the next (a graph wires that handoff with no turn of yours in between), do the steps want different specialists (the tool lists the roster). If any of the three holds, orchestrate the whole task as one run_subagent_dag call. A step whose result decides what runs next is a decision node: give it routes, and guard what follows with when, all in one graph. Iteration is graphs in series, one graph per round, driven by you.
+description: Use when a task breaks into several distinct steps that a separate sub-agent could each carry out. A DAG node dispatches to an agent on the roster and cannot call your own tools, so steps that are just your own tool calls (reading files, small edits, running commands) are not a DAG for being many - do those yourself. The bound is about who can carry the work, not what kind of work it is: when the roster carries a specialist for it (a coding agent for code changes, an on-call agent for long runs) and the request assigns the work that way, it clears the bound like any other. For work that clears it, test three things before running the steps one at a time: are two or more steps independent (they can run at once), does a step hand its result to the next (a graph wires that handoff with no turn of yours in between), do the steps want different specialists (the roster closes the tool list). If any of the three holds, orchestrate the whole task as one run_subagent_dag call. A step whose result decides what runs next is a decision node: give it routes, and guard what follows with when, all in one graph. Iteration is graphs in series, one graph per round, driven by you.
 metadata: {"raven":{"emoji":"🕸️","always":true,"inject":"description","requires":{"tools":["run_subagent_dag"]}}}
 ---
 
@@ -30,8 +30,8 @@ time:
   to a file the downstream node reads, and the graph wires that handoff itself. A `spawn`
   can hand its result on too — it takes a `node_id` and a later task names it the same way
   a node does — but only across a turn of yours; a graph needs none.
-- **Specialism** — do the steps want different sub-agents? The tool's own description
-  lists the roster and what each one is for.
+- **Specialism** — do the steps want different sub-agents? The roster at the end of
+  the tool list — `spawn`'s description closes it — says what each one is for.
 
 If any of the three holds, express the whole task as **one** `run_subagent_dag` call
 rather than dispatching sub-agents one at a time. Persistence is not one of the reasons:
@@ -50,7 +50,7 @@ this.
 
 Every install can run a graph: raven's own agents are on the roster whether or not any
 third-party agent is configured, so `run_subagent_dag` is always available. Which agents
-exist is still the tool description's answer, not this file's — read the roster there.
+exist is still the roster's answer, not this file's — read it at the end of the tool list.
 
 ## Write the brief as the owner gave it
 
@@ -207,7 +207,7 @@ and reported in the run summary when it finishes, so that node can be continued 
 
 ### Sub-agent capability tags
 
-The tool description tags every available sub-agent, and both tags are checked
+The roster tags every available sub-agent, and both tags are checked
 before any node is dispatched — a graph that violates one is rejected whole, with
 nothing run:
 

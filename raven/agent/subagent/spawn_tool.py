@@ -119,23 +119,6 @@ class SpawnTool(Tool):
         if agents:
             from raven.agent.subagent.backends import format_agent_listing
 
-            listing = format_agent_listing(agents)
-            base += (
-                " Pick the agent for the job with `subagent` -- there is no default, so choose "
-                f"deliberately from: {listing}."
-            )
-            # Sits with the roster rather than after the DAG pointer below: it is a
-            # rule about which name to pass here, so a model that has stopped
-            # reading by the time it reaches the DAG advice has still read it.
-            # Withheld when the table holds nothing but the generic row, which
-            # would make it name a specialist the model cannot pick.
-            if any(a.name != GENERIC_AGENT for a in agents):
-                base += (
-                    " Prefer delegation over doing it yourself: when a single specialist on this "
-                    "roster covers the whole task, spawn that one instead of carrying the work out "
-                    f"with your own tools. `{GENERIC_AGENT}` is not a specialist -- it carries no "
-                    "capability bias, so reach for it only when no specialist covers the work."
-                )
             # The one moment a wrong choice is visible: the model is reading this
             # tool while the work is really a graph.
             base += (
@@ -151,6 +134,25 @@ class SpawnTool(Tool):
                 "its `node_id` directly, instead of restating the result from memory. Beside it "
                 "sits `<node_id>.memory.json` -- what the sub-agent concluded for itself, rather "
                 "than the answer it gave you -- written after the call, so absence is normal."
+            )
+            # Right before the roster: it is a rule about which name to pass, so it
+            # sits with the list it picks from. Withheld when the table holds
+            # nothing but the generic row, which would make it name a specialist
+            # the model cannot pick.
+            if any(a.name != GENERIC_AGENT for a in agents):
+                base += (
+                    " Prefer delegation over doing it yourself: when a single specialist on the "
+                    "roster below covers the whole task, spawn that one instead of carrying the work "
+                    f"out with your own tools. `{GENERIC_AGENT}` is not a specialist -- it carries no "
+                    "capability bias, so reach for it only when no specialist covers the work."
+                )
+            # Last, and the array's only copy: the loop lists this tool after every
+            # other one, and run_subagent_dag, listed just before it, points here
+            # rather than rendering the roster a second time.
+            base += (
+                " Pick the agent for the job with `subagent` -- there is no default, so choose "
+                "deliberately from the roster, which `run_subagent_dag` nodes pick from as well: "
+                f"{format_agent_listing(agents)}."
             )
         return base
 
