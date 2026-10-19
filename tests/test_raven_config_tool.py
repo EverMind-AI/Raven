@@ -178,6 +178,15 @@ async def test_the_image_provider_may_be_set_to_volcengine(config_file):
 
 
 @pytest.mark.asyncio
+async def test_the_image_provider_may_be_set_to_minimax(config_file):
+    calls = Calls({"settings.set": {"applied": True, "previous": ""}})
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+    await _run(tool, action="set", path="tools.media.image.provider", value='"minimax"')
+    assert calls.calls == [("settings.set", {"key": "tools.media.image.provider", "value": "minimax"})]
+
+
+@pytest.mark.asyncio
 async def test_without_a_caller_a_settings_page_setting_is_refused(config_file):
     tool = RavenConfigTool()
     reply = await _run(tool, action="set", path="tools.exec.timeout", value="120")

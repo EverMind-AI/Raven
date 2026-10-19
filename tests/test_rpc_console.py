@@ -2184,6 +2184,18 @@ async def test_the_image_role_may_run_on_volcengine(settings_cfg):
     assert (image["model"], image["provider"]) == ("doubao-seedream-5-0-pro", "volcengine")
 
 
+@pytest.mark.parametrize("provider", ["minimax", "minimax_cn_api"])
+async def test_the_image_role_may_run_on_minimax(settings_cfg, provider):
+    """MiniMax's image route is one the image tool speaks, so either of its API-key
+    sections is a provider the roles card may save for the image role."""
+    import json
+
+    selection = {"model": "image-01", "quality": "", "provider": provider}
+    await console_module.settings_set({"key": "tools.media.image", "value": selection})
+    image = json.loads(settings_cfg.read_text())["tools"]["media"]["image"]
+    assert (image["model"], image["provider"]) == ("image-01", provider)
+
+
 @pytest.mark.parametrize(
     "key,value",
     [
