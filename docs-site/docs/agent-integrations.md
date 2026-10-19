@@ -228,10 +228,12 @@ it writes to `run/local-4970.token` under Mirasim's state directory
 (`MIRASIM_HOME`, else `~/.mirasim`). When the host listens anywhere else,
 `RAVEN_MIRASIM_HOST` names it: `unix:<path>` for a socket (not on Windows, where
 the desktop app's port is the way in), or a loopback port as `<port>`,
-`127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>`. The adapter runs with
-the login shell's environment plus the row's own `env`, not Raven's, so set the
-variable in your shell profile, or in the `env` of the Mirasim rows that should
-use it; exported only in the shell that starts Raven, it does not reach them.
+`127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>`. On Linux and macOS
+the adapter runs with the login shell's environment plus the row's own `env`,
+not Raven's, so set the variable in your shell profile, or in the `env` of the
+Mirasim rows that should use it; exported only in the shell that starts Raven,
+it does not reach them. On Windows the adapter inherits Raven's own
+environment, so setting it where Raven starts is enough.
 
 What a turn Raven started stops to ask is put to Raven while the turn
 waits: a tool approval as a permission request, and a

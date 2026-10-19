@@ -191,9 +191,10 @@ Kimi Code 和 ZCode CLI 的自有模型，因此这四个 Agent 的这些模型�
 `~/.mirasim`）下的 `run/local-4970.token`。若 host 监听在其他位置，用
 `RAVEN_MIRASIM_HOST` 指明：socket 写作 `unix:<path>`（Windows 不支持，那里经桌面端的
 端口接入），本机回环端口写作 `<port>`、`127.0.0.1:<port>`、`localhost:<port>` 或
-`[::1]:<port>`。适配器使用的是登录 shell 的环境加上该行自己的 `env`，而不是 Raven
-进程的环境，所以请把这个变量写进 shell 配置文件，或写进要使用它的 Mirasim 行的 `env`；
-只在启动 Raven 的 shell 里 export 是传不到适配器的。
+`[::1]:<port>`。在 Linux 和 macOS 上，适配器使用的是登录 shell 的环境加上该行自己的
+`env`，而不是 Raven 进程的环境，所以请把这个变量写进 shell 配置文件，或写进要使用它的
+Mirasim 行的 `env`；只在启动 Raven 的 shell 里 export 是传不到适配器的。在 Windows 上，
+适配器继承 Raven 自己的环境，在启动 Raven 的地方设置即可。
 
 Raven 发起的轮次停下来等待的事项会在等待期间转交 Raven：工具审批以权限请求发出；提问——Mirasim
 开启 `askTool` 设置时 Claude Code 的 `AskUserQuestion`，或 MCP 服务器的表单——以
