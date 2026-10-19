@@ -113,7 +113,8 @@ class FakeSession:
 class Client:
     ws: web.WebSocketResponse
     subs: set[str] = field(default_factory=set)
-    cadence: bool = False
+    baseline: set[str] = field(default_factory=set)
+    """The sessions whose snapshot this client holds as the base of later patches; any other gets ``full`` first."""
 
 
 class FakeHost:
@@ -137,6 +138,8 @@ class FakeHost:
         self.sessions: dict[str, FakeSession] = {}
         self.deleted: set[str] = set()
         self.received: list[dict[str, Any]] = []
+        self.handled: list[dict[str, Any]] = []
+        """The received frames whose handling has finished, in the order it did."""
         self.clients: list[Client] = []
         self.refuse: dict[str, str] = {}
         """Frame type -> the ``error`` message a frame of that type is answered with instead."""
@@ -146,9 +149,13 @@ class FakeHost:
         """``/api/health``: its JSON when true, a 503 when false, and a string is the 200 body sent instead."""
         self.accepting: asyncio.Event | None = None
         """When given, a ``prompt`` is answered only once it is set."""
+        self.delete_error: str | None = None
+        """When given, ``deleteSession`` answers ``ok: false`` with it and deletes nothing."""
         self.address: HostAddress | None = None
         self._runner: web.AppRunner | None = None
         self._tasks = itertools.count(1)
+        self._handling: set[asyncio.Task[None]] = set()
+        self._failures: list[BaseException] = []
 
     async def start(self, *, socket: Path | None = None) -> HostAddress:
         app = web.Application()
@@ -173,9 +180,14 @@ class FakeHost:
         for session in self.sessions.values():
             if session.running is not None:
                 session.running.cancel()
+        for handling in list(self._handling):
+            handling.cancel()
+        await asyncio.gather(*self._handling, return_exceptions=True)
         await self.drop()
         if self._runner is not None:
             await self._runner.cleanup()
+        if self._failures:
+            raise self._failures[0]
 
     async def drop(self) -> None:
         """Close every client connection, as a host that went away would."""
@@ -230,10 +242,19 @@ class FakeHost:
                     continue
                 frame = json.loads(message.data)
                 self.received.append(frame)
-                await self._handle(client, frame)
+                # The host hands every frame to its dispatcher without waiting on the one before it, so a
+                # frame overtakes one whose handler is still waiting -- a recall overtakes a held prompt.
+                handling = asyncio.ensure_future(self._handle(client, frame))
+                self._handling.add(handling)
+                handling.add_done_callback(self._settled)
         finally:
             self.clients.remove(client)
         return ws
+
+    def _settled(self, handling: asyncio.Task[None]) -> None:
+        self._handling.discard(handling)
+        if not handling.cancelled() and (exc := handling.exception()) is not None:
+            self._failures.append(exc)
 
     # -- frames -----------------------------------------------------------------
 
@@ -248,6 +269,12 @@ class FakeHost:
                 await self._send(client, frame)
 
     async def _handle(self, client: Client, frame: dict[str, Any]) -> None:
+        try:
+            await self._dispatch(client, frame)
+        finally:
+            self.handled.append(frame)
+
+    async def _dispatch(self, client: Client, frame: dict[str, Any]) -> None:
         kind = frame.get("type")
         if kind in self.silent:
             return
@@ -257,8 +284,8 @@ class FakeHost:
             )
             return
         if kind == "setStreamCadence":
-            client.cadence = True
-        elif kind == "listClis":
+            return
+        if kind == "listClis":
             asyncio.ensure_future(self._clis(client))
         elif kind == "getCatalog":
             doc = self.catalogs.get(frame.get("agent"), {"models": [], "effort": []})
@@ -290,19 +317,7 @@ class FakeHost:
         elif kind == "interact":
             self._interact(frame)
         elif kind == "deleteSession":
-            key = frame.get("sessionKey")
-            self.sessions.pop(key, None)
-            self.deleted.add(key)
-            await self._send(
-                client,
-                {
-                    "type": "sessionDeleteResult",
-                    "clientRef": frame.get("clientRef"),
-                    "sessionKey": key,
-                    "ok": True,
-                    "worktreeRemoved": False,
-                },
-            )
+            await self._delete(client, frame)
 
     async def _clis(self, client: Client) -> None:
         late = dict(self.progressive)
@@ -354,13 +369,34 @@ class FakeHost:
         }
 
     async def _subscribe(self, client: Client, key: Any) -> None:
-        session = self.sessions.get(key)
-        if session is None or not session.snapshot:
-            await self._send(client, {"type": "outbox", "sessionKey": key, "items": [], "noRun": True})
-            return
         client.subs.add(key)
+        await self._send_snapshot(client, key, unheld=False)
+
+    async def _send_snapshot(self, client: Client, key: Any, *, unheld: bool) -> None:
+        """What the host sends a client taking up a session: its snapshot, then its queue.
+
+        A session the host holds no state for (it restarted since) has no snapshot, and its
+        ``outbox`` says ``noRun``. A client the prompt subscribed just now (``unheld``) is not
+        given that snapshot as a base: its first patch comes ``full``.
+        """
+        session = self.sessions.get(key)
+        held = session is not None and bool(session.snapshot)
+        if session is not None and held:
+            await self._send(
+                client, {"type": "snapshot", "sessionKey": key, "seq": session.seq, "snapshot": session.snapshot}
+            )
+            if not unheld:
+                client.baseline.add(key)
+        items = self._items(session) if session is not None else []
         await self._send(
-            client, {"type": "snapshot", "sessionKey": key, "seq": session.seq, "snapshot": session.snapshot}
+            client,
+            {
+                "type": "outbox",
+                "sessionKey": key,
+                "items": items,
+                "baseline": True,
+                **({} if held else {"noRun": True}),
+            },
         )
 
     async def _patch(self, session: FakeSession, patch: dict[str, Any]) -> None:
@@ -372,10 +408,27 @@ class FakeHost:
                 snapshot[key] = (snapshot.get(key) or "") + added
         snapshot.update(patch.get("set") or {})
         session.snapshot = snapshot
-        await self._broadcast(
-            session.key,
-            {"type": "session", "sessionKey": session.key, "seq": session.seq, "fromSeq": start, "patch": patch},
-        )
+        for client in list(self.clients):
+            if session.key not in client.subs:
+                continue
+            if session.key in client.baseline:
+                sent = {
+                    "type": "session",
+                    "sessionKey": session.key,
+                    "seq": session.seq,
+                    "fromSeq": start,
+                    "patch": patch,
+                }
+            else:
+                client.baseline.add(session.key)
+                sent = {
+                    "type": "session",
+                    "sessionKey": session.key,
+                    "seq": session.seq,
+                    "fromSeq": -1,
+                    "patch": {"full": dict(snapshot)},
+                }
+            await self._send(client, sent)
 
     async def _prompt(self, client: Client, frame: dict[str, Any]) -> None:
         if self.accepting is not None:
@@ -394,26 +447,62 @@ class FakeHost:
         if "route" in frame:
             session.route = frame["route"]
         session.prompts.append(frame)
-        client.subs.add(key)
+        unheld = key not in client.subs
         if session.running is not None and not session.running.done():
+            client.subs.add(key)
             session.queue.append(frame)
             await self._send(
                 client, {"type": "accepted", "clientRef": frame.get("clientRef"), "sessionKey": key, "taskId": ""}
             )
+            await self._send_snapshot(client, key, unheld=unheld)
             await self._outbox(session)
             return
         task_id = f"task-{next(self._tasks)}"
+        # The host replaces the session's snapshot with the new turn's as it dispatches it, before
+        # answering, and its subscribers see that as a patch clearing every key the new one lacks.
+        fresh = {
+            "phase": "queued",
+            "taskId": task_id,
+            "agent": session.agent,
+            "text": "",
+            "reasoning": "",
+            "toolCalls": [],
+            "interactions": [],
+            "artifacts": [],
+        }
+        await self._patch(session, {"set": {**dict.fromkeys(session.snapshot), **fresh}})
+        client.subs.add(key)
         await self._send(
             client, {"type": "accepted", "clientRef": frame.get("clientRef"), "sessionKey": key, "taskId": task_id}
         )
-        await self._send(
-            client, {"type": "snapshot", "sessionKey": key, "seq": session.seq, "snapshot": session.snapshot}
-        )
+        await self._send_snapshot(client, key, unheld=unheld)
         session.running = asyncio.ensure_future(self._run(session, frame, task_id))
 
+    @staticmethod
+    def _items(session: FakeSession) -> list[dict[str, Any]]:
+        return [{"ref": item.get("clientRef"), "prompt": item.get("prompt")} for item in session.queue]
+
     async def _outbox(self, session: FakeSession, **extra: Any) -> None:
-        items = [{"ref": item.get("clientRef"), "prompt": item.get("prompt")} for item in session.queue]
-        await self._broadcast(session.key, {"type": "outbox", "sessionKey": session.key, "items": items, **extra})
+        await self._broadcast(
+            session.key, {"type": "outbox", "sessionKey": session.key, "items": self._items(session), **extra}
+        )
+
+    async def _delete(self, client: Client, frame: dict[str, Any]) -> None:
+        """Stop the session's turn and drop its queue, then delete it, as the host does; ``delete_error`` refuses."""
+        key = frame.get("sessionKey")
+        answer = {"type": "sessionDeleteResult", "clientRef": frame.get("clientRef"), "sessionKey": key}
+        if self.delete_error is not None:
+            await self._send(client, {**answer, "ok": False, "error": self.delete_error})
+            return
+        session = self.sessions.get(key)
+        if session is not None and session.running is not None and not session.running.done():
+            session.queue.clear()
+            session.stopped = True
+            session.wake.set()
+            await asyncio.wait({session.running}, timeout=5)
+        self.sessions.pop(key, None)
+        self.deleted.add(key)
+        await self._send(client, {**answer, "ok": True, "worktreeRemoved": False})
 
     async def _run(self, session: FakeSession, frame: dict[str, Any], task_id: str) -> None:
         session.stopped = False

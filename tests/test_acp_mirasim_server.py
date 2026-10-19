@@ -498,9 +498,14 @@ async def test_a_timed_out_continuation_is_recalled_without_stopping_the_apps_tu
     monkeypatch.setattr(server_mod, "ACCEPT_TIMEOUT_S", 0.05)
     harness.host.accepting = asyncio.Event()
     await harness.refused("session/prompt", sessionId=sid, prompt=text("late"))
+    late = harness.prompts()[-1]
+    # The recall sent on giving up overtakes the held prompt and finds nothing to take back,
+    # as on the real host: only the one sent when the late `accepted` arrives can.
+    await harness.host.wait_for(lambda: [f for f in harness.host.handled if f.get("type") == "recall"])
     harness.host.accepting.set()
-    await harness.host.wait_for(lambda: harness.host.frames("recall"), limit=1)
+    await harness.host.wait_for(lambda: late in session.prompts)
     await harness.host.wait_for(lambda: not session.queue, limit=1)
+    assert [f["ref"] for f in harness.host.frames("recall")] == [late["clientRef"], late["clientRef"]]
     assert session.running is not None and not session.running.done()
     assert not harness.host.frames("stop")
 
@@ -1579,17 +1584,7 @@ async def test_reads_the_host_cannot_answer_are_said_so(harness: Harness, monkey
 async def test_a_conversation_the_host_refuses_to_delete_is_said_so(harness: Harness) -> None:
     sid = await harness.new()
     await harness.ok("session/prompt", sessionId=sid, prompt=text("one"))
-    original = harness.host._handle
-
-    async def refuse_delete(client: Any, frame: dict[str, Any]) -> None:
-        if frame.get("type") == "deleteSession":
-            await harness.host._send(
-                client, {"type": "sessionDeleteResult", "clientRef": frame["clientRef"], "ok": False, "error": "busy"}
-            )
-            return
-        await original(client, frame)
-
-    harness.host._handle = refuse_delete  # type: ignore[method-assign]
+    harness.host.delete_error = "busy"
     error = await harness.refused("session/delete", sessionId=sid)
     assert error["message"].endswith("did not delete conversation " + harness.host.session().key + ": busy")
 
@@ -1648,10 +1643,12 @@ async def test_a_queued_prompt_given_up_before_the_host_took_it_is_recalled_when
     await harness.host.wait_for(lambda: len(harness.host.frames("prompt")) == 2)
     await harness.ok("session/cancel", sessionId=sid)
     assert await turn == {"stopReason": "cancelled"}
+    recalled_early = len(harness.host.frames("recall"))
     harness.host.silent.discard("prompt")
     await harness.host._prompt(harness.host.clients[0], harness.host.frames("prompt")[1])
-    recall = await harness.host.wait_for(lambda: harness.host.frames("recall"))
-    assert recall[0]["ref"] == harness.host.frames("prompt")[1]["clientRef"]
+    late = await harness.host.wait_for(lambda: harness.host.frames("recall")[recalled_early:])
+    assert late[0]["ref"] == harness.host.frames("prompt")[1]["clientRef"]
+    await harness.host.wait_for(lambda: not session.queue)
     session.stopped = True
     session.wake.set()
 
@@ -1705,11 +1702,12 @@ async def test_a_timed_out_steer_is_recalled_or_stopped_when_accepted_later(
     await harness.host.wait_for(lambda: harness.said(sid) == "busy")
     harness.host.silent.add("prompt")
     assert await harness.ok("_raven/session/steer", sessionId=sid, text="late") == {"status": "no_turn"}
+    late = harness.prompts()[-1]
+    await harness.host.wait_for(lambda: [f for f in harness.host.handled if f.get("type") == "recall"])
     if original_ended:
         await harness.ok("session/cancel", sessionId=sid)
         await turn
     harness.host.silent.discard("prompt")
-    late = harness.prompts()[-1]
     await harness.host._prompt(harness.host.clients[0], late)
     session = harness.host.session()
     if original_ended:
@@ -1717,7 +1715,7 @@ async def test_a_timed_out_steer_is_recalled_or_stopped_when_accepted_later(
         assert any(f.get("taskId") == "task-2" for f in harness.host.frames("stop"))
     else:
         await harness.host.wait_for(lambda: not session.queue, limit=1)
-        assert any(f.get("ref") == late["clientRef"] for f in harness.host.frames("recall"))
+        assert [f["ref"] for f in harness.host.frames("recall")] == [late["clientRef"], late["clientRef"]]
         assert not harness.host.frames("stop")
         await harness.ok("session/cancel", sessionId=sid)
         await turn
