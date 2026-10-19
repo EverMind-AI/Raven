@@ -54,8 +54,9 @@ IMAGE_AGENTS = frozenset({"claude"})
 """The agents measured seeing an image sent as a ``prompt`` frame's ``attachments``.
 
 Measured 2026-10-17: Claude Code on ``glm-5.3-flash`` named the colour of an
-attached image. An agent outside this set gets an image as a file path instead,
-which its own tools can open."""
+attached image. An agent outside this set declares no image support: an image
+linked as a local file reaches it as that file's path, which its own tools can
+open, and an image sent inline is refused."""
 
 PLATFORM_ROUTE_AGENTS = frozenset({"claude", "codex", "kimi", "zcode"})
 """The agents whose own models the Mirasim platform runs as well.

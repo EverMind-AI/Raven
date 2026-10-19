@@ -17,8 +17,9 @@ sessions and the same machine identity. Where the host listens, in the order
 
 Two frames are never sent, because the answers carry secrets: ``ready`` makes
 the host push its whole settings tree, IM bot tokens included, and
-``getConfig`` answers with the configuration. Nothing a frame says is logged;
-the token travels in a header, never in a URL.
+``getConfig`` answers with the configuration. No frame is logged whole --
+only the reason a refusal gives, which names what failed -- and the token
+travels in a header, never in a URL.
 
 One connection serves every session of the adapter. A frame comes back to its
 request by what the host echoes, which differs per frame: ``clientRef`` on

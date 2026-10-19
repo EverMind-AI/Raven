@@ -10,10 +10,12 @@ shows when it starts, a question reaches the client when it is asked, and a
 cancel is one frame:
 
 ===============================  ==============================================
-``initialize``                   answered at once; the menus are read behind it
-``session/new``                  nothing is sent -- the id is minted here, and
-                                 the Mirasim conversation starts with the first
-                                 turn
+``initialize``                   answered within two seconds; the menus are
+                                 read behind it
+``session/new``                  the id is minted here, and the Mirasim
+                                 conversation starts with the first turn; the
+                                 menus are read again when stale, and the
+                                 agent's commands are announced after
 ``session/load``                 the record :mod:`.store` kept, or a Mirasim
                                  conversation of this agent that
                                  ``session/list`` offered; its history is
@@ -34,11 +36,12 @@ cancel is one frame:
                                  ``steer``-ed into the running turn
 ===============================  ==============================================
 
-Every turn names its model, effort and route, because a continued Mirasim
-conversation otherwise keeps the ones it last ran on, and Raven re-asserts its
-own choice on every route into a session. The route is the conversation's --
-the platform's quota or the user's own account (see :mod:`.catalog`) -- and the
-host takes it from any ``prompt`` frame.
+Every turn names its model, and its effort when the model takes one, because a
+continued Mirasim conversation otherwise keeps the ones it last ran on, and Raven
+re-asserts its own choice on every route into a session. A turn of an agent the
+platform also runs (``PLATFORM_ROUTE_AGENTS`` in :mod:`.catalog`) names its route
+too: the conversation's, the platform's quota or the user's own account, which
+the host takes from any ``prompt`` frame.
 
 The host is shared: the user's own turns run on it, and a turn can start with
 nobody here having asked -- a background job's report, a scheduled wake, a
