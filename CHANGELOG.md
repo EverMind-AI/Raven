@@ -97,17 +97,6 @@ All notable changes to Raven are documented here.
   guessing. Playbooks carry the same three fields, and the TUI's DAG panel and
   the web tasks list show what each node's branch did.
 
-- Node judgement is always on. `subagentDag.verdictEnabled` no longer exists,
-  and a load-time migration removes it from the config file and says so once;
-  set again later, by an older build sharing the config, it is dropped on every
-  load. A config that turned judgement off now has every finished node judged:
-  one more model call per node, and a node judged not to have accomplished its
-  task can suspend as `exception` and report, as it does wherever judgement was
-  on. `raven playbook run` judges its nodes too, on the same `subagentDag`
-  settings; with nobody there to answer, a node judged not to have accomplished
-  its task fails on the judge's reason. A host with no model to judge with
-  refuses a graph that declares routes.
-
 ### Changed
 
 - Memory runs on EverOS 1.4.2, which fixes what a memory server that stays up
@@ -223,6 +212,17 @@ All notable changes to Raven are documented here.
   handed back the picture the author had just rejected. A call generates; the
   file name is unchanged so the new picture arrives without the page being
   edited.
+
+- Node judgement is always on. `subagentDag.verdictEnabled` no longer exists,
+  and a load-time migration removes it from the config file and says so once;
+  set again later, by an older build sharing the config, it is dropped on every
+  load. A config that turned judgement off now has every finished node judged:
+  one more model call per node, and a node judged not to have accomplished its
+  task can suspend as `exception` and report, as it does wherever judgement was
+  on. `raven playbook run` judges its nodes too, on the same `subagentDag`
+  settings; with nobody there to answer, a node judged not to have accomplished
+  its task fails on the judge's reason. A host with no model to judge with
+  refuses a graph that declares routes.
 
 ### Removed
 

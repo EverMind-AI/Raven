@@ -5015,18 +5015,22 @@ def test_the_docs_site_no_longer_offers_to_turn_the_judge_off(page: str) -> None
 
 def test_the_changelog_entry_names_the_feature_and_the_retired_switch() -> None:
     """`## Unreleased` is hand-kept, so nothing but this test notices an entry the
-    feature should have had."""
+    feature should have had. The retired switch changes what an upgraded build does,
+    so it is filed under Changed, apart from the feature it serves."""
     unreleased = _heading_span(_repo_text("CHANGELOG.md"), "## Unreleased")
     added = _flat(_heading_span(unreleased, "### Added"))
+    changed = _flat(_heading_span(unreleased, "### Changed"))
 
     assert "`routes`" in added and "`when`" in added
     assert "`not_executed`" in added
     assert "a node of the same graph that reads one gets a fixed sentence" in added
-    assert "`subagentDag.verdictEnabled`" in added
+    assert "`subagentDag.verdictEnabled`" not in added
+    assert "`subagentDag.verdictEnabled`" in changed
     # What retiring the switch does to a config that had judgement off, said plainly;
     # the no-judge refusal is a fact of its own, not the reason the switch went.
     assert (
-        "A config that turned judgement off now has every finished node judged: one more model call per node" in added
+        "A config that turned judgement off now has every finished node judged: one more model call per node" in changed
     )
-    assert "A host with no model to judge with refuses a graph that declares routes." in added
+    assert "`raven playbook run` judges its nodes too" in changed
+    assert "A host with no model to judge with refuses a graph that declares routes." in changed
     assert "reads exactly as it did" not in added
