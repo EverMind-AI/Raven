@@ -91,6 +91,20 @@ class Verdict:
     characters and marked with an ellipsis."""
 
 
+def judge_provider(default: Any, pool: Any, pinned: str | None) -> Any:
+    """The provider a node's judge calls: the pinned ``verdictModel``'s own, else ``default``.
+
+    A pinned model has to travel with the provider holding its credential: a bare
+    model id sent through another vendor's provider fails, and an ordinary node's
+    judge then fails open, so verdicts would go quietly off -- while a decision node
+    fails for want of a route. ``pool`` is the host's ``ProviderPool``; ``None`` (or a
+    pin it cannot bind) leaves ``default``.
+    """
+    if pinned and pool is not None and (binding := pool.bind_pin(pinned)) is not None:
+        return binding.provider
+    return default
+
+
 def tail(text: str, budget: int) -> str:
     """The last ``budget`` characters. A failure's evidence sits at the end: the
     last failing tool call, then the closing statement."""

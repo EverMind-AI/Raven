@@ -3,6 +3,7 @@
 import asyncio
 import json
 import re
+from types import SimpleNamespace
 
 import pytest
 
@@ -377,6 +378,32 @@ def test_extract_verdict_cuts_and_marks_a_route_quote_past_the_cap(size):
 @pytest.mark.parametrize("text", ["a short quote", "z" * 500], ids=["short", "exactly-at-the-cap"])
 def test_extract_verdict_keeps_a_route_quote_up_to_the_cap_whole(text):
     assert extract_verdict(_routed("bug", evidence=text)).route_evidence == text
+
+
+class _Pool:
+    """Binds exactly one pinned model to its own provider."""
+
+    def __init__(self, model, provider):
+        self._model, self._provider = model, provider
+
+    def bind_pin(self, model, provider_name=None):
+        return SimpleNamespace(provider=self._provider) if model == self._model else None
+
+
+@pytest.mark.parametrize(
+    ("pinned", "pool", "expected"),
+    [
+        ("judge/cheap", _Pool("judge/cheap", "pinned-provider"), "pinned-provider"),
+        (None, _Pool("judge/cheap", "pinned-provider"), "session-provider"),
+        ("judge/elsewhere", _Pool("judge/cheap", "pinned-provider"), "session-provider"),
+        ("judge/cheap", None, "session-provider"),
+    ],
+    ids=["pinned-and-bindable", "no-pin", "pin-the-pool-cannot-bind", "no-pool"],
+)
+def test_judge_provider_takes_the_pinned_models_own_provider_when_it_can(pinned, pool, expected):
+    from raven.agent.subagent.dag_verdict import judge_provider
+
+    assert judge_provider("session-provider", pool, pinned) == expected
 
 
 def test_extract_verdict_spells_a_lone_surrogate_in_a_route_quote_as_its_escape():

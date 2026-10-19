@@ -103,7 +103,10 @@ All notable changes to Raven are documented here.
   load. A config that turned judgement off now has every finished node judged:
   one more model call per node, and a node judged not to have accomplished its
   task can suspend as `exception` and report, as it does wherever judgement was
-  on. A host with no model to judge with refuses a graph that declares routes.
+  on. `raven playbook run` judges its nodes too, on the same `subagentDag`
+  settings; with nobody there to answer, a node judged not to have accomplished
+  its task fails on the judge's reason. A host with no model to judge with
+  refuses a graph that declares routes.
 
 ### Changed
 
