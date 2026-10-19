@@ -146,6 +146,17 @@ All notable changes to Raven are documented here.
   guessing. Playbooks carry the same three fields, and the TUI's DAG panel and
   the web tasks list show what each node's branch did.
 
+- The image and video roles run on MiniMax. Settings > Model offers MiniMax's
+  two API-key providers (`minimax`, `minimax_cn_api`) for both roles, and a
+  section naming one takes that provider's address and key and calls
+  MiniMax's own APIs: `/v1/image_generation`, where an input image is the
+  character to keep, and the video APIs, text-to-video or from a
+  `first_frame_image`. The video section takes a `provider` as the image
+  section does; one written there by hand was ignored before and is honoured
+  now. Raven-PPT's pinned image settings keep the provider they run on, and
+  `PPT_IMAGE_PROVIDER` puts a deck's pictures on a provider of its own. See
+  `docs/minimax-media.md`.
+
 ### Changed
 
 - Memory runs on EverOS 1.4.2, which fixes what a memory server that stays up
