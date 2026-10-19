@@ -50,7 +50,7 @@ def _tool(tmp_path: Path, **section) -> VideoGenerateTool:
 
 
 def _v2(task: dict | None = None):
-    """MiniMax's V2 flow: a task id, then a finished task whose video is on the CDN."""
+    """MiniMax's V2 flow: a ``task_id``, then a finished job whose video is on the CDN."""
     finished = task or {"id": "t2", "status": "succeeded", "content": {"url": _CDN}}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -64,7 +64,7 @@ def _v2(task: dict | None = None):
 
 
 def _v1(base_resp_on_submit: dict | None = None):
-    """MiniMax's V1 flow: a task id, a finished status naming a file, the file's link."""
+    """MiniMax's V1 flow: a ``task_id``, a finished status naming a file, the file's link."""
     ok = {"status_code": 0, "status_msg": "success"}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -228,7 +228,7 @@ async def test_the_aigc_watermark_is_taken_on_the_china_section_only(monkeypatch
         assert "aigc_watermark" in out["detail"] and seen == []
 
 
-async def test_a_failed_v2_task_keeps_minimax_s_reason(monkeypatch, tmp_path) -> None:
+async def test_a_failed_v2_job_keeps_minimax_s_reason(monkeypatch, tmp_path) -> None:
     failed = {"id": "t2", "status": "failed", "error": {"code": "1026", "message": "sensitive content"}}
     _serve(monkeypatch, _v2(failed))
     out = json.loads(await _tool(tmp_path).execute(prompt="x"))

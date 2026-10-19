@@ -1563,7 +1563,7 @@ class VideoGenerateTool(_OpenRouterMediaTool):
                 task_id = job.get("task_id") if isinstance(job, dict) else None
                 if not task_id:
                     return json.dumps(
-                        {"error": "the video task answer carried no task_id", "model": model_id}, ensure_ascii=False
+                        {"error": "the video job answer carried no task_id", "model": model_id}, ensure_ascii=False
                     )
                 status = await self._poll_minimax(client, root, str(task_id), v2=v2)
                 if status is None:
@@ -1616,7 +1616,7 @@ class VideoGenerateTool(_OpenRouterMediaTool):
     async def _poll_minimax(
         self, client: httpx.AsyncClient, root: str, task_id: str, *, v2: bool
     ) -> dict[str, Any] | None:
-        """Poll a MiniMax task until it leaves its waiting states; None at the ceiling."""
+        """Poll a MiniMax job until it leaves its waiting states; None at the ceiling."""
         if v2:
             url, query = f"{root}/v2/query/video_generation/{task_id}", None
         else:
