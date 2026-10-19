@@ -190,7 +190,7 @@ flag (default `true`) is described above.
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `id` | yes | Node id, unique across the whole conversation (not just this graph). Letters, digits, `_`, `-` only. |
-| `subagent` | yes | Which agent runs this node. Use one of the names listed in the tool's own description — don't invent them. Raven's own in-process agent (`Raven`) is on that list too, so a graph needs no third-party agent configured. |
+| `subagent` | yes | Which agent runs this node. Use one of the names listed in the tool's own description — don't invent them. Raven's own in-process agent (`Raven-General`) is on that list too, so a graph needs no third-party agent configured. |
 | `prompt_template` | yes | Template rendered into the node's prompt. May contain the placeholders below. |
 | `depends_on` | no | Upstream node ids that must finish before this node runs. May also name a task this conversation already finished — an earlier run's node, or a `spawn` — which only records the dependency. |
 | `inputs` | no | Object mapping a key to a literal string, to `{"file": "<path>"}`, or to `{"node": "<id>"}` for another node's output — exactly one of the three, with nothing else in the object. |
@@ -500,7 +500,7 @@ guarded steps:
   "nodes": [
     {
       "id": "triage",
-      "subagent": "Raven",
+      "subagent": "Raven-General",
       "node_summary": "Classify the issue",
       "prompt_template": "Owner's request, as written: \"Handle issue 123 — work out what kind of issue it is, do the work it needs, and draft the reply.\"\nYour part: read issue 123. Conclude in one sentence whether it is a defect in the code, a request for new behaviour, or something else such as a usage question. Give your reasoning after the conclusion.",
       "routes": {
@@ -511,7 +511,7 @@ guarded steps:
     },
     {
       "id": "risk",
-      "subagent": "Raven",
+      "subagent": "Raven-General",
       "node_summary": "Judge the risk of changing this",
       "prompt_template": "Owner's request, as written: \"Handle issue 123 — work out what kind of issue it is, do the work it needs, and draft the reply.\"\nYour part: read issue 123 and conclude in one sentence whether a change would touch authentication, billing or a data migration. Give your reasoning after the conclusion.",
       "routes": {
@@ -521,7 +521,7 @@ guarded steps:
     },
     {
       "id": "fix",
-      "subagent": "Raven",
+      "subagent": "Raven-General",
       "node_summary": "Fix the defect",
       "depends_on": ["triage"],
       "when": "triage.bug",
@@ -529,7 +529,7 @@ guarded steps:
     },
     {
       "id": "design",
-      "subagent": "Raven",
+      "subagent": "Raven-General",
       "node_summary": "Write the design proposal",
       "depends_on": ["triage"],
       "when": "triage.feature",
@@ -537,7 +537,7 @@ guarded steps:
     },
     {
       "id": "deep_review",
-      "subagent": "Raven",
+      "subagent": "Raven-General",
       "node_summary": "Review the change risk",
       "depends_on": ["triage", "risk", "fix", "design"],
       "when": "(triage.bug or triage.feature) and risk.high",
@@ -545,7 +545,7 @@ guarded steps:
     },
     {
       "id": "reply",
-      "subagent": "Raven",
+      "subagent": "Raven-General",
       "node_summary": "Draft the reply to the reporter",
       "depends_on": ["triage", "fix", "design"],
       "when": "triage.done",
