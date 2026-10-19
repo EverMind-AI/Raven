@@ -1078,3 +1078,43 @@ def test_list_says_which_machines_log_in_with_a_password(store):
 
     assert out.exit_code == 0, out.output
     assert "(password)" in said(out)
+
+
+# --- --password-stdin says how the machine is logged in to -------------------------------
+
+
+def _password_home(monkeypatch, tmp_path):
+    point_home(monkeypatch, tmp_path)
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    monkeypatch.setattr(sys, "platform", "linux")
+    return tmp_path / "rhome"
+
+
+def test_password_stdin_without_auth_registers_by_password(store, reached, monkeypatch, tmp_path):
+    """Piping a password in says how the machine is logged in to; without --auth it used to be read as a key
+    login, and the piped line was left unread."""
+    rhome = _password_home(monkeypatch, tmp_path)
+
+    out = CliRunner().invoke(connection_app, [*PW_ADD, "--password-stdin", *FULL], input="hunter2\n")
+
+    assert out.exit_code == 0, out.output
+    (row,) = json.loads(store.read_text(encoding="utf-8"))["connections"]
+    assert row["auth"] == "password" and "key" not in row
+    assert (rhome / "keys" / "box.password").read_text(encoding="utf-8") == "hunter2\n"
+
+
+def test_password_stdin_with_a_key_login_is_refused_and_nothing_is_written(store, reached, monkeypatch, tmp_path):
+    """With a key login the piped line would be left to answer a question of its own -- the machine's name, when
+    asked -- and the password would land in the registry in the clear."""
+    rhome = _password_home(monkeypatch, tmp_path)
+
+    out = CliRunner().invoke(
+        connection_app,
+        [*PW_ADD, "--auth", "key", "--key", "~/.ssh/id_rsa", "--password-stdin", *FULL],
+        input="hunter2\n",
+    )
+
+    assert out.exit_code == 1, out.output
+    assert "--password-stdin goes with --auth password" in said(out) and "Nothing was written" in out.output
+    assert _nothing_kept(rhome) and not store.exists()
+    assert "hunter2" not in out.output

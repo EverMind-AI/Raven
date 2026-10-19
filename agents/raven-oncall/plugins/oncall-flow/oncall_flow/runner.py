@@ -44,16 +44,42 @@ def prepare_remote(
     ensure_image(run, image)
 
 
-def make_ssh_sync(host: str, port: int, key: str, *, user: str = "root", connect_timeout: int = 15) -> SyncRunner:
+def make_ssh_sync(
+    host: str,
+    port: int,
+    key: str,
+    *,
+    user: str = "root",
+    connect_timeout: int = 15,
+    password: bool = False,
+    env: dict[str, str] | None = None,
+) -> SyncRunner:
+    """rsync to ``user@host`` over ssh, logged in with ``key``.
+
+    With ``password`` it logs in with the password kept for the machine instead:
+    no key is offered and ``BatchMode``, which forbids asking at all, is off, so
+    ssh asks the askpass helper that ``env`` names
+    (``oncall_flow.transport.password_env``); ``key`` is then unread. rsync
+    starts ssh itself, so ``env`` is rsync's, and rsync is started the way
+    trunk starts a password connection's ssh, in a session of its own: an
+    OpenSSH older than 8.4 reads no ``SSH_ASKPASS_REQUIRE`` and asks the helper
+    only when there is no terminal to ask instead.
+    """
     import subprocess
 
+    from raven.ops.transport import PASSWORD_AUTH
+
     def sync(local: str, remote: str) -> tuple[int, str]:
-        ssh = (
-            f"ssh -i {key} -p {port} -o BatchMode=yes "
-            f"-o ConnectTimeout={connect_timeout} -o StrictHostKeyChecking=accept-new"
-        )
+        if password:
+            ssh = f"ssh -p {port} -o ConnectTimeout={connect_timeout} -o StrictHostKeyChecking=accept-new "
+            ssh += " ".join(PASSWORD_AUTH)
+        else:
+            ssh = (
+                f"ssh -i {key} -p {port} -o BatchMode=yes "
+                f"-o ConnectTimeout={connect_timeout} -o StrictHostKeyChecking=accept-new"
+            )
         argv = ["rsync", "-az", "-e", ssh, local, f"{user}@{host}:{remote}"]
-        proc = subprocess.run(argv, capture_output=True, text=True)
+        proc = subprocess.run(argv, capture_output=True, text=True, env=env, start_new_session=password)
         tail = f"\n{proc.stderr}" if proc.stderr and proc.returncode != 0 else ""
         return proc.returncode, proc.stdout + tail
 

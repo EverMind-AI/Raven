@@ -58,7 +58,12 @@ one, else the home. A first registration lands in the home. Sub-agents run on a
 rendered config in a state directory of their own and inherit the home, so
 they read the owner's registry rather than a copy of it. SSH registration can
 also write a managed alias in `~/.ssh/config`; the key path is recorded, not
-the private key bytes. Do not put keys or passwords in a task message.
+the private key bytes. A machine registered with a password
+([Working on registered machines](machines.md#1-register-the-machine)) runs
+campaigns too: their ssh and their rsync log in with the password Raven keeps
+for it, through the same options and askpass hook as every other connection,
+and a campaign carries the connection id and `auth`, never the password. Do
+not put keys or passwords in a task message.
 
 An agent can register a machine too. The `ops_connection_add` tool (on in
 raven-oncall and raven-code through `tools.connectionAdd`; off elsewhere) takes
@@ -66,7 +71,9 @@ what the owner said in conversation -- this computer or another, what they
 call it, an address if another -- fills a port, user or key they left out from
 their own ssh config, reaches the machine, and only then writes the row. When
 the registry lists no machine that fits, the agent asks the owner rather than
-looking for a way in with a raw ssh command.
+looking for a way in with a raw ssh command. It never asks for a password: a
+machine that takes one is the owner's to register, from the Agent Hub's
+**Machines** tab or with `raven ops connection add --auth password`.
 
 `doctor` validates registry usability; it is not a fresh execution test of
 every remote environment. `--skip-probe` on `add` skips contacting the machine
