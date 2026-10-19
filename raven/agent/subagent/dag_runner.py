@@ -600,9 +600,11 @@ async def run_dag(
                 carried = set()
                 # The second settle pass announces what it decides before the ready
                 # set, so this finds nothing; it keeps this exit, which skips the
-                # sweep below, from relying on that. Only `not_executed`: a graph
-                # without routes or guards gets no event from this line.
-                await publish_terminal((NOT_EXECUTED,))
+                # sweep below, from relying on that. `not_executed` covers a graph
+                # without routes or guards; the skipped and cancelled of this very
+                # pass -- the cascade's skips, the stop's cancels -- are published
+                # here because the break leaves before the sweep could take them.
+                await publish_terminal(("skipped", "cancelled", NOT_EXECUTED))
                 plan = desk.take_plan()
                 if plan is not None:
                     await _apply_replan(
@@ -933,10 +935,10 @@ async def _publish_terminal(
     """Announce, once each, every node the scheduler itself put in one of ``states``.
 
     `_run_node` announces the nodes it ran; a node the scheduler skipped, cancelled
-    or left unexecuted is announced here or by `_apply_replan`, never by both. Two
-    cases are announced by neither: a node the cascade or a stop marked in the pass
-    that meets a replan (that pass sweeps only `not_executed`), and the nodes
-    stopped by cancelling the run's task.
+    or left unexecuted is announced here or by `_apply_replan`, never by both,
+    including on the pass that meets a replan, whose exit publishes all three
+    before it breaks. One case is announced by neither: the nodes stopped by
+    cancelling the run's task.
     """
     for nid, st in status.items():
         if st not in states or nid in published_terminal:
@@ -995,23 +997,6 @@ async def _apply_replan(
         # the replan's would erase why it actually ended, which is the one thing someone
         # reading this run afterwards is looking for. `_mark_stopped` guards the same way.
         if st not in ("running", "exception", "pending"):
-            # A node the cascade marked skipped on this very pass -- or a stop
-            # marked cancelled -- is otherwise announced by no one: the loop
-            # breaks at the replan before its own sweep runs, so publish it
-            # here, keeping the outcome it already earned.
-            if st in ("skipped", "cancelled") and nid not in published_terminal:
-                published_terminal.add(nid)
-                node_started_at.setdefault(nid, now)
-                # setdefault: a node stopped out of `running` already ended for
-                # real when its dispatch was cut off, and the manifest's duration
-                # should keep that instant, not this pass's.
-                node_ended_at.setdefault(nid, now)
-                await _emit(
-                    progress_publisher,
-                    "dag_node_updated",
-                    {"run_id": run_id, "node": nid, "status": st},
-                )
-                await _write_node_status(session_key, run_id, nid, by_id[nid].subagent, st)
             continue
         status[nid] = "skipped" if st == "pending" else ("cancelled" if st == "running" else "failed")
         errors[nid] = reason

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import itertools
 import json
 import os
 import posixpath
@@ -8702,7 +8703,7 @@ async def test_a_replan_does_not_overwrite_a_pre_existing_failure_or_its_cascade
 
 
 async def test_a_node_skipped_on_the_replan_pass_is_announced_on_that_pass(tmp_path) -> None:
-    """`_apply_replan` publishes the cascade's own skips too, not only its own.
+    """The replan exit's publish covers the cascade's own skips too.
 
     The cascade marks `b` skipped off `a`'s failed verdict on the same pass
     that discovers the replan the judge resolved for another ticket, and the
@@ -8824,6 +8825,75 @@ async def test_a_node_cancelled_on_the_replan_pass_is_announced_on_that_pass(tmp
     statuses = {entry["node"]: entry["status"] for entry in result.files}
     assert statuses == {"a": "failed", "slowpoke": "cancelled"}
     assert ("slowpoke", "cancelled") in frames, "the stop's cancel is announced on the pass that decides it"
+
+
+async def test_a_node_cancelled_mid_retry_keeps_a_duration_of_its_own(tmp_path, monkeypatch) -> None:
+    """The replan-time publish and the loop's own sweep are one definition.
+
+    A node that ended an attempt, was adjudicated into a retry, and is then
+    stopped on the pass that meets a replan carries an earlier attempt's end
+    in its history. Publishing it with `setdefault` keeps that stamp and
+    writes a duration that runs backwards into the manifest, while the sweep
+    always re-stamps: one node history must not depend on whether a replan
+    landed on the same pass. The clock is a strict counter so every stamp is
+    orderable, not a race with the millisecond resolution of the real one.
+    """
+    from raven.agent.subagent import dag_runner
+    from raven.agent.subagent.dag_adjudication import CONTINUE, REPLAN, AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    ticks = itertools.count(1000, 10)
+    monkeypatch.setattr(dag_runner, "_now_ms", lambda: next(ticks))
+
+    desk = AdjudicationDesk()
+    cancel = asyncio.Event()
+    first_landed = asyncio.Event()
+
+    class _Backend:
+        async def run(self, prompt: str, **_kw: Any) -> str:
+            if not first_landed.is_set():
+                first_landed.set()
+                return "attempt one lands"
+            # The retry is in flight: land a replan and a stop on the one pass
+            # that will discover both.
+            desk.open("elsewhere")
+            desk.resolve("elsewhere", REPLAN, "the plan was wrong", plan=_replan_plan())
+            cancel.set()
+            await asyncio.sleep(30)
+
+    async def _announce_exception(run_id, node_id, report, origin, **_):
+        desk.resolve(node_id, CONTINUE, "try it again")
+
+    async def _judge(*, node, store, output, error, crashed, **_):
+        return Verdict(accomplished=False, what_is_missing="a token")
+
+    spec = parse_dag_spec(
+        {
+            "task_summary": "replan me",
+            "nodes": [{"id": "n0", "subagent": "x", "node_summary": "one", "prompt_template": "do it"}],
+        }
+    )
+    result = await run_dag(
+        spec,
+        resolve=lambda node: _Backend(),
+        backend=LocalFileBackend(),
+        workdir=str(tmp_path),
+        run_root=str(tmp_path / "runs"),
+        nodes_root=str(tmp_path / "nodes"),
+        history_root=str(tmp_path),
+        desk=desk,
+        judge_node=_judge,
+        origin=_TEST_ORIGIN,
+        adjudication_timeout_s=5,
+        cancel=cancel,
+        announce_exception=_announce_exception,
+    )
+
+    rows = {entry["node"]: entry for entry in result.files}
+    assert rows["n0"]["status"] == "cancelled", rows
+    started, ended = rows["n0"]["started_at"], rows["n0"]["ended_at"]
+    assert started is not None and ended is not None
+    assert started <= ended, f"a cancelled retry must not end before it starts: {started} > {ended}"
 
 
 async def test_a_run_that_was_not_replanned_reports_no_successor(tmp_path) -> None:
