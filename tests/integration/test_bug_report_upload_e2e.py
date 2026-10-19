@@ -22,10 +22,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+import httpx
 import pytest
 
+from raven.trajectory import receiver as rcv
 from tests.bug_report_receiver_stub import PROXY_VARIABLES
 from tests.test_trajectory_bugreport import _span, _write_log
+from tests.test_trajectory_receiver import PACKAGE, ROOT, SHA
 
 pytestmark = pytest.mark.integration
 
@@ -142,6 +145,53 @@ async def test_report_bug_uploads_through_a_real_receiver(tmp_path):
         assert await asyncio.wait_for(proc.wait(), 15) == 0
     finally:
         await _reap(proc)
+
+
+async def test_the_receiver_process_refuses_an_upload_without_the_answer(tmp_path):
+    env = _env(tmp_path)
+    inbox = tmp_path / "inbox"
+    proc, port = await _start_receiver(_raven("receiver", "--save-dir", str(inbox), "--port", "0"), env)
+    try:
+        base = f"http://127.0.0.1:{port}"
+        async with httpx.AsyncClient(trust_env=False, timeout=10) as client:
+            hello = await client.get(base + rcv.HELLO_PATH)
+            assert hello.json() == {"service": rcv.SERVICE_NAME, "protocol": rcv.PROTOCOL_VERSION}
+            challenge = (await client.post(base + rcv.CHALLENGE_PATH)).json()["challenge"]
+            headers = {"Content-Type": "application/gzip", rcv.REPORT_ID_HEADER: ROOT, rcv.SHA256_HEADER: SHA}
+            for answer in ({}, {rcv.CHALLENGE_HEADER: challenge, rcv.RESPONSE_HEADER: "0" * 64}):
+                refused = await client.post(base + rcv.ENDPOINT_PATH, content=PACKAGE, headers={**headers, **answer})
+                assert refused.status_code == 401 and refused.json()["error"] == "unauthorized"
+                assert refused.headers["WWW-Authenticate"] == "Raven-Challenge"
+        assert list((inbox / ".incoming").iterdir()) == []
+        assert not list(inbox.glob("????-??-??"))
+        proc.send_signal(signal.SIGTERM)
+        assert await asyncio.wait_for(proc.wait(), 15) == 0
+    finally:
+        await _reap(proc)
+
+
+async def test_report_bug_warns_and_keeps_the_package_when_the_receiver_is_down(tmp_path):
+    env = _env(tmp_path)
+    _write_log(tmp_path / "traces" / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+    proc, port = await _start_receiver(_raven("receiver", "--save-dir", str(tmp_path / "inbox"), "--port", "0"), env)
+    try:
+        # Stopped right after it printed its address, it may not have its own
+        # handler in place yet and die of the signal; gone is all this needs.
+        proc.send_signal(signal.SIGTERM)
+        assert await asyncio.wait_for(proc.wait(), 15) in (0, -signal.SIGTERM)
+    finally:
+        await _reap(proc)
+    env["RAVEN_BUGREPORT_URL"] = f"http://127.0.0.1:{port}"
+    report = _run(_raven("report-bug", "trace-1", "-d", "it broke", "--yes", "--accept-risk"), env)
+
+    assert report.returncode == 1, report.stdout + report.stderr
+    out = " ".join(report.stdout.split())
+    assert f"The bug report receiver at http://127.0.0.1:{port} is not reachable: could not reach" in out
+    assert "Continuing: if the upload fails, the package stays on this machine." in out
+    assert "Upload failed:" in out
+    (record_dir,) = [p for p in (tmp_path / "traces" / "bugreports").iterdir() if p.name.startswith("br-")]
+    record = json.loads((record_dir / "record.json").read_text(encoding="utf-8"))
+    assert record["status"] == "local_ready" and record["upload"]["state"] == "failed"
 
 
 async def test_a_silent_receiver_is_killed_at_the_deadline(tmp_path):
