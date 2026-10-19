@@ -690,13 +690,6 @@ BY_PASSWORD = {k: v for k, v in FORM.items() if k != "key"} | {"auth": "password
 
 
 @pytest.fixture
-def supported_host(monkeypatch):
-    """A computer the password login is offered on. The handler refuses the pick on Windows first of
-    all (the case at the end of this file), so a password-flow case has to say which host it runs as."""
-    monkeypatch.setattr(sys, "platform", "linux")
-
-
-@pytest.fixture
 def rhome(_home, monkeypatch):
     monkeypatch.setenv("RAVEN_HOME", str(_home / "rhome"))
     return _home / "rhome"

@@ -880,7 +880,8 @@ def test_add_by_password_refuses_an_unreadable_registry_before_it_keeps_anything
     )
 
     assert out.exit_code == 1, out.output
-    assert "Nothing was written" in out.output and "not valid JSON" in out.output
+    said = " ".join(out.output.split())  # the console wraps a long path mid-phrase
+    assert "Nothing was written" in said and "not valid JSON" in said
     assert _nothing_kept(rhome) and store.read_text(encoding="utf-8") == broken
 
 

@@ -130,8 +130,7 @@ def test_the_askpass_environment_names_the_helper_and_the_password_file_never_th
     assert helper.read_text(encoding="utf-8") == before
 
 
-def test_a_password_row_with_no_password_kept_here_is_refused_by_name(tmp_path, monkeypatch):
-    monkeypatch.setattr(sys, "platform", "linux")  # the mode is refused on Windows first of all
+def test_a_password_row_with_no_password_kept_here_is_refused_by_name(tmp_path, monkeypatch, supported_host):
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
 
     with pytest.raises(TransportError, match="no password is kept here for machine 'box'.*register it again"):
@@ -152,9 +151,8 @@ def test_a_password_row_is_refused_on_windows_before_ssh_is_started(tmp_path, mo
 
 
 def test_the_runner_hands_ssh_the_askpass_environment_for_a_password_row_and_nothing_for_a_key_row(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, supported_host
 ):
-    monkeypatch.setattr(sys, "platform", "linux")  # the mode is refused on Windows first of all
     from raven.ops.connection_add import store_password
 
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
