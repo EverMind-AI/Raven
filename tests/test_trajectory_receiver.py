@@ -264,6 +264,27 @@ async def test_health_and_json_errors(client):
     assert resp.status == 405 and (await resp.json())["error"] == "method_not_allowed"
 
 
+async def test_hello_names_the_service(client):
+    resp = await client.get(rcv.HELLO_PATH)
+    assert resp.status == 200
+    assert await resp.json() == {"service": rcv.SERVICE_NAME, "protocol": rcv.PROTOCOL_VERSION}
+    assert resp.headers["Cache-Control"] == "no-store"
+
+
+async def test_hello_answers_only_get(client):
+    resp = await client.post(rcv.HELLO_PATH)
+    assert resp.status == 405 and (await resp.json())["error"] == "method_not_allowed"
+    assert "GET" in resp.headers["Allow"]
+    assert (await client.head(rcv.HELLO_PATH)).status == 200
+
+
+async def test_hello_spends_no_upload_tokens(make_client):
+    client = await make_client(rate_burst=1, rate_per_10min=600)
+    for _ in range(5):
+        assert (await client.get(rcv.HELLO_PATH)).status == 200
+    assert (await _post(client)).status == 201
+
+
 # --- startup and repair -----------------------------------------------------
 
 

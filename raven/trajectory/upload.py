@@ -25,6 +25,13 @@ request outright. Per-operation socket timeouts alone cannot bound a transfer:
 a peer that trickles a byte before each one expires can hold a call open
 forever, and that holds whether it is slow to send response headers, slow to
 send the body, or slow to read the upload.
+
+Before a report starts, :func:`probe_receiver` asks the URL's ``/v1/hello``
+and accepts only an answer that names a Raven receiver speaking this
+protocol, so a wrong port, a proxy's default page or an older receiver shows
+up before anyone has reviewed a redaction. ``/healthz`` would not tell: anything
+alive answers ok there, and it is not under the base URL's path prefix. The
+probe runs under one deadline for the whole exchange, for the same reason.
 """
 
 from __future__ import annotations
@@ -51,15 +58,25 @@ from raven.trajectory.bugreport import (
     load_record,
     save_record,
 )
-from raven.trajectory.receiver import ENDPOINT_PATH, RECEIPT_ID, REPORT_ID_HEADER, SHA256_HEADER
+from raven.trajectory.receiver import (
+    ENDPOINT_PATH,
+    HELLO_PATH,
+    PROTOCOL_VERSION,
+    RECEIPT_ID,
+    REPORT_ID_HEADER,
+    SERVICE_NAME,
+    SHA256_HEADER,
+)
 
 DEFAULT_UPLOAD_URL = ""
 UPLOAD_URL_ENV = "RAVEN_BUGREPORT_URL"
 ALLOW_HTTP_ENV = "RAVEN_BUGREPORT_ALLOW_HTTP"
 MAX_RESPONSE_BYTES = 64 * 1024
+PROBE_TIMEOUT = 5.0
 
 _TRUTHY = {"1", "true", "yes", "on"}
 _CHUNK = 64 * 1024
+_REDIRECT_CHARS = 200
 _RETRYABLE_STATUSES = (408, 429)
 _RECEIPT_FIELDS = ("receipt_id", "report_id", "sha256", "size_bytes", "received_at", "duplicate")
 
@@ -76,6 +93,15 @@ class UploadError(Exception):
         self.reason = reason
         self.status = status
         self.retryable = retryable
+
+
+class ProbeError(Exception):
+    """The receiver URL does not lead to a Raven bug report receiver that answers in time."""
+
+    def __init__(self, reason: str, *, status: int | None = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.status = status
 
 
 @dataclass(frozen=True)
@@ -350,6 +376,89 @@ def upload_package(
     )
 
 
+def _redirect_target(location: str) -> str:
+    """Where a redirect points, cut to what an error message may show; "" when nothing is left.
+
+    A Location comes from whatever stands in front of the receiver, and a
+    sign-in gateway puts tickets in the query and credentials before an ``@``.
+    It is cut on the string, not parsed, so no spelling of a URL (``//host``,
+    backslashes, no scheme) carries userinfo past it: the query and fragment
+    go first, then everything up to the last ``@``.
+    """
+    location = location.strip()
+    cut = min((i for i in (location.find("?"), location.find("#")) if i != -1), default=len(location))
+    head = location[:cut].rpartition("@")[2][:_REDIRECT_CHARS]
+    if not head:
+        return ""
+    return head + ("..." if cut < len(location) else "")
+
+
+async def _check_hello(response: httpx.Response, host: str) -> None:
+    status = response.status_code
+    if 300 <= status < 400:
+        target = _redirect_target(response.headers.get("Location", ""))
+        where = f"redirected to {target}" if target else "answered with a redirect"
+        raise ProbeError(f"{host} {where}; point {UPLOAD_URL_ENV} at the receiver itself", status=status)
+    not_receiver = f"{host} does not answer as a Raven bug report receiver"
+    try:
+        body = await _read_bounded(response)
+    except UploadError as exc:
+        raise ProbeError(f"{not_receiver}: {exc.reason}", status=status) from exc
+    if status != 200:
+        raise ProbeError(f"{not_receiver} (HTTP {status} on {HELLO_PATH})", status=status)
+    is_json = response.headers.get("Content-Type", "").lower().startswith("application/json")
+    payload = _parse_json(body) if is_json else _NOT_JSON
+    if (
+        not isinstance(payload, dict)
+        or payload.get("service") != SERVICE_NAME
+        or type(payload.get("protocol")) is not int
+    ):
+        raise ProbeError(not_receiver, status=status)
+    if payload["protocol"] != PROTOCOL_VERSION:
+        raise ProbeError(
+            f"the receiver at {host} speaks protocol {payload['protocol']}; this Raven speaks {PROTOCOL_VERSION}",
+            status=status,
+        )
+
+
+async def probe_receiver_async(base_url: str, *, timeout: float = PROBE_TIMEOUT) -> None:
+    """Check that a Raven receiver speaking this protocol answers at ``base_url``.
+
+    Raises :class:`ProbeError` with a reason a person can act on. ``timeout``
+    bounds the whole exchange, the response body and closing the connection
+    included; the per-operation timeouts inside it cannot bound it alone.
+    """
+    url = base_url.rstrip("/") + HELLO_PATH
+    host = urlsplit(url).netloc
+    headers = {"Accept": "application/json", "Accept-Encoding": "identity", "User-Agent": f"raven/{__version__}"}
+    try:
+        async with asyncio.timeout(timeout):
+            async with httpx.AsyncClient(timeout=httpx.Timeout(timeout), follow_redirects=False) as client:
+                async with client.stream("GET", url, headers=headers) as response:
+                    await _check_hello(response, host)
+    except (TimeoutError, httpx.TimeoutException) as exc:
+        raise ProbeError(f"no answer from {host} within {timeout}s") from exc
+    except httpx.TransportError as exc:
+        raise ProbeError(f"could not reach {host}: {exc}") from exc
+    except httpx.HTTPError as exc:
+        raise ProbeError(str(exc)) from exc
+
+
+def probe_receiver(base_url: str, *, timeout: float = PROBE_TIMEOUT) -> None:
+    """Blocking :func:`probe_receiver_async`, on an event loop of its own.
+
+    From async code either await :func:`probe_receiver_async` directly or
+    run this in a worker thread (``asyncio.to_thread``).
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    else:
+        raise RuntimeError("run probe_receiver in a worker thread, or await probe_receiver_async")
+    asyncio.run(probe_receiver_async(base_url, timeout=timeout))
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -406,10 +515,14 @@ __all__ = [
     "ALLOW_HTTP_ENV",
     "DEFAULT_UPLOAD_URL",
     "MAX_RESPONSE_BYTES",
+    "PROBE_TIMEOUT",
     "UPLOAD_URL_ENV",
+    "ProbeError",
     "UploadConfigError",
     "UploadError",
     "UploadReceipt",
+    "probe_receiver",
+    "probe_receiver_async",
     "resolve_upload_url",
     "upload_package",
     "upload_package_async",

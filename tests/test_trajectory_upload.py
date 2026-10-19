@@ -80,10 +80,10 @@ class _Fake:
         return await self.respond(request)
 
 
-async def _fake_server(respond):
+async def _fake_server(respond, *, method="POST", path=rcv.ENDPOINT_PATH):
     fake = _Fake(respond)
     app = web.Application()
-    app.router.add_post(rcv.ENDPOINT_PATH, fake.handle)
+    app.router.add_route(method, path, fake.handle)
     server = TestServer(app)
     await server.start_server(auto_decompress=False)
     return server, f"http://{server.host}:{server.port}", fake
@@ -540,6 +540,204 @@ async def test_redirects_and_error_statuses(tmp_path):
         finally:
             await server.close()
         assert exc.value.retryable is retryable and needle in str(exc.value), str(exc.value)
+
+
+# --- probing the receiver -------------------------------------------------------
+
+
+HELLO = {"service": rcv.SERVICE_NAME, "protocol": rcv.PROTOCOL_VERSION}
+
+
+async def _fake_hello(respond, path=rcv.HELLO_PATH):
+    return await _fake_server(respond, method="GET", path=path)
+
+
+async def _probe_error(respond):
+    server, url, fake = await _fake_hello(respond)
+    try:
+        with pytest.raises(tupload.ProbeError) as exc:
+            await tupload.probe_receiver_async(url)
+    finally:
+        await server.close()
+    return exc.value, fake
+
+
+async def test_probe_finds_a_real_receiver(receiver_url):
+    await tupload.probe_receiver_async(receiver_url)
+
+
+async def test_probe_follows_a_path_prefix():
+    server, url, fake = await _fake_hello(_json_response(200, HELLO), path="/prefix" + rcv.HELLO_PATH)
+    try:
+        await tupload.probe_receiver_async(f"{url}/prefix/")
+    finally:
+        await server.close()
+    assert len(fake.requests) == 1
+
+
+async def test_probe_of_a_dead_port_says_so():
+    with pytest.raises(tupload.ProbeError) as exc:
+        await tupload.probe_receiver_async(_dead_url())
+    assert "could not reach" in exc.value.reason and exc.value.status is None
+
+
+def _respond(status, body, *, content_type="application/json", **headers):
+    async def respond(_request):
+        return web.Response(status=status, body=body, headers={"Content-Type": content_type, **headers})
+
+    return respond
+
+
+NOT_A_RECEIVER = "does not answer as a Raven bug report receiver"
+
+
+@pytest.mark.parametrize(
+    "respond,status,needle",
+    [
+        (_json_response(404, {"error": "not_found"}), 404, f"{NOT_A_RECEIVER} (HTTP 404 on /v1/hello)"),
+        (_respond(200, b"<html></html>", content_type="text/html"), 200, NOT_A_RECEIVER),
+        (_respond(200, b"[]"), 200, NOT_A_RECEIVER),
+        (_json_response(200, {"service": "other", "protocol": 1}), 200, NOT_A_RECEIVER),
+        (_json_response(200, {**HELLO, "protocol": "1"}), 200, NOT_A_RECEIVER),
+        (_json_response(200, {**HELLO, "protocol": True}), 200, NOT_A_RECEIVER),
+        (_json_response(200, {**HELLO, "protocol": 2}), 200, "speaks protocol 2; this Raven speaks 1"),
+        (_respond(200, b" " * (tupload.MAX_RESPONSE_BYTES + 1)), 200, "larger than 64 KiB"),
+        (_respond(200, gzip.compress(json.dumps(HELLO).encode()), **{"Content-Encoding": "gzip"}), 200, "compressed"),
+    ],
+    ids=["404", "html", "array", "service", "protocol-str", "protocol-bool", "protocol-2", "oversized", "gzip"],
+)
+async def test_probe_refuses_what_is_not_a_receiver(respond, status, needle):
+    error, _fake = await _probe_error(respond)
+    assert error.status == status and needle in error.reason, error.reason
+
+
+async def test_probe_does_not_follow_redirects():
+    error, fake = await _probe_error(_respond(302, b"", Location="https://elsewhere.example/"))
+    assert error.status == 302 and "redirected to https://elsewhere.example/" in error.reason
+    assert len(fake.requests) == 1
+
+
+@pytest.mark.parametrize(
+    "location,shown",
+    [
+        ("https://user:pw-secret@sso.example/login", "sso.example/login"),
+        ("https://sso.example/login?ticket=tk-secret", "https://sso.example/login..."),
+        ("https://sso.example/login#code=cd-secret", "https://sso.example/login..."),
+        ("/login?ticket=tk-secret", "/login..."),
+        ("//user:pw-secret@sso.example/login?ticket=tk-secret", "sso.example/login..."),
+        ("\\\\user:pw-secret@sso.example/login", "sso.example/login"),
+        ("?ticket=tk-secret", ""),
+        ("", ""),
+        ("   ", ""),
+        ("  /login  ", "/login"),
+    ],
+)
+def test_redirect_target_keeps_only_what_is_safe_to_show(location, shown):
+    assert tupload._redirect_target(location) == shown
+
+
+def test_redirect_target_is_bounded():
+    assert tupload._redirect_target("/" + "a" * 500) == "/" + "a" * 199
+
+
+@pytest.mark.parametrize(
+    "location,needle",
+    [
+        ("https://user:pw-secret@sso.example/login", "redirected to sso.example/login;"),
+        ("https://sso.example/login?ticket=tk-secret", "redirected to https://sso.example/login...;"),
+        ("https://sso.example/login#code=cd-secret", "redirected to https://sso.example/login...;"),
+        ("/login?ticket=tk-secret", "redirected to /login...;"),
+        ("//user:pw-secret@sso.example/login?ticket=tk-secret", "redirected to sso.example/login...;"),
+        ("\\\\user:pw-secret@sso.example/login", "redirected to sso.example/login;"),
+        ("?ticket=tk-secret", "answered with a redirect;"),
+        (None, "answered with a redirect;"),
+    ],
+)
+async def test_probe_redirects_never_echo_secrets(location, needle):
+    headers = {} if location is None else {"Location": location}
+    error, fake = await _probe_error(_respond(302, b"", **headers))
+    assert error.status == 302 and "secret" not in error.reason, error.reason
+    assert needle in error.reason and "point RAVEN_BUGREPORT_URL at the receiver itself" in error.reason
+    assert len(fake.requests) == 1
+
+
+async def _assert_probe_deadline(coro, *, timeout=0.3, limit=2.5):
+    """The probe's own deadline ended it, well before the server's 3 s pace would have."""
+    started = time.monotonic()
+    with pytest.raises(tupload.ProbeError) as exc:
+        await coro
+    elapsed = time.monotonic() - started
+    assert f"within {timeout}s" in exc.value.reason
+    assert 0.25 <= elapsed < limit, elapsed
+
+
+async def test_probe_slow_headers_hit_the_deadline():
+    closed = asyncio.Event()
+
+    async def handler(reader, writer):
+        try:
+            await reader.readuntil(b"\r\n\r\n")
+            writer.write(b"HTTP/1.1 200 OK\r\nX-Slow: ")
+            await writer.drain()
+            for _ in range(60):
+                writer.write(b"a")
+                await writer.drain()
+                await asyncio.sleep(0.05)
+        except (ConnectionError, asyncio.IncompleteReadError):
+            pass
+        finally:
+            closed.set()
+            writer.close()
+
+    server, port = await _raw_server(handler)
+    try:
+        await _assert_probe_deadline(tupload.probe_receiver_async(f"http://127.0.0.1:{port}", timeout=0.3))
+        await asyncio.wait_for(closed.wait(), 2)
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+def _dripping_hello(disconnected):
+    async def respond(request):
+        resp = web.StreamResponse(status=200, headers={"Content-Type": "application/json"})
+        await resp.prepare(request)
+        try:
+            for _ in range(60):
+                await resp.write(b" ")
+                await asyncio.sleep(0.05)
+        except asyncio.CancelledError:
+            disconnected.set()
+            raise
+        except ConnectionError:
+            disconnected.set()
+        return resp
+
+    return respond
+
+
+async def test_probe_dripping_body_hits_the_deadline():
+    disconnected = asyncio.Event()
+    server, url, _fake = await _fake_hello(_dripping_hello(disconnected))
+    try:
+        await _assert_probe_deadline(tupload.probe_receiver_async(url, timeout=0.3))
+        await asyncio.wait_for(disconnected.wait(), 2)
+    finally:
+        await server.close()
+
+
+async def test_sync_probe_obeys_the_deadline():
+    disconnected = asyncio.Event()
+    server, url, _fake = await _fake_hello(_dripping_hello(disconnected))
+    try:
+        await _assert_probe_deadline(asyncio.to_thread(tupload.probe_receiver, url, timeout=0.3))
+    finally:
+        await server.close()
+
+
+async def test_sync_probe_refuses_a_running_loop():
+    with pytest.raises(RuntimeError):
+        tupload.probe_receiver("http://127.0.0.1:1")
 
 
 # --- the record -----------------------------------------------------------------

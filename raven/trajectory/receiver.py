@@ -18,6 +18,11 @@ Package inspection hashes up to the configured unpacked limit, so it runs in a
 worker thread. Cancelling the request — a client that went away, a timeout,
 shutdown — stops that thread cooperatively and waits for it before the
 temporary file is removed, so no thread ever reads a file from under itself.
+
+A client asks ``/v1/hello`` before a report starts, to learn that what answers
+at the URL it was given is a Raven receiver and which protocol it speaks.
+``/healthz`` only says that something is alive, and it sits at the root, not
+under the path prefix a client's base URL may carry.
 """
 
 from __future__ import annotations
@@ -51,6 +56,9 @@ from raven.trajectory.package_check import PackageError, PackageLimits, PackageS
 
 ENDPOINT_PATH = "/v1/bugreports"
 HEALTH_PATH = "/healthz"
+HELLO_PATH = "/v1/hello"
+SERVICE_NAME = "raven-bug-report-receiver"
+PROTOCOL_VERSION = 1
 REPORT_ID_HEADER = "X-Raven-Report-Id"
 SHA256_HEADER = "X-Raven-Package-Sha256"
 GZIP_TYPES = ("application/gzip", "application/x-gzip")
@@ -70,6 +78,7 @@ RECEIPT_ID = re.compile(r"^rc-[0-9a-f]{12}$")
 _RECEIPT_ID = RECEIPT_ID
 _RECEIPT_FIELDS = ("receipt_id", "report_id", "sha256", "size_bytes", "received_at")
 _HTTP_CODES = {404: "not_found", 405: "method_not_allowed"}
+_NO_STORE = {"Cache-Control": "no-store"}
 _BUSY_RETRY_AFTER = 5
 _SHUTDOWN_TIMEOUT = 30.0
 _monotonic = time.monotonic
@@ -674,6 +683,9 @@ class Receiver:
     async def handle_health(self, request: web.Request) -> web.Response:
         return web.json_response({"status": "ok"})
 
+    async def handle_hello(self, request: web.Request) -> web.Response:
+        return web.json_response({"service": SERVICE_NAME, "protocol": PROTOCOL_VERSION}, headers=_NO_STORE)
+
     async def handle_upload(self, request: web.Request) -> web.Response:
         started = _monotonic()
         upload = _Upload(client=_client_ip(request.remote or "", request.headers.get("X-Forwarded-For"), self._trusted))
@@ -877,13 +889,14 @@ async def _json_errors(request: web.Request, handler: Any) -> web.StreamResponse
 
 
 def build_app(config: ReceiverConfig, *, store: ReceiverStore | None = None) -> web.Application:
-    """The aiohttp application: prepares the store, then serves the two routes."""
+    """The aiohttp application: prepares the store, then serves its routes."""
     receiver = Receiver(config, store=store)
     receiver.store.prepare()
     app = web.Application(middlewares=[_json_errors])
     app[RECEIVER_KEY] = receiver
     app.router.add_post(ENDPOINT_PATH, receiver.handle_upload)
     app.router.add_get(HEALTH_PATH, receiver.handle_health)
+    app.router.add_get(HELLO_PATH, receiver.handle_hello)
     return app
 
 
@@ -944,9 +957,12 @@ def run_receiver(config: ReceiverConfig, *, ready: Callable[[str, int], None] | 
 __all__ = [
     "ENDPOINT_PATH",
     "HEALTH_PATH",
+    "HELLO_PATH",
+    "PROTOCOL_VERSION",
     "RECEIVER_KEY",
     "REPORT_ID_HEADER",
     "RUNNER_OPTIONS",
+    "SERVICE_NAME",
     "SHA256_HEADER",
     "DailyLedger",
     "Receiver",
