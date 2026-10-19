@@ -105,7 +105,7 @@ def add(  # noqa: PLR0913 -- one option per field of the row; a dict would hide 
 
     import click
 
-    from raven.ops.connections import LOCAL, SSH, row_problems, store_path
+    from raven.ops.connections import LOCAL, SSH, load, row_problems, store_path
 
     kind = (transport or SSH).strip().lower()
     login = (auth or "key").strip().lower()
@@ -150,6 +150,15 @@ def add(  # noqa: PLR0913 -- one option per field of the row; a dict would hide 
         else:
             row.update({"host": host, "port": port, "user": user, "key": key})
 
+    if any(str(r.get("id") or "").strip() == conn_id for r in load()):
+        # Judged before anything is kept or reached: a re-add under an id in
+        # use must not touch the registered row's password (a failed one used
+        # to delete it, reviewed 2026-10-19). Remove, then register again.
+        console.print(
+            f"[red]a machine with id {conn_id!r} is already listed in {store_path()}; remove it first "
+            f"(raven ops connection remove {conn_id}). Nothing was written.[/red]"
+        )
+        raise typer.Exit(1)
     if password:
         # Kept before the probe, which reaches the machine the way every later connection will.
         _store_password(conn_id, password)

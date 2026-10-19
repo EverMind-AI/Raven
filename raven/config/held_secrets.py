@@ -28,7 +28,7 @@ _MIN_LEN = 6
 #: Values a credential field holds when it holds nothing.
 _PLACEHOLDERS = frozenset({"EMPTY", "empty", "dummy", "changeme", "not-needed", "sk-xxx"})
 
-_cache: tuple[Path, float, tuple[tuple[str, int], ...], tuple[tuple[str, str], ...]] | None = None
+_cache: tuple[Path, float, tuple[tuple[str, str], ...]] | None = None
 
 
 def _collect(node: Any, prefix: str, out: list[tuple[str, str]]) -> None:
@@ -95,9 +95,13 @@ def _machine_passwords(files: list[Path]) -> list[tuple[str, str]]:
 
 
 def held_secrets() -> tuple[tuple[str, str], ...]:
-    """``(value, path)`` for every credential Raven holds, longest first; re-read when a file changes.
+    """``(value, path)`` for every credential Raven holds, longest first.
 
-    The config's credentials, and the passwords kept for registered machines.
+    The config's credentials, re-read when the file changes, and the passwords
+    kept for registered machines, read on every call: they are a few tiny
+    files, and an in-place rewrite can keep the old mtime (reviewed
+    2026-10-19 -- a stamp on mtime let a replaced password reach a model
+    verbatim until something else invalidated the cache).
     """
     global _cache
     path = get_config_path()
@@ -105,23 +109,19 @@ def held_secrets() -> tuple[tuple[str, str], ...]:
         mtime = path.stat().st_mtime
     except OSError:
         return ()
-    files = _machine_password_files()
-    stamp = tuple((str(file), file.stat().st_mtime_ns) for file in files if file.exists())
-    if _cache is not None and _cache[0] == path and _cache[1] == mtime and _cache[2] == stamp:
-        return _cache[3]
-    found: list[tuple[str, str]] = []
-    try:
-        _collect(read_raw(path), "", found)
-    except Exception as exc:  # noqa: BLE001 - an unreadable config holds nothing to scrub
-        logger.debug("held_secrets: config unreadable: {}", exc)
-    found.extend(_machine_passwords(files))
-    unique = {value: where for value, where in found}
+    if _cache is None or _cache[0] != path or _cache[1] != mtime:
+        found: list[tuple[str, str]] = []
+        try:
+            _collect(read_raw(path), "", found)
+        except Exception as exc:  # noqa: BLE001 - an unreadable config holds nothing to scrub
+            logger.debug("held_secrets: config unreadable: {}", exc)
+        _cache = (path, mtime, tuple(found))
+    unique = dict(_cache[2])
+    unique.update(_machine_passwords(_machine_password_files()))
     # As a JSON file prints it too: a quote or a backslash in the value is
     # escaped there, and `cat config.json` shows that spelling.
     unique.update({json.dumps(value)[1:-1]: where for value, where in list(unique.items())})
-    held = tuple(sorted(unique.items(), key=lambda pair: -len(pair[0])))
-    _cache = (path, mtime, stamp, held)
-    return held
+    return tuple(sorted(unique.items(), key=lambda pair: -len(pair[0])))
 
 
 def scrub_held_secrets(text: str) -> str:
