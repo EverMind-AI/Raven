@@ -28,7 +28,7 @@ _MIN_LEN = 6
 #: Values a credential field holds when it holds nothing.
 _PLACEHOLDERS = frozenset({"EMPTY", "empty", "dummy", "changeme", "not-needed", "sk-xxx"})
 
-_cache: tuple[Path, float, tuple[tuple[str, str], ...]] | None = None
+_cache: tuple[Path, float, tuple[tuple[str, int], ...], tuple[tuple[str, str], ...]] | None = None
 
 
 def _collect(node: Any, prefix: str, out: list[tuple[str, str]]) -> None:
@@ -63,27 +63,64 @@ def _worth_holding(path: str) -> bool:
     return True
 
 
+# Where ``raven.ops.connection_add.store_password`` keeps a machine's password:
+# ``<home>/keys/<id>.password``. Spelled here rather than imported, so the
+# config package does not draw ``raven.ops`` into its import cycle; the test
+# beside ``store_password`` holds the two spellings together.
+MACHINE_PASSWORD_GLOB = ("keys", "*.password")
+
+
+def _machine_password_files() -> list[Path]:
+    """The passwords kept for registered machines, by file."""
+    try:
+        from raven.home import raven_home
+
+        return sorted((raven_home() / MACHINE_PASSWORD_GLOB[0]).glob(MACHINE_PASSWORD_GLOB[1]))
+    except Exception as exc:  # noqa: BLE001 - no home to look in holds nothing to scrub
+        logger.debug("held_secrets: machine passwords not looked at: {}", exc)
+        return []
+
+
+def _machine_passwords(files: list[Path]) -> list[tuple[str, str]]:
+    """``(value, where)`` for each kept password: one more credential Raven holds, scrubbed like the rest."""
+    out: list[tuple[str, str]] = []
+    for file in files:
+        try:
+            value = file.read_text(encoding="utf-8").strip("\r\n")
+        except OSError:
+            continue
+        if len(value) >= _MIN_LEN:
+            out.append((value, f"the password kept for machine {file.name[: -len('.password')]}"))
+    return out
+
+
 def held_secrets() -> tuple[tuple[str, str], ...]:
-    """``(value, path)`` for every credential in Raven's config, longest first; re-read when the file changes."""
+    """``(value, path)`` for every credential Raven holds, longest first; re-read when a file changes.
+
+    The config's credentials, and the passwords kept for registered machines.
+    """
     global _cache
     path = get_config_path()
     try:
         mtime = path.stat().st_mtime
     except OSError:
         return ()
-    if _cache is not None and _cache[0] == path and _cache[1] == mtime:
-        return _cache[2]
+    files = _machine_password_files()
+    stamp = tuple((str(file), file.stat().st_mtime_ns) for file in files if file.exists())
+    if _cache is not None and _cache[0] == path and _cache[1] == mtime and _cache[2] == stamp:
+        return _cache[3]
     found: list[tuple[str, str]] = []
     try:
         _collect(read_raw(path), "", found)
     except Exception as exc:  # noqa: BLE001 - an unreadable config holds nothing to scrub
         logger.debug("held_secrets: config unreadable: {}", exc)
+    found.extend(_machine_passwords(files))
     unique = {value: where for value, where in found}
     # As a JSON file prints it too: a quote or a backslash in the value is
     # escaped there, and `cat config.json` shows that spelling.
     unique.update({json.dumps(value)[1:-1]: where for value, where in list(unique.items())})
     held = tuple(sorted(unique.items(), key=lambda pair: -len(pair[0])))
-    _cache = (path, mtime, held)
+    _cache = (path, mtime, stamp, held)
     return held
 
 

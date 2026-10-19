@@ -45,7 +45,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from raven.ops import connections, remote_path
-from raven.ops.transport import TIMED_OUT_RC, TransportError, runner_from, ssh_argv, ssh_target
+from raven.ops.transport import TIMED_OUT_RC, TransportError, runner_from, ssh_argv, ssh_env, ssh_target
 
 #: Where an agent works on its machine when its entry names nowhere else
 #: (:data:`raven.ops.remote_path.DEFAULT_ROOT`, which the file tools read from
@@ -202,8 +202,13 @@ def ssh_command(
     ssh's own lines name the address.
     """
     host, port, key, user = _target(target)
+    password = connections.password_auth(target._row)
+    if password:
+        # Refused here, by name, when the password is not kept here any more:
+        # the environment is what carries it (:func:`ssh_environment`).
+        ssh_environment(target)
     extra = KEEPALIVE + ("-E", os.fspath(ssh_log))
-    argv = ssh_argv(host, port, key, user=user, connect_timeout=connect_timeout, extra=extra)
+    argv = ssh_argv(host, port, key, user=user, connect_timeout=connect_timeout, password=password, extra=extra)
     # ``--`` so nothing in the remote command is read as an option to ssh,
     # which also parses options that follow the destination.
     argv += ["--", posix(command)]
@@ -371,9 +376,11 @@ def push(target: Machine, command: str, data: bytes, *, timeout: float = 300.0) 
         wrapped = posix(command)
     except ValueError as exc:
         raise RemoteMachineError(f"machine {target.label}: {exc}") from None
-    argv = ssh_argv(host, port, key, user=user) + [wrapped]
+    password = connections.password_auth(target._row)
+    env = {**os.environ, **ssh_environment(target)} if password else None
+    argv = ssh_argv(host, port, key, user=user, password=password) + [wrapped]
     try:
-        done = subprocess.run(argv, input=data, capture_output=True, timeout=timeout)
+        done = subprocess.run(argv, input=data, capture_output=True, timeout=timeout, env=env)
     except subprocess.TimeoutExpired:
         return TIMED_OUT_RC, ""
     out = done.stdout.decode("utf-8", "replace")
@@ -420,6 +427,8 @@ async def tunnel(
     if not parts.hostname:
         raise RemoteMachineError(f"machine {target.label}: the endpoint's URL names no host to reach from it")
     host, port, key, user = _target(target)
+    password = connections.password_auth(target._row)
+    env = {**os.environ, **ssh_environment(target)} if password else None
     # An IPv6 address is bracketed in the forward as it is in the URL, which
     # ``hostname`` gives bare; ssh refuses the bare one.
     far = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
@@ -434,7 +443,7 @@ async def tunnel(
             continue
         forward = f"127.0.0.1:{local}:{far}:{parts.port or 80}"
         extra = TUNNEL + ("-L", forward, "-E", os.fspath(ssh_log))
-        argv = ssh_argv(host, port, key, user=user, connect_timeout=connect_timeout, extra=extra)
+        argv = ssh_argv(host, port, key, user=user, connect_timeout=connect_timeout, password=password, extra=extra)
         since = _log_size(ssh_log)
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -442,6 +451,7 @@ async def tunnel(
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
+                env=env,
             )
         except OSError as exc:
             raise RemoteMachineError(f"machine {target.label}: ssh could not be started: {exc}") from None
@@ -566,12 +576,15 @@ def explain(target: Machine, rc: int, output: str) -> str | None:
         return None
     for pattern, said in _SSH_FAILURES:
         if pattern.search(output):
+            if said is _LOGIN_REFUSED and connections.password_auth(target._row):
+                said = "refused the login; check the password kept for it, and that the machine accepts password logins"
             return f"machine {target.label} {said}"
     return f"the connection to machine {target.label} ended before the agent answered"
 
 
 # Checked in order; the first that matches names the failure. Wording is ssh's
 # own (OpenSSH 9), which is stable across the platforms raven runs on.
+_LOGIN_REFUSED = "refused the login; check the key it is registered with"
 _SSH_FAILURES = (
     (
         re.compile(r"REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed", re.IGNORECASE),
@@ -579,7 +592,7 @@ _SSH_FAILURES = (
     ),
     (
         re.compile(r"Permission denied|Too many authentication failures", re.IGNORECASE),
-        "refused the login; check the key it is registered with",
+        _LOGIN_REFUSED,
     ),
     (re.compile(r"timed out", re.IGNORECASE), "did not answer within the connection timeout"),
     (
@@ -635,6 +648,19 @@ def _target(target: Machine) -> tuple[str, int, str, str]:
         raise RemoteMachineError(f"machine {target.label}: {exc}") from None
 
 
+def ssh_environment(target: Machine) -> dict[str, str]:
+    """What ssh to ``target`` needs in its environment: the askpass helper for a password machine, nothing for a key one.
+
+    The one place a password machine's ssh is refused by name -- no password
+    kept here any more, or a Windows host -- before anything is started
+    (:func:`raven.ops.transport.ssh_env`).
+    """
+    try:
+        return ssh_env(target._row)
+    except TransportError as exc:
+        raise RemoteMachineError(f"machine {target.label}: {exc}") from None
+
+
 __all__ = [
     "CHECK_HANDLE",
     "DEFAULT_ROOT",
@@ -657,6 +683,7 @@ __all__ = [
     "shell_path",
     "shown",
     "ssh_command",
+    "ssh_environment",
     "leave_agents_running",
     "leaving",
     "staying",

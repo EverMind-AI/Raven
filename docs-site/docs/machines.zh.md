@@ -11,8 +11,8 @@ Agent 的安装见[Agent 集成](agent-integrations.md)。
 
 ## 准备条件 { #what-you-need }
 
-- 一台能用密钥 ssh 登录的机器，登录用户就是 Agent 将要运行的用户。Raven 不会输入密码，
-  登录必须只凭密钥就能完成。
+- 一台能 ssh 登录的机器，登录用户就是 Agent 将要运行的用户：用密钥，或者用一个由 Raven
+  保存在本机、每次连接时交给 ssh 的密码（见下面的登记一节）。
 - 机器上是 Linux 或 macOS，该用户有 POSIX shell。节点依赖 unix 套接字和进程组，
   所以 Windows 机器不能作为目标。（Raven 本机可以是 Windows，见[限制与默认值](#limits-and-defaults)。）
 - 机器上有 `uv`（在 PATH 上，或在它的安装程序放置的位置），**或者**有 `curl` 或 `wget`
@@ -49,20 +49,22 @@ raven ops connection add --id gpu1 --name "GPU box 1" \
   旁边那份；再没有就是 Raven 主目录（`~/.raven`）里那份。注册表的细节见
   [Oncall](oncall.md#prepare-the-agent-and-machine)。
 - 记录的是私钥的**路径**，从不记录私钥本身。
-- 只能用密码登录的机器，在 Agent Hub 里把**登录方式**选成**密码**来登记。密码只用于这一次
-  ssh 登录：Raven 在这次登录里把自己生成的一把密钥（`ssh-keygen` 生成，存在
-  `~/.raven/keys/<id>_ed25519`）写进该账号的 `authorized_keys`，之后每次连接都用密钥，
-  登记表里记的也是这把密钥的路径。密码不保存、不进日志、不回显。机器的 sshd 必须允许
-  密码登录（`PasswordAuthentication yes`）这一步才能过，不允许的机器会拒绝，拒绝语里会说明。
-  本机是 Windows 时不提供。公钥单独占一行，接在 `authorized_keys` 原有内容之后；随后的
-  检查和这次登录一样读你的 ssh 配置，所以经跳板或别名才能到达的机器也照样登记。移除机器时
-  会把这把密钥收回（[第 8 节](#8-remove-a-machine)）；登录之后才被拒绝的登记会把它留在
-  机器上（以 `raven@<id>` 结尾的那一行），下次登记这台机器时继续用。
+- 只能用密码登录的机器，在 Agent Hub 里把**登录方式**选成**密码**来登记，或者用
+  `raven ops connection add --auth password --password-stdin`（密码从标准输入的第一行读，
+  不走命令行）。密码保存在本机的 `~/.raven/keys/<id>.password`，只有你的账号能读
+  （权限 0600）；每次连接时经 OpenSSH 的 askpass 钩子交给 ssh，不进登记表、不进日志、
+  不回显、不上命令行。登记表里这一行记 `auth: password`，没有密钥路径。机器的 sshd 必须允许
+  密码登录（`PasswordAuthentication yes`），不允许的机器每次连接都会拒绝，拒绝语里会说明。
+  登记时被机器拒绝的密码不会保存。机器改了密码，先移除这台机器再重新登记（id 已在用的登记
+  会被拒）。本机是 Windows 时不提供：
+  Windows 的 OpenSSH 没有 askpass。这样登记的机器不写 `~/.ssh/config` 里的 `Host <id>`
+  别名：终端里对它用 `scp`、`rsync` 要自己输密码，Agent 读写它上面的文件走 Raven 自己的
+  文件工具。移除机器时会删掉本机保存的密码（[第 8 节](#8-remove-a-machine)）。
 - 机器的主机密钥在第一次连接时接受并写进 `~/.ssh/known_hosts`。之后机器换了密钥，
   会被拒绝，直到你自己核实过。用密码登记时，这第一次连接带着密码：在不信任的网络上，
   先在终端里连一次（`ssh user@host` 会显示指纹让你确认）再登记，或者改用密钥登记。
-- `~/.ssh/config` 里会写入一段受管理的 `Host <id>`，这样本机的 `scp` 和 `rsync`
-  可以按 id 找到这台机器。
+- 用密钥登记的机器，`~/.ssh/config` 里会写入一段受管理的 `Host <id>`，这样本机的 `scp`
+  和 `rsync` 可以按 id 找到这台机器。
 
 `raven ops connection list` 列出机器。`raven ops connection doctor` 逐条列出条目的问题，
 阻塞的和提示性的都列，但只有一台可用的机器都没有时退出码才非零：一条坏的条目旁边有一条
@@ -303,10 +305,8 @@ raven ops connection remove gpu1
 而且是在 spawn 已经回答"已启动"之后，所以要先断开这些条目（Agent Hub，或配置里的
 `subagents.agents` 段），或者加 `--force` 照样移除，命令会说出哪些条目还指着一台不存在的机器。
 已断开的条目不拦着移除，只会被点名：再接入它会被拒，直到用同一个 id 重新登记机器。
-`node_dir` 下的节点留在机器上，要删就到机器上手动删掉那个目录。Raven 为这台机器生成的密钥
-（用密码登记的）会被收回：用这把密钥最后登录一次，把它那一行从机器的 `authorized_keys`
-里删掉，再删掉本机 `~/.raven/keys/` 下的这对密钥；机器连不上时那一行留在那里，命令会说明，
-以 `raven@<id>` 结尾的那一行由你到机器上删。
+`node_dir` 下的节点留在机器上，要删就到机器上手动删掉那个目录。用密码登记的机器，本机为它
+保存的密码会随这一行一起删掉。
 
 Agent Hub 机器抽屉里的**移除机器**做同样的事，先弹确认；本机链路上还有 Agent 在这台机器上
 跑时也会拒绝，等它们跑完或先停掉。之前的 Raven 进程留在机器上的运行

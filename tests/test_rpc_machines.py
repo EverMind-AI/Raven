@@ -41,6 +41,7 @@ BOX = {
     "paths": ["/data/work"],
 }
 HERE = {"id": "here", "display_name": "This computer", "transport": "local"}
+PASSWORD_BOX = {k: v for k, v in BOX.items() if k != "key"} | {"auth": "password"}
 SECRETS = ("203.0.113.7", "alice", "id_box")
 
 
@@ -123,6 +124,7 @@ async def test_list_says_what_a_machine_is_and_how_its_link_is_doing_and_never_t
         "agents": 2,
         "node_version": "0.2.4",
         "node_current": True,
+        "auth": "key",
         "install": {"running": False, "detail": ""},
         "paths": ["/data/work"],
         "problems": [],
@@ -532,48 +534,28 @@ async def test_remove_takes_the_row_and_its_alias_out_closes_the_link_and_leaves
     assert pool.asked == [("close", "box")] and "box" not in rpc._INSTALLS
 
 
-@pytest.mark.parametrize("taken", [True, False], ids=["taken back", "machine away"])
-async def test_remove_takes_back_the_key_this_computer_made_and_says_when_it_could_not(
-    pool, _home, agents, monkeypatch, taken
+async def test_remove_forgets_the_password_kept_for_a_password_row_and_asks_the_machine_for_nothing(
+    pool, _home, agents, monkeypatch
 ):
-    """A row registered with a password carries a key Raven made: its line goes
-    from the machine's authorized_keys and the pair here is deleted, either way."""
     monkeypatch.setenv("RAVEN_HOME", str(_home / "rhome"))
-    private, _line = connection_add.generate_key("box")
-    _store({**BOX, "key": str(private)})
-    revoked: list[dict] = []
-    monkeypatch.setattr(
-        connection_add,
-        "revoke_public_key",
-        lambda row, **kw: (
-            revoked.append(row) or ((True, "") if taken else (False, "alice@203.0.113.7: Connection refused"))
-        ),
-    )
+    kept = connection_add.store_password("box", "hunter2")
+    _store(PASSWORD_BOX)
 
     out = await rpc.machines_remove({"id": "box"})
 
     _check("machines.remove", out)
-    assert out["removed"] and [r["id"] for r in revoked] == ["box"]
-    if taken:
-        assert out["detail"].endswith(
-            "; the key this computer made for it is taken back (its line is gone from authorized_keys there)"
-        )
-    else:
-        assert out["detail"].endswith(
-            "; the key this computer made for it could not be taken back (the machine: Connection refused): "
-            "the line ending raven@box stays in authorized_keys on the machine, the pair here is deleted"
-        )
-    assert not private.exists() and not private.with_name(private.name + ".pub").exists()
-    assert _rows() == []
+    assert out["removed"]
+    assert out["detail"].endswith("; the node installed on it stays there; the password kept here for it is deleted")
+    assert not kept.exists() and _rows() == []
+    assert pool.asked == [("close", "box")], "nothing is asked of the machine itself"
 
 
-async def test_remove_leaves_the_owner_s_own_key_alone(pool, _home, agents, monkeypatch):
+async def test_remove_of_a_key_row_forgets_nothing_and_says_nothing_about_a_password(pool, _home, agents):
     _store(BOX)
-    monkeypatch.setattr(connection_add, "revoke_public_key", lambda row, **kw: pytest.fail("reached the machine"))
 
     out = await rpc.machines_remove({"id": "box"})
 
-    assert out["removed"] and "key" not in out["detail"]
+    assert out["removed"] and "password" not in out["detail"]
 
 
 async def test_remove_refuses_while_agent_entries_name_the_machine_and_force_says_what_is_left_pointing_at_nothing(
@@ -702,110 +684,63 @@ async def test_remove_reads_a_malformed_agents_section_as_naming_nothing(pool, m
     assert (await rpc.machines_remove({"id": "box"}))["removed"] is True
 
 
-# --- machines.add by password: this computer's key goes on first -----------------
-
-
-@pytest.fixture
-def keyed(monkeypatch, _home):
-    """The key made for the machine and the one password login that puts it there, both stood in for."""
-    made: list[str] = []
-    installs: list[tuple[str, int, str, str, str]] = []
-    private = _home / "keys" / "box_ed25519"
-
-    def generate_key(conn_id: str):
-        made.append(conn_id)
-        return private, f"ssh-ed25519 AAAA raven@{conn_id}"
-
-    def install_public_key(host, port, user, password, public_line, *, timeout=30.0):
-        installs.append((host, port, user, password, public_line))
-        return (
-            (True, "installed a key on the machine")
-            if password == "hunter2"
-            else (
-                False,
-                "could not reach the machine: Permission denied (password).\nThe password was refused, or this "
-                "machine does not accept password logins (PasswordAuthentication is off in its sshd).",
-            )
-        )
-
-    monkeypatch.setattr(connection_add, "generate_key", generate_key)
-    monkeypatch.setattr(connection_add, "key_path", lambda conn_id: private)
-    monkeypatch.setattr(connection_add, "install_public_key", install_public_key)
-    return {"made": made, "installs": installs, "private": private}
-
+# --- machines.add by password: the password stays here, used on every connection ------
 
 BY_PASSWORD = {k: v for k, v in FORM.items() if k != "key"} | {"auth": "password", "password": "hunter2"}
 
 
 @pytest.fixture
 def supported_host(monkeypatch):
-    """A computer the password login is offered on. The handler refuses the pick on Windows before
-    anything else runs (the win32 cases at the end of this file), so a password-flow case that stands
-    the key making and the login in for has to say which host it runs as -- or on a Windows reviewer's
-    machine it tests that refusal instead of its own scenario."""
+    """A computer the password login is offered on. The handler refuses the pick on Windows first of
+    all (the case at the end of this file), so a password-flow case has to say which host it runs as."""
     monkeypatch.setattr(sys, "platform", "linux")
 
 
-async def test_add_by_password_puts_this_computer_s_key_on_then_proves_that_key_and_writes_its_path(
-    supported_host, pool, keyed, monkeypatch
+@pytest.fixture
+def rhome(_home, monkeypatch):
+    monkeypatch.setenv("RAVEN_HOME", str(_home / "rhome"))
+    return _home / "rhome"
+
+
+async def test_add_by_password_keeps_the_password_here_proves_it_through_the_probe_and_writes_a_row_with_no_key(
+    supported_host, pool, rhome, monkeypatch
 ):
-    probed: list[tuple[dict, bool, bool]] = []
+    probed: list[tuple[dict, str]] = []
 
     def probe(row, **kw):
-        probed.append((dict(row), bool(kw.get("isolate_key")), bool(kw.get("keep_config"))))
-        return True, "reached", {"cores": 8}
+        # The probe runs as every later connection will: with the password already kept here.
+        probed.append((dict(row), connection_add.password_path("box").read_text(encoding="utf-8")))
+        return True, "reached alice@203.0.113.7:2222", {"cores": 8}
 
     monkeypatch.setattr(connection_add, "probe", probe)
 
     out = await rpc.machines_add(BY_PASSWORD)
 
     _check("machines.add", out)
-    assert out["ok"] and out["reason"] == ""
-    assert keyed["made"] == ["box"]
-    assert keyed["installs"] == [("203.0.113.7", 2222, "alice", "hunter2", "ssh-ed25519 AAAA raven@box")]
-    ((row, isolated, config_kept),) = probed
-    assert row["key"] == str(keyed["private"]) and isolated, "the probe proves the key just made, and only it"
-    assert config_kept, "through the owner's ssh config, the way the install reached the machine"
+    assert out["ok"] and out["reason"] == "" and out["row"]["auth"] == "password"
+    ((row, kept),) = probed
+    assert row["auth"] == "password" and "key" not in row and "password" not in row and kept == "hunter2\n"
     (stored,) = _rows()
-    assert stored["key"] == str(keyed["private"]) and "password" not in stored and "auth" not in stored
+    assert stored["auth"] == "password" and "key" not in stored and "password" not in stored
+    assert connection_add.password_path("box").read_text(encoding="utf-8") == "hunter2\n"
     assert "hunter2" not in json.dumps(out) and "hunter2" not in json.dumps(_rows())
+    assert not (rhome.parent / ".ssh" / "config").exists(), "no alias: an ssh config has nowhere to carry a password"
 
 
-async def test_a_password_registration_the_probe_refuses_says_the_installed_key_stays(
-    supported_host, pool, keyed, monkeypatch
+async def test_a_password_the_machine_refuses_is_forgotten_here_and_named_as_a_login_refusal(
+    supported_host, pool, rhome, monkeypatch
 ):
-    """The install went through, so the machine trusts a key no row records: said, with the line to look for."""
     monkeypatch.setattr(
-        connection_add, "probe", lambda row, **kw: (False, "could not reach 203.0.113.7:2222: timed out", {})
+        connection_add,
+        "probe",
+        lambda row, **kw: (
+            False,
+            # ssh's own wording names the login twice; the answer names the machine once.
+            "could not reach alice@203.0.113.7:2222: alice@203.0.113.7: Permission denied (password).\nThe password "
+            "was refused, or this machine does not accept password logins (PasswordAuthentication is off in its sshd).",
+            {},
+        ),
     )
-    _store()
-
-    out = await rpc.machines_add(BY_PASSWORD)
-
-    _check("machines.add", out)
-    assert not out["ok"] and out["reason"] == "timeout"
-    assert out["detail"].endswith(
-        "; the key this computer put on the machine stays in its authorized_keys (the line ending raven@box) "
-        "and is used again when you register it again"
-    )
-    assert "203.0.113.7" not in out["detail"] and _rows() == []
-
-
-async def test_add_by_password_without_one_is_refused_before_anything_is_made_or_reached(
-    supported_host, pool, keyed, monkeypatch
-):
-    monkeypatch.setattr(connection_add, "probe", lambda row, **kw: pytest.fail("reached the machine"))
-
-    out = await rpc.machines_add({**BY_PASSWORD, "password": ""})
-
-    assert (out["ok"], out["reason"]) == (False, "invalid") and "needs the password" in out["detail"]
-    assert keyed["made"] == [] and keyed["installs"] == [] and not connections.store_path().exists()
-
-
-async def test_a_refused_password_is_a_login_refusal_that_names_neither_the_address_nor_the_password(
-    supported_host, pool, keyed, monkeypatch
-):
-    monkeypatch.setattr(connection_add, "probe", lambda row, **kw: pytest.fail("reached the machine"))
 
     out = await rpc.machines_add({**BY_PASSWORD, "password": "wrong-one"})
 
@@ -814,7 +749,19 @@ async def test_a_refused_password_is_a_login_refusal_that_names_neither_the_addr
     assert out["detail"].startswith("could not reach the machine: Permission denied")
     assert "does not accept password logins" in out["detail"]
     assert "wrong-one" not in out["detail"] and "203.0.113.7" not in out["detail"] and "alice@" not in out["detail"]
+    assert not connection_add.password_path("box").exists(), "a password the machine refused is not kept"
     assert not connections.store_path().exists()
+
+
+async def test_add_by_password_without_one_is_refused_before_anything_is_kept_or_reached(
+    supported_host, pool, rhome, monkeypatch
+):
+    monkeypatch.setattr(connection_add, "probe", lambda row, **kw: pytest.fail("reached the machine"))
+
+    out = await rpc.machines_add({**BY_PASSWORD, "password": ""})
+
+    assert (out["ok"], out["reason"]) == (False, "invalid") and "needs the password" in out["detail"]
+    assert not (rhome / "keys").exists() and not connections.store_path().exists()
 
 
 async def test_add_by_key_still_needs_the_key_path(pool, monkeypatch):
@@ -825,48 +772,10 @@ async def test_add_by_key_still_needs_the_key_path(pool, monkeypatch):
     assert (out["ok"], out["reason"]) == (False, "invalid") and "'key' is missing" in out["detail"]
 
 
-async def test_add_by_password_without_ssh_keygen_is_the_no_ssh_refusal_and_reaches_nothing(
-    supported_host, pool, monkeypatch
-):
-    def no_keygen(conn_id: str):
-        raise connection_add.TransportError(
-            "ssh-keygen not found on this computer, so no key can be made for the machine"
-        )
-
-    monkeypatch.setattr(connection_add, "key_path", lambda conn_id: connections.store_path().parent / "k")
-    monkeypatch.setattr(connection_add, "generate_key", no_keygen)
-    monkeypatch.setattr(connection_add, "install_public_key", lambda *a, **k: pytest.fail("logged in"))
-    monkeypatch.setattr(connection_add, "probe", lambda row, **kw: pytest.fail("reached the machine"))
-
-    out = await rpc.machines_add(BY_PASSWORD)
-
-    assert (out["ok"], out["reason"]) == (False, "nossh")
-    assert (
-        out["detail"]
-        == "could not reach the machine: ssh-keygen not found on this computer, so no key can be made for the machine"
-    )
-    assert not connections.store_path().exists()
-
-
-@pytest.mark.parametrize("keygen", ["installed", "missing"])
-async def test_add_by_password_on_windows_is_refused_before_a_key_is_made_or_looked_for(
-    pool, _home, tmp_path, monkeypatch, keygen
-):
-    """The Windows review of #1005: the refusal used to come only from the install step, so
-    ssh-keygen had already run (a pair left under the home) or had already been found missing
-    (a ``nossh`` that asks for OpenSSH, which cannot make the mode work there). Through the
-    real handler and the real key maker, with only the platform and the executable lookup
-    stood in for."""
-    ran = tmp_path / "keygen-ran"
-    if keygen == "installed":
-        fake = tmp_path / "ssh-keygen"
-        fake.write_text(f"#!/bin/sh\ntouch {ran}\n", encoding="utf-8")
-        fake.chmod(0o700)
-        monkeypatch.setattr(connection_add.shutil, "which", lambda name: str(fake))
-    else:
-        monkeypatch.setattr(connection_add.shutil, "which", lambda name: None)
+async def test_add_by_password_on_windows_is_refused_before_anything_is_kept(pool, _home, monkeypatch):
+    """The Windows review of #1005, kept: the refusal comes first of all, and nothing is left behind."""
+    monkeypatch.setenv("RAVEN_HOME", str(_home / "rhome"))
     monkeypatch.setattr(sys, "platform", "win32")
-    monkeypatch.setattr(connection_add, "install_public_key", lambda *a, **k: pytest.fail("logged in"))
     monkeypatch.setattr(connection_add, "probe", lambda row, **kw: pytest.fail("reached the machine"))
 
     out = await rpc.machines_add(BY_PASSWORD)
@@ -874,6 +783,13 @@ async def test_add_by_password_on_windows_is_refused_before_a_key_is_made_or_loo
     _check("machines.add", out)
     assert (out["ok"], out["reason"]) == (False, "platform")
     assert out["detail"] == "registering with a password is not supported on Windows; use a key instead"
-    assert not ran.exists(), "ssh-keygen ran"
-    assert not (_home / "keys").exists() and not list(tmp_path.rglob("*_ed25519*")), "a key was made"
-    assert not connections.store_path().exists()
+    assert not (_home / "rhome" / "keys").exists() and not connections.store_path().exists()
+
+
+async def test_list_rows_say_how_they_log_in(pool, _home):
+    _store(BOX, PASSWORD_BOX | {"id": "pw"}, HERE)
+
+    rows = {r["id"]: r for r in (await rpc.machines_list({}))["rows"]}
+
+    assert rows["box"]["auth"] == "key" and rows["pw"]["auth"] == "password" and "auth" not in rows["here"]
+    _check("machines.list", {"rows": list(rows.values())})

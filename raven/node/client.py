@@ -874,8 +874,8 @@ class NodePool:
                     raise NodeError(said or f"the link to machine {node.target.label} was lost")
         return node
 
-    def _prepare(self, machine_id: str) -> tuple[remote.Machine, Path, list[str], str]:
-        """The machine, its ssh log (emptied), the ssh argv and the install name. Blocking: reads the registry."""
+    def _prepare(self, machine_id: str) -> tuple[remote.Machine, Path, list[str], dict[str, str], str]:
+        """The machine, its ssh log (emptied), the ssh argv, its environment and the install name. Blocking."""
         target = remote.machine(machine_id)
         install_name = bundle.install_name()
         log = remote.ssh_log_path(f"raven-node@{target.id}")
@@ -903,11 +903,13 @@ class NodePool:
             argv = remote.ssh_command(target, command, ssh_log=log)
         except ValueError as exc:
             raise remote.RemoteMachineError(f"machine {target.label}: {exc}") from None
-        return target, log, argv, install_name
+        # A password machine's ssh asks askpass; the environment names the
+        # helper and the file, never the password (``remote.ssh_environment``).
+        return target, log, argv, remote.ssh_environment(target), install_name
 
     async def _launch(self, machine_id: str) -> _Node:
         try:
-            target, log, argv, install_name = await asyncio.to_thread(self._prepare, machine_id)
+            target, log, argv, env, install_name = await asyncio.to_thread(self._prepare, machine_id)
         except remote.RemoteMachineError as exc:
             raise NodeError(str(exc)) from None
         channels: dict[int, ChannelEndpoint] = {}
@@ -919,7 +921,7 @@ class NodePool:
                 command=argv,
                 # Fixed rather than any caller's workspace: the ssh needs none.
                 cwd=str(Path.home()),
-                env={},
+                env=env,
                 on_notification=partial(self._notified, channels, machine_id),
             )
         except AcpConnectionError as exc:

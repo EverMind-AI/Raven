@@ -446,6 +446,7 @@ export function machineRowOf(r: MachineRowWire): MachineRow {
     agents: r.agents || 0,
     node_version: r.node_version || '',
     node_current: !!r.node_current,
+    auth: r.auth === 'password' ? 'password' : r.auth === 'key' ? 'key' : '',
     install: { running: !!r.install?.running, ok: r.install?.ok ?? null, detail: r.install?.detail || '' },
     paths: Array.isArray(r.paths) ? r.paths.map(String) : [],
     problems: Array.isArray(r.problems) ? r.problems.map(String) : [],

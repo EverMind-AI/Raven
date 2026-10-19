@@ -2734,6 +2734,10 @@ export interface MachineRow {
    */
   node_current: boolean;
   /**
+   * How this computer logs in to an ssh row: key (the path the row carries) or password (kept on this computer for Raven's own logins). Absent for a local row.
+   */
+  auth?: 'key' | 'password';
+  /**
    * The last node install asked for from this page: in flight, or how it ended.
    */
   install: {

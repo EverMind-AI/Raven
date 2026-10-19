@@ -1548,14 +1548,17 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.machine.f_auth': 'Login',
     'gui.machine.auth_key': 'Key',
     'gui.machine.auth_password': 'Password',
+    'gui.machine.auth_stored': 'Password (kept on this computer)',
     'gui.machine.f_key': 'Private key path',
     'gui.machine.key_note': 'Only the path is stored. The key never leaves this computer.',
     'gui.machine.f_password': 'Password',
     'gui.machine.password_note':
-      'The password is used once: at registration Raven puts a key of its own on the machine and logs in with that key from then on. The password is not stored and reaches no log.',
+      "The password is kept on this computer, readable by your account alone, and handed to ssh on every connection: never on a command line, never in a log. When the machine's password changes, register it here again.",
+    'gui.machine.auth_note':
+      "No ssh alias is written for it; an agent reads and writes its files through Raven's own file tools. When its password changes, register it again.",
     'gui.machine.f_paths': 'Work directories on the machine, one per line (optional)',
     'gui.machine.add_hint':
-      "One ssh login, with a key or with a password that puts a key there. The machine's host key is recorded at the first contact and checked after.",
+      "An ssh login, with a key or with a password. The machine's host key is recorded at the first contact and checked after.",
     'gui.machine.add_do': 'Reach it once and register',
     'gui.machine.adding': 'Reaching the machine',
     'gui.machine.add_bad': 'Not registered',
@@ -1574,7 +1577,9 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
       'Fix what the line says, then press Install node again. Nothing was left on the machine.',
     'gui.machine.remove_do': 'Remove machine',
     'gui.machine.remove_body':
-      '{name} ({id}) is taken out of the registry and its ssh alias goes with it. Agent entries that run there have to be disconnected first. The node installed on the machine stays there; a key Raven made for it is taken back.',
+      '{name} ({id}) is taken out of the registry and its ssh alias goes with it. Agent entries that run there have to be disconnected first. The node installed on the machine stays there.',
+    'gui.machine.remove_body_password':
+      '{name} ({id}) is taken out of the registry and the password kept here for it is deleted. Agent entries that run there have to be disconnected first. The node installed on the machine stays there.',
     'gui.machine.removing': 'Removing',
     'gui.machine.removed': '{name} was removed',
     'gui.machine.load_bad': 'The machine list could not be read',
@@ -4885,13 +4890,15 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.machine.f_auth': '登录方式',
     'gui.machine.auth_key': '密钥',
     'gui.machine.auth_password': '密码',
+    'gui.machine.auth_stored': '密码（保存在本机）',
     'gui.machine.f_key': '私钥路径',
     'gui.machine.key_note': '只记录路径，私钥不离开这台电脑。',
     'gui.machine.f_password': '密码',
     'gui.machine.password_note':
-      '密码只用这一次：登记时 Raven 把自己的一把密钥装到机器上，之后一直用密钥登录。密码不保存，也不进日志。',
+      '密码保存在这台电脑上，只有你的账号能读；每次连接时读出来交给 ssh，不进命令行、不进日志。机器改了密码，就在这里重新登记一次。',
+    'gui.machine.auth_note': '没有写 ssh 别名；Agent 读写它上面的文件走 Raven 的文件工具。机器改了密码，重新登记一次。',
     'gui.machine.f_paths': '机器上的工作目录，每行一个（可不填）',
-    'gui.machine.add_hint': '用密钥或密码 ssh 登录一次。第一次连接时记下它的主机密钥，之后每次核对。',
+    'gui.machine.add_hint': '用密钥或密码 ssh 登录。第一次连接时记下它的主机密钥，之后每次核对。',
     'gui.machine.add_do': '连一次并登记',
     'gui.machine.adding': '正在连接机器',
     'gui.machine.add_bad': '没有登记',
@@ -4909,7 +4916,9 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.machine.install_bad_hint': '按这一行的提示处理后，再点一次「安装节点」。机器上没有留下东西。',
     'gui.machine.remove_do': '移除机器',
     'gui.machine.remove_body':
-      '{name}（{id}）会从登记表里去掉，ssh 别名一起去掉；在它上面跑的 Agent 条目要先断开。装在机器上的节点会留在那里；Raven 为它生成的密钥会收回。',
+      '{name}（{id}）会从登记表里去掉，ssh 别名一起去掉；在它上面跑的 Agent 条目要先断开。装在机器上的节点会留在那里。',
+    'gui.machine.remove_body_password':
+      '{name}（{id}）会从登记表里去掉，为它保存的密码一起删掉；在它上面跑的 Agent 条目要先断开。装在机器上的节点会留在那里。',
     'gui.machine.removing': '正在移除',
     'gui.machine.removed': '已移除 {name}',
     'gui.machine.load_bad': '机器列表读不出来',

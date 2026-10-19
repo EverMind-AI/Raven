@@ -71,6 +71,7 @@ function mrow(over: Partial<MachineRow> = {}): MachineRow {
     agents: 0,
     node_version: '',
     node_current: false,
+    auth: 'key',
     install: { running: false, ok: null, detail: '' },
     paths: [],
     problems: [],
@@ -2300,6 +2301,12 @@ describe('the machines module', () => {
       await new Promise((resolve) => setTimeout(resolve, 15))
     })
   }
+  /* A read-only field of the sheet, by its label; null when the sheet has none. */
+  const shown = (k: string): string | null =>
+    [...sheet()!.querySelectorAll('.extAgents-fld')]
+      .find((f) => f.querySelector('.extAgents-k')?.textContent === k)
+      ?.querySelector('.extAgents-ro')?.textContent ?? null
+  const sheetAbouts = (): string[] => [...sheet()!.querySelectorAll('.extAgents-about')].map((a) => a.textContent || '')
 
   it('lists each registered machine with its node and link, then the register card, and counts them', async () => {
     install([row()], {
@@ -2450,7 +2457,8 @@ describe('the machines module', () => {
         list: async () => rows.map((r) => ({ ...r })),
         add: async (form) => {
           mcalls.push(['add', [form]])
-          rows.push(mrow({ id: form.id, name: form.name }))
+          /* The server's row says how it logs in; the password is not in it. */
+          rows.push(mrow({ id: form.id, name: form.name, auth: form.auth }))
           return { ok: true, detail: 'reached', reason: '' }
         },
       },
@@ -2479,6 +2487,25 @@ describe('the machines module', () => {
     expect(sheetName()).toBe('GPU box 2')
     const [sent] = mcalls.filter((c) => c[0] === 'add').map((c) => c[1][0] as RegisterForm)
     expect(sent).toEqual({ id: 'gpu2', name: 'GPU box 2', host: '203.0.113.8', port: 0, user: 'alice', auth: 'password', key: '', password: ' s3cret ', paths: [] })
+    /* The new sheet says the login is the password kept here, and what that
+       means for the owner; the password itself is nowhere on the page. */
+    expect(shown('gui.machine.f_auth')).toBe('gui.machine.auth_stored')
+    expect(sheetAbouts()).toContain('gui.machine.auth_note')
+    expect(sheet()!.textContent).not.toContain('s3cret')
+  })
+
+  it('says in the sheet how a machine is logged in to, with the alias note only for a password machine', async () => {
+    install([row()], { machines: [mrow(), mrow({ id: 'pw', name: 'Pw box', auth: 'password' }), mrow({ id: 'here', name: 'Here', transport: 'local', auth: '' })] })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    expect(shown('gui.machine.f_auth')).toBe('gui.machine.auth_key')
+    expect(sheetAbouts()).not.toContain('gui.machine.auth_note')
+    await openSheet('Pw box')
+    expect(shown('gui.machine.f_auth')).toBe('gui.machine.auth_stored')
+    expect(sheetAbouts()).toContain('gui.machine.auth_note')
+    await openSheet('Here')
+    expect(shown('gui.machine.f_auth')).toBeNull()
   })
 
   it('removes a machine from its sheet after asking, keeps a refusal on the row, and closes the sheet once it is gone', async () => {

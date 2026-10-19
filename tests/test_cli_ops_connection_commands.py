@@ -15,6 +15,7 @@ has to still have the last word in it.
 from __future__ import annotations
 
 import json
+import sys
 
 import pytest
 from typer.testing import CliRunner
@@ -611,31 +612,20 @@ def test_remove_asks_then_takes_the_row_and_its_alias_out_and_says_the_node_stay
     assert "Host box" not in (tmp_path / ".ssh" / "config").read_text(encoding="utf-8")
 
 
-@pytest.mark.parametrize("taken", [True, False], ids=["taken back", "machine away"])
-def test_remove_takes_back_the_key_this_computer_made_and_says_when_it_could_not(store, monkeypatch, tmp_path, taken):
+def test_remove_forgets_the_password_kept_for_a_password_row(store, monkeypatch, tmp_path):
     point_home(monkeypatch, tmp_path)
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
     _named(monkeypatch)
-    from raven.cli import ops_connection_commands as cli
-    from raven.ops.connection_add import generate_key
+    from raven.ops.connection_add import password_path, store_password
 
-    private, _line = generate_key("box")
-    _box_row(store, key=str(private))
-    monkeypatch.setattr(
-        cli,
-        "_revoke_public_key",
-        lambda row, **kw: (True, "") if taken else (False, "alice@203.0.113.7: Connection refused"),
-    )
+    store_password("box", "hunter2")
+    _box_row(store, auth="password")
 
     out = remove("box", answer="y\n")
 
     assert out.exit_code == 0, out.output
-    if taken:
-        assert "the key this computer made for it is taken back from its authorized_keys" in said(out)
-    else:
-        assert "could not be taken back (alice@203.0.113.7: Connection refused)" in said(out)
-        assert "the line ending raven@box stays in authorized_keys on the machine" in said(out)
-    assert not private.exists() and not private.with_name(private.name + ".pub").exists()
+    assert "the password kept here for it is deleted" in said(out) and "hunter2" not in out.output
+    assert not password_path("box").exists()
     assert json.loads(store.read_text(encoding="utf-8"))["connections"] == []
 
 
@@ -732,3 +722,98 @@ def test_add_reports_an_incomplete_managed_block_as_a_warning_and_still_writes_t
     assert out.exit_code == 0, out.output
     assert "wrote gpu" in said(out) and "ssh alias not written (the managed 'Host gpu' block" in said(out)
     assert json.loads(store.read_text(encoding="utf-8"))["connections"][0]["id"] == "gpu"
+
+
+# --- add with a password: kept here, used on every connection -----------------------
+
+PW_ADD = ["add", "--id", "box", "--name", "Box", "--host", "14.103.100.27", "--port", "58717", "--user", "root"]
+
+
+def test_add_with_a_password_from_stdin_keeps_it_here_and_writes_a_row_with_no_key_and_no_alias(
+    store, reached, monkeypatch, tmp_path
+):
+    point_home(monkeypatch, tmp_path)
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    monkeypatch.setattr(sys, "platform", "linux")
+    from raven.ops.connection_add import password_path
+
+    out = CliRunner().invoke(
+        connection_app, [*PW_ADD, "--auth", "password", "--password-stdin", *FULL], input="hunter2\n"
+    )
+
+    assert out.exit_code == 0, out.output
+    row = json.loads(store.read_text(encoding="utf-8"))["connections"][0]
+    assert row["auth"] == "password" and "key" not in row and "password" not in row
+    assert password_path("box").read_text(encoding="utf-8") == "hunter2\n"
+    assert "password kept for box" in said(out)
+    assert "hunter2" not in out.output and "ssh alias" not in out.output
+    assert not (tmp_path / ".ssh" / "config").exists()
+
+
+def test_add_by_password_needs_the_password_and_a_refused_one_is_not_kept(store, unreachable, monkeypatch, tmp_path):
+    point_home(monkeypatch, tmp_path)
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    monkeypatch.setattr(sys, "platform", "linux")
+    from raven.ops.connection_add import password_path
+
+    out = CliRunner().invoke(connection_app, [*PW_ADD, "--auth", "password", *FULL])
+    assert out.exit_code == 1 and "needs the password" in said(out) and not store.exists()
+
+    out = CliRunner().invoke(
+        connection_app, [*PW_ADD, "--auth", "password", "--password-stdin", *FULL], input="hunter2\n"
+    )
+    assert out.exit_code == 1 and "could not reach" in said(out)
+    assert not password_path("box").exists() and not store.exists()
+
+
+def test_add_by_password_is_refused_on_windows_before_anything_is_kept(store, monkeypatch, tmp_path):
+    point_home(monkeypatch, tmp_path)
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr("raven.cli.ops_connection_commands.probe", lambda row, **kw: pytest.fail("reached the machine"))
+
+    out = CliRunner().invoke(
+        connection_app, [*PW_ADD, "--auth", "password", "--password-stdin", *FULL], input="hunter2\n"
+    )
+
+    assert out.exit_code == 1 and "not supported on Windows" in said(out)
+    assert not (tmp_path / "rhome" / "keys").exists() and not store.exists()
+
+
+def test_add_asks_for_the_password_when_the_login_pick_says_so(store, reached, monkeypatch, tmp_path):
+    point_home(monkeypatch, tmp_path)
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    monkeypatch.setattr(sys, "platform", "linux")
+    from raven.ops.connection_add import password_path
+
+    answers = (
+        "\n".join(
+            ["Box", "ssh", "box", "14.103.100.27", "58717", "root", "password", "hunter2", "OpenFOAM", "", "", ""]
+        )
+        + "\n"
+    )
+    out = CliRunner().invoke(connection_app, ["add"], input=answers)
+
+    assert out.exit_code == 0, out.output
+    row = json.loads(store.read_text(encoding="utf-8"))["connections"][0]
+    assert row["auth"] == "password" and "key" not in row
+    assert password_path("box").read_text(encoding="utf-8") == "hunter2\n"
+    assert "hunter2" not in out.output
+
+
+def test_list_says_which_machines_log_in_with_a_password(store):
+    store.write_text(
+        json.dumps(
+            {
+                "connections": [
+                    {"id": "pw", "display_name": "PW", "host": "h", "port": 22, "user": "u", "auth": "password"}
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    out = run("list")
+
+    assert out.exit_code == 0, out.output
+    assert "(password)" in said(out)

@@ -57,6 +57,22 @@ if mode == "unreachable":
     else:
         sys.stderr.write(said + "\\n")
     sys.exit(255)
+expect = os.path.join(here, "password")
+if os.path.exists(expect):
+    # The machine takes a password: the way OpenSSH asks for one under SSH_ASKPASS_REQUIRE=force.
+    import subprocess as sp
+    log = args[args.index("-E") + 1] if "-E" in args else None
+    def refuse(said):
+        if log:
+            open(log, "a").write(said + "\\n")
+        else:
+            sys.stderr.write(said + "\\n")
+        sys.exit(255)
+    if "-i" in args or os.environ.get("SSH_ASKPASS_REQUIRE") != "force" or not os.environ.get("SSH_ASKPASS"):
+        refuse("worker@{host}: Permission denied (password).")
+    given = sp.run([os.environ["SSH_ASKPASS"], "password:"], capture_output=True, text=True).stdout.rstrip("\\n")
+    if given != open(expect).read().strip():
+        refuse("worker@{host}: Permission denied (password).")
 command = args[args.index("--") + 1] if "--" in args else args[-1]
 os.chdir(home)
 # A daemon these tests start leaves soon after they do; the relay reads the idle time from its environment.
@@ -140,6 +156,10 @@ class Machine:
 
     def mode(self, mode: str) -> None:
         (self.bin / "mode").write_text(mode, encoding="utf-8")
+
+    def password(self, expected: str) -> None:
+        """The machine takes a password from now on, and only this one."""
+        (self.bin / "password").write_text(expected, encoding="utf-8")
 
     def node(self, where: Path | None = None, *, stub: str | None = None) -> Path:
         """Put a node of this Raven's code under ``where`` (the default node dir)."""
@@ -1654,3 +1674,58 @@ def test_lending_requires_a_nonempty_task():
     with pytest.raises(ValueError, match="agent task"):
         pool.lend("box", "d1", {"pg": "/unused"}, task="")
     assert pool._lent == {}
+
+
+# ---- a machine registered with a password: the link logs in through askpass ------------
+
+
+def _password_row() -> dict[str, Any]:
+    return {k: v for k, v in row().items() if k != "key"} | {"auth": "password"}
+
+
+async def test_the_link_to_a_password_machine_logs_in_through_askpass_and_offers_no_key(box, pool, monkeypatch):
+    from raven.ops.connection_add import store_password
+
+    monkeypatch.setenv("RAVEN_HOME", str(box.root / "rhome"))
+    box.rows([_password_row()])
+    box.password("hunter2")
+    store_password("box", "hunter2")
+    box.node()
+
+    hello = await pool.hello("box")
+
+    assert hello["digest"] == bundle.digest()
+    (argv,) = box.launches()
+    assert "-i" not in argv and "PubkeyAuthentication=no" in argv and "hunter2" not in " ".join(argv)
+
+
+async def test_a_password_the_machine_refuses_ends_the_link_with_the_login_named_and_nothing_else(
+    box, pool, monkeypatch
+):
+    from raven.ops.connection_add import store_password
+
+    monkeypatch.setenv("RAVEN_HOME", str(box.root / "rhome"))
+    box.rows([_password_row()])
+    box.password("hunter2")
+    store_password("box", "wrong-one")
+    box.node()
+
+    with pytest.raises(NodeError) as caught:
+        await pool.hello("box")
+
+    said = str(caught.value)
+    assert "refused the login" in said and "password" in said
+    assert HOST not in said and "wrong-one" not in said
+
+
+async def test_a_password_machine_whose_password_is_not_kept_here_is_refused_before_ssh_is_started(
+    box, pool, monkeypatch
+):
+    monkeypatch.setenv("RAVEN_HOME", str(box.root / "rhome"))
+    box.rows([_password_row()])
+    box.node()
+
+    with pytest.raises(NodeError, match="no password is kept here for machine 'box'"):
+        await pool.hello("box")
+
+    assert box.launches() == [], "ssh never ran"

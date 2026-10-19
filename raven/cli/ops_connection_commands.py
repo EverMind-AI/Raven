@@ -38,12 +38,12 @@ from rich.table import Table
 # ``add`` reads them as its own globals -- which is also what a test that
 # stands in a reachable machine patches.
 from raven.ops.connection_add import NODE_FIELD, probe
-from raven.ops.connection_add import forget_key as _forget_key
-from raven.ops.connection_add import own_key as _own_key
+from raven.ops.connection_add import forget_password as _forget_password
 from raven.ops.connection_add import parse_probe as _parse_probe  # noqa: F401 -- re-export, the tests read it here
+from raven.ops.connection_add import password_auth as _password_auth
 from raven.ops.connection_add import remove as _remove
 from raven.ops.connection_add import remove_ssh_alias as _remove_ssh_alias
-from raven.ops.connection_add import revoke_public_key as _revoke_public_key
+from raven.ops.connection_add import store_password as _store_password
 from raven.ops.connection_add import write as _write
 from raven.ops.connection_add import write_ssh_alias as _write_ssh_alias
 
@@ -74,6 +74,15 @@ def add(  # noqa: PLR0913 -- one option per field of the row; a dict would hide 
     port: int = typer.Option(0, "--port"),
     user: str = typer.Option("", "--user"),
     key: str = typer.Option("", "--key", help="Path to the private key; the path is stored, not the key."),
+    auth: str = typer.Option(
+        "",
+        "--auth",
+        help="key (the default) or password: how Raven logs in. A password is kept on this computer, readable by "
+        "you alone, and used on every connection.",
+    ),
+    password_stdin: bool = typer.Option(
+        False, "--password-stdin", help="With --auth password: read the password from the first line of stdin."
+    ),
     software: str = typer.Option("", "--software", help="What is installed, with paths."),
     budget_unit: str = typer.Option("", "--budget-unit", help="minute | core-minute | gpu-minute"),
     concurrency: int = typer.Option(0, "--concurrency", help="Jobs it will run at once."),
@@ -92,9 +101,15 @@ def add(  # noqa: PLR0913 -- one option per field of the row; a dict would hide 
     conversation and passes them through. Either way the machine is contacted
     before anything is written, and what it can say about itself is read off it.
     """
+    import sys
+
+    import click
+
     from raven.ops.connections import LOCAL, SSH, row_problems, store_path
 
     kind = (transport or SSH).strip().lower()
+    login = (auth or "key").strip().lower()
+    password = ""
     if not non_interactive:
         console.print(f"[dim]writing to {store_path()}[/dim]")
         name = name or _ask("What do you call this machine")
@@ -104,19 +119,50 @@ def add(  # noqa: PLR0913 -- one option per field of the row; a dict would hide 
             host = host or _ask("Address")
             port = port or int(_ask("Port", "22"))
             user = user or _ask("Username", "root")
-            key = key or _ask("Private key path", "~/.ssh/id_rsa")
+            login = (auth or _ask("Log in with a key or a password? (key/password)", "key")).strip().lower()
+            if login == "password" and sys.platform != "win32":
+                password = typer.prompt("Password (kept on this computer, readable by you alone)", hide_input=True)
+            elif login == "key":
+                key = key or _ask("Private key path", "~/.ssh/id_rsa")
+    elif login == "password" and password_stdin:
+        # Never an option: a command line is readable by every account here.
+        password = click.get_text_stream("stdin").readline().rstrip("\r\n")
     conn_id = conn_id or _slug(name)
     row: dict[str, Any] = {"id": conn_id, "display_name": name or conn_id, "transport": kind}
     if kind != LOCAL:
-        row.update({"host": host, "port": port, "user": user, "key": key})
+        if login not in ("key", "password"):
+            console.print(f"[red]--auth must be key or password, not {login!r}. Nothing was written.[/red]")
+            raise typer.Exit(1)
+        if login == "password":
+            if sys.platform == "win32":
+                console.print(
+                    "[red]registering with a password is not supported on Windows; use a key instead. "
+                    "Nothing was written.[/red]"
+                )
+                raise typer.Exit(1)
+            if not password:
+                console.print(
+                    "[red]registering with a password needs the password: pass --password-stdin, or run without "
+                    "--non-interactive to be asked. Nothing was written.[/red]"
+                )
+                raise typer.Exit(1)
+            row.update({"host": host, "port": port, "user": user, "auth": "password"})
+        else:
+            row.update({"host": host, "port": port, "user": user, "key": key})
 
+    if password:
+        # Kept before the probe, which reaches the machine the way every later connection will.
+        _store_password(conn_id, password)
     if skip_probe:
         console.print("[yellow]--skip-probe: this machine was not contacted, so nothing here is confirmed.[/yellow]")
     else:
         reached, message, found = probe(row)
         if not reached:
+            if password:
+                _forget_password(conn_id)
+                message = message.replace(password, "the password")
             console.print(f"[red]{message}[/red]")
-            console.print("Nothing was written. Fix the address, port, user or key and run this again.")
+            console.print("Nothing was written. Fix the address, port, user, key or password and run this again.")
             raise typer.Exit(1)
         console.print(f"[green]{message}[/green]")
         if found:
@@ -155,6 +201,12 @@ def add(  # noqa: PLR0913 -- one option per field of the row; a dict would hide 
         console.print("[red]Nothing was written.[/red]")
         raise typer.Exit(1) from None
     console.print(f"[green]wrote {row['id']} to {written}[/green]")
+    if password:
+        console.print(f"[green]password kept for {row['id']} (readable by you alone; used on every connection)[/green]")
+        console.print(
+            "No Host alias goes into ~/.ssh/config for a password machine: scp and rsync from a terminal ask for the "
+            "password, and an agent reaches its files through Raven's own file tools."
+        )
     try:
         alias = _write_ssh_alias(row)
     except (OSError, ValueError) as exc:
@@ -196,6 +248,8 @@ def list_connections(as_json: bool = typer.Option(False, "--json")) -> None:
         table.add_column(column)
     for row in found.rows:
         reach = "local" if str(row.get("transport") or "ssh") == "local" else f"{row.get('host')}:{row.get('port')}"
+        if _password_auth(row) and reach != "local":
+            reach += " (password)"
         what = " ".join(str(row.get(k)) for k in ("kind", "device", "cores") if row.get(k))
         table.add_row(
             str(row.get("id")),
@@ -265,9 +319,8 @@ def remove_connection(
     does not refuse the removal; it is named, since connecting it again is
     refused until the machine is registered again. What the install put on the machine is not touched:
     this computer stops knowing the way there, and ``<node_dir>`` on the
-    machine is the owner's to remove by hand. A key this computer made for
-    the machine (a password registration) is taken back: its line goes from
-    the machine's ``authorized_keys``, the pair here is deleted.
+    machine is the owner's to remove by hand. The password kept here for a
+    machine registered with one is deleted with the row.
     """
     from pydantic import ValidationError
 
@@ -314,16 +367,9 @@ def remove_connection(
     console.print(
         "The Raven node installed on it, if any, stays there: remove its node directory on the machine by hand."
     )
-    if _own_key(rows[0]):
-        taken, why = _revoke_public_key(rows[0])
-        _forget_key(wanted)
-        if taken:
-            console.print("[green]the key this computer made for it is taken back from its authorized_keys[/green]")
-        else:
-            console.print(
-                f"[yellow]the key this computer made for it could not be taken back ({why}); "
-                f"the line ending raven@{wanted} stays in authorized_keys on the machine (the pair here is deleted)[/yellow]"
-            )
+    if _password_auth(rows[0]):
+        _forget_password(wanted)
+        console.print("[green]the password kept here for it is deleted[/green]")
     if named:
         console.print(
             f"[yellow]{', '.join(named)} still name{'s' if len(named) == 1 else ''} this machine and "
