@@ -250,6 +250,52 @@ async def test_the_live_preset_fixture_keeps_its_desktop_token_home(tmp_path: Pa
         await host.stop()
 
 
+def _live_module(name: str) -> Any:
+    """The live suite's module, loaded the way pytest would not: it is collected only by hand."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        name, Path(__file__).parent / "integration" / "test_acp_mirasim_real_llm.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+async def test_live_runs_side_by_side_hold_slots_of_their_own_and_sweep_only_theirs(
+    tmp_path: Path, host: FakeHost, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The live suite deletes conversations on the user's own host: only ever the ones in the slot it holds."""
+    monkeypatch.setenv("RAVEN_MIRASIM_HOST", "1")
+    live = _live_module("mirasim_live_slots")
+    monkeypatch.setattr(live, "HOST", host.address)
+    monkeypatch.setattr(live, "SLOTS", tmp_path / "slots")
+    with live._slot() as mine, live._slot() as theirs:
+        assert (mine.name, theirs.name) == ("slot-0", "slot-1")
+        own = host.add_session("claude", str(mine), [])
+        running_elsewhere = host.add_session("claude", str(theirs), [])
+        users = host.add_session("claude", str(tmp_path / "slots"), [])
+        assert await live._sweep(mine) == [own.key]
+        assert running_elsewhere.key in host.sessions and users.key in host.sessions
+    with live._slot() as again:
+        assert again.name == "slot-0"
+
+
+async def test_the_live_dispatch_runs_no_turn_when_the_menu_lacks_its_model(
+    tmp_path: Path, host: FakeHost, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Refused the model, a dispatch would run on the agent's premium default and still answer PONG."""
+    monkeypatch.setenv("RAVEN_MIRASIM_HOST", "1")
+    live = _live_module("mirasim_live_menu")
+    monkeypatch.setattr(live, "HOST", host.address)
+    monkeypatch.setitem(live._RUN, "dir", tmp_path)
+    host.catalogs["claude"]["models"] = [m for m in host.catalogs["claude"]["models"] if m["id"] != live.MODEL]
+    with pytest.raises(AssertionError, match=f"offers no {live.MODEL}"):
+        await live.test_raven_dispatches_to_a_mirasim_preset(tmp_path)
+    assert host.frames("prompt") == []
+
+
 async def test_the_agents_mirasim_has_are_asked_of_the_adapter_in_the_login_shells_environment(
     host: FakeHost, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

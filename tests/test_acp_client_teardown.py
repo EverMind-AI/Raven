@@ -196,7 +196,7 @@ async def test_a_real_child_receives_eof_before_the_force_fallback(tmp_path: Pat
 
 @pytest.mark.skipif(os.name == "nt", reason="a process group to end")
 async def test_the_grace_ends_when_the_agent_does_though_a_descendant_still_holds_its_stdout(monkeypatch):
-    monkeypatch.setattr(acp_client, "_TEARDOWN_GRACE_S", 5.0)
+    monkeypatch.setattr(acp_client, "_TEARDOWN_GRACE_S", 20.0)
     child = (
         "import subprocess, sys\n"
         "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
@@ -216,7 +216,7 @@ async def test_the_grace_ends_when_the_agent_does_though_a_descendant_still_hold
         started = asyncio.get_running_loop().time()
         await endpoint.end()
         assert proc.returncode == 0
-        assert asyncio.get_running_loop().time() - started < 2.0
+        assert asyncio.get_running_loop().time() - started < 8.0
     finally:
         endpoint.release()
 

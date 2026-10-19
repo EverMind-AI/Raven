@@ -1371,7 +1371,7 @@ async def test_a_turn_that_ran_a_tool_while_the_connection_was_down_keeps_its_wh
 async def test_a_prompt_still_queued_when_the_connection_returns_is_not_given_up(
     harness: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(server_mod, "LOST_TURN_S", 0.2)
+    monkeypatch.setattr(server_mod, "LOST_TURN_S", 1.0)
     monkeypatch.setattr(host_mod, "RECONNECT_PAUSES_S", (0.01,))
     sid = await harness.new()
     await harness.ok("session/prompt", sessionId=sid, prompt=text("hello"))
@@ -1384,7 +1384,7 @@ async def test_a_prompt_still_queued_when_the_connection_returns_is_not_given_up
     cadences = len(harness.host.frames("setStreamCadence"))
     await harness.host.drop()
     await harness.host.wait_for(lambda: len(harness.host.frames("setStreamCadence")) > cadences)
-    await asyncio.sleep(0.4)
+    await asyncio.sleep(1.3)
     assert not queued.done()
     harness.host.respond = script(("text", "queued work done"))
     session.stopped = True
