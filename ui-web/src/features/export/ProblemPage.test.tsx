@@ -219,4 +219,3 @@ describe('the receiver check', () => {
     expect(filed).toHaveLength(1)
   })
 })
-
