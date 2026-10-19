@@ -30,12 +30,19 @@ All notable changes to Raven are documented here.
 - Bug Report Packages can be sent to a Bug Report Receiver. `raven trajectory
   receiver --save-dir DIR` runs the receiver: it checks each package in a
   stream without extracting it, stores the original bytes by UTC day next to
-  a receipt sidecar, answers the same package with the same receipt, and
-  bounds abuse with per-address rate limits, daily budgets, a free-disk
-  reserve and timeouts rather than with authentication. `report-bug` and the
-  browser's *Report a bug* upload the package as soon as it lands when
+  a receipt sidecar, and answers the same package with the same receipt. It
+  takes only uploads that answer its Upload Challenge -- a shallow gate that
+  keeps out HTTP clients that are not Raven, built on a constant published
+  with the source, not a credential -- and bounds abuse with per-address rate
+  limits, daily budgets, a free-disk reserve and timeouts. `report-bug` and
+  the browser's *Report a bug* upload the package as soon as it lands when
   `RAVEN_BUGREPORT_URL` names a receiver, and `raven trajectory
-  upload-bug-report` sends a filed report again.
+  upload-bug-report` sends a filed report again. Before a report starts,
+  `report-bug`, the browser and the WebUI's *Report a problem* ask the
+  receiver's `/v1/hello` and say so when it does not answer: an interactive
+  run asks whether to go on (the WebUI offers *Continue anyway*), and
+  `report-bug --yes` goes on and keeps the package if the upload fails. A
+  proxy in front of the receiver must forward all of `/v1/`.
 
 - Memory runs on native Windows. EverOS 1.4.0 runs there without WSL, so
   the memory plugin's pin moves to `everos[multimodal]==1.4.1` and the
