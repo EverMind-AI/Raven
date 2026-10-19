@@ -14,11 +14,13 @@ own filesystem.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -185,11 +187,21 @@ ASKPASS_FILE_ENV = "RAVEN_MACHINE_PASSWORD_FILE"
 # The helper itself: OpenSSH runs it when ``SSH_ASKPASS_REQUIRE=force`` and
 # reads the password from its stdout. It prints the one line of the file the
 # environment names, so the password is in no process's environment and on no
-# command line; the file is readable by the owner alone.
+# command line; the file is readable by the owner alone. It answers a prompt
+# for a password and no other -- ssh's own (``user@host's password: ``) or a
+# keyboard-interactive server's (``Password:``, ``Passwort:``): a second
+# factor's (a verification code, a passcode) gets nothing, since Raven cannot
+# answer one and a PAM module may pass what it is given on to its vendor
+# (reviewed 2026-10-19). The question is ssh's first argument.
 _ASKPASS = (
     "#!/bin/sh\n"
-    "# Raven: hands ssh the password kept for a registered machine. Managed; rewritten when it differs.\n"
-    f'exec cat "${ASKPASS_FILE_ENV}"\n'
+    "# Raven: hands ssh the password kept for a registered machine, at a password prompt only.\n"
+    "# Managed; rewritten when it differs.\n"
+    "case $(printf '%s' \"$1\" | tr '[:upper:]' '[:lower:]') in\n"
+    f'  *passw*) exec cat "${ASKPASS_FILE_ENV}" ;;\n'
+    "esac\n"
+    "echo 'raven: the password kept for this machine answers a password prompt only, and this prompt is not one' >&2\n"
+    "exit 1\n"
 )
 
 
@@ -247,9 +259,18 @@ def askpass_helper(keys_dir: Path) -> Path:
     except OSError:
         current = None
     if current != _ASKPASS:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o700)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(_ASKPASS)
+        # Written beside it and renamed over it, never refilled in place: connections start together (the
+        # machines list reaches them all at once), and one could run a helper another had just emptied. The
+        # name is unique per call, since threads share a pid, and outside the ``*.password`` glob.
+        fd, tmp = tempfile.mkstemp(prefix=".askpass.", dir=keys_dir)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(_ASKPASS)
+            os.chmod(tmp, 0o700)
+            os.replace(tmp, path)
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(tmp)
     os.chmod(path, 0o700)
     return path
 

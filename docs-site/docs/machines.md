@@ -80,10 +80,13 @@ What gets recorded, and where:
   terminal -- still reaches the helper instead of prompting. A jump host does
   not: `ProxyJump` and `ProxyCommand` are off for password connections, since
   the jump's own ssh would be handed this machine's password; a machine
-  reached only through one has to be registered with a key. The row
+  reached only through one has to be registered with a key. The helper
+  answers ssh's prompt for the password and nothing else: a second factor's
+  prompt (a verification code, a passcode) gets no answer, so a machine whose
+  login also asks for one is registered with a key as well. The row
   carries `auth: password` and no key path. `raven ops connection doctor`
-  counts the row usable, and Oncall, which logs in with a key only, lists it as
-  unusable with that reason. The machine's sshd has to accept
+  counts the row usable, and Oncall campaigns run on it too, logging in the
+  same way. The machine's sshd has to accept
   password logins (`PasswordAuthentication yes`); one that does not refuses
   every connection, and the refusal says so. A password the machine refuses at
   registration is not kept. When the machine's password changes, remove the
