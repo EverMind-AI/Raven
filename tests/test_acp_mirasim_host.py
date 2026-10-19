@@ -28,6 +28,17 @@ posix_only = pytest.mark.skipif(os.name == "nt", reason="a unix socket")
 
 
 @pytest.fixture
+def socket_dir() -> Any:
+    """A directory short enough to bind a socket in: macOS caps a socket's path at 104 bytes, under its tmp_path."""
+    import shutil
+    import tempfile
+
+    path = Path(tempfile.mkdtemp(prefix="mrs-", dir="/tmp" if os.path.isdir("/tmp") else None))
+    yield path
+    shutil.rmtree(path, ignore_errors=True)
+
+
+@pytest.fixture
 async def fake() -> Any:
     host = FakeHost(token="local-secret")
     await host.start()
@@ -67,11 +78,11 @@ def test_an_address_that_is_not_one_is_refused(value: str) -> None:
 
 @posix_only
 def test_the_remote_hosts_socket_is_found_before_the_desktop_port(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, socket_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import socket as socket_mod
 
-    path = tmp_path / "server.sock"
+    path = socket_dir / "server.sock"
     listener = socket_mod.socket(socket_mod.AF_UNIX)
     listener.bind(str(path))
     try:
@@ -205,10 +216,10 @@ async def test_a_host_that_answers_its_health_but_holds_the_websocket_is_given_u
 
 
 @posix_only
-async def test_a_socket_its_host_left_behind_is_unavailable(tmp_path: Path) -> None:
+async def test_a_socket_its_host_left_behind_is_unavailable(socket_dir: Path) -> None:
     import socket as socket_mod
 
-    path = tmp_path / "server.sock"
+    path = socket_dir / "server.sock"
     with socket_mod.socket(socket_mod.AF_UNIX) as gone:
         gone.bind(str(path))
     conn = HostConnection(on_frame=lambda f: None, locate=lambda: HostAddress(socket=str(path)))
@@ -361,9 +372,9 @@ async def test_a_frame_cannot_be_sent_on_a_connection_that_is_gone(fake: FakeHos
 
 
 @posix_only
-async def test_the_host_is_reached_over_a_unix_socket_with_no_token(tmp_path: Path) -> None:
+async def test_the_host_is_reached_over_a_unix_socket_with_no_token(socket_dir: Path) -> None:
     host = FakeHost()
-    address = await host.start(socket=tmp_path / "server.sock")
+    address = await host.start(socket=socket_dir / "server.sock")
     conn = HostConnection(on_frame=lambda f: None, locate=lambda: address)
     try:
         answer = await conn.request(
@@ -372,7 +383,7 @@ async def test_the_host_is_reached_over_a_unix_socket_with_no_token(tmp_path: Pa
             timeout=5,
         )
         assert answer["sessions"] == []
-        assert conn.address == HostAddress(socket=str(tmp_path / "server.sock"))
+        assert conn.address == HostAddress(socket=str(socket_dir / "server.sock"))
     finally:
         await conn.close()
         await host.stop()

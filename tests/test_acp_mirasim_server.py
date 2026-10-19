@@ -328,11 +328,6 @@ async def test_the_usage_a_turn_ends_on_is_measured_against_whatever_names_the_w
 
 
 async def test_text_arrives_before_the_turn_ends(harness: Harness) -> None:
-    gate = asyncio.Event()
-
-    async def wait() -> None:
-        await gate.wait()
-
     harness.host.respond = script(("text", "first half "), ("hold",))
     sid = await harness.new()
     turn = asyncio.ensure_future(harness.ok("session/prompt", sessionId=sid, prompt=text("go")))
@@ -931,9 +926,7 @@ async def test_an_agent_that_takes_no_steer_refuses_the_method(harness: Harness)
     assert error["code"] == METHOD_NOT_FOUND
 
 
-async def test_a_steer_the_turn_ends_before_taking_is_recalled(
-    harness: Harness, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_a_steer_the_host_never_confirms_is_recalled(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(server_mod, "STEER_TIMEOUT_S", 0.5)
     harness.host.respond = script(("text", "busy"), ("hold",))
     harness.host.silent.add("steer")
@@ -945,6 +938,30 @@ async def test_a_steer_the_turn_ends_before_taking_is_recalled(
     assert recall["ref"] == harness.prompts()[1]["clientRef"]
     await harness.ok("session/cancel", sessionId=sid)
     await turn
+
+
+async def test_a_steer_the_turn_ends_before_taking_is_stopped_once_it_runs_on_its_own(harness: Harness) -> None:
+    harness.host.respond = script(("text", "busy"), ("hold",))
+    sid = await harness.new()
+    turn = asyncio.ensure_future(harness.ok("session/prompt", sessionId=sid, prompt=text("go")))
+    await harness.host.wait_for(lambda: harness.said(sid) == "busy")
+    session = harness.host.session()
+    original = harness.host._steer
+
+    async def end_first(frame: dict[str, Any]) -> None:
+        # The turn ends before the steer is taken, and the host runs the queued text as a turn of its own.
+        session.stopped = True
+        session.wake.set()
+        await harness.host.wait_for(lambda: turn.done())
+        await original(frame)
+
+    harness.host._steer = end_first  # type: ignore[method-assign]
+    assert await harness.ok("_raven/session/steer", sessionId=sid, text="late text") == {"status": "no_turn"}
+    await harness.host.wait_for(lambda: len(session.turns) == 2 and session.running is None)
+    late = session.turns[-1]
+    assert late["prompt"] == "late text"
+    assert [frame["taskId"] for frame in harness.host.frames("stop")] == [late["taskId"]]
+    assert session.snapshot.get("error") == "Interrupted by user."
 
 
 async def test_a_steer_that_started_a_turn_of_its_own_is_stopped(harness: Harness) -> None:
@@ -1306,8 +1323,6 @@ async def test_a_turn_unheard_of_long_after_the_connection_dropped_is_given_up(
     sid = await harness.new()
     turn = asyncio.ensure_future(harness.call("session/prompt", sessionId=sid, prompt=text("go")))
     await harness.host.wait_for(lambda: harness.said(sid) == "before")
-    harness.host.health = False
-    harness.host.silent.add("subscribe")
     real = harness.host.address
     harness.agent.host._locate = lambda: None
     await harness.host.drop()
