@@ -156,7 +156,7 @@ Raven-Code 的 `code-flow` 提供的不只是身份 prompt。每个任务都应�
 | `hermes` | `hermes acp --accept-hooks` | 原生认证；该标志接受之前未见的 Shell hook |
 | `openclaw` | `openclaw acp` | 自身网关、认证；启动使用较长握手等待 |
 | `mirothinker` | OpenAI-compatible HTTP | 端点、模型、key；预设关闭有状态重放 |
-| `mirasim_<agent>` | Raven 自带的 ACP 适配器，经 Mirasim host 的协议调用 | 本机正在运行 Mirasim，且该 Agent 已在 Mirasim 中安装；以 `sessionMcp: false` 阻止每会话 MCP 下发 |
+| `mirasim_<agent>` | Raven 自带的 ACP 适配器，经 Mirasim host 的协议调用 | 本机正在运行 Mirasim，该 Agent 已在 Mirasim 中安装，且登录 shell 的 PATH 上有 `mirasim` CLI（列出这些行时据此判断）；以 `sessionMcp: false` 阻止每会话 MCP 下发 |
 
 GitHub Copilot、Qwen Code、CodeBuddy、Qoder、Grok Build、Kimi Code 和 Pi 也有预设。
 适配器版本与精确命令维护在 `raven/agent/subagent/presets.py` 和
@@ -179,12 +179,23 @@ Kimi Code 和 ZCode CLI 的自有模型，因此这四个 Agent 的这些模型�
 接入的机器上的 host——自身不启动任何服务，Raven 发起的轮次在 Mirasim 应用中实时可见。
 每轮以流式返回：思考、正文、工具调用、计划和交付的文件随发生随送达 Raven，结束时报告
 所用上下文。取消会停止该轮。对 Claude Code、Codex、DSH、Pi 和 ZCode CLI，运行中追加的
-文字会并入当前轮；图片以内联方式送达 Claude Code，其他 Agent 收到的是图片的文件路径。
-会话可以列出（包括在 Mirasim 中开启的对话）、续接、连同全部历史载入、关闭和删除；删除时
-Mirasim 中的对话一并删除。Raven 持有的会话里由 Mirasim 自行发起的轮次（例如后台任务的
-报告）也会转给 Raven。若 host 监听在适配器不会查找的位置，用 `RAVEN_MIRASIM_HOST` 指明：
-`unix:<path>` 或本机回环端口。
-该轮停下来等待的事项会在等待期间转交 Raven：工具审批以权限请求发出；提问——Mirasim
+文字会并入当前轮。图片以内联方式送达 Claude Code；其他 Agent 收到以本地文件链接给出的
+图片时得到该文件的路径，内联图片则会被拒绝。会话可以列出（指定目录下该 Agent 的对话，
+包括在 Mirasim 中开启的）、续接、连同全部历史载入、关闭和删除；删除时 Mirasim 中的对话
+一并删除，Agent 自己保存的转录文件不会删除。Raven 持有的会话里由 Mirasim 自行发起的轮次
+（例如后台任务的报告）也会转给 Raven，这类轮次中的提问留给 Mirasim 应用处理。
+
+适配器按以下顺序查找 host：Mirasim 经 SSH 接入的机器上的 host socket
+（`~/.mirasim-remote/run/server.sock`，仅限 Linux 和 macOS），然后是桌面端在
+`127.0.0.1:4970` 上的 host，其 token 写在 Mirasim 状态目录（`MIRASIM_HOME`，否则为
+`~/.mirasim`）下的 `run/local-4970.token`。若 host 监听在其他位置，用
+`RAVEN_MIRASIM_HOST` 指明：socket 写作 `unix:<path>`（Windows 不支持，那里经桌面端的
+端口接入），本机回环端口写作 `<port>`、`127.0.0.1:<port>`、`localhost:<port>` 或
+`[::1]:<port>`。适配器使用的是登录 shell 的环境加上该行自己的 `env`，而不是 Raven
+进程的环境，所以请把这个变量写进 shell 配置文件，或写进要使用它的 Mirasim 行的 `env`；
+只在启动 Raven 的 shell 里 export 是传不到适配器的。
+
+Raven 发起的轮次停下来等待的事项会在等待期间转交 Raven：工具审批以权限请求发出；提问——Mirasim
 开启 `askTool` 设置时 Claude Code 的 `AskUserQuestion`，或 MCP 服务器的表单——以
 elicitation 发出，由你或 Raven 的提问自动作答回答。不支持表单的客户端会跳过该提问，
 并在回复中写明所问内容。
