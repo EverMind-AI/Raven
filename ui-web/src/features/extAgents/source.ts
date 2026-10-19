@@ -395,23 +395,24 @@ export const extAgentsSource: ExtAgentsSource = {
       on_machines: Array.isArray(p.on_machines) ? p.on_machines.map(String) : [],
     }))
   },
-  /* The same add a preset's sheet makes, from the machine's side: the name is
-     fixed to `<preset name>@<machine>` so a preset this computer also has
-     connected lands as a second row rather than a second row of one name. The
-     server starts it on the machine once first, and a refusal is its own
+  /* The same add a preset's sheet makes, from the machine's side, under the
+     server's own default name (`<preset>@<machine>`): one preset once per
+     machine is the server's rule, kept whichever way the add arrives -- a
+     preset the machine already has is refused, naming the entry it has -- and
+     a preset this computer also runs lands as a second row of its own name.
+     The server starts it on the machine once first, and a refusal is its own
      sentence -- the agent's words when it did not answer. */
   connectOnMachine: async (choice, machine, remoteCwd) => {
     try {
-      await gateway().call('subagents.add', {
+      const got = await gateway().call('subagents.add', {
         preset: choice.preset,
-        name: `${choice.name}@${machine}`,
         machine,
         remote_cwd: remoteCwd || undefined,
       })
-      return null
+      return { name: got.name || `${choice.preset}@${machine}` }
     } catch (e) {
       const err = e as { message?: string; data?: { detail?: string } } | null
-      return (err && ((err.data && err.data.detail) || err.message)) || String(e)
+      return { refused: (err && ((err.data && err.data.detail) || err.message)) || String(e) }
     }
   },
 }

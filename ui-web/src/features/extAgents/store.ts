@@ -528,19 +528,20 @@ async function loadPresets(): Promise<void> {
   }
 }
 
-/* The add from the machine's side: the preset on that machine, under
-   `<preset name>@<machine>`. `landed` when it was written; the roster is read
-   again then, with the probe, so the new card arrives with its verdict.
-   `current` says whether the form it was pressed in is still the one open --
-   the same machine, the same opening -- which is the only form a refusal is
-   written to and the only drawer the caller may put the machine's sheet back
-   into: closed or replaced meanwhile, the write's end changes nothing on
-   screen. The busy mark is cleared only when it is still this write's. */
+/* The add from the machine's side: the preset on that machine, under the
+   server's default name (`<preset>@<machine>`). `landed` when it was written,
+   with the `name` it landed under; the roster is read again then, with the
+   probe, so the new card arrives with its verdict. `current` says whether the
+   form it was pressed in is still the one open -- the same machine, the same
+   opening -- which is the only form a refusal is written to and the only
+   drawer the caller may put the machine's sheet back into: closed or replaced
+   meanwhile, the write's end changes nothing on screen. The busy mark is
+   cleared only when it is still this write's. */
 export async function connectOnMachine(
   choice: PresetChoice,
   machine: string,
   remoteCwd: string,
-): Promise<{ landed: boolean; current: boolean }> {
+): Promise<{ landed: boolean; current: boolean; name: string }> {
   const gen = get().mconnectGen
   /* Still the form it was pressed in, and that form still on screen: the
      drawer's own state says whether it is open and ours, since `mconnect`
@@ -548,19 +549,19 @@ export async function connectOnMachine(
   const current = (): boolean =>
     get().mconnect === machine && get().mconnectGen === gen && detail.get().open && detail.get().owner === 'extAgents'
   set({ mconnectBusy: gen, mconnectFailed: '' })
-  let refused: string | null
+  let got: { name: string } | { refused: string }
   try {
-    refused = await source().connectOnMachine(choice, machine, remoteCwd)
+    got = await source().connectOnMachine(choice, machine, remoteCwd)
   } catch (e) {
-    refused = failure(e)
+    got = { refused: failure(e) }
   }
   if (get().mconnectBusy === gen) set({ mconnectBusy: null })
-  if (refused === null) {
+  if ('name' in got) {
     await load(true)
-    return { landed: true, current: current() }
+    return { landed: true, current: current(), name: got.name }
   }
-  if (current()) set({ mconnectFailed: refused })
-  return { landed: false, current: current() }
+  if (current()) set({ mconnectFailed: got.refused })
+  return { landed: false, current: current(), name: `${choice.preset}@${machine}` }
 }
 
 export function closeSheet(): void {

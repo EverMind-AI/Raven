@@ -22,9 +22,12 @@ All notable changes to Raven are documented here.
   connected on the machine (*No agent connected here yet* until one is; the
   state line now reads *Link up, no agent running*), and a machine whose node
   is up has **Connect an agent on this machine** in its sheet: pick the agent
-  and its working directory there, and **Connect** adds `<preset name>@<machine
-  id>` with one proof prompt run on the machine. The list has every preset a
-  node can start, including one already connected on this computer. An agent
+  and its working directory there, and **Connect** adds `<preset>@<machine id>`
+  with one proof prompt run on the machine. The list has every preset a node
+  can start, including one already connected on this computer. `subagents.add`
+  now refuses a preset the machine already has when no name is given, naming
+  the entry there, so the page and a chat cannot add the same agent on one
+  machine twice between them; a named add is still a second entry. An agent
   that is not installed on this computer can be connected onto a machine from
   its own sheet (*Runs on*). The register form fills the private-key path with
   a key this computer has instead of a placeholder. New read-only RPCs

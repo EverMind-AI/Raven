@@ -16,7 +16,7 @@ import * as store from './store'
 import type { ExtAgentActArgs, ExtAgentRow, ExtAgentsSource } from './types'
 
 /* The two source verbs the machine sheet's form uses; nothing here opens that form. */
-const offMachine = { presets: async () => [], connectOnMachine: async () => null }
+const offMachine = { presets: async () => [], connectOnMachine: async () => ({ refused: 'no machine form in this test' }) }
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true

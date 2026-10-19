@@ -3464,6 +3464,64 @@ async def test_add_on_a_machine_keeps_the_name_the_caller_chose(
     assert entry["machine"] == "ravenx2" and not entry.get("remoteCwd"), "unset: the node's default applies"
 
 
+async def test_add_on_a_machine_refuses_a_preset_the_machine_already_has_before_any_ping(
+    config_path: Path, registry: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Seen live: the page and the chat reach one machine by two routes and spell
+    the default name differently, so the second route made a second entry of the
+    same preset there. Judged on the preset and the machine, under the default
+    name only; a named add is a second entry on purpose."""
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _pings_ok)
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", _no_record)
+    await subagents_add({"preset": "claude_code", "machine": "ravenx2", "name": "Claude Code@ravenx2"})
+    before = _stored(config_path)
+
+    async def _never(cfg: object) -> object:
+        pytest.fail("the duplicate is refused before the agent is pinged")
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _never)
+    with pytest.raises(ConfigValidationError) as caught:
+        await subagents_add({"preset": "claude_code", "machine": "ravenx2", "remote_cwd": "~/elsewhere"})
+
+    said = str(caught.value)
+    assert "'claude_code'" in said and "'ravenx2'" in said and "'Claude Code@ravenx2'" in said and "(connected)" in said
+    assert "203.0.113" not in said
+    assert caught.value.data == {"field": "machine", "machine": "ravenx2", "existing": "Claude Code@ravenx2"}
+    assert _stored(config_path) == before
+    # Named, it is a second entry on purpose: allowed, proved like any other.
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _pings_ok)
+    out = await subagents_add({"preset": "claude_code", "machine": "ravenx2", "name": "lab-2", "remote_cwd": "~/b"})
+    assert out == {"added": True, "name": "lab-2"}
+    names = [e["name"] for e in _stored(config_path)]
+    assert names.count("Claude Code@ravenx2") == 1 and "lab-2" in names
+    # Another machine is another entry, under the default name.
+    registry.write_text(
+        json.dumps({"connections": [*_MACHINES, {**_MACHINES[0], "id": "ravenx", "display_name": "RavenX"}]}),
+        encoding="utf-8",
+    )
+    out = await subagents_add({"preset": "claude_code", "machine": "ravenx"})
+    assert out == {"added": True, "name": "claude_code@ravenx"}
+
+
+async def test_add_on_a_machine_names_the_switched_off_entry_of_the_preset_there(
+    config_path: Path, registry: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _pings_ok)
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", _no_record)
+    await subagents_add({"preset": "claude_code", "machine": "ravenx2"})
+    doc = json.loads(config_path.read_text(encoding="utf-8"))
+    for entry in doc["subagents"]["agents"]:
+        if entry["name"] == "claude_code@ravenx2":
+            entry["enabled"] = False
+    config_path.write_text(json.dumps(doc), encoding="utf-8")
+
+    with pytest.raises(ConfigValidationError) as caught:
+        await subagents_add({"preset": "claude_code", "machine": "ravenx2"})
+
+    assert "'claude_code@ravenx2' (switched off); switch that entry back on" in str(caught.value)
+    assert caught.value.data == {"field": "machine", "machine": "ravenx2", "existing": "claude_code@ravenx2"}
+
+
 async def test_add_on_a_machine_needs_no_debug_switch(config_path, registry, monkeypatch):
     monkeypatch.delenv("RAVEN_DEBUG_MACHINES", raising=False)
     pinged = []

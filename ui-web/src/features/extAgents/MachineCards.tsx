@@ -346,8 +346,10 @@ export function MachineSheet({ row, ms }: { row: MachineRow; ms: MachinesState }
    a preset's own sheet makes with "Runs on", from the other side. It lists
    presets the roster withholds (one already connected on this computer is
    still to be had on a machine) and greys the ones this machine has; the name
-   is fixed to `<preset name>@<machine id>`, so nothing here collides with the
-   row of the same preset that runs here. */
+   is the server's default, `<preset>@<machine id>`, which is also what the
+   server holds the machine to -- a second entry of one preset there is refused
+   under that name, however the add arrives -- so nothing here collides with
+   the row of the same preset that runs here. */
 export function MachineConnectSheet({ row, s }: { row: MachineRow; s: ExtAgentsState }): JSX.Element {
   const dHost = store.detailHost()
   const cwdRef = useRef<HTMLInputElement>(null)
@@ -358,8 +360,7 @@ export function MachineConnectSheet({ row, s }: { row: MachineRow; s: ExtAgentsS
   const busy = s.mconnectBusy !== null && s.mconnectBusy === s.mconnectGen
   const submit = async (): Promise<void> => {
     if (!chosen) return
-    const name = `${chosen.name}@${row.id}`
-    const { landed, current } = await store.connectOnMachine(chosen, row.id, cwdRef.current?.value.trim() || '')
+    const { landed, current, name } = await store.connectOnMachine(chosen, row.id, cwdRef.current?.value.trim() || '')
     if (landed) {
       toast(t('gui.machine.connected_said', { name }))
       /* The card's own line changes with it; back to the sheet that says so --

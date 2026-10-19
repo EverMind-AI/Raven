@@ -10,6 +10,8 @@
  * page chose.
  */
 
+import { RpcError } from '../transport'
+
 import type { FixtureEnv, Fixtures } from '../fixtureTransport'
 import type { ResultOf } from '../generated'
 import type { PushMethod } from '../notifications'
@@ -131,23 +133,35 @@ export function createSubagents(env: FixtureEnv): SubagentsFixture {
         })),
       }),
       'subagents.add': (p) => {
+        if (p.machine) {
+          /* An add on a machine makes a second row of the preset, under
+             <preset>@<machine> unless the caller named it, drawn from the
+             preset's own row when the roster has one, so the offline page
+             shows the card it would. One preset once per machine, as the
+             server holds it: a second one there under the default name is
+             refused, naming the entry the machine has. */
+          const name = p.name || `${p.preset}@${p.machine}`
+          const there = rows.find((r) => r.preset === p.preset && r.configured && r.machine === p.machine)
+          if (there && !p.name) {
+            throw new RpcError(-32011, 'config_validation_error', {
+              detail: `preset '${p.preset}' is already on machine '${p.machine}' as '${there.name}' (connected); use that entry, or give this one a name of its own`,
+            })
+          }
+          const base = rows.find((r) => r.preset === p.preset) || find(p.preset || '')
+          if (base) {
+            rows.push({
+              ...base, name, machine: p.machine, configured: true, enabled: true,
+              group: 'installed', probe_status: 'ready', probe_detail: `runs on machine ${p.machine}; it ran and replied`,
+              last_test_ok: true, last_test_at_ms: env.now(), model_choices: [...(base.model_choices || [])],
+            })
+          }
+          return { added: true, name }
+        }
         const row = find(p.name || p.preset || '')
         if (row) {
           row.configured = true
           row.enabled = row.kind !== 'openai' || row.has_api_key
           if (p.api_key) { row.has_api_key = true; row.enabled = true }
-        } else if (p.machine && p.name) {
-          /* An add on a machine makes a second row of the preset, under the
-             name the form fixed; drawn from the preset's own row when the
-             roster has one, so the offline page shows the card it would. */
-          const base = rows.find((r) => r.preset === p.preset) || find(p.preset || '')
-          if (base) {
-            rows.push({
-              ...base, name: p.name, machine: p.machine, configured: true, enabled: true,
-              group: 'installed', probe_status: 'ready', probe_detail: `runs on machine ${p.machine}; it ran and replied`,
-              last_test_ok: true, last_test_at_ms: env.now(), model_choices: [...(base.model_choices || [])],
-            })
-          }
         }
         return { added: true, name: p.name || '' }
       },

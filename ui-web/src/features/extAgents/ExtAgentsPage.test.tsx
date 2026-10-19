@@ -141,9 +141,10 @@ function install(
     },
     presets: async () => [],
     connectOnMachine: async (choice, machine, remoteCwd) => {
-      acts.push(['connect_on_machine', `${choice.name}@${machine}`, { machine, remote_cwd: remoteCwd }])
+      const name = `${choice.preset}@${machine}`
+      acts.push(['connect_on_machine', name, { machine, remote_cwd: remoteCwd }])
       const why = refuse ? refuse('connect_on_machine') : null
-      return why
+      return why ? { refused: why } : { name }
     },
     ...rest,
   }
@@ -2636,11 +2637,11 @@ describe('the machines module', () => {
     await typeInto(field('gui.machine.remote_cwd'), '/data/w')
     const before = loads.length
     await click(sheetAct('gui.machine.connect_do'))
-    expect(acts).toEqual([['connect_on_machine', 'Claude Code@box', { machine: 'box', remote_cwd: '/data/w' }]])
+    expect(acts).toEqual([['connect_on_machine', 'claude_code@box', { machine: 'box', remote_cwd: '/data/w' }]])
     /* The roster again, with the probe, so the new card arrives with its verdict; the machines too, for the card's line. */
     expect(loads.slice(before)).toEqual([true])
     expect(mcalls.filter((c) => c[0] === 'list').length).toBeGreaterThan(1)
-    expect(toasts).toEqual(['gui.machine.connected_said {"name":"Claude Code@box"}'])
+    expect(toasts).toEqual(['gui.machine.connected_said {"name":"claude_code@box"}'])
     expect(sheetName()).toBe('Lab box')
   })
 
@@ -2656,7 +2657,7 @@ describe('the machines module', () => {
     await openSheet('Lab box')
     await click(sheetAct('gui.machine.connect_here'))
     await click(sheetAct('gui.machine.connect_do'))
-    expect(acts).toEqual([['connect_on_machine', 'Codex@box', { machine: 'box', remote_cwd: '' }]])
+    expect(acts).toEqual([['connect_on_machine', 'codex@box', { machine: 'box', remote_cwd: '' }]])
     expect(sheetStatus()).toBe('gui.machine.connect_bad')
     expect(note()).toEqual({ t: 'gui.machine.connect_bad', said: 'it is installed but has no usable credential' })
     expect(sheetName()).toBe('gui.machine.connect_title {"name":"Lab box"}')
@@ -2727,12 +2728,14 @@ describe('the machines module', () => {
 
   /* A connect whose readiness ping is still running: the source answers only
      when the test releases it, with the add's refusal or null. */
-  const heldConnect = (): { connect: () => Promise<string | null>; release: (why: string | null) => Promise<void> } => {
+  type Landed = { name: string } | { refused: string }
+  const heldConnect = (): { connect: () => Promise<Landed>; release: (why: string | null) => Promise<void> } => {
     let release: (why: string | null) => void = () => {}
-    /* Releasing answers the source; the write's own continuation -- the roster
-       read, the toast -- is a few more turns of the loop. */
+    /* Releasing answers the source -- the name it landed under, or the refusal;
+       the write's own continuation -- the roster read, the toast -- is a few
+       more turns of the loop. */
     return {
-      connect: () => new Promise<string | null>((res) => { release = res }),
+      connect: () => new Promise<Landed>((res) => { release = (why) => res(why === null ? { name: 'codex@box' } : { refused: why }) }),
       release: async (why) => {
         await act(async () => {
           release(why)
@@ -2772,7 +2775,7 @@ describe('the machines module', () => {
     await held.release(null)
     expect(sheetName()).toBe('gui.machine.connect_title {"name":"GPU 1"}')
     expect(sheetStatus()).toBe('gui.machine.connect_hint')
-    expect(toasts).toEqual(['gui.machine.connected_said {"name":"Codex@box"}'])
+    expect(toasts).toEqual(['gui.machine.connected_said {"name":"codex@box"}'])
     expect(mcalls.filter((c) => c[0] === 'list').length).toBeGreaterThan(listsBefore)
   })
 
@@ -2796,7 +2799,7 @@ describe('the machines module', () => {
     expect(sheetStatus()).toBe('gui.machine.connect_hint')
     expect(note()).toBeNull()
     expect((sheetAct('gui.machine.connect_do') as HTMLButtonElement).disabled).toBe(false)
-    expect(toasts).toEqual(['gui.machine.connect_bad_named {"name":"Codex@box"}'])
+    expect(toasts).toEqual(['gui.machine.connect_bad_named {"name":"codex@box"}'])
   })
 
   it('does not reopen a drawer the reader closed while a machine-side connect ran, even inside the close fade', async () => {
@@ -2818,7 +2821,7 @@ describe('the machines module', () => {
     await held.release(null)
     expect(detail.get().open).toBe(false)
     expect(store.get().msheet).toBeNull()
-    expect(toasts).toEqual(['gui.machine.connected_said {"name":"Codex@box"}'])
+    expect(toasts).toEqual(['gui.machine.connected_said {"name":"codex@box"}'])
     await act(async () => {
       await new Promise((res) => setTimeout(res, 300))
     })
@@ -2845,7 +2848,7 @@ describe('the machines module', () => {
     await held.release('it is installed but has no usable credential')
     expect(detail.get().open).toBe(false)
     expect(store.get().mconnectFailed).toBe('')
-    expect(toasts).toEqual(['gui.machine.connect_bad_named {"name":"Codex@box"}'])
+    expect(toasts).toEqual(['gui.machine.connect_bad_named {"name":"codex@box"}'])
     await act(async () => {
       await new Promise((res) => setTimeout(res, 300))
     })

@@ -136,10 +136,11 @@ export interface ExtAgentsSource {
   act(op: ExtAgentOp, row: ExtAgentRow, args?: ExtAgentActArgs): Promise<ExtAgentRow[]>
   /* The presets an entry can be made from on a registered machine. */
   presets(): Promise<PresetChoice[]>
-  /* Connect `choice` on `machine`, under `<preset name>@<machine>`, in the
-     working directory there (`''` for the default); the server starts it there
-     once as proof. The refusal's sentence when it was not written, else null. */
-  connectOnMachine(choice: PresetChoice, machine: string, remoteCwd: string): Promise<string | null>
+  /* Connect `choice` on `machine` under the server's default name,
+     `<preset>@<machine>`, in the working directory there (`''` for the
+     default); the server starts it there once as proof, and refuses a preset
+     the machine already has. The name it landed under, or the refusal. */
+  connectOnMachine(choice: PresetChoice, machine: string, remoteCwd: string): Promise<{ name: string } | { refused: string }>
 }
 
 /* What fixes a refusal, as the server classified it: which kind of fix, and

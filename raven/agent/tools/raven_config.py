@@ -328,7 +328,8 @@ def _machines_line() -> str | None:
         f"  machines a preset can be added on: {', '.join(names)} -- add subagents "
         '{"preset": "<preset>", "machine": "<id>", "remote_cwd"?: "~/raven-work"}: an acp or cli preset runs '
         "there, signed in there, though a mirasim_* preset runs only here; an openai preset's endpoint is "
-        "reached from there through an ssh tunnel (no remote_cwd); the name defaults to <preset>@<id>"
+        "reached from there through an ssh tunnel (no remote_cwd); the name defaults to <preset>@<id>, and a preset "
+        "the machine already has is refused under it, naming the entry there -- pass a name to add a second one"
     )
 
 

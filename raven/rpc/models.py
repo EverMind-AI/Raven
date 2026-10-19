@@ -2716,8 +2716,9 @@ class SubagentsAddParams(_Strict):
         description=(
             "A registered machine, by its id in the machine registry: an acp or cli preset's command is started "
             "there by the machine's Raven node and signed in there; an openai preset's endpoint is reached from "
-            "that machine through an ssh tunnel. The row's name defaults to <preset>@<machine>. Refused for a "
-            "built-in agent, and unless the machine is registered and usable."
+            "that machine through an ssh tunnel. The row's name defaults to <preset>@<machine>, and under that default a "
+            "preset the machine already has is refused, naming the entry there (give `name` to add a second one on "
+            "purpose). Refused for a built-in agent, and unless the machine is registered and usable."
         ),
     )
     remote_cwd: str | None = Field(

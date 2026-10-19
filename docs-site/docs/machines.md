@@ -152,11 +152,12 @@ Once the node is up, the card says which agent entries are connected on the
 machine (*No agent connected here yet* until one is; the state line, *Link
 up, no agent running*, is about this moment), and the sheet says the next
 step and offers **Connect an agent on this machine**: pick the agent, give
-its working directory there, and **Connect** adds `<preset name>@<machine
-id>` the way section 4's `subagents.add` does, one real prompt run on the
-machine first. The list has every preset a machine's node can start,
-including one already connected on this computer -- that is a second entry,
-on the machine, not a conflict. An agent's own sheet connects it onto a
+its working directory there, and **Connect** adds `<preset>@<machine id>`
+(`codex@gpu1`) the way section 4's `subagents.add` does, one real prompt run
+on the machine first, and refused the same way when the machine already has
+that preset. The list has every preset a machine's node can start, including
+one already connected on this computer -- that is a second entry, on the
+machine, not a conflict. An agent's own sheet connects it onto a
 machine too (*Runs on*), which lists the registered machines, lets only those
 with this Raven's node be picked (the others say why), and takes the working
 directory there; an agent that is not installed on this computer offers it
@@ -264,7 +265,11 @@ with the preset, the machine and, for an ACP or CLI preset, an optional
 ```
 
 The entry is named `<preset>@<machine>` unless you give a name, so one preset
-can be added once per machine. Before anything is stored, the add is proved
+can be added once per machine: a preset the machine already has is refused
+under the default name, and the refusal names the entry it has (connected or
+switched off). A second entry of one agent on one machine -- two working
+directories, say -- is added by giving it a name of its own. Before anything
+is stored, the add is proved
 the way a local add is: one real test prompt, run on that machine, through
 that agent -- so the agent has to be installed and signed in there already.
 The add is refused up front when the preset is a built-in agent, when an

@@ -439,7 +439,10 @@ A row also names the connected agent entries that run on the machine (`agents_he
 and a machine whose node is up offers the next step from its sheet: connect an agent
 on it, chosen from `subagents.presets` -- every preset a node can start, one already
 connected on this computer included, since an entry is one preset on one machine --
-under `<preset name>@<machine id>`, through the same proved `subagents.add`. The
+under the add's default `<preset>@<machine id>`, through the same proved `subagents.add`,
+which refuses a preset the machine already has under that default name (the refusal
+names the entry there; a named add is a second entry on purpose), so the page and the
+chat cannot make one agent on one machine twice between them. The
 register form proposes the private keys this computer has (`machines.local_keys`,
 `~/.ssh` identities in ssh's order) instead of a placeholder path.
 _Avoid_: "host" / "server" / "node" (too broad, no link to the
