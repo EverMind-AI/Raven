@@ -1,25 +1,36 @@
 """The Mirasim adapter against the Mirasim host running on this machine, with real model turns.
 
 Run by hand: ``pytest tests/integration/test_acp_mirasim_real_llm.py -m integration -n 0``. Every
-turn names ``glm-5.3-flash``, the platform model, and checks the snapshot ran on it: the agents'
-own defaults are premium models or the user's own keys. Only claude, codex, pi and zcode offer it,
-so those are the agents covered; they span Mirasim's three kinds of driver.
+turn names ``glm-5.3-flash``, the platform model, and checks that it ran on it: the agents' own
+defaults are premium models or the user's own keys. Only claude, codex, pi and zcode offer it, so
+those are the agents covered; they span Mirasim's three kinds of driver.
 
-The host is the user's own, so every conversation is opened in one directory of its own and
-deleted when its test ends, and a sweep before and after deletes whatever an earlier run left
-there -- matched on that exact directory, never a prefix. The turns show in the Mirasim app
-while they run.
+The host is the user's own. A run claims a directory of its own, ``slot-<n>`` under
+``<tmp>/raven-mirasim-it``, by holding that slot's lock for as long as it runs, so runs side by
+side -- two terminals, or xdist workers -- never share one. Its conversations are deleted when
+their test ends, and a sweep before and after deletes whatever an earlier run left in its slot --
+matched on that exact directory, never a prefix -- so nothing outside it, a conversation another
+run holds included, is touched. The turns show in the Mirasim app while they run.
+
+What a run leaves behind: the slot directories themselves, and the agents' own records of the
+turns, which deleting a Mirasim conversation does not remove -- Claude Code keeps its transcripts
+and a ``memory/`` directory under ``~/.claude/projects/`` in a folder named after the slot's path.
+A run interrupted mid-test leaves its conversations until the next run that claims the slot.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import itertools
+import os
 import struct
 import tempfile
 import time
 import zlib
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 import pytest
 
@@ -30,11 +41,18 @@ from raven.acp.mirasim.store import BindingStore
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
 MODEL = "glm-5.3-flash"
-WORKDIR = Path(tempfile.gettempdir()) / "raven-mirasim-it"
+SLOTS = Path(tempfile.gettempdir()) / "raven-mirasim-it"
 TURN_S = 240.0
 HOST_HOME = mirasim_home().resolve()
 HOST = locate_host()
 """Read the address and token directory at import, before each test isolates its home."""
+
+_RUN: dict[str, Path] = {}
+
+
+def workdir() -> Path:
+    """The slot this run holds: every conversation it opens works there."""
+    return _RUN["dir"]
 
 
 def _host_env() -> dict[str, str]:
@@ -58,19 +76,27 @@ async def _host_is_up() -> bool:
         await conn.close()
 
 
-async def _sweep() -> list[str]:
-    """Delete every conversation in the test directory; the keys deleted."""
+async def _listed(directory: Path) -> list[dict[str, Any]]:
+    """The host's rows for the conversations working in ``directory`` exactly."""
+    conn = HostConnection(on_frame=lambda frame: None, locate=lambda: HOST)
+    try:
+        listed = await conn.request(
+            {"type": "listSessions", "reqId": "raven-it-list", "workdir": str(directory)},
+            lambda f: f.get("type") == "sessions" and f.get("reqId") == "raven-it-list",
+            timeout=30,
+        )
+    finally:
+        await conn.close()
+    return [row for row in listed.get("sessions") or [] if row.get("workdir") == str(directory)]
+
+
+async def _sweep(directory: Path) -> list[str]:
+    """Delete every conversation in ``directory``, a slot this run holds; the keys deleted."""
+    rows = await _listed(directory)
     conn = HostConnection(on_frame=lambda frame: None, locate=lambda: HOST)
     deleted: list[str] = []
     try:
-        listed = await conn.request(
-            {"type": "listSessions", "reqId": "raven-it-sweep", "workdir": str(WORKDIR)},
-            lambda f: f.get("type") == "sessions" and f.get("reqId") == "raven-it-sweep",
-            timeout=30,
-        )
-        for row in listed.get("sessions") or []:
-            if row.get("workdir") != str(WORKDIR):
-                continue
+        for row in rows:
             ref = f"raven-it-delete-{row['sessionKey']}"
             await conn.request(
                 {"type": "deleteSession", "sessionKey": row["sessionKey"], "clientRef": ref},
@@ -83,14 +109,49 @@ async def _sweep() -> list[str]:
     return deleted
 
 
+def _locked(handle: IO[bytes]) -> bool:
+    """Take ``handle``'s file for this process alone, or say another holds it."""
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    return True
+
+
+@contextlib.contextmanager
+def _slot() -> Iterator[Path]:
+    """The first slot no other run holds, held until the block ends."""
+    SLOTS.mkdir(parents=True, exist_ok=True)
+    for index in itertools.count():
+        handle = (SLOTS / f"slot-{index}.lock").open("a+b")
+        if not _locked(handle):
+            handle.close()
+            continue
+        try:
+            directory = SLOTS / f"slot-{index}"
+            directory.mkdir(exist_ok=True)
+            yield directory
+        finally:
+            handle.close()
+        return
+
+
 @pytest.fixture(scope="module", autouse=True)
 def _live_host() -> Any:
     if not asyncio.run(_host_is_up()):
         pytest.skip("no Mirasim host is running on this machine")
-    WORKDIR.mkdir(parents=True, exist_ok=True)
-    asyncio.run(_sweep())
-    yield
-    asyncio.run(_sweep())
+    with _slot() as directory:
+        _RUN["dir"] = directory
+        asyncio.run(_sweep(directory))
+        yield
+        asyncio.run(_sweep(directory))
 
 
 class Live:
@@ -115,7 +176,7 @@ class Live:
 
     async def session(self) -> str:
         await self.ok("initialize", protocolVersion=1)
-        sid = (await self.ok("session/new", cwd=str(WORKDIR), mcpServers=[]))["sessionId"]
+        sid = (await self.ok("session/new", cwd=str(workdir()), mcpServers=[]))["sessionId"]
         await self.ok("session/set_config_option", sessionId=sid, configId="model", value=MODEL)
         self.opened.append(sid)
         return sid
@@ -197,16 +258,16 @@ async def test_a_conversation_continues_is_listed_replays_and_is_deleted(live: A
     await adapter.ok("session/prompt", sessionId=sid, prompt=text("What was the code word? Reply with it only."))
     assert "PELICAN-7" in adapter.said(sid)
     key = adapter.agent.sessions[sid].mirasim_key
-    listed = await adapter.ok("session/list", cwd=str(WORKDIR))
+    listed = await adapter.ok("session/list", cwd=str(workdir()))
     assert sid in [row["sessionId"] for row in listed["sessions"]]
     other = live()
     await other.ok("initialize", protocolVersion=1)
-    await other.ok("session/load", sessionId=sid, cwd=str(WORKDIR), mcpServers=[])
+    await other.ok("session/load", sessionId=sid, cwd=str(workdir()), mcpServers=[])
     asked = other.said(sid, "user_message_chunk")
     assert asked.index("Remember the code word") < asked.index("What was the code word?")
     assert "PELICAN-7" in other.said(sid)
     assert await other.ok("session/delete", sessionId=sid) == {}
-    after = await other.ok("session/list", cwd=str(WORKDIR))
+    after = await other.ok("session/list", cwd=str(workdir()))
     assert key not in [row["sessionId"] for row in after["sessions"]] and sid not in [
         row["sessionId"] for row in after["sessions"]
     ]
@@ -281,6 +342,16 @@ async def test_raven_dispatches_to_a_mirasim_preset(tmp_path: Path) -> None:
     from raven.agent.subagent.presets import third_party_subagent_preset
     from raven.config.schema import ThirdPartyAcpSubagentConfig
 
+    # A model the session refuses leaves the dispatch on the agent's default, a premium one, with
+    # nothing failing: so the menu is read before any turn runs, and the turn's model after.
+    menus = MirasimAgent(
+        agent="claude", store=BindingStore(tmp_path / "menus.json"), emit=lambda frame: None, locate=lambda: HOST
+    )
+    try:
+        offered = (await menus.catalog()).offers_model(MODEL)
+    finally:
+        await menus.close()
+    assert offered, f"Mirasim's Claude Code offers no {MODEL}: the dispatch would run on its default"
     row = third_party_subagent_preset("mirasim_claude")
     cfg = ThirdPartyAcpSubagentConfig.model_validate(
         {**row, "env": {"RAVEN_HOME": str(tmp_path / "home"), **_host_env()}}
@@ -290,7 +361,7 @@ async def test_raven_dispatches_to_a_mirasim_preset(tmp_path: Path) -> None:
             AcpAgentBackend(name=cfg.name, command=cfg.command, env=dict(cfg.env)).run(
                 "Reply with exactly: PONG",
                 task_id="t1",
-                workspace=WORKDIR,
+                workspace=workdir(),
                 executor=None,
                 session_model=MODEL,
             ),
@@ -299,3 +370,5 @@ async def test_raven_dispatches_to_a_mirasim_preset(tmp_path: Path) -> None:
     finally:
         await close_pool()
     assert "PONG" in answer
+    ran = [row.get("model") for row in await _listed(workdir()) if row.get("agent") == "claude"]
+    assert ran and all(model == MODEL for model in ran), ran

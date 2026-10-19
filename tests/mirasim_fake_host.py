@@ -340,6 +340,7 @@ class FakeHost:
                 "workdir": session.workdir,
                 "title": session.title,
                 "preview": session.turns[-1].get("prompt", "") if session.turns else "",
+                "model": session.prompts[-1].get("model") if session.prompts else None,
                 "updatedAt": session.updated_at,
                 "runState": "running" if session.running else "done",
                 "numTurns": len(session.turns),

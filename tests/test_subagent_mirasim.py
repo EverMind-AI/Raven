@@ -243,9 +243,9 @@ async def test_the_live_preset_fixture_keeps_its_desktop_token_home(tmp_path: Pa
         monkeypatch.setenv("USERPROFILE", str(isolated))
         workdir = tmp_path / "work"
         workdir.mkdir()
-        monkeypatch.setattr(live, "WORKDIR", workdir)
+        monkeypatch.setitem(live._RUN, "dir", workdir)
         await asyncio.wait_for(live.test_raven_dispatches_to_a_mirasim_preset(tmp_path), 40)
-        assert host.frames("prompt")[0]["prompt"] == "Reply with exactly: PONG"
+        assert [(f["prompt"], f["model"]) for f in host.frames("prompt")] == [("Reply with exactly: PONG", live.MODEL)]
     finally:
         await host.stop()
 
