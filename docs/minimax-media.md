@@ -57,6 +57,25 @@ not read for these tools, and the OpenRouter key is never sent to MiniMax. An em
   `MiniMax-H3-Max` `480P` or `768P` and 5-15 seconds. MiniMax answers a value outside
   them with an error.
 
+## Decks
+
+Raven-PPT draws its pictures with the host's image role and follows it live, so a
+host whose image role runs on MiniMax draws its decks there too. A deck that pays for
+its pictures from an account of its own sets, in the Raven-PPT agent's `.env` (see
+its `.env.example`):
+
+```
+PPT_IMAGE_PROVIDER=minimax
+PPT_IMAGE_API_KEY=<the deck's MiniMax API key>
+PPT_IMAGE_MODEL=image-01
+```
+
+`PPT_IMAGE_PROVIDER` is needed only when the host's image role runs on another
+provider, and then `PPT_IMAGE_MODEL` is too. On a host already on MiniMax,
+`PPT_IMAGE_API_KEY` alone puts the deck on its own key. A `PPT_IMAGE_API_BASE` set
+without `PPT_IMAGE_PROVIDER` is called as an OpenAI-compatible endpoint, which
+MiniMax's address is not.
+
 ## References
 
 - [Image generation](https://platform.minimax.io/docs/api-reference/image-generation-t2i)

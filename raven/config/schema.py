@@ -1175,7 +1175,11 @@ class MediaToolConfig(Base):
     quality: Literal["", "low", "medium", "high"] = ""
     # Sent with every request, beside the key; secret like a provider's own.
     extra_headers: dict[str, str] = Field(default_factory=dict, json_schema_extra={"secret": True})
-    selection_config: str = Field(default="", description="Host config path for live model and quality inheritance")
+    selection_config: str = Field(
+        default="",
+        description="Config file this section is read from, live, against that file's providers: "
+        "the host's, or a pinned deck's own",
+    )
 
 
 class ImageToolConfig(MediaToolConfig):

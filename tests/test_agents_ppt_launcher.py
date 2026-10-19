@@ -24,6 +24,7 @@ seeds it into the pinned home at first turn (tests in the plugin family),
 so this launcher still seeds none of them.
 """
 
+import asyncio
 import importlib.util
 import json
 import os
@@ -32,6 +33,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
@@ -56,7 +58,16 @@ def grounded(launcher, tmp_path, monkeypatch):
     monkeypatch.setenv("PPT_STATE_ROOT", str(tmp_path / "state"))
     monkeypatch.delenv("PPT_ACP_HOME", raising=False)
     monkeypatch.setenv("PPT_API_KEY", "sk-own")
-    for name in ("PPT_MODEL", "PPT_API_BASE", "PPT_SERPER_API_KEY", "PPT_JINA_API_KEY", "PPT_IMAGE_API_KEY"):
+    for name in (
+        "PPT_MODEL",
+        "PPT_API_BASE",
+        "PPT_SERPER_API_KEY",
+        "PPT_JINA_API_KEY",
+        "PPT_IMAGE_API_KEY",
+        "PPT_IMAGE_API_BASE",
+        "PPT_IMAGE_MODEL",
+        "PPT_IMAGE_PROVIDER",
+    ):
         monkeypatch.delenv(name, raising=False)
     # The launcher reads the host's proxy out of the environment; a developer box
     # that exports one would otherwise decide what "no proxy configured" renders.
@@ -904,19 +915,21 @@ def test_a_host_image_section_on_a_named_provider_carries_that_provider(grounded
     assert image["extraHeaders"] == {"X-Tenant": "t1"}
     assert image["selectionConfig"] == str(home / "config.json")
 
-    # A pin makes the section a snapshot the deck reads as written, so it carries
-    # the provider's pair and the bare id that pair serves, and no provider to
-    # resolve against a config that may not hold one.
+    # A pin makes the section a snapshot in a file of its own beside the render: it
+    # keeps the provider, and the provider's endpoint is resolved in that file, not
+    # against the providers the deck's chat runs on.
     monkeypatch.setenv("PPT_IMAGE_MODEL", "gpt-image-2-mini")
-    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
-    image = data["tools"]["media"]["image"]
-    assert (image["model"], image["apiKey"], image["apiBase"]) == (
+    rendered = grounded.render_config(RUN_PY.parent / "config.json")
+    image = json.loads(rendered.read_text())["tools"]["media"]["image"]
+    assert image["selectionConfig"] != str(home / "config.json"), "a pinned section does not follow the host"
+    section = _deck_section(rendered)
+    assert (section.provider, section.model, section.api_key, section.api_base) == (
+        "openai",
         "gpt-image-2-mini",
         "sk-host-openai",
         "https://compat.example/v1",
     )
-    assert "provider" not in image and "selectionConfig" not in image
-    assert image["extraHeaders"] == {"X-Tenant": "t1"}, "the address is still the provider's"
+    assert section.extra_headers == {"X-Tenant": "t1"}, "the address is still the provider's"
     monkeypatch.delenv("PPT_IMAGE_MODEL")
 
     # A pinned base without a pinned key does not take the provider's key or headers along.
@@ -937,6 +950,33 @@ def _host_image(tmp_path: Path, image: dict, providers: dict | None = None) -> N
     home = tmp_path / "home"
     home.mkdir(parents=True, exist_ok=True)
     (home / "config.json").write_text(json.dumps({"tools": {"media": {"image": image}}, "providers": providers or {}}))
+
+
+def _deck_section(rendered: Path):
+    """The image section the deck process reads: its own render, then the file that points at."""
+    from raven.config.live import LiveConfig, media_tool_config
+
+    return media_tool_config(LiveConfig(rendered), "image")
+
+
+_REAL_ASYNC_CLIENT = httpx.AsyncClient
+
+
+def _deck_draws(rendered: Path, tmp_path: Path, monkeypatch) -> list[tuple[str, str]]:
+    """Where the deck's image tool sends a picture request, and the key it carries."""
+    from raven.agent.tools import media_gen
+
+    seen: list[tuple[str, str]] = []
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        seen.append((str(request.url), request.headers.get("authorization", "")))
+        return httpx.Response(500, text="stop")
+
+    monkeypatch.setattr(
+        media_gen.httpx, "AsyncClient", lambda *_a, **_kw: _REAL_ASYNC_CLIENT(transport=httpx.MockTransport(answer))
+    )
+    asyncio.run(media_gen.ImageGenerateTool(_deck_section(rendered), workspace=tmp_path / "ws").execute("a poster"))
+    return seen
 
 
 _AUTH_HEADERS = {"Authorization": "Bearer sk-host-header", "X-Tenant": "t1"}
@@ -966,15 +1006,13 @@ def test_a_pinned_deck_key_is_the_key_on_the_wire(grounded, tmp_path, monkeypatc
     Authorization among them outranked it on the wire while the log named the pin as
     the payer; the address is still the host's, so only the headers stay behind."""
     from raven.agent.tools.media_gen import ImageGenerateTool
-    from raven.config.schema import MediaToolConfig
 
     _host_image(tmp_path, image, providers)
     monkeypatch.setenv("PPT_IMAGE_API_KEY", "sk-deck")
-    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
-    section = data["tools"]["media"]["image"]
-    assert (section["apiKey"], section["apiBase"]) == ("sk-deck", "https://host-relay.test/v1")
-    assert "extraHeaders" not in section
-    tool = ImageGenerateTool(MediaToolConfig.model_validate(section), workspace=tmp_path / "ws")
+    section = _deck_section(grounded.render_config(RUN_PY.parent / "config.json"))
+    assert (section.api_key, section.api_base) == ("sk-deck", "https://host-relay.test/v1")
+    assert not section.extra_headers
+    tool = ImageGenerateTool(section, workspace=tmp_path / "ws")
     assert tool._headers() == {"Authorization": "Bearer sk-deck"}
 
 
@@ -989,9 +1027,8 @@ def test_a_provider_without_a_key_does_not_draw_on_the_section_s_own(grounded, t
     assert image["apiBase"] == "https://host-relay.test/v1" and not image.get("apiKey")
 
     monkeypatch.setenv("PPT_IMAGE_MODEL", "gpt-image-2-mini")
-    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
-    image = data["tools"]["media"]["image"]
-    assert image["apiBase"] == "https://host-relay.test/v1" and not image.get("apiKey")
+    section = _deck_section(grounded.render_config(RUN_PY.parent / "config.json"))
+    assert section.api_base == "https://host-relay.test/v1" and not section.api_key
 
 
 def test_a_pinned_deck_base_gets_no_key_borrowed_for_the_host_s_address(grounded, tmp_path, monkeypatch):
@@ -1029,6 +1066,168 @@ def test_a_section_naming_openrouter_renders_as_the_default(grounded, tmp_path, 
     assert rendered[0] == rendered[1]
 
 
+_MINIMAX_HOST = ({"provider": "minimax", "model": "image-01"}, {"minimax": {"apiKey": "mm-host"}})
+
+
+@pytest.mark.parametrize(
+    ("pins", "key"),
+    [({"PPT_IMAGE_MODEL": "image-01-live"}, "Bearer mm-host"), ({"PPT_IMAGE_API_KEY": "mm-deck"}, "Bearer mm-deck")],
+    ids=["model-pinned", "key-pinned"],
+)
+def test_a_pinned_deck_on_a_minimax_host_keeps_minimax_s_request_shape(grounded, tmp_path, monkeypatch, pins, key):
+    """MiniMax's request shape follows the provider a section names, so a pin that
+    dropped the name sent the deck's pictures to the OpenAI Images path on MiniMax's
+    address, which MiniMax answers with 404."""
+    _host_image(tmp_path, *_MINIMAX_HOST)
+    for name, value in pins.items():
+        monkeypatch.setenv(name, value)
+    rendered = grounded.render_config(RUN_PY.parent / "config.json")
+    assert _deck_draws(rendered, tmp_path, monkeypatch) == [("https://api.minimax.io/v1/image_generation", key)]
+
+
+def test_a_pinned_deck_key_outranks_the_host_key_the_deck_s_chat_carries(grounded, tmp_path, monkeypatch):
+    """On the inherit branch the deck's own providers are the host's, copied for its
+    chat, MiniMax's key among them. The pinned section is resolved in a file of its
+    own, so the deck's key is the one its pictures send and the chat keeps the host's."""
+    monkeypatch.delenv("PPT_API_KEY", raising=False)
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    host = {
+        "providers": {"openrouter": {"apiKey": "sk-or-chat", "models": ["vendor/model"]}, **_MINIMAX_HOST[1]},
+        "agents": {"defaults": {"provider": "openrouter", "model": "openrouter/vendor/model"}},
+        "tools": {"media": {"image": _MINIMAX_HOST[0]}},
+    }
+    (home / "config.json").write_text(json.dumps(host))
+    monkeypatch.setenv("PPT_IMAGE_API_KEY", "mm-deck")
+    rendered = grounded.render_config(RUN_PY.parent / "config.json")
+    assert json.loads(rendered.read_text())["providers"]["minimax"]["apiKey"] == "mm-host"
+    assert _deck_draws(rendered, tmp_path, monkeypatch) == [
+        ("https://api.minimax.io/v1/image_generation", "Bearer mm-deck")
+    ]
+
+
+@pytest.mark.parametrize(
+    ("host", "pins", "drawn"),
+    [
+        (
+            ({"model": "openai/gpt-image-2.5-sunburst"}, {"openrouter": {"apiKey": "sk-or-host"}}),
+            {"PPT_IMAGE_PROVIDER": "minimax_cn_api", "PPT_IMAGE_API_KEY": "mm-deck", "PPT_IMAGE_MODEL": "image-01"},
+            ("https://api.minimaxi.com/v1/image_generation", "Bearer mm-deck"),
+        ),
+        (
+            _MINIMAX_HOST,
+            {
+                "PPT_IMAGE_PROVIDER": "openrouter",
+                "PPT_IMAGE_API_KEY": "sk-or-deck",
+                "PPT_IMAGE_MODEL": "openai/gpt-image-2.5-sunburst",
+            },
+            ("https://openrouter.ai/api/v1/images", "Bearer sk-or-deck"),
+        ),
+        (
+            ({"model": "openai/gpt-image-2.5-sunburst"}, {"openrouter": {"apiKey": "sk-or-host"}}),
+            {
+                "PPT_IMAGE_PROVIDER": "minimax",
+                "PPT_IMAGE_API_BASE": "https://mm-relay.test/v1",
+                "PPT_IMAGE_API_KEY": "mm-deck",
+                "PPT_IMAGE_MODEL": "image-01",
+            },
+            ("https://mm-relay.test/v1/image_generation", "Bearer mm-deck"),
+        ),
+        (
+            (
+                {"model": "openai/gpt-image-2.5-sunburst"},
+                {"openrouter": {"apiKey": "sk-or-host"}, "minimax": {"apiKey": "mm-host"}},
+            ),
+            {"PPT_IMAGE_PROVIDER": "minimax", "PPT_IMAGE_MODEL": "image-01"},
+            ("https://api.minimax.io/v1/image_generation", "Bearer mm-host"),
+        ),
+    ],
+    ids=["to-minimax-cn", "off-minimax", "to-a-relay", "on-the-host-s-key-for-it"],
+)
+def test_ppt_image_provider_puts_the_deck_s_pictures_on_a_provider_of_its_own(
+    grounded, tmp_path, monkeypatch, host, pins, drawn
+):
+    """The provider a deck draws on can differ from the host's image role. Nothing of
+    the host's endpoint crosses over: its address and key belong to another one."""
+    _host_image(tmp_path, *host)
+    for name, value in pins.items():
+        monkeypatch.setenv(name, value)
+    rendered = grounded.render_config(RUN_PY.parent / "config.json")
+    assert _deck_draws(rendered, tmp_path, monkeypatch) == [drawn]
+
+
+def test_a_deck_switched_off_a_provider_leaves_the_key_the_host_wrote_for_it(grounded, tmp_path, monkeypatch):
+    """With no deck key pinned, the key slot falls back to the host image section's own
+    key, which was written for the host's provider. A deck on another provider draws
+    with the key that pays for its words on OpenRouter, never with that one."""
+    _host_image(tmp_path, {**_MINIMAX_HOST[0], "apiKey": "mm-section-own"}, _MINIMAX_HOST[1])
+    monkeypatch.setenv("PPT_IMAGE_PROVIDER", "openrouter")
+    monkeypatch.setenv("PPT_IMAGE_MODEL", "openai/gpt-image-2.5-sunburst")
+    rendered = grounded.render_config(RUN_PY.parent / "config.json")
+    assert _deck_draws(rendered, tmp_path, monkeypatch) == [("https://openrouter.ai/api/v1/images", "Bearer sk-own")]
+
+
+def test_a_pinned_base_on_a_named_provider_takes_only_the_deck_s_key_there(grounded, tmp_path, monkeypatch):
+    """A base pinned with a provider is that provider's request shape at the deck's own
+    address. The host resolved its key for its own address, so none goes along."""
+    _host_image(tmp_path, *_MINIMAX_HOST)
+    monkeypatch.setenv("PPT_IMAGE_PROVIDER", "minimax")
+    monkeypatch.setenv("PPT_IMAGE_API_BASE", "https://mm-relay.test/v1")
+    rendered = grounded.render_config(RUN_PY.parent / "config.json")
+    assert not _deck_section(rendered).api_key
+    assert _deck_draws(rendered, tmp_path, monkeypatch) == []
+
+    monkeypatch.setenv("PPT_IMAGE_API_KEY", "mm-deck")
+    rendered = grounded.render_config(RUN_PY.parent / "config.json")
+    assert _deck_draws(rendered, tmp_path, monkeypatch) == [
+        ("https://mm-relay.test/v1/image_generation", "Bearer mm-deck")
+    ]
+
+
+@pytest.mark.parametrize(
+    ("pins", "named"),
+    [
+        ({"PPT_IMAGE_PROVIDER": "openai", "PPT_IMAGE_API_KEY": "sk-deck"}, "PPT_IMAGE_MODEL"),
+        ({"PPT_IMAGE_PROVIDER": "nope", "PPT_IMAGE_API_KEY": "sk-deck", "PPT_IMAGE_MODEL": "m"}, "minimax"),
+    ],
+    ids=["switch-without-a-model", "unknown-provider"],
+)
+def test_a_deck_provider_it_cannot_draw_on_draws_nothing_and_says_what_to_set(
+    grounded, tmp_path, monkeypatch, capsys, pins, named
+):
+    """The host's model belongs to the host's provider, and a name the image tool does
+    not run on has no request path: either way the deck draws nothing, and the launch
+    log names what would let it draw."""
+    _host_image(tmp_path, *_MINIMAX_HOST)
+    for name, value in pins.items():
+        monkeypatch.setenv(name, value)
+    capsys.readouterr()
+    rendered = grounded.render_config(RUN_PY.parent / "config.json")
+    said = [line for line in capsys.readouterr().err.splitlines() if line.startswith("[run] images:")]
+    assert len(said) == 1 and named in said[0] and pins["PPT_IMAGE_PROVIDER"] in said[0]
+    assert _deck_draws(rendered, tmp_path, monkeypatch) == []
+
+
+def test_a_pinned_section_s_own_file_is_owner_only_and_goes_with_its_render(grounded, tmp_path, monkeypatch):
+    """The file holds the deck's image key, so it is written the way the render is and
+    swept when the render is: named by the pid that reads it."""
+    _host_image(tmp_path, *_MINIMAX_HOST)
+    monkeypatch.setenv("PPT_IMAGE_API_KEY", "mm-deck")
+    rendered = grounded.render_config(RUN_PY.parent / "config.json")
+    own = Path(json.loads(rendered.read_text())["tools"]["media"]["image"]["selectionConfig"])
+    assert own == tmp_path / "state" / f".config.rendered.{os.getpid()}.image.json"
+    if os.name == "posix":
+        assert stat.S_IMODE(own.stat().st_mode) == 0o600
+    dead = own.with_name(".config.rendered.999999.image.json")
+    dead.write_text("{}")
+    grounded.render.sweep_stale_renders(own.parent)
+    assert own.exists() and not dead.exists()
+
+    monkeypatch.delenv("PPT_IMAGE_API_KEY")
+    grounded.render_config(RUN_PY.parent / "config.json")
+    assert not own.exists(), "a render that pins nothing leaves no deck key behind"
+
+
 def test_the_launcher_still_renders_under_the_releases_it_can_outlive(grounded, tmp_path, monkeypatch):
     """A stamped home tree outranks a checkout's own agents/, so this file can run
     under any 0.2 raven. Those have no ``media_provider`` and read the image section
@@ -1047,6 +1246,33 @@ def test_the_launcher_still_renders_under_the_releases_it_can_outlive(grounded, 
     data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
     image = data["tools"]["media"]["image"]
     assert (image["apiKey"], image["model"]) == ("sk-host-images", "gpt-image-2-mini")
+
+    # Such a raven routes no picture by a provider's name, so a deck asked for one
+    # draws on none rather than on whatever account the section would fall back to.
+    monkeypatch.setenv("PPT_IMAGE_PROVIDER", "minimax")
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    assert data["tools"]["media"]["image"] == {}
+
+
+def test_a_raven_without_render_parts_keeps_a_pinned_section_inline(grounded, tmp_path, monkeypatch):
+    """A stamped launcher can run on a raven from before render parts, where every named
+    image provider took the OpenAI-compatible route: a pinned section on one renders
+    inline without the name there, as it always did."""
+    monkeypatch.delattr(grounded.render, "rendered_part")
+    monkeypatch.delattr(grounded.render, "write_rendered_part")
+    _host_image(
+        tmp_path,
+        {"model": "openai/gpt-image-2", "provider": "openai"},
+        {"openai": {"apiKey": "sk-host-openai", "apiBase": "https://compat.example/v1"}},
+    )
+    monkeypatch.setenv("PPT_IMAGE_MODEL", "gpt-image-2-mini")
+    image = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())["tools"]["media"]["image"]
+    assert (image["model"], image["apiKey"], image["apiBase"]) == (
+        "gpt-image-2-mini",
+        "sk-host-openai",
+        "https://compat.example/v1",
+    )
+    assert "provider" not in image and "selectionConfig" not in image
 
 
 def test_the_serper_key_reaches_both_search_consumers(grounded, tmp_path, monkeypatch):

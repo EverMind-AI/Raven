@@ -11,7 +11,7 @@ the raven data directory, the work stays where the work is), regenerating a
 product-owned workspace file on every launch, assembling the
 ``acp.modes`` catalogue from overlay files, sweeping stale renders by pid
 liveness, and writing the rendered copy owner-only with the host's deny
-rules merged in.
+rules merged in, beside any file that belongs with it.
 
 What stays in each product is its tables and its judgement: which secrets go
 where, what its modes are called, how a mode's budget resolves, what must
@@ -905,7 +905,8 @@ def mode_catalogue(
 
 
 def sweep_stale_renders(root: Path) -> None:
-    """Remove rendered configs whose server is gone, by pid liveness."""
+    """Remove rendered configs whose server is gone, and the files that belong with
+    them (:func:`rendered_part`), by pid liveness."""
     for stale in root.glob(".config.rendered.*.json"):
         try:
             pid = int(stale.name.split(".")[3])
@@ -937,10 +938,27 @@ def write_rendered(config: dict, root: Path, *, own_plugins: Iterable[str] = ())
     inherit_host_denials(config, host)
     inherit_plugin_opt_outs(config, host, own=own_plugins)
     inherit_memory_backend(config, host)
-    rendered = root / f".config.rendered.{os.getpid()}.json"
-    fd = os.open(rendered, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    return _write_owner_only(config, root / f".config.rendered.{os.getpid()}.json")
+
+
+def rendered_part(root: Path, name: str) -> Path:
+    """Where a file that belongs with this process's render goes: beside it, under
+    its pid, so :func:`sweep_stale_renders` removes it with the render."""
+    return root / f".config.rendered.{os.getpid()}.{name}.json"
+
+
+def write_rendered_part(part: dict, root: Path, name: str) -> Path:
+    """Write a file that belongs with the render at :func:`rendered_part`, owner-only
+    on POSIX as the render is: it holds what the render would otherwise carry, keys
+    included. It is not a config the runtime loads, so nothing is merged in."""
+    root.mkdir(parents=True, exist_ok=True)
+    return _write_owner_only(part, rendered_part(root, name))
+
+
+def _write_owner_only(data: dict, path: Path) -> Path:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as stream:
         if hasattr(os, "fchmod"):
             os.fchmod(stream.fileno(), 0o600)
-        json.dump(config, stream, indent=2, ensure_ascii=False)
-    return rendered
+        json.dump(data, stream, indent=2, ensure_ascii=False)
+    return path
