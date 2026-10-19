@@ -535,11 +535,18 @@ export function machineConnectOpen(id: string): void {
   void loadPresets()
 }
 
+/* Reads of the presets, counted: only the latest one is written, so a read
+   started when a form opened cannot land over the one a finished add asked
+   for after it. */
+let presetsRead = 0
+
 async function loadPresets(): Promise<void> {
+  const read = ++presetsRead
   try {
-    set({ presets: await source().presets(), presetsFailed: '' })
+    const presets = await source().presets()
+    if (read === presetsRead) set({ presets, presetsFailed: '' })
   } catch (e) {
-    set({ presets: [], presetsFailed: failure(e) })
+    if (read === presetsRead) set({ presets: [], presetsFailed: failure(e) })
   }
 }
 
@@ -572,19 +579,23 @@ export async function connectOnMachine(
     got = { refused: failure(e) }
   }
   if (get().mconnectBusy === gen) set({ mconnectBusy: null })
-  set({ mconnectPending: get().mconnectPending.filter(name => name !== pending) })
+  const settled = (): void => set({ mconnectPending: get().mconnectPending.filter(name => name !== pending) })
   if ('name' in got) {
     await load(true)
     /* The preset just landed on the machine, so a form open on that machine
        has to read its choices again -- whichever opening it is: one opened
        while the write ran holds a copy that predates it, and would offer the
        preset once more, which a press answers with a second add the server
-       refuses before any ping, right after a toast said connected (reviewed
-       2026-10-19). `current()` is the wrong test here: it is about the form
-       the write was pressed in, and the reader may have reopened it since. */
+       refuses before any ping, right after a toast said connected. The
+       in-flight mark comes off only once that read is in, so the preset goes
+       from being connected to taken with no moment in between where it is
+       offered. `current()` is the wrong test here: it is about the form the
+       write was pressed in, and the reader may have reopened it since. */
     if (get().mconnect === machine) await loadPresets()
+    settled()
     return { landed: true, current: current(), name: got.name }
   }
+  settled()
   if (current()) set({ mconnectFailed: got.refused })
   return { landed: false, current: current(), name: `${choice.preset}@${machine}` }
 }
