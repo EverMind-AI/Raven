@@ -115,7 +115,7 @@ def _hold_after_turn(session_key: str) -> dict[str, Any] | None:
         campaign = campaign_for_window(home, session_key)
         if not campaign or is_concluded(home / campaign):
             return None
-        job = wakes.pending_look(tools_base.granted_scheduler(), campaign)
+        job = wakes.pending_look(tools_base.granted_scheduler(), campaign, include_running=False)
         if job is None:
             return None
         state = getattr(job, "state", None)

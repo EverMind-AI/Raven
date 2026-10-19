@@ -21,6 +21,7 @@ import json
 import os
 import sys
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -510,10 +511,16 @@ def test_a_killed_job_still_points_at_ops_submit() -> None:
 # ── The ACP hold: a turn that ends with a wake armed says so ────────────
 
 
-def _bound_campaign_with_wake(tmp_path: Path, *, session_key: str = "acp:w1", eta: int = 1800):
+def _bound_campaign_with_wake(
+    tmp_path: Path,
+    *,
+    session_key: str = "acp:w1",
+    eta: int = 1800,
+    grant: NamespacedWakeScheduler | None = None,
+):
     """A window bound to a campaign that has one pending wake, through the real grant."""
     cdir = _campaign(tmp_path)
-    grant = _grant(tmp_path)
+    grant = grant or _grant(tmp_path)
     _adopt_faces(grant)
     bind_window(tools_base.ops_home(), session_key, "camp-a")
     note = wakes.schedule_next_look(grant, campaign="camp-a", eta_seconds=eta, message="look", channel="acp", to="w1")
@@ -568,3 +575,87 @@ def test_no_hold_without_a_pending_wake_or_once_the_campaign_concluded(tmp_path:
     wakes.schedule_next_look(grant, campaign="camp-a", eta_seconds=600, message="look", channel="acp", to="w1")
     (cdir / CONCLUDED_FILE).write_text(json.dumps({"at": "now"}))
     assert "acp_meta" not in asyncio.run(send("acp:w1"))["observers"]
+
+
+# ── The hold read from inside the wake's own turn ───────────────────────
+
+
+def _turn_inside_the_wake(tmp_path: Path, during=None, *, entrance: str = "loop", clock=None) -> dict:
+    """Fire camp-a's wake through the real scheduler and run a turn inside it.
+
+    The scheduler that fires the wake is the one the grant reads, as in a
+    running agent. ``during`` acts inside the turn before it ends: re-arm,
+    pull forward, move the clock. Returns the observers the turn's send left.
+    """
+    svc = CronService(tmp_path / "jobs.json", allowed_channels=None, now_fn=clock)
+    grant = NamespacedWakeScheduler(svc, NS)
+    _bound_campaign_with_wake(tmp_path, grant=grant)
+    job = wakes.pending_look(grant, "camp-a")
+    hook = OncallFlowHook()
+    meta: dict = {}
+
+    async def on_job(fired) -> None:
+        assert fired.id == job.id
+        if during is not None:
+            during(grant)
+        await hook.after_iteration(_iteration(meta, response=LLMResponse(content="ok"), session_key="acp:w1"))
+        await hook.after_send(AgentHookContext(session_key="acp:w1", outbound_content="done", metadata=meta))
+
+    svc.on_job = on_job
+
+    async def fire() -> None:
+        if entrance == "manual":
+            assert await svc.run_job(job.id) is True
+            return
+        svc._store.jobs[0].state.next_run_at_ms = 1
+        svc._save_store()
+        await svc._process_due()
+
+    asyncio.run(fire())
+    assert svc._in_flight == {}, "the run's record is cleared with its writeback"
+    return meta["observers"]
+
+
+def test_the_last_wake_turn_ends_the_held_prompt(tmp_path: Path) -> None:
+    """The final round arms nothing. Its own wake is still in the store until
+    the writeback after the turn, and reading it as pending held the ACP prompt
+    open with nothing left to fire: the host saw the node running for days
+    (2026-10-14). The wake executing this turn is not a wake to wait for."""
+    observers = _turn_inside_the_wake(tmp_path)
+    assert "acp_meta" not in observers
+    assert observers.get("oncall_flow", {}).get("held") is not True
+
+
+def test_a_wake_turn_through_the_manual_entrance_ends_the_held_prompt(tmp_path: Path) -> None:
+    assert "acp_meta" not in _turn_inside_the_wake(tmp_path, entrance="manual")
+
+
+def test_a_wake_turn_that_arms_the_next_look_keeps_the_hold(tmp_path: Path) -> None:
+    def rearm(grant) -> None:
+        wakes.schedule_next_look(grant, campaign="camp-a", eta_seconds=600, message="look", channel="acp", to="w1")
+
+    hold = _turn_inside_the_wake(tmp_path, rearm)["acp_meta"]["raven.holdTurn"]
+    assert "camp-a" in hold["why"]
+
+
+def test_a_next_look_already_due_when_the_turn_ends_keeps_the_hold(tmp_path: Path) -> None:
+    """The turn arms a short look and works past it. Due-and-claimed-here is
+    true of that new wake too, so a test on the clock would end the prompt
+    while a wake is still coming; the schedule the run started from is what
+    tells the two apart."""
+    now = [datetime.now()]
+
+    def rearm_then_overrun(grant) -> None:
+        wakes.schedule_next_look(grant, campaign="camp-a", eta_seconds=60, message="look", channel="acp", to="w1")
+        now[0] += timedelta(minutes=5)
+
+    observers = _turn_inside_the_wake(tmp_path, rearm_then_overrun, clock=lambda: now[0])
+    assert "raven.holdTurn" in observers["acp_meta"]
+
+
+def test_an_owner_answer_inside_the_wake_turn_keeps_the_hold(tmp_path: Path) -> None:
+    """The owner's answer pulls the wake to now (``advance_look``), during the
+    very run of that wake. The pulled wake is a fresh look at the answer and
+    must still be waited for."""
+    observers = _turn_inside_the_wake(tmp_path, lambda grant: wakes.advance_look(grant, "camp-a"))
+    assert "raven.holdTurn" in observers["acp_meta"]

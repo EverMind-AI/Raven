@@ -356,7 +356,7 @@ async def test_check_later_refuses_a_concluded_campaign(home) -> None:
     scheduled = []
 
     class _Wakes:
-        def pending_wakes(self, prefix=""):
+        def pending_wakes(self, prefix="", *, include_running=True):
             return []
 
         def schedule_wake(self, key, at_ms, message, **route):
