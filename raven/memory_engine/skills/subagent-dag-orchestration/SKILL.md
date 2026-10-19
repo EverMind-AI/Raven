@@ -1,6 +1,6 @@
 ---
 name: subagent-dag-orchestration
-description: Use when a task breaks into several distinct steps that a separate sub-agent could each carry out. A DAG node dispatches to an agent on the roster and cannot call your own tools, so steps that are just your own tool calls (reading files, small edits, running commands) are not a DAG for being many - do those yourself. The bound is about who can carry the work, not what kind of work it is: when the roster carries a specialist for it (a coding agent for code changes, an on-call agent for long runs) and the request assigns the work that way, it clears the bound like any other. For work that clears it, test three things before running the steps one at a time: are two or more steps independent (they can run at once), does a step hand its result to the next (a graph wires that handoff with no turn of yours in between), do the steps want different specialists (the roster closes the tool list). If any of the three holds, orchestrate the whole task as one run_subagent_dag call. A step whose result decides what runs next is a decision node: give it routes, and guard what follows with when, all in one graph. Iteration is graphs in series, one graph per round, driven by you.
+description: Use when delegated work breaks into several tasks that agents on the roster can carry out. The host's role decides what to delegate; this skill decides how to group that work. A DAG node dispatches to a roster agent, including the generic agent, and cannot call the host's tools. Reading a brief or checking task status is host coordination, not a reason to create graph nodes. Before dispatching tasks one at a time, test three things: are two or more tasks independent (they can run at once), does a task hand its result to the next (a graph wires that handoff with no turn of yours in between), do the tasks want different specialists (the roster closes the tool list). If any of the three holds, orchestrate the whole task as one run_subagent_dag call. A step whose result decides what runs next is a decision node: give it routes, and guard what follows with when, all in one graph. Iteration is graphs in series, one graph per round, driven by you.
 metadata: {"raven":{"emoji":"🕸️","always":true,"inject":"description","requires":{"tools":["run_subagent_dag"]}}}
 ---
 
@@ -8,20 +8,15 @@ metadata: {"raven":{"emoji":"🕸️","always":true,"inject":"description","requ
 
 ## When to use
 
-The trigger is **a task that breaks into several distinct steps** — not a task you
-have already decided needs sub-agents.
+The trigger is **delegated work that breaks into several tasks**.
 
-**First, the hard bound.** A DAG node dispatches only to a configured third-party
-sub-agent; it cannot call your own tools. So steps that are just your own tool calls
-— reading files, small edits, running commands — are not a DAG for being many or
-independent: do those yourself. The bound is about who can carry the work, not what
-kind of work it is: when the roster carries a specialist for it (a coding agent for
-code changes, an on-call agent for long runs) and the owner's request assigns the
-work that way, it clears the bound like any other. Only work a sub-agent on the
-roster could carry out gets as far as the tests below.
+The host's role decides what to delegate; this guide decides how to group the work.
+A DAG node dispatches to an agent on the roster, including `Raven-General`; it cannot
+call the host's tools. The host's own coordination calls, such as reading a brief or
+checking task status, are not delegated tasks and do not need a graph just because
+there are several of them.
 
-For work that clears that bound, test three things before running the steps one at a
-time:
+For the delegated tasks, test three things before dispatching them one at a time:
 
 - **Independence** — can two or more steps run at the same time? Independent nodes are
   scheduled concurrently, up to the shared sub-agent cap
@@ -43,10 +38,9 @@ next code change — dispatch one graph per round and drive the loop yourself: e
 graph's outputs come back to you, and the next round's nodes reuse the same
 `instance` handles, so each side keeps its context across rounds.
 
-If none of the three holds, the graph buys you nothing — dispatch the work as a single
-`spawn`, which is the right call exactly when the task is genuinely one sub-agent doing
-one thing. The work you do yourself is the work that never cleared the bound above, not
-this.
+If none of the three holds, dispatch the work to one agent: use `spawn` if it is offered,
+or a one-node graph if `run_subagent_dag` is the only dispatch path. The host's role still
+governs the work; choosing one agent instead of a graph does not change that role.
 
 Every install can run a graph: raven's own agents are on the roster whether or not any
 third-party agent is configured, so `run_subagent_dag` is always available. Which agents
@@ -685,8 +679,8 @@ Terminal outputs:
 ## Anti-patterns
 
 - **Don't** dispatch sub-agents one at a time in a loop when a DAG expresses the work.
-- **Don't** build a DAG for steps only your own tools can do — nodes reach third-party
-  sub-agents, not your tools. Many steps alone is not a reason.
+- **Don't** turn the host's coordination calls into graph nodes. Nodes carry delegated
+  work; reading a brief or checking task status is part of managing that work.
 - **Don't** call the tool again to check on a background run, and don't re-submit its graph —
   the result is delivered to you; a second call runs the whole thing a second time.
 - **Don't** reach for `background: false` to "make sure it finishes". It finishes either way;

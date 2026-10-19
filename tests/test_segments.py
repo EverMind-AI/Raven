@@ -730,6 +730,24 @@ class TestHostRole:
             "the role decides how every request is read, so it is read before anything else"
         )
 
+    async def test_resident_dag_guidance_leaves_delegation_to_the_host_role(self, tmp_path: Path) -> None:
+        tools = _tool_defs("read_file", "spawn", "run_subagent_dag", "exec")
+        catalog = ContextBuilder(workspace=tmp_path).skills
+        identity = await IdentitySegmentBuilder(tmp_path, get_tool_definitions=tools).build(_ctx(tmp_path))
+        skills = await ActiveSkillsSegmentBuilder(catalog, get_tool_definitions=tools).build(_ctx(tmp_path))
+        body = catalog.load_skill("subagent-dag-orchestration")
+
+        assert "Producing anything, however small" in identity.text
+        assert "goes to an agent" in identity.text
+        assert "### Skill: subagent-dag-orchestration" in skills.text
+        for text in (skills.text, body):
+            normalized = " ".join(text.split())
+            assert "The host's role decides what to delegate" in normalized
+            assert "do those yourself" not in normalized
+            assert "work that never cleared the bound" not in normalized
+            assert "nodes reach third-party" not in normalized
+        assert "one-node graph" in body
+
     def test_without_a_dispatch_path_the_host_does_the_work_itself(self, tmp_path: Path) -> None:
         """A role that hands all work over is a prohibition without a way to obey it
         on a turn that holds no dispatch tool -- the same guard the Delegation
