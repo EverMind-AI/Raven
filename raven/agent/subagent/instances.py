@@ -532,7 +532,7 @@ async def hold_handle(session_key: str, agent: str, handle: str) -> AsyncIterato
     is what the lock protects. Non-reentrant, that pair is a deadlock with no
     error and no timeout: the turn's record simply stays ``running`` forever.
     """
-    key = (session_key, agent, handle)
+    key = (session_key, canonical_agent_name(agent), handle)
     current = asyncio.current_task()
 
     if current is not None and _handle_owners.get(key) is current:

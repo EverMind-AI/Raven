@@ -6,6 +6,7 @@ import asyncio
 import inspect
 import json
 import os
+from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
@@ -147,6 +148,74 @@ def test_equally_dated_messages_prefer_the_current_agent_name(tmp_path):
         assert InstanceState(instance_state_path(tmp_path, name, "h1")).load() == [
             {"role": "user", "content": GENERIC_AGENT}
         ]
+
+
+@pytest.mark.parametrize("former", ["Raven", "raven"])
+async def test_alias_chat_turns_share_the_lock_and_preserve_both_turns(tmp_path, monkeypatch, former):
+    manager = _direct_chat_manager(tmp_path, monkeypatch)
+    backend = manager.registry.backend(GENERIC_AGENT)
+    run = backend.run
+    slot = manager._hold_instance_slot
+    first_started = asyncio.Event()
+    second_attempted = asyncio.Event()
+    second_started = asyncio.Event()
+    release = asyncio.Event()
+    slots = 0
+
+    @asynccontextmanager
+    async def observed_slot(*args):
+        nonlocal slots
+        slots += 1
+        if slots == 2:
+            second_attempted.set()
+        async with slot(*args):
+            yield
+
+    async def delayed_run(task, **kwargs):
+        (first_started if task == "first" else second_started).set()
+        await release.wait()
+        return await run(task, **kwargs)
+
+    monkeypatch.setattr(manager, "_hold_instance_slot", observed_slot)
+    monkeypatch.setattr(backend, "run", delayed_run)
+    first = asyncio.create_task(manager.chat(session_key="s1", agent=former, handle="h1", text="first"))
+    second = None
+    try:
+        await asyncio.wait_for(first_started.wait(), timeout=2)
+        second = asyncio.create_task(manager.chat(session_key="s1", agent=GENERIC_AGENT, handle="h1", text="second"))
+        await asyncio.wait_for(second_attempted.wait(), timeout=2)
+        overlapped = second_started.is_set()
+    finally:
+        release.set()
+        await asyncio.gather(first, *([second] if second is not None else []))
+
+    assert not overlapped
+    history = manager.instance_state("s1", GENERIC_AGENT, "h1").load()
+    assert [m["content"] for m in history if m["role"] == "user"] == ["first", "second"]
+
+
+@pytest.mark.parametrize("former", ["Raven", "raven"])
+async def test_a_legacy_dag_handle_lock_blocks_a_current_name_chat(tmp_path, monkeypatch, former):
+    from raven.agent.subagent.instances import hold_handle
+
+    manager = _direct_chat_manager(tmp_path, monkeypatch)
+    slot = manager._hold_instance_slot
+    attempted = asyncio.Event()
+
+    @asynccontextmanager
+    async def observed_slot(*args):
+        attempted.set()
+        async with slot(*args):
+            yield
+
+    monkeypatch.setattr(manager, "_hold_instance_slot", observed_slot)
+    async with hold_handle("s1", former, "h1"):
+        turn = asyncio.create_task(manager.chat(session_key="s1", agent=GENERIC_AGENT, handle="h1", text="later"))
+        await asyncio.wait_for(attempted.wait(), timeout=2)
+        finished_while_held = turn.done()
+    await asyncio.wait_for(turn, timeout=2)
+
+    assert not finished_while_held
 
 
 def test_load_of_a_missing_file_is_empty(tmp_path):
