@@ -1760,9 +1760,9 @@ class ThirdPartyOpenAISubagentConfig(Base):
     ``OpenAIApiBackend`` has no tools and no filesystem access of its own, so
     no channel exists through which the endpoint could open a path -- being
     served from this host does not change that. The value is not inert:
-    ``format_agent_listing`` renders it into the spawn / DAG tool descriptions
-    as a ``local-files`` tag, which is the dispatching model's licence to hand
-    this agent a path."""
+    ``format_agent_listing`` renders it into the roster that closes the ``spawn``
+    tool's description as a ``local-files`` tag, which is the dispatching model's
+    licence to hand this agent a path."""
     system_prompt: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None

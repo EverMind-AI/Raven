@@ -190,7 +190,7 @@ flag (default `true`) is described above.
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `id` | yes | Node id, unique across the whole conversation (not just this graph). Letters, digits, `_`, `-` only. |
-| `subagent` | yes | Which agent runs this node. Use one of the names listed in the tool's own description — don't invent them. Raven's own in-process agent (`Raven-General`) is on that list too, so a graph needs no third-party agent configured. |
+| `subagent` | yes | Which agent runs this node. Use one of the names on the roster at the end of the tool list — don't invent them. Raven's own in-process agent (`Raven-General`) is on that list too, so a graph needs no third-party agent configured. |
 | `prompt_template` | yes | Template rendered into the node's prompt. May contain the placeholders below. |
 | `depends_on` | no | Upstream node ids that must finish before this node runs. May also name a task this conversation already finished — an earlier run's node, or a `spawn` — which only records the dependency. |
 | `inputs` | no | Object mapping a key to a literal string, to `{"file": "<path>"}`, or to `{"node": "<id>"}` for another node's output — exactly one of the three, with nothing else in the object. |

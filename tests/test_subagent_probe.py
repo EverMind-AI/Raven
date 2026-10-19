@@ -366,8 +366,8 @@ async def test_openai_probe_does_send_for_a_keyless_configured_entry() -> None:
 
 
 def test_openai_config_coerces_declared_local_file_access_away() -> None:
-    # `reads_local_files` is rendered into the spawn / DAG tool descriptions as a
-    # `local-files` tag, so honouring it here would licence the dispatching model
+    # `reads_local_files` is rendered into the roster that closes the spawn tool's
+    # description as a `local-files` tag, so honouring it here would licence the dispatching model
     # to hand this agent a path that nothing can open. It is coerced rather than
     # rejected because the older web form defaulted the checkbox to true and
     # rendered it for both kinds: rejecting on load would raise inside the whole

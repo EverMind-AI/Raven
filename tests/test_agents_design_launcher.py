@@ -135,8 +135,8 @@ def test_the_roster_row_carries_the_forks_identity_verbatim():
     """The lane flips cli -> acp (the verdict's feature 10); the fork row's
     identity pair -- name, everos, output cap, timeout -- is carried
     byte-for-byte. Its description and owns are not: those two are rendered
-    three times a turn (the spawn and DAG tool descriptions, and the skill
-    gate), so this row states capability and role and leaves procedure to the
+    twice a turn (the roster at the end of the spawn tool's description, and the
+    skill gate), so this row states capability and role and leaves procedure to the
     engine's Skills. The fork's recommendedLlm is dropped as well: this product
     runs on the host's LLM and its launcher reads no key of its own, and a
     recommended model in the manifest is what told the wizard to take one and
