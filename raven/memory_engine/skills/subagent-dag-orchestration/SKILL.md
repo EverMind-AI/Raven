@@ -1,6 +1,6 @@
 ---
 name: subagent-dag-orchestration
-description: Use when delegated work breaks into several tasks that agents on the roster can carry out. The host's role decides what to delegate; this skill decides how to group that work. A DAG node dispatches to a roster agent, including the generic agent, and cannot call the host's tools. Reading a brief or checking task status is host coordination, not a reason to create graph nodes. Before dispatching tasks one at a time, test three things: are two or more tasks independent (they can run at once), does a task hand its result to the next (a graph wires that handoff with no turn of yours in between), do the tasks want different specialists (the roster closes the tool list). If any of the three holds, orchestrate the whole task as one run_subagent_dag call. A step whose result decides what runs next is a decision node: give it routes, and guard what follows with when, all in one graph. Iteration is graphs in series, one graph per round, driven by you.
+description: Use when delegated work breaks into several tasks that agents on the roster can carry out. The host's role decides what to delegate; this skill decides how to group that work. A DAG node dispatches to a roster agent, including the generic agent, and cannot call the host's tools. Choose from the tool's `subagent` parameter enum -- agent names on ordinary turns, worker labels when a Worker Table is bound. The roster describes underlying capabilities. Reading a brief or checking task status is host coordination, not a reason to create graph nodes. Before dispatching tasks one at a time, test three things: are two or more tasks independent (they can run at once), does a task hand its result to the next (a graph wires that handoff with no turn of yours in between), do the tasks want different specialists (the roster closes the tool list). If any of the three holds, orchestrate the whole task as one run_subagent_dag call. A step whose result decides what runs next is a decision node: give it routes, and guard what follows with when, all in one graph. Iteration is graphs in series, one graph per round, driven by you.
 metadata: {"raven":{"emoji":"🕸️","always":true,"inject":"description","requires":{"tools":["run_subagent_dag"]}}}
 ---
 
@@ -12,7 +12,11 @@ The trigger is **delegated work that breaks into several tasks**.
 
 The host's role decides what to delegate; this guide decides how to group the work.
 A DAG node dispatches to an agent on the roster, including `Raven-General`; it cannot
-call the host's tools. The host's own coordination calls, such as reading a brief or
+call the host's tools. Choose from that tool's `subagent` parameter enum: agent names
+on ordinary turns, worker labels when a Worker Table is bound. A worker label selects
+the underlying agent together with that worker's brief. The roster describes the
+underlying agents' capabilities; its names are not dispatch values on a worker turn.
+The host's own coordination calls, such as reading a brief or
 checking task status, are not delegated tasks and do not need a graph just because
 there are several of them.
 
@@ -26,7 +30,8 @@ For the delegated tasks, test three things before dispatching them one at a time
   can hand its result on too — it takes a `node_id` and a later task names it the same way
   a node does — but only across a turn of yours; a graph needs none.
 - **Specialism** — do the steps want different sub-agents? The roster at the end of
-  the tool list — `spawn`'s description closes it — says what each one is for.
+  the tool list says what each agent is for. When a Worker Table is bound, the
+  `subagent` parameter also describes each worker's brief; choose a label that fits.
 
 If any of the three holds, express the whole task as **one** `run_subagent_dag` call
 rather than dispatching sub-agents one at a time. Persistence is not one of the reasons:
@@ -45,6 +50,7 @@ governs the work; choosing one agent instead of a graph does not change that rol
 Every install can run a graph: raven's own agents are on the roster whether or not any
 third-party agent is configured, so `run_subagent_dag` is always available. Which agents
 exist is still the roster's answer, not this file's — read it at the end of the tool list.
+Use the current parameter enum to choose which names or worker labels you can pass.
 
 ## Write the brief as the owner gave it
 
@@ -184,7 +190,7 @@ flag (default `true`) is described above.
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `id` | yes | Node id, unique across the whole conversation (not just this graph). Letters, digits, `_`, `-` only. |
-| `subagent` | yes | Which agent runs this node. Use one of the names on the roster at the end of the tool list — don't invent them. Raven's own in-process agent (`Raven-General`) is on that list too, so a graph needs no third-party agent configured. |
+| `subagent` | yes | Choose from this tool's `subagent` parameter enum: agent names on ordinary turns, worker labels when a Worker Table is bound. A worker label selects its agent and brief together; pass the label itself. The roster at the end of the tool list describes underlying capabilities, including Raven's in-process agent, so a graph needs no third-party agent configured. |
 | `prompt_template` | yes | Template rendered into the node's prompt. May contain the placeholders below. |
 | `depends_on` | no | Upstream node ids that must finish before this node runs. May also name a task this conversation already finished — an earlier run's node, or a `spawn` — which only records the dependency. |
 | `inputs` | no | Object mapping a key to a literal string, to `{"file": "<path>"}`, or to `{"node": "<id>"}` for another node's output — exactly one of the three, with nothing else in the object. |

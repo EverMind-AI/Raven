@@ -743,6 +743,8 @@ class TestHostRole:
         for text in (skills.text, body):
             normalized = " ".join(text.split())
             assert "The host's role decides what to delegate" in normalized
+            assert "`subagent` parameter enum" in normalized
+            assert "worker labels" in normalized
             assert "do those yourself" not in normalized
             assert "work that never cleared the bound" not in normalized
             assert "nodes reach third-party" not in normalized

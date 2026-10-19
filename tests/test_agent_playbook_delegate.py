@@ -23,7 +23,8 @@ from raven.agent.subagent.dag_tool import _DispatchBackend, _WorkerBackend
 from raven.agent.subagent.delegate import DelegateTable, Worker, current_delegate, delegate_scope, outbound_charter
 from raven.agent.subagent.prompt_capabilities import AgentCapabilities
 from raven.agent.subagent.prompt_errors import DagValidationError
-from raven.config.schema import PlaybookConfig
+from raven.agent.tools.params import validate_params
+from raven.config.schema import BuiltinAgentConfig, PlaybookConfig
 from raven.playbook import NodeSpec, PlaybookSpec, Triggers
 from raven.playbook.agent_generator import (
     PERSONA_SYSTEM_PROMPT,
@@ -158,6 +159,38 @@ def test_the_workers_replace_the_dag_roster_too(workspace) -> None:
     assert prop["enum"] == ["research-a", "research-b"]
     assert "the label itself, not the agent it runs on" in prop["description"]
     assert "research-a: only A's pricing [runs on Raven-Research]" in description
+
+
+def test_worker_dispatch_instructions_agree_with_the_live_enums(workspace) -> None:
+    loop = _loop(workspace, "generate")
+    loop.subagents.registry.apply([BuiltinAgentConfig(name="Scribe", description="Writes reports")])
+    assert "reach for it only when no specialist" in _spawn_schema(loop)["description"]
+    table = DelegateTable(workers={"general-worker": Worker("general-worker", "Raven-General", "general work", "")})
+    with delegate_scope(table):
+        spawn = _spawn_schema(loop)
+        dag = _dag_schema(loop)
+        assert "worker label from the `subagent` parameter enum" in spawn["description"]
+        assert "underlying agents' capabilities" in spawn["description"]
+        assert "choose deliberately from the roster" not in spawn["description"]
+        assert "reach for it only when no specialist" not in spawn["description"]
+        instance_description = spawn["parameters"]["properties"]["instance"]["description"]
+        assert "selected worker's underlying agent is tagged [stateful]" in instance_description
+        assert "Raven-General" not in instance_description
+
+        for schema, payload, key in (
+            (
+                spawn["parameters"],
+                {"task_summary": "write a note", "node_id": "note", "prompt_template": "write"},
+                "subagent",
+            ),
+            (
+                dag["parameters"]["properties"]["nodes"]["items"],
+                {"id": "note", "node_summary": "write a note", "prompt_template": "write"},
+                "subagent",
+            ),
+        ):
+            assert validate_params(schema, {**payload, key: "general-worker"}) == []
+            assert validate_params(schema, {**payload, key: "Raven-General"})
 
 
 @pytest.mark.asyncio
