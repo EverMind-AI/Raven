@@ -638,8 +638,9 @@ export async function startReport(): Promise<void> {
     set({ probeWaiting: false })
     s = store.get()
   }
-  if (probeRefused(s)) return
-  if (s.sessionKey === null) return
+  /* The fields stay editable while a start waits on the check, so what was
+     ready when it was pressed is asked again of what the page holds now. */
+  if (s.sessionKey === null || !s.selected.length || !s.problemReady || probeRefused(s)) return
   if (s.report) forgetReport(s.report.id)
   const problem: Problem = { ...draft }
   writeReporter(draft.reporter)

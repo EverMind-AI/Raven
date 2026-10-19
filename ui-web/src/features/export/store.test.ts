@@ -465,6 +465,27 @@ describe('probing the receiver', () => {
     expect(store.get().probeWaiting).toBe(false)
   })
 
+  it.each(['description', 'selection'] as const)(
+    'asks the fields again once the check ends, since they stay editable meanwhile (%s emptied)',
+    async (emptied) => {
+      const answer = deferred<ReportProbe>()
+      onReportProbe = () => answer.promise
+      await atProblemPage()
+      const starting = store.startReport()
+      if (emptied === 'description') store.editProblem('description', '')
+      else store.toggleAll()
+      answer.resolve(REACHABLE)
+      await starting
+      expect(of('reportStart')).toEqual([])
+      expect(localStorage.getItem(store.REPORTER_KEY)).toBeNull()
+      expect(store.get()).toMatchObject({ probeWaiting: false, reportStarting: false, report: null })
+      if (emptied === 'description') store.editProblem('description', 'it broke again')
+      else store.toggleAll()
+      await store.startReport()
+      expect(of('reportStart')).toHaveLength(1)
+    },
+  )
+
   it('does not start while the receiver is down, until the reader goes on', async () => {
     const answer = deferred<ReportProbe>()
     onReportProbe = () => answer.promise
