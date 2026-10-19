@@ -1,4 +1,4 @@
-"""Multimodal generation tools (OpenRouter backend).
+"""Multimodal generation tools (OpenRouter by default, other providers for image and video).
 
 OpenRouter exposes chat-routed generation through the OpenAI-compatible
 chat-completions API with extra *output modalities*; speech and the chat-routed
@@ -32,7 +32,10 @@ Video uses a separate async endpoint (NOT chat-completions):
   ``{id, polling_url, status}`` → poll ``polling_url`` until ``completed`` (URLs
   to download) or ``failed`` (with ``error``). Default model
   ``kwaivgi/kling-v3.0-std`` (Kling v3 Standard). Requires postpaid billing /
-  credits enabled on the OpenRouter account.
+  credits enabled on the OpenRouter account. A section on MiniMax takes MiniMax's
+  own video API instead: ``/v2/video_generation`` for MiniMax-H3 and -H3-Max (a
+  content array, a first frame optional), ``/v1/video_generation`` for the rest,
+  each polled until done, the /v1 result fetched through the file it names.
 
 Generated files are written under ``<working directory>/<output_subdir>`` --
 ``workdir.current()`` when a turn is bound, the constructor's root otherwise --
@@ -72,19 +75,6 @@ if TYPE_CHECKING:
     from raven.config.schema import MediaToolConfig
 
 _DEFAULT_BASE = "https://openrouter.ai/api/v1"
-_MINIMAX_IMAGE_VIDEO_MODELS = frozenset(
-    [
-        "MiniMax-H3",
-        "MiniMax-Hailuo-2.3",
-        "MiniMax-Hailuo-2.3-Fast",
-        "MiniMax-Hailuo-02",
-        "I2V-01-Director",
-        "I2V-01-live",
-        "I2V-01",
-    ]
-)
-_MINIMAX_V2_MODEL = "MiniMax-H3"
-_MINIMAX_GLOBAL_BASE = "https://api.minimax.io"
 
 
 _EXT_MIME = {
@@ -233,6 +223,21 @@ class _OpenRouterMediaTool(Tool):
         if not stem:
             return out_dir / f"{self.name}-{uuid.uuid4().hex[:12]}.{ext}"
         return _claim(out_dir, stem, ext)
+
+    def _image_part(self, ref: str) -> ImagePart:
+        """Build an OpenAI-style image_url content part from a path/URL/data URI."""
+        if ref.startswith(("http://", "https://", "data:")):
+            return image_block(ref)
+        path = Path(ref).expanduser()
+        if self._restrict_to_workspace:
+            resolved = path.resolve()
+            root = self._workspace.resolve()
+            if resolved != root and root not in resolved.parents:
+                raise PermissionError(f"{ref} is outside the workspace")
+        data = path.read_bytes()
+        mime = _EXT_MIME.get(path.suffix.lower(), "image/png")
+        b64 = base64.b64encode(data).decode("ascii")
+        return image_block(f"data:{mime};base64,{b64}")
 
     def _no_key_error(self) -> str:
         from raven.config.schema import media_provider
@@ -438,21 +443,36 @@ class _PictureUnfetchableError(Exception):
         self.detail = detail
 
     def answer(self, model_id: str) -> str:
-        return json.dumps(
-            {
-                "error": "generated, but the picture URL was refused or could not be fetched",
-                "model": model_id,
-                "url": self.url,
-                "detail": self.detail,
-            },
-            ensure_ascii=False,
-        )
+        return _unfetchable_answer("picture", model_id, self.url, self.detail)
+
+
+def _unfetchable_answer(what: str, model_id: str, url: str, detail: str) -> str:
+    """A generation answered with a link this process cannot take. It is billed
+    before it answers, so this must not read as a failed request to repeat."""
+    return json.dumps(
+        {
+            "error": f"generated, but the {what} URL was refused or could not be fetched",
+            "model": model_id,
+            "url": url,
+            "detail": detail,
+        },
+        ensure_ascii=False,
+    )
 
 
 # The providers whose media requests take MiniMax's own shapes: its global and
 # China API-key sections, the two the registry marks for the media tools.
 _MINIMAX_PROVIDERS = frozenset({"minimax", "minimax_cn_api"})
 _MINIMAX_IMAGE_MODEL = "image-01"
+_MINIMAX_VIDEO_MODEL = "MiniMax-Hailuo-2.3"
+# The video models MiniMax serves on /v2, which take a content array; every
+# other one is a /v1 model, with its query and file handoff.
+_MINIMAX_V2_VIDEO_MODELS = frozenset({"MiniMax-H3", "MiniMax-H3-Max"})
+# What each family takes in ``params``. MiniMax ignores any other key without a
+# word, so one outside these is refused before anything is billed.
+_MINIMAX_V2_PARAMS = frozenset({"duration", "resolution", "ratio", "callback_url"})
+_MINIMAX_V1_PARAMS = frozenset({"duration", "resolution", "prompt_optimizer", "fast_pretreatment", "callback_url"})
+_MINIMAX_WAITING = frozenset({"queued", "running", "preparing", "queueing", "processing"})
 
 
 def _minimax_root(api_base: str) -> str:
@@ -669,21 +689,6 @@ class ImageGenerateTool(_OpenRouterMediaTool):
             },
         },
     }
-
-    def _image_part(self, ref: str) -> ImagePart:
-        """Build an OpenAI-style image_url content part from a path/URL/data URI."""
-        if ref.startswith(("http://", "https://", "data:")):
-            return image_block(ref)
-        path = Path(ref).expanduser()
-        if self._restrict_to_workspace:
-            resolved = path.resolve()
-            root = self._workspace.resolve()
-            if resolved != root and root not in resolved.parents:
-                raise PermissionError(f"{ref} is outside the workspace")
-        data = path.read_bytes()
-        mime = _EXT_MIME.get(path.suffix.lower(), "image/png")
-        b64 = base64.b64encode(data).decode("ascii")
-        return image_block(f"data:{mime};base64,{b64}")
 
     def effective_quality(self, requested: str | None, model_id: str | None = None) -> str | None:
         """The quality a call sends: Settings' where it names one, else the request's.
@@ -1351,14 +1356,15 @@ def _pick_video_url(status: dict[str, Any]) -> str | None:
 
 
 class VideoGenerateTool(_OpenRouterMediaTool):
-    """Generate a video, including MiniMax first-frame image animation."""
+    """Generate a video via Kling on OpenRouter (async), or on MiniMax's video API
+    where the section names MiniMax."""
 
     name = "video_generate"
     default_model = "kwaivgi/kling-v3.0-std"  # Kling v3 Standard
     description = (
-        "Generate a short video from a prompt and optional MiniMax first-frame image. Saves "
-        "the video under the workspace and returns its path; forward it with the "
-        "`message` tool's `media` field."
+        "Generate a short video from a text prompt (async; takes a while), and, where the "
+        "video tool runs on MiniMax, from a first frame to animate. Saves the video under "
+        "the workspace and returns its path; forward it with the `message` tool's `media` field."
     )
     parameters = {
         "type": "object",
@@ -1366,18 +1372,27 @@ class VideoGenerateTool(_OpenRouterMediaTool):
             "prompt": {"type": "string", "description": "Text description of the video"},
             "model": {
                 "type": "string",
-                "description": "Optional video model override; configure a MiniMax model for image animation",
+                "description": (
+                    "Optional video model override (default: the configured one, else "
+                    "kwaivgi/kling-v3.0-std on OpenRouter and MiniMax-Hailuo-2.3 on MiniMax)"
+                ),
             },
             "first_frame_image": {
                 "type": "string",
-                "description": "MiniMax first-frame image: public HTTP(S) URL or image data URI",
+                "description": (
+                    "Where the video tool runs on MiniMax: an image to start the video from, as a "
+                    "local file path, http(s) URL, or data: URI"
+                ),
             },
             "params": {
                 "type": "object",
                 "description": (
-                    "Optional generation settings. MiniMax-H3 uses duration (4-15 seconds), "
-                    "resolution (2K), ratio, and callback_url. MiniMax V1 supports duration, "
-                    "resolution, callback_url, prompt_optimizer, and fast_pretreatment."
+                    "Optional provider params. On OpenRouter they are merged into the request, e.g. "
+                    '{"duration": 5, "aspect_ratio": "16:9"} (3-15s; 16:9/9:16/1:1). On MiniMax, '
+                    "MiniMax-H3 and MiniMax-H3-Max take duration, resolution, callback_url and, "
+                    "without a first frame, ratio; the other MiniMax models take duration, "
+                    "resolution, prompt_optimizer, fast_pretreatment and callback_url; any other "
+                    "key is refused"
                 ),
             },
         },
@@ -1397,21 +1412,26 @@ class VideoGenerateTool(_OpenRouterMediaTool):
         first_frame_image: str | None = None,
         **kwargs: Any,
     ) -> str:
-        model_id = self._model(model)
-        if model_id in _MINIMAX_IMAGE_VIDEO_MODELS:
-            if self._model(None) not in _MINIMAX_IMAGE_VIDEO_MODELS:
-                return json.dumps({"error": "Configure tools.media.video.model and apiKey for MiniMax first."})
-            if not first_frame_image or not first_frame_image.strip():
-                return json.dumps({"error": "MiniMax image-to-video requires first_frame_image."})
-            if not first_frame_image.startswith(("https://", "http://", "data:image/")):
-                return json.dumps({"error": "first_frame_image must be a public image URL or image data URI."})
+        from raven.config.schema import media_provider
+
+        runs_on = media_provider(self._config)
+        if runs_on in _MINIMAX_PROVIDERS:
             if not self.api_key:
-                return json.dumps({"error": "Set tools.media.video.apiKey or MINIMAX_API_KEY."})
-            return await self._execute_minimax(prompt, model_id, params, first_frame_image)
+                return self._no_key_error()
+            return await self._execute_minimax(runs_on, prompt, model, params, first_frame_image)
+        if runs_on and runs_on != "openrouter":
+            return json.dumps(
+                {
+                    "error": "video_generate has no request path for this provider",
+                    "detail": f"the video section names {runs_on}; the video tool runs on OpenRouter or MiniMax",
+                },
+                ensure_ascii=False,
+            )
         if first_frame_image is not None:
-            return json.dumps({"error": "first_frame_image requires a supported MiniMax image-to-video model."})
-        if self._model(None) in _MINIMAX_IMAGE_VIDEO_MODELS:
-            return json.dumps({"error": "A MiniMax video configuration requires a supported MiniMax model."})
+            return json.dumps(
+                {"error": "first_frame_image is taken only where the video tool runs on MiniMax"},
+                ensure_ascii=False,
+            )
         if not self.api_key:
             return self._no_key_error()
 
@@ -1471,176 +1491,147 @@ class VideoGenerateTool(_OpenRouterMediaTool):
         logger.info("video_generate: {} bytes via {} -> {}", len(data), model_id, path)
         return json.dumps({"success": True, "model": model_id, "path": str(path)}, ensure_ascii=False)
 
-    @staticmethod
-    def _resolve_key(config: "MediaToolConfig | None") -> str:
-        if getattr(config, "model", "") in _MINIMAX_IMAGE_VIDEO_MODELS:
-            return getattr(config, "api_key", "") or os.environ.get("MINIMAX_API_KEY", "")
-        return _OpenRouterMediaTool._resolve_key(config)
-
-    def _minimax_api_base(self) -> str:
-        configured = getattr(self._config, "api_base", "") if self._config else ""
-        base = (configured or _MINIMAX_GLOBAL_BASE).rstrip("/")
-        for suffix in ("/v2/video_generation", "/v1/video_generation", "/v2", "/v1"):
-            if base.endswith(suffix):
-                return base[: -len(suffix)]
-        return base
-
-    @staticmethod
-    def _minimax_error(payload: dict[str, Any]) -> str:
-        response = payload.get("base_resp") or {}
-        status_code = response.get("status_code")
-        if status_code in (None, 0):
-            return ""
-        return response.get("status_msg") or f"MiniMax API status {status_code}"
-
     async def _execute_minimax(
         self,
+        runs_on: str,
         prompt: str,
-        model_id: str,
+        model: str | None,
         params: dict[str, Any] | None,
-        first_frame_image: str,
+        first_frame_image: str | None,
     ) -> str:
-        api_base = self._minimax_api_base()
-        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
-        options = params or {}
-        is_v2 = model_id == _MINIMAX_V2_MODEL
-        if is_v2:
-            if not prompt.strip() or len(prompt) > 7000:
-                return json.dumps({"error": "MiniMax-H3 requires a non-empty prompt of at most 7000 characters."})
-            duration = options.get("duration", 5)
-            if type(duration) is not int or not 4 <= duration <= 15:
-                return json.dumps({"error": "MiniMax-H3 duration must be an integer from 4 to 15."})
-            if options.get("resolution", "2K") != "2K":
-                return json.dumps({"error": "MiniMax-H3 resolution must be 2K."})
-            allowed = {"resolution", "duration", "ratio", "callback_url", "aigc_watermark"}
-            body: dict[str, Any] = {
-                "model": model_id,
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": first_frame_image}, "role": "first_frame"},
-                ],
-                "resolution": options.get("resolution", "2K"),
-                "duration": options.get("duration", 5),
-            }
-            if httpx.URL(api_base).host != "api.minimaxi.com":
-                allowed.discard("aigc_watermark")
-            body.update({key: value for key, value in options.items() if key in allowed})
-            submit_url = f"{api_base}/v2/video_generation"
+        """MiniMax's video API: ``/v2/video_generation`` for the models that take a
+        content array, ``/v1/video_generation`` with its query and file handoff for
+        the rest. Text-to-video unless a first frame is given."""
+        model_id = wire_model(
+            model or getattr(self._config, "model", "") or _MINIMAX_VIDEO_MODEL, client_provider=runs_on
+        )
+        v2 = model_id in _MINIMAX_V2_VIDEO_MODELS
+        options = dict(params or {})
+        takes = _MINIMAX_V2_PARAMS if v2 else _MINIMAX_V1_PARAMS
+        if v2 and runs_on == "minimax_cn_api":
+            # Documented on MiniMax's China API alone.
+            takes = takes | {"aigc_watermark"}
+        if unknown := sorted(set(options) - takes):
+            return json.dumps(
+                {
+                    "error": "a param this MiniMax model does not take",
+                    "detail": f"{', '.join(unknown)}; {model_id} takes {', '.join(sorted(takes))}",
+                    "model": model_id,
+                },
+                ensure_ascii=False,
+            )
+        frame = None
+        if first_frame_image:
+            try:
+                frame = self._image_part(first_frame_image)["image_url"]["url"]
+            except OSError as e:
+                return json.dumps({"error": "could not read the first frame", "detail": str(e)}, ensure_ascii=False)
+        body: dict[str, Any]
+        if v2:
+            content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+            defaults: dict[str, Any] = {"resolution": "768P", "duration": 6}
+            if frame:
+                # MiniMax answers any other ratio beside a frame with the frame's own
+                # shape, without a word.
+                if options.get("ratio", "adaptive") != "adaptive":
+                    return json.dumps(
+                        {
+                            "error": "a first frame sets the ratio on MiniMax",
+                            "detail": f"leave ratio out; got {options['ratio']!r}",
+                            "model": model_id,
+                        },
+                        ensure_ascii=False,
+                    )
+                content.append({"type": "image_url", "image_url": {"url": frame}, "role": "first_frame"})
+            else:
+                # Text-to-video takes a ratio and refuses ``adaptive``.
+                defaults["ratio"] = "16:9"
+            body = {"model": model_id, "content": content, **defaults, **options}
         else:
-            allowed = {"prompt_optimizer", "fast_pretreatment", "duration", "resolution", "callback_url"}
-            body = {"model": model_id, "prompt": prompt, "first_frame_image": first_frame_image}
-            body.update({key: value for key, value in options.items() if key in allowed})
-            submit_url = f"{api_base}/v1/video_generation"
-
+            body = {"model": model_id, "prompt": prompt, **options}
+            if frame:
+                body["first_frame_image"] = frame
+        root = _minimax_root(self.api_base)
+        headers = self._headers(json_body=True)
         try:
-            async with httpx.AsyncClient(proxy=self._proxy, timeout=120.0) as client:
-                response = await client.post(submit_url, headers=headers, json=body)
-                response.raise_for_status()
-                job = response.json()
-                if error := self._minimax_error(job):
-                    return json.dumps({"error": error, "model": model_id}, ensure_ascii=False)
-                task_id = job.get("task_id")
+            async with httpx.AsyncClient(proxy=self._proxy, timeout=180.0) as client:
+                r = await client.post(f"{root}/{'v2' if v2 else 'v1'}/video_generation", headers=headers, json=body)
+                r.raise_for_status()
+                job = r.json()
+                if refused := _minimax_status_error(job, model_id):
+                    return refused
+                task_id = job.get("task_id") if isinstance(job, dict) else None
                 if not task_id:
                     return json.dumps(
-                        {"error": "video task response did not include task_id", "model": model_id},
-                        ensure_ascii=False,
+                        {"error": "the video task answer carried no task_id", "model": model_id}, ensure_ascii=False
                     )
-
-                status = await self._poll_minimax(client, api_base, str(task_id), headers, is_v2=is_v2)
-                if status.get("status") == "timeout":
+                status = await self._poll_minimax(client, root, str(task_id), v2=v2)
+                if status is None:
                     return json.dumps({"error": "video job status=timeout", "model": model_id}, ensure_ascii=False)
-                if error := self._minimax_error(status):
-                    return json.dumps({"error": error, "model": model_id}, ensure_ascii=False)
-
-                if is_v2:
-                    task = status.get("task") or {}
-                    state = str(task.get("status", "")).lower()
-                    video_url = (task.get("content") or {}).get("url")
+                if refused := _minimax_status_error(status, model_id):
+                    return refused
+                task = (status.get("task") or {}) if v2 else status
+                state = str(task.get("status") or "").lower()
+                if state != ("succeeded" if v2 else "success"):
                     detail = task.get("error") or status
-                    succeeded = state == "succeeded"
-                else:
-                    state = str(status.get("status", "")).lower()
-                    detail = status
-                    succeeded = state == "success"
-                    video_url = None
-                    if succeeded:
-                        file_id = status.get("file_id")
-                        if not file_id:
-                            return json.dumps({"error": "MiniMax completed task did not include file_id."})
-                        file_response = await client.get(
-                            f"{api_base}/v1/files/retrieve",
-                            headers=headers,
-                            params={"file_id": file_id},
-                        )
-                        file_response.raise_for_status()
-                        file_payload = file_response.json()
-                        if error := self._minimax_error(file_payload):
-                            return json.dumps({"error": error, "model": model_id}, ensure_ascii=False)
-                        video_url = (file_payload.get("file") or {}).get("download_url")
-
-                if not succeeded:
                     return json.dumps(
-                        {"error": f"video job status={state}", "detail": detail, "model": model_id},
-                        ensure_ascii=False,
+                        {"error": f"video job status={state}", "detail": detail, "model": model_id}, ensure_ascii=False
                     )
+                if v2:
+                    video_url = (task.get("content") or {}).get("url")
+                else:
+                    r = await client.get(
+                        f"{root}/v1/files/retrieve", headers=headers, params={"file_id": task.get("file_id")}
+                    )
+                    r.raise_for_status()
+                    handoff = r.json()
+                    if refused := _minimax_status_error(handoff, model_id):
+                        return refused
+                    video_url = (handoff.get("file") or {}).get("download_url")
                 if not video_url:
                     return json.dumps(
-                        {"error": "completed but no video URL found", "model": model_id},
-                        ensure_ascii=False,
+                        {"error": "completed but no video URL found", "model": model_id}, ensure_ascii=False
                     )
-
-                video_origin = httpx.URL(video_url)
-                api_origin = httpx.URL(api_base)
-                same_origin = (video_origin.scheme, video_origin.host, video_origin.port) == (
-                    api_origin.scheme,
-                    api_origin.host,
-                    api_origin.port,
-                )
-                download_headers = headers if same_origin else None
-                download = await client.get(video_url, headers=download_headers, timeout=180.0)
-                download.raise_for_status()
-                data = download.content
-        except httpx.HTTPStatusError as error:
-            return self._format_http_error(error)
-        except Exception as error:
-            logger.error("video_generate error: {}", error)
-            return json.dumps({"error": str(error)}, ensure_ascii=False)
+                try:
+                    fetched = await guarded_fetch(client, str(video_url), what="generated video")
+                except httpx.TransportError as e:
+                    return _unfetchable_answer("video", model_id, str(video_url), str(e))
+                if fetched is None:
+                    return _unfetchable_answer("video", model_id, str(video_url), "not a fetchable public target")
+                if not fetched.is_success:
+                    detail = f"HTTP {fetched.status_code} {fetched.text[:400]}".rstrip()
+                    return _unfetchable_answer("video", model_id, str(video_url), detail)
+                data = fetched.content
+        except httpx.HTTPStatusError as e:
+            return self._format_http_error(e)
+        except Exception as e:
+            logger.error("video_generate error: {}", e)
+            return json.dumps({"error": type(e).__name__, "detail": str(e)}, ensure_ascii=False)
 
         path = self._output_path("mp4")
         path.write_bytes(data)
-        logger.info("video_generate: {} bytes via {} -> {}", len(data), model_id, path)
+        logger.info("video_generate: {} bytes via {} on {} -> {}", len(data), model_id, runs_on, path)
         return json.dumps({"success": True, "model": model_id, "path": str(path)}, ensure_ascii=False)
 
     async def _poll_minimax(
-        self,
-        client: httpx.AsyncClient,
-        api_base: str,
-        task_id: str,
-        headers: dict[str, str],
-        *,
-        is_v2: bool,
-    ) -> dict[str, Any]:
+        self, client: httpx.AsyncClient, root: str, task_id: str, *, v2: bool
+    ) -> dict[str, Any] | None:
+        """Poll a MiniMax task until it leaves its waiting states; None at the ceiling."""
+        if v2:
+            url, query = f"{root}/v2/query/video_generation/{task_id}", None
+        else:
+            url, query = f"{root}/v1/query/video_generation", {"task_id": task_id}
         waited = 0.0
         while waited < self._POLL_TIMEOUT_S:
-            if is_v2:
-                response = await client.get(f"{api_base}/v2/query/video_generation/{task_id}", headers=headers)
-            else:
-                response = await client.get(
-                    f"{api_base}/v1/query/video_generation",
-                    headers=headers,
-                    params={"task_id": task_id},
-                )
-            response.raise_for_status()
-            job = response.json()
-            task = job.get("task") or {}
-            state = str(task.get("status") if is_v2 else job.get("status", "")).lower()
-            if self._minimax_error(job):
-                return job
-            if state not in {"queued", "running", "preparing", "queueing", "processing"}:
+            r = await client.get(url, headers=self._headers(), params=query)
+            r.raise_for_status()
+            job = r.json()
+            state = (job.get("task") or {}).get("status") if v2 else job.get("status")
+            if str(state or "").lower() not in _MINIMAX_WAITING:
                 return job
             await asyncio.sleep(self._POLL_INTERVAL_S)
             waited += self._POLL_INTERVAL_S
-        return {"status": "timeout"}
+        return None
 
     def _is_api_origin(self, url: str) -> bool:
         """Is this URL on the same origin as the configured API base?
