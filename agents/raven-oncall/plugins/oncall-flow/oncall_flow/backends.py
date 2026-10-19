@@ -106,17 +106,24 @@ def prepare_from_meta(meta: dict[str, Any], *, app_dir: str) -> None:
         return
     from oncall_flow.docker_backend import make_ssh_runner
     from oncall_flow.runner import make_ssh_sync, prepare_remote
+    from oncall_flow.transport import logs_in_by_password, password_env, password_row, runner_from
 
     # Same seam as backend_from_meta: a campaign that names a connection has no
     # address of its own, and reading meta["host"] here raised KeyError on the
     # first campaign an agent created for itself (2026-08-18).
     meta = _resolve(meta)
-    key_path = os.path.expanduser(meta.get("key", "~/.ssh/id_rsa"))
-    host, port = meta["host"], int(meta.get("port", 22))
     remote_dir = meta.get("remote_dir", "/root/raven-ops")
+    if logs_in_by_password(meta):
+        run = runner_from(meta)
+        row = password_row(meta)
+        sync = make_ssh_sync(row["host"], row["port"], "", user=row["user"], password=True, env=password_env(row))
+    else:
+        key_path = os.path.expanduser(meta.get("key", "~/.ssh/id_rsa"))
+        host, port = meta["host"], int(meta.get("port", 22))
+        run, sync = make_ssh_runner(host, port, key_path), make_ssh_sync(host, port, key_path)
     prepare_remote(
-        make_ssh_runner(host, port, key_path),
-        make_ssh_sync(host, port, key_path),
+        run,
+        sync,
         image=meta.get("image", "python:3.12-slim"),
         app_local=os.path.abspath(app_dir) + "/",
         app_remote=f"{remote_dir}/app",
@@ -139,13 +146,17 @@ def _docker_from_meta(meta: dict[str, Any]) -> JobBackend:
     # Imported inside the factory so the module-level name stays patchable by
     # tests that swap the SSH runner.
     from oncall_flow.docker_backend import DockerExecutor, make_ssh_runner
+    from oncall_flow.transport import logs_in_by_password, runner_from
 
-    run = make_ssh_runner(
-        meta["host"],
-        int(meta.get("port", 22)),
-        os.path.expanduser(meta.get("key", "~/.ssh/id_rsa")),
-        user=str(meta.get("user") or "root"),
-    )
+    if logs_in_by_password(meta):
+        run = runner_from(meta)
+    else:
+        run = make_ssh_runner(
+            meta["host"],
+            int(meta.get("port", 22)),
+            os.path.expanduser(meta.get("key", "~/.ssh/id_rsa")),
+            user=str(meta.get("user") or "root"),
+        )
     return DockerExecutor(
         run,
         image=meta.get("image", "python:3.12-slim"),

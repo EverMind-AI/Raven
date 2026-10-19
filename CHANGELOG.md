@@ -22,7 +22,8 @@ All notable changes to Raven are documented here.
   logins (`~/.raven/keys/<id>.password`, readable by the owner alone), handed
   to ssh on every connection through its askpass hook, and never on a command
   line, in a log or in an answer; such a machine gets no ssh alias and no jump
-  host, Oncall lists it as unusable with the reason, and the mode is not
+  host, its password answers a password prompt and no second factor's, Oncall
+  campaigns run on it as Raven's own connections do, and the mode is not
   offered on Windows. New RPC group
   `machines.{list,add,install_node,doctor,remove}`.
 

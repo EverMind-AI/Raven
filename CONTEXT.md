@@ -433,8 +433,9 @@ through OpenSSH's askpass hook -- in no row, log, command line or answer,
 key, gets no ssh alias, no jump host and no shared connection, and is refused on Windows,
 whose OpenSSH cannot run Raven's POSIX askpass helper; a password under six characters is
 refused, since the scrubber would pass it as ordinary text, and the id rule is the one owner
-`connections.password_path`; Oncall, which logs in with a key only, lists such a row as
-unusable with that reason), install the node in the background, doctor, and remove (`raven ops
+`connections.password_path`; the askpass helper answers a password prompt and no other, a
+second factor's included; Oncall's ssh and rsync log in to such a row the same way,
+`oncall_flow.transport.password_row`), install the node in the background, doctor, and remove (`raven ops
 connection remove`, refused while a connected agent entry names the machine; the password kept
 for a machine goes with its row, `connection_add.forget_password`);
 none of it hands the page an address, an account or a key path, and

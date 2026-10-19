@@ -81,7 +81,9 @@ def add(  # noqa: PLR0913 -- one option per field of the row; a dict would hide 
         "you alone, and used on every connection.",
     ),
     password_stdin: bool = typer.Option(
-        False, "--password-stdin", help="With --auth password: read the password from the first line of stdin."
+        False,
+        "--password-stdin",
+        help="Read the password from the first line of stdin, before any question; implies --auth password.",
     ),
     software: str = typer.Option("", "--software", help="What is installed, with paths."),
     budget_unit: str = typer.Option("", "--budget-unit", help="minute | core-minute | gpu-minute"),
@@ -107,6 +109,13 @@ def add(  # noqa: PLR0913 -- one option per field of the row; a dict would hide 
 
     from raven.ops.connections import LOCAL, SSH, UNREADABLE, read, row_problems, store_path
 
+    if password_stdin and (auth or "password").strip().lower() != "password":
+        # Refused rather than ignored: the piped line would otherwise answer the
+        # first question, and the password would land in the registry as the
+        # machine's name.
+        console.print("[red]--password-stdin goes with --auth password. Nothing was written.[/red]")
+        raise typer.Exit(1)
+    auth = auth or ("password" if password_stdin else "")
     kind = (transport or SSH).strip().lower()
     login = (auth or "key").strip().lower()
     password = ""

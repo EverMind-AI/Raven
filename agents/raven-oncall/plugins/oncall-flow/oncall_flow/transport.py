@@ -20,6 +20,8 @@ from typing import Any
 
 from oncall_flow.backend import JobBackendError
 from oncall_flow.docker_backend import CommandRunner
+from raven.ops import transport as trunk
+from raven.ops.connections import AUTH_PASSWORD, password_auth
 
 LOCAL = "local"
 SSH = "ssh"
@@ -32,6 +34,48 @@ def transport_of(meta: dict[str, Any]) -> str:
     campaign written before this seam existed meaning exactly what it meant.
     """
     return LOCAL if str(meta.get("transport") or SSH).strip().lower() == LOCAL else SSH
+
+
+def logs_in_by_password(meta: dict[str, Any]) -> bool:
+    """Whether this meta reaches its machine over ssh with the password kept for it (``auth: password``)."""
+    return transport_of(meta) == SSH and password_auth(meta)
+
+
+def password_row(meta: dict[str, Any], *, what: str = "campaign") -> dict[str, Any]:
+    """The registry row trunk logs in with, for a meta that logs in by password.
+
+    Built from the meta, so a field the campaign overrides holds here as it does
+    for a key machine. Its id is the meta's connection, because that is what the
+    password is kept under: a meta that names none has nothing to log in with,
+    and is refused saying so rather than sent to a machine that would refuse it.
+    """
+    named = str(meta.get("connection") or "").strip()
+    if not named:
+        raise JobBackendError(
+            f"this {what} logs in with a password and names no connection: a password is kept for a "
+            "registered machine, under its id, so the machine has to be named by its connection"
+        )
+    return {
+        "id": named,
+        "transport": SSH,
+        "host": str(meta.get("host") or "").strip(),
+        "port": int(meta.get("port") or 22),
+        "user": str(meta.get("user") or "root"),
+        "auth": AUTH_PASSWORD,
+    }
+
+
+def password_env(row: dict[str, Any]) -> dict[str, str]:
+    """This process's environment plus what ssh needs to log in as ``row``, for a caller that starts ssh itself.
+
+    rsync is that caller: it runs ssh with the environment it was given. Trunk's
+    refusals -- no password kept here, a Windows computer -- arrive as a
+    :class:`JobBackendError` in trunk's words.
+    """
+    try:
+        return {**os.environ, **trunk.ssh_env(row)}
+    except trunk.TransportError as exc:
+        raise JobBackendError(str(exc)) from None
 
 
 # What ``timeout`` returns when it kills something, reused so a caller reads one
@@ -65,14 +109,6 @@ def make_local_runner(cap_seconds: float = 600.0) -> CommandRunner:
     return run
 
 
-def _row_of(meta: dict[str, Any]) -> dict[str, Any]:
-    """The registry row a campaign's meta names, when it names one and no address was filled in yet."""
-    from oncall_flow.connections import get
-
-    named = str(meta.get("connection") or "").strip()
-    return (get(named) or {}) if named else {}
-
-
 def runner_from(meta: dict[str, Any], *, what: str = "campaign", cap_seconds: float | None = None) -> CommandRunner:
     """The runner this meta -- or connection row -- calls for.
 
@@ -82,15 +118,15 @@ def runner_from(meta: dict[str, Any], *, what: str = "campaign", cap_seconds: fl
     Measured 2026-08-17, and again 2026-08-18 when the failure reached the owner
     as "your machine refused the connection" while that machine was answering in
     under 200ms.
+
+    A machine that takes a password is logged in to by trunk's runner
+    (:func:`raven.ops.transport.runner_from`) rather than by a copy of its login
+    here: the options that make each password connection log in on its own, and
+    the askpass hook that hands ssh the password kept for the machine, are
+    trunk's, and a copy drifts the first time either changes. Trunk's refusals
+    -- no password kept here, a Windows computer -- arrive as a
+    :class:`JobBackendError` in trunk's words, before anything is started.
     """
-    from oncall_flow.connections import PASSWORD_ROW_SAID, by_password
-
-    if by_password(meta) or by_password(_row_of(meta)):
-        # Judged before any ssh is started: this product logs in with a key
-        # only, and a password row would be offered by the listing and then
-        # refused at the campaign's first ssh (reviewed 2026-10-19).
-        raise JobBackendError(f"this {what} names a machine {PASSWORD_ROW_SAID}")
-
     if transport_of(meta) == LOCAL:
         # The caller's cap, not this module's default. Looking at a machine is
         # capped at one minute whichever way it is reached; without this the local
@@ -111,6 +147,11 @@ def runner_from(meta: dict[str, Any], *, what: str = "campaign", cap_seconds: fl
         raise JobBackendError(
             f"this {what} has no address to run on: connection {named!r} is not in the connection registry"
         )
+    if logs_in_by_password(meta):
+        try:
+            return trunk.runner_from(password_row(meta, what=what), cap_seconds=cap_seconds)
+        except trunk.TransportError as exc:
+            raise JobBackendError(str(exc)) from None
     return make_ssh_runner(
         host,
         int(meta.get("port") or 22),

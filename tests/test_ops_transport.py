@@ -182,3 +182,67 @@ def test_a_password_row_whose_id_no_password_could_be_kept_under_is_refused_the_
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
     with pytest.raises(TransportError, match="not an id a password can be kept under"):
         transport.ssh_env({**PASSWORD_ROW, "id": "../escape"})
+
+
+# ---- the askpass helper answers a prompt for the password, and no other ----
+
+_posix_helper = pytest.mark.skipif(sys.platform == "win32", reason="the askpass helper is a POSIX shell script")
+
+
+def _askpass(tmp_path: Path, prompt: str) -> subprocess.CompletedProcess[str]:
+    """What the askpass helper hands ssh for ``prompt``, with ``hunter2`` kept for the machine."""
+    keys = tmp_path / "keys"
+    helper = transport.askpass_helper(keys)
+    secret = keys / "box.password"
+    secret.write_text("hunter2\n", encoding="utf-8")
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "RAVEN_MACHINE_PASSWORD_FILE": str(secret)}
+    return subprocess.run(["sh", str(helper), prompt], capture_output=True, text=True, env=env, timeout=30)
+
+
+@_posix_helper
+@pytest.mark.parametrize(
+    "prompt",
+    ["alice@203.0.113.7's password: ", "(alice@203.0.113.7) Password: ", "Password: ", "(alice@box) Passwort: "],
+    ids=["password-method", "keyboard-interactive", "older-openssh", "other-language"],
+)
+def test_the_askpass_helper_answers_a_prompt_for_the_password(tmp_path, prompt):
+    done = _askpass(tmp_path, prompt)
+
+    assert (done.returncode, done.stdout) == (0, "hunter2\n"), done.stderr
+
+
+@_posix_helper
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "(alice@203.0.113.7) Verification code: ",
+        "(alice@203.0.113.7) Passcode or option (1-3): ",
+        "Verification code: ",
+        "Enter passphrase for key '/home/alice/.ssh/id_ed25519': ",
+    ],
+    ids=["code", "passcode", "code-older-openssh", "key-passphrase"],
+)
+def test_the_askpass_helper_gives_a_second_factor_s_prompt_nothing(tmp_path, prompt):
+    """Raven cannot answer a second factor, and a PAM module may pass what it is given on to its vendor."""
+    done = _askpass(tmp_path, prompt)
+
+    assert (done.returncode, done.stdout) == (1, "")
+    assert done.stderr.startswith("raven: ") and "hunter2" not in done.stderr
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not available on Windows")
+def test_a_stale_askpass_helper_is_replaced_whole_and_never_rewritten_in_place(tmp_path):
+    keys = tmp_path / "keys"
+    keys.mkdir(mode=0o700)
+    stale = '#!/bin/sh\nexec cat "$RAVEN_MACHINE_PASSWORD_FILE"\n'
+    (keys / "askpass").write_text(stale, encoding="utf-8")
+
+    with (keys / "askpass").open(encoding="utf-8") as running:
+        helper = transport.askpass_helper(keys)
+        # A connection that started the stale helper while another brought it up to date reads
+        # it whole: never a file emptied under it.
+        assert running.read() == stale
+
+    assert helper.read_text(encoding="utf-8") == transport._ASKPASS
+    assert oct(helper.stat().st_mode & 0o777) == "0o700"
+    assert sorted(path.name for path in keys.iterdir()) == ["askpass"], "nothing is left beside it"

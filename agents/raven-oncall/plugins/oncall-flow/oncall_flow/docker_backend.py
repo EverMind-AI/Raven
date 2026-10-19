@@ -238,7 +238,9 @@ def make_ssh_runner(
     """Run a command over ssh, the way a job reaches its machine: whatever the
     owner's ssh would use gets to work, an agent included. The probe that has
     to prove WHICH key opened a session is trunk's
-    (``raven.ops.transport.make_ssh_runner(identities_only=True)``)."""
+    (``raven.ops.transport.make_ssh_runner(identities_only=True)``), and so is
+    the login to a machine that takes a password, which never comes here
+    (``oncall_flow.transport.runner_from``)."""
     import subprocess
 
     def run(cmd: str) -> tuple[int, str]:

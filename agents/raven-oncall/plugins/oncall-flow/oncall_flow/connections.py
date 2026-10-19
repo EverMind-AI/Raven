@@ -21,12 +21,13 @@ is. Three things follow:
     budget is counted in, and how many jobs it will run at once, were being
     restated in every campaign's meta and in the task statement itself.
 
-Credentials are a reference -- a path to a key the owner already has. A machine
-registered with a password (trunk's ``auth: password``, 2026-10-19) is a
-credential this product cannot present: every ssh here logs in with a key, so
-such a row is listed as unusable with the reason, rather than offered and then
-refused at the campaign's first ssh. Routing these paths through trunk's
-askpass (``transport.ssh_env``) is the follow-up that would lift it.
+A credential in a campaign is never the secret itself. A key is a path to one
+the owner already has; a password is the one this computer keeps for the
+connection (trunk's registry says ``auth: password``), found by the
+connection's id. So a campaign's meta carries ``auth`` beside the address and
+never the password, and every ssh this plugin starts for such a machine, its
+rsync's included, logs in with trunk's options and trunk's askpass hook
+(:mod:`oncall_flow.transport`).
 
 Trunk's :mod:`raven.ops.connections` is the reader and
 :mod:`raven.ops.connection_add` the writer; both are imported here rather than
@@ -75,22 +76,10 @@ _SHOWN = SHOWN
 # this one changes nothing about which machine the work calls for, and a field
 # the agent can see is a field it can reason about wrongly -- here, by deciding
 # it may skip naming the machine at all, which loses the record of where a
-# command ran.
-_TRANSPORT = ("host", "port", "user", "key", "transport")
-
-#: What a password-registered machine is told, wherever this product would offer it. One sentence, so the listing
-#: and the runner say the same thing.
-#: What a password-registered machine is told, wherever this product would offer it. One sentence, so the listing
-#: and the runner say the same thing. It is a sentence shown to a model, not a credential.
-PASSWORD_ROW_SAID = (  # noqa: S105
-    "registered with a password, which this product logs in to with a key only: campaigns cannot run there; "  # noqa: S105
-    "register it with a key (Raven's own connections still reach it by password)"
-)
-
-
-def by_password(row: dict[str, Any]) -> bool:
-    """Whether the registry reaches this machine with a password this product does not present."""
-    return str(row.get("auth") or "key").strip().lower() == "password"
+# command ran. ``auth`` goes with the address because a machine that takes a
+# password has no key: a meta without it is logged in to with a key the machine
+# was never given, and refused at its first ssh.
+_TRANSPORT = ("host", "port", "user", "key", "transport", "auth")
 
 
 def get(conn_id: str) -> dict[str, Any] | None:
@@ -169,21 +158,10 @@ def describe() -> str:
     # every listing is read as noise and then not read at all, which is the same
     # reason a shallow path claim is not honoured below.
     faults = [f for f in problems() if f.blocking]
-    # A password row passes the registry's own reader -- Raven reaches it -- but
-    # not this product's ssh: said here, once per machine, rather than offered
-    # and refused at the campaign's first ssh (reviewed 2026-10-19).
-    passwords = [
-        f"{row.get('display_name') or row['id']} (id {row['id']}): {PASSWORD_ROW_SAID}"
-        for row in rows
-        if by_password(row)
-    ]
-    faults = faults + passwords
     lines = []
     for row in rows:
         bits = [f"{row.get('display_name') or row['id']}   (id {row['id']})"]
         bits += [f"{k} {row[k]}" for k in SHOWN if row.get(k) not in (None, "")]
-        if by_password(row):
-            bits.append("(password: not for campaigns)")
         lines.append("  " + "   ".join(bits))
     trouble = (
         "\n\nOne or more of these cannot be used as written, and picking it will "
