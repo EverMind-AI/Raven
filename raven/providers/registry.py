@@ -179,6 +179,12 @@ class ProviderSpec:
     # must read one answer.
     image_api: bool = False
 
+    # The video tool can run on this provider's address and key: OpenRouter, its
+    # default backend (`/videos`), or MiniMax, whose own video API the tool also
+    # speaks. Read by the roles card and the save for the same reason as
+    # `image_api`.
+    video_api: bool = False
+
     @property
     def label(self) -> str:
         return self.display_name or self.name.title()
@@ -333,6 +339,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         supports_prompt_caching=True,
         default_model="openrouter/anthropic/claude-sonnet-5",
         image_api=True,
+        video_api=True,
     ),
     # AiHubMix: global gateway, OpenAI-compatible interface.
     # strip_model_prefix=True: it doesn't understand "anthropic/claude-3",
@@ -963,6 +970,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         # /v1/models before any LiteLLM call resolves an endpoint.
         default_api_base="https://api.minimax.io/v1",
         image_api=True,
+        video_api=True,
     ),
     ProviderSpec(
         name="minimax_cn_api",
@@ -980,6 +988,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         requires_api_base=True,
         default_model="minimax-cn-api/MiniMax-M3",
         image_api=True,
+        video_api=True,
     ),
     ProviderSpec(
         name="minimax_global",

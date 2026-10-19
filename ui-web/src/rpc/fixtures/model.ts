@@ -32,6 +32,8 @@ interface Entry {
   gateway?: boolean
   /** The image tool can run here; the roles card offers the image role these. */
   image_api?: boolean
+  /** The video tool can run here; the roles card offers the video role these. */
+  video_api?: boolean
   /** The kind per model id, where it is not text. The live reply carries one
       for every described model; offline, only the rows a page filters on need
       to differ, and text is what a missing label means. */
@@ -70,7 +72,8 @@ const PROVIDERS: Entry[] = [
   /* A gateway with one model of each kind a role slot filters on, so the
      offline page can open every slot's picker and show the filter working. */
   { slug: 'openrouter', name: 'OpenRouter', homepage: 'https://openrouter.ai/',
-    key_url: 'https://openrouter.ai/keys', gateway: true, image_api: true, authenticated: true, auth_type: 'key',
+    key_url: 'https://openrouter.ai/keys', gateway: true, image_api: true, video_api: true, authenticated: true,
+    auth_type: 'key',
     models: ['anthropic/claude-sonnet-4-5', 'openai/text-embedding-3-small', 'BAAI/bge-reranker-v2-m3', 'google/gemini-2.5-flash-image'],
     kinds: {
       'openai/text-embedding-3-small': 'embedding',
@@ -116,6 +119,7 @@ const wire = (e: Entry, current: string): Provider => ({
   extra_headers: {},
   gateway: !!e.gateway,
   image_api: !!e.image_api,
+  video_api: !!e.video_api,
   /* The prefixes this provider answers to. Canned rows are named once and
      never renamed, so that is the slug itself. */
   route_names: [e.slug],

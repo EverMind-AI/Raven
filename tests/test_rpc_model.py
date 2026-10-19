@@ -205,6 +205,15 @@ async def test_options_rows_say_which_providers_the_image_tool_runs_on(fake_home
     assert serving == ["custom", "minimax", "minimax_cn_api", "openai", "openrouter", "volcengine"]
 
 
+async def test_options_rows_say_which_providers_the_video_tool_runs_on(fake_home: Path) -> None:
+    """The roles card offers the video role exactly these, and the save checks the
+    same flag."""
+    _write_config(fake_home, {"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}})
+    result = await model_options({})
+    serving = sorted(row["slug"] for row in result["providers"] if row["video_api"])
+    assert serving == ["minimax", "minimax_cn_api", "openrouter"]
+
+
 async def test_options_rows_carry_every_prefix_that_names_the_provider(fake_home: Path) -> None:
     """The set ``merge_key`` strips, so a client can ask the same identity.
 

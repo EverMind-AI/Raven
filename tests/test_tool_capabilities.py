@@ -347,6 +347,40 @@ def test_a_media_section_on_a_named_provider_is_paid_by_that_provider(workspace,
     assert has_credential(cap, config)
 
 
+def test_a_video_section_on_minimax_is_paid_by_minimax(workspace, tmp_path: Path) -> None:
+    """The video section names a provider as the image one does: MiniMax's address and
+    key, with the OpenRouter key on the same install left alone."""
+    config = _config(tmp_path)
+    config.tools.media.video.model = "MiniMax-Hailuo-2.3"
+    config.tools.media.video.provider = "minimax"
+    config.providers.minimax.api_key = "sk-mm"
+    config.providers.openrouter.api_key = "sk-or-test"
+    loop = _loop(workspace, config)
+
+    cap = next(c for c in CAPABILITIES if c.tool == "video_generate")
+    resolved = _resolved(config, "video")
+    assert (resolved.api_base, resolved.api_key) == ("https://api.minimax.io/v1", "sk-mm")
+    assert is_configured(cap, config) and loop.tools.offers_by_name("video_generate")
+    assert configured_from(cap, config) == "borrowed: providers.minimax.apiKey"
+    assert has_credential(cap, config)
+
+
+def test_a_row_on_a_named_provider_names_that_provider_s_key_and_no_openrouter_terms(tmp_path: Path) -> None:
+    """OpenRouter's variable never reaches a section on another provider, and that
+    provider bills it, so the row a deployer reads names the provider's key and
+    neither the variable nor OpenRouter's credit."""
+    from raven.agent.tools.capabilities import resolve
+
+    config = _config(tmp_path)
+    config.tools.media.video.provider = "minimax"
+    cap = resolve(next(c for c in CAPABILITIES if c.tool == "video_generate"), config)
+    assert (cap.key_path, cap.env_var) == ("providers.minimax.apiKey", "")
+    assert cap.cost_note and "OpenRouter" not in cap.cost_note
+
+    on_openrouter = resolve(next(c for c in CAPABILITIES if c.tool == "image_generate"), config)
+    assert (on_openrouter.key_path, on_openrouter.env_var) == ("tools.media.image.apiKey", "OPENROUTER_API_KEY")
+
+
 def test_a_named_provider_whose_section_does_not_validate_lends_nothing_at_boot() -> None:
     """An undeclared provider's section loads as raw data and is validated only when
     read, so the boot resolution reads it as absent rather than raising on start."""
