@@ -33,3 +33,27 @@ def test_the_scrubber_looks_where_the_password_is_kept():
     kept = password_path("box")
     assert kept.parent == raven_home() / MACHINE_PASSWORD_GLOB[0]
     assert kept.match(MACHINE_PASSWORD_GLOB[1])
+
+
+def test_a_password_rewritten_in_place_with_the_same_mtime_is_still_the_one_scrubbed(tmp_path, monkeypatch):
+    """A rewrite can land inside the filesystem's timestamp resolution; the files are read, not stamped."""
+    import os
+
+    from raven.config import held_secrets as hs
+    from raven.ops.connection_add import store_password
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("RAVEN_HOME", str(home))
+    config = home / "config.json"
+    home.mkdir()
+    config.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(hs, "get_config_path", lambda: config)
+    hs._cache = None
+    path = store_password("box", "correct-horse")
+    assert hs.scrub_held_secrets("say correct-horse") == "say [redacted: the password kept for machine box]"
+    stamp = path.stat()
+    store_password("box", "battery-staple")
+    os.utime(path, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+    assert path.stat().st_mtime_ns == stamp.st_mtime_ns, "the rewrite kept the old mtime, as a fast one can"
+    assert hs.scrub_held_secrets("say battery-staple") == "say [redacted: the password kept for machine box]"
+    assert hs.scrub_held_secrets("say correct-horse") == "say correct-horse"

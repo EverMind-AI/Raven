@@ -750,6 +750,30 @@ def test_add_with_a_password_from_stdin_keeps_it_here_and_writes_a_row_with_no_k
     assert not (tmp_path / ".ssh" / "config").exists()
 
 
+def test_a_failed_re_add_under_an_id_in_use_leaves_the_registered_password_alone(
+    store, unreachable, monkeypatch, tmp_path
+):
+    """The id is judged before anything is kept or reached: the registered row's password survives a re-add that fails."""
+    point_home(monkeypatch, tmp_path)
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    monkeypatch.setattr(sys, "platform", "linux")
+    from raven.ops.connection_add import password_path, store_password
+
+    _box_row(store, auth="password", user="root")
+    store_password("box", "working-old")
+    before = store.read_text(encoding="utf-8")
+
+    out = CliRunner().invoke(
+        connection_app, [*PW_ADD, "--auth", "password", "--password-stdin", *FULL], input="wrong-new\n"
+    )
+
+    assert out.exit_code == 1, out.output
+    assert "already listed" in said(out) and "remove it first" in said(out)
+    assert password_path("box").read_text(encoding="utf-8") == "working-old\n"
+    assert store.read_text(encoding="utf-8") == before
+    assert "wrong-new" not in out.output
+
+
 def test_add_by_password_needs_the_password_and_a_refused_one_is_not_kept(store, unreachable, monkeypatch, tmp_path):
     point_home(monkeypatch, tmp_path)
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
