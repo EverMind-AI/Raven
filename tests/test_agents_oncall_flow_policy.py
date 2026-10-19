@@ -24,7 +24,9 @@ from oncall_flow.escalation import (  # noqa: E402
     append_note,
     append_owner_answer,
     blocking_question_open,
+    decided_without_owner,
     load_guard,
+    open_question,
     save_guard,
     unanswered_question,
 )
@@ -301,6 +303,48 @@ def test_a_denied_ask_never_opens_a_question(tmp_path: Path) -> None:
     assert unanswered_question(cdir) == "checking in"
     assert blocking_question_open(cdir) == "", "only a question the loop marked blocking blocks"
     append_note(cdir, "the answer no longer matters; proceeding on the fallback")
+    assert unanswered_question(cdir) == ""
+
+
+def test_a_question_with_an_id_is_not_closed_by_the_loops_own_note(tmp_path: Path) -> None:
+    """A progress note is not the owner's answer. Read as one, it let the loop
+    end its own question without saying so, and ops_finish stopped asking."""
+    cdir = tmp_path / "camp"
+    cdir.mkdir()
+    log_event(cdir, "ask_owner", ask_id="q1", question="count the top outflow?", allowed=True, blocks_progress=True)
+    append_note(cdir, "round 2 submitted with a finer step")
+    assert unanswered_question(cdir) == "count the top outflow?"
+    assert blocking_question_open(cdir) == "count the top outflow?"
+
+    append_owner_answer(cdir, "A, count it")
+    assert unanswered_question(cdir) == "", "the owner speaking after the ask closes it"
+
+
+def test_settling_on_the_default_closes_the_question_and_is_read_out(tmp_path: Path) -> None:
+    cdir = tmp_path / "camp"
+    cdir.mkdir()
+    log_event(cdir, "ask_owner", ask_id="q1", question="count the top outflow?", allowed=True)
+    log_event(cdir, "ask_settled", ask_id="q1", reason="went ahead counting it, as said")
+    assert open_question(cdir) is None
+    assert decided_without_owner(cdir) == [
+        {"question": "count the top outflow?", "reason": "went ahead counting it, as said"}
+    ]
+
+    log_event(cdir, "owner_answered", ask_id="q1", via="question")
+    assert decided_without_owner(cdir) == [], "answered after all: no longer a decision made without them"
+
+
+def test_an_answer_to_an_older_question_does_not_close_the_newer_one(tmp_path: Path) -> None:
+    cdir = tmp_path / "camp"
+    cdir.mkdir()
+    log_event(cdir, "ask_owner", ask_id="q1", question="first?", allowed=True)
+    log_event(cdir, "ask_owner", ask_id="q2", question="second?", allowed=True)
+    append_note(cdir, "yes to the first", source="owner", ask_id="q1")
+    still = open_question(cdir)
+    assert still is not None and still["ask_id"] == "q2"
+    log_event(cdir, "owner_answered", ask_id="q1", via="question")
+    assert unanswered_question(cdir) == "second?"
+    log_event(cdir, "ask_withdrawn", ask_id="q2", reason="campaign closed")
     assert unanswered_question(cdir) == ""
 
 

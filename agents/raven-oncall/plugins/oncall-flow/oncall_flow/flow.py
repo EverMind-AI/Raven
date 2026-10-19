@@ -52,7 +52,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from oncall_flow import wakes, watched
-from oncall_flow.escalation import append_note, unanswered_question
+from oncall_flow.escalation import append_note, open_question
 from oncall_flow.instrument import is_concluded, log_event
 from oncall_flow.tools import base as tools_base
 from oncall_flow.window import campaign_for_window, task_fingerprint
@@ -181,14 +181,14 @@ def _capture_owner_instruction(session_key: str, content: str, origin: str) -> d
         cdir = home / campaign
         if (cdir / "concluded.json").exists():
             return {}
-        # Read BEFORE the note is written: any note at or after the ask closes
-        # the question (escalation.unanswered_question), and the capture's own
-        # note is exactly such a note -- writing first would answer the
-        # question with itself and the wake would never be pulled forward.
-        question_open = bool(unanswered_question(cdir))
+        # Read BEFORE the note is written: the owner speaking after the ask
+        # closes the question (escalation.open_question), and the capture's own
+        # note is exactly that -- writing first would answer the question with
+        # itself and the wake would never be pulled forward.
+        question = open_question(cdir)
         append_note(cdir, text[:2000], source="owner")
         out: dict[str, Any] = {"owner_note": campaign}
-        if question_open:
+        if question is not None:
             # The owner is right here; the wake the loop scheduled while it
             # waited is pulled to now, so the answer is read within seconds
             # rather than after the rest of a twenty-minute timer (fork
@@ -197,7 +197,7 @@ def _capture_owner_instruction(session_key: str, content: str, origin: str) -> d
             scheduler = tools_base.granted_scheduler()
             if scheduler is not None:
                 woke = wakes.pending_look(scheduler, campaign) is not None
-                log_event(cdir, "owner_answered", woke=woke)
+                log_event(cdir, "owner_answered", ask_id=question["ask_id"], via="chat", woke=woke)
                 if woke:
                     wakes.advance_look(scheduler, campaign)
                 out["owner_woke"] = woke

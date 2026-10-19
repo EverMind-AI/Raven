@@ -2034,7 +2034,8 @@ class OpsSubmitTool(_OpsScheduler):
                 "heard back -- so spending compute now contradicts it. Reading logs, reading "
                 "the case and writing down what you find cost nothing and are still open to "
                 "you. If you have since found something that makes the answer unnecessary, "
-                "record it with ops_note and submit again. Nothing was submitted."
+                "record it with ops_note and settles_question=true, and submit again. Nothing "
+                "was submitted."
             )
 
         if round >= 1:
@@ -2836,17 +2837,45 @@ class OpsNoteTool(Tool):
                 "campaign": {"type": "string", "description": "Campaign name (as used in ops_submit)."},
                 "note": {"type": "string", "description": "The user's instruction, verbatim or faithfully summarized."},
                 "ledger": {"type": "string", "description": "Ledger path if known (locates the campaign dir)."},
+                "settles_question": {
+                    "type": "boolean",
+                    "description": "True when this note says you are going ahead without the owner's answer "
+                    "to the open ops_ask_owner question -- on what you said you would do if unanswered, or "
+                    "because the answer no longer changes anything. The question then stops holding back "
+                    "ops_submit and ops_finish, and the report lists it as decided without the owner.",
+                },
             },
             "required": ["campaign", "note"],
         }
 
-    async def execute(self, campaign: str, note: str, ledger: str | None = None, **kwargs: Any) -> str:
+    async def execute(
+        self,
+        campaign: str,
+        note: str,
+        ledger: str | None = None,
+        settles_question: bool = False,
+        **kwargs: Any,
+    ) -> str:
         cdir = _resolve_campaign_dir(campaign, ledger, getattr(self, "_session_key", ""), getattr(self, "_task", ""))
         _append_note(cdir, note)
+        from oncall_flow.escalation import open_question
         from oncall_flow.instrument import log_event
 
         log_event(cdir, "note", note=note)
-        return f"Noted for campaign '{campaign}': {note}\nThe next wake turn will see it via ops_tune_status."
+        settled = ""
+        if settles_question:
+            question = open_question(cdir)
+            if question is None:
+                settled = "\nNo question to the owner is open, so there was nothing to settle."
+            elif not question["ask_id"]:
+                settled = "\nThe open question predates question ids; this note closes it as any note does."
+            else:
+                log_event(cdir, "ask_settled", ask_id=question["ask_id"], reason=note[:400])
+                settled = (
+                    f"\nSettled without the owner: {question['question'][:200]}\n"
+                    "Their answer, if it still comes, is written to the notes like any other."
+                )
+        return f"Noted for campaign '{campaign}': {note}\nThe next wake turn will see it via ops_tune_status.{settled}"
 
 
 class OpsKillTool(Tool):
