@@ -59,9 +59,10 @@ raven ops connection add --id gpu1 --name "GPU box 1" \
   密码登录（`PasswordAuthentication yes`），不允许的机器每次连接都会拒绝，拒绝语里会说明。
   登记时被机器拒绝的密码不会保存。机器改了密码，先移除这台机器再重新登记（id 已在用的登记
   会被拒）。本机是 Windows 时不提供：
-  Windows 的 OpenSSH 没有 askpass。这样登记的机器不写 `~/.ssh/config` 里的 `Host <id>`
-  别名：终端里对它用 `scp`、`rsync` 要自己输密码，Agent 读写它上面的文件走 Raven 自己的
-  文件工具。移除机器时会删掉本机保存的密码（[第 8 节](#8-remove-a-machine)）。
+  Windows 的 OpenSSH 跑不了把密码交给 ssh 的 POSIX 脚本。这样登记的机器不写
+  `~/.ssh/config` 里的 `Host <id>` 别名：终端里对它用 `scp`、`rsync` 要自己输密码，
+  Agent 读写它上面的文件走 Raven 自己的文件工具。移除机器时会删掉本机保存的密码
+  （[第 8 节](#8-remove-a-machine)）。
 - 机器的主机密钥在第一次连接时接受并写进 `~/.ssh/known_hosts`。之后机器换了密钥，
   会被拒绝，直到你自己核实过。用密码登记时，这第一次连接带着密码：在不信任的网络上，
   先在终端里连一次（`ssh user@host` 会显示指纹让你确认）再登记，或者改用密钥登记。

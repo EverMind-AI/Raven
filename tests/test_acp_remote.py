@@ -575,7 +575,7 @@ def _pw() -> Machine:
 
 
 def test_the_ssh_command_for_a_password_machine_offers_no_key_and_the_link_gets_the_askpass_environment(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, supported_host
 ):
     from raven.ops.connection_add import store_password
 
@@ -592,7 +592,7 @@ def test_the_ssh_command_for_a_password_machine_offers_no_key_and_the_link_gets_
 
 
 def test_a_password_machine_with_no_password_kept_here_is_refused_by_name_not_as_a_network_fault(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, supported_host
 ):
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
 
@@ -603,7 +603,7 @@ def test_a_password_machine_with_no_password_kept_here_is_refused_by_name_not_as
 
 
 def test_push_hands_ssh_the_askpass_environment_for_a_password_machine_and_nothing_for_a_key_machine(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, supported_host
 ):
     from raven.ops.connection_add import store_password
 
@@ -625,7 +625,9 @@ def test_push_hands_ssh_the_askpass_environment_for_a_password_machine_and_nothi
     assert env_key is None and "-i" in argv_key
 
 
-async def test_the_tunnel_hands_ssh_the_askpass_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+async def test_the_tunnel_hands_ssh_the_askpass_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, supported_host
+):
     from raven.ops.connection_add import store_password
 
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
