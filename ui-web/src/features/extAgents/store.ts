@@ -542,7 +542,11 @@ export async function connectOnMachine(
   remoteCwd: string,
 ): Promise<{ landed: boolean; current: boolean }> {
   const gen = get().mconnectGen
-  const current = (): boolean => get().mconnect === machine && get().mconnectGen === gen
+  /* Still the form it was pressed in, and that form still on screen: the
+     drawer's own state says whether it is open and ours, since `mconnect`
+     stays set through the close fade (`sheetDismissed` drops it after). */
+  const current = (): boolean =>
+    get().mconnect === machine && get().mconnectGen === gen && detail.get().open && detail.get().owner === 'extAgents'
   set({ mconnectBusy: gen, mconnectFailed: '' })
   let refused: string | null
   try {
@@ -610,6 +614,11 @@ export async function pickAndConnect(row: ExtAgentRow): Promise<void> {
    the drawer has finished fading, or the card is gone from inside a panel that
    is still on screen. */
 export function sheetDismissed(): void {
+  /* A connect form's write may still be running: from this tick it is no
+     longer the form's, whatever the fade still shows -- the drop below comes
+     a fade later, and a write ending inside that window must not reopen the
+     drawer the reader just closed, nor write to the fading form. */
+  if (get().mconnect) set({ mconnectGen: get().mconnectGen + 1, mconnectBusy: null })
   if (!get().sheet && !get().msheet && !get().picking && !get().mconnect) return
   /* Which open this close belongs to. The name cannot answer that: closing a
      card and pressing the same row again inside the fade writes the same string

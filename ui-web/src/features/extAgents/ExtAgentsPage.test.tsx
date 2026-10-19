@@ -2799,7 +2799,7 @@ describe('the machines module', () => {
     expect(toasts).toEqual(['gui.machine.connect_bad_named {"name":"Codex@box"}'])
   })
 
-  it('does not reopen a drawer the reader closed while a machine-side connect ran', async () => {
+  it('does not reopen a drawer the reader closed while a machine-side connect ran, even inside the close fade', async () => {
     const presets: PresetChoice[] = [{ preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, on_machines: [] }]
     const held = heldConnect()
     const { toasts } = install([row()], { machines: [ready()], presets: async () => presets, connectOnMachine: () => held.connect() })
@@ -2808,23 +2808,51 @@ describe('the machines module', () => {
     await openSheet('Lab box')
     await click(sheetAct('gui.machine.connect_here'))
     await click(sheetAct('gui.machine.connect_do'))
-    /* The real close path: the drawer fades, then the island drops its card. */
+    /* The real close path: the flag flips now, the island drops its card a
+       fade later. The write lands inside that fade, while `mconnect` is still
+       set -- the window the close has to have made stale already. */
     await act(async () => {
       detail.close()
     })
+    expect(store.get().mconnect).toBe('box')
+    await held.release(null)
+    expect(detail.get().open).toBe(false)
+    expect(store.get().msheet).toBeNull()
+    expect(toasts).toEqual(['gui.machine.connected_said {"name":"Codex@box"}'])
     await act(async () => {
       await new Promise((res) => setTimeout(res, 300))
     })
     expect(store.get().mconnect).toBeNull()
-    await held.release(null)
-    expect(store.get().msheet).toBeNull()
-    expect(store.get().mconnect).toBeNull()
     expect(detail.get().open).toBe(false)
-    expect(toasts).toEqual(['gui.machine.connected_said {"name":"Codex@box"}'])
     /* Pressed again in a fresh form, the busy mark is the new form's own. */
     await openSheet('Lab box')
     await click(sheetAct('gui.machine.connect_here'))
     expect(sheetStatus()).toBe('gui.machine.connect_hint')
+  })
+
+  it('tells a refusal that lands inside the close fade in a line, and leaves nothing on the next form', async () => {
+    const presets: PresetChoice[] = [{ preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, on_machines: [] }]
+    const held = heldConnect()
+    const { toasts } = install([row()], { machines: [ready()], presets: async () => presets, connectOnMachine: () => held.connect() })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    await click(sheetAct('gui.machine.connect_do'))
+    await act(async () => {
+      detail.close()
+    })
+    await held.release('it is installed but has no usable credential')
+    expect(detail.get().open).toBe(false)
+    expect(store.get().mconnectFailed).toBe('')
+    expect(toasts).toEqual(['gui.machine.connect_bad_named {"name":"Codex@box"}'])
+    await act(async () => {
+      await new Promise((res) => setTimeout(res, 300))
+    })
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    expect(sheetStatus()).toBe('gui.machine.connect_hint')
+    expect(note()).toBeNull()
   })
 
   it('offers an absent agent no machine when none is registered', async () => {
