@@ -48,7 +48,8 @@ not read for these tools, and the OpenRouter key is never sent to MiniMax. An em
 - `params` takes what the model family documents, and any other key is refused before a
   request is sent:
   - `MiniMax-H3` / `MiniMax-H3-Max`: `duration`, `resolution`, `ratio` (text-only calls),
-    `callback_url`, and `aigc_watermark` on `minimax_cn_api`;
+    `callback_url`, `extra` (`prompt_expansion_mode` on `MiniMax-H3-Max`), and
+    `aigc_watermark` on `minimax_cn_api`;
   - the other models: `duration`, `resolution`, `prompt_optimizer`,
     `fast_pretreatment`, `callback_url`.
 - `MiniMax-H3` and `MiniMax-H3-Max` default to `768P`, 6 seconds, and `16:9` without a

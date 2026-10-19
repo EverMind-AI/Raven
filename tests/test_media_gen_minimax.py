@@ -211,6 +211,13 @@ async def test_a_param_the_model_does_not_take_is_refused_naming_what_it_takes(
     assert unknown in out["detail"] and "duration" in out["detail"] and seen == []
 
 
+async def test_h3_max_takes_its_documented_prompt_expansion_setting(monkeypatch, tmp_path) -> None:
+    seen = _serve(monkeypatch, _v2())
+    extra = {"prompt_expansion_mode": "quality"}
+    out = json.loads(await _tool(tmp_path, model="MiniMax-H3-Max").execute(prompt="x", params={"extra": extra}))
+    assert out["success"] and json.loads(seen[0].content)["extra"] == extra
+
+
 @pytest.mark.parametrize(("provider", "taken"), [("minimax_cn_api", True), ("minimax", False)])
 async def test_the_aigc_watermark_is_taken_on_the_china_section_only(monkeypatch, tmp_path, provider, taken) -> None:
     seen = _serve(monkeypatch, _v2())

@@ -470,7 +470,7 @@ _MINIMAX_VIDEO_MODEL = "MiniMax-Hailuo-2.3"
 _MINIMAX_V2_VIDEO_MODELS = frozenset({"MiniMax-H3", "MiniMax-H3-Max"})
 # What each family takes in ``params``. MiniMax ignores any other key without a
 # word, so one outside these is refused before anything is billed.
-_MINIMAX_V2_PARAMS = frozenset({"duration", "resolution", "ratio", "callback_url"})
+_MINIMAX_V2_PARAMS = frozenset({"duration", "resolution", "ratio", "callback_url", "extra"})
 _MINIMAX_V1_PARAMS = frozenset({"duration", "resolution", "prompt_optimizer", "fast_pretreatment", "callback_url"})
 _MINIMAX_WAITING = frozenset({"queued", "running", "preparing", "queueing", "processing"})
 
@@ -1389,7 +1389,7 @@ class VideoGenerateTool(_OpenRouterMediaTool):
                 "description": (
                     "Optional provider params. On OpenRouter they are merged into the request, e.g. "
                     '{"duration": 5, "aspect_ratio": "16:9"} (3-15s; 16:9/9:16/1:1). On MiniMax, '
-                    "MiniMax-H3 and MiniMax-H3-Max take duration, resolution, callback_url and, "
+                    "MiniMax-H3 and MiniMax-H3-Max take duration, resolution, callback_url, extra and, "
                     "without a first frame, ratio; the other MiniMax models take duration, "
                     "resolution, prompt_optimizer, fast_pretreatment and callback_url; any other "
                     "key is refused"
