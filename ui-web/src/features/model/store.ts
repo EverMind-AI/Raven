@@ -128,7 +128,7 @@ export function setCurrent(model: string, provider = ''): void {
 export function open(anchor?: HTMLElement | null, after?: () => void, marked?: string, offer: Offer = DEFAULT_OFFER): void {
   if (!installed()) return
   if (!anchor && source().loading?.()) {
-    toast(t('gui.model.catalogue_loading'))
+    toast(t('gui.model.provider_catalogue_loading'))
     return
   }
   const rows = listed(offer)

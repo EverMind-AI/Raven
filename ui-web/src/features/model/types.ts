@@ -244,7 +244,8 @@ export const withCurrent = (host: ModelHost, rows: string[], held: string | null
 
 export interface ModelSource {
   providers(): Provider[]
-  /* The composer's catalogue, independent of selection readiness and settings slots. */
+  /* Whether the composer's Provider catalogue read is in flight, independent of
+     selection readiness and settings slots. */
   loading?(): boolean
   /* Send it. The provider is required: a model id does not name whose
      credential serves it, so the backend refuses a switch without one -- the

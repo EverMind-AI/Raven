@@ -135,7 +135,7 @@ describe('the model picker', () => {
     mount()
     openIt()
     expect(pick()).toBeNull()
-    expect(h.toasts).toEqual(['gui.model.catalogue_loading'])
+    expect(h.toasts).toEqual(['gui.model.provider_catalogue_loading'])
   })
 
   it('opens a settings picker while the composer catalogue is pending', async () => {

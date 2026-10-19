@@ -550,7 +550,7 @@ async def model_options(params: dict, *, agent_loop_factory: "AgentLoopFactory |
         # the window a picker shows follow the vendor's published one. Guarded
         # inside against a fresh table and against retry storms, and off the loop.
         # A selection-only read draws no rows, so it has no window to keep fresh:
-        # it neither builds nor warms a catalogue, and the full read warms it.
+        # it builds no provider rows and leaves the warm to the full read.
         warm_catalog_in_background()
         entries = await _entries_off_loop(current_provider)
     return {

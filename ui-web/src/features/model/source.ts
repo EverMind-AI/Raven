@@ -251,7 +251,7 @@ export async function loadProviders(sid?: string | null, gen?: number): Promise<
   } catch {
     if (ticket !== generation() || read !== providerRead) return
     providersFailed = true
-    toast(t('gui.model.catalogue_failed'))
+    toast(t('gui.model.provider_catalogue_failed'))
   } finally {
     if (read === providerRead) {
       providersLoading = false
