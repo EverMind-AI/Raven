@@ -128,6 +128,22 @@ def _machine_of(path: str) -> str | None:
     return where.machine if where is not None else None
 
 
+def _is_a_device_spelling(path: str) -> bool:
+    """Whether ``path`` is a Windows reserved device name, colon spelling included (``NUL:``).
+
+    Such a path is the device itself, not a file on a machine: the colon that
+    ``looks_remote`` reads as a machine prefix is the device's stream spelling,
+    so the reserved-name fence must answer before the remote path does. On a
+    POSIX host, and for every name the fence does not hold, this is ``False``
+    and the remote answer runs as it always did.
+    """
+    if not _WINDOWS:
+        return False
+    match = _URL_SCHEME_RE.match(path.strip())
+    is_url = match is not None and len(match.group("scheme")) > 1
+    return not is_url and _has_reserved_windows_component(Path(path))
+
+
 def _unified(before: str, after: str, name: str) -> str | None:
     """Unified diff of one write, or None when there is nothing useful to show.
 
@@ -217,8 +233,14 @@ def resolve_path(
     # A URL argument is not a path on this machine, so its scheme colon is not
     # a stream spelling; the tool's not-found answer is the one that names the
     # tool which can actually serve it, and this fence must not answer first.
-    if _WINDOWS and not _URL_SCHEME_RE.match(path.strip()) and _has_reserved_windows_component(p):
-        raise PermissionError(f"Path {path} is a reserved name on Windows; choose a different name")
+    # The exemption needs two letters: ``_URL_SCHEME_RE`` accepts a one-letter
+    # scheme, and Windows reads ``C://work/nul`` as the drive path
+    # ``C:\work\nul`` -- a drive letter is a local path, not a scheme, so it
+    # must stay inside the reserved-name check.
+    match = _URL_SCHEME_RE.match(path.strip())
+    is_url = match is not None and len(match.group("scheme")) > 1
+    if _WINDOWS and not is_url and _has_reserved_windows_component(p):
+        raise PermissionError(f"Path {path!r} is a reserved name on Windows; choose a different name")
     if not p.is_absolute() and workspace:
         p = workspace / p
     resolved = p.resolve()
@@ -392,7 +414,9 @@ class ReadFileTool(_FsTool):
 
     async def execute(self, path: str, offset: int = 1, limit: int | None = None, **kwargs: Any) -> str | ToolResult:
         # A file on a registered machine is read there, by its Raven node.
-        if (remote := await remote_files.answer("read_file", path, {"offset": offset, "limit": limit})) is not None:
+        if not _is_a_device_spelling(path) and (
+            remote := await remote_files.answer("read_file", path, {"offset": offset, "limit": limit})
+        ) is not None:
             return remote
         try:
             fp = self._resolve(path)
@@ -575,7 +599,9 @@ class WriteFileTool(_FsTool):
         if mode == "append" and not content:
             return "Error: write_file with mode=append needs content; refusing to append nothing."
         # A file on a registered machine is written there, by its Raven node.
-        if (remote := await remote_files.answer("write_file", path, {"content": content, "mode": mode})) is not None:
+        if not _is_a_device_spelling(path) and (
+            remote := await remote_files.answer("write_file", path, {"content": content, "mode": mode})
+        ) is not None:
             return remote
         try:
             fp = self._resolve(path)
@@ -741,7 +767,7 @@ class EditFileTool(_FsTool):
     ) -> str | ToolResult:
         # A file on a registered machine is edited there, by its Raven node.
         sent = {"old_text": old_text, "new_text": new_text, "replace_all": replace_all}
-        if (remote := await remote_files.answer("edit_file", path, sent)) is not None:
+        if not _is_a_device_spelling(path) and (remote := await remote_files.answer("edit_file", path, sent)) is not None:
             return remote
         try:
             fp = self._resolve(path)
@@ -860,7 +886,7 @@ class ListDirTool(_FsTool):
         **kwargs: Any,
     ) -> str:
         params = {"recursive": recursive, "max_entries": max_entries}
-        if (remote := await remote_files.answer("list_dir", path, params)) is not None:
+        if not _is_a_device_spelling(path) and (remote := await remote_files.answer("list_dir", path, params)) is not None:
             return str(remote)
         try:
             dp = self._resolve(path)

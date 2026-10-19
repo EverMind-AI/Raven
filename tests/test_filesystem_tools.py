@@ -540,6 +540,45 @@ def test_a_reserved_name_is_refused_when_the_path_is_absolute(monkeypatch, tmp_p
         resolve_path(str(tmp_path / "subdir" / "nul"), workspace=tmp_path, allowed_dirs=(tmp_path,))
 
 
+def test_a_drive_letter_written_with_double_slashes_stays_in_the_reserved_check(monkeypatch, tmp_path: Path):
+    """``C://work/nul`` is a drive path on Windows, not a URL.
+
+    ``_URL_SCHEME_RE`` accepts a one-letter scheme, so a bare scheme test
+    reads ``C`` as one and skips the fence -- yet Windows parses the same
+    string as ``C:\\work\\nul``. The exemption only holds for schemes Windows
+    cannot read as a drive, i.e. two letters or more, so every reserved shape
+    behind a ``C://`` prefix is refused like its plain spelling.
+    """
+    monkeypatch.setattr(filesystem, "_WINDOWS", True)
+
+    for name in ("C://work/nul", "C://work/notes.md.", "C://work/notes.md:hidden", "C://work/COM¹.txt"):
+        with pytest.raises(PermissionError, match="reserved name on Windows"):
+            resolve_path(name, workspace=tmp_path, allowed_dirs=(tmp_path,))
+
+
+def test_a_multi_letter_url_scheme_is_still_left_to_the_url_hint(monkeypatch, tmp_path: Path):
+    """The two-letter floor keeps the real URL exemption intact."""
+    monkeypatch.setattr(filesystem, "_WINDOWS", True)
+
+    resolved = resolve_path("https://example.com/nul.md", workspace=tmp_path, allowed_dirs=(tmp_path,))
+
+    assert resolved == tmp_path / "https:" / "example.com" / "nul.md"
+
+
+def test_the_refusal_shows_the_path_with_repr(monkeypatch, tmp_path: Path):
+    """The character at fault is often invisible, so the message quotes the path.
+
+    A bare ``Path notes.md  is a reserved name`` hides the trailing space a
+    reader has to drop; ``!r`` makes it retryable.
+    """
+    monkeypatch.setattr(filesystem, "_WINDOWS", True)
+
+    with pytest.raises(PermissionError) as exc_info:
+        resolve_path("notes.md ", workspace=tmp_path, allowed_dirs=(tmp_path,))
+
+    assert "'notes.md '" in str(exc_info.value)
+
+
 def test_an_ordinary_name_resolves_with_the_gate_on(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(filesystem, "_WINDOWS", True)
 
@@ -558,8 +597,8 @@ def test_a_url_argument_is_left_to_the_tools_url_hint_with_the_gate_on(monkeypat
     """The URL's scheme colon is one of the reserved shapes; the hint must win.
 
     ``_missing`` answers a URL with the tool that can serve it, so the fence
-    must not refuse a URL argument first -- the argument never reaches Windows
-    path resolution.
+    must not refuse a URL argument first -- a scheme of two letters or more
+    names a resource no local drive can spell.
     """
     monkeypatch.setattr(filesystem, "_WINDOWS", True)
 
