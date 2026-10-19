@@ -88,7 +88,14 @@ A bound rather than an estimate: the walk returns well inside a second, and
 """
 
 _TEARDOWN_GRACE_S = 1.0
-"""Let an adapter cancel work on an existing host before ending its process tree."""
+"""How long a local agent is given, once its stdin closes, to end on its own before its process tree is.
+
+What an agent that holds work outside its own process -- a turn on a host it is a client of --
+needs to call that work off before it goes. One that exits at once costs nothing: the wait
+ends when the agent does.
+"""
+
+_GRACE_POLL_S = 0.02
 
 
 async def _end(pgid: int, proc: Any) -> None:
@@ -204,14 +211,27 @@ class _ProcessEndpoint:
             if owns_tree and self.proc.returncode is None and self.proc.stdin is not None:
                 try:
                     self.proc.stdin.close()
-                    await asyncio.wait_for(self.proc.wait(), timeout=_TEARDOWN_GRACE_S)
-                except (OSError, asyncio.TimeoutError):
+                except OSError:
                     pass
+                else:
+                    await self._exited_within(_TEARDOWN_GRACE_S)
         finally:
             if self._job is not None:
                 self._job.close()
             else:
                 await _end(self._pgid, self.proc)
+
+    async def _exited_within(self, grace: float) -> None:
+        """Wait up to ``grace`` for the agent itself to exit.
+
+        Polled rather than awaited: ``Process.wait`` settles only once every pipe
+        has closed as well, so a descendant that inherited the agent's stdout
+        would hold the wait to its end after the agent was long gone.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + grace
+        while self.proc.returncode is None and loop.time() < deadline:
+            await asyncio.sleep(_GRACE_POLL_S)
 
     async def wait(self) -> int | None:
         return await self.proc.wait()
@@ -527,8 +547,10 @@ class AcpClient:
         outside stops before releasing the subprocess transport, whose
         ``__del__`` then runs after the loop is closed and prints
         ``RuntimeError: Event loop is closed`` over whatever the user is looking
-        at. So both waits below give up on their own and the teardown always
-        runs to its end.
+        at. So the waits below give up on their own, and a close cancelled
+        while the agent is given its grace (``_TEARDOWN_GRACE_S``) still lets
+        go of everything it held before the cancellation goes on: the tree is
+        ended by then either way, and a retry would find the client closed.
 
         A close that is cancelled part-way leaves its launch record on disk, which
         is harmless: the group it names was killed first, and the first sweep after
@@ -537,18 +559,16 @@ class AcpClient:
         if self._closed:
             return
         self._closed = True
-        await self._endpoint.end()
-        for task in (self._reader_task, self._stderr_task):
-            if task is not None:
-                task.cancel()
-        answer_tasks = list(self._answer_tasks)
-        for task in answer_tasks:
-            task.cancel()
+        try:
+            await self._endpoint.end()
+        except asyncio.CancelledError:
+            self._stop_tasks()
+            self._let_go()
+            raise
+        pending_tasks = self._stop_tasks()
         # Awaited, not just cancelled: an un-awaited cancelled task logs a
         # "Task exception was never retrieved" warning on some paths, and the
         # child must be reaped here rather than left as a zombie.
-        pending_tasks = [t for t in (self._reader_task, self._stderr_task) if t is not None]
-        pending_tasks.extend(answer_tasks)
         if pending_tasks:
             done, _ = await asyncio.wait(pending_tasks, timeout=_TEARDOWN_DRAIN_S)
             for task in done:
@@ -563,6 +583,17 @@ class AcpClient:
                     self.name,
                     _TEARDOWN_REAP_S,
                 )
+        self._let_go()
+
+    def _stop_tasks(self) -> list[asyncio.Task]:
+        """Cancel the read loops and every answer in progress; the tasks, to wait out."""
+        tasks = [t for t in (self._reader_task, self._stderr_task) if t is not None]
+        tasks.extend(self._answer_tasks)
+        for task in tasks:
+            task.cancel()
+        return tasks
+
+    def _let_go(self) -> None:
         self._endpoint.release()
         self._fail_pending(AcpConnectionError(f"acp agent {self.name!r}: connection closed"))
         # Last, so the frames the teardown itself produced are in the file.
