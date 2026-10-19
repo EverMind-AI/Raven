@@ -612,10 +612,10 @@ def test_push_hands_ssh_the_askpass_environment_for_a_password_machine_and_nothi
 
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
     store_password("box", "hunter2")
-    seen: list[tuple[list[str], dict | None]] = []
+    seen: list[tuple[list[str], dict | None, bool]] = []
 
     def run(argv, **kwargs):
-        seen.append((argv, kwargs.get("env")))
+        seen.append((argv, kwargs.get("env"), kwargs.get("start_new_session", False)))
         return subprocess.CompletedProcess(argv, 0, b"ok", b"")
 
     monkeypatch.setattr(remote.subprocess, "run", run)
@@ -623,9 +623,12 @@ def test_push_hands_ssh_the_askpass_environment_for_a_password_machine_and_nothi
     assert remote.push(_pw(), "cat > /dev/null", b"data") == (0, "ok")
     assert remote.push(_box(), "cat > /dev/null", b"data") == (0, "ok")
 
-    (argv_pw, env_pw), (argv_key, env_key) = seen
+    (argv_pw, env_pw, session_pw), (argv_key, env_key, session_key) = seen
     assert env_pw["SSH_ASKPASS_REQUIRE"] == "force" and "-i" not in argv_pw
     assert env_key is None and "-i" in argv_key
+    assert session_pw is True and session_key is False
+    for option in ("ProxyJump=none", "ProxyCommand=none"):
+        assert option in argv_pw, option
 
 
 async def test_the_tunnel_hands_ssh_the_askpass_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -651,7 +654,9 @@ async def test_the_tunnel_hands_ssh_the_askpass_environment(tmp_path: Path, monk
             self.returncode = -9
 
     async def spawn(*argv, **kwargs):
-        spawned.append({"argv": list(argv), "env": kwargs.get("env")})
+        spawned.append(
+            {"argv": list(argv), "env": kwargs.get("env"), "session": kwargs.get("start_new_session", False)}
+        )
         return _Proc()
 
     async def up(*args, **kwargs):
@@ -665,6 +670,7 @@ async def test_the_tunnel_hands_ssh_the_askpass_environment(tmp_path: Path, monk
 
     (one,) = spawned
     assert one["env"]["SSH_ASKPASS_REQUIRE"] == "force" and "-i" not in one["argv"] and "-L" in one["argv"]
+    assert one["session"] is True, "no controlling terminal for the tunnel's ssh either"
 
 
 def test_a_refused_login_names_the_password_for_a_password_machine_and_the_key_for_a_key_machine():

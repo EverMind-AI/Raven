@@ -169,6 +169,14 @@ PASSWORD_AUTH = (
     "ControlMaster=no",
     "-o",
     "ControlPath=none",
+    # A jump host is another ssh, started by this one, that inherits the
+    # askpass helper: it would be handed this machine's password for its own
+    # prompt (reviewed 2026-10-19). A machine reached only through one is
+    # registered with a key.
+    "-o",
+    "ProxyJump=none",
+    "-o",
+    "ProxyCommand=none",
 )
 
 #: The variable the askpass helper reads the password file's path from.
@@ -225,6 +233,11 @@ def ssh_argv(
     return argv
 
 
+# OpenSSH before 8.4 knows no ``SSH_ASKPASS_REQUIRE``: it reads a password from
+# the terminal whenever it can open one, and falls back to askpass only when it
+# cannot. A password connection is therefore started in a session of its own
+# (``start_new_session``), with no controlling terminal to open, so every
+# version reaches askpass. Key connections keep the caller's session.
 def askpass_helper(keys_dir: Path) -> Path:
     """The askpass helper under ``keys_dir`` (:data:`_ASKPASS`), made or brought up to date; the owner's alone."""
     path = keys_dir / "askpass"
@@ -326,7 +339,15 @@ def make_ssh_runner(
             # side, and under ``raven acp`` the caller's stdin carries ACP
             # frames, which a one-shot ssh would otherwise swallow.
             proc = subprocess.run(
-                argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=cap_seconds, env=env
+                argv,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=cap_seconds,
+                env=env,
+                # See ``askpass_helper``: no controlling terminal, so no OpenSSH
+                # version can ask it and every one uses the helper.
+                start_new_session=password,
             )
         except subprocess.TimeoutExpired as exc:
             got = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")

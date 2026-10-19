@@ -63,17 +63,27 @@ What gets recorded, and where:
   more detail.
 - The **path** of the private key is stored, never the key itself.
 - A machine you can only reach with a password is registered from the Agent
-  Hub with **Login: Password**, or with `raven ops connection add --auth
-  password --password-stdin` (the password on the first line of stdin, never
-  on the command line). The password is kept on this computer, under
+  Hub with **Login: Password**, or with `raven ops connection add
+  --non-interactive --auth password --password-stdin --id <id> --name <name>
+  --host <address> --port 22 --user <user>` (the password on the first line of
+  stdin, never on the command line; `--password-stdin` is read before the first
+  question, so it works with or without `--non-interactive`). The password must
+  be at least six characters and is kept on this computer, under
   `~/.raven/keys/<id>.password`, readable by your account alone (mode 0600),
   and handed to ssh on every connection through OpenSSH's askpass hook: it is
   in no registry row, log or answer, and never on a command line. Each of
   those connections logs in on its own (connection sharing from your ssh
   config, `ControlMaster`, is turned off for them), so a registration proves
   the password it keeps and a password changed on the machine is noticed at
-  the next connection. The row
-  carries `auth: password` and no key path. The machine's sshd has to accept
+  the next connection. It is started with no controlling terminal, so an
+  OpenSSH older than 8.4 -- which only uses askpass when it cannot open a
+  terminal -- still reaches the helper instead of prompting. A jump host does
+  not: `ProxyJump` and `ProxyCommand` are off for password connections, since
+  the jump's own ssh would be handed this machine's password; a machine
+  reached only through one has to be registered with a key. The row
+  carries `auth: password` and no key path. `raven ops connection doctor`
+  counts the row usable, and Oncall, which logs in with a key only, lists it as
+  unusable with that reason. The machine's sshd has to accept
   password logins (`PasswordAuthentication yes`); one that does not refuses
   every connection, and the refusal says so. A password the machine refuses at
   registration is not kept. When the machine's password changes, remove the
