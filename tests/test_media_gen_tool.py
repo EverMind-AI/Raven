@@ -2029,3 +2029,13 @@ def test_the_image_tool_says_what_references_do_on_the_provider_it_runs_on() -> 
     section.provider, section.api_base = "minimax", "https://api.minimax.io/v1"
     assert "character" in offered()["parameters"]["properties"]["images"]["description"]
     assert "edit" not in offered()["description"].split(".")[0]
+
+
+def test_a_plain_section_an_embedder_hands_in_for_video_is_a_video_section() -> None:
+    """An embedder handing ``AgentLoop`` a plain ``MediaToolConfig`` for video keeps
+    working now that the video section has a class of its own, as the image one did."""
+    from raven.config.schema import MediaGenConfig, MediaToolConfig, VideoToolConfig
+
+    media = MediaGenConfig(video=MediaToolConfig(api_key="k", model="kwaivgi/kling-v3.0-std"))
+    assert isinstance(media.video, VideoToolConfig)
+    assert (media.video.api_key, media.video.model, media.video.provider) == ("k", "kwaivgi/kling-v3.0-std", "")
