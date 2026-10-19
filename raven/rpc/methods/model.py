@@ -2,7 +2,8 @@
 
 These handlers back the TUI ``/model`` picker and the page's provider pane:
 
-* ``model.options`` — current model/provider + one row per provider.
+* ``model.options`` — current model/provider + one row per provider, or the
+  selection alone with ``include_providers=False``.
 * ``model.save_key`` — store an api_key (+ optional api_base) for a provider.
 * ``model.disconnect`` — clear a provider's stored credentials.
 * ``model.reveal_key`` — read back the one key ``save_key`` stored, for a
@@ -512,6 +513,10 @@ async def model_options(params: dict, *, agent_loop_factory: "AgentLoopFactory |
     The session matters: the model is per conversation now, so answering from
     ``agents.defaults`` would star the wrong row for every session that has
     switched -- the picker would disagree with the status bar it sits under.
+
+    ``include_providers=False`` answers the second question alone, with an
+    empty ``providers`` list, so a page can show the selection without waiting
+    for every provider's row to be built.
     """
     parsed = _parse(ModelOptionsParams, params)
     current_model, current_provider = _current_selection()
@@ -537,7 +542,15 @@ async def model_options(params: dict, *, agent_loop_factory: "AgentLoopFactory |
     if parsed.include_providers:
         from raven.providers.rates import warm_catalog_in_background
 
-        # Selection-only reads must not import or probe model catalogues.
+        # The windows below are read from whatever catalogue is already in hand
+        # (``_model_labels`` never fetches on a UI call), and nothing else on this
+        # page would ever fill it: the warm otherwise runs only when a vision probe
+        # misses, so a home whose models all answer that question keeps showing the
+        # figures it cached weeks ago -- or none at all. Asking here is what makes
+        # the window a picker shows follow the vendor's published one. Guarded
+        # inside against a fresh table and against retry storms, and off the loop.
+        # A selection-only read draws no rows, so it has no window to keep fresh:
+        # it neither builds nor warms a catalogue, and the full read warms it.
         warm_catalog_in_background()
         entries = await _entries_off_loop(current_provider)
     return {
