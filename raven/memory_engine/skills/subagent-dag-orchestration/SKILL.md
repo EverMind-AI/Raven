@@ -589,17 +589,17 @@ researchers run in parallel; a writer waits for both and reads their outputs by 
 [
   {
     "id": "research_web",
-    "subagent": "Raven",
+    "subagent": "Raven-General",
     "prompt_template": "Owner's request, as written: \"Pick a web framework for the new service. Compare the candidates on benchmarks and on what recent papers say about async runtimes, and recommend one.\"\nYour part: research recent web-framework benchmarks and report your findings."
   },
   {
     "id": "research_papers",
-    "subagent": "Raven",
+    "subagent": "Raven-General",
     "prompt_template": "Owner's request, as written: \"Pick a web framework for the new service. Compare the candidates on benchmarks and on what recent papers say about async runtimes, and recommend one.\"\nYour part: summarize the latest papers on async runtimes."
   },
   {
     "id": "synthesize",
-    "subagent": "Raven",
+    "subagent": "Raven-General",
     "depends_on": ["research_web", "research_papers"],
     "prompt_template": "Owner's request, as written: \"Pick a web framework for the new service. Compare the candidates on benchmarks and on what recent papers say about async runtimes, and recommend one.\"\nYour part: write the recommendation, merging these two sources.\nWeb findings: {{ research_web.output_path }}\nPaper summary: {{ research_papers.output_path }}"
   }
@@ -623,19 +623,19 @@ one the graph is rejected before anything runs:
 [
   {
     "id": "draft",
-    "subagent": "Raven",
+    "subagent": "Raven-General",
     "instance": "author",
     "prompt_template": "Owner's request, as written: \"Write the introduction for our report on multi-agent systems: about 200 words, for readers who know software but not agents.\"\nYour part: draft it."
   },
   {
     "id": "review",
-    "subagent": "Raven",
+    "subagent": "Raven-General",
     "depends_on": ["draft"],
     "prompt_template": "Owner's request, as written: \"Write the introduction for our report on multi-agent systems: about 200 words, for readers who know software but not agents.\"\nYour part: critique this draft against that request, for clarity and accuracy:\n{{ draft.output }}"
   },
   {
     "id": "revise",
-    "subagent": "Raven",
+    "subagent": "Raven-General",
     "instance": "author",
     "depends_on": ["review"],
     "prompt_template": "Owner's request, as written: \"Write the introduction for our report on multi-agent systems: about 200 words, for readers who know software but not agents.\"\nYour part: revise your earlier draft using this critique:\n{{ review.output }}"

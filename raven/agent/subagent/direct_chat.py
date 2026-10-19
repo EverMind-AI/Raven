@@ -33,6 +33,7 @@ from loguru import logger
 
 from raven.agent.subagent.activity import persisted_output
 from raven.agent.subagent.history import add_turn_to_instance_log, make_call_id, open_instance_log_for
+from raven.config.agent_names import other_names_of_agent
 from raven.utils.atomic_io import atomic_replace
 from raven.utils.paths import safe_path_segment
 
@@ -40,8 +41,20 @@ _DIRECT_DIRNAME = "direct"
 
 
 def direct_root(session_dir: Path, agent: str, handle: str) -> Path:
-    """Where one instance's direct chat lives. Not created here."""
-    return Path(session_dir) / "subagents" / _DIRECT_DIRNAME / safe_path_segment(agent) / safe_path_segment(handle)
+    """Where one instance's direct chat lives. Not created here.
+
+    A chat first held under another name of its agent -- a built-in row renamed
+    since -- stays where its history is.
+    """
+    base = Path(session_dir) / "subagents" / _DIRECT_DIRNAME
+    path = base / safe_path_segment(agent) / safe_path_segment(handle)
+    if path.exists():
+        return path
+    for other in other_names_of_agent(agent):
+        earlier = base / safe_path_segment(other) / safe_path_segment(handle)
+        if earlier.exists():
+            return earlier
+    return path
 
 
 class DirectTurnMeta(NamedTuple):

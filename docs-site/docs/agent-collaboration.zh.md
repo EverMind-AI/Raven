@@ -5,6 +5,15 @@ Raven 同时提供委派任务与有状态 Agent 实例，两者不是一回事�
 
 先按[Agent 集成](agent-integrations.md)完成配置。本页介绍如何协作，不介绍传输安装。
 
+## 宿主做什么、交出去什么 { #what-the-host-does-and-what-it-hands-over }
+
+Raven 本身是你的 Agent 管家：把请求拆成任务、交给合适的子 Agent，跟踪每个任务
+直到你认可结果，再把各 Agent 的汇报汇总成一个回答。针对某个任务工作的后续消息，
+无论是修改、追加的工作，还是问为什么这样做，都会交回做这件事的实例，它仍保有
+上下文。闲聊、Raven 已经知道的内容和任务进展，由 Raven 直接回答；任何需要产出的
+工作，再小也交给最合适的 Agent，没有合适的 Agent 时才交给内置的 `Raven-General`。
+如果这一轮两个派发工具都被禁用，Raven 会自己完成工作。
+
 ## 在登记机器上工作 { #work-on-a-registered-machine }
 
 配置了 `machine` 的 Agent 会在那台登记机器上运行，在那里工作，文件也留在那里；

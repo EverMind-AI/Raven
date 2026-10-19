@@ -645,7 +645,17 @@ class TestIdentityDelegationSection:
         )
         assert "## Delegation" in text
         assert "`Scribe` owns decks. Do not build the deck yourself." in text
-        assert "You are an orchestrator first" in text
+
+    def test_the_section_is_the_ownership_list_alone(self, tmp_path: Path) -> None:
+        """How work is handed over, and what the host's own tools are for, is the
+        ``## Your role`` section's to say. Said again here, it told the model its own tools were
+        for "work none of them covers" -- the work the role sends to the generic
+        agent instead."""
+        text = render.identity_text(tmp_path, specialists=[("Scribe", "owns decks.")])
+        delegation = text.split("## Delegation", 1)[1].split("\n## ", 1)[0]
+        assert "Hand the whole task over" not in delegation
+        assert "Your own tools are for work" not in text
+        assert "You are an orchestrator first" not in text
 
     def test_nothing_declared_keeps_the_joint_the_section_took_over(self, tmp_path: Path) -> None:
         """An install with no declaring agent must read exactly as it did before.
@@ -696,6 +706,73 @@ class TestIdentityDelegationSection:
         assert "## Delegation" not in (await builder.build(_ctx(tmp_path))).text
 
 
+def _role_of(text: str) -> str:
+    assert "## Your role" in text, "baseline: the ``## Your role`` section must be present, or this asserts nothing"
+    return text.split("## Your role", 1)[1].split("\n## ", 1)[0]
+
+
+class TestHostRole:
+    """The host is told what it is for: running the user's work through the
+    roster, not doing that work itself.
+
+    Replayed on a recorded conversation (glm-5.3-flash): with this section, a
+    question about a dispatched task's work went back to that task's instance in
+    6 of 6 runs against 0 of 6 without it, and a small script went to an agent in
+    6 of 6 instead of being written by the host in 3 of 3. Naming the host
+    differently without the section moved nothing (0 of 6).
+    """
+
+    def test_the_host_is_the_users_agent_manager(self, tmp_path: Path) -> None:
+        text = render.identity_text(tmp_path)
+        assert "You are Raven, the user's agent manager." in text
+        assert "a helpful AI assistant" not in text
+        assert text.index("## Your role") < text.index("## Runtime"), (
+            "the role decides how every request is read, so it is read before anything else"
+        )
+
+    def test_without_a_dispatch_path_the_host_does_the_work_itself(self, tmp_path: Path) -> None:
+        """A role that hands all work over is a prohibition without a way to obey it
+        on a turn that holds no dispatch tool -- the same guard the Delegation
+        section keeps."""
+        text = render.identity_text(tmp_path, dispatch_tools=())
+        assert "You are Raven, a helpful AI assistant." in text
+        assert "## Your role" not in text
+        assert "agent manager" not in text
+
+    def test_the_role_names_only_the_paths_the_turn_holds(self, tmp_path: Path) -> None:
+        spawn_only = _role_of(render.identity_text(tmp_path, dispatch_tools=("spawn",)))
+        assert "`spawn`" in spawn_only
+        assert "run_subagent_dag" not in spawn_only
+
+        dag_only = _role_of(render.identity_text(tmp_path, dispatch_tools=("run_subagent_dag",)))
+        assert "`run_subagent_dag`" in dag_only
+        assert "`spawn`" not in dag_only
+
+    def test_work_no_agent_fits_goes_to_the_generic_agent(self, tmp_path: Path) -> None:
+        """Fit comes first, by ownership or by description. Named bare as where
+        unowned work goes, the generic agent took a small script in 4 of 6 replayed
+        runs on an install whose coding agents declare no ownership."""
+        role = _role_of(render.identity_text(tmp_path))
+        assert f"and to `{GENERIC_AGENT}` only when no agent's does" in role
+        assert "whose ownership or description fits it" in role
+
+    def test_a_question_about_a_tasks_work_is_its_agents_to_answer(self, tmp_path: Path) -> None:
+        """The recorded failure was a question -- "why is it hardcoded?" -- answered by
+        the host from its own reading of the code. Only a role that names questions
+        among the follow-ups moved it."""
+        role = _role_of(render.identity_text(tmp_path))
+        assert "to that task's instance" in role
+        assert "a question about how or why it was done" in role
+
+    def test_the_production_rule_has_no_size_exception(self, tmp_path: Path) -> None:
+        """An earlier wording let the host answer "quick questions" itself, and the
+        model stretched that into "small scripts I can do directly": 0 of 4 runs
+        delegated one. With "however small" it was 6 of 6."""
+        role = _role_of(render.identity_text(tmp_path))
+        assert "however small" in role
+        assert "quick question" not in role
+
+
 class TestDelegationNeedsSomewhereToDelegateTo:
     """The section prohibits a specialist's kind of work, so it must not outlive
     the tools that carry the work away. With every dispatch path withheld a
@@ -710,7 +787,7 @@ class TestDelegationNeedsSomewhereToDelegateTo:
 
     def test_no_live_path_reads_like_an_install_without_specialists(self, tmp_path: Path) -> None:
         assert render.identity_text(tmp_path, specialists=self.SPEC, dispatch_tools=()) == render.identity_text(
-            tmp_path
+            tmp_path, dispatch_tools=()
         )
 
     def test_only_the_paths_that_exist_are_named(self, tmp_path: Path) -> None:

@@ -12,6 +12,7 @@ import pytest
 from raven.agent.loop.bundles import SubagentWiring
 from raven.agent.subagent.direct_chat import DirectChatError, direct_root
 from raven.agent.subagent.instance_state import InstanceState, instance_state_path
+from raven.config.agent_names import GENERIC_AGENT
 from raven.contracts.llm_provider import LLMResponse
 
 
@@ -87,6 +88,17 @@ class _RecordingProvider:
 def test_state_path_is_scoped_by_agent_and_handle(tmp_path):
     p = instance_state_path(tmp_path, "Raven-Code", "refactor-auth")
     assert p == tmp_path / "subagents" / "direct" / "Raven-Code" / "refactor-auth" / "messages.json"
+
+
+def test_a_direct_chat_under_a_former_name_keeps_its_directory(tmp_path):
+    """The generic agent was renamed without moving what its direct chats wrote, so
+    continuing one under the new name has to land in the directory its history is in."""
+    legacy = direct_root(tmp_path, "Raven", "h1")
+    legacy.mkdir(parents=True)
+
+    assert direct_root(tmp_path, GENERIC_AGENT, "h1") == legacy
+    assert instance_state_path(tmp_path, GENERIC_AGENT, "h1").parent == legacy
+    assert direct_root(tmp_path, GENERIC_AGENT, "fresh") == tmp_path / "subagents" / "direct" / GENERIC_AGENT / "fresh"
 
 
 def test_load_of_a_missing_file_is_empty(tmp_path):

@@ -96,7 +96,7 @@ following **tool arguments**, not a shell command or standalone config file:
     },
     {
       "id": "readiness_summary",
-      "subagent": "Raven",
+      "subagent": "Raven-General",
       "node_summary": "Synthesize readiness findings",
       "depends_on": ["api_audit", "test_audit"],
       "prompt_template": "Combine these findings into a prioritized review. Do not edit files. API: {{ api_audit.output }} Tests: {{ test_audit.output }}"

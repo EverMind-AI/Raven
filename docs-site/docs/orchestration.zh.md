@@ -82,7 +82,7 @@ Charter 不是操作系统沙箱，也不是 fail-closed 安全边界；应独�
     },
     {
       "id": "readiness_summary",
-      "subagent": "Raven",
+      "subagent": "Raven-General",
       "node_summary": "Synthesize readiness findings",
       "depends_on": ["api_audit", "test_audit"],
       "prompt_template": "Combine these findings into a prioritized review. Do not edit files. API: {{ api_audit.output }} Tests: {{ test_audit.output }}"

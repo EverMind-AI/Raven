@@ -22,6 +22,7 @@ from typing import Any
 
 from loguru import logger
 
+from raven.config.agent_names import canonical_agent_name
 from raven.utils.atomic_io import atomic_replace, write_transaction
 from raven.utils.paths import mint_slug
 
@@ -114,11 +115,18 @@ class InstanceRegistry:
         for rec in (raw.get("instances") if isinstance(raw, dict) else None) or []:
             if not isinstance(rec, dict):
                 continue
+            if isinstance(rec.get("agent"), str):
+                # A row written under a former name of a built-in row is keyed, and
+                # listed, under the current one: a resume asks with that name.
+                rec["agent"] = canonical_agent_name(rec["agent"])
             key = (rec.get("sessionKey"), rec.get("agent"), rec.get("handle"))
             if not all(isinstance(part, str) and part for part in key):
                 continue
             if "kind" not in rec:
                 rec["kind"] = "cli"
+            held = records.get(key)
+            if held is not None and (held.get("updatedAtMs") or 0) > (rec.get("updatedAtMs") or 0):
+                continue
             records[key] = rec  # type: ignore[index]
         self._records = records
         # Stamped from the stat taken BEFORE the read: a writer that lands

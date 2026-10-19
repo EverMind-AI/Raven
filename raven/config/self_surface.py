@@ -42,6 +42,7 @@ from typing import Any
 from pydantic import BaseModel
 from pydantic.alias_generators import to_camel, to_snake
 
+from raven.config.agent_names import GENERIC_AGENT
 from raven.config.keys import key_as_written as _spelled
 from raven.config.loader import EXTENSION_KEYS, get_config_path, read_raw_or_raise
 from raven.providers.registry import PROVIDERS
@@ -634,7 +635,7 @@ SECTIONS: tuple[Section, ...] = (
                 _E.IMMEDIATE,
                 writer="subagents",
                 sensitive="the dispatching model reads it every turn, so it can steer what is sent where",
-                note="the built-in Raven row's description is fixed",
+                note=f"the built-in {GENERIC_AGENT} row's description is fixed",
             ),
             Setting(
                 "subagents.*.enabled",

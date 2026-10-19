@@ -22,14 +22,17 @@ does in fact ship.
 
 from __future__ import annotations
 
-GENERIC_AGENT = "Raven"
-"""The generic in-process sub-agent, and the historical identity.
+GENERIC_AGENT = "Raven-General"
+"""The generic in-process sub-agent.
 
-Direct-chat records under ``subagents/direct/<agent>/<handle>/`` and
-instance-registry rows were written before there was a table, and this row is
-what they resolve against now -- which is why the name is reserved rather than
-tidied into ``general-raven``. Those records spell it lowercase, hence
-``LEGACY_AGENT_ALIASES``."""
+Named apart from the host. The host is Raven -- its prompt opens "You are Raven",
+and the UI labels the host's own row and approvals that way -- so a roster entry
+spelled the same made the sub-agent's approvals indistinguishable from the host's
+and told the agent called Raven to hand work to `Raven`.
+
+Direct-chat records under ``subagents/direct/<agent>/<handle>/``, instance logs
+and instance-registry rows written under the row's earlier names were not
+rewritten; ``LEGACY_AGENT_ALIASES`` is what they resolve through."""
 
 BUILTIN_AGENT_NAMES: frozenset[str] = frozenset({GENERIC_AGENT})
 """Names the package seeds. Used to tell an override from an addition, and by the
@@ -45,15 +48,15 @@ rather than as the override it was meant to be.
 Kept equal to the seed table's own names by
 tests/test_subagent_name_vocabulary.py."""
 
-LEGACY_AGENT_ALIASES: dict[str, str] = {"raven": GENERIC_AGENT}
+LEGACY_AGENT_ALIASES: dict[str, str] = {"raven": GENERIC_AGENT, "Raven": GENERIC_AGENT}
 """Names a seed used to answer to, mapped to the one it answers to now.
 
 The generic row was lowercase until it was capitalised to match the rest of the
-table, and by then thousands of instance-registry rows, direct-chat records and
-stored dag nodes had its old name written into them. Resolution consults this only
-*after* an exact match fails, so no other agent's name changes meaning, and the
-roster never advertises an alias -- it is for reading old data, not for the model
-to pick from."""
+table, then renamed apart from the host, and each time thousands of
+instance-registry rows, direct-chat records and stored dag nodes already had the
+old name written into them. Resolution consults this only *after* an exact match
+fails, so no other agent's name changes meaning, and the roster never advertises
+an alias -- it is for reading old data, not for the model to pick from."""
 
 THIRD_PARTY_PRESET_NAMES: frozenset[str] = frozenset(
     {
@@ -138,6 +141,20 @@ def canonical_agent_name(name: str) -> str:
 def is_builtin_agent_name(name: str) -> bool:
     """Whether a name refers to a package seed, under any name it has had."""
     return canonical_agent_name(name) in BUILTIN_AGENT_NAMES
+
+
+def other_names_of_agent(name: str) -> tuple[str, ...]:
+    """The other names the seed ``name`` refers to has answered to, current first.
+
+    For the stores keyed on an agent's name -- instance logs, direct chats -- that
+    were written under one spelling and are read under another: a lookup tries the
+    name it was given, then these. Empty for an agent that is no seed.
+    """
+    seed = canonical_agent_name(name)
+    if seed not in BUILTIN_AGENT_NAMES:
+        return ()
+    former = [alias for alias, current in LEGACY_AGENT_ALIASES.items() if current == seed]
+    return tuple(other for other in (seed, *former) if other != name)
 
 
 __all__ = [

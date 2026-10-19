@@ -7,6 +7,18 @@ tasks and stateful agent instances; they are different things.
 Set up agents first with [Agent Integrations](agent-integrations.md). This page
 covers using them, not installing their transports.
 
+## What the host does and what it hands over
+
+Raven itself works as your agent manager. It sorts a request into tasks, hands
+each to the sub-agent that fits it, keeps track of every task until you accept
+the result, and gathers what the agents report into one answer. A later message
+about a task's work -- a correction, more work, or a question about why it was
+done that way -- goes back to the instance that did the work, which still has
+its context. Raven answers conversation, what it already knows and where your
+tasks stand itself; anything to produce, however small, goes to the agent that
+fits it, and to the built-in `Raven-General` agent only when none does. On a turn
+where both dispatch tools are disabled, Raven does the work itself.
+
 ## Work on a registered machine
 
 An agent entry that names a `machine` runs on that registered machine, works

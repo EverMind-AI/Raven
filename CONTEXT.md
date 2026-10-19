@@ -293,7 +293,8 @@ launches, beside the `RAVEN_HOME` it already sends, and a process that reads it 
 registers none of the tools that hand work to a further agent (`spawn`, `run_subagent_dag`,
 the three graph controls) and builds no playbook funnel, so `load_playbook` and
 `create_playbook` unregister themselves. The `## Delegation` block and the DAG orchestration
-guide follow the tools out on their own, both being conditional on a live dispatch path.
+guide follow the tools out on their own, both being conditional on a live dispatch path; the
+**Host role** section is withheld on the role itself as well as on the tools.
 `WITHHELD_FROM_SUBAGENT` is the specification; the gates enforce it by not building, and the
 tests hold the two in agreement. A config `env` entry outranks the host's, which is how one
 agent is handed back a full registry.
@@ -324,10 +325,12 @@ filesystem, then `builtin` package seeds, then config. `builtin` rows are packag
 (`agent/subagent/builtin_agents.py`): they exist whether or not config mentions them, and a
 config row of the same name is a field-level override -- of every field but `enabled`,
 which the merge discards, so a seed row cannot be taken off the roster at all. An unnamed
-`spawn` and a DAG node with no `subagent` both dispatch to the generic seed, `Raven`. A name
-a seed used to answer to resolves to it (`LEGACY_AGENT_ALIASES`; `raven` -> `Raven`), so
-stored instance rows, direct-chat records and dag nodes written before a rename still find
-their agent -- exact match first, and the roster never offers an alias back. Read under the
+`spawn` and a DAG node with no `subagent` both dispatch to the generic seed,
+`Raven-General` -- named apart from the host, so a prompt or an approval can no longer mistake
+one for the other. A name a seed used to answer to resolves to it (`LEGACY_AGENT_ALIASES`;
+`raven` and `Raven` -> `Raven-General`), so stored instance rows, instance logs, direct-chat
+records and dag nodes written before a rename still find their agent -- exact match first,
+and the roster never offers an alias back. Read under the
 older key `thirdParty` too; the write path emits `agents`.
 _Avoid_: "third-party registry" — the table holds raven's own agents as well, which is the
 point of it: `spawn` and a DAG node pick from one roster, so an agent reachable from one
@@ -566,7 +569,7 @@ in for it: from the folder's manifest for a vendored agent, from the package see
 built-in override, so a config written before the field existed still gets one. `""` is the
 user declaring the agent owns nothing and is never refilled.
 
-Two things never carry ownership. The generic row (`raven`) claims none whatever a config
+Two things never carry ownership. The generic row (`Raven-General`) claims none whatever a config
 says, because it carries no capability bias and a line about it would prohibit the agent
 reading it from doing its own work. And the section is withheld entirely on a turn holding
 no dispatch tool — `spawn` and `run_subagent_dag` can both be withheld by
@@ -574,6 +577,17 @@ no dispatch tool — `spawn` and `run_subagent_dag` can both be withheld by
 leaves a request with no compliant action at all. Only the paths the turn does hold are named.
 _Avoid_: putting it in `description` — that copy is spliced into the tool descriptions, where
 the model reads it only once it is already choosing an agent.
+
+**Host role** (`## Your role`, `_host_role` in `context_engine/segments/render.py`):
+What the host is for, rendered at the top of its identity: the user's agent manager. It sorts
+a request into tasks and dispatches each, keeps every task until the user accepts its result,
+sends each later message about a task's work -- a question included -- to that task's
+instance, and gathers the reports into one answer. Producing anything goes to the agent whose
+ownership or description fits it, to `Raven-General` only when none does; the host answers
+itself only what needs no tools and belongs to no task. Rendered only in a process that is
+not a **Sub-agent role** and on a turn holding a dispatch path -- elsewhere the identity
+stays "a helpful AI assistant", byte for byte. **Ownership** names each agent's territory;
+this says what the host itself does and does not do.
 
 **Subagent working directory** (`workspace=` on every backend's `run`):
 Where a sub-agent's commands and file tools act: the *session's* working directory, the same

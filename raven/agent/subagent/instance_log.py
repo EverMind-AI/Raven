@@ -43,6 +43,7 @@ from typing import Any
 
 from loguru import logger
 
+from raven.config.agent_names import other_names_of_agent
 from raven.utils.paths import safe_path_segment
 from raven.utils.portable_lock import file_lock
 
@@ -55,8 +56,21 @@ def instance_root(session_dir: Path, agent: str) -> Path:
 
 
 def transcript_path(session_dir: Path, agent: str, handle: str) -> Path:
-    """The instance's conversation, in the session log's own format."""
-    return instance_root(session_dir, agent) / f"{safe_path_segment(handle)}.jsonl"
+    """The instance's conversation, in the session log's own format.
+
+    An instance first logged under another name of its agent -- a built-in row
+    renamed since -- keeps that file, so a continued turn lands beside the earlier
+    ones instead of opening a second log the viewer would list as a new instance.
+    """
+    filename = f"{safe_path_segment(handle)}.jsonl"
+    path = instance_root(session_dir, agent) / filename
+    if path.exists():
+        return path
+    for other in other_names_of_agent(agent):
+        earlier = instance_root(session_dir, other) / filename
+        if earlier.exists():
+            return earlier
+    return path
 
 
 def _header(*, session_key: str, agent: str, handle: str, kind: str, title: str = "") -> dict[str, Any]:

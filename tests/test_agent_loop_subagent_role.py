@@ -276,6 +276,24 @@ def test_the_reply_rules_are_the_host_s_alone(workspace, monkeypatch: pytest.Mon
     assert "## How you reply" not in render.identity_text(workspace)
 
 
+def test_the_manager_role_is_the_host_s_alone(workspace, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A launched child does the work it was handed. Telling it that it runs the
+    work through a roster would contradict the registry it was given, which holds
+    no tool that hands work on -- so the child keeps the identity it had before.
+
+    Asserted with ``identity_text``'s default dispatch paths on purpose: the role
+    has to follow the process, not only the tool table it is told about.
+    """
+    plain = render.identity_text(workspace)
+    assert "## Your role" in plain
+
+    monkeypatch.setenv("RAVEN_SUBAGENT", "1")
+    child = render.identity_text(workspace)
+
+    assert "## Your role" not in child
+    assert "You are Raven, a helpful AI assistant." in child
+
+
 def test_the_reply_rules_leave_one_blank_line_either_side(workspace, monkeypatch: pytest.MonkeyPatch) -> None:
     """The joint in both roles. The section is spliced in by a helper that renders
     empty for a child, and a stray newline on either branch would ship unseen in

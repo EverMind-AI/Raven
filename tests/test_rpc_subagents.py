@@ -11,6 +11,7 @@ import pytest
 
 from raven.agent.subagent.acp_registry_presets import ACP_REGISTRY_PRESETS
 from raven.agent.subagent.mirasim_presets import MIRASIM_PRESETS
+from raven.config.agent_names import GENERIC_AGENT
 from raven.config.schema import ThirdPartyCliSubagentConfig
 from raven.rpc.dispatcher import Dispatcher
 from raven.rpc.errors import ConfigFieldReadonlyError, ConfigValidationError, SubagentNotReadyError
@@ -334,7 +335,7 @@ async def test_list_with_probe_false_skips_the_network_probe(config_path: Path, 
     # so an overlay that omitted it would be hiding the agent every unnamed spawn
     # already dispatches to.
     assert set(by_name) == {
-        "Raven",
+        GENERIC_AGENT,
         "Coder",
         "Researcher",
         "Codex",
@@ -344,10 +345,10 @@ async def test_list_with_probe_false_skips_the_network_probe(config_path: Path, 
     } | {p["name"] for p in ACP_REGISTRY_PRESETS.values()} | {p["name"] for p in MIRASIM_PRESETS.values()}
     # Their own group, not installed/uninstalled: there is nothing to install, and
     # a row that could only ever read "uninstalled" would say the opposite.
-    assert by_name["Raven"]["group"] == "builtin"
-    assert by_name["Raven"]["builtin"] is True
-    assert by_name["Raven"]["configured"] is False
-    assert by_name["Raven"]["enabled"] is True
+    assert by_name[GENERIC_AGENT]["group"] == "builtin"
+    assert by_name[GENERIC_AGENT]["builtin"] is True
+    assert by_name[GENERIC_AGENT]["configured"] is False
+    assert by_name[GENERIC_AGENT]["enabled"] is True
     assert all(row["probe_status"] == "unknown" for row in result["rows"])
     assert all(row["probe_detail"] == "" for row in result["rows"])
     # group must still resolve correctly without a probe: openai keyed by its
@@ -2550,7 +2551,7 @@ async def test_a_builtin_row_cannot_be_switched_off(config_path: Path) -> None:
     state change is owed the reason it did not happen.
     """
     with pytest.raises(ConfigFieldReadonlyError):
-        await subagents_toggle({"name": "Raven", "enabled": False})
+        await subagents_toggle({"name": GENERIC_AGENT, "enabled": False})
 
     # And the name it used to be written under is refused too: a guard that missed
     # it would write a config row under the old name, which lands on the table as a
@@ -2560,14 +2561,14 @@ async def test_a_builtin_row_cannot_be_switched_off(config_path: Path) -> None:
 
     # Nothing was written on the way out either time: the override row that used to
     # be created to carry the switch has no other reason to exist.
-    assert [e for e in _stored(config_path) if e["name"] in ("Raven", "raven")] == []
+    assert [e for e in _stored(config_path) if e["name"] in (GENERIC_AGENT, "Raven", "raven")] == []
 
     rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
-    assert rows["Raven"]["enabled"] is True
-    assert rows["Raven"]["group"] == "builtin"
+    assert rows[GENERIC_AGENT]["enabled"] is True
+    assert rows[GENERIC_AGENT]["group"] == "builtin"
     # The description still comes from the package's row, which is the only line
     # the model reads about this agent.
-    assert "in-process sub-agent" in rows["Raven"]["description"]
+    assert "in-process sub-agent" in rows[GENERIC_AGENT]["description"]
 
 
 async def test_a_switch_off_hand_written_into_config_does_not_take_it_off_the_roster(
@@ -2584,7 +2585,7 @@ async def test_a_switch_off_hand_written_into_config_does_not_take_it_off_the_ro
     config_path.write_text(json.dumps(raw))
 
     rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
-    assert rows["Raven"]["enabled"] is True
+    assert rows[GENERIC_AGENT]["enabled"] is True
     assert "raven" not in rows
 
 
@@ -2928,8 +2929,8 @@ async def test_building_a_name_no_folder_carries_is_refused(
 async def test_a_reserved_name_entry_is_reported_once_and_as_ignored(config_path: Path) -> None:
     """The roster is where a user learns their entry is dead, not the server log.
 
-    The capitalised spelling was accepted before the generic row was renamed to it,
-    so config can hold a cli entry of that name. It is inert at runtime, and the
+    `Raven` was accepted before the generic row took that name, and is a former name
+    of the row now, so config can hold a cli entry of that name. It is inert at runtime, and the
     list used to carry it beside the built-in row as a second enabled-looking agent
     of the same name -- a view that keys by name opens whichever comes first.
     """
@@ -2939,9 +2940,10 @@ async def test_a_reserved_name_entry_is_reported_once_and_as_ignored(config_path
     )
     config_path.write_text(json.dumps(raw))
 
-    rows = [r for r in (await subagents_list({"probe": False}))["rows"] if r["name"] == "Raven"]
+    rows = [r for r in (await subagents_list({"probe": False}))["rows"] if r["name"] in (GENERIC_AGENT, "Raven")]
 
     assert len(rows) == 1
+    assert rows[0]["name"] == GENERIC_AGENT
     assert rows[0]["kind"] == "builtin"
     assert rows[0]["enabled"] is True
 
@@ -3000,7 +3002,7 @@ async def test_list_marks_the_built_in_row_and_a_discovered_product_as_ravens_ow
     monkeypatch.setattr(va, "agents_root", lambda: root)
     rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
 
-    assert rows["Raven"]["own"] is True and rows["Raven"]["model_source"] == "raven"
+    assert rows[GENERIC_AGENT]["own"] is True and rows[GENERIC_AGENT]["model_source"] == "raven"
     # Ownership and the model rule are two facts: a discovered product is
     # raven's, and as a cli row it has no menu -- `update` refuses a model on it.
     assert rows["Raven-Probe"]["own"] is True and rows["Raven-Probe"]["model_source"] == "fixed"

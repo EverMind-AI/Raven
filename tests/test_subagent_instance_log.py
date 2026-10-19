@@ -8,10 +8,12 @@ from pathlib import Path
 from raven.agent.subagent.instance_log import (
     append_turn,
     build_turn,
+    instance_root,
     instance_title,
     open_instance_log,
     transcript_path,
 )
+from raven.config.agent_names import GENERIC_AGENT
 
 
 def test_turn_is_prompt_then_work_then_answer() -> None:
@@ -112,3 +114,23 @@ def test_an_unnamed_instance_still_opens(tmp_path: Path) -> None:
 
     assert transcript_path(tmp_path, "Coder", "h1").is_file()
     assert instance_title(tmp_path, "Coder", "h1") == ""
+
+
+def test_an_instance_logged_under_a_former_name_keeps_its_file(tmp_path: Path) -> None:
+    """The generic agent was renamed without moving the logs written before. A
+    continued instance appends where its earlier turns are, rather than opening a
+    second file under the new name that the viewer would show as a new instance."""
+    open_instance_log(tmp_path, agent="Raven", handle="h1", session_key="s1", kind="spawn", title="Draft")
+    legacy = transcript_path(tmp_path, "Raven", "h1")
+
+    assert transcript_path(tmp_path, GENERIC_AGENT, "h1") == legacy
+
+    append_turn(tmp_path, agent=GENERIC_AGENT, handle="h1", session_key="s1", kind="spawn", prompt="go", answer="ok")
+    assert not instance_root(tmp_path, GENERIC_AGENT).exists()
+    assert "ok" in legacy.read_text(encoding="utf-8")
+
+
+def test_a_new_instance_is_logged_under_the_current_name(tmp_path: Path) -> None:
+    open_instance_log(tmp_path, agent="Raven", handle="old", session_key="s1", kind="spawn", title="Draft")
+
+    assert transcript_path(tmp_path, GENERIC_AGENT, "fresh").parent == instance_root(tmp_path, GENERIC_AGENT)

@@ -1,18 +1,22 @@
 """Name resolution across the agent table.
 
-The generic built-in row was renamed ``raven`` -> ``Raven``, and the names written
-into instance-registry rows, direct-chat records and stored dag nodes before that
-were not rewritten. Every one of those references still has to resolve, which is
-what :data:`LEGACY_AGENT_ALIASES` is for -- and it has to resolve *without* the
-roster ever offering the old spelling back to the model, or the table would
-advertise two names for one agent.
+The generic built-in row was renamed twice, ``raven`` -> ``Raven`` ->
+``Raven-General``, and the names written into instance-registry rows, direct-chat
+records and stored dag nodes before each rename were not rewritten. Every one of
+those references still has to resolve, which is what :data:`LEGACY_AGENT_ALIASES`
+is for -- and it has to resolve *without* the roster ever offering an old spelling
+back to the model, or the table would advertise two names for one agent.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
+
+FORMER_NAMES = ("raven", "Raven")
 from raven.agent.subagent.registry import AgentRegistry
 from raven.config.schema import ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
 
@@ -28,32 +32,35 @@ class TestTheGenericRowIsOnTheTableUnderItsCurrentName:
     def test_the_enum_offers_the_current_name(self) -> None:
         assert GENERIC_AGENT in _registry().names()
 
-    def test_and_never_the_legacy_one(self) -> None:
+    @pytest.mark.parametrize("former", FORMER_NAMES)
+    def test_and_never_a_legacy_one(self, former: str) -> None:
         # The enum is what the model picks from. An alias there would read as a
         # second agent, and the two would be indistinguishable on the roster.
-        assert "raven" not in _registry().names()
+        assert former not in _registry().names()
 
 
+@pytest.mark.parametrize("former", FORMER_NAMES)
 class TestAStoredReferenceUnderTheLegacyNameStillResolves:
-    def test_lookup_finds_the_row(self) -> None:
-        row = _registry().get("raven")
+    def test_lookup_finds_the_row(self, former: str) -> None:
+        row = _registry().get(former)
 
         assert row is not None
         assert row.name == GENERIC_AGENT
 
-    def test_dispatch_finds_the_backend(self) -> None:
+    def test_dispatch_finds_the_backend(self, former: str) -> None:
         # `backend` is its own lookup, not a wrapper around `get` -- a resume that
         # got its row would still fail here if only one of the two resolved.
-        assert _registry().backend("raven") is not None
+        assert _registry().backend(former) is not None
 
-    def test_validation_accepts_a_playbook_that_names_it(self) -> None:
+    def test_validation_accepts_a_playbook_that_names_it(self, former: str) -> None:
         # `all_names` is what a stored playbook's agent reference is checked
         # against, and a playbook written before the rename is not malformed.
-        assert "raven" in _registry().all_names()
+        assert former in _registry().all_names()
 
-    def test_a_name_on_no_row_still_resolves_to_nothing(self) -> None:
-        assert _registry().get("Nonexistent") is None
-        assert _registry().backend("Nonexistent") is None
+
+def test_a_name_on_no_row_still_resolves_to_nothing() -> None:
+    assert _registry().get("Nonexistent") is None
+    assert _registry().backend("Nonexistent") is None
 
 
 class TestTheAliasCannotBeUsedToDisplaceTheSeed:
@@ -80,14 +87,15 @@ class TestTheAliasCannotBeUsedToDisplaceTheSeed:
         assert row is not None
         assert row.kind == "builtin"
 
-    def test_and_the_legacy_spelling_still_reaches_the_built_in_one(self) -> None:
+    @pytest.mark.parametrize("former", FORMER_NAMES)
+    def test_and_the_legacy_spelling_still_reaches_the_built_in_one(self, former: str) -> None:
         # The sharper half: without the seed winning, this lookup would resolve
         # through the alias into the external row, so every record written under
         # the old name would dispatch to a third-party backend.
         registry = AgentRegistry(build_builtin=lambda row, narrowed: ("backend", row.name))
         registry.apply([self._external(GENERIC_AGENT)])
 
-        row = registry.get("raven")
+        row = registry.get(former)
         assert row is not None
         assert row.kind == "builtin"
 

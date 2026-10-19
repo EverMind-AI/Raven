@@ -78,13 +78,13 @@ params:
     description: The brief to inspect
 nodes:
   - id: inspect
-    subagent: raven
+    subagent: Raven-General
     nodeSummary: Identify gaps
     skills: []
     mcps: []
     promptTemplate: "Find gaps in this brief: {{ params.brief }}. Do not edit files or contact external services."
   - id: summarize
-    subagent: raven
+    subagent: Raven-General
     nodeSummary: Prioritize feedback
     dependsOn: [inspect]
     skills: []
@@ -93,7 +93,7 @@ nodes:
 ```
 ````
 
-`raven` is the generic built-in agent. To use Raven-Code or another specialized
+`Raven-General` is the generic built-in agent. To use Raven-Code or another specialized
 agent, substitute a registered name and verify its setup through
 [Agent Integrations](agent-integrations.md). A stored Playbook uses the
 underlying agent registry, not temporary worker labels advertised for an

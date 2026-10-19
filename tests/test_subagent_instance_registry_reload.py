@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from raven.agent.subagent.instances import InstanceRegistry
+from raven.config.agent_names import GENERIC_AGENT
 
 
 def _write(path: Path, records: list[dict[str, object]]) -> None:
@@ -138,3 +139,48 @@ class TestARowTheFileCannotHoldGoesNoFurther:
         on_disk = json.loads(path.read_text(encoding="utf-8"))
         assert sorted(str(r["handle"]) for r in on_disk["instances"]) == ["first", "mine"]
         assert registry.list_instances("s2") == []
+
+
+class TestARowWrittenUnderAFormerNameOfItsAgent:
+    """The generic agent was renamed, ``raven`` -> ``Raven`` -> ``Raven-General``,
+    without this file being rewritten. A spawn continuing one of its instances asks
+    under the current name, and has to reach the session the old row bound -- or
+    the instance silently restarts without its context."""
+
+    @staticmethod
+    def _old_row(agent: str, *, updated: int = 1, agent_id: str = "sess-1") -> dict[str, object]:
+        return {
+            "kind": "acp",
+            "sessionKey": "s1",
+            "agent": agent,
+            "handle": "h1",
+            "agentId": agent_id,
+            "createdAtMs": 1,
+            "updatedAtMs": updated,
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("former", ["raven", "Raven"])
+    async def test_a_lookup_under_the_current_name_finds_it(self, tmp_path: Path, former: str) -> None:
+        path = tmp_path / "reg.json"
+        _write(path, [self._old_row(former)])
+
+        assert await InstanceRegistry(path).lookup("s1", GENERIC_AGENT, "h1", kind="acp") == "sess-1"
+
+    def test_it_is_listed_under_the_current_name(self, tmp_path: Path) -> None:
+        path = tmp_path / "reg.json"
+        _write(path, [self._old_row("Raven")])
+
+        assert [r["agent"] for r in InstanceRegistry(path).list_instances("s1")] == [GENERIC_AGENT]
+
+    def test_two_spellings_of_one_instance_keep_the_newer(self, tmp_path: Path) -> None:
+        """The first rename could leave both: the old row, and the one a later
+        resume wrote under the then-current name."""
+        path = tmp_path / "reg.json"
+        _write(
+            path,
+            [self._old_row("Raven", updated=5, agent_id="newer"), self._old_row("raven", updated=2, agent_id="older")],
+        )
+
+        (row,) = InstanceRegistry(path).list_instances("s1")
+        assert row["agentId"] == "newer"

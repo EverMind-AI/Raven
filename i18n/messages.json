@@ -492,8 +492,8 @@
       "zh": "失败"
     },
     "gui.deleg.self": {
-      "en": "Raven",
-      "zh": "Raven 分身"
+      "en": "Raven-General",
+      "zh": "Raven-General"
     },
     "gui.deleg.open_hint": {
       "en": "Open this run's transcript",

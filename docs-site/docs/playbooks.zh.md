@@ -72,13 +72,13 @@ params:
     description: The brief to inspect
 nodes:
   - id: inspect
-    subagent: raven
+    subagent: Raven-General
     nodeSummary: Identify gaps
     skills: []
     mcps: []
     promptTemplate: "Find gaps in this brief: {{ params.brief }}. Do not edit files or contact external services."
   - id: summarize
-    subagent: raven
+    subagent: Raven-General
     nodeSummary: Prioritize feedback
     dependsOn: [inspect]
     skills: []
@@ -87,7 +87,7 @@ nodes:
 ```
 ````
 
-`raven` 是通用内置 Agent。如需 Raven-Code 等专用 Agent，替换为已注册的名称，
+`Raven-General` 是通用内置 Agent。如需 Raven-Code 等专用 Agent，替换为已注册的名称，
 并按[Agent 集成](agent-integrations.md)检查配置。保存的 Playbook 使用底层
 Agent registry，而不是临时组图时向模型展示的 worker label。
 

@@ -13,6 +13,7 @@ from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import EngineWiring, SubagentWiring, ToolWiring, TurnPolicy
 from raven.agent.subagent.dag_graph import DagNodeSpec
 from raven.agent.tools.load_playbook import LoadPlaybookTool
+from raven.config.agent_names import GENERIC_AGENT
 from raven.config.raven import CheckpointConfig, RuntimeConfig
 from raven.config.schema import BuiltinAgentConfig, PlaybookConfig
 from raven.playbook.agent_generator import PERSONA_TOOL, TASK_TOOL
@@ -74,7 +75,7 @@ class _WholeTurnProvider(LLMProvider):
                             "workers": [
                                 {
                                     "as": "researcher",
-                                    "agent": "Raven",
+                                    "agent": GENERIC_AGENT,
                                     "prompt": "Return WORKER_EVIDENCE_OK after collecting the requested evidence",
                                 }
                             ],
@@ -217,7 +218,7 @@ def _saved_composite() -> UnifiedPlaybookSpec:
             DelegateEntry(
                 **{
                     "as": "researcher",
-                    "name": "Raven",
+                    "name": GENERIC_AGENT,
                     "brief": "Collect primary evidence and return the marker",
                     "playbook": {"memory": {"systemPrompt": "Return WORKER_EVIDENCE_OK when complete."}},
                 }
@@ -488,7 +489,7 @@ class _TaskWithoutDagProvider(LLMProvider):
                         arguments={
                             "artifactName": "concise-answer-task",
                             "description": "Answer a bounded question concisely",
-                            "workers": [{"agent": "Raven", "prompt": "Answer concisely with cited facts"}],
+                            "workers": [{"agent": GENERIC_AGENT, "prompt": "Answer concisely with cited facts"}],
                         },
                     )
                 ],
@@ -931,7 +932,7 @@ def _saved_persona() -> UnifiedPlaybookSpec:
             DelegateEntry(
                 **{
                     "as": "planner",
-                    "name": "Raven",
+                    "name": GENERIC_AGENT,
                     "brief": "Route each day within the walking limit",
                 }
             )
@@ -1090,7 +1091,7 @@ class _FailingTurnProvider(LLMProvider):
                             "workers": [
                                 {
                                     "as": "researcher",
-                                    "agent": "Raven",
+                                    "agent": GENERIC_AGENT,
                                     "prompt": "Return WORKER_EVIDENCE_OK",
                                 }
                             ],

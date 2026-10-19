@@ -19,6 +19,7 @@ from loguru import logger
 
 from raven.agent.harness_capabilities import function_enabled, parameter_enabled
 from raven.agent.subagent.delegate import DelegateTable, Worker
+from raven.config.agent_names import GENERIC_AGENT
 from raven.observability.purpose import purpose as _llm_purpose
 from raven.playbook.agent_spec import AgentPlaybookSpec
 
@@ -1148,11 +1149,12 @@ class PersonaPlaybookGenerator(_PlaybookGenerator):
         existing_artifact_names: list[str] | None = None,
     ) -> HarnessResolution:
         inventory = _tool_inventory(tool_catalog)
-        # The main Raven is represented by ``coordinator``. Offering it again
-        # as a worker lets the model create a peer that cannot dispatch the
-        # actual specialists, recreating the nesting problem this topology is
-        # designed to remove. Task mode still offers Raven normally.
-        delegate_names = sorted(name for name in agent_names if name != "Raven")
+        # The host is represented by ``coordinator``. Offering the generic agent
+        # -- the host's own loop without its dispatch tools -- as a worker lets
+        # the model create a peer that cannot dispatch the actual specialists,
+        # recreating the nesting problem this topology is designed to remove.
+        # Task mode still offers it normally.
+        delegate_names = sorted(name for name in agent_names if name != GENERIC_AGENT)
         profiles = {name: _profile_payload((agent_profiles or {}).get(name)) for name in delegate_names}
         payload = {
             "personaRequirements": query,

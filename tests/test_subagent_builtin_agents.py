@@ -141,17 +141,19 @@ class TestTheSwitchIsNotOverridableOnABuiltinRow:
         assert merged.skills == ["x"]
 
 
-class TestTheGenericAgentCarriesACapitalisedName:
-    """It is the product's own name, and every other row on the table is capitalised."""
+class TestTheGenericAgentIsNamedApartFromTheHost:
+    """The host is Raven, so the generic row takes the family's ``Raven-<role>``
+    form like every other capitalised row, with its role in the name."""
 
-    def test_the_seed_is_the_capitalised_name(self) -> None:
-        assert GENERIC_AGENT == "Raven"
-        assert [seed.name for seed in builtin_agent_seeds()] == ["Raven"]
+    def test_the_seed_is_raven_general(self) -> None:
+        assert GENERIC_AGENT == "Raven-General"
+        assert [seed.name for seed in builtin_agent_seeds()] == ["Raven-General"]
 
 
-class TestTheLegacyLowercaseNameStillNamesTheSeed:
+class TestTheLegacyNamesStillNameTheSeed:
     """Thousands of instance-registry rows and every stored dag node spell it
-    ``raven``, from before the row was capitalised.
+    ``raven``, from before the row was capitalised, or ``Raven``, from before it
+    was renamed apart from the host.
 
     ``merge_builtin_seeds`` matches a config row to a seed by name, so without the
     alias a stored ``{"name": "raven", ...}`` override stops overriding and lands on
@@ -159,13 +161,15 @@ class TestTheLegacyLowercaseNameStillNamesTheSeed:
     ``BUILTIN_AGENT_NAMES``, stop recognising the name they exist to protect.
     """
 
-    def test_the_membership_helper_accepts_it(self) -> None:
-        assert is_builtin_agent_name("raven")
+    @pytest.mark.parametrize("former", ["raven", "Raven"])
+    def test_the_membership_helper_accepts_it(self, former: str) -> None:
+        assert is_builtin_agent_name(former)
         assert is_builtin_agent_name(GENERIC_AGENT)
         assert not is_builtin_agent_name("Coder")
 
-    def test_a_row_written_under_it_overrides_the_seed(self) -> None:
-        stored = BuiltinAgentConfig.model_validate({"name": "raven", "kind": "builtin", "skills": ["x"]})
+    @pytest.mark.parametrize("former", ["raven", "Raven"])
+    def test_a_row_written_under_it_overrides_the_seed(self, former: str) -> None:
+        stored = BuiltinAgentConfig.model_validate({"name": former, "kind": "builtin", "skills": ["x"]})
         merged = merge_builtin_seeds([BuiltinAgentConfig.model_validate(stored.model_dump())])
 
         assert [row.name for row in merged] == [GENERIC_AGENT]
