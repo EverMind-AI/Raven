@@ -100,7 +100,9 @@ def ssh_defaults(host: str, *, port: int = 0, user: str = "") -> dict[str, Any]:
     return out
 
 
-def probe(row: dict[str, Any], *, timeout: float = 30.0, isolate_key: bool = False) -> tuple[bool, str, dict[str, Any]]:
+def probe(
+    row: dict[str, Any], *, timeout: float = 30.0, isolate_key: bool = False, keep_config: bool = False
+) -> tuple[bool, str, dict[str, Any]]:
     """Reach the machine and read what it is. ``(reached, message, detected)``.
 
     The reaching is the point and the reading is the bonus. A row that cannot be
@@ -110,13 +112,18 @@ def probe(row: dict[str, Any], *, timeout: float = 30.0, isolate_key: bool = Fal
     machine channel reaches a machine through, so the way a machine is reached
     here is the way it will be reached afterwards.
 
-    ``isolate_key`` is for the one caller that has to say WHICH key opened the
-    session rather than merely that one opened: trying the keys ssh named when
-    the owner gave no path. Without it ``-i`` is a preference and not a
-    restriction -- the other configured identities and the agent are offered too
-    -- so the first candidate could be credited with a session a different key
-    authenticated, and the registry would then hold a path that stops working
-    the day that agent or config changes.
+    ``isolate_key`` is for the callers that have to say WHICH key opened the
+    session rather than merely that one opened. Without it ``-i`` is a
+    preference and not a restriction -- the other configured identities and
+    the agent are offered too -- so the first candidate could be credited with
+    a session a different key authenticated, and the registry would then hold
+    a path that stops working the day that agent or config changes. The agent
+    tool trying the keys ssh named, when the owner gave no path, isolates
+    fully: no config read at all. A password registration, proving the key it
+    just installed, adds ``keep_config``: the owner's ssh config stays in play
+    -- a jump host, an alias, an old host's algorithms are how that machine
+    is reached, and how the install itself reached it a moment before -- and
+    only the agent is kept out.
     """
     from raven.ops.transport import TIMED_OUT_RC, TransportError, make_ssh_runner, runner_from, ssh_target
 
@@ -126,7 +133,9 @@ def probe(row: dict[str, Any], *, timeout: float = 30.0, isolate_key: bool = Fal
             # The row read the one way every other route onto a machine reads
             # it; only the key restriction is added.
             host, port, key, user = ssh_target(row)
-            runner = make_ssh_runner(host, port, key, user=user, identities_only=True, cap_seconds=timeout)
+            runner = make_ssh_runner(
+                host, port, key, user=user, identities_only=True, keep_config=keep_config, cap_seconds=timeout
+            )
         else:
             runner = runner_from(row, cap_seconds=timeout)
         code, out = runner(PROBE_SCRIPT)
@@ -187,12 +196,78 @@ def generate_key(conn_id: str) -> tuple[Path, str]:
     return private, public.read_text(encoding="utf-8").strip()
 
 
-#: What the remote shell does with a public key: add it once, keep the modes sshd accepts.
+#: What the remote shell does with a public key: add it once, on a line of
+#: its own, keep the modes sshd accepts. A file whose last line has no newline
+#: (``echo -n``, an editor that adds none) gets one first, the way
+#: ``ssh-copy-id`` does it: appended straight after, the key lands inside the
+#: owner's last line -- sshd then reads neither it nor, without a comment field
+#: to absorb it, the owner's own key.
 INSTALL_KEY_SCRIPT = (
     "umask 077; mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys "
     "&& chmod 600 ~/.ssh/authorized_keys "
-    "&& { grep -qxF %s ~/.ssh/authorized_keys || printf '%%s\\n' %s >> ~/.ssh/authorized_keys; }"
+    "&& { grep -qxF %s ~/.ssh/authorized_keys || { "
+    '[ ! -s ~/.ssh/authorized_keys ] || [ -z "$(tail -c 1 ~/.ssh/authorized_keys)" ] || echo >> ~/.ssh/authorized_keys; '
+    "printf '%%s\\n' %s >> ~/.ssh/authorized_keys; }; }"
 )
+
+
+#: What the remote shell does to take that key back: the one exact line goes,
+#: nothing else, and the file keeps its inode and mode (``cat >`` rewrites in
+#: place). A missing file is nothing to take back. ``grep -v`` answers 1 for
+#: a file that held only that line, which is still a file to write back.
+REMOVE_KEY_SCRIPT = (
+    'umask 077; f=~/.ssh/authorized_keys; [ -f "$f" ] || exit 0; '
+    'grep -vxF %s "$f" > "$f.raven"; rc=$?; '
+    '[ "$rc" -le 1 ] && cat "$f.raven" > "$f"; rm -f "$f.raven"; [ "$rc" -le 1 ]'
+)
+
+
+def own_key(row: dict[str, Any]) -> bool:
+    """Whether the row's key is one this computer made for it (a password registration's)."""
+    conn_id = str(row.get("id") or "").strip()
+    return bool(conn_id) and str(row.get("key") or "") == str(key_path(conn_id))
+
+
+def revoke_public_key(row: dict[str, Any], *, timeout: float = 30.0) -> tuple[bool, str]:
+    """Take the key this computer made for the machine out of its ``authorized_keys``; ``(taken back, why not)``.
+
+    The other half of :func:`install_public_key`, for the removal: a key Raven
+    made and authorized is Raven's to take back, so the machine is not left
+    trusting a key nobody holds any more (the pair here goes with the row,
+    :func:`forget_key`). One key connection, the row's own, with the exact
+    public line to drop; a machine that cannot be reached keeps the line, and
+    the sentence says so for the owner to take it out by hand.
+    """
+    from raven.ops.transport import TIMED_OUT_RC, TransportError, runner_from
+
+    public = key_path(str(row.get("id") or "").strip()).with_name(
+        key_path(str(row.get("id") or "").strip()).name + ".pub"
+    )
+    try:
+        line = public.read_text(encoding="utf-8").strip()
+    except OSError:
+        return False, "the public half of the key is not here to name the line"
+    if not line:
+        return False, "the public half of the key here is empty"
+    try:
+        rc, out = runner_from(row, cap_seconds=timeout)(REMOVE_KEY_SCRIPT % _shell_quote(line))
+    except TransportError as exc:
+        return False, str(exc)
+    if rc == TIMED_OUT_RC:
+        return False, f"no answer within {timeout:.0f}s"
+    if rc != 0:
+        return False, (out.strip().splitlines() or [f"exit {rc}"])[-1]
+    return True, ""
+
+
+def forget_key(conn_id: str) -> bool:
+    """Delete the pair this computer made for ``conn_id``; whether there was one."""
+    private = key_path(conn_id)
+    public = private.with_name(private.name + ".pub")
+    had = private.exists() or public.exists()
+    for path in (private, public):
+        path.unlink(missing_ok=True)
+    return had
 
 
 def _shell_quote(text: str) -> str:
