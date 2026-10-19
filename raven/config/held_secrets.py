@@ -112,15 +112,24 @@ def held_secrets() -> tuple[tuple[str, str], ...]:
     try:
         mtime = path.stat().st_mtime
     except OSError:
-        return ()
-    if _cache is None or _cache[0] != path or _cache[1] != mtime:
-        found: list[tuple[str, str]] = []
-        try:
-            _collect(read_raw(path), "", found)
-        except Exception as exc:  # noqa: BLE001 - an unreadable config holds nothing to scrub
-            logger.debug("held_secrets: config unreadable: {}", exc)
-        _cache = (path, mtime, tuple(found))
-    unique = dict(_cache[2])
+        # No config file. That used to end the whole call, which also skipped
+        # the machine passwords below -- and those live under the Raven home
+        # independently of any config: a configless Raven can register a
+        # password machine, and a tool printing keys/<id>.password then passed
+        # it to the model verbatim (reviewed 2026-10-19).
+        mtime = None
+    if mtime is None:
+        config_held: tuple[tuple[str, str], ...] = ()
+    else:
+        if _cache is None or _cache[0] != path or _cache[1] != mtime:
+            found: list[tuple[str, str]] = []
+            try:
+                _collect(read_raw(path), "", found)
+            except Exception as exc:  # noqa: BLE001 - an unreadable config holds nothing to scrub
+                logger.debug("held_secrets: config unreadable: {}", exc)
+            _cache = (path, mtime, tuple(found))
+        config_held = _cache[2]
+    unique = dict(config_held)
     unique.update(_machine_passwords(_machine_password_files()))
     # As a JSON file prints it too: a quote or a backslash in the value is
     # escaped there, and `cat config.json` shows that spelling.

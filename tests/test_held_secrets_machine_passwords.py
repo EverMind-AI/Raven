@@ -57,3 +57,22 @@ def test_a_password_rewritten_in_place_with_the_same_mtime_is_still_the_one_scru
     assert path.stat().st_mtime_ns == stamp.st_mtime_ns, "the rewrite kept the old mtime, as a fast one can"
     assert hs.scrub_held_secrets("say battery-staple") == "say [redacted: the password kept for machine box]"
     assert hs.scrub_held_secrets("say correct-horse") == "say correct-horse"
+
+
+def test_a_machine_password_is_scrubbed_even_with_no_config_file(tmp_path, monkeypatch):
+    """The config and the kept passwords live independently under the Raven home: a configless Raven can register a
+    password machine, and its password must still be scrubbed (reviewed 2026-10-19 -- the missing config used to end
+    the whole call before the passwords were read)."""
+    from raven.config import held_secrets
+    from raven.ops.connection_add import store_password
+
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    monkeypatch.setattr(held_secrets, "get_config_path", lambda: tmp_path / "no-such-config.json")
+    monkeypatch.setattr(held_secrets, "_cache", None)
+
+    assert held_secrets.scrub_held_secrets("pw: correct-horse") == "pw: correct-horse"
+    store_password("box", "correct-horse")
+    assert held_secrets.scrub_held_secrets("pw: correct-horse") == "pw: [redacted: the password kept for machine box]"
+    assert held_secrets.scrub_held_secrets("sk-anything-at-all") == "sk-anything-at-all", (
+        "no config holds no config credentials"
+    )
