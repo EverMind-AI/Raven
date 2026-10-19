@@ -1520,17 +1520,17 @@ class VideoGenerateTool(_OpenRouterMediaTool):
                 },
                 ensure_ascii=False,
             )
-        frame = None
+        part = None
         if first_frame_image:
             try:
-                frame = self._image_part(first_frame_image)["image_url"]["url"]
+                part = self._image_part(first_frame_image)
             except OSError as e:
                 return json.dumps({"error": "could not read the first frame", "detail": str(e)}, ensure_ascii=False)
         body: dict[str, Any]
         if v2:
             content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
             defaults: dict[str, Any] = {"resolution": "768P", "duration": 6}
-            if frame:
+            if part:
                 # MiniMax answers any other ratio beside a frame with the frame's own
                 # shape, without a word.
                 if options.get("ratio", "adaptive") != "adaptive":
@@ -1542,15 +1542,15 @@ class VideoGenerateTool(_OpenRouterMediaTool):
                         },
                         ensure_ascii=False,
                     )
-                content.append({"type": "image_url", "image_url": {"url": frame}, "role": "first_frame"})
+                content.append({**part, "role": "first_frame"})
             else:
                 # Text-to-video takes a ratio and refuses ``adaptive``.
                 defaults["ratio"] = "16:9"
             body = {"model": model_id, "content": content, **defaults, **options}
         else:
             body = {"model": model_id, "prompt": prompt, **options}
-            if frame:
-                body["first_frame_image"] = frame
+            if part:
+                body["first_frame_image"] = part["image_url"]["url"]
         root = _minimax_root(self.api_base)
         headers = self._headers(json_body=True)
         try:
