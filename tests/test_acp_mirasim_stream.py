@@ -316,7 +316,7 @@ def test_tool_kinds_are_matched_without_case_and_anything_else_is_other() -> Non
     assert tool_kind("mcp__mirasim__deliver_artifact") == "other" and tool_kind(None) == "other"
 
 
-async def test_a_coalesced_snapshot_keeps_every_segment_in_order() -> None:
+async def test_a_snapshot_that_carries_segments_keeps_every_segment_in_order() -> None:
     from raven.acp_client.acp_agent import _TurnCollector
 
     snapshot = {
@@ -359,6 +359,37 @@ async def test_a_coalesced_snapshot_keeps_every_segment_in_order() -> None:
     snapshot["text"] += " More."
     snapshot["segments"][-1]["to"] += 6
     assert texts(valid(stream.updates(snapshot)), "agent_message_chunk") == [" More."]
+
+
+async def test_a_whole_snapshot_without_segments_keeps_the_answer_after_a_call_it_brings() -> None:
+    from raven.acp_client.acp_agent import _TurnCollector
+
+    stream = TurnStream()
+    updates = stream.updates({"phase": "streaming", "taskId": "t1", "text": "I will", "toolCalls": []})
+    # Live frames carry no segments. Across a reconnect, one snapshot brings the rest of the
+    # sentence, a call that started and ended meanwhile, and the start of the answer after it.
+    done = {"id": "c1", "name": "Bash", "status": "done", "result": "ok"}
+    caught_up = {"phase": "streaming", "taskId": "t1", "text": "I will check.All checks", "toolCalls": [done]}
+    updates += stream.updates(caught_up, whole=True)
+    updates += stream.updates({**caught_up, "phase": "done", "text": "I will check.All checks passed."})
+    collector = _TurnCollector(track_files=False)
+    for update in valid(updates):
+        await collector("session/update", {"sessionId": "s1", "update": update})
+    assert collector.reply.endswith("All checks passed.")
+    assert [u["sessionUpdate"] for u in updates] == [
+        "agent_message_chunk",
+        "tool_call",
+        "agent_message_chunk",
+        "agent_message_chunk",
+    ]
+
+
+def test_a_patch_without_segments_sends_its_text_before_a_call_it_opens() -> None:
+    stream = TurnStream()
+    stream.updates({"phase": "streaming", "taskId": "t1", "text": "", "toolCalls": []})
+    opened = {"id": "c1", "name": "Bash", "status": "running"}
+    updates = stream.updates({"phase": "streaming", "taskId": "t1", "text": "I will check.", "toolCalls": [opened]})
+    assert [u["sessionUpdate"] for u in valid(updates)] == ["agent_message_chunk", "tool_call"]
 
 
 def test_partial_or_malformed_segments_drop_neither_text_nor_calls() -> None:

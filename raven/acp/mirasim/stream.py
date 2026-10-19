@@ -24,12 +24,15 @@ rule is tested against recorded shapes. Measured on Mirasim 0.0.465 and 0.0.537:
 - a turn is one ``taskId``; a new one resets ``text`` and ``reasoning`` with a
   ``set`` and leaves the lists to whatever the new turn sets;
 - the phase runs ``queued`` -> ``streaming`` -> ``done``, and only the first two
-  are a turn still running (``Kl`` in the host);
+  are a turn still running (the host's own running-turn test checks exactly those);
 - a tool call is ``{id, name, summary, input, status, result}``, its status
   ``running``, ``done`` or ``failed``;
 - the plan is ``{explanation, steps: [{text, status}]}``, a step's status
   ``pending``, ``inProgress`` or ``completed``;
-- a steer the turn took is a ``steers`` entry with no ``pending`` flag.
+- a steer the turn took is a ``steers`` entry with no ``pending`` flag;
+- a live snapshot has no ``segments``: the host's patches never carry that key,
+  and only a settled turn of ``getHistory`` records how its text, reasoning and
+  calls interleaved. :class:`TurnStream` orders live updates without it.
 
 Anything else in a snapshot is ignored rather than guessed at.
 """
@@ -169,12 +172,18 @@ class TurnStream:
     """The turn's end was reported; frames for it that arrive later add nothing."""
     _rewrites_logged: bool = False
 
-    def updates(self, snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    def updates(self, snapshot: dict[str, Any], *, whole: bool = False) -> list[dict[str, Any]]:
         """The ACP ``session/update`` payloads that bring the client level with ``snapshot``.
 
-        The host's segments retain the order lost when patches are coalesced.
-        A tool's completion goes at its segment, before the text that follows
-        it, so ACP clients do not split that answer at a late tool update.
+        A snapshot that names ``segments`` is replayed in their order. Live
+        frames name none (measured on 0.0.537 to 0.0.558: the host's patches
+        never carry the key), so the order is inferred: within one patch, a
+        call already shown settles before the text after it, and a call that
+        opens follows the text before it. A snapshot taken ``whole`` -- on
+        subscribing, after a gap, or caught up on at once -- can span any number
+        of the turn's steps, so its calls go before its text: the answer after a
+        call it brings must not land in front of that call, where ACP clients
+        would split it off as a message of its own.
         """
         task_id = _text(snapshot.get("taskId")) or None
         if task_id != self.task_id:
@@ -183,12 +192,12 @@ class TurnStream:
             return []
         out: list[dict[str, Any]] = []
         out += self._steers(snapshot.get("steers"))
-        out += self._content(snapshot)
+        out += self._content(snapshot, whole=whole)
         out += self._plan(snapshot.get("plan"))
         out += self._artifacts(snapshot.get("artifacts"))
         return out
 
-    def _content(self, snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    def _content(self, snapshot: dict[str, Any], *, whole: bool) -> list[dict[str, Any]]:
         sources: dict[str, _TextDelta] = {}
         for key, segment, update_kind in (
             ("reasoning", "thinking", "agent_thought_chunk"),
@@ -210,6 +219,12 @@ class TurnStream:
         segments = snapshot.get("segments")
         segments = [s for s in segments if isinstance(s, dict)] if isinstance(segments, list) else []
         out: list[dict[str, Any]] = []
+        if whole and not segments:
+            for pending in calls.values():
+                out += pending.values()
+            for source in sources.values():
+                out += source.through()
+            return out
         for kind, pending in calls.items():
             named = {call_id for s in segments if s.get("kind") == kind for call_id in _segment_ids(s)}
             for call_id, update in list(pending.items()):

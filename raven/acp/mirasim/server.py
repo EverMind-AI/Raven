@@ -1098,7 +1098,8 @@ class MirasimAgent:
                     session.resyncing = True
                     self._spawn(self._subscribe(session))
                 return
-            self._observe(session)
+            patch = frame.get("patch")
+            self._observe(session, whole=kind == "snapshot" or (isinstance(patch, dict) and "full" in patch))
         elif kind == "outbox":
             items = frame.get("items")
             for item in items if isinstance(items, list) else ():
@@ -1124,10 +1125,15 @@ class MirasimAgent:
         turn.heard_at = time.monotonic()
         if turn.cancelled:
             self._spawn(self._stop(turn))
-        self._observe(turn.session)
+        # Patches of the turn that came in while it was queued were held back: caught up on at once.
+        self._observe(turn.session, whole=True)
 
-    def _observe(self, session: Session) -> None:
-        """Bring the client level with the session's snapshot, as far as anyone is listening for it."""
+    def _observe(self, session: Session, *, whole: bool = False) -> None:
+        """Bring the client level with the session's snapshot, as far as anyone is listening for it.
+
+        ``whole`` when the snapshot may hold more than the last patch's change (see
+        :meth:`TurnStream.updates`).
+        """
         snapshot = session.view.snapshot
         task_id = _text(snapshot.get("taskId")) or None
         turn = session.turn
@@ -1135,7 +1141,7 @@ class MirasimAgent:
             if turn.task_id is None or task_id != turn.task_id:
                 return
             turn.heard_at = time.monotonic()
-            for update in session.stream.updates(snapshot):
+            for update in session.stream.updates(snapshot, whole=whole):
                 self._update(session, update)
             self._relay_questions(session, turn, snapshot)
             if not is_running(snapshot):
@@ -1150,7 +1156,7 @@ class MirasimAgent:
             session.stream.ended = True
             return
         was_ended = session.stream.ended and session.stream.task_id == task_id
-        for update in session.stream.updates(snapshot):
+        for update in session.stream.updates(snapshot, whole=whole):
             self._update(session, update)
         if not is_running(snapshot) and not was_ended:
             session.stream.ended = True

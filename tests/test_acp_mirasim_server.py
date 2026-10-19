@@ -1266,6 +1266,43 @@ async def test_a_turn_unheard_of_long_after_the_connection_dropped_is_given_up(
     harness.agent.host._locate = lambda: real
 
 
+async def test_a_turn_that_ran_a_tool_while_the_connection_was_down_keeps_its_whole_answer(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from raven.acp_client.acp_agent import _TurnCollector
+
+    monkeypatch.setattr(host_mod, "RECONNECT_PAUSES_S", (0.01,))
+    call = {"id": "c1", "name": "Bash", "summary": "Check", "status": "running"}
+    connection = harness.agent.host
+    original = harness.host._step
+
+    async def step(session: FakeSession, item: Any) -> str | None:
+        if item[0] != "outage":
+            return await original(session, item)
+
+        def subscribes() -> int:
+            return len([frame for frame in harness.host.handled if frame.get("type") == "subscribe"])
+
+        before = subscribes()
+        reach = connection._locate
+        connection._locate = lambda: None
+        await harness.host.drop()
+        for inner in (("text", " check."), ("tool", call), ("tool", {**call, "status": "done"}), ("text", "All")):
+            await original(session, inner)
+        connection._locate = reach
+        await harness.host.wait_for(lambda: subscribes() > before)
+        return None
+
+    harness.host._step = step  # type: ignore[method-assign]
+    harness.host.respond = script(("text", "I will"), ("outage",), ("text", " checks passed."))
+    sid = await harness.new()
+    assert await harness.ok("session/prompt", sessionId=sid, prompt=text("check")) == {"stopReason": "end_turn"}
+    collector = _TurnCollector(track_files=False)
+    for update in harness.session_updates(sid):
+        await collector("session/update", {"sessionId": sid, "update": update})
+    assert collector.reply.endswith("All checks passed.")
+
+
 async def test_a_prompt_still_queued_when_the_connection_returns_is_not_given_up(
     harness: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
