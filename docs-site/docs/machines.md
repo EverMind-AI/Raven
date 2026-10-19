@@ -14,8 +14,9 @@ installing the agents themselves.
 
 ## What you need
 
-- A machine reached over ssh with a key, as the user the agent will run as.
-  Raven never types a password: the login has to work with the key alone.
+- A machine reached over ssh, as the user the agent will run as: with a key,
+  or with a password that Raven keeps on this computer and hands to ssh on
+  every connection (see the registration section below).
 - Linux or macOS on that machine, with a POSIX shell for that user. The node
   uses unix sockets and process groups, so a Windows machine cannot be a
   destination. (Raven itself may run on Windows; see
@@ -62,28 +63,46 @@ What gets recorded, and where:
   more detail.
 - The **path** of the private key is stored, never the key itself.
 - A machine you can only reach with a password is registered from the Agent
-  Hub with **Login: Password**. The password is used for one ssh login, in
-  which Raven puts a key of its own (made with `ssh-keygen`, kept under
-  `~/.raven/keys/<id>_ed25519`) into the account's `authorized_keys`; from
-  then on every connection is a key connection, and the row stores that key's
-  path. The password is not stored, logged or shown back. The machine's sshd
-  has to accept password logins for this one step (`PasswordAuthentication
-  yes`); one that does not refuses it, and the refusal says so. Not available
-  when this computer is Windows. The key is added on a line of its own, after
-  whatever `authorized_keys` already holds; the check that follows reads your
-  ssh config the way the login did, so a machine you reach through a jump
-  host or an alias registers the same way. Removing the machine takes that
-  key back ([section 8](#8-remove-a-machine)); a registration refused after
-  the login leaves it there (the line ending `raven@<id>`) and uses it again
-  when you register the machine again.
+  Hub with **Login: Password**, or with `raven ops connection add
+  --non-interactive --auth password --password-stdin --id <id> --name <name>
+  --host <address> --port 22 --user <user>` (the password on the first line of
+  stdin, never on the command line; `--password-stdin` is read before the first
+  question, so it works with or without `--non-interactive`). The password must
+  be at least six characters and is kept on this computer, under
+  `~/.raven/keys/<id>.password`, readable by your account alone (mode 0600),
+  and handed to ssh on every connection through OpenSSH's askpass hook: it is
+  in no registry row, log or answer, and never on a command line. Each of
+  those connections logs in on its own (connection sharing from your ssh
+  config, `ControlMaster`, is turned off for them), so a registration proves
+  the password it keeps and a password changed on the machine is noticed at
+  the next connection. It is started with no controlling terminal, so an
+  OpenSSH older than 8.4 -- which only uses askpass when it cannot open a
+  terminal -- still reaches the helper instead of prompting. A jump host does
+  not: `ProxyJump` and `ProxyCommand` are off for password connections, since
+  the jump's own ssh would be handed this machine's password; a machine
+  reached only through one has to be registered with a key. The row
+  carries `auth: password` and no key path. `raven ops connection doctor`
+  counts the row usable, and Oncall, which logs in with a key only, lists it as
+  unusable with that reason. The machine's sshd has to accept
+  password logins (`PasswordAuthentication yes`); one that does not refuses
+  every connection, and the refusal says so. A password the machine refuses at
+  registration is not kept. When the machine's password changes, remove the
+  machine and register it again (a registration under an id in use is
+  refused). Not available when this computer is Windows, whose OpenSSH cannot
+  run the POSIX script that hands ssh the password. Such a machine gets no
+  `Host <id>` alias in `~/.ssh/config`: `scp` and `rsync` from a terminal ask
+  for the password, and an agent reads and writes its files through Raven's
+  own file tools. Removing the machine deletes the password kept here
+  ([section 8](#8-remove-a-machine)).
 - The machine's host key is accepted on the first connection and kept in
   `~/.ssh/known_hosts`. A machine that later presents a different key is
   refused until you check it yourself. With a password that first connection
   carries the password, so on a network you do not trust, connect once from a
   terminal first (`ssh user@host` shows the fingerprint to confirm) and
   register after, or register with a key.
-- A managed `Host <id>` block is written to `~/.ssh/config`, so `scp` and
-  `rsync` on this computer can address the machine by its id.
+- For a machine registered with a key, a managed `Host <id>` block is written
+  to `~/.ssh/config`, so `scp` and `rsync` on this computer can address the
+  machine by its id.
 
 `raven ops connection list` shows the machines. `raven ops connection doctor`
 lists what is wrong with each entry, blocking or advisory, and exits non-zero
@@ -417,12 +436,8 @@ section of the config), or pass `--force` to remove the machine anyway and be
 told which entries are left pointing at nothing. A disconnected entry does not
 stand in the way; it is named, and connecting it again is refused until a
 machine is registered under that id again. The node under its `node_dir` stays on the machine,
-and removing it is a matter of deleting that directory there by hand. A key
-Raven made for the machine (a registration by password) is taken back: its
-line goes from the machine's `authorized_keys`, over one last key login, and
-the pair under `~/.raven/keys/` is deleted; a machine that cannot be reached
-keeps the line, the command says so, and the line ending `raven@<id>` is yours
-to take out there.
+and removing it is a matter of deleting that directory there by hand. The
+password kept here for a machine registered with one is deleted with the row.
 
 The Agent Hub's **Remove machine**, in a machine's sheet, does the same after
 a confirmation, and also refuses while agents are running on the machine over

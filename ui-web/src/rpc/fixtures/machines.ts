@@ -15,13 +15,13 @@ type Row = ResultOf<'machines.list'>['rows'][number]
 const ROWS: Row[] = [
   {
     id: 'ravenx2', name: 'RavenX 2', transport: 'ssh', state: 'idle', detail: '', agents: 0,
-    node_version: '0.2.4', node_current: true,
+    node_version: '0.2.4', node_current: true, auth: 'key',
     install: { running: false, ok: true, detail: 'Installed the Raven node 0.2.4-f5bd06f5d991 in /root/.raven-node (62 MB). The node answers: Python 3.12.3.' },
     paths: ['/root/raven-work'], problems: [], agents_here: ['claude_code@ravenx2'],
   },
   {
     id: 'gpu1', name: 'GPU box 1', transport: 'ssh', state: 'off', detail: '', agents: 0,
-    node_current: false, install: { running: false, detail: '' },
+    node_current: false, auth: 'key', install: { running: false, detail: '' },
     paths: ['/data/alice/projects'], problems: ["gpu1: 'key' is missing, so there is no way onto it"], agents_here: [],
   },
 ]
@@ -68,8 +68,9 @@ export function createMachines(_env: FixtureEnv): { fixtures: Fixtures } {
       if (rows.some((r) => r.id === id)) return { ok: false, detail: `a machine with id '${id}' is registered already`, reason: 'duplicate' }
       const refusal = REFUSALS[id]
       if (refusal) return { ok: false, detail: refusal[1], reason: refusal[0] }
-      /* A password login: refused without one, and `wrong` is the password
-         the machine turns away -- with the second cause the server names. */
+      /* A password login, kept here from then on: refused without one, and
+         `wrong` is the password the machine turns away -- with the second
+         cause the server names. */
       if (p.auth === 'password') {
         if (!p.password) return { ok: false, detail: 'registering with a password needs the password; nothing was written', reason: 'invalid' }
         if (p.password === 'wrong') {
@@ -84,7 +85,7 @@ export function createMachines(_env: FixtureEnv): { fixtures: Fixtures } {
       }
       const row: Row = {
         id, name: String(p.name || id), transport: 'ssh', state: 'off', detail: '', agents: 0,
-        node_current: false, install: { running: false, detail: '' },
+        node_current: false, auth: p.auth === 'password' ? 'password' : 'key', install: { running: false, detail: '' },
         paths: Array.isArray(p.paths) ? p.paths.map(String) : [], problems: [], agents_here: [],
       }
       rows = [...rows, row]
@@ -116,7 +117,8 @@ export function createMachines(_env: FixtureEnv): { fixtures: Fixtures } {
         }
       }
       rows = rows.filter((r) => r !== row)
-      return { removed: true, detail: `removed machine '${row.name}' (${row.id}) from the registry; its ssh alias is gone from ~/.ssh/config; the node installed on it stays there`, agents: [] }
+      const gone = row.auth === 'password' ? 'the password kept here for it is deleted' : 'its ssh alias is gone from ~/.ssh/config'
+      return { removed: true, detail: `removed machine '${row.name}' (${row.id}) from the registry; ${gone}; the node installed on it stays there`, agents: [] }
     },
   }
   return { fixtures }

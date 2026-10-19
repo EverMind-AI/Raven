@@ -85,3 +85,16 @@ def test_a_meta_with_neither_is_left_alone_rather_than_newly_refused():
     change additive.
     """
     assert callable(runner_from({}, what="machine"))
+
+
+def test_a_password_machine_is_refused_before_any_ssh_is_started(monkeypatch):
+    """The runner is where a campaign's first ssh would happen; the refusal names the reason instead."""
+    from oncall_flow import connections as conn
+
+    monkeypatch.setattr(
+        conn, "get", lambda conn_id: {"id": conn_id, "host": "h", "port": 22, "user": "root", "auth": "password"}
+    )
+    with pytest.raises(JobBackendError, match="registered with a password"):
+        runner_from({"connection": "conn_pw"})
+    with pytest.raises(JobBackendError, match="registered with a password"):
+        runner_from({"host": "h", "port": 22, "auth": "password"}, what="machine")

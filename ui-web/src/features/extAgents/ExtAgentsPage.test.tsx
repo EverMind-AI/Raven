@@ -80,6 +80,7 @@ function mrow(over: Partial<MachineRow> = {}): MachineRow {
     agents: 0,
     node_version: '',
     node_current: false,
+    auth: 'key',
     install: { running: false, ok: null, detail: '' },
     paths: [],
     problems: [],
@@ -2639,6 +2640,12 @@ describe('the machines module', () => {
       await new Promise(resolve => setTimeout(resolve, 15))
     })
   }
+  /* A read-only field of the sheet, by its label; null when the sheet has none. */
+  const shown = (k: string): string | null =>
+    [...sheet()!.querySelectorAll('.extAgents-fld')]
+      .find((f) => f.querySelector('.extAgents-k')?.textContent === k)
+      ?.querySelector('.extAgents-ro')?.textContent ?? null
+  const sheetAbouts = (): string[] => [...sheet()!.querySelectorAll('.extAgents-about')].map((a) => a.textContent || '')
 
   it('lists each registered machine with its node and link, then the register card, and counts them', async () => {
     install([row()], {
@@ -2839,7 +2846,8 @@ describe('the machines module', () => {
         list: async () => rows.map(r => ({ ...r })),
         add: async form => {
           mcalls.push(['add', [form]])
-          rows.push(mrow({ id: form.id, name: form.name }))
+          /* The server's row says how it logs in; the password is not in it. */
+          rows.push(mrow({ id: form.id, name: form.name, auth: form.auth }))
           return { ok: true, detail: 'reached', reason: '' }
         }
       }
@@ -2883,6 +2891,113 @@ describe('the machines module', () => {
       password: ' s3cret ',
       paths: []
     })
+    /* The new sheet says the login is the password kept here, and what that
+       means for the owner; the password itself is nowhere on the page. */
+    expect(shown('gui.machine.f_auth')).toBe('gui.machine.auth_stored')
+    expect(sheetAbouts()).toContain('gui.machine.auth_note')
+    expect(sheet()!.textContent).not.toContain('s3cret')
+  })
+
+  it('carries nothing typed for one login into the other when the pick changes', async () => {
+    /* Unkeyed, React kept the one <input> across the pick and only patched its
+       type, so a password typed under Password went out as a key path -- and
+       was written into the registry in the clear (reviewed 2026-10-19). */
+    const rows: MachineRow[] = []
+    const { mcalls } = install([row()], {
+      machinesOver: {
+        list: async () => rows.map(r => ({ ...r })),
+        add: async form => {
+          mcalls.push(['add', [form]])
+          rows.push(mrow({ id: form.id, name: form.name, auth: form.auth }))
+          return { ok: true, detail: 'reached', reason: '' }
+        }
+      }
+    })
+    await mount()
+    await openMachines()
+    const go = (): HTMLButtonElement => sheet()!.querySelector<HTMLButtonElement>('.extAgents-act button')!
+    const segment = (label: string): HTMLButtonElement | undefined =>
+      [...sheet()!.querySelectorAll<HTMLButtonElement>('.extAgents-seg button')].find(b => b.textContent === label)
+    const fillIdentity = async (id: string): Promise<void> => {
+      for (const [label, value] of [
+        ['gui.machine.f_name', `Box ${id}`],
+        ['gui.machine.f_id', id],
+        ['gui.machine.f_host', '203.0.113.9'],
+        ['gui.machine.f_user', 'alice']
+      ] as const) {
+        await typeInto(field(label), value)
+      }
+    }
+    const sent = (): RegisterForm => mcalls.filter(c => c[0] === 'add').map(c => c[1][0] as RegisterForm).at(-1)!
+
+    /* Password typed, then Key picked: a fresh, empty input, the form not ready
+       until a path is typed. */
+    await click(rowNamed('gui.machine.register'))
+    await fillIdentity('gpu3')
+    await click(segment('gui.machine.auth_password'))
+    const pw = field('gui.machine.f_password') as HTMLInputElement
+    await typeInto(pw, 'pw-zq81x7Rk')
+    expect(go().disabled).toBe(false)
+    await click(segment('gui.machine.auth_key'))
+    const keyField = field('gui.machine.f_key') as HTMLInputElement
+    expect(keyField).not.toBe(pw)
+    expect(keyField.value).toBe('')
+    expect(go().disabled).toBe(true)
+    await typeInto(keyField, '~/.ssh/id_gpu3')
+    await click(go())
+    expect(sheetName()).toBe('Box gpu3')
+    expect(sent()).toEqual({
+      id: 'gpu3',
+      name: 'Box gpu3',
+      host: '203.0.113.9',
+      port: 0,
+      user: 'alice',
+      auth: 'key',
+      key: '~/.ssh/id_gpu3',
+      password: '',
+      paths: []
+    })
+    expect(JSON.stringify(sent())).not.toContain('pw-zq81x7Rk')
+
+    /* The other way round: a key path typed, then Password picked. */
+    await click(rowNamed('gui.machine.register'))
+    await fillIdentity('gpu4')
+    const keyFirst = field('gui.machine.f_key') as HTMLInputElement
+    await typeInto(keyFirst, '~/.ssh/id_gpu4')
+    await click(segment('gui.machine.auth_password'))
+    const pwField = field('gui.machine.f_password') as HTMLInputElement
+    expect(pwField).not.toBe(keyFirst)
+    expect(pwField.value).toBe('')
+    expect(go().disabled).toBe(true)
+    await typeInto(pwField, 'only-the-password')
+    await click(go())
+    expect(sheetName()).toBe('Box gpu4')
+    expect(sent()).toEqual({
+      id: 'gpu4',
+      name: 'Box gpu4',
+      host: '203.0.113.9',
+      port: 0,
+      user: 'alice',
+      auth: 'password',
+      key: '',
+      password: 'only-the-password',
+      paths: []
+    })
+    expect(JSON.stringify(sent())).not.toContain('id_gpu4')
+  })
+
+  it('says in the sheet how a machine is logged in to, with the alias note only for a password machine', async () => {
+    install([row()], { machines: [mrow(), mrow({ id: 'pw', name: 'Pw box', auth: 'password' }), mrow({ id: 'here', name: 'Here', transport: 'local', auth: '' })] })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    expect(shown('gui.machine.f_auth')).toBe('gui.machine.auth_key')
+    expect(sheetAbouts()).not.toContain('gui.machine.auth_note')
+    await openSheet('Pw box')
+    expect(shown('gui.machine.f_auth')).toBe('gui.machine.auth_stored')
+    expect(sheetAbouts()).toContain('gui.machine.auth_note')
+    await openSheet('Here')
+    expect(shown('gui.machine.f_auth')).toBeNull()
   })
 
   it('removes a machine from its sheet after asking, keeps a refusal on the row, and closes the sheet once it is gone', async () => {

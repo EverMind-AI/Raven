@@ -1159,6 +1159,21 @@ def with_channel_fields(view, **overrides):
     return DispensedSlice(section, cargo)
 
 
+@pytest.fixture
+def supported_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    """This computer offers a machine the password login, whatever host the test runs on.
+
+    For a test of the password flow rather than of the host. A machine
+    registered with a password is reached through OpenSSH's askpass hook
+    (``raven.ops.transport.ssh_env``), and a Windows host refuses the whole
+    mode -- the registration itself is refused there, so a test of the flow
+    would be asserting the host instead. The pin is on ``sys.platform``, which
+    the modules read as they are asked; none of them reads it by value at
+    import time.
+    """
+    monkeypatch.setattr(sys, "platform", "linux")
+
+
 @pytest.fixture(autouse=True)
 def _one_memory_plugin_in_discovery(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep the second memory plugin out of entry-point discovery by default.

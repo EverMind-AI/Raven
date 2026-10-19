@@ -9,13 +9,13 @@
  * the directories it reads from without asking, what the doctor says, and the
  * actions, removal among them.
  *
- * Nothing here shows an address: the server hands over what a machine is,
- * never the way onto it, and the register form's fields are written once and
- * not read back. A refusal comes with its kind, and the sheet says in the
+ * Nothing here shows an address, a key path or a password: the server hands
+ * over what a machine is, never the way onto it, and the register form's
+ * fields are written once and not read back. A refusal comes with its kind, and the sheet says in the
  * reader's language what to do about it, with the server's sentence under it.
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 import { Glyph } from '../../components/Ico'
@@ -236,7 +236,7 @@ export function MachineSheet({ row, ms }: { row: MachineRow; ms: MachinesState }
   const remove = (): void =>
     confirmAsk(
       t('gui.machine.remove_do'),
-      t('gui.machine.remove_body', { name: row.name, id: row.id }),
+      t(row.auth === 'password' ? 'gui.machine.remove_body_password' : 'gui.machine.remove_body', { name: row.name, id: row.id }),
       t('gui.machine.remove_do'),
       () => {
         void machines.remove(row.id).then(gone => {
@@ -277,6 +277,17 @@ export function MachineSheet({ row, ms }: { row: MachineRow; ms: MachinesState }
         <Field k={t('gui.machine.f_transport')}>
           {row.transport === 'local' ? t('gui.machine.transport_local') : t('gui.machine.transport_ssh')}
         </Field>
+        {row.transport === 'ssh' ? (
+          <div className="extAgents-fld">
+            <span className="extAgents-k">{t('gui.machine.f_auth')}</span>
+            <p className="extAgents-ro">
+              {row.auth === 'password' ? t('gui.machine.auth_stored') : t('gui.machine.auth_key')}
+            </p>
+            {/* A password machine gets no ssh alias, which is the one thing the
+                owner would otherwise expect of a registered machine. */}
+            {row.auth === 'password' ? <div className="extAgents-about">{t('gui.machine.auth_note')}</div> : null}
+          </div>
+        ) : null}
         <Field k={t('gui.machine.f_node')}>
           {busy ? (
             <>
@@ -483,8 +494,8 @@ export function RegisterSheet({ ms }: { ms: MachinesState }): JSX.Element {
   const pathsRef = useRef<HTMLTextAreaElement>(null)
   const noteRef = useRef<HTMLDivElement>(null)
   const [ready, setReady] = useState(false)
-  /* How the machine is reached once: with a key the owner already has, or
-     with a password, used for that one login to put a key of Raven's there.
+  /* How Raven logs in, every time: with a key the owner already has, or with
+     a password the server keeps on this computer for the owner alone.
      Switching empties the other field with the form: what was typed for one
      way in does not travel with the other. */
   const [auth, setAuth] = useState<RegisterForm['auth']>('key')
@@ -591,8 +602,11 @@ export function RegisterSheet({ ms }: { ms: MachinesState }): JSX.Element {
             </button>
           </span>
         </div>
+        {/* Keyed, so the pick swaps the element rather than patching one
+            input's type: unkeyed, React kept the DOM node and what was typed
+            as a password went out as a key path (reviewed 2026-10-19). */}
         {auth === 'key' ? (
-          <>
+          <Fragment key="key">
             <label className="extAgents-fld">
               <span className="extAgents-k">{t('gui.machine.f_key')}</span>
               <input
@@ -618,9 +632,9 @@ export function RegisterSheet({ ms }: { ms: MachinesState }): JSX.Element {
                   : t('gui.machine.keys_none') + ' '}
               {t('gui.machine.key_note')}
             </div>
-          </>
+          </Fragment>
         ) : (
-          <>
+          <Fragment key="password">
             <label className="extAgents-fld">
               <span className="extAgents-k">{t('gui.machine.f_password')}</span>
               <input
@@ -633,7 +647,7 @@ export function RegisterSheet({ ms }: { ms: MachinesState }): JSX.Element {
               />
             </label>
             <div className="extAgents-about">{t('gui.machine.password_note')}</div>
-          </>
+          </Fragment>
         )}
         <label className="extAgents-fld">
           <span className="extAgents-k">{t('gui.machine.f_paths')}</span>
