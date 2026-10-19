@@ -23,10 +23,15 @@ from typing import Any
 import pytest
 
 import raven.home as raven_home_module
+from raven.agent.subagent.dag_reader import read_run
 from raven.agent.subagent.dag_store import DagRunStore, index_guard
 from raven.agent.subagent.history import SpawnRecord, dag_root, nodes_root, session_history_root, spawn_live_key
 from raven.agent.subagent.prompt_backend import LocalFileBackend
+from raven.agent.subagent.registry import AgentRegistry
+from raven.config.schema import BuiltinAgentConfig
 from raven.rpc.methods import tasks as tasks_mod
+from raven.rpc.methods.instances import instances_list
+from raven.rpc.methods.subagent import subagent_context, subagent_list
 from raven.rpc.methods.tasks import tasks_list
 from raven.rpc.models import TasksListResult
 
@@ -203,6 +208,79 @@ def _drop_meta_key(session_dir: Path, node_id: str, key: str) -> None:
     path.write_text(json.dumps(meta), encoding="utf-8")
 
 
+@pytest.mark.parametrize(
+    "agent, expected",
+    [("raven", "Raven-General"), ("Raven", "Raven-General"), ("Raven-General", "Raven-General"), ("Scribe", "Scribe")],
+)
+@pytest.mark.parametrize("finished", [False, True])
+async def test_persisted_spawn_identity_matches_instances_and_roster(
+    workspace, tmp_path, agent, expected, finished
+) -> None:
+    session_dir = _session_dir(workspace)
+    await _claim_spawn_node(session_dir, "legacy_task")
+    record = SpawnRecord.open(
+        session_dir,
+        task_id="legacy_task",
+        task="inspect a file",
+        meta=_spawn_meta(agent=agent, handle="review", task_summary="Inspect file"),
+        node_id="legacy_task",
+    )
+    status = "completed" if finished else "running"
+    if finished:
+        record.finish(status=status, output="done")
+    instance_path = tmp_path / "inst.json"
+    instance_path.write_text(
+        json.dumps(
+            {
+                "instances": [
+                    {"sessionKey": SESSION, "agent": agent, "handle": "review", "kind": "spawn", "status": status}
+                ]
+            }
+        )
+    )
+    meta_path = nodes_root(session_dir) / "legacy_task.meta.json"
+    before = {path: path.read_bytes() for path in (instance_path, meta_path)}
+    loop = _loop_stub(live_spawn_handles=frozenset({(expected, "review")}) if not finished else frozenset())
+    registry = AgentRegistry()
+    registry.apply([BuiltinAgentConfig(name="Scribe")])
+    loop.subagents.registry = registry
+    factory = _factory(loop)
+
+    task = (await tasks_list({"session_key": SESSION}, agent_loop_factory=factory))["tasks"][0]
+    listed = (await subagent_list({"session_id": SESSION}, agent_loop_factory=factory))["items"][0]
+    context = await subagent_context({"session_id": SESSION, "id": "legacy_task"}, agent_loop_factory=factory)
+    instances = (await instances_list({"session_key": SESSION}, agent_loop_factory=factory))["instances"]
+
+    assert task["status"] == status
+    assert task["nodes"][0]["status"] == status
+    assert [task["agent"], task["nodes"][0]["agent"], listed["agent"], context["agent"]] == [expected] * 4
+    assert (task["nodes"][0]["agent"], task["nodes"][0]["instance"]) == (instances[0]["agent"], instances[0]["handle"])
+    assert registry.get(task["agent"]).name == expected
+    assert all(path.read_bytes() == data for path, data in before.items())
+
+
+@pytest.mark.parametrize("missing", [False, True])
+async def test_persisted_spawn_without_agent_keeps_the_missing_identity(workspace, missing) -> None:
+    session_dir = _session_dir(workspace)
+    await _claim_spawn_node(session_dir, "anonymous")
+    record = SpawnRecord.open(
+        session_dir, task_id="anonymous", task="old task", meta={"agent": None}, node_id="anonymous"
+    )
+    record.finish(status="completed", output="done")
+    if missing:
+        _drop_meta_key(session_dir, "anonymous", "agent")
+    path = nodes_root(session_dir) / "anonymous.meta.json"
+    before = path.read_bytes()
+
+    task = (await tasks_list({"session_key": SESSION}))["tasks"][0]
+    listed = (await subagent_list({"session_id": SESSION}))["items"][0]
+    context = await subagent_context({"session_id": SESSION, "id": "anonymous"})
+
+    assert task["agent"] is listed["agent"] is context["agent"] is None
+    assert task["nodes"][0]["agent"] == ""
+    assert path.read_bytes() == before
+
+
 class TestSpawnStatusLadder:
     async def test_aborted_reads_as_failed_with_its_error_from_out_md(self, workspace: Path) -> None:
         session_dir = _session_dir(workspace)
@@ -265,7 +343,7 @@ class TestSpawnStatusLadder:
         _drop_meta_key(session_dir, "legacy_open", "status")
         # Live, or the not-live overlay converts this `running` to
         # `interrupted` before the fallback ladder's own answer is visible.
-        loop = _loop_stub(live_spawn_handles=frozenset({("Raven", "legacy_open")}))
+        loop = _loop_stub(live_spawn_handles=frozenset({("Raven-General", "legacy_open")}))
 
         row = (await tasks_list({"session_key": SESSION}, agent_loop_factory=_factory(loop)))["tasks"][0]
         assert row["status"] == "running"
@@ -295,7 +373,7 @@ class TestSpawnStatusLadder:
             meta=_spawn_meta(agent="Raven", handle="live", task_summary="Live"),
             node_id="live",
         )
-        loop = _loop_stub(live_spawn_handles=frozenset({("Raven", "live")}))
+        loop = _loop_stub(live_spawn_handles=frozenset({("Raven-General", "live")}))
 
         row = (await tasks_list({"session_key": SESSION}, agent_loop_factory=_factory(loop)))["tasks"][0]
         assert row["status"] == "running"
@@ -382,6 +460,59 @@ async def _make_run(
     async with index_guard(store.registry_root):
         await store.init(json.dumps(graph), node_ids=node_ids)
     return store
+
+
+@pytest.mark.parametrize(
+    "graph_agent, manifest_agent, expected",
+    [
+        ("raven", None, "Raven-General"),
+        ("Raven", None, "Raven-General"),
+        ("Raven-General", None, "Raven-General"),
+        ("Scribe", None, "Scribe"),
+        (None, None, None),
+        ("Scribe", "raven", "Raven-General"),
+        ("Scribe", "Raven", "Raven-General"),
+        ("Raven", "Scribe", "Scribe"),
+    ],
+)
+async def test_persisted_dag_readers_publish_one_agent_identity(
+    workspace, graph_agent, manifest_agent, expected
+) -> None:
+    session_dir = _session_dir(workspace)
+    graph = {
+        "task_summary": "legacy graph",
+        "nodes": [{"id": "legacy_node", "subagent": graph_agent, "instance": "review"}],
+    }
+    store = await _make_run(session_dir, RUN_ID, graph, ["legacy_node"])
+    if manifest_agent is not None:
+        await store.write_manifest(
+            {"legacy_node": _manifest_entry(status="completed", subagent=manifest_agent, instance="review")}
+        )
+    paths = list((dag_root(session_dir) / RUN_ID).glob("*.json"))
+    before = {path: path.read_bytes() for path in paths}
+
+    task = (await tasks_list({"session_key": SESSION}))["tasks"][0]
+    listed = (await subagent_list({"session_id": SESSION}))["items"][0]
+    run = await read_run(LocalFileBackend(), str(dag_root(session_dir)), RUN_ID, str(nodes_root(session_dir)))
+
+    assert task["nodes"][0]["agent"] == (expected or "")
+    assert listed["agent"] == expected
+    assert run["files"][0]["subagent"] == expected
+    assert all(path.read_bytes() == data for path, data in before.items())
+
+
+@pytest.mark.parametrize("source", ["graph", "manifest"])
+@pytest.mark.parametrize("agent", ["raven", "Raven"])
+async def test_dag_reader_canonicalizes_the_former_agent_field(workspace, source, agent) -> None:
+    session_dir = _session_dir(workspace)
+    graph = {"nodes": [{"id": "legacy_node", **({"agent": agent} if source == "graph" else {})}]}
+    store = await _make_run(session_dir, RUN_ID, graph, ["legacy_node"])
+    if source == "manifest":
+        await store.write_manifest({"legacy_node": {"agent": agent, "status": "completed"}})
+
+    run = await read_run(LocalFileBackend(), str(dag_root(session_dir)), RUN_ID, str(nodes_root(session_dir)))
+
+    assert run["files"][0]["subagent"] == "Raven-General"
 
 
 def _manifest_entry(
@@ -1347,7 +1478,7 @@ async def test_a_running_spawn_reads_usage_and_counts_off_the_live_activity(work
         meta=_spawn_meta(agent="Raven", handle="counting", task_summary="Counting"),
         node_id="counting",
     )
-    loop = _loop_stub(live_spawn_handles=frozenset({("Raven", "counting")}))
+    loop = _loop_stub(live_spawn_handles=frozenset({("Raven-General", "counting")}))
 
     with activity_mod.collecting(live_key=spawn_live_key(nodes_root(session_dir), "counting")):
         activity_mod.note_usage({"prompt_tokens": 40, "completion_tokens": 2})
@@ -1382,7 +1513,7 @@ async def test_a_running_spawns_created_and_removed_files_reach_the_row(workspac
         meta=_spawn_meta(agent="Raven", handle="cleaning", task_summary="Cleaning"),
         node_id="cleaning",
     )
-    loop = _loop_stub(live_spawn_handles=frozenset({("Raven", "cleaning")}))
+    loop = _loop_stub(live_spawn_handles=frozenset({("Raven-General", "cleaning")}))
 
     with activity_mod.collecting(live_key=spawn_live_key(nodes_root(session_dir), "cleaning")):
         activity_mod.note_file_change("notes/new.md", "add", 4, 0, 18)
@@ -1410,7 +1541,7 @@ async def test_a_lane_that_has_not_spoken_keeps_its_nulls_while_live(workspace: 
         meta=_spawn_meta(agent="Raven", handle="quiet", task_summary="Quiet"),
         node_id="quiet",
     )
-    loop = _loop_stub(live_spawn_handles=frozenset({("Raven", "quiet")}))
+    loop = _loop_stub(live_spawn_handles=frozenset({("Raven-General", "quiet")}))
 
     with activity_mod.collecting(live_key=spawn_live_key(nodes_root(session_dir), "quiet")):
         node = (await tasks_list({"session_key": SESSION}, agent_loop_factory=_factory(loop)))["tasks"][0]["nodes"][0]
@@ -1530,7 +1661,7 @@ async def test_two_conversations_that_named_a_spawn_alike_each_read_their_own_li
             meta=_spawn_meta(agent="Raven", handle="step1", task_summary="Step one"),
             node_id="step1",
         )
-    loop = _loop_stub(live_spawn_handles=frozenset({("Raven", "step1")}))
+    loop = _loop_stub(live_spawn_handles=frozenset({("Raven-General", "step1")}))
 
     with activity_mod.collecting(live_key=spawn_live_key(nodes_root(dir_a), "step1")):
         activity_mod.note_usage({"prompt_tokens": 10, "completion_tokens": 1})

@@ -26,6 +26,7 @@ from raven.agent.subagent.dag_reader import branch_fields, registry_outcome
 from raven.agent.subagent.dag_store import REGISTRY_FILENAME, RUNNING, UNRECORDED, node_live_key
 from raven.agent.subagent.history import dag_root, nodes_root, session_history_root, spawn_live_key
 from raven.agent.subagent.instances import get_registry
+from raven.config.agent_names import canonical_agent_name
 from raven.rpc.methods.instances import _graph_of
 from raven.rpc.methods.session import _safe_invoke_factory
 from raven.rpc.methods.subagent import (
@@ -401,10 +402,11 @@ def _dag_row(
             # neither of which is a clock this node ever had.
             started = ended = None
         call_count, failure_count = _tool_counts(account)
+        agent = (entry or {}).get("subagent") or gnode.get("subagent") or ""
         node: dict[str, Any] = {
             "node_id": nid,
             "node_summary": gnode.get("node_summary") or None,
-            "agent": ((entry or {}).get("subagent") or gnode.get("subagent") or ""),
+            "agent": canonical_agent_name(agent) if isinstance(agent, str) else agent,
             "instance": (entry.get("instance") if entry is not None and "instance" in entry else gnode.get("instance")),
             "status": status,
             "depends_on": list(gnode.get("depends_on") or []),

@@ -27,6 +27,7 @@ import re
 from typing import Any
 
 from raven.agent.subagent.dag_store import memory_path_in, output_path_in, prompt_path_in, tally_node_statuses
+from raven.config.agent_names import canonical_agent_name
 
 # Both ids are minted by raven itself (``make_run_id`` / the graph schema's
 # ``_ID_PATTERN``), but they arrive here straight off a web request, so they
@@ -241,6 +242,7 @@ async def read_run(backend: Any, root: str, run_id: str, nodes_root: str) -> dic
         entry = (manifest or {}).get(nid) or {}
         prompt_file, output_file = await _artifact_paths(backend, entry, nodes_root, nid)
         mem_path = await _existing_path(backend, memory_path_in(backend, _artifact_root(entry, nodes_root), nid))
+        agent = entry.get("subagent") or node.get("subagent") or entry.get("agent") or node.get("agent")
         files.append(
             {
                 "node": nid,
@@ -249,7 +251,7 @@ async def read_run(backend: Any, root: str, run_id: str, nodes_root: str) -> dic
                 # The ``agent`` fallback covers the one release where the node
                 # field carried that name: a graph.json written then is still on
                 # disk, and this reader is the only place that has to know.
-                "subagent": entry.get("subagent") or node.get("subagent") or entry.get("agent") or node.get("agent"),
+                "subagent": canonical_agent_name(agent) if isinstance(agent, str) else agent,
                 "depends_on": entry.get("depends_on") or node.get("depends_on") or [],
                 "instance": entry.get("instance", node.get("instance")),
                 "status": entry.get("status", "pending"),
