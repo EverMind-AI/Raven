@@ -52,6 +52,13 @@ def test_the_named_address_wins_and_is_read_as_a_socket_or_a_loopback_port(tmp_p
     assert parse_address(" localhost:5001 ", env).port == 5001
 
 
+def test_a_loopback_host_named_in_the_address_is_the_one_connected_to() -> None:
+    assert parse_address("[::1]:5001", {}).base_url == "http://[::1]:5001"
+    assert parse_address("localhost:5001", {}).describe() == "localhost:5001"
+    assert parse_address("5001", {}).base_url == "http://127.0.0.1:5001"
+    assert parse_address("127.0.0.1:5001", {}) == HostAddress(port=5001)
+
+
 @pytest.mark.parametrize("value", ["unix:", "example.com:4970", "4970x", "0", "70000", "192.168.1.2:4970"])
 def test_an_address_that_is_not_one_is_refused(value: str) -> None:
     with pytest.raises(ValueError):
@@ -112,7 +119,7 @@ def test_the_state_directory_and_token_follow_mirasim_home(tmp_path: Path, monke
 def test_an_address_describes_itself_without_its_token() -> None:
     assert HostAddress(socket="/s").describe() == "unix socket /s"
     assert HostAddress(port=4970, token="t").describe() == "127.0.0.1:4970"
-    assert "t" not in repr(HostAddress(port=1, token="t")).split("port=1")[1]
+    assert "s3cr3t-token" not in repr(HostAddress(port=1, token="s3cr3t-token"))
 
 
 # -- the connection -------------------------------------------------------------
@@ -145,6 +152,56 @@ async def test_an_address_nothing_listens_on_is_unavailable_and_says_where() -> 
     with pytest.raises(HostUnavailableError, match=f"cannot reach the Mirasim host at 127.0.0.1:{port}"):
         await conn.connect()
     assert not conn.connected
+
+
+async def test_a_host_that_answers_its_health_but_holds_the_websocket_is_given_up_in_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aiohttp import web
+
+    monkeypatch.setattr(host_mod, "CONNECT_TIMEOUT_S", 0.3)
+    opened: list[Any] = []
+    real = host_mod.aiohttp.ClientSession
+
+    def recording(*args: Any, **kwargs: Any) -> Any:
+        opened.append(real(*args, **kwargs))
+        return opened[-1]
+
+    monkeypatch.setattr(host_mod.aiohttp, "ClientSession", recording)
+    held = asyncio.Event()
+
+    async def health(request: web.Request) -> web.Response:
+        return web.json_response({"ok": True, "version": "0.0.537"})
+
+    async def upgrade(request: web.Request) -> web.Response:
+        held.set()
+        await asyncio.sleep(3600)
+        return web.Response()
+
+    app = web.Application()
+    app.router.add_get("/api/health", health)
+    app.router.add_get("/ws", upgrade)
+    runner = web.AppRunner(app, shutdown_timeout=0.1)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
+    try:
+        conn = HostConnection(on_frame=lambda f: None, locate=lambda: HostAddress(port=port))
+        with pytest.raises(HostUnavailableError, match=f"cannot reach the Mirasim host at 127.0.0.1:{port}"):
+            await asyncio.wait_for(conn.connect(), 5)
+        assert held.is_set() and opened and all(session.closed for session in opened)
+        # A connect given up from outside while the upgrade hangs closes what it opened as well.
+        monkeypatch.setattr(host_mod, "CONNECT_TIMEOUT_S", 30)
+        held.clear()
+        attempt = asyncio.ensure_future(conn.connect())
+        await asyncio.wait_for(held.wait(), 5)
+        attempt.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await attempt
+        assert len(opened) == 2 and all(session.closed for session in opened)
+    finally:
+        await runner.cleanup()
 
 
 @posix_only

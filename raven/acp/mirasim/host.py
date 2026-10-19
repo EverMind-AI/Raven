@@ -79,14 +79,16 @@ class HostAddress:
     socket: str | None = None
     port: int | None = None
     token: str | None = field(default=None, repr=False)
+    host: str = "127.0.0.1"
+    """The loopback name the port is reached on, as the address named it: ``localhost`` and ``[::1]`` stay so."""
 
     @property
     def base_url(self) -> str:
         # Over a unix socket the host part is never resolved; it names the request.
-        return "http://localhost" if self.socket else f"http://127.0.0.1:{self.port}"
+        return "http://localhost" if self.socket else f"http://{self.host}:{self.port}"
 
     def describe(self) -> str:
-        return f"unix socket {self.socket}" if self.socket else f"127.0.0.1:{self.port}"
+        return f"unix socket {self.socket}" if self.socket else f"{self.host}:{self.port}"
 
 
 def mirasim_home(env: Mapping[str, str] | None = None) -> Path:
@@ -123,7 +125,7 @@ def parse_address(value: str, env: Mapping[str, str] | None = None) -> HostAddre
     if not port_text.isdigit() or not 0 < int(port_text) < 65536:
         raise ValueError(f"{HOST_ENV}={value!r} names no port")
     port = int(port_text)
-    return HostAddress(port=port, token=port_token(port, env))
+    return HostAddress(port=port, token=port_token(port, env), host=host or "127.0.0.1")
 
 
 def locate_host(env: Mapping[str, str] | None = None) -> HostAddress | None:
@@ -210,16 +212,22 @@ class HostConnection:
             headers = {"x-mirasim-token": address.token} if address.token else {}
             try:
                 version = await _health(session, address, headers)
-                ws = await session.ws_connect(
-                    f"{address.base_url}/ws",
-                    headers=headers,
-                    max_msg_size=MAX_FRAME_BYTES,
-                )
-            except (aiohttp.ClientError, OSError, TimeoutError) as exc:
+                # The session's timeout bounds the connection, not the upgrade's answer: a host that
+                # takes the request and never upgrades would hold this lock, and every send, forever.
+                async with asyncio.timeout(CONNECT_TIMEOUT_S):
+                    ws = await session.ws_connect(
+                        f"{address.base_url}/ws",
+                        headers=headers,
+                        max_msg_size=MAX_FRAME_BYTES,
+                    )
+            except BaseException as exc:
                 await session.close()
-                raise HostUnavailableError(
-                    f"cannot reach the Mirasim host at {address.describe()}: {exc or type(exc).__name__}"
-                ) from exc
+                if not isinstance(exc, (aiohttp.ClientError, OSError, TimeoutError)):
+                    raise
+                said = str(exc) or (
+                    "it did not answer in time" if isinstance(exc, TimeoutError) else type(exc).__name__
+                )
+                raise HostUnavailableError(f"cannot reach the Mirasim host at {address.describe()}: {said}") from exc
             self._session, self._ws, self.address, self.version = session, ws, address, version
             self.lost_at = None
             self.epoch += 1
