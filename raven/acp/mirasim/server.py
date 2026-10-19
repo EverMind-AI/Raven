@@ -267,6 +267,8 @@ class Session:
     view: SessionView = field(default_factory=SessionView)
     stream: TurnStream = field(default_factory=TurnStream)
     resyncing: bool = False
+    replaying: bool = False
+    """A ``session/load`` is replaying the history: a turn nobody here prompted waits until it has gone."""
     replies: dict[str, tuple[Reply, int]] = field(default_factory=dict)
     """The answer given to each of the turn's questions, and the connection it was sent on."""
     relays: dict[str, asyncio.Task[None]] = field(default_factory=dict)
@@ -527,11 +529,19 @@ class MirasimAgent:
         return {"sessionId": session.id, **self._state(session, catalog)}
 
     async def load_session(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Reopen a session and replay its history, the whole of it, before answering."""
-        session = await self._reopen(params)
-        if session.mirasim_key is not None:
-            for update in await self._history(session.mirasim_key):
-                self._update(session, update)
+        """Reopen a session and replay its history, the whole of it, before answering.
+
+        A turn the app runs on the conversation meanwhile goes out after the history,
+        caught up on at once, rather than in front of the turns that came before it.
+        """
+        session = await self._reopen(params, replaying=True)
+        try:
+            if session.mirasim_key is not None:
+                for update in await self._history(session.mirasim_key):
+                    self._update(session, update)
+        finally:
+            session.replaying = False
+        self._observe(session, whole=True)
         return self._state(session, await self.catalog())
 
     async def resume_session(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -539,7 +549,7 @@ class MirasimAgent:
         session = await self._reopen(params)
         return self._state(session, await self.catalog())
 
-    async def _reopen(self, params: dict[str, Any]) -> Session:
+    async def _reopen(self, params: dict[str, Any], *, replaying: bool = False) -> Session:
         session_id = _required_text(params, "sessionId")
         cwd = _required_text(params, "cwd")
         missing = RefusalError(RESOURCE_NOT_FOUND, f"no Mirasim session {session_id!r} is recorded here")
@@ -566,6 +576,7 @@ class MirasimAgent:
         session.model = None
         session.mode = None
         session.mcp_names = _mcp_names(params)
+        session.replaying = replaying
         self._remember(session)
         if session.mirasim_key is not None:
             await self._subscribe(session)
@@ -634,6 +645,7 @@ class MirasimAgent:
         """
         pages: list[list[dict[str, Any]]] = []
         before: str | None = None
+        read: set[str] = set()
         while True:
             request_id = f"raven-history-{uuid.uuid4().hex}"
             frame: dict[str, Any] = {
@@ -655,11 +667,16 @@ class MirasimAgent:
                     INTERNAL_ERROR, f"Mirasim could not read the session's history: {_said(exc)}"
                 ) from exc
             turns = [turn for turn in answer.get("turns") or () if isinstance(turn, dict)]
-            pages.append(turns)
-            older = answer.get("older")
-            before = (_text(turns[0].get("taskId")) or _text(turns[0].get("anchor"))) if turns else ""
-            if not before or not isinstance(older, int) or older <= 0:
+            oldest = (_text(turns[0].get("taskId")) or _text(turns[0].get("anchor"))) if turns else ""
+            if oldest in read:
+                # A host that ignores ``before`` hands back a page already read: stop rather than ask forever.
                 break
+            pages.append(turns)
+            read.add(oldest)
+            older = answer.get("older")
+            if not oldest or not isinstance(older, int) or older <= 0:
+                break
+            before = oldest
         return [update for page in reversed(pages) for turn in page for update in replay(turn)]
 
     async def set_config_option(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -1148,7 +1165,7 @@ class MirasimAgent:
                 session.stream.ended = True
                 _settle(turn.ended, snapshot)
             return
-        if task_id is None:
+        if task_id is None or session.replaying:
             return
         if session.stream.task_id != task_id and not is_running(snapshot):
             # A turn that had ended before anyone here looked: the state a subscribe brings back.

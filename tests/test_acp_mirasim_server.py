@@ -998,6 +998,41 @@ async def test_a_replay_reads_every_page_of_history_oldest_first(
     assert len(harness.host.frames("getHistory")) == 3
 
 
+async def test_a_replay_stops_when_the_host_hands_back_the_page_it_already_gave(harness: Harness) -> None:
+    turns = [{"taskId": f"t{i}", "prompt": f"p{i}", "text": f"a{i}"} for i in range(3)]
+    session = harness.host.add_session("claude", str(harness.tmp_path), turns)
+    real = harness.host._history
+
+    def ignores_before(frame: dict[str, Any]) -> dict[str, Any]:
+        return {**real({**frame, "before": None, "limit": 1}), "older": 2}
+
+    harness.host._history = ignores_before  # type: ignore[method-assign]
+    await asyncio.wait_for(
+        harness.ok("session/load", sessionId=session.key, cwd=str(harness.tmp_path), mcpServers=[]), 5
+    )
+    assert len(harness.host.frames("getHistory")) == 2
+    assert harness.said(session.key, "user_message_chunk") == "p2"
+
+
+async def test_a_turn_running_in_the_app_is_forwarded_after_the_history_a_load_replays(harness: Harness) -> None:
+    session = harness.host.add_session(
+        "claude", str(harness.tmp_path), [{"taskId": "t0", "prompt": "older question", "text": "older answer"}]
+    )
+    harness.host.respond = script(("text", "live so far "), ("hold",))
+    session.running = asyncio.ensure_future(harness.host._run(session, {"prompt": "from the app"}, "task-app"))
+    await harness.host.wait_for(lambda: session.snapshot.get("text") == "live so far ")
+    await harness.ok("session/load", sessionId=session.key, cwd=str(harness.tmp_path), mcpServers=[])
+    said = [
+        u["content"]["text"]
+        for u in harness.session_updates(session.key)
+        if u["sessionUpdate"] in ("agent_message_chunk", "user_message_chunk")
+    ]
+    assert said == ["older question", "older answer", "live so far "]
+    session.steered.append("x")
+    session.wake.set()
+    await harness.host.wait_for(lambda: harness.said(session.key).endswith("steered: x"))
+
+
 async def test_resume_reopens_without_replaying(harness: Harness) -> None:
     session = harness.host.add_session(
         "claude", str(harness.tmp_path), [{"taskId": "t0", "prompt": "old", "text": "x"}]
