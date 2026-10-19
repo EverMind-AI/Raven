@@ -259,7 +259,13 @@ def ssh_env(row: dict[str, Any]) -> dict[str, str]:
             f"machine {label!r} was registered with a password, which this computer (Windows) cannot hand to ssh; "
             "use a key instead"
         )
-    secret = password_path(label)
+    try:
+        secret = password_path(label)
+    except ValueError as exc:
+        # A hand-written row with an id the registry refuses: the doctor
+        # blocks it, and a caller that reaches it anyway gets the one kind of
+        # refusal this function gives rather than a crash.
+        raise TransportError(str(exc)) from None
     if not secret.is_file():
         raise TransportError(f"no password is kept here for machine {label!r} ({secret}); register it again")
     return {

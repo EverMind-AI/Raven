@@ -162,9 +162,19 @@ def store_password(conn_id: str, password: str) -> Path:
     which a service that restarts and runs at night with nobody there could
     not open. One line, newline-terminated, which is what askpass hands ssh;
     never in the registry, never on a command line, never in a log
-    (``raven.config.held_secrets`` scrubs it from what a model reads).
-    Registering the machine again rewrites it in place.
+    (``raven.config.held_secrets`` scrubs it from what a model reads, which
+    is why one shorter than that scrubber's floor is refused here: that
+    short, it would pass as ordinary text and a model could read it back).
+    Refused, too, for an id the registry refuses (``password_path``), before
+    anything is written. Removing the machine deletes the file.
     """
+    from raven.config.held_secrets import PASSWORD_MIN_LEN
+
+    if len(password) < PASSWORD_MIN_LEN:
+        raise ValueError(
+            f"a password shorter than {PASSWORD_MIN_LEN} characters cannot be kept: that short, it would pass the "
+            "scrubber as ordinary text and a model could read it back; use a longer password, or register with a key"
+        )
     path = password_path(conn_id)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(path.parent, 0o700)
@@ -176,8 +186,11 @@ def store_password(conn_id: str, password: str) -> Path:
 
 
 def forget_password(conn_id: str) -> bool:
-    """Delete the password kept for ``conn_id``; whether there was one."""
-    path = password_path(conn_id)
+    """Delete the password kept for ``conn_id``; whether there was one. An id none could be kept under has none."""
+    try:
+        path = password_path(conn_id)
+    except ValueError:
+        return False
     had = path.exists()
     path.unlink(missing_ok=True)
     return had

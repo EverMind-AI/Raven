@@ -526,3 +526,18 @@ def test_a_row_registered_with_a_password_needs_no_key_and_an_auth_nobody_knows_
     assert [p.text for p in row_problems({**base, "auth": "token"}) if p.blocking] == [
         "box: 'auth' must be key or password, not 'token'"
     ]
+
+
+def test_a_password_can_only_be_kept_under_an_id_the_registry_accepts(tmp_path, monkeypatch):
+    """The id names the file: a path-shaped one would put the password -- and the askpass helper beside it --
+    outside keys/, where nothing scrubs or removes it. The rule has one owner, so no door can slip past it."""
+    import pytest
+
+    from raven.ops.connections import password_path
+
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    assert password_path("box-1_2") == tmp_path / "rhome" / "keys" / "box-1_2.password"
+    assert password_path(" box ") == tmp_path / "rhome" / "keys" / "box.password"
+    for bad in ("../escape", "/abs", "My Box", "Box", "", "box/../x"):
+        with pytest.raises(ValueError, match="not an id a password can be kept under"):
+            password_path(bad)

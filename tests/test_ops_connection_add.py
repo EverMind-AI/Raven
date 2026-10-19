@@ -538,6 +538,33 @@ def test_a_password_is_kept_under_the_home_for_the_owner_alone_and_forgotten_on_
     assert adder.forget_password("gpu1") is False, "nothing kept is nothing to forget"
 
 
+def test_a_password_shorter_than_the_scrubbers_floor_is_refused_before_anything_is_written(_home, monkeypatch):
+    """Shorter than six characters it would pass ``held_secrets`` as ordinary text and a model could read it back;
+    the floor is the scrubber's own, so the two cannot drift."""
+    import pytest
+
+    from raven.config.held_secrets import PASSWORD_MIN_LEN
+
+    monkeypatch.setenv("RAVEN_HOME", str(_home / "rhome"))
+    assert PASSWORD_MIN_LEN == 6
+    for short in ("root", "admin", ""):
+        with pytest.raises(ValueError, match="shorter than 6 characters cannot be kept"):
+            adder.store_password("gpu1", short)
+    assert not (_home / "rhome" / "keys").exists(), "nothing was written, not even the directory"
+    adder.store_password("gpu1", "admin1")
+    assert adder.password_path("gpu1").read_text(encoding="utf-8") == "admin1\n"
+
+
+def test_a_password_is_never_kept_under_a_path_shaped_id_and_forgetting_one_is_quiet(_home, monkeypatch):
+    import pytest
+
+    monkeypatch.setenv("RAVEN_HOME", str(_home / "rhome"))
+    with pytest.raises(ValueError, match="not an id a password can be kept under"):
+        adder.store_password("../escape", "hunter2")
+    assert not (_home / "rhome" / "escape.password").exists() and not (_home / "rhome" / "keys").exists()
+    assert adder.forget_password("../escape") is False
+
+
 def test_a_row_registered_with_a_password_says_so_and_gets_no_ssh_alias(_home):
     row = {"id": "gpu1", "transport": "ssh", "host": "h", "port": 22, "user": "u", "auth": "password"}
     assert adder.password_auth(row)
@@ -610,6 +637,7 @@ def test_a_refused_password_is_one_sentence_that_names_the_other_cause_too_and_n
 
 
 def test_a_password_row_with_no_password_kept_here_is_refused_before_ssh_is_started(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")  # the mode is refused on Windows first of all
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
     _fake_ssh(tmp_path, monkeypatch, "echo 'ssh must not run' >&2; exit 99")
 

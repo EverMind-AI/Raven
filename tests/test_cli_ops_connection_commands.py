@@ -774,6 +774,188 @@ def test_a_failed_re_add_under_an_id_in_use_leaves_the_registered_password_alone
     assert "wrong-new" not in out.output
 
 
+def _nothing_kept(rhome) -> bool:
+    """No password file anywhere under the Raven home, keys/ included, and no askpass helper either."""
+    return not list(rhome.rglob("*.password")) and not list(rhome.rglob("askpass"))
+
+
+@pytest.mark.parametrize(
+    ("bad_id", "said"),
+    [
+        ("../escape", "id must be lowercase"),
+        ("My Box", "id must be lowercase"),
+        ("Box", "id must be lowercase"),
+    ],
+)
+def test_add_by_password_judges_the_id_before_it_keeps_anything(store, reached, monkeypatch, tmp_path, bad_id, said):
+    """A path-shaped id used to put the password file outside keys/ (nothing scrubs or removes it there) and an
+    id with a space or a capital left an orphan file no `remove` could reach; both are refused with nothing kept."""
+    point_home(monkeypatch, tmp_path)
+    rhome = tmp_path / "rhome"
+    monkeypatch.setenv("RAVEN_HOME", str(rhome))
+    monkeypatch.setattr(sys, "platform", "linux")
+
+    out = CliRunner().invoke(
+        connection_app,
+        [
+            "add",
+            "--id",
+            bad_id,
+            "--name",
+            "Box",
+            "--host",
+            "14.103.100.27",
+            "--port",
+            "58717",
+            "--user",
+            "root",
+            "--auth",
+            "password",
+            "--password-stdin",
+            "--skip-probe",
+            *FULL,
+        ],
+        input="hunter2\n",
+    )
+
+    assert out.exit_code == 1, out.output
+    assert said in out.output and "Nothing was written" in out.output
+    assert _nothing_kept(rhome) and not (rhome / "escape.password").exists()
+    assert not store.exists()
+
+
+def test_add_by_password_on_a_case_insensitive_disk_leaves_the_registered_machines_password_alone(
+    store, unreachable, monkeypatch, tmp_path
+):
+    """`Box` is refused as an id before anything is kept, so on a disk where Box.password and box.password are one
+    file the registered machine's password is neither deleted by the refusal nor replaced by the new one."""
+    point_home(monkeypatch, tmp_path)
+    rhome = tmp_path / "rhome"
+    monkeypatch.setenv("RAVEN_HOME", str(rhome))
+    monkeypatch.setattr(sys, "platform", "linux")
+    from raven.ops.connection_add import password_path, store_password
+
+    _box_row(store, auth="password", user="root")
+    store_password("box", "working-old")
+
+    out = CliRunner().invoke(
+        connection_app,
+        [
+            "add",
+            "--id",
+            "Box",
+            "--name",
+            "Box",
+            "--host",
+            "14.103.100.27",
+            "--port",
+            "58717",
+            "--user",
+            "root",
+            "--auth",
+            "password",
+            "--password-stdin",
+            *FULL,
+        ],
+        input="wrong-new\n",
+    )
+
+    assert out.exit_code == 1, out.output
+    assert password_path("box").read_text(encoding="utf-8") == "working-old\n"
+    assert "wrong-new" not in out.output
+
+
+def test_add_by_password_refuses_an_unreadable_registry_before_it_keeps_anything(store, reached, monkeypatch, tmp_path):
+    """`load()` reads an unreadable file as empty, so the duplicate check alone would let the password be kept for a
+    registration the write then refuses; the registry has to read first, as `machines.add` demands."""
+    point_home(monkeypatch, tmp_path)
+    rhome = tmp_path / "rhome"
+    monkeypatch.setenv("RAVEN_HOME", str(rhome))
+    monkeypatch.setattr(sys, "platform", "linux")
+    broken = '{"connections": [{"id": "gpu",}]}'
+    store.write_text(broken, encoding="utf-8")
+
+    out = CliRunner().invoke(
+        connection_app, [*PW_ADD, "--auth", "password", "--password-stdin", *FULL], input="hunter2\n"
+    )
+
+    assert out.exit_code == 1, out.output
+    assert "Nothing was written" in out.output and "not valid JSON" in out.output
+    assert _nothing_kept(rhome) and store.read_text(encoding="utf-8") == broken
+
+
+def test_a_password_kept_for_a_registration_whose_write_fails_is_forgotten(store, reached, monkeypatch, tmp_path):
+    """Between the duplicate check and the write another registration of the same id can land; the write refuses,
+    and the password kept for a row that was never written goes with the refusal."""
+    point_home(monkeypatch, tmp_path)
+    rhome = tmp_path / "rhome"
+    monkeypatch.setenv("RAVEN_HOME", str(rhome))
+    monkeypatch.setattr(sys, "platform", "linux")
+    import raven.cli.ops_connection_commands as cli
+
+    def refuse(row):
+        raise ValueError(f"a machine with id {row['id']!r} is already listed in {store}")
+
+    monkeypatch.setattr(cli, "_write", refuse)
+
+    out = CliRunner().invoke(
+        connection_app, [*PW_ADD, "--auth", "password", "--password-stdin", *FULL], input="hunter2\n"
+    )
+
+    assert out.exit_code == 1, out.output
+    assert "already listed" in out.output and "Nothing was written" in out.output
+    assert _nothing_kept(rhome)
+
+
+def test_an_add_aborted_at_a_later_question_leaves_no_password_behind(store, reached, monkeypatch, tmp_path):
+    """Interactive: the password is kept before the probe, and the owner stops at a question after it (Ctrl-C is an
+    Abort); the file does not outlive the registration that never happened."""
+    point_home(monkeypatch, tmp_path)
+    rhome = tmp_path / "rhome"
+    monkeypatch.setenv("RAVEN_HOME", str(rhome))
+    monkeypatch.setattr(sys, "platform", "linux")
+    import typer
+
+    import raven.cli.ops_connection_commands as cli
+
+    answers = {
+        "What do you call this machine": "Box",
+        "Reached over ssh, or is it this computer? (ssh/local)": "ssh",
+        "Short id for it": "box",
+        "Address": "14.103.100.27",
+        "Port": "58717",
+        "Username": "root",
+        "Log in with a key or a password? (key/password)": "password",
+    }
+
+    def ask(label, default="", *, required=True):
+        if label.startswith("What is installed on it"):
+            raise typer.Abort()
+        return answers[label]
+
+    monkeypatch.setattr(cli, "_ask", ask)
+    monkeypatch.setattr(cli.typer, "prompt", lambda label, **kw: "hunter2")
+
+    out = CliRunner().invoke(connection_app, ["add"])
+
+    assert out.exit_code == 1, out.output
+    assert "Aborted" in out.output
+    assert _nothing_kept(rhome) and not store.exists()
+
+
+def test_add_by_password_refuses_a_password_shorter_than_the_scrubbers_floor(store, reached, monkeypatch, tmp_path):
+    point_home(monkeypatch, tmp_path)
+    rhome = tmp_path / "rhome"
+    monkeypatch.setenv("RAVEN_HOME", str(rhome))
+    monkeypatch.setattr(sys, "platform", "linux")
+
+    out = CliRunner().invoke(connection_app, [*PW_ADD, "--auth", "password", "--password-stdin", *FULL], input="root\n")
+
+    assert out.exit_code == 1, out.output
+    assert "shorter than 6 characters cannot be kept" in said(out) and "Nothing was written" in out.output
+    assert _nothing_kept(rhome) and not store.exists()
+
+
 def test_add_by_password_needs_the_password_and_a_refused_one_is_not_kept(store, unreachable, monkeypatch, tmp_path):
     point_home(monkeypatch, tmp_path)
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))

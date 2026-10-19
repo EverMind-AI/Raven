@@ -126,6 +126,7 @@ def test_the_askpass_environment_names_the_helper_and_the_password_file_never_th
 
 
 def test_a_password_row_with_no_password_kept_here_is_refused_by_name(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")  # the mode is refused on Windows first of all
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
 
     with pytest.raises(TransportError, match="no password is kept here for machine 'box'.*register it again"):
@@ -148,6 +149,7 @@ def test_a_password_row_is_refused_on_windows_before_ssh_is_started(tmp_path, mo
 def test_the_runner_hands_ssh_the_askpass_environment_for_a_password_row_and_nothing_for_a_key_row(
     tmp_path, monkeypatch
 ):
+    monkeypatch.setattr(sys, "platform", "linux")  # the mode is refused on Windows first of all
     from raven.ops.connection_add import store_password
 
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
@@ -167,3 +169,11 @@ def test_the_runner_hands_ssh_the_askpass_environment_for_a_password_row_and_not
     assert env_pw["SSH_ASKPASS_REQUIRE"] == "force" and env_pw["RAVEN_MACHINE_PASSWORD_FILE"].endswith("box.password")
     assert "PubkeyAuthentication=no" in argv_pw and "-i" not in argv_pw and "hunter2" not in " ".join(argv_pw)
     assert env_key is None and "-i" in argv_key
+
+
+def test_a_password_row_whose_id_no_password_could_be_kept_under_is_refused_the_one_way(tmp_path, monkeypatch):
+    """Hand-written registry, id the doctor blocks: a caller that reaches it anyway gets a TransportError, not a crash."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    with pytest.raises(TransportError, match="not an id a password can be kept under"):
+        transport.ssh_env({**PASSWORD_ROW, "id": "../escape"})

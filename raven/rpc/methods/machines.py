@@ -253,27 +253,42 @@ async def machines_add(params: dict) -> dict:
         return _refused(f"a machine with id {conn_id!r} is registered already", "duplicate")
     if by_password:
         # Kept before the probe, which reaches the machine the way every later
-        # connection will: through the askpass helper reading this file.
-        connection_add.store_password(conn_id, password)
-    reached, message, detected = await asyncio.to_thread(connection_add.probe, row)
-    if not reached:
-        said = _scrubbed(message, row)
-        if by_password:
-            # A password the machine refused is not kept; and ssh never echoes
-            # one, but the replace is the guarantee rather than the belief.
-            connection_add.forget_password(conn_id)
-            said = said.replace(password, "the password")
-        return _refused(said, _reason(message))
-    row.update(detected)
-    row["software"] = ""
-    row["budget_unit"] = "gpu-minute" if row.get("kind") == "gpu" else "core-minute"
-    if not connections.resource_unit(row):
-        row["concurrency"] = 1
+        # connection will: through the askpass helper reading this file. Last
+        # of all the checks, so a refusal has nothing to clean up but this
+        # file -- which the finally below sees to.
+        try:
+            connection_add.store_password(conn_id, password)
+        except ValueError as exc:
+            return _refused(str(exc), "invalid")
+    written = False
     try:
-        connection_add.write(row)
-    except ValueError as exc:
-        said = str(exc)
-        return _refused(said, "duplicate" if "already listed" in said else "registry")
+        reached, message, detected = await asyncio.to_thread(connection_add.probe, row)
+        if not reached:
+            said = _scrubbed(message, row)
+            if by_password:
+                # ssh never echoes a password, but the replace is the
+                # guarantee rather than the belief.
+                said = said.replace(password, "the password")
+            return _refused(said, _reason(message))
+        row.update(detected)
+        row["software"] = ""
+        row["budget_unit"] = "gpu-minute" if row.get("kind") == "gpu" else "core-minute"
+        if not connections.resource_unit(row):
+            row["concurrency"] = 1
+        try:
+            connection_add.write(row)
+        except ValueError as exc:
+            said = str(exc)
+            return _refused(said, "duplicate" if "already listed" in said else "registry")
+        written = True
+    finally:
+        if by_password and not written:
+            # No row was written -- the machine refused, or the write did (a
+            # registration of the same id that landed in between) -- so the
+            # password kept a moment ago goes too: a password file with no row
+            # is one nothing lists and `remove` cannot reach (reviewed
+            # 2026-10-19).
+            connection_add.forget_password(conn_id)
     said = [f"{detected['cores']} cores" if "cores" in detected else "", str(detected.get("memory") or "")]
     said.append(str(detected.get("device") or ""))
     detail = f"reached machine {_label(row)}: " + (

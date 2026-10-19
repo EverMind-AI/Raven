@@ -105,7 +105,7 @@ def add(  # noqa: PLR0913 -- one option per field of the row; a dict would hide 
 
     import click
 
-    from raven.ops.connections import LOCAL, SSH, load, row_problems, store_path
+    from raven.ops.connections import LOCAL, SSH, UNREADABLE, read, row_problems, store_path
 
     kind = (transport or SSH).strip().lower()
     login = (auth or "key").strip().lower()
@@ -150,65 +150,95 @@ def add(  # noqa: PLR0913 -- one option per field of the row; a dict would hide 
         else:
             row.update({"host": host, "port": port, "user": user, "key": key})
 
-    if any(str(r.get("id") or "").strip() == conn_id for r in load()):
-        # Judged before anything is kept or reached: a re-add under an id in
-        # use must not touch the registered row's password (a failed one used
-        # to delete it, reviewed 2026-10-19). Remove, then register again.
+    # Judged before anything is kept or reached, in the order machines.add
+    # uses: the row's own fields (its id above all, since a password file is
+    # named by it), a registry that reads, and an id not in use. A failed
+    # registration used to leave a password file behind -- under a path-shaped
+    # id even outside keys/ -- or to delete or replace the registered machine's
+    # (reviewed 2026-10-19). Remove, then register again.
+    early = [f for f in row_problems(row) if f.blocking]
+    if early:
+        for fault in early:
+            console.print(f"  [red]- {fault}[/]")
+        console.print("[red]Nothing was written.[/red]")
+        raise typer.Exit(1)
+    registry = read()
+    if registry.state == UNREADABLE:
+        console.print(f"[red]{registry.detail}[/red]")
+        console.print("[red]Nothing was written: fix the registry file first.[/red]")
+        raise typer.Exit(1)
+    if any(str(r.get("id") or "").strip() == conn_id for r in registry.rows):
         console.print(
             f"[red]a machine with id {conn_id!r} is already listed in {store_path()}; remove it first "
             f"(raven ops connection remove {conn_id}). Nothing was written.[/red]"
         )
         raise typer.Exit(1)
-    if password:
-        # Kept before the probe, which reaches the machine the way every later connection will.
-        _store_password(conn_id, password)
-    if skip_probe:
-        console.print("[yellow]--skip-probe: this machine was not contacted, so nothing here is confirmed.[/yellow]")
-    else:
-        reached, message, found = probe(row)
-        if not reached:
-            if password:
-                _forget_password(conn_id)
-                message = message.replace(password, "the password")
-            console.print(f"[red]{message}[/red]")
-            console.print("Nothing was written. Fix the address, port, user, key or password and run this again.")
-            raise typer.Exit(1)
-        console.print(f"[green]{message}[/green]")
-        if found:
-            console.print("  " + "   ".join(f"{k} {v}" for k, v in found.items()))
-        row.update(found)
 
-    for field, value in (("device", device), ("cores", cores), ("memory", memory), ("note", note)):
-        if value:
-            row[field] = value
-    if not non_interactive:
-        software = software or _ask("What is installed on it (write the paths in)", str(row.get("software") or ""))
-        budget_unit = budget_unit or _ask(
-            "Budget counted in", "gpu-minute" if row.get("kind") == "gpu" else "core-minute"
-        )
-        concurrency = concurrency or int(_ask("How many jobs at once", "1"))
-        if not paths:
-            answer = _ask("Directories on it that hold your work (space separated, blank for none)", required=False)
-            paths = shlex.split(answer)
-    row["software"] = software or row.get("software", "")
-    row["budget_unit"] = budget_unit
-    row["concurrency"] = concurrency
-    if paths:
-        row["paths"] = list(paths)
-
-    faults = row_problems(row)
-    blocking = [f for f in faults if f.blocking]
-    for fault in faults:
-        console.print(f"  [{'red' if fault.blocking else 'yellow'}]- {fault}[/]")
-    if blocking:
-        console.print("[red]Nothing was written.[/red]")
-        raise typer.Exit(1)
+    kept = False
+    written = None
     try:
-        written = _write(row)
-    except ValueError as exc:
-        console.print(f"[red]{exc}[/red]")
-        console.print("[red]Nothing was written.[/red]")
-        raise typer.Exit(1) from None
+        if password:
+            # Kept before the probe, which reaches the machine the way every later connection will.
+            try:
+                _store_password(conn_id, password)
+            except ValueError as exc:
+                console.print(f"[red]{exc}. Nothing was written.[/red]")
+                raise typer.Exit(1) from None
+            kept = True
+        if skip_probe:
+            console.print(
+                "[yellow]--skip-probe: this machine was not contacted, so nothing here is confirmed.[/yellow]"
+            )
+        else:
+            reached, message, found = probe(row)
+            if not reached:
+                if password:
+                    message = message.replace(password, "the password")
+                console.print(f"[red]{message}[/red]")
+                console.print("Nothing was written. Fix the address, port, user, key or password and run this again.")
+                raise typer.Exit(1)
+            console.print(f"[green]{message}[/green]")
+            if found:
+                console.print("  " + "   ".join(f"{k} {v}" for k, v in found.items()))
+            row.update(found)
+
+        for field, value in (("device", device), ("cores", cores), ("memory", memory), ("note", note)):
+            if value:
+                row[field] = value
+        if not non_interactive:
+            software = software or _ask("What is installed on it (write the paths in)", str(row.get("software") or ""))
+            budget_unit = budget_unit or _ask(
+                "Budget counted in", "gpu-minute" if row.get("kind") == "gpu" else "core-minute"
+            )
+            concurrency = concurrency or int(_ask("How many jobs at once", "1"))
+            if not paths:
+                answer = _ask("Directories on it that hold your work (space separated, blank for none)", required=False)
+                paths = shlex.split(answer)
+        row["software"] = software or row.get("software", "")
+        row["budget_unit"] = budget_unit
+        row["concurrency"] = concurrency
+        if paths:
+            row["paths"] = list(paths)
+
+        faults = row_problems(row)
+        blocking = [f for f in faults if f.blocking]
+        for fault in faults:
+            console.print(f"  [{'red' if fault.blocking else 'yellow'}]- {fault}[/]")
+        if blocking:
+            console.print("[red]Nothing was written.[/red]")
+            raise typer.Exit(1)
+        try:
+            written = _write(row)
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
+            console.print("[red]Nothing was written.[/red]")
+            raise typer.Exit(1) from None
+    finally:
+        if kept and written is None:
+            # Refused, aborted at a question, or the write failed: no row holds
+            # this password, so it is not kept either -- a password file with no
+            # row is one nothing lists and `remove` cannot reach.
+            _forget_password(conn_id)
     console.print(f"[green]wrote {row['id']} to {written}[/green]")
     if password:
         console.print(f"[green]password kept for {row['id']} (readable by you alone; used on every connection)[/green]")
