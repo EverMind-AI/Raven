@@ -232,6 +232,9 @@ export async function loadProviders(sid?: string | null, gen?: number): Promise<
   const selection = loadSelection(target, ticket)
   try {
     const mo = await readOptions(target ? { session_id: target } : {})
+    // model.options does its catalogue work off-thread, so responses can land
+    // out of click order. A refresh keyed to a superseded view, or overtaken by
+    // a later refresh of this one, must not repaint what the reader now sees.
     if (ticket !== generation() || read !== providerRead) return
     providersLive = rowsOf(mo.providers || [])
   } catch {
