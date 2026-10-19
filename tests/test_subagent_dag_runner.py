@@ -10406,11 +10406,12 @@ async def test_a_replan_while_a_routers_judge_is_out_skips_its_branch() -> None:
     assert result.replanned_into == "next"
 
 
-async def test_a_replan_exit_announces_nothing_for_a_graph_without_branches() -> None:
-    """Only a not-executed node is announced on the way out of a replan.
+async def test_a_replan_exit_announces_the_cascade_skips_of_a_graph_without_branches() -> None:
+    """The replan exit publishes this pass's cascade skips too.
 
     `b` is skipped by the cascade on the pass that meets the replan, and that pass
-    ends before its sweep: a graph without routes or guards gets no event for it.
+    ends before its sweep: without the exit publishing it, a graph without routes
+    or guards got no event for it, and its row landed only when the run finalized.
     """
     from raven.agent.subagent.dag_adjudication import AdjudicationDesk, ReplanPlan
 
@@ -10442,6 +10443,7 @@ async def test_a_replan_exit_announces_nothing_for_a_graph_without_branches() ->
     assert [(v["node"], v["status"]) for n, v in events if n == "dag_node_updated"] == [
         ("a", "running"),
         ("a", "failed"),
+        ("b", "skipped"),
     ]
 
 
