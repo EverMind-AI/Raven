@@ -213,6 +213,17 @@ export async function loadSelection(sid?: string | null, gen?: number): Promise<
   }
 }
 
+/* A draft promoted to a conversation is the same view under a new key: the
+   promotion takes no view ticket, and the selection the draft read (its staged
+   pick, or the default) is what the session starts on. Hand that reading to the session, so its first
+   re-read refreshes a known selection instead of waiting as if for a new view.
+   Only a reading taken under the ticket the promotion began on: every switch to
+   another view starts that view's own read at once, under its own ticket, so a
+   reader who left during the create keeps the selection of where they went. */
+export function adoptSelection(sessionId: string, gen: number): void {
+  if (selectionGeneration === gen) selectionSession = sessionId
+}
+
 export async function loadProviders(sid?: string | null, gen?: number): Promise<void> {
   // The model is per conversation, so ask for the visible one's -- model.options
   // stars the row that conversation actually runs, not agents.defaults. Omit the

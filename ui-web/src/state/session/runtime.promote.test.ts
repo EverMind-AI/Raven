@@ -34,7 +34,13 @@ interface Staged { model: { model: string; provider: string } | null; tier: stri
 const traffic = (method: string, params: { key?: string }): string =>
   `rpc:${method}${method === 'config.set' ? `:${params.key ?? ''}` : ''}`
 
-async function harness(startAsDraft: boolean, { refuseModelWrite = false, holdTurnSend = false } = {}) {
+/* `realModel` keeps the model chip's own source and store instead of the stand-in
+   below, so a case can read what the chip says across a promotion; the transport
+   then answers `model.options` itself, at once or when a case releases it. */
+async function harness(
+  startAsDraft: boolean,
+  { refuseModelWrite = false, holdTurnSend = false, realModel = false, selectionOnly = true } = {},
+) {
   const log: string[] = []
   /* The reload a refused model write fires, held until a case lands it: on a
      real page it is a round trip, and what happens before it lands is the
@@ -93,16 +99,18 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false, holdTu
       'src/features/workspace/record': { wsOnHistory: () => {} },
       'src/features/rail/source': { rowPreview: (t: string) => t, touchSession: (id: string) => log.push(`touch:${id}`) },
       'src/state/session/residency': { park: () => {}, resume: () => {} },
-      'src/features/model/source': {
-        /* The re-read a refused model write ends with, which is the only place
-           the generation the promotion began on becomes visible. */
-        loadProviders: (id: string | null, gen: number) => {
-          reReads.push([id, gen])
-          return new Promise<void>((done) => { reloads.push(done) })
+      ...(realModel ? {} : {
+        'src/features/model/source': {
+          /* The re-read a refused model write ends with, which is the only place
+             the generation the promotion began on becomes visible. */
+          loadProviders: (id: string | null, gen: number) => {
+            reReads.push([id, gen])
+            return new Promise<void>((done) => { reloads.push(done) })
+          },
+          openModelsForMissingProvider: () => false,
+          stagedTier: () => staging().tier,
         },
-        openModelsForMissingProvider: () => false,
-        stagedTier: () => staging().tier,
-      },
+      }),
       'src/features/settings/source': {
         loadPermMode: () => {},
         stagedPerm: () => staging().perm,
@@ -125,7 +133,24 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false, holdTu
   const workdir = await import('../workdir')
 
   const created: object[] = []
+  /* `model.options` as the real chip asks it: answered with `answer` while
+     `holdOptions` is off, otherwise parked until `answerHeld` or `failHeld`. */
+  const options = {
+    answer: 'draft-m',
+    holdOptions: false,
+    asked: [] as object[],
+    held: [] as Array<{ resolve: (v: object) => void; reject: (e: Error) => void }>,
+  }
+  if (realModel) {
+    const { absorb } = await import('../../rpc/capabilities')
+    absorb(selectionOnly ? ['model.options.selection_only'] : [])
+  }
   await fakeGateway(async (method: string, params: { key?: string } = {}) => {
+    if (method === 'model.options') {
+      options.asked.push(params)
+      if (!options.holdOptions) return { model: options.answer, provider: 'p', providers: [] }
+      return new Promise<object>((resolve, reject) => { options.held.push({ resolve, reject }) })
+    }
     log.push(traffic(method, params))
     if (method === 'session.create') {
       created.push(params)
@@ -169,6 +194,10 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false, holdTu
        clears. */
     minted: () => minted,
     reReads,
+    options,
+    answerHeld: (model: string) => { options.held.splice(0).forEach((r) => r.resolve({ model, provider: 'p', providers: [] })) },
+    failHeld: () => { options.held.splice(0).forEach((r) => r.reject(new Error('socket disconnected'))) },
+    rereadChips: registry.rereadChips,
     log,
     rows,
     pointer: () => current,
@@ -410,5 +439,89 @@ describe('the model the first message of a draft goes out on', () => {
 
     expect(h.log).toContain('rpc:turn.send')
     expect(used()).toBeNull()
+  })
+})
+
+/* The draft and the conversation it becomes are one view: the promotion takes no
+   new view ticket, and the selection the draft read is what the session starts
+   on. So the first re-read of that view -- a settings-changing tool result, a
+   provider or default-model write, a typed id -- is a refresh of a known
+   selection and must leave it usable, while every way of reaching a DIFFERENT
+   view still waits for that view's own answer. Driven on the real chip source
+   and store, with only the transport faked, on gateways with and without the
+   selection-only read. */
+describe('the model chip across a promotion', () => {
+  const settle = async (): Promise<void> => { for (let i = 0; i < 20; i += 1) await Promise.resolve() }
+  const chip = async () => {
+    const store = await import('../../features/model/store')
+    const source = await import('../../features/model/source')
+    return { status: store.loadStatus(), current: store.current(), blocked: source.blockSendForModel() }
+  }
+
+  it.each([true, false])('keeps a known selection usable through the first re-read of a promoted draft (selection-only: %s)', async (selectionOnly) => {
+    const h = await harness(true, { realModel: true, selectionOnly })
+    await settle()
+    expect(await chip()).toEqual({ status: 'ready', current: 'draft-m', blocked: false })
+    await h.openConversation()
+    expect(h.pointer()).toBe('made-1')
+
+    h.options.holdOptions = true
+    h.rereadChips()
+    await settle()
+    expect(h.options.held.length).toBeGreaterThan(0)
+    expect(await chip()).toEqual({ status: 'ready', current: 'draft-m', blocked: false })
+
+    h.answerHeld('session-m')
+    await settle()
+    expect(await chip()).toEqual({ status: 'ready', current: 'session-m', blocked: false })
+  })
+
+  it.each([true, false])('still waits when the draft never learned its selection (selection-only: %s)', async (selectionOnly) => {
+    const h = await harness(false, { realModel: true, selectionOnly })
+    h.options.holdOptions = true
+    h.enterDraft()
+    await settle()
+    h.failHeld()
+    await settle()
+    expect((await chip()).status).toBe('error')
+    await h.openConversation()
+
+    h.rereadChips()
+    await settle()
+    expect(await chip()).toMatchObject({ status: 'loading', blocked: true })
+    h.answerHeld('session-m')
+    await settle()
+    expect(await chip()).toEqual({ status: 'ready', current: 'session-m', blocked: false })
+  })
+
+  it.each([true, false])('waits again for a new draft opened after the promotion (selection-only: %s)', async (selectionOnly) => {
+    const h = await harness(true, { realModel: true, selectionOnly })
+    await settle()
+    await h.openConversation()
+    h.options.holdOptions = true
+    h.enterDraft()
+    await settle()
+    expect(await chip()).toMatchObject({ status: 'loading', blocked: true })
+    h.answerHeld('default-m')
+    await settle()
+    expect(await chip()).toEqual({ status: 'ready', current: 'default-m', blocked: false })
+  })
+
+  it.each([true, false])('hands nothing to the conversation when the reader left during its creation (selection-only: %s)', async (selectionOnly) => {
+    const h = await harness(true, { realModel: true, selectionOnly })
+    await settle()
+    /* The reader opens a new draft while `session.create` is answering; that
+       draft's own read answers too, so the page holds a ready selection that
+       belongs to the NEW draft, not to the conversation being made. */
+    h.onCreate(() => { h.enterDraft() })
+    await h.openConversation()
+    await settle()
+    expect((await chip()).status).toBe('ready')
+
+    h.options.holdOptions = true
+    h.rereadChips()
+    await settle()
+    expect(h.pointer()).toBe('made-1')
+    expect(await chip()).toMatchObject({ status: 'loading', blocked: true })
   })
 })
