@@ -117,8 +117,9 @@ export interface ExtAgentsState {
      drawer, by registry id, or null: the fourth thing the one drawer draws,
      exclusive with the other three. */
   mconnect: string | null
-  /* What that form chooses from, read when it opens; null before the answer,
-     and the read's refusal beside it. */
+  /* What that form chooses from, read when it opens and again when an add
+     lands on its machine while it is open, the latest read being the one
+     kept; null before the answer, and the read's refusal beside it. */
   presets: PresetChoice[] | null
   presetsFailed: string
   /* Each opening of that form is a generation, and the write in flight
@@ -134,9 +135,11 @@ export interface ExtAgentsState {
   mconnectFailed: string
   /* The adds in flight from any opening of that form, by the name each will
      land under (`<preset>@<machine>`): the generation above says whose form
-     a write is, this says that the write is still running. A form opened on
-     the same machine meanwhile greys that preset instead of offering a second
-     add of it, which the server would ping and then refuse as a duplicate. */
+     a write is, this says that the write is still running -- or has landed,
+     and the form open on that machine is still reading its presets again. A
+     form opened on the same machine meanwhile greys that preset instead of
+     offering a second add of it, which the server would ping and then refuse
+     as a duplicate. */
   mconnectPending: string[]
 }
 
