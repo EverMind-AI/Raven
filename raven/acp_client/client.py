@@ -141,6 +141,12 @@ async def _end(pgid: int, proc: Any) -> None:
         pass
 
 
+def _retrieved(task: asyncio.Task) -> None:
+    """Read the outcome of a task nobody waits on, so a failure is not reported as never retrieved."""
+    if not task.cancelled():
+        task.exception()
+
+
 class Endpoint(Protocol):
     """What a connection runs over: where its frames go and come from, and how it ends.
 
@@ -575,7 +581,8 @@ class AcpClient:
         try:
             await self._endpoint.end()
         except asyncio.CancelledError:
-            self._stop_tasks()
+            for task in self._stop_tasks():
+                task.add_done_callback(_retrieved)
             self._let_go()
             raise
         pending_tasks = self._stop_tasks()

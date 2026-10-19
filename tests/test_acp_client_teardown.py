@@ -281,3 +281,17 @@ async def test_a_local_agent_gets_the_grace_its_handshake_asks_for_up_to_a_cap(m
     client._heard_initialize({"agentCapabilities": {"_meta": meta}})
     await client.close()
     assert granted == [given]
+
+
+async def test_a_task_a_cancelled_close_leaves_behind_has_its_outcome_read():
+    async def fail():
+        raise RuntimeError("the agent's answer failed")
+
+    failed = asyncio.ensure_future(fail())
+    cancelled = asyncio.ensure_future(asyncio.Event().wait())
+    cancelled.cancel()
+    await asyncio.wait({failed, cancelled})
+    assert failed._log_traceback
+    acp_client._retrieved(failed)
+    acp_client._retrieved(cancelled)
+    assert not failed._log_traceback
