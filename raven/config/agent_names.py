@@ -48,7 +48,7 @@ rather than as the override it was meant to be.
 Kept equal to the seed table's own names by
 tests/test_subagent_name_vocabulary.py."""
 
-LEGACY_AGENT_ALIASES: dict[str, str] = {"raven": GENERIC_AGENT, "Raven": GENERIC_AGENT}
+LEGACY_AGENT_ALIASES: dict[str, str] = {"Raven": GENERIC_AGENT, "raven": GENERIC_AGENT}
 """Names a seed used to answer to, mapped to the one it answers to now.
 
 The generic row was lowercase until it was capitalised to match the rest of the
@@ -56,7 +56,8 @@ table, then renamed apart from the host, and each time thousands of
 instance-registry rows, direct-chat records and stored dag nodes already had the
 old name written into them. Resolution consults this only *after* an exact match
 fails, so no other agent's name changes meaning, and the roster never advertises
-an alias -- it is for reading old data, not for the model to pick from."""
+an alias -- it is for reading old data, not for the model to pick from. Former
+names are ordered newest first to break ties between equally dated stores."""
 
 THIRD_PARTY_PRESET_NAMES: frozenset[str] = frozenset(
     {

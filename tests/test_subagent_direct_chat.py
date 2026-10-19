@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import os
 from typing import Any
 
 import pytest
@@ -93,12 +94,59 @@ def test_state_path_is_scoped_by_agent_and_handle(tmp_path):
 def test_a_direct_chat_under_a_former_name_keeps_its_directory(tmp_path):
     """The generic agent was renamed without moving what its direct chats wrote, so
     continuing one under the new name has to land in the directory its history is in."""
-    legacy = direct_root(tmp_path, "Raven", "h1")
+    legacy = tmp_path / "subagents" / "direct" / "Raven" / "h1"
     legacy.mkdir(parents=True)
 
     assert direct_root(tmp_path, GENERIC_AGENT, "h1") == legacy
     assert instance_state_path(tmp_path, GENERIC_AGENT, "h1").parent == legacy
     assert direct_root(tmp_path, GENERIC_AGENT, "fresh") == tmp_path / "subagents" / "direct" / GENERIC_AGENT / "fresh"
+
+
+@pytest.mark.parametrize("latest", ["raven", "Raven"])
+def test_two_legacy_directories_resume_the_latest_state_for_every_alias(tmp_path, latest):
+    older = tmp_path / "subagents" / "direct" / "raven" / "h1"
+    newer = tmp_path / "subagents" / "direct" / "Raven" / "h1"
+    older.mkdir(parents=True)
+    newer.mkdir(parents=True, exist_ok=True)
+    if older.samefile(newer):
+        pytest.skip("Two casing generations require a case-sensitive filesystem")
+    InstanceState(older / "messages.json").save([{"role": "user", "content": "older"}])
+    InstanceState(newer / "messages.json").save([{"role": "user", "content": "newer"}])
+    chosen = older if latest == "raven" else newer
+    for path in (older, newer):
+        stamp = 2_000_000_000 if path == chosen else 1_000_000_000
+        os.utime(path / "messages.json", ns=(stamp, stamp))
+
+    for name in (GENERIC_AGENT, "Raven", "raven"):
+        state = InstanceState(instance_state_path(tmp_path, name, "h1"))
+        assert state.load() == InstanceState(chosen / "messages.json").load()
+        assert direct_root(tmp_path, name, "h1") == chosen
+
+
+@pytest.mark.parametrize("state_is_directory", [False, True])
+def test_an_empty_current_directory_does_not_hide_legacy_messages(tmp_path, state_is_directory):
+    legacy = tmp_path / "subagents" / "direct" / "Raven" / "h1"
+    current = tmp_path / "subagents" / "direct" / GENERIC_AGENT / "h1"
+    InstanceState(legacy / "messages.json").save([{"role": "user", "content": "kept"}])
+    current.mkdir(parents=True)
+    if state_is_directory:
+        (current / "messages.json").mkdir()
+
+    assert InstanceState(instance_state_path(tmp_path, GENERIC_AGENT, "h1")).load() == [
+        {"role": "user", "content": "kept"}
+    ]
+
+
+def test_equally_dated_messages_prefer_the_current_agent_name(tmp_path):
+    for agent in ("Raven", GENERIC_AGENT):
+        path = tmp_path / "subagents" / "direct" / agent / "h1" / "messages.json"
+        InstanceState(path).save([{"role": "user", "content": agent}])
+        os.utime(path, ns=(1_000_000_000, 1_000_000_000))
+
+    for name in ("Raven", "raven", GENERIC_AGENT):
+        assert InstanceState(instance_state_path(tmp_path, name, "h1")).load() == [
+            {"role": "user", "content": GENERIC_AGENT}
+        ]
 
 
 def test_load_of_a_missing_file_is_empty(tmp_path):
