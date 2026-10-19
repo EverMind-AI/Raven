@@ -336,7 +336,37 @@ def test_local_keys_lists_the_computer_s_own_identities_in_ssh_s_order_and_a_nam
     for name in ("id_rsa", "id_ecdsa", "id_ecdsa.pub", "deploy", "deploy.pub", "orphan.pub", "config"):
         (ssh / name).write_text("x", encoding="utf-8")
 
-    assert adder.local_keys() == ["~/.ssh/id_ecdsa", "~/.ssh/id_rsa", "~/.ssh/deploy"]
+    assert adder.local_keys() == ["~/.ssh/id_rsa", "~/.ssh/id_ecdsa", "~/.ssh/deploy"]
+
+
+def test_the_default_identities_are_in_the_order_this_computer_s_ssh_offers_them():
+    """Measured, not assumed: the table proposed ``id_ed25519`` first while ``ssh -G``
+    lists ``id_rsa`` first (OpenSSH 8.9, 9.6, 9.9), so an owner with both was proposed the
+    key ssh itself would try second. Pinned against the ssh on the computer running this."""
+    import subprocess
+
+    try:
+        done = subprocess.run(
+            ["ssh", "-G", "-F", "/dev/null", "nobody@localhost"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pytest.skip("no ssh to measure against")
+    if done.returncode != 0:
+        pytest.skip("ssh -G did not answer")
+    measured = [
+        os.path.basename(line.split(None, 1)[1])
+        for line in done.stdout.splitlines()
+        if line.startswith("identityfile ")
+    ]
+    assert measured and measured[0] == adder.DEFAULT_IDENTITIES[0] == "id_rsa"
+    # The same relative order for every name both know; a version that lacks or adds one changes nothing here.
+    assert [n for n in adder.DEFAULT_IDENTITIES if n in measured] == [
+        n for n in measured if n in adder.DEFAULT_IDENTITIES
+    ]
 
 
 def test_local_keys_is_empty_without_an_ssh_directory(tmp_path, monkeypatch):

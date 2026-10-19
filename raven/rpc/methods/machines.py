@@ -40,6 +40,7 @@ from loguru import logger
 from pydantic import ValidationError
 
 from raven.acp_client import remote
+from raven.config.loader import ConfigReadError
 from raven.config.update_subagents import agents_on_machine
 from raven.node import bundle
 from raven.node import install as node_install
@@ -137,12 +138,13 @@ def _agents_here(conn_id: str) -> list[str]:
     Connected ones only (``only_enabled``), which is what the agents page
     calls connected too; an entry switched off still names the machine, and
     the removal refuses over it, but it is not what the card means by "runs
-    here". A malformed agents section is the agents page's to report: the
-    machine is still what it is, with nothing listed.
+    here". A malformed agents section, or a config file that does not parse
+    at all (a comment, a trailing comma), is the agents page's to report:
+    the machine is still what it is, with nothing listed.
     """
     try:
         return agents_on_machine(conn_id, only_enabled=True)
-    except ValidationError:
+    except (ValidationError, ConfigReadError):
         return []
 
 

@@ -154,6 +154,22 @@ async def test_list_names_the_connected_agent_entries_that_run_on_each_machine(p
     assert ("box", True) in asked
 
 
+async def test_list_lists_no_agent_over_a_config_file_that_does_not_parse_rather_than_failing(
+    pool, monkeypatch, tmp_path
+):
+    """A real file, not a stand-in: `// a note` is not JSON, the loader raises its own ConfigReadError (not a
+    ValidationError), and the whole listing failed with internal_error while the gateway itself runs on."""
+    _store(BOX)
+    config = tmp_path / "config.json"
+    config.write_text('{ // my note\n  "subagents": {"agents": []}\n}\n', encoding="utf-8")
+    monkeypatch.setattr("raven.config.update_subagents.get_config_path", lambda: config)
+
+    out = await rpc.machines_list({})
+
+    _check("machines.list", out)
+    assert [r["id"] for r in out["rows"]] == ["box"] and out["rows"][0]["agents_here"] == []
+
+
 async def test_list_lists_no_agent_over_a_malformed_agents_section_rather_than_failing(pool, monkeypatch):
     _store(BOX)
 
@@ -191,9 +207,10 @@ async def test_local_keys_proposes_ssh_s_own_identities_first_then_any_key_with_
     out = await rpc.machines_local_keys({})
 
     _check("machines.local_keys", out)
-    # ed25519 before rsa, as ssh offers them, whether or not it has a .pub beside it; then the
-    # owner's own pair by name; never a .pub, a public half with no private one, or ssh's files.
-    assert out["keys"] == ["~/.ssh/id_ed25519", "~/.ssh/id_rsa", "~/.ssh/work_key"]
+    # rsa before ed25519, as ssh offers them (`ssh -G` lists id_rsa first on OpenSSH 8.9, 9.6 and 9.9),
+    # whether or not a .pub is beside it; then the owner's own pair by name; never a .pub, a public
+    # half with no private one, or ssh's files.
+    assert out["keys"] == ["~/.ssh/id_rsa", "~/.ssh/id_ed25519", "~/.ssh/work_key"]
 
 
 async def test_local_keys_proposes_nothing_on_a_computer_without_an_ssh_directory(_home):

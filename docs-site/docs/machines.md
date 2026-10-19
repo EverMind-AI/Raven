@@ -103,7 +103,7 @@ key, no answer in time) and what to do about it. What the page shows
 afterwards is what the machine is -- its name, id, link and node -- never its
 address, user or key path: those travel once, in the form, and are not read
 back. The private-key field starts filled with a key this computer has: ssh's
-own identities first (`~/.ssh/id_ed25519` before `id_rsa`), then any pair you
+own identities first (`~/.ssh/id_rsa` before `id_ed25519`, the order ssh tries them), then any pair you
 named, with the others to pick from; when none is found the form says so, and
 *Password* is the other way in.
 
@@ -171,7 +171,11 @@ machine too (*Runs on*), which lists the registered machines, lets only those
 with this Raven's node be picked (the others say why), and takes the working
 directory there; an agent that is not installed on this computer offers it
 as well, since what matters is that it is installed and signed in on the
-machine.
+machine. Only a preset not yet on the roster offers it: a row that already
+exists, switched off, connects by its own button, which takes no machine.
+While an add on a machine is still running -- its proof prompt takes up to a
+minute -- the machine's connect form, opened again, greys that preset rather
+than adding it a second time.
 
 **Upgrading.** The node runs exactly the code of the Raven that installed it,
 checked by a digest on every connection. After you update Raven on this

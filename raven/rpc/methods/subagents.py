@@ -1520,7 +1520,7 @@ async def subagents_presets(params: dict) -> dict:
     from. Unlike ``subagents.list``, a preset is listed here whether or not an
     entry already holds it: an entry is one preset on one machine, so a preset
     connected on this computer is still to be had on each machine, under
-    ``<preset name>@<machine id>`` -- the roster withholds it only because two
+    the add's default ``<preset>@<machine id>`` -- the roster withholds it only because two
     rows of one NAME would be unusable there. Only the kinds a machine's node
     starts are listed (acp, cli): a built-in agent is this process's own loop,
     a Mirasim shim runs on this host's interpreter, and an openai endpoint

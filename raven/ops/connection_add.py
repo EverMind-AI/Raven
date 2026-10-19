@@ -100,8 +100,13 @@ def ssh_defaults(host: str, *, port: int = 0, user: str = "") -> dict[str, Any]:
     return out
 
 
-#: ssh's own identity files, in the order it offers them (ssh_config(5), IdentityFile).
-DEFAULT_IDENTITIES = ("id_ed25519", "id_ed25519_sk", "id_ecdsa", "id_ecdsa_sk", "id_rsa", "id_dsa")
+#: ssh's own identity files, in the order it offers them: the IdentityFile
+#: defaults of ssh_config(5), as ``ssh -G`` prints them on OpenSSH 8.9, 9.6
+#: and 9.9 alike -- ``id_rsa`` first. The form prefills the first one that
+#: exists, so this order is what decides which key an owner with two of them
+#: is proposed; measured rather than assumed, since the other way round
+#: proposed the key ssh itself would try second.
+DEFAULT_IDENTITIES = ("id_rsa", "id_ecdsa", "id_ecdsa_sk", "id_ed25519", "id_ed25519_sk", "id_xmss", "id_dsa")
 
 
 def local_keys() -> list[str]:

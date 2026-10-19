@@ -132,6 +132,12 @@ export interface ExtAgentsState {
   /* That form's refusal -- the agent's words when it did not answer on the
      machine -- for the form it was pressed in. */
   mconnectFailed: string
+  /* The adds in flight from any opening of that form, by the name each will
+     land under (`<preset>@<machine>`): the generation above says whose form
+     a write is, this says that the write is still running. A form opened on
+     the same machine meanwhile greys that preset instead of offering a second
+     add of it, which the server would ping and then refuse as a duplicate. */
+  mconnectPending: string[]
 }
 
 const store = makeStore<ExtAgentsState>({
@@ -155,13 +161,14 @@ const store = makeStore<ExtAgentsState>({
   mconnectGen: 0,
   mconnectBusy: null,
   mconnectFailed: '',
+  mconnectPending: []
 })
 
 export const { get, subscribe, _resetForTests } = store
 
 /** A patch, merged into the page's state. */
 export function set(patch: Partial<ExtAgentsState>): void {
-  store.set((prev) => ({ ...prev, ...patch }))
+  store.set(prev => ({ ...prev, ...patch }))
 }
 
 export const source = (): ExtAgentsSource => ds('extAgents')
@@ -253,7 +260,7 @@ export async function run(
   op: ExtAgentOp,
   row?: ExtAgentRow,
   args?: ExtAgentActArgs,
-  opts: { quiet?: boolean } = {},
+  opts: { quiet?: boolean } = {}
 ): Promise<Pick<Failure, 'detail' | 'remedy'> | null> {
   let rows = get().rows
   let failedWith: Pick<Failure, 'detail' | 'remedy'> | null = null
@@ -277,18 +284,22 @@ export async function run(
        rows from before the others landed -- rows connected meanwhile read as
        connectable again. It is also how a refused model pick leaves a menu the
        row has since moved off, since rows are re-measured behind the page. */
-    rows = await source().load(false).catch(() => get().rows)
+    rows = await source()
+      .load(false)
+      .catch(() => get().rows)
     if (!opts.quiet) toast(t('gui.agent.failed', { detail: failedWith.detail }))
   }
   while (landed > gen) {
     gen = ++started
-    rows = await source().load(true).catch(() => get().rows)
+    rows = await source()
+      .load(true)
+      .catch(() => get().rows)
   }
   landed = gen
   const next: Partial<ExtAgentsState> = { rows, epoch: get().epoch + 1 }
   if (renamed && get().sheet === row?.name) next.sheet = renamed
   set(next)
-  if (get().sheet && !rows.some((x) => x.name === get().sheet)) closeSheet()
+  if (get().sheet && !rows.some(x => x.name === get().sheet)) closeSheet()
   watchBuilds(rows)
   return failedWith
 }
@@ -329,7 +340,11 @@ export function connectRow(row: ExtAgentRow, model?: string): Promise<void> {
   const stage = stageOf(row)
   if (stage === 'add') {
     const description = get().drafts[row.name]
-    return act(row, 'connect', { ...(description ? { description } : {}), ...(model ? { model } : {}), ...whereArgs(row.name) })
+    return act(row, 'connect', {
+      ...(description ? { description } : {}),
+      ...(model ? { model } : {}),
+      ...whereArgs(row.name)
+    })
   }
   if (stage === 'stale') return act(row, 'migrate')
   return act(row, 'toggle', { enabled: true })
@@ -402,9 +417,9 @@ export const draftOf = (name: string): string | undefined => get().drafts[name]
    environment the gateway captured when it started. */
 export async function recheck(row: ExtAgentRow): Promise<void> {
   await load(true, true)
-  const now = get().rows.find((r) => r.name === row.name)
+  const now = get().rows.find(r => r.name === row.name)
   const still = !!now && sectionOf(now) === 'missing'
-  const rest = get().stillMissing.filter((name) => name !== row.name)
+  const rest = get().stillMissing.filter(name => name !== row.name)
   set({ stillMissing: still ? [...rest, row.name] : rest })
 }
 
@@ -414,7 +429,7 @@ export const found = (): ExtAgentRow[] => get().rows.filter(isFound)
 
 /* Done once one of those is actually enabled -- connecting is the ask, not
    merely having something on the machine to connect. */
-export const stepDone = (): boolean => found().some((r) => r.enabled)
+export const stepDone = (): boolean => found().some(r => r.enabled)
 
 /* One test, and the flag that says it is under way. `run` cannot carry this:
    its await *is* the test -- `subagents.test` holds the connection open for the
@@ -434,7 +449,7 @@ export async function runTest(row: ExtAgentRow): Promise<void> {
   try {
     await run('test', row)
   } finally {
-    set({ testing: get().testing.filter((name) => name !== row.name) })
+    set({ testing: get().testing.filter(name => name !== row.name) })
   }
 }
 
@@ -458,7 +473,7 @@ const BUILD_POLL_MS = 4000
 
 function watchBuilds(rows: ExtAgentRow[]): void {
   if (buildTimer !== null) return
-  if (!rows.some((r) => r.building)) return
+  if (!rows.some(r => r.building)) return
   buildTimer = setTimeout(() => {
     buildTimer = null
     /* Unprobed while a build is in flight -- a probe per poll would re-measure
@@ -468,8 +483,8 @@ function watchBuilds(rows: ExtAgentRow[]): void {
        the reader watched happen. */
     void source()
       .load(false)
-      .then(async (next) => {
-        const done = !next.some((r) => r.building)
+      .then(async next => {
+        const done = !next.some(r => r.building)
         const rows = done ? await source().load(true) : next
         set({ rows, epoch: get().epoch + 1 })
         watchBuilds(rows)
@@ -515,7 +530,7 @@ export function machineConnectOpen(id: string): void {
     mconnectGen: get().mconnectGen + 1,
     mconnectBusy: null,
     mconnectFailed: '',
-    epoch: get().epoch + 1,
+    epoch: get().epoch + 1
   })
   void loadPresets()
 }
@@ -540,7 +555,7 @@ async function loadPresets(): Promise<void> {
 export async function connectOnMachine(
   choice: PresetChoice,
   machine: string,
-  remoteCwd: string,
+  remoteCwd: string
 ): Promise<{ landed: boolean; current: boolean; name: string }> {
   const gen = get().mconnectGen
   /* Still the form it was pressed in, and that form still on screen: the
@@ -548,7 +563,8 @@ export async function connectOnMachine(
      stays set through the close fade (`sheetDismissed` drops it after). */
   const current = (): boolean =>
     get().mconnect === machine && get().mconnectGen === gen && detail.get().open && detail.get().owner === 'extAgents'
-  set({ mconnectBusy: gen, mconnectFailed: '' })
+  const pending = `${choice.preset}@${machine}`
+  set({ mconnectBusy: gen, mconnectFailed: '', mconnectPending: [...get().mconnectPending, pending] })
   let got: { name: string } | { refused: string }
   try {
     got = await source().connectOnMachine(choice, machine, remoteCwd)
@@ -556,6 +572,7 @@ export async function connectOnMachine(
     got = { refused: failure(e) }
   }
   if (get().mconnectBusy === gen) set({ mconnectBusy: null })
+  set({ mconnectPending: get().mconnectPending.filter(name => name !== pending) })
   if ('name' in got) {
     await load(true)
     return { landed: true, current: current(), name: got.name }
@@ -606,7 +623,7 @@ export async function pickAndConnect(row: ExtAgentRow): Promise<void> {
   await connectRow(row, get().picked[row.name])
   const drawer = detail.get()
   if (get().failed[row.name] || !drawer.open || drawer.gen !== gen || get().picking !== family) return
-  if (get().rows.some((other) => familyOf(other) === family && get().joining[other.name])) return
+  if (get().rows.some(other => familyOf(other) === family && get().joining[other.name])) return
   detail.close()
 }
 
@@ -629,7 +646,7 @@ export function sheetDismissed(): void {
   const gen = detail.get().gen
   detail.dropAfterFade(
     () => set({ sheet: null, msheet: null, picking: null, mconnect: null }),
-    () => detail.get().gen !== gen,
+    () => detail.get().gen !== gen
   )
 }
 detail.onClose('extAgents', sheetDismissed)

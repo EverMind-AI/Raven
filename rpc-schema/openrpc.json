@@ -2114,7 +2114,7 @@
     {
       "name": "subagents.presets",
       "summary": "The presets an agent entry can be made from on a registered machine, whether or not one already holds them, and where each already runs.",
-      "description": "What the machines tab's connect form chooses from. A preset connected on this computer is listed too: an entry is one preset on one machine, so it is still to be had on each machine, under <preset name>@<machine id>. Only the kinds a machine's node starts (acp, cli): no built-in agent, no Mirasim shim, no openai endpoint.",
+      "description": "What the machines tab's connect form chooses from. A preset connected on this computer is listed too: an entry is one preset on one machine, so it is still to be had on each machine, under the add's default <preset>@<machine id> (claude_code@gpu1). Only the kinds a machine's node starts (acp, cli): no built-in agent, no Mirasim shim, no openai endpoint.",
       "params": [],
       "result": {
         "name": "SubagentsPresetsResult",

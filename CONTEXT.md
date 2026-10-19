@@ -438,7 +438,8 @@ taken back from its `authorized_keys` and deleted here, `connection_add.revoke_p
 none of it hands the page an address, an account or a key path, and
 `node_install` on a row is the node the last install or contact found there,
 which is how a listing says a machine has this Raven's node without reaching it.
-A row also names the connected agent entries that run on the machine (`agents_here`),
+A row also names the connected agent entries that run on the machine (`agents_here`; none
+when the agents section, or the config file itself, cannot be read -- that is the agents page's to say),
 and a machine whose node is up offers the next step from its sheet: connect an agent
 on it, chosen from `subagents.presets` -- every preset a node can start, one already
 connected on this computer included, since an entry is one preset on one machine --

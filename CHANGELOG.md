@@ -27,10 +27,13 @@ All notable changes to Raven are documented here.
   can start, including one already connected on this computer. `subagents.add`
   now refuses a preset the machine already has when no name is given, naming
   the entry there, so the page and a chat cannot add the same agent on one
-  machine twice between them; a named add is still a second entry. An agent
+  machine twice between them; a named add is still a second entry. A preset
   that is not installed on this computer can be connected onto a machine from
-  its own sheet (*Runs on*). The register form fills the private-key path with
-  a key this computer has instead of a placeholder. New read-only RPCs
+  its own sheet (*Runs on*); a row that already exists, switched off, connects
+  by its own button as before. While an add is still running on a machine, a
+  form opened again on that machine greys the preset rather than adding it
+  twice. The register form fills the private-key path with the key ssh would
+  try first (`id_rsa` before `id_ed25519`) instead of a placeholder. New read-only RPCs
   `subagents.presets` and `machines.local_keys`; `machines.list` rows carry
   `agents_here`.
 

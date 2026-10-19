@@ -12,7 +12,16 @@ import { ExtAgentsApp } from './ExtAgentsPage'
 import * as machines from './machines'
 import * as store from './store'
 
-import type { ExtAgentActArgs, ExtAgentModelChoice, ExtAgentRow, ExtAgentsSource, MachineRow, MachinesSource, PresetChoice, RegisterForm } from './types'
+import type {
+  ExtAgentActArgs,
+  ExtAgentModelChoice,
+  ExtAgentRow,
+  ExtAgentsSource,
+  MachineRow,
+  MachinesSource,
+  PresetChoice,
+  RegisterForm
+} from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -21,19 +30,19 @@ const toastWriter = vi.hoisted(() => ({ items: [] as string[] }))
 vi.mock('../../state/toast', () => ({
   show: (text: string) => {
     toastWriter.items.push(text)
-  },
+  }
 }))
 
 /* The host's provider list, which the built-in row's pill picks from. */
 const hostModels = vi.hoisted(() => ({
   providers: [] as Array<{ id: string; name: string; models: string[]; configured?: string[]; on: boolean }>,
-  loads: 0,
+  loads: 0
 }))
 vi.mock('../model/source', () => ({
   defaultProviders: () => hostModels.providers,
   loadDefaultProviders: async () => {
     hostModels.loads += 1
-  },
+  }
 }))
 
 function row(over: Partial<ExtAgentRow> = {}): ExtAgentRow {
@@ -52,7 +61,7 @@ function row(over: Partial<ExtAgentRow> = {}): ExtAgentRow {
     last_test_at_ms: null,
     last_test_detail: '',
     upgrade_to: null,
-    ...over,
+    ...over
   }
 }
 
@@ -75,7 +84,7 @@ function mrow(over: Partial<MachineRow> = {}): MachineRow {
     paths: [],
     problems: [],
     agents_here: [],
-    ...over,
+    ...over
   }
 }
 
@@ -83,7 +92,11 @@ type MachinesOver = Partial<MachinesSource>
 
 function install(
   rows: ExtAgentRow[],
-  over: Partial<ExtAgentsSource> & { refuse?: (op: string) => string | null; machines?: MachineRow[]; machinesOver?: MachinesOver } = {},
+  over: Partial<ExtAgentsSource> & {
+    refuse?: (op: string) => string | null
+    machines?: MachineRow[]
+    machinesOver?: MachinesOver
+  } = {}
 ) {
   const acts: Array<[string, string, ExtAgentActArgs]> = []
   const loads: boolean[] = []
@@ -95,9 +108,9 @@ function install(
   const machinesSource: MachinesSource = {
     list: async (refresh, id) => {
       mcalls.push(['list', [!!refresh, id]])
-      return machineRows.map((r) => ({ ...r }))
+      return machineRows.map(r => ({ ...r }))
     },
-    add: async (form) => {
+    add: async form => {
       mcalls.push(['add', [form]])
       return { ok: true, detail: 'reached', reason: '' }
     },
@@ -109,7 +122,7 @@ function install(
       mcalls.push(['doctor', []])
       return []
     },
-    remove: async (id) => {
+    remove: async id => {
       mcalls.push(['remove', [id]])
       return { removed: true, detail: 'removed', agents: [] }
     },
@@ -117,7 +130,7 @@ function install(
       mcalls.push(['localKeys', []])
       return []
     },
-    ...machinesOver,
+    ...machinesOver
   }
   const source: ExtAgentsSource = {
     load: async (probe, rescan) => {
@@ -146,7 +159,7 @@ function install(
       const why = refuse ? refuse('connect_on_machine') : null
       return why ? { refused: why } : { name }
     },
-    ...rest,
+    ...rest
   }
   const toasts: string[] = []
   toastWriter.items = toasts
@@ -175,11 +188,11 @@ async function mount() {
 
 const rowsOf = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('.extAgents-card')]
 const rowNamed = (name: string): HTMLElement =>
-  rowsOf().find((r) => r.querySelector('.extAgents-t')!.textContent === name)!
+  rowsOf().find(r => r.querySelector('.extAgents-t')!.textContent === name)!
 const tabs = (): HTMLButtonElement[] => [...document.querySelectorAll<HTMLButtonElement>('.extAgents-tab')]
 const tabLabel = (tab: HTMLElement): string => tab.firstChild!.textContent!
 const tabLabels = (): string[] => tabs().map(tabLabel)
-const tabNamed = (label: string): HTMLButtonElement => tabs().find((b) => tabLabel(b) === label)!
+const tabNamed = (label: string): HTMLButtonElement => tabs().find(b => tabLabel(b) === label)!
 /* The card's corner control, by what it says: an icon button says it in its
    label, a tag in its text. */
 const controlOf = (name: string): string | null => {
@@ -195,15 +208,16 @@ const footOf = (name: string): { k: string | null; r: string | null } | null => 
   if (!f) return null
   return {
     k: f.querySelector('.extAgents-foot-k')?.textContent ?? null,
-    r: f.querySelector('.extAgents-foot-r')?.textContent ?? null,
+    r: f.querySelector('.extAgents-foot-r')?.textContent ?? null
   }
 }
-const ledOf = (name: string): string | null => rowNamed(name).querySelector('.extAgents-nm .extAgents-led')?.className ?? null
+const ledOf = (name: string): string | null =>
+  rowNamed(name).querySelector('.extAgents-nm .extAgents-led')?.className ?? null
 /* Which tab lists a card, read by pressing each one in turn -- the filter under
    test -- and coming back to All, where every other helper looks. */
 const namesIn = async (label: string): Promise<string[]> => {
   await click(tabNamed(label))
-  const names = rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent!)
+  const names = rowsOf().map(r => r.querySelector('.extAgents-t')!.textContent!)
   await click(tabNamed('gui.filter.all'))
   return names
 }
@@ -217,7 +231,8 @@ const sectionOf = async (name: string): Promise<string | undefined> => {
 const sheet = (): HTMLElement | null => document.querySelector('#dBody .extAgents-sheet')
 const sheetName = (): string | null => sheet()?.querySelector('h3')?.textContent ?? null
 const sheetStatus = (): string | null => sheet()?.querySelector('.extAgents-by')?.textContent ?? null
-const sheetActs = (): Array<string | null> => [...(sheet()?.querySelectorAll('.extAgents-act button') ?? [])].map((b) => b.textContent)
+const sheetActs = (): Array<string | null> =>
+  [...(sheet()?.querySelectorAll('.extAgents-act button') ?? [])].map(b => b.textContent)
 const sheetTextarea = (): HTMLTextAreaElement | null => sheet()?.querySelector('textarea') ?? null
 
 async function openSheet(name: string): Promise<void> {
@@ -286,14 +301,35 @@ afterEach(() => {
 describe('the tabs', () => {
   it('files every card under connected, available or not installed, and All lists them in that order', async () => {
     install([
-      row({ name: 'Raven', preset: undefined, kind: 'builtin', builtin: true, configured: false, probe_status: 'unknown' }),
+      row({
+        name: 'Raven',
+        preset: undefined,
+        kind: 'builtin',
+        builtin: true,
+        configured: false,
+        probe_status: 'unknown'
+      }),
       row({ name: 'Raven-Code', preset: undefined, vendored: true, configured: false, enabled: true }),
       row({ name: 'on_one' }),
       row({ name: 'off_one', enabled: false }),
       row({ name: 'hermes', preset: 'hermes', configured: false, enabled: false, probe_status: 'attention' }),
       row({ name: 'codex', preset: 'codex', configured: false, enabled: false, probe_status: 'missing' }),
-      row({ name: 'mirothinker', preset: 'mirothinker', kind: 'openai', configured: false, enabled: false, probe_status: 'missing' }),
-      row({ name: 'Raven-PPT', preset: undefined, vendored: true, configured: false, enabled: false, probe_status: 'attention' }),
+      row({
+        name: 'mirothinker',
+        preset: 'mirothinker',
+        kind: 'openai',
+        configured: false,
+        enabled: false,
+        probe_status: 'missing'
+      }),
+      row({
+        name: 'Raven-PPT',
+        preset: undefined,
+        vendored: true,
+        configured: false,
+        enabled: false,
+        probe_status: 'attention'
+      })
     ])
     await mount()
     expect(tabLabels()).toEqual(['gui.filter.all', 'gui.agent.g_on', 'gui.agent.g_avail', 'gui.agent.g_missing'])
@@ -303,10 +339,17 @@ describe('the tabs', () => {
        absent, only unready, and both stay connectable. */
     expect(await namesIn('gui.agent.g_avail')).toEqual(['Raven-PPT', 'off_one', 'hermes', 'mirothinker'])
     expect(await namesIn('gui.agent.g_missing')).toEqual(['codex'])
-    expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).toEqual([
-      'Raven', 'Raven-Code', 'on_one', 'Raven-PPT', 'off_one', 'hermes', 'mirothinker', 'codex',
+    expect(rowsOf().map(r => r.querySelector('.extAgents-t')!.textContent)).toEqual([
+      'Raven',
+      'Raven-Code',
+      'on_one',
+      'Raven-PPT',
+      'off_one',
+      'hermes',
+      'mirothinker',
+      'codex'
     ])
-    expect(tabs().map((b) => b.querySelector('.extAgents-tn')!.textContent)).toEqual(['8', '3', '4', '1'])
+    expect(tabs().map(b => b.querySelector('.extAgents-tn')!.textContent)).toEqual(['8', '3', '4', '1'])
   })
 
   it('always offers All and Connected, and the other two only with cards in them', async () => {
@@ -342,22 +385,24 @@ describe('the tabs', () => {
 })
 
 describe('the Mirasim family card', () => {
-  const family = (): HTMLElement | undefined => rowsOf().find((r) => r.querySelector('.extAgents-t')!.textContent === 'gui.agent.fam_mirasim')
+  const family = (): HTMLElement | undefined =>
+    rowsOf().find(r => r.querySelector('.extAgents-t')!.textContent === 'gui.agent.fam_mirasim')
   const picks = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('.extAgents-pickrow')]
-  const pickNamed = (name: string): HTMLElement => picks().find((p) => p.querySelector('.extAgents-picknm')!.textContent === name)!
+  const pickNamed = (name: string): HTMLElement =>
+    picks().find(p => p.querySelector('.extAgents-picknm')!.textContent === name)!
 
   /* The preset names the server ships, in the order `presets.py` declares. */
   const members = (): ExtAgentRow[] =>
-    ['claude', 'codex', 'kimi', 'antigravity', 'qwen', 'grok', 'dsh', 'pi', 'zcode'].map((id) =>
-      row({ name: `${id}-Mirasim`, preset: `mirasim_${id}`, configured: false, enabled: false, probe_status: 'ready' }),
+    ['claude', 'codex', 'kimi', 'antigravity', 'qwen', 'grok', 'dsh', 'pi', 'zcode'].map(id =>
+      row({ name: `${id}-Mirasim`, preset: `mirasim_${id}`, configured: false, enabled: false, probe_status: 'ready' })
     )
 
   /* A member whose handshake offered these choices; every other member as is. */
   const withChoices = (rows: ExtAgentRow[], name: string, choices: ExtAgentModelChoice[]): ExtAgentRow[] =>
-    rows.map((m) => (m.name === name ? { ...m, model_source: 'agent' as const, model_choices: choices } : m))
+    rows.map(m => (m.name === name ? { ...m, model_source: 'agent' as const, model_choices: choices } : m))
   const CODEX_CHOICES: ExtAgentModelChoice[] = [
     { value: 'gpt-5.5', name: 'GPT-5.5', group: 'OpenAI' },
-    { value: 'gpt-6', name: 'GPT-6', group: 'OpenAI' },
+    { value: 'gpt-6', name: 'GPT-6', group: 'OpenAI' }
   ]
 
   it('draws one card for nine presets, and says how many it stands for', async () => {
@@ -381,16 +426,16 @@ describe('the Mirasim family card', () => {
        by the probe (the agent is not installed), `avail` by everything else,
        and both hold unconfigured presets. */
     const gone = new Set(['codex-Mirasim', 'kimi-Mirasim'])
-    const all = members().map((member) =>
-      gone.has(member.name) ? { ...member, probe_status: 'missing', probe_missing: 'mirasim' } : member,
+    const all = members().map(member =>
+      gone.has(member.name) ? { ...member, probe_status: 'missing', probe_missing: 'mirasim' } : member
     )
     install(all)
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
       await mount()
-      const cards = rowsOf().filter((c) => c.querySelector('.extAgents-t')!.textContent === 'gui.agent.fam_mirasim')
+      const cards = rowsOf().filter(c => c.querySelector('.extAgents-t')!.textContent === 'gui.agent.fam_mirasim')
       expect(cards.length).toBe(2)
-      const complaint = errors.mock.calls.map((call) => String(call[0])).find((text) => text.includes('same key'))
+      const complaint = errors.mock.calls.map(call => String(call[0])).find(text => text.includes('same key'))
       expect(complaint, complaint ?? 'React reported no duplicate key').toBeUndefined()
     } finally {
       errors.mockRestore()
@@ -403,9 +448,7 @@ describe('the Mirasim family card', () => {
        signing in -- is outside this page, so a press here would spend a launch
        to arrive at the sentence the row already says. A `toggle` from here is
        answered with "no configured sub-agent named ...". */
-    const all = members().map((member) =>
-      member.name === 'codex-Mirasim' ? { ...member, needs_auth: true } : member,
-    )
+    const all = members().map(member => (member.name === 'codex-Mirasim' ? { ...member, needs_auth: true } : member))
     const { acts } = install(all)
     await mount()
     await click(family())
@@ -422,7 +465,7 @@ describe('the Mirasim family card', () => {
   })
 
   it('opens installation and recheck for a missing family member', async () => {
-    const all = members().map((member) => ({ ...member, probe_status: 'missing', probe_missing: 'mirasim' }))
+    const all = members().map(member => ({ ...member, probe_status: 'missing', probe_missing: 'mirasim' }))
     const { acts, rescans } = install(all)
     await mount()
     await click(family())
@@ -434,7 +477,9 @@ describe('the Mirasim family card', () => {
     expect(document.querySelector('.extAgents-inst a')!.getAttribute('href')).toBe('https://mirasim.ai/download')
     const recheck = document.querySelector<HTMLButtonElement>('.extAgents-act button')!
     expect(recheck.textContent).toBe('gui.agent.recheck')
-    all.forEach((entry) => { entry.probe_status = 'ready' })
+    all.forEach(entry => {
+      entry.probe_status = 'ready'
+    })
     await click(recheck)
     expect(rescans.at(-1)).toBe(true)
     expect(document.querySelector('.extAgents-inst')).toBe(null)
@@ -445,7 +490,7 @@ describe('the Mirasim family card', () => {
     const { acts } = install(members())
     await mount()
     await click(family())
-    expect(picks().map((p) => p.querySelector('.extAgents-picknm')!.textContent)).toEqual([
+    expect(picks().map(p => p.querySelector('.extAgents-picknm')!.textContent)).toEqual([
       'claude-Mirasim',
       'codex-Mirasim',
       'kimi-Mirasim',
@@ -454,15 +499,15 @@ describe('the Mirasim family card', () => {
       'grok-Mirasim',
       'dsh-Mirasim',
       'pi-Mirasim',
-      'zcode-Mirasim',
+      'zcode-Mirasim'
     ])
     /* Opening the drawer changes nothing on the grid: the card is the only one. */
-    expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).not.toContain('codex-Mirasim')
+    expect(rowsOf().map(r => r.querySelector('.extAgents-t')!.textContent)).not.toContain('codex-Mirasim')
     await click(pickNamed('codex-Mirasim').querySelector<HTMLElement>('.extAgents-pickgo')!)
     expect(acts).toEqual([['connect', 'codex-Mirasim', {}]])
     /* The card appears because the add wrote the row, beside the group card the
        other eight still sit behind -- and it is already a connected one. */
-    expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).toContain('codex-Mirasim')
+    expect(rowsOf().map(r => r.querySelector('.extAgents-t')!.textContent)).toContain('codex-Mirasim')
     expect(family()).toBeTruthy()
     expect(rowNamed('codex-Mirasim').querySelector('.extAgents-ctl button')).toBe(null)
     /* Done, so the drawer gets out of the way of the card it made. */
@@ -475,7 +520,7 @@ describe('the Mirasim family card', () => {
   it('keeps the drawer up while the connect runs, and the row says it is running', async () => {
     const all = members()
     let land!: () => void
-    const held = new Promise<void>((done) => {
+    const held = new Promise<void>(done => {
       land = done
     })
     install(all, {
@@ -486,7 +531,7 @@ describe('the Mirasim family card', () => {
           r.enabled = true
         }
         return all
-      },
+      }
     })
     await mount()
     await click(family())
@@ -514,7 +559,7 @@ describe('the Mirasim family card', () => {
           throw { data: { detail: 'model not served', remedy: { kind: 'model', command: '' } } }
         }
         return all
-      },
+      }
     })
     await mount()
     await click(family())
@@ -525,7 +570,7 @@ describe('the Mirasim family card', () => {
     expect(line.textContent).toBe('gui.agent.st_connect_bad · gui.agent.why_model')
     expect(line.title).toBe('model not served')
     /* Still a member of the card: nothing was written. */
-    expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).not.toContain('codex-Mirasim')
+    expect(rowsOf().map(r => r.querySelector('.extAgents-t')!.textContent)).not.toContain('codex-Mirasim')
     expect(pickNamed('codex-Mirasim').querySelector<HTMLButtonElement>('.extAgents-pickgo')!.disabled).toBe(false)
   })
 
@@ -544,14 +589,16 @@ describe('the Mirasim family card', () => {
           r.enabled = true
         }
         return all
-      },
+      }
     })
     await mount()
     await click(family())
     await click(pickNamed('codex-Mirasim').querySelector<HTMLElement>('.extAgents-pm')!)
-    await click([...document.querySelectorAll<HTMLElement>('.model-picker-model')].find((o) => o.textContent === 'GPT-6'))
+    await click([...document.querySelectorAll<HTMLElement>('.model-picker-model')].find(o => o.textContent === 'GPT-6'))
     await click(pickNamed('kimi-Mirasim').querySelector<HTMLElement>('.extAgents-pickgo')!)
-    expect(pickNamed('kimi-Mirasim').querySelector('.extAgents-pickone')!.classList.contains('extAgents-pickone-bad')).toBe(true)
+    expect(
+      pickNamed('kimi-Mirasim').querySelector('.extAgents-pickone')!.classList.contains('extAgents-pickone-bad')
+    ).toBe(true)
     expect(pickNamed('codex-Mirasim').querySelector('.extAgents-mid')!.textContent).toBe('GPT-6')
     await click(pickNamed('codex-Mirasim').querySelector<HTMLElement>('.extAgents-pickgo')!)
     expect(sent.at(-1)).toEqual(['connect', 'codex-Mirasim', { model: 'gpt-6' }])
@@ -581,7 +628,17 @@ describe('the Mirasim family card', () => {
     await mount()
     await click(family())
     const rect = (left: number, right: number, top: number, bottom: number) => (): DOMRect =>
-      ({ left, right, top, bottom, width: right - left, height: bottom - top, x: left, y: top, toJSON: () => ({}) }) as DOMRect
+      ({
+        left,
+        right,
+        top,
+        bottom,
+        width: right - left,
+        height: bottom - top,
+        x: left,
+        y: top,
+        toJSON: () => ({})
+      }) as DOMRect
     const drawer = document.getElementById('detail')!
     drawer.classList.add('dpanel')
     drawer.getBoundingClientRect = rect(0, 540, 0, 900)
@@ -632,8 +689,8 @@ describe('the Mirasim family card', () => {
     const { acts } = install(
       withChoices(members(), 'codex-Mirasim', [
         { value: 'gpt-5.5', name: 'GPT-5.5', group: 'OpenAI' },
-        { value: 'glm-5.3-flash', name: 'GLM 5.3 Flash', group: 'Platform' },
-      ]),
+        { value: 'glm-5.3-flash', name: 'GLM 5.3 Flash', group: 'Platform' }
+      ])
     )
     await mount()
     await click(family())
@@ -641,13 +698,13 @@ describe('the Mirasim family card', () => {
     await click(codex.querySelector<HTMLElement>('.extAgents-pm')!)
     /* The agent's own groups, as the left column: its choices, not Raven's providers. */
     /* By the name span: the button also carries the provider's icon letter. */
-    const prov = [...document.querySelectorAll<HTMLElement>('.model-picker-prov')].find((p) =>
-      [...p.querySelectorAll('span')].some((x) => x.textContent === 'Platform'),
+    const prov = [...document.querySelectorAll<HTMLElement>('.model-picker-prov')].find(p =>
+      [...p.querySelectorAll('span')].some(x => x.textContent === 'Platform')
     )
     expect(prov, 'the picker lists the agent s own groups').toBeTruthy()
     await click(prov!)
-    const opt = [...document.querySelectorAll<HTMLElement>('.model-picker-model')].find((o) =>
-      (o.textContent || '').includes('GLM 5.3 Flash'),
+    const opt = [...document.querySelectorAll<HTMLElement>('.model-picker-model')].find(o =>
+      (o.textContent || '').includes('GLM 5.3 Flash')
     )
     expect(opt, 'the picker lists the agent s own choices').toBeTruthy()
     await click(opt!)
@@ -656,7 +713,7 @@ describe('the Mirasim family card', () => {
        which here differs from the name the pill shows for it. */
     await click(codex.querySelector<HTMLElement>('.extAgents-pm')!)
     const ticked = [...document.querySelectorAll<HTMLElement>('.model-picker-model[aria-pressed="true"]')]
-    expect(ticked.map((o) => o.textContent)).toEqual(['GLM 5.3 Flash✓'])
+    expect(ticked.map(o => o.textContent)).toEqual(['GLM 5.3 Flash✓'])
     await click(ticked[0]!)
     await click(codex.querySelector<HTMLElement>('.extAgents-pickgo')!)
     expect(acts).toEqual([['connect', 'codex-Mirasim', { model: 'glm-5.3-flash' }]])
@@ -677,7 +734,7 @@ describe('the Mirasim family card', () => {
      over it -- on its card, not in the picker, where the drawer is already
      Mirasim's and the agent is what is being chosen. */
   it('draws a connected member s mark as the route with the agent over it', async () => {
-    install(members().map((m) => (m.name === 'codex-Mirasim' ? { ...m, configured: true, enabled: true } : m)))
+    install(members().map(m => (m.name === 'codex-Mirasim' ? { ...m, configured: true, enabled: true } : m)))
     await mount()
     const mark = rowNamed('codex-Mirasim').querySelector('.agent-mark')!
     expect(mark.querySelector(':scope > img')!.getAttribute('src')).toBe('assets/agents/mirasim.svg')
@@ -689,14 +746,12 @@ describe('the Mirasim family card', () => {
   })
 
   it('never folds a member that is already on the roster', async () => {
-    const all = members().map((m) =>
-      m.name === 'codex-Mirasim' ? { ...m, configured: true, enabled: true } : m,
-    )
+    const all = members().map(m => (m.name === 'codex-Mirasim' ? { ...m, configured: true, enabled: true } : m))
     install(all)
     await mount()
     expect(rowNamed('codex-Mirasim')).toBeTruthy()
     await click(family())
-    expect(picks().map((p) => p.querySelector('.extAgents-picknm')!.textContent)).not.toContain('codex-Mirasim')
+    expect(picks().map(p => p.querySelector('.extAgents-picknm')!.textContent)).not.toContain('codex-Mirasim')
     expect(picks().length).toBe(8)
   })
 
@@ -720,9 +775,16 @@ describe('a card', () => {
     install([
       row({ name: 'claude_code' }),
       row({ name: 'Raven-Code', preset: undefined, vendored: true, configured: false }),
-      row({ name: 'homemade', preset: undefined, configured: true, enabled: false, probe_status: 'attention', probe_detail: 'found, untested' }),
+      row({
+        name: 'homemade',
+        preset: undefined,
+        configured: true,
+        enabled: false,
+        probe_status: 'attention',
+        probe_detail: 'found, untested'
+      }),
       row({ name: 'plain', preset: undefined, configured: true, enabled: true }),
-      row({ name: 'moved', preset: undefined, configured: true, enabled: false, upgrade_to: 'acp' }),
+      row({ name: 'moved', preset: undefined, configured: true, enabled: false, upgrade_to: 'acp' })
     ])
     await mount()
     expect(lineOf('claude_code')).toBe('gui.agent.short_claude_code')
@@ -747,17 +809,26 @@ describe('a card', () => {
 
   it('carries a corner control only for connect and install, none once connected', async () => {
     install([
-      row({ name: 'Raven', preset: undefined, kind: 'builtin', builtin: true, configured: false, probe_status: 'unknown' }),
+      row({
+        name: 'Raven',
+        preset: undefined,
+        kind: 'builtin',
+        builtin: true,
+        configured: false,
+        probe_status: 'unknown'
+      }),
       row({ name: 'on_one' }),
       row({ name: 'off_one', enabled: false }),
-      row({ name: 'codex', preset: 'codex', configured: false, enabled: false, probe_status: 'missing' }),
+      row({ name: 'codex', preset: 'codex', configured: false, enabled: false, probe_status: 'missing' })
     ])
     await mount()
     expect(controlOf('Raven')).toBe('')
     expect(controlOf('on_one')).toBe('')
     expect(controlOf('off_one')).toBe('gui.agent.connect')
     expect(controlOf('codex')).toBe('gui.agent.go_install')
-    const labels = new Set(rowsOf().flatMap((r) => [...r.querySelectorAll('button')].map((b) => b.getAttribute('aria-label'))))
+    const labels = new Set(
+      rowsOf().flatMap(r => [...r.querySelectorAll('button')].map(b => b.getAttribute('aria-label')))
+    )
     expect(labels).toEqual(new Set(['gui.agent.connect', 'gui.agent.go_install']))
   })
 
@@ -766,7 +837,7 @@ describe('a card', () => {
       row({ name: 'on_one' }),
       row({ name: 'on_warn', probe_status: 'attention' }),
       row({ name: 'off_one', enabled: false }),
-      row({ name: 'codex', preset: 'codex', configured: false, enabled: false, probe_status: 'missing' }),
+      row({ name: 'codex', preset: 'codex', configured: false, enabled: false, probe_status: 'missing' })
     ])
     await mount()
     expect(ledOf('on_one')).toBe('extAgents-led')
@@ -794,7 +865,7 @@ describe('connecting', () => {
     const { acts, confirms } = install([
       row({ name: 'hermes', preset: 'hermes', configured: false, enabled: false, probe_status: 'attention' }),
       row({ name: 'off_one', enabled: false }),
-      row({ name: 'moved', configured: true, enabled: false, upgrade_to: 'acp' }),
+      row({ name: 'moved', configured: true, enabled: false, upgrade_to: 'acp' })
     ])
     await mount()
     await click(buttonOf('hermes'))
@@ -803,13 +874,15 @@ describe('connecting', () => {
     expect(acts).toEqual([
       ['connect', 'hermes', {}],
       ['toggle', 'off_one', { enabled: true }],
-      ['migrate', 'moved', {}],
+      ['migrate', 'moved', {}]
     ])
     expect(confirms).toEqual(['gui.agent.migrate_do'])
   })
 
   it('sends a key-less endpoint to the sheet instead of writing', async () => {
-    const { acts } = install([row({ name: 'mirothinker', preset: 'mirothinker', kind: 'openai', configured: false, enabled: false })])
+    const { acts } = install([
+      row({ name: 'mirothinker', preset: 'mirothinker', kind: 'openai', configured: false, enabled: false })
+    ])
     await mount()
     await click(buttonOf('mirothinker'))
     expect(acts).toEqual([])
@@ -818,7 +891,7 @@ describe('connecting', () => {
 
   it('shows the card testing for the length of a switch-on, with nothing else to press', async () => {
     let release: () => void = () => {}
-    const gate = new Promise<void>((resolve) => {
+    const gate = new Promise<void>(resolve => {
       release = resolve
     })
     const rows = [row({ name: 'off_one', enabled: false })]
@@ -827,7 +900,7 @@ describe('connecting', () => {
         await gate
         if (op === 'toggle') r.enabled = !!(args as { enabled?: boolean } | undefined)?.enabled
         return rows
-      },
+      }
     })
     await mount()
     await click(buttonOf('off_one'))
@@ -845,7 +918,7 @@ describe('connecting', () => {
 
   it('says testing on the sheet button too, since that is what the wait is', async () => {
     let release: () => void = () => {}
-    const gate = new Promise<void>((resolve) => {
+    const gate = new Promise<void>(resolve => {
       release = resolve
     })
     const rows = [row({ name: 'off_one', enabled: false })]
@@ -854,7 +927,7 @@ describe('connecting', () => {
         await gate
         if (op === 'toggle') r.enabled = !!(args as { enabled?: boolean } | undefined)?.enabled
         return rows
-      },
+      }
     })
     await mount()
     await openSheet('off_one')
@@ -872,7 +945,7 @@ describe('connecting', () => {
      connecting to it. */
   it('says disconnecting while a disconnect is in flight', async () => {
     let release: () => void = () => {}
-    const gate = new Promise<void>((resolve) => {
+    const gate = new Promise<void>(resolve => {
       release = resolve
     })
     const rows = [row({ name: 'on_one', configured: true, enabled: true })]
@@ -881,7 +954,7 @@ describe('connecting', () => {
         await gate
         if (op === 'toggle') r.enabled = !!(args as { enabled?: boolean } | undefined)?.enabled
         return rows
-      },
+      }
     })
     await mount()
     await openSheet('on_one')
@@ -899,7 +972,7 @@ describe('connecting', () => {
      before the first answer: a reload keeps the rows it has. */
   it('draws one placeholder card per catalogue entry until the roster arrives', async () => {
     let release: () => void = () => {}
-    const gate = new Promise<void>((resolve) => {
+    const gate = new Promise<void>(resolve => {
       release = resolve
     })
     const rows = [row({ name: 'claude_code' }), row({ name: 'off_one', enabled: false })]
@@ -907,7 +980,7 @@ describe('connecting', () => {
       load: async () => {
         await gate
         return rows
-      },
+      }
     })
     await mount()
     /* Nineteen and not the agent catalogue's twenty-seven: the nine Mirasim presets
@@ -940,10 +1013,16 @@ describe('connecting', () => {
      vendor: the mark beside the name already says that. */
   it('says how a card is doing under the line about it, when nothing is wrong', async () => {
     install([
-      row({ name: 'tested', configured: true, enabled: true, last_test_ok: true, last_test_at_ms: Date.now() - 3 * 86400_000 }),
+      row({
+        name: 'tested',
+        configured: true,
+        enabled: true,
+        last_test_ok: true,
+        last_test_at_ms: Date.now() - 3 * 86400_000
+      }),
       row({ name: 'on_one', configured: true, enabled: true }),
       row({ name: 'off_one', enabled: false }),
-      row({ name: 'gone', preset: 'codex', configured: false, enabled: false, probe_status: 'missing' }),
+      row({ name: 'gone', preset: 'codex', configured: false, enabled: false, probe_status: 'missing' })
     ])
     await mount()
     expect(footOf('tested')!.k).toContain('gui.agent.hd_on_tested')
@@ -951,14 +1030,15 @@ describe('connecting', () => {
     expect(footOf('on_one')!.k).toBe('gui.agent.g_on')
     expect(footOf('off_one')!.k).toBe('gui.agent.g_avail')
     expect(footOf('gone')!.k).toBe('gui.agent.g_missing')
-    for (const name of ['tested', 'on_one', 'off_one']) expect(rowNamed(name).querySelector('.extAgents-foot-quiet')).not.toBeNull()
+    for (const name of ['tested', 'on_one', 'off_one'])
+      expect(rowNamed(name).querySelector('.extAgents-foot-quiet')).not.toBeNull()
     expect(buttonOf('tested')).toBeNull()
   })
 
   it('keeps a refusal on the card in red with a retry, and does not toast it', async () => {
     let refusals = 1
     const { acts, toasts } = install([row({ name: 'off_one', enabled: false })], {
-      refuse: () => (refusals-- > 0 ? 'it did not answer a test message' : null),
+      refuse: () => (refusals-- > 0 ? 'it did not answer a test message' : null)
     })
     await mount()
     await click(buttonOf('off_one'))
@@ -973,7 +1053,7 @@ describe('connecting', () => {
     await click(buttonOf('off_one'))
     expect(acts).toEqual([
       ['toggle', 'off_one', { enabled: true }],
-      ['toggle', 'off_one', { enabled: true }],
+      ['toggle', 'off_one', { enabled: true }]
     ])
     expect(await sectionOf('off_one')).toBe('gui.agent.g_on')
   })
@@ -982,7 +1062,7 @@ describe('connecting', () => {
     const { toasts } = install([], {
       load: async () => {
         throw { data: { detail: 'gateway away' } }
-      },
+      }
     })
     await mount()
     expect(toasts).toEqual(['gui.agent.failed {"detail":"gateway away"}'])
@@ -1012,7 +1092,16 @@ describe('the sheet', () => {
   })
 
   it('offers nothing to press on the built-in loop', async () => {
-    install([row({ name: 'Raven', preset: undefined, kind: 'builtin', builtin: true, configured: false, probe_status: 'unknown' })])
+    install([
+      row({
+        name: 'Raven',
+        preset: undefined,
+        kind: 'builtin',
+        builtin: true,
+        configured: false,
+        probe_status: 'unknown'
+      })
+    ])
     await mount()
     await openSheet('Raven')
     expect(sheetActs()).toEqual([])
@@ -1024,7 +1113,7 @@ describe('the sheet', () => {
   it('reads the last verdict into the status line', async () => {
     install([
       row({ name: 'passed', last_test_ok: true, last_test_at_ms: 1 }),
-      row({ name: 'failed', last_test_ok: false, last_test_at_ms: 1, last_test_detail: 'it returned nothing' }),
+      row({ name: 'failed', last_test_ok: false, last_test_at_ms: 1, last_test_detail: 'it returned nothing' })
     ])
     await mount()
     await openSheet('passed')
@@ -1042,7 +1131,7 @@ describe('the sheet', () => {
     expect(note.querySelector('.extAgents-note-t')!.firstChild!.textContent).toBe('gui.agent.st_test_bad')
     expect(note.querySelector('.extAgents-note-when')!.textContent).toContain('gui.time.ago_d')
     expect(note.querySelector('.extAgents-note-p')!.textContent).toBe(
-      `gui.agent.said_test ${JSON.stringify({ button: 'gui.agent.test_again' })}`,
+      `gui.agent.said_test ${JSON.stringify({ button: 'gui.agent.test_again' })}`
     )
     expect(note.querySelector('.extAgents-note-said')!.textContent).toBe('it returned nothing')
     expect(note.querySelector('details')).toBeNull()
@@ -1056,7 +1145,7 @@ describe('the sheet', () => {
 
   it('runs a test from its action bar, says so while it runs, and offers to stop it', async () => {
     let release: () => void = () => {}
-    const gate = new Promise<void>((resolve) => {
+    const gate = new Promise<void>(resolve => {
       release = resolve
     })
     const rows = [row({ name: 'claude_code' })]
@@ -1065,7 +1154,7 @@ describe('the sheet', () => {
         acts.push([op, r.name, {}])
         if (op === 'test') await gate
         return rows
-      },
+      }
     })
     await mount()
     await openSheet('claude_code')
@@ -1076,7 +1165,7 @@ describe('the sheet', () => {
     expect(sheetActs()).toEqual(['gui.agent.disconnect', 'gui.stop'])
     expect((sheet()!.querySelectorAll('.extAgents-act button')[1] as HTMLButtonElement).disabled).toBe(false)
     await click(sheet()!.querySelectorAll('.extAgents-act button')[1])
-    expect(acts.map((a) => a[0])).toEqual(['test', 'test_cancel'])
+    expect(acts.map(a => a[0])).toEqual(['test', 'test_cancel'])
     await act(async () => {
       release()
       await gate
@@ -1099,7 +1188,9 @@ describe('the sheet', () => {
   })
 
   it('holds a description typed for a preset until the connect that writes the row', async () => {
-    const { acts } = install([row({ name: 'hermes', preset: 'hermes', configured: false, enabled: false, probe_status: 'attention' })])
+    const { acts } = install([
+      row({ name: 'hermes', preset: 'hermes', configured: false, enabled: false, probe_status: 'attention' })
+    ])
     await mount()
     await openSheet('hermes')
     await typeInto(sheetTextarea(), 'Odd jobs')
@@ -1111,7 +1202,9 @@ describe('the sheet', () => {
   })
 
   it('takes a key for an endpoint and connects with it, once one is typed', async () => {
-    const { acts } = install([row({ name: 'mirothinker', preset: 'mirothinker', kind: 'openai', configured: false, enabled: false })])
+    const { acts } = install([
+      row({ name: 'mirothinker', preset: 'mirothinker', kind: 'openai', configured: false, enabled: false })
+    ])
     await mount()
     await openSheet('mirothinker')
     const go = sheet()!.querySelector('.extAgents-act button') as HTMLButtonElement
@@ -1129,7 +1222,14 @@ describe('the sheet', () => {
      and the sentence said to change a key there was no field for. */
   it('lets an endpoint whose key is already stored type another, and switches it on with it', async () => {
     const { acts } = install([
-      row({ name: 'mirothinker', preset: 'mirothinker', kind: 'openai', configured: true, enabled: false, has_api_key: true }),
+      row({
+        name: 'mirothinker',
+        preset: 'mirothinker',
+        kind: 'openai',
+        configured: true,
+        enabled: false,
+        has_api_key: true
+      })
     ])
     await mount()
     await openSheet('mirothinker')
@@ -1142,13 +1242,20 @@ describe('the sheet', () => {
     await click(sheet()!.querySelector('.extAgents-act button'))
     expect(acts).toEqual([
       ['update', 'mirothinker', { api_key: 'sk-2' }],
-      ['toggle', 'mirothinker', { enabled: true }],
+      ['toggle', 'mirothinker', { enabled: true }]
     ])
   })
 
   it('keeps a plain press on a keyed endpoint as the connect it was', async () => {
     const { acts } = install([
-      row({ name: 'mirothinker', preset: 'mirothinker', kind: 'openai', configured: true, enabled: false, has_api_key: true }),
+      row({
+        name: 'mirothinker',
+        preset: 'mirothinker',
+        kind: 'openai',
+        configured: true,
+        enabled: false,
+        has_api_key: true
+      })
     ])
     await mount()
     await openSheet('mirothinker')
@@ -1158,8 +1265,17 @@ describe('the sheet', () => {
 
   it('does not switch a row on behind a key edit the server refused', async () => {
     const { acts } = install(
-      [row({ name: 'mirothinker', preset: 'mirothinker', kind: 'openai', configured: true, enabled: false, has_api_key: true })],
-      { refuse: (op) => (op === 'update' ? 'no' : null) },
+      [
+        row({
+          name: 'mirothinker',
+          preset: 'mirothinker',
+          kind: 'openai',
+          configured: true,
+          enabled: false,
+          has_api_key: true
+        })
+      ],
+      { refuse: op => (op === 'update' ? 'no' : null) }
     )
     await mount()
     await openSheet('mirothinker')
@@ -1170,7 +1286,16 @@ describe('the sheet', () => {
   })
 
   it('draws no key field on an endpoint that is connected', async () => {
-    install([row({ name: 'mirothinker', preset: 'mirothinker', kind: 'openai', configured: true, enabled: true, has_api_key: true })])
+    install([
+      row({
+        name: 'mirothinker',
+        preset: 'mirothinker',
+        kind: 'openai',
+        configured: true,
+        enabled: true,
+        has_api_key: true
+      })
+    ])
     await mount()
     await openSheet('mirothinker')
     expect(sheet()!.querySelector('.extAgents-fld input')).toBeNull()
@@ -1181,8 +1306,17 @@ describe('the sheet', () => {
      a credential change nothing asked for. */
   it('keeps Retry for a connected endpoint whose description edit was refused, and draws no key field', async () => {
     const { acts } = install(
-      [row({ name: 'mirothinker', preset: 'mirothinker', kind: 'openai', configured: true, enabled: true, has_api_key: true })],
-      { refuse: (op) => (op === 'update' ? 'no' : null) },
+      [
+        row({
+          name: 'mirothinker',
+          preset: 'mirothinker',
+          kind: 'openai',
+          configured: true,
+          enabled: true,
+          has_api_key: true
+        })
+      ],
+      { refuse: op => (op === 'update' ? 'no' : null) }
     )
     await mount()
     await openSheet('mirothinker')
@@ -1193,21 +1327,28 @@ describe('the sheet', () => {
     await click(sheet()!.querySelector('.extAgents-act button'))
     expect(acts).toEqual([
       ['update', 'mirothinker', { description: 'Odd jobs' }],
-      ['update', 'mirothinker', { description: 'Odd jobs' }],
+      ['update', 'mirothinker', { description: 'Odd jobs' }]
     ])
   })
 
   it('ignores Enter while the key it took is still being written', async () => {
-    const r = row({ name: 'mirothinker', preset: 'mirothinker', kind: 'openai', configured: true, enabled: false, has_api_key: true })
+    const r = row({
+      name: 'mirothinker',
+      preset: 'mirothinker',
+      kind: 'openai',
+      configured: true,
+      enabled: false,
+      has_api_key: true
+    })
     const sent: string[] = []
     let land: (() => void) | null = null
     install([r], {
-      act: (op) => {
+      act: op => {
         sent.push(op)
-        return new Promise<ExtAgentRow[]>((resolve) => {
+        return new Promise<ExtAgentRow[]>(resolve => {
           land = () => resolve([r])
         })
-      },
+      }
     })
     await mount()
     await openSheet('mirothinker')
@@ -1222,21 +1363,39 @@ describe('the sheet', () => {
     await act(async () => land!())
   })
 
-  it.each([true, false])('draws no key field on an endpoint whose preset moved transport (key stored: %s), and connects it by migrating', async (has_api_key) => {
-    const { acts, confirms } = install([
-      row({ name: 'mirothinker', preset: 'mirothinker', kind: 'openai', configured: true, enabled: false, has_api_key, upgrade_to: 'acp' }),
-    ])
-    await mount()
-    await openSheet('mirothinker')
-    expect(sheet()!.querySelector('.extAgents-fld input')).toBeNull()
-    await click(sheet()!.querySelector('.extAgents-act button'))
-    expect(confirms).toEqual(['gui.agent.migrate_do'])
-    expect(acts).toEqual([['migrate', 'mirothinker', {}]])
-  })
+  it.each([true, false])(
+    'draws no key field on an endpoint whose preset moved transport (key stored: %s), and connects it by migrating',
+    async has_api_key => {
+      const { acts, confirms } = install([
+        row({
+          name: 'mirothinker',
+          preset: 'mirothinker',
+          kind: 'openai',
+          configured: true,
+          enabled: false,
+          has_api_key,
+          upgrade_to: 'acp'
+        })
+      ])
+      await mount()
+      await openSheet('mirothinker')
+      expect(sheet()!.querySelector('.extAgents-fld input')).toBeNull()
+      await click(sheet()!.querySelector('.extAgents-act button'))
+      expect(confirms).toEqual(['gui.agent.migrate_do'])
+      expect(acts).toEqual([['migrate', 'mirothinker', {}]])
+    }
+  )
 
   it('still takes a key for an endpoint that is on the roster without one', async () => {
     const { acts } = install([
-      row({ name: 'mirothinker', preset: 'mirothinker', kind: 'openai', configured: true, enabled: true, has_api_key: false }),
+      row({
+        name: 'mirothinker',
+        preset: 'mirothinker',
+        kind: 'openai',
+        configured: true,
+        enabled: true,
+        has_api_key: false
+      })
     ])
     await mount()
     await openSheet('mirothinker')
@@ -1247,14 +1406,21 @@ describe('the sheet', () => {
   })
 
   it('shows an absent agent how to get installed, and re-checks the machine on request', async () => {
-    const rows = [row({ name: 'qwen', preset: 'qwen_code', configured: false, enabled: false, probe_status: 'missing' })]
+    const rows = [
+      row({ name: 'qwen', preset: 'qwen_code', configured: false, enabled: false, probe_status: 'missing' })
+    ]
     const { loads, rescans } = install(rows)
-    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn().mockResolvedValue(undefined) } })
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: vi.fn().mockResolvedValue(undefined) }
+    })
     await mount()
     await openSheet('qwen')
     expect(sheetStatus()).toBe('gui.agent.hd_missing_by {"by":"gui.agent.by_qwen_code"}')
     expect(sheet()!.querySelector('.extAgents-cmd code')!.textContent).toBe('npm install -g @qwen-code/qwen-code')
-    expect(sheet()!.querySelector<HTMLAnchorElement>('.extAgents-site')!.href).toBe('https://github.com/QwenLM/qwen-code')
+    expect(sheet()!.querySelector<HTMLAnchorElement>('.extAgents-site')!.href).toBe(
+      'https://github.com/QwenLM/qwen-code'
+    )
     expect(sheetActs()).toEqual(['gui.agent.recheck'])
     await click(sheet()!.querySelector('.extAgents-cmd button'))
     expect(sheet()!.querySelector('.extAgents-cmd button')!.textContent).toBe('gui.agent.copied')
@@ -1274,7 +1440,14 @@ describe('the sheet', () => {
 
   it('names a refused agent on its card instead of offering to connect it', async () => {
     const { acts } = install([
-      row({ name: 'codex', preset: 'codex', configured: false, enabled: false, probe_status: 'attention', needs_auth: true }),
+      row({
+        name: 'codex',
+        preset: 'codex',
+        configured: false,
+        enabled: false,
+        probe_status: 'attention',
+        needs_auth: true
+      })
     ])
     await mount()
     expect(await sectionOf('codex')).toBe('gui.agent.g_avail')
@@ -1288,7 +1461,7 @@ describe('the sheet', () => {
     const [named, test] = [...sheet()!.querySelectorAll<HTMLButtonElement>('.extAgents-act button')]
     expect(named!.disabled).toBe(true)
     await click(test)
-    expect(acts.map((a) => a.slice(0, 2))).toEqual([['test', 'codex']])
+    expect(acts.map(a => a.slice(0, 2))).toEqual([['test', 'codex']])
   })
 
   /* One verdict for the card and the sheet, from `healthOf`: a failed test
@@ -1297,7 +1470,7 @@ describe('the sheet', () => {
   it('paints the card red for a connected row whose last test failed, and nothing for one that is off', async () => {
     install([
       row({ name: 'on_bad', last_test_ok: false, last_test_detail: 'no credential' }),
-      row({ name: 'off_bad', enabled: false, last_test_ok: false, last_test_detail: 'no credential' }),
+      row({ name: 'off_bad', enabled: false, last_test_ok: false, last_test_detail: 'no credential' })
     ])
     await mount()
     expect(ledOf('on_bad')).toBe('extAgents-led extAgents-led-bad')
@@ -1308,7 +1481,13 @@ describe('the sheet', () => {
      note at the top of the body, in the warning colour, its words folded. */
   const said = (key: string, vars: Record<string, string>): string => `${key} ${JSON.stringify(vars)}`
   it("says in the sheet what the card's gold dot means, in a note of its own", async () => {
-    install([row({ name: 'on_warn', probe_status: 'attention', probe_detail: 'launch config changed since the last test -- run a test' })])
+    install([
+      row({
+        name: 'on_warn',
+        probe_status: 'attention',
+        probe_detail: 'launch config changed since the last test -- run a test'
+      })
+    ])
     await mount()
     expect(ledOf('on_warn')).toBe('extAgents-led extAgents-led-warn')
     await openSheet('on_warn')
@@ -1318,9 +1497,11 @@ describe('the sheet', () => {
     expect(line.querySelector('details')).toBeNull()
     const note = sheet()!.querySelector('.extAgents-note')!
     expect(note.className).toBe('extAgents-note extAgents-note-warn')
-    expect(note.querySelector('.extAgents-note-t')!.textContent).toBe(said('gui.agent.warn_title', { agent: 'on_warn' }))
+    expect(note.querySelector('.extAgents-note-t')!.textContent).toBe(
+      said('gui.agent.warn_title', { agent: 'on_warn' })
+    )
     expect(note.querySelector('.extAgents-note-p')!.textContent).toBe(
-      said('gui.agent.warn_lead', { agent: 'on_warn', button: 'gui.agent.test_label' }),
+      said('gui.agent.warn_lead', { agent: 'on_warn', button: 'gui.agent.test_label' })
     )
     expect(note.querySelector('details summary')!.textContent).toBe('gui.agent.probe_raw')
     expect(note.querySelector('details')!.textContent).toContain('launch config changed since the last test')
@@ -1329,25 +1510,39 @@ describe('the sheet', () => {
     store.lendAskRaven((key, name, vars) => handed.push([key, name, vars]))
     await click(note.querySelector('.extAgents-note-ask'))
     store.lendAskRaven(null)
-    expect(handed).toEqual([['gui.agent.ask_check', 'on_warn', { reason: 'launch config changed since the last test -- run a test' }]])
+    expect(handed).toEqual([
+      ['gui.agent.ask_check', 'on_warn', { reason: 'launch config changed since the last test -- run a test' }]
+    ])
   })
 
   it('reads a check that found no credential as a sign-in', async () => {
-    install([row({ name: 'Pi', probe_status: 'attention', needs_auth: true, probe_detail: 'connected, but no session could be opened' })])
+    install([
+      row({
+        name: 'Pi',
+        probe_status: 'attention',
+        needs_auth: true,
+        probe_detail: 'connected, but no session could be opened'
+      })
+    ])
     await mount()
     await openSheet('Pi')
     const note = sheet()!.querySelector('.extAgents-note')!
     expect(note.querySelector('.extAgents-note-t')!.textContent).toBe(said('gui.agent.bad_sign_in', { agent: 'Pi' }))
     expect(note.querySelector('.extAgents-note-p')!.textContent).toBe(
-      said('gui.agent.fix_sign_in_bare', { agent: 'Pi', button: 'gui.agent.test_label' }),
+      said('gui.agent.fix_sign_in_bare', { agent: 'Pi', button: 'gui.agent.test_label' })
     )
     expect(sheetActs()).toContain('gui.agent.test_label')
   })
 
   it('names the dot for a reader who cannot see its colour', async () => {
-    install([row({ name: 'fine' }), row({ name: 'on_warn', probe_status: 'attention' }), row({ name: 'on_bad', last_test_ok: false })])
+    install([
+      row({ name: 'fine' }),
+      row({ name: 'on_warn', probe_status: 'attention' }),
+      row({ name: 'on_bad', last_test_ok: false })
+    ])
     await mount()
-    const nameOf = (name: string): string | null => rowNamed(name).querySelector('.extAgents-led')!.getAttribute('aria-label')
+    const nameOf = (name: string): string | null =>
+      rowNamed(name).querySelector('.extAgents-led')!.getAttribute('aria-label')
     expect(nameOf('fine')).toContain('gui.agent.hd_on_by')
     expect(nameOf('on_warn')).toBe('gui.agent.hd_on_attention')
     expect(nameOf('on_bad')).toBe('gui.agent.hd_on_test_bad')
@@ -1357,10 +1552,17 @@ describe('the sheet', () => {
 
   it('keeps its rendered shape, grid', async () => {
     install([
-      row({ name: 'Raven', preset: undefined, kind: 'builtin', builtin: true, configured: false, probe_status: 'unknown' }),
+      row({
+        name: 'Raven',
+        preset: undefined,
+        kind: 'builtin',
+        builtin: true,
+        configured: false,
+        probe_status: 'unknown'
+      }),
       row({ name: 'claude_code' }),
       row({ name: 'hermes', preset: 'hermes', configured: false, enabled: false, probe_status: 'attention' }),
-      row({ name: 'codex', preset: 'codex', configured: false, enabled: false, probe_status: 'missing' }),
+      row({ name: 'codex', preset: 'codex', configured: false, enabled: false, probe_status: 'missing' })
     ])
     await mount()
     expect(domSnapshot(document.getElementById('extAgentsBody')!)).toMatchSnapshot()
@@ -1382,7 +1584,7 @@ describe('the sheet', () => {
     const r = row({ name: 'ua', configured: false, enabled: false, needs_auth: true, probe_status: 'attention' })
     const rows = [r]
     install(rows, {
-      act: async (op) => {
+      act: async op => {
         if (op === 'test') {
           r.needs_auth = false
           r.probe_status = 'ready'
@@ -1390,11 +1592,13 @@ describe('the sheet', () => {
           r.last_test_detail = 'it connected and then answered nothing'
         }
         return rows
-      },
+      }
     })
     await mount()
     await openSheet('ua')
-    await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.test_label'))
+    await click(
+      [...sheet()!.querySelectorAll('.extAgents-act button')].find(b => b.textContent === 'gui.agent.test_label')
+    )
     /* Not connected, so the head names the maker rather than "connected". */
     expect(sheetStatus()).toBe('gui.agent.st_test_bad · Anthropic')
     const note = sheet()!.querySelector('.extAgents-note')!
@@ -1404,7 +1608,7 @@ describe('the sheet', () => {
        note names Connect rather than a Test the bar no longer offers. */
     expect(sheetActs()).toEqual(['gui.agent.connect'])
     expect(note.querySelector('.extAgents-note-p')!.textContent).toBe(
-      `gui.agent.said_test ${JSON.stringify({ button: 'gui.agent.connect' })}`,
+      `gui.agent.said_test ${JSON.stringify({ button: 'gui.agent.connect' })}`
     )
   })
 
@@ -1415,9 +1619,11 @@ describe('the sheet', () => {
     ['connected', { configured: true, enabled: true }],
     ['unauthorized', { configured: false, enabled: false, needs_auth: true, probe_status: 'attention' }],
     ['available', { configured: false, enabled: false }],
-    ['waiting on a key', { preset: 'mirothinker', kind: 'openai', configured: false, enabled: false }],
+    ['waiting on a key', { preset: 'mirothinker', kind: 'openai', configured: false, enabled: false }]
   ] as const)('names a press the bar offers, after a failed test on a %s row', async (_state, over) => {
-    install([row({ name: 'x', last_test_ok: false, last_test_at_ms: 1, last_test_detail: 'it answered nothing', ...over })])
+    install([
+      row({ name: 'x', last_test_ok: false, last_test_at_ms: 1, last_test_detail: 'it answered nothing', ...over })
+    ])
     await mount()
     await openSheet('x')
     const said = sheet()!.querySelector('.extAgents-note .extAgents-note-p')!.textContent!
@@ -1453,8 +1659,8 @@ describe('a refusal that names its fix', () => {
         last_test_ok: false,
         last_test_at_ms: 1,
         last_test_detail: hermesSaid,
-        last_test_remedy: { kind: 'setup', command: 'hermes model' },
-      }),
+        last_test_remedy: { kind: 'setup', command: 'hermes model' }
+      })
     ])
     await mount()
     await openSheet('Hermes Agent')
@@ -1472,16 +1678,19 @@ describe('a refusal that names its fix', () => {
     const r = row({ name: 'Codex', preset: 'codex', configured: false, enabled: false })
     const said = 'sub-agent Codex did not answer a test message: it is installed but has no usable credential'
     install([r], {
-      act: async (op) => {
-        if (op === 'connect') throw { data: { detail: said, remedy: { kind: 'sign_in', command: 'npx -y @openai/codex login' } } }
+      act: async op => {
+        if (op === 'connect')
+          throw { data: { detail: said, remedy: { kind: 'sign_in', command: 'npx -y @openai/codex login' } } }
         return [r]
-      },
+      }
     })
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
     await mount()
     await openSheet('Codex')
-    await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
+    await click(
+      [...sheet()!.querySelectorAll('.extAgents-act button')].find(b => b.textContent === 'gui.agent.connect')
+    )
     expect(sheetStatus()).toBe('gui.agent.st_connect_bad · OpenAI')
     expect(title()).toBe(say('gui.agent.bad_sign_in', { agent: 'Codex' }))
     expect(lead()).toBe(say('gui.agent.fix_sign_in', { agent: 'Codex', button: 'gui.retry' }))
@@ -1499,20 +1708,36 @@ describe('a refusal that names its fix', () => {
     const handed: Array<[string, string, Record<string, string>]> = []
     store.lendAskRaven((key, name, vars) => handed.push([key, name, vars]))
     const codex = row({ name: 'Codex', preset: 'codex', configured: false, enabled: false })
-    install([codex, row({ name: 'failed', last_test_ok: false, last_test_at_ms: 1, last_test_detail: 'it returned nothing\nstderr: -' })], {
-      act: async (op) => {
-        if (op === 'connect') throw { data: { detail: 'no usable credential', remedy: { kind: 'sign_in', command: 'codex login' } } }
-        return [codex]
-      },
-    })
+    install(
+      [
+        codex,
+        row({
+          name: 'failed',
+          last_test_ok: false,
+          last_test_at_ms: 1,
+          last_test_detail: 'it returned nothing\nstderr: -'
+        })
+      ],
+      {
+        act: async op => {
+          if (op === 'connect')
+            throw { data: { detail: 'no usable credential', remedy: { kind: 'sign_in', command: 'codex login' } } }
+          return [codex]
+        }
+      }
+    )
     await mount()
     await openSheet('Codex')
     expect(note()).toBeNull()
-    await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
+    await click(
+      [...sheet()!.querySelectorAll('.extAgents-act button')].find(b => b.textContent === 'gui.agent.connect')
+    )
     const ask = note()!.querySelector<HTMLButtonElement>('.extAgents-note-ask')!
     expect(ask.textContent).toBe('gui.agent.ask_raven')
     await click(ask)
-    expect(handed).toEqual([['gui.agent.ask_connect', 'Codex', { reason: say('gui.agent.bad_sign_in', { agent: 'Codex' }) }]])
+    expect(handed).toEqual([
+      ['gui.agent.ask_connect', 'Codex', { reason: say('gui.agent.bad_sign_in', { agent: 'Codex' }) }]
+    ])
 
     await act(async () => {
       detail.close()
@@ -1532,8 +1757,8 @@ describe('a refusal that names its fix', () => {
         last_test_ok: false,
         last_test_at_ms: 1,
         last_test_detail: 'it has no usable API key',
-        last_test_remedy: { kind: 'api_key', command: '' },
-      }),
+        last_test_remedy: { kind: 'api_key', command: '' }
+      })
     ])
     await mount()
     await openSheet('MiroThinker')
@@ -1546,26 +1771,37 @@ describe('a refusal that names its fix', () => {
   })
 
   it('offers the field again when the stored key is what the server refused', async () => {
-    const r = row({ name: 'MiroThinker', preset: 'mirothinker', kind: 'openai', configured: true, enabled: false, has_api_key: true })
+    const r = row({
+      name: 'MiroThinker',
+      preset: 'mirothinker',
+      kind: 'openai',
+      configured: true,
+      enabled: false,
+      has_api_key: true
+    })
     const sent: string[] = []
     install([r], {
-      act: async (op) => {
+      act: async op => {
         sent.push(op)
         if (op === 'toggle' && sent.length === 1) {
           throw { data: { detail: 'HTTP 401: invalid api key', remedy: { kind: 'api_key', command: '' } } }
         }
         if (op === 'toggle') r.enabled = true
         return [r]
-      },
+      }
     })
     await mount()
     await openSheet('MiroThinker')
     await click(sheet()!.querySelector('.extAgents-act button'))
-    expect(note()!.querySelector('.extAgents-note-p')!.textContent).toBe(say('gui.agent.fix_api_key', { agent: 'MiroThinker', button: 'gui.retry' }))
+    expect(note()!.querySelector('.extAgents-note-p')!.textContent).toBe(
+      say('gui.agent.fix_api_key', { agent: 'MiroThinker', button: 'gui.retry' })
+    )
     expect(sheetActs()).toEqual(['gui.retry'])
     await typeInto(sheet()!.querySelector('.extAgents-fld input'), 'sk-2')
     expect(sheetActs()).toEqual(['gui.agent.connect'])
-    expect(note()!.querySelector('.extAgents-note-p')!.textContent).toBe(say('gui.agent.fix_api_key', { agent: 'MiroThinker', button: 'gui.agent.connect' }))
+    expect(note()!.querySelector('.extAgents-note-p')!.textContent).toBe(
+      say('gui.agent.fix_api_key', { agent: 'MiroThinker', button: 'gui.agent.connect' })
+    )
     await click(sheet()!.querySelector('.extAgents-act button'))
     expect(sent).toEqual(['toggle', 'update', 'toggle'])
     expect(sheet()!.querySelector('.extAgents-fld input')).toBeNull()
@@ -1573,25 +1809,38 @@ describe('a refusal that names its fix', () => {
   })
 
   it('names Connect in a bare connect refusal too, once a key is typed', async () => {
-    const r = row({ name: 'MiroThinker', preset: 'mirothinker', kind: 'openai', configured: true, enabled: false, has_api_key: true })
+    const r = row({
+      name: 'MiroThinker',
+      preset: 'mirothinker',
+      kind: 'openai',
+      configured: true,
+      enabled: false,
+      has_api_key: true
+    })
     const sent: string[] = []
     install([r], {
-      act: async (op) => {
+      act: async op => {
         sent.push(op)
         if (op === 'toggle' && sent.length === 1) throw { data: { detail: 'HTTP 451: unavailable for legal reasons' } }
         if (op === 'toggle') r.enabled = true
         return [r]
-      },
+      }
     })
     await mount()
     await openSheet('MiroThinker')
     await click(sheet()!.querySelector('.extAgents-act button'))
-    expect(note()!.querySelector('.extAgents-note-t')!.textContent).toBe(say('gui.agent.bad_connect', { agent: 'MiroThinker' }))
-    expect(note()!.querySelector('.extAgents-note-p')!.textContent).toBe(say('gui.agent.said_connect', { button: 'gui.retry' }))
+    expect(note()!.querySelector('.extAgents-note-t')!.textContent).toBe(
+      say('gui.agent.bad_connect', { agent: 'MiroThinker' })
+    )
+    expect(note()!.querySelector('.extAgents-note-p')!.textContent).toBe(
+      say('gui.agent.said_connect', { button: 'gui.retry' })
+    )
     expect(note()!.querySelector('.extAgents-note-said')!.textContent).toBe('HTTP 451: unavailable for legal reasons')
     await typeInto(sheet()!.querySelector('.extAgents-fld input'), 'sk-2')
     expect(sheetActs()).toEqual(['gui.agent.connect'])
-    expect(note()!.querySelector('.extAgents-note-p')!.textContent).toBe(say('gui.agent.said_connect', { button: 'gui.agent.connect' }))
+    expect(note()!.querySelector('.extAgents-note-p')!.textContent).toBe(
+      say('gui.agent.said_connect', { button: 'gui.agent.connect' })
+    )
     await click(sheet()!.querySelector('.extAgents-act button'))
     expect(sent).toEqual(['toggle', 'update', 'toggle'])
   })
@@ -1601,7 +1850,14 @@ describe('a refusal that names its fix', () => {
      make, and the refusal, whose retry that press will never be, leaves the
      head and the note. */
   it('names Connect, not Retry, once a key is typed beside a refused description, and drops that refusal', async () => {
-    const r = row({ name: 'MiroThinker', preset: 'mirothinker', kind: 'openai', configured: true, enabled: false, has_api_key: true })
+    const r = row({
+      name: 'MiroThinker',
+      preset: 'mirothinker',
+      kind: 'openai',
+      configured: true,
+      enabled: false,
+      has_api_key: true
+    })
     const sent: string[] = []
     install([r], {
       act: async (op, _row, args) => {
@@ -1609,7 +1865,7 @@ describe('a refusal that names its fix', () => {
         if (op === 'update' && args?.description !== undefined) throw { data: { detail: 'disk full' } }
         if (op === 'toggle') r.enabled = true
         return [r]
-      },
+      }
     })
     await mount()
     await openSheet('MiroThinker')
@@ -1635,13 +1891,13 @@ describe('a refusal that names its fix', () => {
       has_api_key: true,
       last_test_ok: false,
       last_test_at_ms: 1,
-      last_test_detail: 'it returned nothing',
+      last_test_detail: 'it returned nothing'
     })
     install([r], {
       act: async (op, _row, args) => {
         if (op === 'update' && args?.description !== undefined) throw { data: { detail: 'disk full' } }
         return [r]
-      },
+      }
     })
     await mount()
     await openSheet('MiroThinker')
@@ -1650,7 +1906,9 @@ describe('a refusal that names its fix', () => {
     expect(note()!.querySelector('.extAgents-note-t')!.textContent).toBe('gui.agent.bad_save')
     await typeInto(sheet()!.querySelector('.extAgents-fld input'), 'sk-2')
     expect(note()!.querySelector('.extAgents-note-t')!.firstChild!.textContent).toBe('gui.agent.st_test_bad')
-    expect(note()!.querySelector('.extAgents-note-p')!.textContent).toBe(say('gui.agent.said_test', { button: 'gui.agent.connect' }))
+    expect(note()!.querySelector('.extAgents-note-p')!.textContent).toBe(
+      say('gui.agent.said_test', { button: 'gui.agent.connect' })
+    )
     expect(note()!.querySelector('.extAgents-note-said')!.textContent).toBe('it returned nothing')
   })
 
@@ -1662,8 +1920,8 @@ describe('a refusal that names its fix', () => {
         last_test_ok: false,
         last_test_at_ms: 1,
         last_test_detail: 'it is installed but has no usable credential',
-        last_test_remedy: { kind: 'sign_in', command: '' },
-      }),
+        last_test_remedy: { kind: 'sign_in', command: '' }
+      })
     ])
     await mount()
     await openSheet('opencode')
@@ -1676,14 +1934,16 @@ describe('a refusal that names its fix', () => {
     const command = 'npx -y @agentclientprotocol/claude-agent-acp@0.79.0'
     const said = 'npx could not download it (ECONNREFUSED); check the network, the npm registry or the proxy'
     install([r], {
-      act: async (op) => {
+      act: async op => {
         if (op === 'connect') throw { data: { detail: said, remedy: { kind: 'download', command } } }
         return [r]
-      },
+      }
     })
     await mount()
     await openSheet('Claude Code')
-    await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
+    await click(
+      [...sheet()!.querySelectorAll('.extAgents-act button')].find(b => b.textContent === 'gui.agent.connect')
+    )
     expect(title()).toBe(say('gui.agent.bad_download', { agent: 'Claude Code' }))
     expect(lead()).toBe(say('gui.agent.fix_download', { agent: 'Claude Code', button: 'gui.retry' }))
     expect(note()!.querySelector('.extAgents-cmd code')!.textContent).toBe(command)
@@ -1694,17 +1954,20 @@ describe('a refusal that names its fix', () => {
     expect(footOf('Claude Code')).toEqual({ k: 'gui.agent.st_connect_bad', r: 'gui.agent.why_download' })
   })
 
-  it('offers no command for a download when the row\'s command is its own, not the preset\'s', async () => {
+  it("offers no command for a download when the row's command is its own, not the preset's", async () => {
     const r = row({ name: 'my-agent', preset: undefined, configured: true, enabled: false })
     install([r], {
-      act: async (op) => {
-        if (op === 'toggle') throw { data: { detail: 'npx could not download it (ENOTFOUND)', remedy: { kind: 'download' } } }
+      act: async op => {
+        if (op === 'toggle')
+          throw { data: { detail: 'npx could not download it (ENOTFOUND)', remedy: { kind: 'download' } } }
         return [r]
-      },
+      }
     })
     await mount()
     await openSheet('my-agent')
-    await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
+    await click(
+      [...sheet()!.querySelectorAll('.extAgents-act button')].find(b => b.textContent === 'gui.agent.connect')
+    )
     expect(lead()).toBe(say('gui.agent.fix_download_bare', { agent: 'my-agent', button: 'gui.retry' }))
     expect(note()!.querySelector('.extAgents-cmd')).toBeNull()
   })
@@ -1723,14 +1986,14 @@ describe('a refusal that names its fix', () => {
     ['exited', 'gui.agent.why_exited'],
     /* Sent without its two versions, a runtime fix names no Node.js, and the
        card says what the sheet does: a launch that quit. */
-    ['runtime', 'gui.agent.why_exited'],
-  ])('puts a %s fix on the card as a line in the reader\'s words', async (kind, key) => {
+    ['runtime', 'gui.agent.why_exited']
+  ])("puts a %s fix on the card as a line in the reader's words", async (kind, key) => {
     const r = row({ name: 'Codex', preset: 'codex', configured: false, enabled: false })
     install([r], {
-      act: async (op) => {
+      act: async op => {
         if (op === 'connect') throw { data: { detail: 'the English sentence', remedy: { kind, command: 'x' } } }
         return [r]
-      },
+      }
     })
     await mount()
     await click(buttonOf('Codex'))
@@ -1750,20 +2013,23 @@ describe('a refusal that names its fix', () => {
       "sub-agent 'Qwen Code' did not answer a test message, so it was not added: its model provider does not serve " +
       'the model it is set to use'
     install([r], {
-      act: async (op) => {
-        if (op === 'connect') throw { data: { detail: said, remedy: { kind: 'model', command: 'qwen', then: '/auth' } } }
+      act: async op => {
+        if (op === 'connect')
+          throw { data: { detail: said, remedy: { kind: 'model', command: 'qwen', then: '/auth' } } }
         return [r]
-      },
+      }
     })
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
     await mount()
     await openSheet('Qwen Code')
-    await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
+    await click(
+      [...sheet()!.querySelectorAll('.extAgents-act button')].find(b => b.textContent === 'gui.agent.connect')
+    )
     expect(lead()).toBe(say('gui.agent.fix_model', { agent: 'Qwen Code', button: 'gui.retry' }))
     const steps = [...note()!.querySelectorAll('.extAgents-steps li')]
-    expect(steps.map((li) => li.firstChild!.textContent)).toEqual(['gui.agent.fix_step_run', 'gui.agent.fix_step_type'])
-    expect(steps.map((li) => li.querySelector('.extAgents-cmd code')!.textContent)).toEqual(['qwen', '/auth'])
+    expect(steps.map(li => li.firstChild!.textContent)).toEqual(['gui.agent.fix_step_run', 'gui.agent.fix_step_type'])
+    expect(steps.map(li => li.querySelector('.extAgents-cmd code')!.textContent)).toEqual(['qwen', '/auth'])
     await click(steps[1]!.querySelector('.extAgents-cmd button'))
     expect(writeText).toHaveBeenCalledWith('/auth')
     expect(raw()!.textContent).toContain(said)
@@ -1777,8 +2043,8 @@ describe('a refusal that names its fix', () => {
         last_test_ok: false,
         last_test_at_ms: 1,
         last_test_detail: 'it is installed but has no usable credential',
-        last_test_remedy: { kind: 'setup', command: 'qwen', then: '/auth' },
-      }),
+        last_test_remedy: { kind: 'setup', command: 'qwen', then: '/auth' }
+      })
     ])
     await mount()
     await openSheet('Qwen Code')
@@ -1786,7 +2052,7 @@ describe('a refusal that names its fix', () => {
        "again", since its last test is why the note is there. */
     expect(title()).toBe(say('gui.agent.bad_setup', { agent: 'Qwen Code' }))
     expect(lead()).toBe(say('gui.agent.fix_setup_then', { agent: 'Qwen Code', button: 'gui.agent.test_again' }))
-    expect([...note()!.querySelectorAll('.extAgents-steps code')].map((c) => c.textContent)).toEqual(['qwen', '/auth'])
+    expect([...note()!.querySelectorAll('.extAgents-steps code')].map(c => c.textContent)).toEqual(['qwen', '/auth'])
   })
 
   it.each([
@@ -1794,20 +2060,22 @@ describe('a refusal that names its fix', () => {
     ['silent', 'qwen hi', 'gui.agent.fix_silent'],
     ['upgrade', 'npm i -g @qwen-code/qwen-code@latest', 'gui.agent.fix_upgrade'],
     ['plan', 'https://www.kimi.com/code/#pricing', 'gui.agent.fix_plan'],
-    ['config', 'kimi doctor config', 'gui.agent.fix_config'],
+    ['config', 'kimi doctor config', 'gui.agent.fix_config']
   ])('says a %s refusal and puts its one command on a line of its own', async (kind, command, key) => {
     const r = row({ name: 'Qwen Code', preset: 'qwen_code', configured: false, enabled: false })
     install([r], {
-      act: async (op) => {
+      act: async op => {
         if (op === 'connect') throw { data: { detail: 'the English sentence', remedy: { kind, command } } }
         return [r]
-      },
+      }
     })
     await mount()
     await openSheet('Qwen Code')
-    await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
+    await click(
+      [...sheet()!.querySelectorAll('.extAgents-act button')].find(b => b.textContent === 'gui.agent.connect')
+    )
     expect(lead()).toBe(say(key, { agent: 'Qwen Code', button: 'gui.retry' }))
-    expect([...note()!.querySelectorAll('.extAgents-cmd code')].map((c) => c.textContent)).toEqual([command])
+    expect([...note()!.querySelectorAll('.extAgents-cmd code')].map(c => c.textContent)).toEqual([command])
     expect(note()!.querySelector('.extAgents-steps')).toBeNull()
   })
 
@@ -1820,18 +2088,20 @@ describe('a refusal that names its fix', () => {
     ['upgrade', 'gui.agent.fix_upgrade_bare'],
     ['exited', 'gui.agent.fix_exited'],
     ['plan', 'gui.agent.fix_plan_bare'],
-    ['config', 'gui.agent.fix_config_bare'],
+    ['config', 'gui.agent.fix_config_bare']
   ])('says a %s refusal with no command known in a sentence that ends, offering nothing to run', async (kind, key) => {
     const r = row({ name: 'my-agent', preset: undefined, configured: true, enabled: false })
     install([r], {
-      act: async (op) => {
+      act: async op => {
         if (op === 'toggle') throw { data: { detail: 'the English sentence', remedy: { kind, then: '/model' } } }
         return [r]
-      },
+      }
     })
     await mount()
     await openSheet('my-agent')
-    await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
+    await click(
+      [...sheet()!.querySelectorAll('.extAgents-act button')].find(b => b.textContent === 'gui.agent.connect')
+    )
     expect(lead()).toBe(say(key, { agent: 'my-agent', button: 'gui.retry' }))
     expect(note()!.querySelector('.extAgents-cmd')).toBeNull()
     expect(raw()!.textContent).toContain('the English sentence')
@@ -1842,35 +2112,50 @@ describe('a refusal that names its fix', () => {
      Node.js, so the sheet says which one ran and which one it needs. */
   it.each([
     ['nvm install 22 && nvm alias default 22', 'gui.agent.fix_runtime'],
-    ['', 'gui.agent.fix_runtime_bare'],
-  ])('says which Node.js ran and which one is needed, with the upgrade when one is known (%s)', async (command, key) => {
-    const r = row({ name: 'Qwen Code', preset: 'qwen_code', configured: false, enabled: false })
-    install([r], {
-      act: async (op) => {
-        if (op === 'connect') throw { data: { detail: 'the English sentence', remedy: { kind: 'runtime', command, needs: '22', found: '18.20.8' } } }
-        return [r]
-      },
-    })
-    await mount()
-    await openSheet('Qwen Code')
-    await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
-    expect(title()).toBe(say('gui.agent.bad_runtime', { agent: 'Qwen Code' }))
-    expect(lead()).toBe(say(key, { agent: 'Qwen Code', button: 'gui.retry', needs: '22', found: '18.20.8' }))
-    expect([...note()!.querySelectorAll('.extAgents-cmd code')].map((c) => c.textContent)).toEqual(command ? [command] : [])
-    expect(footOf('Qwen Code')).toEqual({ k: 'gui.agent.st_connect_bad', r: 'gui.agent.why_runtime' })
-  })
+    ['', 'gui.agent.fix_runtime_bare']
+  ])(
+    'says which Node.js ran and which one is needed, with the upgrade when one is known (%s)',
+    async (command, key) => {
+      const r = row({ name: 'Qwen Code', preset: 'qwen_code', configured: false, enabled: false })
+      install([r], {
+        act: async op => {
+          if (op === 'connect')
+            throw {
+              data: {
+                detail: 'the English sentence',
+                remedy: { kind: 'runtime', command, needs: '22', found: '18.20.8' }
+              }
+            }
+          return [r]
+        }
+      })
+      await mount()
+      await openSheet('Qwen Code')
+      await click(
+        [...sheet()!.querySelectorAll('.extAgents-act button')].find(b => b.textContent === 'gui.agent.connect')
+      )
+      expect(title()).toBe(say('gui.agent.bad_runtime', { agent: 'Qwen Code' }))
+      expect(lead()).toBe(say(key, { agent: 'Qwen Code', button: 'gui.retry', needs: '22', found: '18.20.8' }))
+      expect([...note()!.querySelectorAll('.extAgents-cmd code')].map(c => c.textContent)).toEqual(
+        command ? [command] : []
+      )
+      expect(footOf('Qwen Code')).toEqual({ k: 'gui.agent.st_connect_bad', r: 'gui.agent.why_runtime' })
+    }
+  )
 
   it('says only that it quit when the versions did not come with the fix', async () => {
     const r = row({ name: 'Qwen Code', preset: 'qwen_code', configured: false, enabled: false })
     install([r], {
-      act: async (op) => {
+      act: async op => {
         if (op === 'connect') throw { data: { detail: 'the English sentence', remedy: { kind: 'runtime' } } }
         return [r]
-      },
+      }
     })
     await mount()
     await openSheet('Qwen Code')
-    await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
+    await click(
+      [...sheet()!.querySelectorAll('.extAgents-act button')].find(b => b.textContent === 'gui.agent.connect')
+    )
     /* The title and the card say the same as the sentence, not a Node.js
        they cannot name. */
     expect(title()).toBe(say('gui.agent.bad_exited', { agent: 'Qwen Code' }))
@@ -1878,13 +2163,15 @@ describe('a refusal that names its fix', () => {
     expect(footOf('Qwen Code')).toEqual({ k: 'gui.agent.st_connect_bad', r: 'gui.agent.why_exited' })
   })
 
-  it('says a failure with no fix in the reader\'s words too, and folds the server\'s sentence', async () => {
+  it("says a failure with no fix in the reader's words too, and folds the server's sentence", async () => {
     const r = row({ name: 'Claude Code', preset: 'claude_code', configured: false, enabled: false })
     const said = 'sub-agent did not answer a test message: it did not answer within 180s'
-    install([r], { refuse: (op) => (op === 'connect' ? said : null) })
+    install([r], { refuse: op => (op === 'connect' ? said : null) })
     await mount()
     await openSheet('Claude Code')
-    await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
+    await click(
+      [...sheet()!.querySelectorAll('.extAgents-act button')].find(b => b.textContent === 'gui.agent.connect')
+    )
     /* No fix named, so the server's sentence is the reason, and it is shown as
        it came rather than folded. */
     expect(title()).toBe(say('gui.agent.bad_connect', { agent: 'Claude Code' }))
@@ -1897,10 +2184,12 @@ describe('a refusal that names its fix', () => {
 
   it('says a refused disconnect did not disconnect, on the card and in the sheet', async () => {
     const r = row({ name: 'Codex', preset: 'codex', configured: true, enabled: true })
-    install([r], { refuse: (op) => (op === 'toggle' ? 'subagent not found: Codex' : null) })
+    install([r], { refuse: op => (op === 'toggle' ? 'subagent not found: Codex' : null) })
     await mount()
     await openSheet('Codex')
-    await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.disconnect'))
+    await click(
+      [...sheet()!.querySelectorAll('.extAgents-act button')].find(b => b.textContent === 'gui.agent.disconnect')
+    )
     expect(sheetStatus()).toBe('gui.agent.st_disconnect_bad · OpenAI')
     expect(title()).toBe(say('gui.agent.bad_disconnect', { agent: 'Codex' }))
     expect(lead()).toBe(say('gui.agent.said_disconnect', { button: 'gui.retry' }))
@@ -1909,7 +2198,7 @@ describe('a refusal that names its fix', () => {
 
   it('says a refused edit was not saved, rather than that the agent did not connect', async () => {
     const r = row({ name: 'Codex', preset: 'codex' })
-    install([r], { refuse: (op) => (op === 'model' ? 'model x is not on the menu' : null) })
+    install([r], { refuse: op => (op === 'model' ? 'model x is not on the menu' : null) })
     await mount()
     await act(async () => {
       await store.setModel(r, 'x')
@@ -1928,22 +2217,29 @@ describe('a refusal that names its fix', () => {
 describe('an agent that is missing npx', () => {
   const inst = (): Element | null => sheet()?.querySelector('.extAgents-inst') ?? null
 
-  it('offers Node.js, not the agent\'s own installer', async () => {
+  it("offers Node.js, not the agent's own installer", async () => {
     install([
-      row({ name: 'Claude Code', preset: 'claude_code', configured: false, enabled: false, probe_status: 'missing', probe_missing: 'npx' }),
+      row({
+        name: 'Claude Code',
+        preset: 'claude_code',
+        configured: false,
+        enabled: false,
+        probe_status: 'missing',
+        probe_missing: 'npx'
+      })
     ])
     await mount()
     await openSheet('Claude Code')
     expect(inst()!.querySelector('.extAgents-about')!.textContent).toBe(
-      'gui.agent.needs_node ' + JSON.stringify({ agent: 'Claude Code', button: 'gui.agent.recheck' }),
+      'gui.agent.needs_node ' + JSON.stringify({ agent: 'Claude Code', button: 'gui.agent.recheck' })
     )
     expect(inst()!.querySelector('.extAgents-site')!.getAttribute('href')).toBe('https://nodejs.org')
     expect(inst()!.querySelector('.extAgents-cmd')).toBeNull()
   })
 
-  it('still offers the agent\'s own installer when the agent is what is missing', async () => {
+  it("still offers the agent's own installer when the agent is what is missing", async () => {
     install([
-      row({ name: 'Claude Code', preset: 'claude_code', configured: false, enabled: false, probe_status: 'missing' }),
+      row({ name: 'Claude Code', preset: 'claude_code', configured: false, enabled: false, probe_status: 'missing' })
     ])
     await mount()
     await openSheet('Claude Code')
@@ -1956,7 +2252,7 @@ describe('the model pill', () => {
   const choices = [
     { value: 'v/opus', name: 'Opus', group: 'Anthropic' },
     { value: 'v/sonnet', name: 'Sonnet', group: 'Anthropic' },
-    { value: 'o/gpt', name: 'GPT', group: 'OpenAI' },
+    { value: 'o/gpt', name: 'GPT', group: 'OpenAI' }
   ]
   const builtin = (over: Partial<ExtAgentRow> = {}): ExtAgentRow =>
     row({
@@ -1968,7 +2264,7 @@ describe('the model pill', () => {
       probe_status: 'unknown',
       own: true,
       model_source: 'raven',
-      ...over,
+      ...over
     })
   const pill = (): HTMLButtonElement | null => sheet()?.querySelector('.extAgents-pm') ?? null
 
@@ -1977,16 +2273,16 @@ describe('the model pill', () => {
      old one is what is being tested. */
   it('shows the model it is switching to while the write is in flight', async () => {
     let release: () => void = () => {}
-    const gate = new Promise<void>((resolve) => {
+    const gate = new Promise<void>(resolve => {
       release = resolve
     })
     const r = row({ name: 'Coded', kind: 'acp', model_source: 'agent', model: 'v/opus', model_choices: choices })
     const rows = [r]
     install(rows, {
-      act: async (op) => {
+      act: async op => {
         if (op === 'model') await gate
         return rows
-      },
+      }
     })
     await mount()
     await openSheet('Coded')
@@ -2004,16 +2300,16 @@ describe('the model pill', () => {
 
   it('shows the model cleared while the clear is in flight', async () => {
     let release: () => void = () => {}
-    const gate = new Promise<void>((resolve) => {
+    const gate = new Promise<void>(resolve => {
       release = resolve
     })
     const r = row({ name: 'Coded', kind: 'acp', model_source: 'agent', model: 'v/opus', model_choices: choices })
     const rows = [r]
     install(rows, {
-      act: async (op) => {
+      act: async op => {
         if (op === 'model') await gate
         return rows
-      },
+      }
     })
     await mount()
     await openSheet('Coded')
@@ -2029,7 +2325,9 @@ describe('the model pill', () => {
   })
   const picker = (): HTMLElement | null => sheet()?.querySelector('.model-picker') ?? null
   const modelButton = (label: string): HTMLButtonElement | undefined =>
-    [...(picker()?.querySelectorAll<HTMLButtonElement>('.model-picker-model') ?? [])].find((b) => b.textContent!.includes(label))
+    [...(picker()?.querySelectorAll<HTMLButtonElement>('.model-picker-model') ?? [])].find(b =>
+      b.textContent!.includes(label)
+    )
 
   it('is not drawn for a server that has no model field', async () => {
     install([row()])
@@ -2066,7 +2364,7 @@ describe('the model pill', () => {
   it("draws the built-in row on raven's own connected providers and sends the provider with the pick", async () => {
     hostModels.providers = [
       { id: 'openrouter', name: 'OpenRouter', models: ['anthropic/claude-sonnet-5'], on: true },
-      { id: 'dark', name: 'Not connected', models: ['x'], on: false },
+      { id: 'dark', name: 'Not connected', models: ['x'], on: false }
     ]
     const { acts } = install([builtin()])
     await mount()
@@ -2126,7 +2424,7 @@ describe('the model pill', () => {
   it("wears a disabled pill for a row with no menu and none of raven's to fall back on", async () => {
     install([
       row({ name: 'Coder', preset: undefined, kind: 'cli', model_source: 'fixed' }),
-      row({ name: 'codex', preset: 'codex', kind: 'acp', model_source: 'agent', model_choices: [] }),
+      row({ name: 'codex', preset: 'codex', kind: 'acp', model_source: 'agent', model_choices: [] })
     ])
     await mount()
     await openSheet('Coder')
@@ -2144,7 +2442,7 @@ describe('the model pill', () => {
        is stuck. */
     hostModels.providers = [{ id: 'openrouter', name: 'OpenRouter', models: ['z-ai/glm-5.3-flash'], on: true }]
     const { acts } = install([
-      row({ name: 'Raven-Code', preset: undefined, kind: 'acp', own: true, model_source: 'raven', model_choices: [] }),
+      row({ name: 'Raven-Code', preset: undefined, kind: 'acp', own: true, model_source: 'raven', model_choices: [] })
     ])
     await mount()
     await openSheet('Raven-Code')
@@ -2162,7 +2460,9 @@ describe('the model pill', () => {
        -- the provider stopped listing it, a key was removed and re-added with a
        shorter list -- and a picker that dropped it would open with nothing
        marked while the pill beside it still names it. */
-    hostModels.providers = [{ id: 'deepseek', name: 'DeepSeek', models: ['deepseek-v4-pro'], configured: ['deepseek-v4-pro'], on: true }]
+    hostModels.providers = [
+      { id: 'deepseek', name: 'DeepSeek', models: ['deepseek-v4-pro'], configured: ['deepseek-v4-pro'], on: true }
+    ]
     install([
       row({
         name: 'Raven-Code',
@@ -2171,8 +2471,8 @@ describe('the model pill', () => {
         own: true,
         model_source: 'raven',
         model_choices: [],
-        model: 'deepseek/retired-v3',
-      }),
+        model: 'deepseek/retired-v3'
+      })
     ])
     await mount()
     await openSheet('Raven-Code')
@@ -2188,10 +2488,16 @@ describe('the model pill', () => {
        alone -- a vendor with four models on one and none on the other. */
     hostModels.providers = [
       { id: 'gemini', name: 'Gemini', models: ['gemini-2.5-pro', 'gemini-2.5-flash'], configured: [], on: true },
-      { id: 'deepseek', name: 'DeepSeek', models: ['deepseek-v4-pro', 'deepseek-v4-flash'], configured: ['deepseek-v4-pro'], on: true },
+      {
+        id: 'deepseek',
+        name: 'DeepSeek',
+        models: ['deepseek-v4-pro', 'deepseek-v4-flash'],
+        configured: ['deepseek-v4-pro'],
+        on: true
+      }
     ]
     const { acts } = install([
-      row({ name: 'Raven-Code', preset: undefined, kind: 'acp', own: true, model_source: 'raven', model_choices: [] }),
+      row({ name: 'Raven-Code', preset: undefined, kind: 'acp', own: true, model_source: 'raven', model_choices: [] })
     ])
     await mount()
     await openSheet('Raven-Code')
@@ -2199,7 +2505,7 @@ describe('the model pill', () => {
     expect(picker()!.textContent).toContain('Gemini')
     expect(modelButton('gemini-2.5-pro')).toBeDefined()
     expect(modelButton('gemini-2.5-flash')).toBeDefined()
-    await click([...picker()!.querySelectorAll('.model-picker-prov')].find((b) => b.textContent!.includes('DeepSeek')))
+    await click([...picker()!.querySelectorAll('.model-picker-prov')].find(b => b.textContent!.includes('DeepSeek')))
     expect(modelButton('deepseek-v4-pro')).toBeDefined()
     expect(modelButton('deepseek-v4-flash')).toBeUndefined()
     await click(modelButton('deepseek-v4-pro'))
@@ -2220,8 +2526,8 @@ describe('the model pill', () => {
         own: true,
         model_source: 'agent',
         model_choices: choices,
-        model: 'openrouter/anthropic/claude-opus-5',
-      }),
+        model: 'openrouter/anthropic/claude-opus-5'
+      })
     ])
     await mount()
     await openSheet('Raven-Code')
@@ -2231,14 +2537,14 @@ describe('the model pill', () => {
     expect(acts).toEqual([['model', 'Raven-Code', { clear_model: true }]])
   })
 
-  it("says a product on its own key manages its own model, not that it follows", async () => {
+  it('says a product on its own key manages its own model, not that it follows', async () => {
     /* One of raven's own, so `own` is set -- but its folder carries the chat
        credential its launcher branches on, which is the one case where an own
        row does not inherit the host's model at all. The server says so with
        `fixed`, and ownership must not draw over it. */
     hostModels.providers = [{ id: 'openrouter', name: 'OpenRouter', models: ['anthropic/claude-opus-5'], on: true }]
     install([
-      row({ name: 'Raven-Research', preset: undefined, kind: 'acp', own: true, vendored: true, model_source: 'fixed' }),
+      row({ name: 'Raven-Research', preset: undefined, kind: 'acp', own: true, vendored: true, model_source: 'fixed' })
     ])
     await mount()
     await openSheet('Raven-Research')
@@ -2250,7 +2556,7 @@ describe('the model pill', () => {
   it("does not show an endpoint's configured model as a pick, and still lets a menuless acp row clear one", async () => {
     const { acts } = install([
       row({ name: 'mirothinker', preset: 'mirothinker', kind: 'openai', model_source: 'fixed', model: 'miro-1' }),
-      row({ name: 'quiet', preset: undefined, kind: 'acp', model_source: 'agent', model_choices: [], model: 'v/old' }),
+      row({ name: 'quiet', preset: undefined, kind: 'acp', model_source: 'agent', model_choices: [], model: 'v/old' })
     ])
     await mount()
     await openSheet('mirothinker')
@@ -2265,12 +2571,14 @@ describe('the model pill', () => {
   })
 
   it('lets a shipped product be tested, under its own source', async () => {
-    const { acts } = install([row({ name: 'Raven-Code', preset: undefined, kind: 'acp', vendored: true, configured: false, own: true })])
+    const { acts } = install([
+      row({ name: 'Raven-Code', preset: undefined, kind: 'acp', vendored: true, configured: false, own: true })
+    ])
     await mount()
     await openSheet('Raven-Code')
     expect(sheetActs()).toEqual(['gui.agent.disconnect', 'gui.agent.test_label'])
     await click(sheet()!.querySelectorAll('.extAgents-act button')[1])
-    expect(acts.map((a) => a.slice(0, 2))).toEqual([['test', 'Raven-Code']])
+    expect(acts.map(a => a.slice(0, 2))).toEqual([['test', 'Raven-Code']])
   })
 
   /* Part of Raven, and still the reader's to take off the roster: a shipped folder
@@ -2279,12 +2587,22 @@ describe('the model pill', () => {
      into config by an installer or found under `agents/` is storage, and the
      verbs do not change with it. Only the built-in loop has no switch. */
   it('disconnects a discovered agent, and connects it back', async () => {
-    const { acts } = install([row({ name: 'Raven-Code', preset: undefined, kind: 'acp', vendored: true, configured: false, own: true })])
+    const { acts } = install([
+      row({ name: 'Raven-Code', preset: undefined, kind: 'acp', vendored: true, configured: false, own: true })
+    ])
     await mount()
     await openSheet('Raven-Code')
-    await click([...sheet()!.querySelectorAll<HTMLElement>('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.disconnect'))
+    await click(
+      [...sheet()!.querySelectorAll<HTMLElement>('.extAgents-act button')].find(
+        b => b.textContent === 'gui.agent.disconnect'
+      )
+    )
     expect(acts).toEqual([['toggle', 'Raven-Code', { enabled: false }]])
-    await click([...sheet()!.querySelectorAll<HTMLElement>('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
+    await click(
+      [...sheet()!.querySelectorAll<HTMLElement>('.extAgents-act button')].find(
+        b => b.textContent === 'gui.agent.connect'
+      )
+    )
     expect(acts.at(-1)).toEqual(['toggle', 'Raven-Code', { enabled: true }])
   })
 })
@@ -2298,18 +2616,27 @@ describe('the machines module', () => {
     })
   }
   const registerButton = (): HTMLButtonElement | null =>
-    [...document.querySelectorAll<HTMLButtonElement>('.extAgents-tabs button')].find((b) => b.textContent === 'gui.machine.register') ?? null
+    [...document.querySelectorAll<HTMLButtonElement>('.extAgents-tabs button')].find(
+      b => b.textContent === 'gui.machine.register'
+    ) ?? null
   const field = (label: string): HTMLInputElement | HTMLSelectElement | null =>
     sheet()?.querySelector(`[aria-label="${label}"]`) ?? null
   const sheetAct = (label: string): HTMLButtonElement | undefined =>
-    [...(sheet()?.querySelectorAll<HTMLButtonElement>('.extAgents-act button') ?? [])].find((b) => b.textContent === label)
+    [...(sheet()?.querySelectorAll<HTMLButtonElement>('.extAgents-act button') ?? [])].find(
+      b => b.textContent === label
+    )
   const note = (): { t: string | null; said: string | null } | null => {
     const n = sheet()?.querySelector('.extAgents-note')
-    return n ? { t: n.querySelector('.extAgents-note-t')?.textContent ?? null, said: n.querySelector('.extAgents-note-said')?.textContent ?? null } : null
+    return n
+      ? {
+          t: n.querySelector('.extAgents-note-t')?.textContent ?? null,
+          said: n.querySelector('.extAgents-note-said')?.textContent ?? null
+        }
+      : null
   }
   const settle = async (): Promise<void> => {
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 15))
+      await new Promise(resolve => setTimeout(resolve, 15))
     })
   }
 
@@ -2320,8 +2647,13 @@ describe('the machines module', () => {
         mrow({ id: 'old', name: 'Old box', node_version: '0.2.3', state: 'lost', detail: 'the link went' }),
         mrow({ id: 'bare', name: 'Bare box' }),
         mrow({ id: 'here', name: 'This Mac', transport: 'local' }),
-        mrow({ id: 'none', name: 'No node', state: 'error', detail: "no Raven node on machine 'No node' (none); install it with `raven ops connection install-node none`" }),
-      ],
+        mrow({
+          id: 'none',
+          name: 'No node',
+          state: 'error',
+          detail: "no Raven node on machine 'No node' (none); install it with `raven ops connection install-node none`"
+        })
+      ]
     })
     await mount()
     expect(tabs().map(tabLabel)).not.toContain('gui.machine.g_machines')
@@ -2329,20 +2661,27 @@ describe('the machines module', () => {
     /* No filter pills on this module: the one action, beside the grid. */
     expect(tabs()).toEqual([])
     expect(registerButton()).toBeTruthy()
-    expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).toEqual([
-      'Lab box', 'Old box', 'Bare box', 'This Mac', 'No node', 'gui.machine.register',
+    expect(rowsOf().map(r => r.querySelector('.extAgents-t')!.textContent)).toEqual([
+      'Lab box',
+      'Old box',
+      'Bare box',
+      'This Mac',
+      'No node',
+      'gui.machine.register'
     ])
     expect(lineOf('Lab box')).toBe('boxgui.machine.node_version {"v":"0.2.4"}')
     expect(lineOf('Old box')).toBe('oldgui.machine.node_stale {"v":"0.2.3"}')
     expect(lineOf('Bare box')).toBe('baregui.machine.node_none')
     expect(lineOf('This Mac')).toBe('heregui.machine.node_here')
     expect(footOf('Lab box')!.k).toBeNull()
-    expect(rowNamed('Lab box').querySelector('.extAgents-foot-say')!.textContent).toBe('gui.machine.state_connected {"n":"2"}')
+    expect(rowNamed('Lab box').querySelector('.extAgents-foot-say')!.textContent).toBe(
+      'gui.machine.state_connected {"n":"2"}'
+    )
     expect(rowNamed('Old box').querySelector('.extAgents-foot-say')!.textContent).toBe('the link went')
     expect(rowNamed('This Mac').querySelector('.extAgents-foot-say')!.textContent).toBe('gui.machine.transport_local')
     /* The one error a reader can act on from here is said with what to do. */
     expect(rowNamed('No node').querySelector('.extAgents-foot-say')!.textContent).toBe(
-      'gui.machine.err_no_node {"said":"no Raven node on machine \'No node\' (none); install it with `raven ops connection install-node none`"}',
+      'gui.machine.err_no_node {"said":"no Raven node on machine \'No node\' (none); install it with `raven ops connection install-node none`"}'
     )
     expect(ledOf('No node')).toBe('extAgents-led extAgents-led-bad')
     expect(ledOf('Lab box')).toBe('extAgents-led')
@@ -2360,8 +2699,8 @@ describe('the machines module', () => {
       machinesOver: {
         list: async () => {
           throw { data: { detail: 'the registry is not valid JSON' } }
-        },
-      },
+        }
+      }
     })
     await mount()
     await openMachines()
@@ -2379,29 +2718,51 @@ describe('the machines module', () => {
     await openMachines()
     listed = { ...stored, install: { running: true, ok: null, detail: 'looking at the machine' } }
     await click(buttonOf('Lab box'))
-    expect(mcalls.filter((c) => c[0] === 'install')).toEqual([['install', ['box', undefined]]])
+    expect(mcalls.filter(c => c[0] === 'install')).toEqual([['install', ['box', undefined]]])
     await settle()
     expect(controlOf('Lab box')).toBe(' gui.machine.installing')
     expect(lineOf('Lab box')).toBe('boxgui.machine.installing')
-    listed = { ...stored, install: { running: false, ok: false, detail: 'installing the Raven node failed at the packages step: exit 1' } }
+    listed = {
+      ...stored,
+      install: { running: false, ok: false, detail: 'installing the Raven node failed at the packages step: exit 1' }
+    }
     await settle()
-    expect(footOf('Lab box')!.k).toBe('gui.machine.install_bad_said {"said":"installing the Raven node failed at the packages step: exit 1"}')
+    expect(footOf('Lab box')!.k).toBe(
+      'gui.machine.install_bad_said {"said":"installing the Raven node failed at the packages step: exit 1"}'
+    )
     expect(buttonOf('Lab box')!.textContent).toBe('gui.machine.install')
     /* The sheet says it in a note with what to do, and takes a directory for the next try. */
     await openSheet('Lab box')
-    expect(note()).toEqual({ t: 'gui.machine.install_bad', said: 'installing the Raven node failed at the packages step: exit 1' })
+    expect(note()).toEqual({
+      t: 'gui.machine.install_bad',
+      said: 'installing the Raven node failed at the packages step: exit 1'
+    })
     await typeInto(field('gui.machine.f_node_dir'), '/data/raven-node')
     listed = { ...stored, install: { running: true, ok: null, detail: 'looking at the machine' } }
     await click(sheetAct('gui.machine.install'))
-    expect(mcalls.filter((c) => c[0] === 'install')[1]).toEqual(['install', ['box', '/data/raven-node']])
-    listed = { ...stored, node_version: '0.2.4', node_current: true, state: 'idle', install: { running: false, ok: true, detail: 'Installed the Raven node' } }
+    expect(mcalls.filter(c => c[0] === 'install')[1]).toEqual(['install', ['box', '/data/raven-node']])
+    listed = {
+      ...stored,
+      node_version: '0.2.4',
+      node_current: true,
+      state: 'idle',
+      install: { running: false, ok: true, detail: 'Installed the Raven node' }
+    }
     await settle()
-    expect(sheetActs()).toEqual(['gui.machine.probe', 'gui.machine.doctor', 'gui.machine.remove_do', 'gui.machine.connect_here'])
+    expect(sheetActs()).toEqual([
+      'gui.machine.probe',
+      'gui.machine.doctor',
+      'gui.machine.remove_do',
+      'gui.machine.connect_here'
+    ])
     expect(controlOf('Lab box')).toBe('')
   })
 
   it('keeps a refused install on the card without polling', async () => {
-    install([row()], { machines: [mrow()], machinesOver: { installNode: async () => ({ started: false, detail: 'an install is already running' }) } })
+    install([row()], {
+      machines: [mrow()],
+      machinesOver: { installNode: async () => ({ started: false, detail: 'an install is already running' }) }
+    })
     await mount()
     await openMachines()
     await click(buttonOf('Lab box'))
@@ -2413,18 +2774,18 @@ describe('the machines module', () => {
     const rows: MachineRow[] = []
     const answers = [
       { ok: false, detail: 'could not reach the machine: Permission denied (publickey).', reason: 'login' as const },
-      { ok: true, detail: 'reached', reason: '' as const },
+      { ok: true, detail: 'reached', reason: '' as const }
     ]
     const { mcalls } = install([row()], {
       machinesOver: {
-        list: async () => rows.map((r) => ({ ...r })),
-        add: async (form) => {
+        list: async () => rows.map(r => ({ ...r })),
+        add: async form => {
           mcalls.push(['add', [form]])
           const answer = answers.shift()!
           if (answer.ok) rows.push(mrow({ id: form.id, name: form.name, paths: form.paths }))
           return answer
-        },
-      },
+        }
+      }
     })
     await mount()
     await openMachines()
@@ -2437,7 +2798,7 @@ describe('the machines module', () => {
       ['gui.machine.f_id', 'gpu1'],
       ['gui.machine.f_host', '203.0.113.7'],
       ['gui.machine.f_user', 'alice'],
-      ['gui.machine.f_key', '~/.ssh/id_gpu1'],
+      ['gui.machine.f_key', '~/.ssh/id_gpu1']
     ]
     for (const [label, value] of typed) await typeInto(field(label), value)
     await typeInto(sheetTextarea(), '/data/alice/projects\n\n /scratch ')
@@ -2445,35 +2806,56 @@ describe('the machines module', () => {
     await click(go())
     /* The kind is said in the head line, which never scrolls away; the server's sentence sits under the form. */
     expect(sheetStatus()).toBe('gui.machine.why_login')
-    expect(note()).toEqual({ t: 'gui.machine.add_bad', said: 'could not reach the machine: Permission denied (publickey).' })
-    expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).toEqual(['gui.machine.register'])
+    expect(note()).toEqual({
+      t: 'gui.machine.add_bad',
+      said: 'could not reach the machine: Permission denied (publickey).'
+    })
+    expect(rowsOf().map(r => r.querySelector('.extAgents-t')!.textContent)).toEqual(['gui.machine.register'])
     await click(go())
     expect(sheetName()).toBe('GPU box 1')
-    expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).toEqual(['GPU box 1', 'gui.machine.register'])
-    const sent = mcalls.filter((c) => c[0] === 'add').map((c) => c[1][0] as RegisterForm)
+    expect(rowsOf().map(r => r.querySelector('.extAgents-t')!.textContent)).toEqual([
+      'GPU box 1',
+      'gui.machine.register'
+    ])
+    const sent = mcalls.filter(c => c[0] === 'add').map(c => c[1][0] as RegisterForm)
     expect(sent.length).toBe(2)
-    expect(sent[1]).toEqual({ id: 'gpu1', name: 'GPU box 1', host: '203.0.113.7', port: 0, user: 'alice', auth: 'key', key: '~/.ssh/id_gpu1', password: '', paths: ['/data/alice/projects', '/scratch'] })
+    expect(sent[1]).toEqual({
+      id: 'gpu1',
+      name: 'GPU box 1',
+      host: '203.0.113.7',
+      port: 0,
+      user: 'alice',
+      auth: 'key',
+      key: '~/.ssh/id_gpu1',
+      password: '',
+      paths: ['/data/alice/projects', '/scratch']
+    })
   })
 
   it('registers with a password once the login pick says so, and sends the password in place of a key path', async () => {
     const rows: MachineRow[] = []
     const { mcalls } = install([row()], {
       machinesOver: {
-        list: async () => rows.map((r) => ({ ...r })),
-        add: async (form) => {
+        list: async () => rows.map(r => ({ ...r })),
+        add: async form => {
           mcalls.push(['add', [form]])
           rows.push(mrow({ id: form.id, name: form.name }))
           return { ok: true, detail: 'reached', reason: '' }
-        },
-      },
+        }
+      }
     })
     await mount()
     await openMachines()
     await click(rowNamed('gui.machine.register'))
     const go = (): HTMLButtonElement => sheet()!.querySelector<HTMLButtonElement>('.extAgents-act button')!
     const segment = (label: string): HTMLButtonElement | undefined =>
-      [...sheet()!.querySelectorAll<HTMLButtonElement>('.extAgents-seg button')].find((b) => b.textContent === label)
-    for (const [label, value] of [['gui.machine.f_name', 'GPU box 2'], ['gui.machine.f_id', 'gpu2'], ['gui.machine.f_host', '203.0.113.8'], ['gui.machine.f_user', 'alice']] as const) {
+      [...sheet()!.querySelectorAll<HTMLButtonElement>('.extAgents-seg button')].find(b => b.textContent === label)
+    for (const [label, value] of [
+      ['gui.machine.f_name', 'GPU box 2'],
+      ['gui.machine.f_id', 'gpu2'],
+      ['gui.machine.f_host', '203.0.113.8'],
+      ['gui.machine.f_user', 'alice']
+    ] as const) {
       await typeInto(field(label), value)
     }
     /* With a key picked, the key path is what is missing; picking the
@@ -2489,30 +2871,49 @@ describe('the machines module', () => {
     expect(go().disabled).toBe(false)
     await click(go())
     expect(sheetName()).toBe('GPU box 2')
-    const [sent] = mcalls.filter((c) => c[0] === 'add').map((c) => c[1][0] as RegisterForm)
-    expect(sent).toEqual({ id: 'gpu2', name: 'GPU box 2', host: '203.0.113.8', port: 0, user: 'alice', auth: 'password', key: '', password: ' s3cret ', paths: [] })
+    const [sent] = mcalls.filter(c => c[0] === 'add').map(c => c[1][0] as RegisterForm)
+    expect(sent).toEqual({
+      id: 'gpu2',
+      name: 'GPU box 2',
+      host: '203.0.113.8',
+      port: 0,
+      user: 'alice',
+      auth: 'password',
+      key: '',
+      password: ' s3cret ',
+      paths: []
+    })
   })
 
   it('removes a machine from its sheet after asking, keeps a refusal on the row, and closes the sheet once it is gone', async () => {
     const rows = [mrow({ node_version: '0.2.4', node_current: true, state: 'idle' })]
     const answers = [
-      { removed: false, detail: "1 agent entry names machine 'Lab box' (box) (claude_code@box); disconnect them first", agents: ['claude_code@box'] },
-      { removed: true, detail: 'removed', agents: [] },
+      {
+        removed: false,
+        detail: "1 agent entry names machine 'Lab box' (box) (claude_code@box); disconnect them first",
+        agents: ['claude_code@box']
+      },
+      { removed: true, detail: 'removed', agents: [] }
     ]
     const { confirms, toasts } = install([row()], {
       machinesOver: {
-        list: async () => rows.map((r) => ({ ...r })),
+        list: async () => rows.map(r => ({ ...r })),
         remove: async () => {
           const answer = answers.shift()!
           if (answer.removed) rows.length = 0
           return answer
-        },
-      },
+        }
+      }
     })
     await mount()
     await openMachines()
     await openSheet('Lab box')
-    expect(sheetActs()).toEqual(['gui.machine.probe', 'gui.machine.doctor', 'gui.machine.remove_do', 'gui.machine.connect_here'])
+    expect(sheetActs()).toEqual([
+      'gui.machine.probe',
+      'gui.machine.doctor',
+      'gui.machine.remove_do',
+      'gui.machine.connect_here'
+    ])
     await click(sheetAct('gui.machine.remove_do'))
     expect(confirms).toEqual(['gui.machine.remove_do'])
     expect(sheetStatus()).toBe('gui.machine.remove_named {"agents":"claude_code@box"}')
@@ -2520,7 +2921,7 @@ describe('the machines module', () => {
     expect(toasts).toEqual([])
     await click(sheetAct('gui.machine.remove_do'))
     expect(toasts).toEqual(['gui.machine.removed {"name":"Lab box"}'])
-    expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).toEqual(['gui.machine.register'])
+    expect(rowsOf().map(r => r.querySelector('.extAgents-t')!.textContent)).toEqual(['gui.machine.register'])
     expect(detail.get().open).toBe(false)
   })
 
@@ -2531,40 +2932,48 @@ describe('the machines module', () => {
         doctor: async () => [
           { id: '', blocking: false, detail: '1 entry had no id and was skipped.' },
           { id: 'box', blocking: true, detail: "box: 'key' is missing, so there is no way onto it" },
-          { id: 'box', blocking: false, detail: "box: 'software' is not set" },
-        ],
-      },
+          { id: 'box', blocking: false, detail: "box: 'software' is not set" }
+        ]
+      }
     })
     await mount()
     await openMachines()
     await openSheet('Lab box')
-    const problems = (): string | null => [...sheet()!.querySelectorAll('.extAgents-fld')].find((f) => f.querySelector('.extAgents-k')!.textContent === 'gui.machine.problems')!.querySelector('.extAgents-ro')!.textContent
+    const problems = (): string | null =>
+      [...sheet()!.querySelectorAll('.extAgents-fld')]
+        .find(f => f.querySelector('.extAgents-k')!.textContent === 'gui.machine.problems')!
+        .querySelector('.extAgents-ro')!.textContent
     expect(problems()).toBe("box: 'key' is missing, so there is no way onto it")
     await click(sheetAct('gui.machine.probe'))
-    expect(mcalls.filter((c) => c[0] === 'list').at(-1)).toEqual(['list', [true, 'box']])
+    expect(mcalls.filter(c => c[0] === 'list').at(-1)).toEqual(['list', [true, 'box']])
     await click(sheetAct('gui.machine.doctor'))
     expect(problems()).toBe("box: 'key' is missing, so there is no way onto it\nbox: 'software' is not set")
     expect(document.querySelector('#extAgentsBody .extAgents-note-t')!.textContent).toBe('gui.machine.file_problems')
-    expect(document.querySelector('#extAgentsBody .extAgents-note-said')!.textContent).toBe('1 entry had no id and was skipped.')
+    expect(document.querySelector('#extAgentsBody .extAgents-note-said')!.textContent).toBe(
+      '1 entry had no id and was skipped.'
+    )
   })
 
   it("offers a preset the machines with this Raven's node to run on, and connects it there with its directory", async () => {
-    const { acts } = install([row({ name: 'codex', preset: 'codex', kind: 'acp', configured: false, enabled: false, probe_status: 'ready' })], {
-      machines: [
-        mrow({ node_version: '0.2.4', node_current: true }),
-        mrow({ id: 'old', name: 'Old box', node_version: '0.2.3' }),
-        mrow({ id: 'bare', name: 'Bare box' }),
-        mrow({ id: 'here', name: 'This Mac', transport: 'local' }),
-      ],
-    })
+    const { acts } = install(
+      [row({ name: 'codex', preset: 'codex', kind: 'acp', configured: false, enabled: false, probe_status: 'ready' })],
+      {
+        machines: [
+          mrow({ node_version: '0.2.4', node_current: true }),
+          mrow({ id: 'old', name: 'Old box', node_version: '0.2.3' }),
+          mrow({ id: 'bare', name: 'Bare box' }),
+          mrow({ id: 'here', name: 'This Mac', transport: 'local' })
+        ]
+      }
+    )
     await mount()
     await openSheet('codex')
     const where = field('gui.machine.where') as HTMLSelectElement
-    expect([...where.options].map((o) => [o.value, o.disabled, o.textContent])).toEqual([
+    expect([...where.options].map(o => [o.value, o.disabled, o.textContent])).toEqual([
       ['', false, 'gui.machine.where_here'],
       ['box', false, 'Lab box (box)'],
       ['old', true, 'Old box (old) - gui.machine.needs_update'],
-      ['bare', true, 'Bare box (bare) - gui.machine.needs_node'],
+      ['bare', true, 'Bare box (bare) - gui.machine.needs_node']
     ])
     expect(field('gui.machine.remote_cwd')).toBeNull()
     await act(async () => {
@@ -2577,26 +2986,42 @@ describe('the machines module', () => {
   })
 
   it('says a preset runs here when no machine is registered, and draws no directory for an endpoint', async () => {
-    install([row({ name: 'mirothinker', preset: 'mirothinker', kind: 'openai', configured: false, enabled: false, probe_status: 'ready', has_api_key: true })])
+    install([
+      row({
+        name: 'mirothinker',
+        preset: 'mirothinker',
+        kind: 'openai',
+        configured: false,
+        enabled: false,
+        probe_status: 'ready',
+        has_api_key: true
+      })
+    ])
     await mount()
     await openSheet('mirothinker')
     const where = field('gui.machine.where') as HTMLSelectElement
-    expect([...where.options].map((o) => o.value)).toEqual([''])
-    expect([...sheet()!.querySelectorAll('.extAgents-about')].map((n) => n.textContent)).toContain('gui.machine.where_none')
+    expect([...where.options].map(o => o.value)).toEqual([''])
+    expect([...sheet()!.querySelectorAll('.extAgents-about')].map(n => n.textContent)).toContain(
+      'gui.machine.where_none'
+    )
   })
 
   /* The card's second line: which connected entries run on the machine. */
-  const agentsLineOf = (name: string): string | null => rowNamed(name).querySelectorAll('.extAgents-one')[1]?.textContent ?? null
+  const agentsLineOf = (name: string): string | null =>
+    rowNamed(name).querySelectorAll('.extAgents-one')[1]?.textContent ?? null
   const pickOption = async (select: HTMLSelectElement, value: string): Promise<void> => {
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(select, value)
       select.dispatchEvent(new Event('change', { bubbles: true }))
     })
   }
-  const ready = (over: Partial<MachineRow> = {}): MachineRow => mrow({ node_version: '0.2.4', node_current: true, state: 'idle', ...over })
+  const ready = (over: Partial<MachineRow> = {}): MachineRow =>
+    mrow({ node_version: '0.2.4', node_current: true, state: 'idle', ...over })
 
   it('says on the card and in the sheet which agent entries run on the machine, and the next step on a ready one', async () => {
-    install([row()], { machines: [ready({ agents_here: ['Claude Code@box', 'codex@box'] }), mrow({ id: 'gpu1', name: 'GPU 1' })] })
+    install([row()], {
+      machines: [ready({ agents_here: ['Claude Code@box', 'codex@box'] }), mrow({ id: 'gpu1', name: 'GPU 1' })]
+    })
     await mount()
     await openMachines()
     expect(agentsLineOf('Lab box')).toBe('gui.machine.agents_line {"n":"2","names":"Claude Code@box, codex@box"}')
@@ -2605,7 +3030,10 @@ describe('the machines module', () => {
     await openSheet('Lab box')
     expect(sheet()!.querySelector('.extAgents-note-next .extAgents-note-t')!.textContent).toBe('gui.machine.next_title')
     expect(sheetActs()).toContain('gui.machine.connect_here')
-    const fields = [...sheet()!.querySelectorAll('.extAgents-fld')].map((f) => [f.querySelector('.extAgents-k')!.textContent, f.querySelector('.extAgents-ro')?.textContent])
+    const fields = [...sheet()!.querySelectorAll('.extAgents-fld')].map(f => [
+      f.querySelector('.extAgents-k')!.textContent,
+      f.querySelector('.extAgents-ro')?.textContent
+    ])
     expect(fields).toContainEqual(['gui.machine.agents_here', 'Claude Code@box\ncodex@box'])
     /* A machine without the node has nothing to connect onto yet: no pointer, no button. */
     await openSheet('GPU 1')
@@ -2617,9 +3045,19 @@ describe('the machines module', () => {
   it('connects an agent on the machine from its sheet: the presets a node can start, the one here greyed, the add under preset@machine, then back to the sheet', async () => {
     const presets: PresetChoice[] = [
       { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, on_machines: ['box'] },
-      { preset: 'claude_code', name: 'Claude Code', kind: 'acp', description: 'Claude Code CLI', connected_here: true, on_machines: [] },
+      {
+        preset: 'claude_code',
+        name: 'Claude Code',
+        kind: 'acp',
+        description: 'Claude Code CLI',
+        connected_here: true,
+        on_machines: []
+      }
     ]
-    const { acts, loads, toasts, mcalls } = install([row()], { machines: [ready({ agents_here: ['Codex@box'] })], presets: async () => presets })
+    const { acts, loads, toasts, mcalls } = install([row()], {
+      machines: [ready({ agents_here: ['Codex@box'] })],
+      presets: async () => presets
+    })
     await mount()
     await openMachines()
     await openSheet('Lab box')
@@ -2627,30 +3065,32 @@ describe('the machines module', () => {
     expect(sheetName()).toBe('gui.machine.connect_title {"name":"Lab box"}')
     expect(sheetStatus()).toBe('gui.machine.connect_hint')
     const pick = field('gui.machine.f_preset') as HTMLSelectElement
-    expect([...pick.options].map((o) => [o.value, o.disabled, o.textContent])).toEqual([
+    expect([...pick.options].map(o => [o.value, o.disabled, o.textContent])).toEqual([
       ['codex', true, 'gui.machine.preset_on_machine {"name":"Codex"}'],
-      ['claude_code', false, 'gui.machine.preset_connected_here {"name":"Claude Code"}'],
+      ['claude_code', false, 'gui.machine.preset_connected_here {"name":"Claude Code"}']
     ])
     /* The first pickable one is chosen, with its own description under it. */
     expect(pick.value).toBe('claude_code')
-    expect([...sheet()!.querySelectorAll('.extAgents-about')].map((n) => n.textContent)).toContain('Claude Code CLI')
+    expect([...sheet()!.querySelectorAll('.extAgents-about')].map(n => n.textContent)).toContain('Claude Code CLI')
     await typeInto(field('gui.machine.remote_cwd'), '/data/w')
     const before = loads.length
     await click(sheetAct('gui.machine.connect_do'))
     expect(acts).toEqual([['connect_on_machine', 'claude_code@box', { machine: 'box', remote_cwd: '/data/w' }]])
     /* The roster again, with the probe, so the new card arrives with its verdict; the machines too, for the card's line. */
     expect(loads.slice(before)).toEqual([true])
-    expect(mcalls.filter((c) => c[0] === 'list').length).toBeGreaterThan(1)
+    expect(mcalls.filter(c => c[0] === 'list').length).toBeGreaterThan(1)
     expect(toasts).toEqual(['gui.machine.connected_said {"name":"claude_code@box"}'])
     expect(sheetName()).toBe('Lab box')
   })
 
   it('keeps the agent s own refusal on the connect form, and says there is nothing to connect when the machine has them all', async () => {
-    const presets: PresetChoice[] = [{ preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, on_machines: [] }]
+    const presets: PresetChoice[] = [
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, on_machines: [] }
+    ]
     const { acts } = install([row()], {
       machines: [ready()],
       presets: async () => presets,
-      refuse: (op) => (op === 'connect_on_machine' ? 'it is installed but has no usable credential' : null),
+      refuse: op => (op === 'connect_on_machine' ? 'it is installed but has no usable credential' : null)
     })
     await mount()
     await openMachines()
@@ -2665,7 +3105,9 @@ describe('the machines module', () => {
     presets[0]!.on_machines = ['box']
     await openSheet('Lab box')
     await click(sheetAct('gui.machine.connect_here'))
-    expect([...sheet()!.querySelectorAll('.extAgents-about')].map((n) => n.textContent)).toContain('gui.machine.presets_none')
+    expect([...sheet()!.querySelectorAll('.extAgents-about')].map(n => n.textContent)).toContain(
+      'gui.machine.presets_none'
+    )
     expect((sheetAct('gui.machine.connect_do') as HTMLButtonElement).disabled).toBe(true)
   })
 
@@ -2676,8 +3118,8 @@ describe('the machines module', () => {
         localKeys: async () => {
           reads += 1
           return ['~/.ssh/id_ed25519', '~/.ssh/id_rsa']
-        },
-      },
+        }
+      }
     })
     await mount()
     await openMachines()
@@ -2685,16 +3127,26 @@ describe('the machines module', () => {
     await act(async () => {})
     const key = field('gui.machine.f_key') as HTMLInputElement
     expect(key.value).toBe('~/.ssh/id_ed25519')
-    expect([...sheet()!.querySelectorAll('datalist option')].map((o) => (o as HTMLOptionElement).value)).toEqual(['~/.ssh/id_ed25519', '~/.ssh/id_rsa'])
-    expect([...sheet()!.querySelectorAll('.extAgents-about')].map((n) => n.textContent)).toContain('gui.machine.keys_found gui.machine.key_note')
+    expect([...sheet()!.querySelectorAll('datalist option')].map(o => (o as HTMLOptionElement).value)).toEqual([
+      '~/.ssh/id_ed25519',
+      '~/.ssh/id_rsa'
+    ])
+    expect([...sheet()!.querySelectorAll('.extAgents-about')].map(n => n.textContent)).toContain(
+      'gui.machine.keys_found gui.machine.key_note'
+    )
     /* The filled key counts: the form is ready once the other fields are typed. */
     const go = (): HTMLButtonElement => sheet()!.querySelector<HTMLButtonElement>('.extAgents-act button')!
-    for (const [label, value] of [['gui.machine.f_name', 'GPU box 1'], ['gui.machine.f_id', 'gpu1'], ['gui.machine.f_host', '203.0.113.7'], ['gui.machine.f_user', 'alice']] as const) {
+    for (const [label, value] of [
+      ['gui.machine.f_name', 'GPU box 1'],
+      ['gui.machine.f_id', 'gpu1'],
+      ['gui.machine.f_host', '203.0.113.7'],
+      ['gui.machine.f_user', 'alice']
+    ] as const) {
       await typeInto(field(label), value)
     }
     expect(go().disabled).toBe(false)
     await click(go())
-    expect((mcalls.find((c) => c[0] === 'add')![1][0] as RegisterForm).key).toBe('~/.ssh/id_ed25519')
+    expect((mcalls.find(c => c[0] === 'add')![1][0] as RegisterForm).key).toBe('~/.ssh/id_ed25519')
     /* Read once per page, not per form. */
     expect(reads).toBe(1)
   })
@@ -2708,17 +3160,31 @@ describe('the machines module', () => {
     const key = field('gui.machine.f_key') as HTMLInputElement
     expect(key.value).toBe('')
     expect(key.placeholder).toBe('~/.ssh/id_ed25519')
-    expect([...sheet()!.querySelectorAll('.extAgents-about')].map((n) => n.textContent)).toContain('gui.machine.keys_none gui.machine.key_note')
+    expect([...sheet()!.querySelectorAll('.extAgents-about')].map(n => n.textContent)).toContain(
+      'gui.machine.keys_none gui.machine.key_note'
+    )
   })
 
   it('connects an agent absent on this computer onto a machine from its own sheet', async () => {
     const { acts } = install(
-      [row({ name: 'codex', preset: 'codex', kind: 'cli', configured: false, enabled: false, probe_status: 'missing', probe_missing: 'codex' })],
-      { machines: [ready()] },
+      [
+        row({
+          name: 'codex',
+          preset: 'codex',
+          kind: 'cli',
+          configured: false,
+          enabled: false,
+          probe_status: 'missing',
+          probe_missing: 'codex'
+        })
+      ],
+      { machines: [ready()] }
     )
     await mount()
     await openSheet('codex')
-    expect([...sheet()!.querySelectorAll('.extAgents-about')].map((n) => n.textContent)).toContain('gui.machine.missing_but_machine')
+    expect([...sheet()!.querySelectorAll('.extAgents-about')].map(n => n.textContent)).toContain(
+      'gui.machine.missing_but_machine'
+    )
     expect(sheetActs()).toEqual(['gui.agent.recheck'])
     await pickOption(field('gui.machine.where') as HTMLSelectElement, 'box')
     expect(sheetActs()).toEqual(['gui.agent.recheck', 'gui.machine.connect_on {"name":"Lab box"}'])
@@ -2735,27 +3201,32 @@ describe('the machines module', () => {
        the write's own continuation -- the roster read, the toast -- is a few
        more turns of the loop. */
     return {
-      connect: () => new Promise<Landed>((res) => { release = (why) => res(why === null ? { name: 'codex@box' } : { refused: why }) }),
-      release: async (why) => {
+      connect: () =>
+        new Promise<Landed>(res => {
+          release = why => res(why === null ? { name: 'codex@box' } : { refused: why })
+        }),
+      release: async why => {
         await act(async () => {
           release(why)
         })
         for (let i = 0; i < 4; i++) {
           await act(async () => {
-            await new Promise((res) => setTimeout(res, 0))
+            await new Promise(res => setTimeout(res, 0))
           })
         }
-      },
+      }
     }
   }
 
   it('leaves the drawer alone when a machine-side connect ends after the reader opened another machine', async () => {
-    const presets: PresetChoice[] = [{ preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, on_machines: [] }]
+    const presets: PresetChoice[] = [
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, on_machines: [] }
+    ]
     const held = heldConnect()
     const { toasts, mcalls } = install([row()], {
       machines: [ready(), ready({ id: 'gpu1', name: 'GPU 1' })],
       presets: async () => presets,
-      connectOnMachine: () => held.connect(),
+      connectOnMachine: () => held.connect()
     })
     await mount()
     await openMachines()
@@ -2769,23 +3240,25 @@ describe('the machines module', () => {
     await click(sheetAct('gui.machine.connect_here'))
     expect(sheetName()).toBe('gui.machine.connect_title {"name":"GPU 1"}')
     expect(sheetStatus()).toBe('gui.machine.connect_hint')
-    const listsBefore = mcalls.filter((c) => c[0] === 'list').length
+    const listsBefore = mcalls.filter(c => c[0] === 'list').length
     /* The first write lands: the add is told, the lists are read again, and
        the drawer the reader is in now is not taken over. */
     await held.release(null)
     expect(sheetName()).toBe('gui.machine.connect_title {"name":"GPU 1"}')
     expect(sheetStatus()).toBe('gui.machine.connect_hint')
     expect(toasts).toEqual(['gui.machine.connected_said {"name":"codex@box"}'])
-    expect(mcalls.filter((c) => c[0] === 'list').length).toBeGreaterThan(listsBefore)
+    expect(mcalls.filter(c => c[0] === 'list').length).toBeGreaterThan(listsBefore)
   })
 
   it('tells a refusal that arrives after its form was replaced in a line, not on the form that replaced it', async () => {
-    const presets: PresetChoice[] = [{ preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, on_machines: [] }]
+    const presets: PresetChoice[] = [
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, on_machines: [] }
+    ]
     const held = heldConnect()
     const { toasts } = install([row()], {
       machines: [ready(), ready({ id: 'gpu1', name: 'GPU 1' })],
       presets: async () => presets,
-      connectOnMachine: () => held.connect(),
+      connectOnMachine: () => held.connect()
     })
     await mount()
     await openMachines()
@@ -2803,9 +3276,15 @@ describe('the machines module', () => {
   })
 
   it('does not reopen a drawer the reader closed while a machine-side connect ran, even inside the close fade', async () => {
-    const presets: PresetChoice[] = [{ preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, on_machines: [] }]
+    const presets: PresetChoice[] = [
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, on_machines: [] }
+    ]
     const held = heldConnect()
-    const { toasts } = install([row()], { machines: [ready()], presets: async () => presets, connectOnMachine: () => held.connect() })
+    const { toasts } = install([row()], {
+      machines: [ready()],
+      presets: async () => presets,
+      connectOnMachine: () => held.connect()
+    })
     await mount()
     await openMachines()
     await openSheet('Lab box')
@@ -2823,7 +3302,7 @@ describe('the machines module', () => {
     expect(store.get().msheet).toBeNull()
     expect(toasts).toEqual(['gui.machine.connected_said {"name":"codex@box"}'])
     await act(async () => {
-      await new Promise((res) => setTimeout(res, 300))
+      await new Promise(res => setTimeout(res, 300))
     })
     expect(store.get().mconnect).toBeNull()
     expect(detail.get().open).toBe(false)
@@ -2834,9 +3313,15 @@ describe('the machines module', () => {
   })
 
   it('tells a refusal that lands inside the close fade in a line, and leaves nothing on the next form', async () => {
-    const presets: PresetChoice[] = [{ preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, on_machines: [] }]
+    const presets: PresetChoice[] = [
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, on_machines: [] }
+    ]
     const held = heldConnect()
-    const { toasts } = install([row()], { machines: [ready()], presets: async () => presets, connectOnMachine: () => held.connect() })
+    const { toasts } = install([row()], {
+      machines: [ready()],
+      presets: async () => presets,
+      connectOnMachine: () => held.connect()
+    })
     await mount()
     await openMachines()
     await openSheet('Lab box')
@@ -2850,7 +3335,7 @@ describe('the machines module', () => {
     expect(store.get().mconnectFailed).toBe('')
     expect(toasts).toEqual(['gui.machine.connect_bad_named {"name":"codex@box"}'])
     await act(async () => {
-      await new Promise((res) => setTimeout(res, 300))
+      await new Promise(res => setTimeout(res, 300))
     })
     await openSheet('Lab box')
     await click(sheetAct('gui.machine.connect_here'))
@@ -2858,8 +3343,96 @@ describe('the machines module', () => {
     expect(note()).toBeNull()
   })
 
+  it('offers a row that exists no machine, even one switched off and missing here: its connect is a toggle', async () => {
+    /* The machine field and "Connect on" belonged to the preset stage; a configured row
+       connects by `toggle`, which carries no machine, so the button would have done another
+       thing than it said. */
+    const { acts } = install(
+      [
+        row({
+          name: 'codex',
+          preset: 'codex',
+          kind: 'cli',
+          configured: true,
+          enabled: false,
+          probe_status: 'missing',
+          probe_missing: 'codex'
+        })
+      ],
+      { machines: [ready()] }
+    )
+    await mount()
+    await openSheet('codex')
+    expect(field('gui.machine.where')).toBeNull()
+    expect([...sheet()!.querySelectorAll('.extAgents-about')].map(n => n.textContent)).not.toContain(
+      'gui.machine.missing_but_machine'
+    )
+    expect(sheetActs()).toEqual(['gui.agent.recheck'])
+    expect(acts).toEqual([])
+  })
+
+  it('greys a preset whose add on the machine is still running when the form is opened again, instead of adding it twice', async () => {
+    /* The first add's readiness ping takes up to a minute and the server writes only after it,
+       so a form opened again on the same machine meanwhile sees the preset as free; pressed, that
+       was a second ping ending in the duplicate refusal, with a toast saying connected and a form
+       saying not. The add in flight is known by its name across openings. */
+    const presets: PresetChoice[] = [
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, on_machines: [] },
+      { preset: 'opencode', name: 'OpenCode', kind: 'acp', description: 'd', connected_here: false, on_machines: [] }
+    ]
+    const held = heldConnect()
+    let asked = 0
+    const { toasts } = install([row()], {
+      machines: [ready()],
+      presets: async () => presets,
+      connectOnMachine: () => {
+        asked += 1
+        return held.connect()
+      }
+    })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    await click(sheetAct('gui.machine.connect_do'))
+    expect(asked).toBe(1)
+    await act(async () => {
+      detail.close()
+    })
+    await act(async () => {
+      await new Promise(res => setTimeout(res, 300))
+    })
+    /* The same machine's form again, while the first add still runs. */
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    const options = [...sheet()!.querySelectorAll('option')].map(o => [o.textContent, o.disabled])
+    expect(options).toEqual([
+      ['gui.machine.preset_connecting {"name":"Codex"}', true],
+      ['OpenCode', false]
+    ])
+    expect((field('gui.machine.f_preset') as HTMLSelectElement).value).toBe('opencode')
+    /* The one still free can be pressed; the one in flight cannot be chosen at all. */
+    expect(sheetAct('gui.machine.connect_do')!.disabled).toBe(false)
+    await held.release(null)
+    expect(toasts).toEqual(['gui.machine.connected_said {"name":"codex@box"}'])
+    expect(store.get().mconnectPending).toEqual([])
+    const after = [...sheet()!.querySelectorAll('option')].map(o => [o.textContent, o.disabled])
+    expect(after[0]).toEqual(['Codex', false])
+    expect(asked).toBe(1)
+  })
+
   it('offers an absent agent no machine when none is registered', async () => {
-    install([row({ name: 'codex', preset: 'codex', kind: 'cli', configured: false, enabled: false, probe_status: 'missing', probe_missing: 'codex' })])
+    install([
+      row({
+        name: 'codex',
+        preset: 'codex',
+        kind: 'cli',
+        configured: false,
+        enabled: false,
+        probe_status: 'missing',
+        probe_missing: 'codex'
+      })
+    ])
     await mount()
     await openSheet('codex')
     expect(field('gui.machine.where')).toBeNull()
