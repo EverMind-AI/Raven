@@ -294,6 +294,24 @@ def test_a_row_with_no_address_is_refused_by_the_transport():
     assert not reached and "no address" in message
 
 
+def test_local_keys_lists_the_computer_s_own_identities_in_ssh_s_order_and_a_named_pair_after_them(
+    tmp_path, monkeypatch
+):
+    point_home(monkeypatch, tmp_path)
+    ssh = tmp_path / ".ssh"
+    ssh.mkdir()
+    for name in ("id_rsa", "id_ecdsa", "id_ecdsa.pub", "deploy", "deploy.pub", "orphan.pub", "config"):
+        (ssh / name).write_text("x", encoding="utf-8")
+
+    assert adder.local_keys() == ["~/.ssh/id_ecdsa", "~/.ssh/id_rsa", "~/.ssh/deploy"]
+
+
+def test_local_keys_is_empty_without_an_ssh_directory(tmp_path, monkeypatch):
+    point_home(monkeypatch, tmp_path)
+
+    assert adder.local_keys() == []
+
+
 def test_ssh_defaults_reads_what_ssh_resolves_and_keeps_only_keys_that_exist(tmp_path, monkeypatch):
     real = tmp_path / "id_real"
     real.write_text("")

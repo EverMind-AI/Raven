@@ -1481,6 +1481,44 @@ async def subagents_test_cancel(params: dict) -> dict:
     return {"cancelled": True}
 
 
+async def subagents_presets(params: dict) -> dict:
+    """The presets an entry can be made from on a registered machine, and where each already is.
+
+    What the machines tab's "connect an agent on this machine" form chooses
+    from. Unlike ``subagents.list``, a preset is listed here whether or not an
+    entry already holds it: an entry is one preset on one machine, so a preset
+    connected on this computer is still to be had on each machine, under
+    ``<preset name>@<machine id>`` -- the roster withholds it only because two
+    rows of one NAME would be unusable there. Only the kinds a machine's node
+    starts are listed (acp, cli): a built-in agent is this process's own loop,
+    a Mirasim shim runs on this host's interpreter, and an openai endpoint
+    takes a key this form does not. The page greys a preset the machine
+    already has (``on_machines``) and says when this computer has it too
+    (``connected_here``), so the add's own refusals are not the first word.
+    """
+    configured = _as_configs(_read_agents())
+    presets: list[dict[str, Any]] = []
+    for preset in third_party_subagent_presets():
+        key = str(preset.get("preset") or "")
+        kind = preset.get("kind")
+        if kind not in ("acp", "cli") or key in BUNDLED_SHIM_PRESETS:
+            continue
+        name = str(preset.get("name") or key)
+        holders = [c for c in configured if getattr(c, "preset", None) == key or getattr(c, "name", "") == name]
+        wheres = [(getattr(c, "machine", None) or "").strip() for c in holders]
+        presets.append(
+            {
+                "preset": key,
+                "name": name,
+                "kind": kind,
+                "description": str(preset.get("description") or ""),
+                "connected_here": any(not where for where in wheres),
+                "on_machines": sorted({where for where in wheres if where}),
+            }
+        )
+    return {"presets": presets}
+
+
 def register_subagents_methods(
     dispatcher: "Dispatcher",
     *,
@@ -1489,6 +1527,7 @@ def register_subagents_methods(
     """Register the ``subagents.*`` methods on a dispatcher instance."""
     dispatcher.register("subagents.list", subagents_list)
     dispatcher.register("subagents.probe", subagents_probe)
+    dispatcher.register("subagents.presets", subagents_presets)
 
     async def _add(params: dict) -> dict:
         return await subagents_add(params, agent_loop_factory=agent_loop_factory)

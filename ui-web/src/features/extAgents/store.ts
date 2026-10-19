@@ -9,7 +9,7 @@ import { familyOf } from './catalogue'
 import * as machines from './machines'
 import { isFound, remedyOf, runsAgent, sectionOf, stageOf } from './source'
 
-import type { ExtAgentActArgs, ExtAgentOp, ExtAgentRow, ExtAgentsSource, Remedy } from './types'
+import type { ExtAgentActArgs, ExtAgentOp, ExtAgentRow, ExtAgentsSource, PresetChoice, Remedy } from './types'
 
 /* Page state, outside React on purpose: two of the callers that drive this page
  * are not React. The rail opens it (chrome/Rail.tsx) and Esc closes it
@@ -113,6 +113,18 @@ export interface ExtAgentsState {
      model one write. Here rather than in the row's component, which a reload
      would reset to the agent's default without the reader touching it. */
   picked: Record<string, string>
+  /* The machine whose "connect an agent on this machine" form is open in the
+     drawer, by registry id, or null: the fourth thing the one drawer draws,
+     exclusive with the other three. */
+  mconnect: string | null
+  /* What that form chooses from, read when it opens; null before the answer,
+     and the read's refusal beside it. */
+  presets: PresetChoice[] | null
+  presetsFailed: string
+  /* That form's own write, and its refusal -- the agent's words when it did
+     not answer on the machine. */
+  mconnecting: boolean
+  mconnectFailed: string
 }
 
 const store = makeStore<ExtAgentsState>({
@@ -130,6 +142,11 @@ const store = makeStore<ExtAgentsState>({
   wheres: {},
   picking: null,
   picked: {},
+  mconnect: null,
+  presets: null,
+  presetsFailed: '',
+  mconnecting: false,
+  mconnectFailed: '',
 })
 
 export const { get, subscribe, _resetForTests } = store
@@ -468,13 +485,50 @@ export function sheetOpen(row: ExtAgentRow): void {
   /* `msheet` and `picking` go with it: all three portal into the one drawer,
      and a sheet opened over the picker or a machine card would otherwise draw
      beside it. */
-  set({ sheet: row.name, msheet: null, picking: null, epoch: get().epoch + 1 })
+  set({ sheet: row.name, msheet: null, picking: null, mconnect: null, epoch: get().epoch + 1 })
 }
 
 /** The drawer on a machine card (its registry id), or on the register form (`new`). */
 export function machineSheetOpen(id: string): void {
   detail.open('extAgents')
-  set({ msheet: id, sheet: null, picking: null, epoch: get().epoch + 1 })
+  set({ msheet: id, sheet: null, picking: null, mconnect: null, epoch: get().epoch + 1 })
+}
+
+/** The drawer on a machine's "connect an agent on this machine" form; the presets are read as it opens. */
+export function machineConnectOpen(id: string): void {
+  detail.open('extAgents')
+  set({ mconnect: id, msheet: null, sheet: null, picking: null, presets: null, presetsFailed: '', mconnectFailed: '', epoch: get().epoch + 1 })
+  void loadPresets()
+}
+
+async function loadPresets(): Promise<void> {
+  try {
+    set({ presets: await source().presets(), presetsFailed: '' })
+  } catch (e) {
+    set({ presets: [], presetsFailed: failure(e) })
+  }
+}
+
+/* The add from the machine's side: the preset on that machine, under
+   `<preset name>@<machine>`. True when it landed; the roster is read again
+   then, with the probe, so the new card arrives with its verdict. A refusal
+   stays on the form, in the agent's own words. */
+export async function connectOnMachine(choice: PresetChoice, machine: string, remoteCwd: string): Promise<boolean> {
+  set({ mconnecting: true, mconnectFailed: '' })
+  try {
+    const refused = await source().connectOnMachine(choice, machine, remoteCwd)
+    if (refused !== null) {
+      set({ mconnectFailed: refused })
+      return false
+    }
+    await load(true)
+    return true
+  } catch (e) {
+    set({ mconnectFailed: failure(e) })
+    return false
+  } finally {
+    set({ mconnecting: false })
+  }
 }
 
 export function closeSheet(): void {
@@ -489,7 +543,7 @@ export function closeSheet(): void {
    nine rows it stands for each have a name, and the card has none. */
 export function pickerOpen(family: string): void {
   detail.open('extAgents')
-  set({ picking: family, sheet: null, msheet: null })
+  set({ picking: family, sheet: null, msheet: null, mconnect: null })
 }
 
 /* A model chosen for a member before it is connected; see `picked`. */
@@ -528,7 +582,7 @@ export async function pickAndConnect(row: ExtAgentRow): Promise<void> {
    the drawer has finished fading, or the card is gone from inside a panel that
    is still on screen. */
 export function sheetDismissed(): void {
-  if (!get().sheet && !get().msheet && !get().picking) return
+  if (!get().sheet && !get().msheet && !get().picking && !get().mconnect) return
   /* Which open this close belongs to. The name cannot answer that: closing a
      card and pressing the same row again inside the fade writes the same string
      back, so the pending drop read it as "still mine" and cleared the card that
@@ -536,7 +590,7 @@ export function sheetDismissed(): void {
      which would read as a reopen and leave the closed card up. */
   const gen = detail.get().gen
   detail.dropAfterFade(
-    () => set({ sheet: null, msheet: null, picking: null }),
+    () => set({ sheet: null, msheet: null, picking: null, mconnect: null }),
     () => detail.get().gen !== gen,
   )
 }

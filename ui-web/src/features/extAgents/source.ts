@@ -384,6 +384,36 @@ export const extAgentsSource: ExtAgentsSource = {
     }
     return extAgentsFetch(remeasures(op, row, a))
   },
+  presets: async () => {
+    const got = await gateway().call('subagents.presets', {})
+    return got.presets.map((p) => ({
+      preset: p.preset,
+      name: p.name,
+      kind: p.kind === 'cli' ? 'cli' : 'acp',
+      description: p.description || '',
+      connected_here: !!p.connected_here,
+      on_machines: Array.isArray(p.on_machines) ? p.on_machines.map(String) : [],
+    }))
+  },
+  /* The same add a preset's sheet makes, from the machine's side: the name is
+     fixed to `<preset name>@<machine>` so a preset this computer also has
+     connected lands as a second row rather than a second row of one name. The
+     server starts it on the machine once first, and a refusal is its own
+     sentence -- the agent's words when it did not answer. */
+  connectOnMachine: async (choice, machine, remoteCwd) => {
+    try {
+      await gateway().call('subagents.add', {
+        preset: choice.preset,
+        name: `${choice.name}@${machine}`,
+        machine,
+        remote_cwd: remoteCwd || undefined,
+      })
+      return null
+    } catch (e) {
+      const err = e as { message?: string; data?: { detail?: string } } | null
+      return (err && ((err.data && err.data.detail) || err.message)) || String(e)
+    }
+  },
 }
 
 /* Test seam only: the rows carried across a refetch are the module's. */
@@ -449,6 +479,7 @@ export function machineRowOf(r: MachineRowWire): MachineRow {
     install: { running: !!r.install?.running, ok: r.install?.ok ?? null, detail: r.install?.detail || '' },
     paths: Array.isArray(r.paths) ? r.paths.map(String) : [],
     problems: Array.isArray(r.problems) ? r.problems.map(String) : [],
+    agents_here: Array.isArray(r.agents_here) ? r.agents_here.map(String) : [],
   }
 }
 
@@ -481,5 +512,9 @@ export const machinesSource: MachinesSource = {
   remove: async (id) => {
     const got = await gateway().call('machines.remove', { id })
     return { removed: !!got.removed, detail: got.detail || '', agents: Array.isArray(got.agents) ? got.agents.map(String) : [] }
+  },
+  localKeys: async () => {
+    const got = await gateway().call('machines.local_keys', {})
+    return Array.isArray(got.keys) ? got.keys.map(String) : []
   },
 }

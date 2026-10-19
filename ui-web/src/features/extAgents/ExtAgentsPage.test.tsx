@@ -12,7 +12,7 @@ import { ExtAgentsApp } from './ExtAgentsPage'
 import * as machines from './machines'
 import * as store from './store'
 
-import type { ExtAgentActArgs, ExtAgentModelChoice, ExtAgentRow, ExtAgentsSource, MachineRow, MachinesSource, RegisterForm } from './types'
+import type { ExtAgentActArgs, ExtAgentModelChoice, ExtAgentRow, ExtAgentsSource, MachineRow, MachinesSource, PresetChoice, RegisterForm } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -74,6 +74,7 @@ function mrow(over: Partial<MachineRow> = {}): MachineRow {
     install: { running: false, ok: null, detail: '' },
     paths: [],
     problems: [],
+    agents_here: [],
     ...over,
   }
 }
@@ -112,6 +113,10 @@ function install(
       mcalls.push(['remove', [id]])
       return { removed: true, detail: 'removed', agents: [] }
     },
+    localKeys: async () => {
+      mcalls.push(['localKeys', []])
+      return []
+    },
     ...machinesOver,
   }
   const source: ExtAgentsSource = {
@@ -133,6 +138,12 @@ function install(
       }
       if (op === 'update' && args?.description !== undefined) r.description = args.description
       return rows
+    },
+    presets: async () => [],
+    connectOnMachine: async (choice, machine, remoteCwd) => {
+      acts.push(['connect_on_machine', `${choice.name}@${machine}`, { machine, remote_cwd: remoteCwd }])
+      const why = refuse ? refuse('connect_on_machine') : null
+      return why
     },
     ...rest,
   }
@@ -2384,7 +2395,7 @@ describe('the machines module', () => {
     expect(mcalls.filter((c) => c[0] === 'install')[1]).toEqual(['install', ['box', '/data/raven-node']])
     listed = { ...stored, node_version: '0.2.4', node_current: true, state: 'idle', install: { running: false, ok: true, detail: 'Installed the Raven node' } }
     await settle()
-    expect(sheetActs()).toEqual(['gui.machine.probe', 'gui.machine.doctor', 'gui.machine.remove_do'])
+    expect(sheetActs()).toEqual(['gui.machine.probe', 'gui.machine.doctor', 'gui.machine.remove_do', 'gui.machine.connect_here'])
     expect(controlOf('Lab box')).toBe('')
   })
 
@@ -2500,7 +2511,7 @@ describe('the machines module', () => {
     await mount()
     await openMachines()
     await openSheet('Lab box')
-    expect(sheetActs()).toEqual(['gui.machine.probe', 'gui.machine.doctor', 'gui.machine.remove_do'])
+    expect(sheetActs()).toEqual(['gui.machine.probe', 'gui.machine.doctor', 'gui.machine.remove_do', 'gui.machine.connect_here'])
     await click(sheetAct('gui.machine.remove_do'))
     expect(confirms).toEqual(['gui.machine.remove_do'])
     expect(sheetStatus()).toBe('gui.machine.remove_named {"agents":"claude_code@box"}')
@@ -2571,5 +2582,154 @@ describe('the machines module', () => {
     const where = field('gui.machine.where') as HTMLSelectElement
     expect([...where.options].map((o) => o.value)).toEqual([''])
     expect([...sheet()!.querySelectorAll('.extAgents-about')].map((n) => n.textContent)).toContain('gui.machine.where_none')
+  })
+
+  /* The card's second line: which connected entries run on the machine. */
+  const agentsLineOf = (name: string): string | null => rowNamed(name).querySelectorAll('.extAgents-one')[1]?.textContent ?? null
+  const pickOption = async (select: HTMLSelectElement, value: string): Promise<void> => {
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(select, value)
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+  }
+  const ready = (over: Partial<MachineRow> = {}): MachineRow => mrow({ node_version: '0.2.4', node_current: true, state: 'idle', ...over })
+
+  it('says on the card and in the sheet which agent entries run on the machine, and the next step on a ready one', async () => {
+    install([row()], { machines: [ready({ agents_here: ['Claude Code@box', 'codex@box'] }), mrow({ id: 'gpu1', name: 'GPU 1' })] })
+    await mount()
+    await openMachines()
+    expect(agentsLineOf('Lab box')).toBe('gui.machine.agents_line {"n":"2","names":"Claude Code@box, codex@box"}')
+    expect(agentsLineOf('GPU 1')).toBe('gui.machine.agents_line_none')
+    expect(rowNamed('Lab box').querySelector('.extAgents-foot-say')!.textContent).toBe('gui.machine.state_idle')
+    await openSheet('Lab box')
+    expect(sheet()!.querySelector('.extAgents-note-next .extAgents-note-t')!.textContent).toBe('gui.machine.next_title')
+    expect(sheetActs()).toContain('gui.machine.connect_here')
+    const fields = [...sheet()!.querySelectorAll('.extAgents-fld')].map((f) => [f.querySelector('.extAgents-k')!.textContent, f.querySelector('.extAgents-ro')?.textContent])
+    expect(fields).toContainEqual(['gui.machine.agents_here', 'Claude Code@box\ncodex@box'])
+    /* A machine without the node has nothing to connect onto yet: no pointer, no button. */
+    await openSheet('GPU 1')
+    expect(sheet()!.querySelector('.extAgents-note-next')).toBeNull()
+    expect(sheetActs()).not.toContain('gui.machine.connect_here')
+    expect(fields.find(([k]) => k === 'gui.machine.agents_here')).toBeDefined()
+  })
+
+  it('connects an agent on the machine from its sheet: the presets a node can start, the one here greyed, the add under preset@machine, then back to the sheet', async () => {
+    const presets: PresetChoice[] = [
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, on_machines: ['box'] },
+      { preset: 'claude_code', name: 'Claude Code', kind: 'acp', description: 'Claude Code CLI', connected_here: true, on_machines: [] },
+    ]
+    const { acts, loads, toasts, mcalls } = install([row()], { machines: [ready({ agents_here: ['Codex@box'] })], presets: async () => presets })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    expect(sheetName()).toBe('gui.machine.connect_title {"name":"Lab box"}')
+    expect(sheetStatus()).toBe('gui.machine.connect_hint')
+    const pick = field('gui.machine.f_preset') as HTMLSelectElement
+    expect([...pick.options].map((o) => [o.value, o.disabled, o.textContent])).toEqual([
+      ['codex', true, 'gui.machine.preset_on_machine {"name":"Codex"}'],
+      ['claude_code', false, 'gui.machine.preset_connected_here {"name":"Claude Code"}'],
+    ])
+    /* The first pickable one is chosen, with its own description under it. */
+    expect(pick.value).toBe('claude_code')
+    expect([...sheet()!.querySelectorAll('.extAgents-about')].map((n) => n.textContent)).toContain('Claude Code CLI')
+    await typeInto(field('gui.machine.remote_cwd'), '/data/w')
+    const before = loads.length
+    await click(sheetAct('gui.machine.connect_do'))
+    expect(acts).toEqual([['connect_on_machine', 'Claude Code@box', { machine: 'box', remote_cwd: '/data/w' }]])
+    /* The roster again, with the probe, so the new card arrives with its verdict; the machines too, for the card's line. */
+    expect(loads.slice(before)).toEqual([true])
+    expect(mcalls.filter((c) => c[0] === 'list').length).toBeGreaterThan(1)
+    expect(toasts).toEqual(['gui.machine.connected_said {"name":"Claude Code@box"}'])
+    expect(sheetName()).toBe('Lab box')
+  })
+
+  it('keeps the agent s own refusal on the connect form, and says there is nothing to connect when the machine has them all', async () => {
+    const presets: PresetChoice[] = [{ preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, on_machines: [] }]
+    const { acts } = install([row()], {
+      machines: [ready()],
+      presets: async () => presets,
+      refuse: (op) => (op === 'connect_on_machine' ? 'it is installed but has no usable credential' : null),
+    })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    await click(sheetAct('gui.machine.connect_do'))
+    expect(acts).toEqual([['connect_on_machine', 'Codex@box', { machine: 'box', remote_cwd: '' }]])
+    expect(sheetStatus()).toBe('gui.machine.connect_bad')
+    expect(note()).toEqual({ t: 'gui.machine.connect_bad', said: 'it is installed but has no usable credential' })
+    expect(sheetName()).toBe('gui.machine.connect_title {"name":"Lab box"}')
+    /* Every preset already on this machine: the form says so and offers no press. */
+    presets[0]!.on_machines = ['box']
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    expect([...sheet()!.querySelectorAll('.extAgents-about')].map((n) => n.textContent)).toContain('gui.machine.presets_none')
+    expect((sheetAct('gui.machine.connect_do') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('fills the key path with a key this computer has, offers the rest, and says when it has none', async () => {
+    let reads = 0
+    const { mcalls } = install([row()], {
+      machinesOver: {
+        localKeys: async () => {
+          reads += 1
+          return ['~/.ssh/id_ed25519', '~/.ssh/id_rsa']
+        },
+      },
+    })
+    await mount()
+    await openMachines()
+    await click(rowNamed('gui.machine.register'))
+    await act(async () => {})
+    const key = field('gui.machine.f_key') as HTMLInputElement
+    expect(key.value).toBe('~/.ssh/id_ed25519')
+    expect([...sheet()!.querySelectorAll('datalist option')].map((o) => (o as HTMLOptionElement).value)).toEqual(['~/.ssh/id_ed25519', '~/.ssh/id_rsa'])
+    expect([...sheet()!.querySelectorAll('.extAgents-about')].map((n) => n.textContent)).toContain('gui.machine.keys_found gui.machine.key_note')
+    /* The filled key counts: the form is ready once the other fields are typed. */
+    const go = (): HTMLButtonElement => sheet()!.querySelector<HTMLButtonElement>('.extAgents-act button')!
+    for (const [label, value] of [['gui.machine.f_name', 'GPU box 1'], ['gui.machine.f_id', 'gpu1'], ['gui.machine.f_host', '203.0.113.7'], ['gui.machine.f_user', 'alice']] as const) {
+      await typeInto(field(label), value)
+    }
+    expect(go().disabled).toBe(false)
+    await click(go())
+    expect((mcalls.find((c) => c[0] === 'add')![1][0] as RegisterForm).key).toBe('~/.ssh/id_ed25519')
+    /* Read once per page, not per form. */
+    expect(reads).toBe(1)
+  })
+
+  it('leaves the key path to the owner when this computer has no key, and points at the password login', async () => {
+    install([row()], { machinesOver: { localKeys: async () => [] } })
+    await mount()
+    await openMachines()
+    await click(rowNamed('gui.machine.register'))
+    await act(async () => {})
+    const key = field('gui.machine.f_key') as HTMLInputElement
+    expect(key.value).toBe('')
+    expect(key.placeholder).toBe('~/.ssh/id_ed25519')
+    expect([...sheet()!.querySelectorAll('.extAgents-about')].map((n) => n.textContent)).toContain('gui.machine.keys_none gui.machine.key_note')
+  })
+
+  it('connects an agent absent on this computer onto a machine from its own sheet', async () => {
+    const { acts } = install(
+      [row({ name: 'codex', preset: 'codex', kind: 'cli', configured: false, enabled: false, probe_status: 'missing', probe_missing: 'codex' })],
+      { machines: [ready()] },
+    )
+    await mount()
+    await openSheet('codex')
+    expect([...sheet()!.querySelectorAll('.extAgents-about')].map((n) => n.textContent)).toContain('gui.machine.missing_but_machine')
+    expect(sheetActs()).toEqual(['gui.agent.recheck'])
+    await pickOption(field('gui.machine.where') as HTMLSelectElement, 'box')
+    expect(sheetActs()).toEqual(['gui.agent.recheck', 'gui.machine.connect_on {"name":"Lab box"}'])
+    await click(sheetAct('gui.machine.connect_on {"name":"Lab box"}'))
+    expect(acts).toEqual([['connect', 'codex', { machine: 'box' }]])
+  })
+
+  it('offers an absent agent no machine when none is registered', async () => {
+    install([row({ name: 'codex', preset: 'codex', kind: 'cli', configured: false, enabled: false, probe_status: 'missing', probe_missing: 'codex' })])
+    await mount()
+    await openSheet('codex')
+    expect(field('gui.machine.where')).toBeNull()
+    expect(sheetActs()).toEqual(['gui.agent.recheck'])
   })
 })

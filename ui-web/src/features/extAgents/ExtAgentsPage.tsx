@@ -12,7 +12,7 @@ import { defaultProviders as hostProviders, loadDefaultProviders } from '../mode
 import { offered, withCurrent } from '../model/types'
 import { byOf, familyOf, installOf, isOwnRow } from './catalogue'
 import { badOf, healthOf, kindOf, ledClass, pendingLabel, refusedWrite, shownOf } from './health'
-import { MachineSheet, MachinesGrid, RegisterSheet, WhereField } from './MachineCards'
+import { MachineConnectSheet, MachineSheet, MachinesGrid, RegisterSheet, WhereField } from './MachineCards'
 import * as machines from './machines'
 import { CardGrid, Spin, Tile, WaitGrid, ago, connect, oneLine, ordered, refusedLabel, whyOf } from './Rows'
 import { gridEntries, sectionOf, stageOf } from './source'
@@ -603,13 +603,25 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
     else connect(row)
   }
 
+  /* An absent agent can still be connected on a registered machine, where
+     it is installed: the machine picked in the sheet's "Runs on", if any. */
+  const machinePicked = ms.rows.find((m) => m.id === store.whereOf(row.name).machine)
+  const offersMachines = ms.rows.some((m) => m.transport === 'ssh') && !row.builtin && !row.vendored
   let actions: JSX.Element | null
   if (shown === 'missing') {
     actions = (
-      <button className="mini go" disabled={s.loading} onClick={() => void store.recheck(row)}>
-        {s.loading ? <Spin /> : null}
-        {t(s.loading ? 'gui.agent.checking' : 'gui.agent.recheck')}
-      </button>
+      <>
+        <button className={machinePicked ? 'mini' : 'mini go'} disabled={s.loading} onClick={() => void store.recheck(row)}>
+          {s.loading ? <Spin /> : null}
+          {t(s.loading ? 'gui.agent.checking' : 'gui.agent.recheck')}
+        </button>
+        {machinePicked && offersMachines ? (
+          <button className="mini go" disabled={!!s.joining[row.name]} onClick={() => connect(row)}>
+            {s.joining[row.name] ? <Spin /> : null}
+            {t('gui.machine.connect_on', { name: machinePicked.name })}
+          </button>
+        ) : null}
+      </>
     )
   } else if (shown === 'on') {
     actions = row.builtin ? null : (
@@ -680,6 +692,12 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
             <InstallBlock row={row} />
             {s.stillMissing.includes(row.name) && !s.loading ? (
               <div className="extAgents-probe extAgents-probe-bad">{t('gui.agent.still_missing')}</div>
+            ) : null}
+            {offersMachines ? (
+              <>
+                <div className="extAgents-about">{t('gui.machine.missing_but_machine')}</div>
+                <WhereField ms={ms} row={row} />
+              </>
             ) : null}
           </>
         ) : (
@@ -909,13 +927,18 @@ export function ExtAgentsApp(): JSX.Element {
   const scanning = s.loading && s.rows.length === 0
   const sheetRow = s.sheet ? s.rows.find((x) => x.name === s.sheet) : undefined
   const machineRow = s.msheet && s.msheet !== 'new' ? ms.rows.find((x) => x.id === s.msheet) : undefined
+  const connectOn = s.mconnect ? ms.rows.find((x) => x.id === s.mconnect) : undefined
   /* The drawer's content, whichever module is drawn: a machine's sheet or the
      register form opens from the machines module, an agent's sheet or the
      family picker from the agents module, and all of them portal into the one
      drawer, so the page renders at most one. */
   const sheets = (
     <>
-      {s.msheet === 'new' ? (
+      {connectOn ? (
+        /* Not remounted per `epoch`, like the picker: the form holds a choice
+           in progress, and its own write reloads the roster. */
+        <MachineConnectSheet key={`connect:${connectOn.id}`} row={connectOn} s={s} />
+      ) : s.msheet === 'new' ? (
         <RegisterSheet key={`new:${s.epoch}`} ms={ms} />
       ) : machineRow ? (
         <MachineSheet key={`${machineRow.id}:${s.epoch}`} ms={ms} row={machineRow} />

@@ -15,6 +15,9 @@ import * as store from './store'
 
 import type { ExtAgentActArgs, ExtAgentRow, ExtAgentsSource } from './types'
 
+/* The two source verbs the machine sheet's form uses; nothing here opens that form. */
+const offMachine = { presets: async () => [], connectOnMachine: async () => null }
+
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -52,6 +55,7 @@ function install(rows: ExtAgentRow[], refuse: Record<string, string> = {}) {
   const acts: Array<[string, string, ExtAgentActArgs]> = []
   const loads: boolean[] = []
   const source: ExtAgentsSource = {
+    ...offMachine,
     load: async (probe) => {
       loads.push(!!probe)
       return rows
@@ -98,7 +102,7 @@ describe('the onboarding wizard\'s agents step', () => {
   it('shows a scanning placeholder before the first answer lands', async () => {
     let resolveLoad: (rows: ExtAgentRow[]) => void = () => {}
     install([])
-    setSources({ extAgents: { load: () => new Promise((res) => (resolveLoad = res)), act: async () => [] } })
+    setSources({ extAgents: { ...offMachine, load: () => new Promise((res) => (resolveLoad = res)), act: async () => [] } })
     render(<AgentsStepBody />)
     await act(async () => {
       void store.load(true)
@@ -252,6 +256,7 @@ describe('the onboarding wizard\'s agents step', () => {
     install(rows)
     setSources({
       extAgents: {
+        ...offMachine,
         load: async () => rows,
         act: () => new Promise<ExtAgentRow[]>((res) => (release = res)),
       },
@@ -309,6 +314,7 @@ describe('the onboarding wizard\'s agents step', () => {
     install(rows)
     setSources({
       extAgents: {
+        ...offMachine,
         load: async () => rows,
         act: async () => {
           throw { data: { detail: 'English', remedy: { kind: 'sign_in', command: 'codex login' } } }
@@ -338,6 +344,7 @@ describe('the onboarding wizard\'s agents step', () => {
     install(rows)
     setSources({
       extAgents: {
+        ...offMachine,
         load: async () => rows,
         act: async () => {
           throw { data: { detail: 'English', remedy } }
@@ -374,6 +381,7 @@ describe('the onboarding wizard\'s agents step', () => {
     install(rows)
     setSources({
       extAgents: {
+        ...offMachine,
         load: async () => rows,
         act: async () => {
           throw { data: { detail: 'English', remedy } }
@@ -399,6 +407,7 @@ describe('the onboarding wizard\'s agents step', () => {
     install(rows)
     setSources({
       extAgents: {
+        ...offMachine,
         load: async () => rows,
         act: async () => {
           throw { data: { detail: 'English', remedy: { kind: 'download', command: 'npx -y @agentclientprotocol/claude-agent-acp@0.79.0' } } }

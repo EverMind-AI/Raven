@@ -126,10 +126,81 @@ async def test_list_says_what_a_machine_is_and_how_its_link_is_doing_and_never_t
         "install": {"running": False, "detail": ""},
         "paths": ["/data/work"],
         "problems": [],
+        "agents_here": [],
     }
     assert here["transport"] == "local" and here["state"] == "off" and "node_version" not in here
     for secret in SECRETS:
         assert secret not in json.dumps(out)
+
+
+async def test_list_names_the_connected_agent_entries_that_run_on_each_machine(pool, monkeypatch):
+    """The line a reader whose machine is up and idle was missing: what is connected here, by name."""
+    _store(BOX, HERE)
+    asked: list[tuple[str, bool]] = []
+
+    def named(conn_id: str, only_enabled: bool = False) -> list[str]:
+        asked.append((conn_id, only_enabled))
+        return ["Claude Code@box", "codex@box"] if conn_id == "box" else []
+
+    monkeypatch.setattr(rpc, "agents_on_machine", named)
+
+    out = await rpc.machines_list({})
+
+    _check("machines.list", out)
+    box, here = out["rows"]
+    assert box["agents_here"] == ["Claude Code@box", "codex@box"]
+    assert here["agents_here"] == []
+    # Connected entries only: a switched-off one still names the machine, but is not what "runs here" means.
+    assert ("box", True) in asked
+
+
+async def test_list_lists_no_agent_over_a_malformed_agents_section_rather_than_failing(pool, monkeypatch):
+    _store(BOX)
+
+    def broken(conn_id: str, only_enabled: bool = False) -> list[str]:
+        raise ValidationError.from_exception_data("SubagentsConfig", [])
+
+    monkeypatch.setattr(rpc, "agents_on_machine", broken)
+
+    out = await rpc.machines_list({})
+
+    _check("machines.list", out)
+    assert out["rows"][0]["agents_here"] == []
+
+
+# --- machines.local_keys ---------------------------------------------------------
+
+
+async def test_local_keys_proposes_ssh_s_own_identities_first_then_any_key_with_its_public_half(_home):
+    ssh = _home / ".ssh"
+    ssh.mkdir()
+    for name in (
+        "id_rsa",
+        "id_rsa.pub",
+        "id_ed25519",
+        "work_key",
+        "work_key.pub",
+        "lonely.pub",
+        "config",
+        "known_hosts",
+        "authorized_keys",
+    ):
+        (ssh / name).write_text("x", encoding="utf-8")
+    (ssh / "a_dir.pub").mkdir()
+
+    out = await rpc.machines_local_keys({})
+
+    _check("machines.local_keys", out)
+    # ed25519 before rsa, as ssh offers them, whether or not it has a .pub beside it; then the
+    # owner's own pair by name; never a .pub, a public half with no private one, or ssh's files.
+    assert out["keys"] == ["~/.ssh/id_ed25519", "~/.ssh/id_rsa", "~/.ssh/work_key"]
+
+
+async def test_local_keys_proposes_nothing_on_a_computer_without_an_ssh_directory(_home):
+    out = await rpc.machines_local_keys({})
+
+    _check("machines.local_keys", out)
+    assert out == {"keys": []}
 
 
 async def test_list_reads_the_node_off_the_row_when_no_link_is_up_and_says_whether_it_is_current(pool, this_node):

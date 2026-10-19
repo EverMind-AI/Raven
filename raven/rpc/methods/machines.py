@@ -6,9 +6,14 @@ that command behind a page -- list, add, install-node, remove, doctor --
 answering what the command prints, as data, with the one difference the
 contract states: nothing here carries an address, an account or a key path.
 A row says what a machine is, how this computer's link to it is doing
-(:meth:`raven.node.client.NodePool.status`) and whether its Raven node is
-this Raven's own code; the way onto it travels once, in ``machines.add``, and
-is not read back.
+(:meth:`raven.node.client.NodePool.status`), whether its Raven node is this
+Raven's own code, and which connected agent entries run on it
+(``agents_here``, from :func:`raven.config.update_subagents.agents_on_machine`)
+-- the one line that tells a reader whose machine is up and idle that the
+next step is on the agents side; the way onto it travels once, in
+``machines.add``, and is not read back. ``machines.local_keys`` names the
+private keys this computer has, for the register form to propose instead of
+a placeholder path.
 
 An install takes minutes and a page cannot hold a call that long, so
 ``machines.install_node`` starts one in the background and ``machines.list``
@@ -119,10 +124,26 @@ def _row_out(row: dict[str, Any]) -> dict[str, Any]:
         "install": install.as_json() if install is not None else dict(_NO_INSTALL),
         "paths": [str(x) for x in row["paths"]] if isinstance(row.get("paths"), list) else [],
         "problems": [p.text for p in row_problems(row) if p.blocking],
+        "agents_here": _agents_here(conn_id),
     }
     if version:
         out["node_version"] = version
     return out
+
+
+def _agents_here(conn_id: str) -> list[str]:
+    """The connected agent entries that run on the machine, by name.
+
+    Connected ones only (``only_enabled``), which is what the agents page
+    calls connected too; an entry switched off still names the machine, and
+    the removal refuses over it, but it is not what the card means by "runs
+    here". A malformed agents section is the agents page's to report: the
+    machine is still what it is, with nothing listed.
+    """
+    try:
+        return agents_on_machine(conn_id, only_enabled=True)
+    except ValidationError:
+        return []
 
 
 def _registry() -> connections.Read:
@@ -418,6 +439,17 @@ async def machines_remove(params: dict) -> dict:
     return {"removed": True, "detail": detail, "agents": named + left}
 
 
+async def machines_local_keys(params: dict) -> dict:
+    """The private keys this computer has, as ``~/.ssh/<name>`` paths, ssh's own default identities first.
+
+    What the register form fills its key field with, and offers as the
+    choices, instead of a placeholder that names a key the owner may not have
+    (:func:`raven.ops.connection_add.local_keys`). Paths on this computer,
+    for its owner's own form; nothing about any machine.
+    """
+    return {"keys": connection_add.local_keys()}
+
+
 def register_machines_methods(dispatcher: "Dispatcher") -> None:
     """Register the ``machines.*`` methods on a dispatcher instance."""
     dispatcher.register("machines.list", machines_list)
@@ -425,12 +457,14 @@ def register_machines_methods(dispatcher: "Dispatcher") -> None:
     dispatcher.register("machines.install_node", machines_install_node)
     dispatcher.register("machines.doctor", machines_doctor)
     dispatcher.register("machines.remove", machines_remove)
+    dispatcher.register("machines.local_keys", machines_local_keys)
 
 
 __all__ = [
     "NODE_FIELD",
     "machines_add",
     "machines_doctor",
+    "machines_local_keys",
     "machines_install_node",
     "machines_list",
     "machines_remove",

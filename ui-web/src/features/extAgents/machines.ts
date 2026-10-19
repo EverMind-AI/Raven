@@ -39,6 +39,9 @@ export interface MachinesState {
   addReason: RegisterReason
   /* The doctor's last answer, or null before it was asked. */
   problems: MachineProblem[] | null
+  /* The private keys this computer has, as `~/.ssh/<name>` paths, read once
+     for the register form; null before the first answer. */
+  keys: string[] | null
 }
 
 const EMPTY: MachinesState = {
@@ -52,6 +55,7 @@ const EMPTY: MachinesState = {
   addFailed: '',
   addReason: '',
   problems: null,
+  keys: null,
 }
 
 const store = makeStore<MachinesState>(EMPTY)
@@ -147,6 +151,15 @@ export async function probe(id: string): Promise<void> {
     await load(true, id)
   } finally {
     set({ busy: without(get().busy, id) })
+  }
+}
+
+/** The keys on this computer the register form proposes; a read that fails proposes none. */
+export async function loadKeys(): Promise<void> {
+  try {
+    set({ keys: await ds('machines').localKeys() })
+  } catch {
+    set({ keys: [] })
   }
 }
 

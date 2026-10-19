@@ -93,7 +93,10 @@ the refusal says what kind it was (unreachable, login refused, changed host
 key, no answer in time) and what to do about it. What the page shows
 afterwards is what the machine is -- its name, id, link and node -- never its
 address, user or key path: those travel once, in the form, and are not read
-back.
+back. The private-key field starts filled with a key this computer has: ssh's
+own identities first (`~/.ssh/id_ed25519` before `id_rsa`), then any pair you
+named, with the others to pick from; when none is found the form says so, and
+*Password* is the other way in.
 
 ## 2. Install the node
 
@@ -143,10 +146,22 @@ has the node before any link to it is up.
 in the background: the card says *Installing the node* until it ends, and the
 sheet keeps how it ended. The sheet's *Install into* field is the command's
 `--dir`. A machine whose node is another Raven's shows *needs updating* and
-offers **Update node**. An agent is connected onto a machine from its preset's
-sheet (*Runs on*), which lists the registered machines, lets only those with
-this Raven's node be picked (the others say why), and takes the working
-directory there for an acp or cli agent.
+offers **Update node**.
+
+Once the node is up, the card says which agent entries are connected on the
+machine (*No agent connected here yet* until one is; the state line, *Link
+up, no agent running*, is about this moment), and the sheet says the next
+step and offers **Connect an agent on this machine**: pick the agent, give
+its working directory there, and **Connect** adds `<preset name>@<machine
+id>` the way section 4's `subagents.add` does, one real prompt run on the
+machine first. The list has every preset a machine's node can start,
+including one already connected on this computer -- that is a second entry,
+on the machine, not a conflict. An agent's own sheet connects it onto a
+machine too (*Runs on*), which lists the registered machines, lets only those
+with this Raven's node be picked (the others say why), and takes the working
+directory there; an agent that is not installed on this computer offers it
+as well, since what matters is that it is installed and signed in on the
+machine.
 
 **Upgrading.** The node runs exactly the code of the Raven that installed it,
 checked by a digest on every connection. After you update Raven on this
@@ -256,8 +271,8 @@ The add is refused up front when the preset is a built-in agent, when an
 OpenAI preset is given a `remote_cwd`, or when the machine's entry cannot be
 used.
 
-The sub-agent page's **Add** does not take a machine yet; use the chat or the
-config file for that.
+On the page, the same add is the machine sheet's **Connect an agent on this
+machine**, or *Runs on* in the agent's own sheet.
 
 ## 5. What happens when you dispatch
 

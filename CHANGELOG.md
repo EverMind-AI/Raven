@@ -18,6 +18,19 @@ All notable changes to Raven are documented here.
   the node before any link is up. New RPC group
   `machines.{list,add,install_node,doctor,remove}`.
 
+- The Machines tab says what to do next. A card names the agent entries
+  connected on the machine (*No agent connected here yet* until one is; the
+  state line now reads *Link up, no agent running*), and a machine whose node
+  is up has **Connect an agent on this machine** in its sheet: pick the agent
+  and its working directory there, and **Connect** adds `<preset name>@<machine
+  id>` with one proof prompt run on the machine. The list has every preset a
+  node can start, including one already connected on this computer. An agent
+  that is not installed on this computer can be connected onto a machine from
+  its own sheet (*Runs on*). The register form fills the private-key path with
+  a key this computer has instead of a placeholder. New read-only RPCs
+  `subagents.presets` and `machines.local_keys`; `machines.list` rows carry
+  `agents_here`.
+
 - The bug report review remembers your redaction decisions. Every keep or
   replace answer is stored in `redaction_history.json` under the Raven home
   (hashes and masked samples only), and the next `report-bug` or browser

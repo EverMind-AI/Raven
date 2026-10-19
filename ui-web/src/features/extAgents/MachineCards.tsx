@@ -21,12 +21,14 @@ import { createPortal } from 'react-dom'
 import { Glyph } from '../../components/Ico'
 import { t } from '../../i18n/t'
 import { ask as confirmAsk } from '../../state/confirm'
+import { show as toast } from '../../state/toast'
 import * as machines from './machines'
 import { Spin, WaitGrid } from './Rows'
 import * as store from './store'
 
 import type { MachinesState } from './machines'
-import type { MachineLink, MachineRow, RegisterForm, RegisterReason } from './types'
+import type { ExtAgentsState } from './store'
+import type { MachineLink, MachineRow, PresetChoice, RegisterForm, RegisterReason } from './types'
 import type { JSX } from 'react'
 
 const MACHINE = 'M4 5.5h16v9.5H4zM9.5 19h5M12 15.5V19'
@@ -102,6 +104,19 @@ function nodeLine(row: MachineRow, ms: MachinesState): string {
 
 const installLabel = (row: MachineRow): string => t(row.node_version ? 'gui.machine.update' : 'gui.machine.install')
 
+/* Which connected agent entries run on the machine. The line a reader whose
+   machine is up and idle was missing: "no agent running" says what the link
+   is doing now, this says whether anything is connected here at all. */
+function agentsLine(row: MachineRow): string {
+  return row.agents_here.length
+    ? t('gui.machine.agents_line', { n: String(row.agents_here.length), names: row.agents_here.join(', ') })
+    : t('gui.machine.agents_line_none')
+}
+
+/* A machine an agent can be connected on from its sheet: reached over ssh,
+   with this Raven's node on it, and not mid-install. */
+const canHost = (row: MachineRow, ms: MachinesState): boolean => row.transport === 'ssh' && row.node_current && !installing(row, ms)
+
 function MachineCard({ row, ms }: { row: MachineRow; ms: MachinesState }): JSX.Element {
   const open = (): void => store.machineSheetOpen(row.id)
   const failed = ms.failed[row.id]
@@ -146,6 +161,7 @@ function MachineCard({ row, ms }: { row: MachineRow; ms: MachinesState }): JSX.E
         </span>
         {nodeLine(row, ms)}
       </div>
+      {row.transport === 'ssh' ? <div className="extAgents-one">{agentsLine(row)}</div> : null}
       <div className="extAgents-foot-slot">
         <div className={'extAgents-foot ' + (failed ? 'extAgents-foot-busy' : 'extAgents-foot-quiet')}>
           <span className={failed ? 'extAgents-foot-k' : 'extAgents-foot-say'}>{failed || stateLine(row)}</span>
@@ -214,6 +230,7 @@ export function MachineSheet({ row, ms }: { row: MachineRow; ms: MachinesState }
   const bad = !!failed || row.state === 'error'
   const problems = (ms.problems ?? []).filter((p) => p.id === row.id)
   const shownProblems = ms.problems ? problems.map((p) => p.detail) : row.problems
+  const hosts = canHost(row, ms)
   const install = (): void => void machines.installNode(row.id, dirRef.current?.value.trim() || '')
   const remove = (): void =>
     confirmAsk(
@@ -244,6 +261,15 @@ export function MachineSheet({ row, ms }: { row: MachineRow; ms: MachinesState }
             <div className="extAgents-note-t">{t('gui.machine.install_bad')}</div>
             <div className="extAgents-note-said">{row.install.detail}</div>
             <div className="extAgents-about">{t('gui.machine.install_bad_hint')}</div>
+          </div>
+        ) : null}
+        {hosts ? (
+          /* The next step, said where the reader is: a machine with its node
+             up has nothing to do on this tab, and the agents tab does not
+             mention it until something runs here. */
+          <div className="extAgents-note extAgents-note-next">
+            <div className="extAgents-note-t">{t('gui.machine.next_title')}</div>
+            <div className="extAgents-note-p">{t('gui.machine.next_body')}</div>
           </div>
         ) : null}
         <Field k="id">{row.id}</Field>
@@ -277,6 +303,9 @@ export function MachineSheet({ row, ms }: { row: MachineRow; ms: MachinesState }
           </label>
         ) : null}
         <Field k={t('gui.machine.paths')}>{row.paths.length ? row.paths.join('\n') : t('gui.machine.paths_none')}</Field>
+        {row.transport === 'ssh' ? (
+          <Field k={t('gui.machine.agents_here')}>{row.agents_here.length ? row.agents_here.join('\n') : t('gui.machine.agents_here_none')}</Field>
+        ) : null}
         <Field k={t('gui.machine.problems')}>
           {shownProblems.length ? shownProblems.join('\n') : t('gui.machine.no_problems')}
         </Field>
@@ -300,6 +329,99 @@ export function MachineSheet({ row, ms }: { row: MachineRow; ms: MachinesState }
         <button className="mini danger" disabled={busy || removing} onClick={remove}>
           {removing ? <Spin /> : null}
           {t('gui.machine.remove_do')}
+        </button>
+        {hosts ? (
+          <button className="mini go" disabled={removing} onClick={() => store.machineConnectOpen(row.id)}>
+            {t('gui.machine.connect_here')}
+          </button>
+        ) : null}
+      </div>
+    </div>,
+    dHost,
+  )
+}
+
+/* The form that connects an agent on a machine, opened from the machine's
+   sheet: the preset, its working directory there, and Connect -- the same add
+   a preset's own sheet makes with "Runs on", from the other side. It lists
+   presets the roster withholds (one already connected on this computer is
+   still to be had on a machine) and greys the ones this machine has; the name
+   is fixed to `<preset name>@<machine id>`, so nothing here collides with the
+   row of the same preset that runs here. */
+export function MachineConnectSheet({ row, s }: { row: MachineRow; s: ExtAgentsState }): JSX.Element {
+  const dHost = store.detailHost()
+  const cwdRef = useRef<HTMLInputElement>(null)
+  const [picked, setPicked] = useState('')
+  const choices = (s.presets ?? []).map((p) => ({ ...p, taken: p.on_machines.includes(row.id) }))
+  const pickable = choices.filter((c) => !c.taken)
+  const chosen: PresetChoice | undefined = pickable.find((c) => c.preset === picked) ?? pickable[0]
+  const busy = s.mconnecting
+  const submit = async (): Promise<void> => {
+    if (!chosen) return
+    const landed = await store.connectOnMachine(chosen, row.id, cwdRef.current?.value.trim() || '')
+    if (!landed) return
+    toast(t('gui.machine.connected_said', { name: `${chosen.name}@${row.id}` }))
+    /* The card's own line changes with it; back to the sheet that says so. */
+    void machines.load()
+    store.machineSheetOpen(row.id)
+  }
+  const label = (c: (typeof choices)[number]): string =>
+    c.taken
+      ? t('gui.machine.preset_on_machine', { name: c.name })
+      : c.connected_here
+        ? t('gui.machine.preset_connected_here', { name: c.name })
+        : c.name
+  return createPortal(
+    <div className="extAgents-sheet" aria-label={t('gui.machine.connect_title', { name: row.name })} role="document">
+      <div className="extAgents-head">
+        <MachineTile />
+        <div className="extAgents-meta">
+          <h3>{t('gui.machine.connect_title', { name: row.name })}</h3>
+          <div className={'extAgents-by' + (s.mconnectFailed && !busy ? ' extAgents-by-bad' : '')}>
+            {busy ? t('gui.machine.connecting') : s.mconnectFailed ? t('gui.machine.connect_bad') : t('gui.machine.connect_hint')}
+          </div>
+        </div>
+      </div>
+      <div className="extAgents-body">
+        {s.presets === null && !s.presetsFailed ? (
+          <div className="extAgents-about">{t('gui.machine.presets_loading')}</div>
+        ) : s.presetsFailed ? (
+          <div className="extAgents-note extAgents-note-warn">
+            <div className="extAgents-note-said">{s.presetsFailed}</div>
+          </div>
+        ) : pickable.length === 0 ? (
+          <div className="extAgents-about">{t('gui.machine.presets_none')}</div>
+        ) : (
+          <>
+            <label className="extAgents-fld">
+              <span className="extAgents-k">{t('gui.machine.f_preset')}</span>
+              <select aria-label={t('gui.machine.f_preset')} className="extAgents-in" onChange={(e) => setPicked(e.target.value)} value={chosen?.preset ?? ''}>
+                {choices.map((c) => (
+                  <option disabled={c.taken} key={c.preset} value={c.preset}>
+                    {label(c)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {chosen?.description ? <div className="extAgents-about">{chosen.description}</div> : null}
+            <label className="extAgents-fld">
+              <span className="extAgents-k">{t('gui.machine.remote_cwd')}</span>
+              <input aria-label={t('gui.machine.remote_cwd')} className="extAgents-in extAgents-in-mono" placeholder="~/raven-work" ref={cwdRef} type="text" />
+            </label>
+            <div className="extAgents-about">{t('gui.machine.next_body')}</div>
+          </>
+        )}
+        {s.mconnectFailed && !busy ? (
+          <div className="extAgents-note extAgents-note-warn">
+            <div className="extAgents-note-t">{t('gui.machine.connect_bad')}</div>
+            <div className="extAgents-note-said">{s.mconnectFailed}</div>
+          </div>
+        ) : null}
+      </div>
+      <div className="extAgents-act">
+        <button className="mini go" disabled={busy || !chosen} onClick={() => void submit()} type="button">
+          {busy ? <Spin /> : null}
+          {t(busy ? 'gui.machine.connecting' : 'gui.machine.connect_do')}
         </button>
       </div>
     </div>,
@@ -353,6 +475,21 @@ export function RegisterSheet({ ms }: { ms: MachinesState }): JSX.Element {
        until something is typed into it. */
     setReady(false)
   }
+  /* The key field starts filled with a key this computer has, ssh's own
+     first, rather than a placeholder naming one the owner may not have. Read
+     once per page; filled whenever the field is drawn empty, which is also
+     after a switch back from Password. */
+  useEffect(() => {
+    if (ms.keys === null) void machines.loadKeys()
+  }, [ms.keys])
+  useEffect(() => {
+    const el = keyRef.current
+    const first = ms.keys?.[0]
+    if (el && first && !el.value) {
+      el.value = first
+      check()
+    }
+  })
   const submit = async (): Promise<void> => {
     const f = read()
     if (await machines.register(f)) store.machineSheetOpen(f.id)
@@ -406,8 +543,27 @@ export function RegisterSheet({ ms }: { ms: MachinesState }): JSX.Element {
         </div>
         {auth === 'key' ? (
           <>
-            {text(keyRef, t('gui.machine.f_key'), '~/.ssh/id_ed25519', true)}
-            <div className="extAgents-about">{t('gui.machine.key_note')}</div>
+            <label className="extAgents-fld">
+              <span className="extAgents-k">{t('gui.machine.f_key')}</span>
+              <input
+                aria-label={t('gui.machine.f_key')}
+                className="extAgents-in extAgents-in-mono"
+                list="extAgents-keys"
+                onChange={check}
+                placeholder={ms.keys && ms.keys.length ? '' : '~/.ssh/id_ed25519'}
+                ref={keyRef}
+                type="text"
+              />
+              <datalist id="extAgents-keys">
+                {(ms.keys ?? []).map((k) => (
+                  <option key={k} value={k} />
+                ))}
+              </datalist>
+            </label>
+            <div className="extAgents-about">
+              {ms.keys === null ? '' : ms.keys.length ? t('gui.machine.keys_found') + ' ' : t('gui.machine.keys_none') + ' '}
+              {t('gui.machine.key_note')}
+            </div>
           </>
         ) : (
           <>

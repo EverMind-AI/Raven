@@ -97,6 +97,15 @@ const ROSTER: Row[] = [
     description: 'MiroMind deep-research (OpenAI-compatible HTTP).' },
 ]
 
+/* The presets a machine's node can start, as `subagents.presets` lists them. */
+const PRESETS: Array<{ preset: string; name: string; kind: 'acp' | 'cli'; description: string }> = [
+  { preset: 'claude_code', name: 'Claude Code', kind: 'acp', description: 'An agentic coding tool that reads your codebase, edits files, runs commands, and integrates with your development tools.' },
+  { preset: 'codex', name: 'Codex', kind: 'acp', description: 'A coding agent from OpenAI that runs locally on your computer.' },
+  { preset: 'opencode', name: 'OpenCode', kind: 'acp', description: 'An open-source coding agent for the terminal.' },
+  { preset: 'hermes', name: 'Hermes Agent', kind: 'acp', description: 'A self-improving agent with a persistent memory.' },
+  { preset: 'openclaw', name: 'OpenClaw', kind: 'acp', description: 'An open-source agent for your own computer.' },
+]
+
 export interface SubagentsFixture {
   fixtures: Fixtures
 }
@@ -111,12 +120,34 @@ export function createSubagents(env: FixtureEnv): SubagentsFixture {
   return {
     fixtures: {
       'subagents.list': () => ({ rows: rows.map((r) => ({ ...r })) }),
+      /* What the machine sheet's connect form chooses from: the presets a
+         machine's node can start, whether or not a row here holds them, with
+         where each already runs read off the roster. */
+      'subagents.presets': () => ({
+        presets: PRESETS.map((p) => ({
+          ...p,
+          connected_here: rows.some((r) => r.preset === p.preset && r.configured && !r.machine),
+          on_machines: rows.filter((r) => r.preset === p.preset && r.configured && !!r.machine).map((r) => String(r.machine)),
+        })),
+      }),
       'subagents.add': (p) => {
         const row = find(p.name || p.preset || '')
         if (row) {
           row.configured = true
           row.enabled = row.kind !== 'openai' || row.has_api_key
           if (p.api_key) { row.has_api_key = true; row.enabled = true }
+        } else if (p.machine && p.name) {
+          /* An add on a machine makes a second row of the preset, under the
+             name the form fixed; drawn from the preset's own row when the
+             roster has one, so the offline page shows the card it would. */
+          const base = rows.find((r) => r.preset === p.preset) || find(p.preset || '')
+          if (base) {
+            rows.push({
+              ...base, name: p.name, machine: p.machine, configured: true, enabled: true,
+              group: 'installed', probe_status: 'ready', probe_detail: `runs on machine ${p.machine}; it ran and replied`,
+              last_test_ok: true, last_test_at_ms: env.now(), model_choices: [...(base.model_choices || [])],
+            })
+          }
         }
         return { added: true, name: p.name || '' }
       },

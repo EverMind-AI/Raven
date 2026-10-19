@@ -2112,6 +2112,68 @@
       ]
     },
     {
+      "name": "subagents.presets",
+      "summary": "The presets an agent entry can be made from on a registered machine, whether or not one already holds them, and where each already runs.",
+      "description": "What the machines tab's connect form chooses from. A preset connected on this computer is listed too: an entry is one preset on one machine, so it is still to be had on each machine, under <preset name>@<machine id>. Only the kinds a machine's node starts (acp, cli): no built-in agent, no Mirasim shim, no openai endpoint.",
+      "params": [],
+      "result": {
+        "name": "SubagentsPresetsResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "presets"
+          ],
+          "properties": {
+            "presets": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "preset",
+                  "name",
+                  "kind",
+                  "description",
+                  "connected_here",
+                  "on_machines"
+                ],
+                "properties": {
+                  "preset": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "acp",
+                      "cli"
+                    ]
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "connected_here": {
+                    "type": "boolean",
+                    "description": "An entry of this preset runs on this computer; one on a machine is a second entry, not a conflict."
+                  },
+                  "on_machines": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "The registered machines (ids) an entry of this preset already runs on."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
       "name": "subagents.add",
       "summary": "Install a sub-agent from a preset into the running config. A preset that would land enabled first has one real prompt sent through that agent, and the add is refused, reporting why, when it does not answer: that spends one call on the agent's own quota, can take up to 60s, and a refusal stores nothing at all. Only a builtin preset and force: true are exempt.",
       "params": [
@@ -3287,6 +3349,29 @@
                 "type": "string"
               },
               "description": "The agent entries that name the machine: the connected ones to disconnect first when the removal was refused over them; after a removal, the ones left pointing at nothing."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "machines.local_keys",
+      "summary": "The private keys this computer has, as ~/.ssh/<name> paths, ssh's own default identities first; what the register form proposes instead of a placeholder path.",
+      "params": [],
+      "result": {
+        "name": "MachinesLocalKeysResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "keys"
+          ],
+          "properties": {
+            "keys": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             }
           }
         }
@@ -18143,7 +18228,8 @@
           "node_current",
           "install",
           "paths",
-          "problems"
+          "problems",
+          "agents_here"
         ],
         "properties": {
           "id": {
@@ -18218,6 +18304,13 @@
               "type": "string"
             },
             "description": "What the registry's doctor says about this row, one sentence each; empty when nothing."
+          },
+          "agents_here": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The connected agent entries that run on the machine, by name: empty on a machine whose next step is to connect one."
           }
         }
       }

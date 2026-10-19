@@ -113,6 +113,20 @@ export interface ExtAgentActArgs {
   remote_cwd?: string
 }
 
+/* One preset as the machine sheet's connect form offers it: what it is, and
+   where an entry of it already runs. Listed whether or not this computer has
+   it connected -- an entry is one preset on one machine -- which is what the
+   roster's own rows cannot say, since they withhold a preset once a row holds
+   its name. */
+export interface PresetChoice {
+  preset: string
+  name: string
+  kind: 'acp' | 'cli'
+  description: string
+  connected_here: boolean
+  on_machines: string[]
+}
+
 export interface ExtAgentsSource {
   /* `rescan` also has the server take the login shell's environment again before
      it probes: the one answer to an agent installed since the gateway started,
@@ -120,6 +134,12 @@ export interface ExtAgentsSource {
      re-check sends it -- the capture runs the user's login shell. */
   load(probe?: boolean, rescan?: boolean): Promise<ExtAgentRow[]>
   act(op: ExtAgentOp, row: ExtAgentRow, args?: ExtAgentActArgs): Promise<ExtAgentRow[]>
+  /* The presets an entry can be made from on a registered machine. */
+  presets(): Promise<PresetChoice[]>
+  /* Connect `choice` on `machine`, under `<preset name>@<machine>`, in the
+     working directory there (`''` for the default); the server starts it there
+     once as proof. The refusal's sentence when it was not written, else null. */
+  connectOnMachine(choice: PresetChoice, machine: string, remoteCwd: string): Promise<string | null>
 }
 
 /* What fixes a refusal, as the server classified it: which kind of fix, and
@@ -185,6 +205,10 @@ export interface MachineRow {
   paths: string[]
   /* What blocks the row, one sentence each, as the registry's doctor says it. */
   problems: string[]
+  /* The connected agent entries that run on this machine, by name: the line
+     that tells a reader whose machine is up and idle where the next step is.
+     Empty on a machine nothing is connected on yet. */
+  agents_here: string[]
 }
 
 export interface MachineProblem {
@@ -223,4 +247,7 @@ export interface MachinesSource {
   installNode(id: string, nodeDir?: string): Promise<{ started: boolean; detail: string }>
   doctor(): Promise<MachineProblem[]>
   remove(id: string): Promise<{ removed: boolean; detail: string; agents: string[] }>
+  /* The private keys this computer has, as `~/.ssh/<name>` paths, ssh's own
+     first: what the register form fills in instead of a placeholder. */
+  localKeys(): Promise<string[]>
 }

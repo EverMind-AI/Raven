@@ -11,6 +11,9 @@ import * as store from './store'
 
 import type { ExtAgentActArgs, ExtAgentRow, ExtAgentsSource } from './types'
 
+/* The two source verbs the machine sheet's form uses; nothing here opens that form. */
+const offMachine = { presets: async () => [], connectOnMachine: async () => null }
+
 const toastWriter = vi.hoisted(() => ({ items: [] as string[] }))
 vi.mock('../../state/toast', () => ({
   show: (text: string) => {
@@ -42,6 +45,7 @@ function row(over: Partial<ExtAgentRow> = {}): ExtAgentRow {
 function install(rows: ExtAgentRow[], refuse: (op: string) => string | null = () => null) {
   const acts: Array<[string, string, ExtAgentActArgs]> = []
   const source: ExtAgentsSource = {
+    ...offMachine,
     load: async () => rows,
     act: async (op, r, args) => {
       acts.push([op, r.name, args || {}])
@@ -98,6 +102,7 @@ describe('act', () => {
     const r = row()
     const said = 'it is installed but has no usable credential'
     const source: ExtAgentsSource = {
+      ...offMachine,
       load: async () => [r],
       act: async () => {
         throw { data: { detail: said, remedy: { kind: 'sign_in', command: 'claude auth login' } } }
@@ -198,6 +203,7 @@ describe('recheck', () => {
     const loads: Array<[boolean, boolean]> = []
     setSources({
       extAgents: {
+        ...offMachine,
         load: async (probe, rescan) => {
           loads.push([!!probe, !!rescan])
           return [r]
@@ -251,6 +257,7 @@ describe('the model verbs', () => {
     const listing = [slow, { ...fast, configured: true, enabled: true }]
     setSources({
       extAgents: {
+        ...offMachine,
         load: async () => listing,
         act: (_op, r) => (r.name === 'claude_code'
           ? new Promise((_, reject) => { failSlow = reject })
@@ -282,6 +289,7 @@ describe('the model verbs', () => {
     const loads: boolean[] = []
     setSources({
       extAgents: {
+        ...offMachine,
         load: async (probe) => {
           loads.push(!!probe)
           return both
@@ -310,6 +318,7 @@ describe('the model verbs', () => {
     let refuse: (e: unknown) => void = () => {}
     setSources({
       extAgents: {
+        ...offMachine,
         load: async () => { throw new Error('offline') },
         act: () => new Promise((_, reject) => { refuse = reject }),
       },
@@ -329,6 +338,7 @@ describe('the model verbs', () => {
     const listed = row({ model_source: 'agent', model_choices: [{ value: 'v/m', name: 'M', group: 'V' }] })
     setSources({
       extAgents: {
+        ...offMachine,
         load: async () => [listed],
         act: async () => {
           throw { data: { detail: 'it offers 55' } }

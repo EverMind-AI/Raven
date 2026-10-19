@@ -435,6 +435,13 @@ the password is used once and neither stored, logged nor answered back,
 none of it hands the page an address, an account or a key path, and
 `node_install` on a row is the node the last install or contact found there,
 which is how a listing says a machine has this Raven's node without reaching it.
+A row also names the connected agent entries that run on the machine (`agents_here`),
+and a machine whose node is up offers the next step from its sheet: connect an agent
+on it, chosen from `subagents.presets` -- every preset a node can start, one already
+connected on this computer included, since an entry is one preset on one machine --
+under `<preset name>@<machine id>`, through the same proved `subagents.add`. The
+register form proposes the private keys this computer has (`machines.local_keys`,
+`~/.ssh` identities in ssh's order) instead of a placeholder path.
 _Avoid_: "host" / "server" / "node" (too broad, no link to the
 `ops connection` registry that supplies the rows); "GPU box" (only some are
 GPU hosts, and the term covers any registered compute destination);

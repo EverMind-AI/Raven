@@ -19,6 +19,7 @@ from raven.rpc.methods.subagents import (
     _read_the_shell_again,
     register_subagents_methods,
     subagents_list,
+    subagents_presets,
     subagents_probe,
     subagents_test,
     subagents_test_cancel,
@@ -151,6 +152,69 @@ async def test_a_preset_is_withheld_when_a_configured_row_holds_its_name(
     assert rows[0]["preset"] is None, "a hand-written row is not given provenance it did not declare"
     # Every other preset is still offered: the rule withholds one name, not the group.
     assert "OpenClaw" in {r["name"] for r in result["rows"]}
+
+
+async def test_presets_lists_what_a_machine_can_start_whether_or_not_an_entry_holds_it_and_where_each_runs(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The machine sheet's connect form chooses from this: the roster hides a
+    preset once a row holds its name, but an entry is one preset on one
+    machine, so the same preset is still to be had on each machine."""
+    from raven.rpc.models import METHOD_MODELS
+
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "subagents": {
+                    "agents": [
+                        {
+                            "name": "Coder",
+                            "preset": "claude_code",
+                            "kind": "cli",
+                            "command": "claude -p {prompt}",
+                            "enabled": True,
+                        },
+                        {
+                            "name": "Claude Code@box",
+                            "preset": "claude_code",
+                            "kind": "acp",
+                            "command": "npx -y @agentclientprotocol/claude-agent-acp@0.81.1",
+                            "machine": "box",
+                            "enabled": True,
+                        },
+                        {
+                            "name": "Researcher",
+                            "preset": "mirothinker",
+                            "kind": "openai",
+                            "baseUrl": "https://x.invalid/v1",
+                            "model": "m",
+                            "apiKey": "k",
+                        },
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+    monkeypatch.setattr("raven.rpc.methods.subagents.get_config_path", lambda: path)
+
+    out = await subagents_presets({})
+
+    METHOD_MODELS["subagents.presets"][1].model_validate(out)
+    by_key = {p["preset"]: p for p in out["presets"]}
+    # Held here AND on a machine: listed all the same, saying both.
+    assert by_key["claude_code"]["name"] == "Claude Code"
+    assert by_key["claude_code"]["connected_here"] is True
+    assert by_key["claude_code"]["on_machines"] == ["box"]
+    # Held nowhere: listed, saying so.
+    assert by_key["codex"]["connected_here"] is False and by_key["codex"]["on_machines"] == []
+    # Only what a machine's node starts: no openai endpoint, no Mirasim shim, no built-in.
+    assert "mirothinker" not in by_key
+    assert not any(key.startswith("mirasim_") for key in by_key)
+    assert {p["kind"] for p in out["presets"]} <= {"acp", "cli"}
+    assert all(p["description"] for p in out["presets"])
 
 
 async def test_list_leaves_out_a_hidden_row(tmp_path: Path, monkeypatch) -> None:
