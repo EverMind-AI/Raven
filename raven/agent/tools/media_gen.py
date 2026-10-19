@@ -92,6 +92,19 @@ _MIME_EXT = {mime: ext.lstrip(".") for ext, mime in _EXT_MIME.items()}
 _MIME_EXT["image/jpeg"] = "jpg"
 
 
+class _ByProvider:
+    """A schema field read per provider: the MiniMax one where the tool runs on
+    MiniMax, the default elsewhere and on the class, which has no section to ask."""
+
+    def __init__(self, default: str, minimax: str) -> None:
+        self._default = default
+        self._minimax = minimax
+
+    def __get__(self, tool: _OpenRouterMediaTool | None, owner: type) -> Any:
+        on_minimax = tool is not None and tool._runs_on_minimax()
+        return getattr(owner, self._minimax if on_minimax else self._default)
+
+
 class _OpenRouterMediaTool(Tool):
     """Shared base: config/env resolution, chat-completions call, file output."""
 
@@ -699,25 +712,17 @@ class ImageGenerateTool(_OpenRouterMediaTool):
     _MINIMAX_DESCRIPTION = _DESCRIPTION.replace(
         "(optionally editing/varying input images)", "(optionally keeping the character an input image shows)"
     )
-    _MINIMAX_IMAGES = (
+    _MINIMAX_PARAMETERS = copy.deepcopy(_PARAMETERS)
+    _MINIMAX_PARAMETERS["properties"]["images"]["description"] = (
         "Optional reference image whose character MiniMax keeps, one per picture (any more are "
         "not sent): a local file path, http(s) URL, or data: URI"
     )
+    _MINIMAX_PARAMETERS["properties"]["prompts"]["items"]["properties"]["images"]["description"] = (
+        "Reference image for this picture only"
+    )
 
-    @property
-    def description(self) -> str:
-        return self._MINIMAX_DESCRIPTION if self._runs_on_minimax() else self._DESCRIPTION
-
-    @property
-    def parameters(self) -> dict[str, Any]:
-        if not self._runs_on_minimax():
-            return self._PARAMETERS
-        schema = copy.deepcopy(self._PARAMETERS)
-        schema["properties"]["images"]["description"] = self._MINIMAX_IMAGES
-        schema["properties"]["prompts"]["items"]["properties"]["images"]["description"] = (
-            "Reference image for this picture only"
-        )
-        return schema
+    description = _ByProvider("_DESCRIPTION", "_MINIMAX_DESCRIPTION")
+    parameters = _ByProvider("_PARAMETERS", "_MINIMAX_PARAMETERS")
 
     def to_schema(self) -> dict[str, Any]:
         # Authored, so the registry serves it live: the provider the section runs
@@ -1448,13 +1453,8 @@ class VideoGenerateTool(_OpenRouterMediaTool):
         "required": ["prompt"],
     }
 
-    @property
-    def description(self) -> str:
-        return self._MINIMAX_DESCRIPTION if self._runs_on_minimax() else self._DESCRIPTION
-
-    @property
-    def parameters(self) -> dict[str, Any]:
-        return self._MINIMAX_PARAMETERS if self._runs_on_minimax() else self._PARAMETERS
+    description = _ByProvider("_DESCRIPTION", "_MINIMAX_DESCRIPTION")
+    parameters = _ByProvider("_PARAMETERS", "_MINIMAX_PARAMETERS")
 
     def to_schema(self) -> dict[str, Any]:
         # Authored, so the registry serves it live: the provider the section runs

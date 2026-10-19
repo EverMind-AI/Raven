@@ -2031,6 +2031,15 @@ def test_the_image_tool_says_what_references_do_on_the_provider_it_runs_on() -> 
     assert "edit" not in offered()["description"].split(".")[0]
 
 
+@pytest.mark.parametrize("tool_class", [ImageGenerateTool, VideoGenerateTool])
+def test_a_media_tool_read_off_its_class_answers_the_default_schema(tool_class) -> None:
+    """The class has no section, so no provider to pick by: it answers what a section
+    on no named provider is offered, and a reader that takes an argument's spelling
+    off the class still finds a schema there."""
+    tool = tool_class(lambda: SimpleNamespace(provider="", api_base="", api_key="k", model=""))
+    assert (tool_class.description, tool_class.parameters) == (tool.description, tool.parameters)
+
+
 def test_a_plain_section_an_embedder_hands_in_for_video_is_a_video_section() -> None:
     """An embedder handing ``AgentLoop`` a plain ``MediaToolConfig`` for video keeps
     working now that the video section has a class of its own, as the image one did."""
