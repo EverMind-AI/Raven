@@ -198,6 +198,10 @@ def _route_quote(value: Any) -> str | None:
     """A route quote as kept: text only, blank is none, and cut and marked past the cap."""
     if not isinstance(value, str) or not value.strip():
         return None
+    # An unpaired escape in the judge's JSON decodes to a lone surrogate, which UTF-8
+    # cannot carry to the registry and the manifest the quote is written to. It is kept
+    # as the escape it was written with, and before the cut, since that lengthens it.
+    value = value.encode("utf-8", "backslashreplace").decode("utf-8")
     if len(value) <= _ROUTE_EVIDENCE_MAX:
         return value
     return value[: _ROUTE_EVIDENCE_MAX - len(_ELLIPSIS)].rstrip() + _ELLIPSIS

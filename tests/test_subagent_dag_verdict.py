@@ -379,6 +379,21 @@ def test_extract_verdict_keeps_a_route_quote_up_to_the_cap_whole(text):
     assert extract_verdict(_routed("bug", evidence=text)).route_evidence == text
 
 
+def test_extract_verdict_spells_a_lone_surrogate_in_a_route_quote_as_its_escape():
+    """An unpaired escape in the judge's JSON decodes to a lone surrogate, which no UTF-8
+    writer accepts, and the quote is written to the shared instance registry and the
+    manifest. It comes back as the six characters the escape was written with."""
+    quote = extract_verdict(_routed("bug", evidence="asks how " + chr(0xD83D) + " to")).route_evidence
+    assert quote == "asks how " + chr(92) + "ud83d to"
+
+
+def test_extract_verdict_escapes_a_route_quote_before_it_cuts_it():
+    """Escaping lengthens the quote, so the cut comes after it: 499 characters and one lone
+    surrogate are 505 once escaped, past the 500 the quote is held to."""
+    quote = extract_verdict(_routed("bug", evidence="y" * 499 + chr(0xDE00))).route_evidence
+    assert quote == "y" * 497 + "..."
+
+
 async def test_judge_sends_the_routes_outside_the_fence():
     provider = _Provider(_routed("bug"))
     await _judged(provider, routes=_ROUTES)
