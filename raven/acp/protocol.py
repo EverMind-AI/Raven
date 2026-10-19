@@ -32,6 +32,7 @@ from typing import Any
 from raven.acp_client.protocol import (
     MENU_UNREAD_META,
     SESSION_MCP_CAPABILITY,
+    SHUTDOWN_GRACE_META,
     AcpProtocolError,
     decode,
     encode,
@@ -188,6 +189,7 @@ __all__ = [
     "REQUEST_CANCELLED",
     "RESOURCE_NOT_FOUND",
     "SESSION_MCP_CAPABILITY",
+    "SHUTDOWN_GRACE_META",
     "STOP_REASONS",
     "AcpProtocolError",
     "decode",

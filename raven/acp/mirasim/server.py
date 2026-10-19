@@ -117,6 +117,7 @@ from raven.acp.protocol import (
     MENU_UNREAD_META,
     METHOD_NOT_FOUND,
     RESOURCE_NOT_FOUND,
+    SHUTDOWN_GRACE_META,
     STEER_CAPABILITY,
     STEER_METHOD,
     error_response,
@@ -189,6 +190,11 @@ IMAGE_LIMIT_BYTES = 10 * 1024 * 1024
 
 INITIALIZE_CONNECT_S = 2.0
 SHUTDOWN_GRACE_S = 5.0
+"""How long the adapter takes, its stdin closed, to call off what it started on the host before exiting.
+
+A first prompt the host has not taken yet has no session or task to stop: it is stopped when the
+host takes it, which :data:`CANCEL_SETTLE_S` waits for. Asked of the client in the handshake
+(``SHUTDOWN_GRACE_META``), which otherwise ends the process tree a second after stdin closes."""
 HUMAN_ANSWER_TIMEOUT_S = 900.0
 """How long a question put to the client may take, the budget raven's own ACP
 server gives a person (``HUMAN_ANSWER_TIMEOUT_S`` in ``raven/acp/questions.py``).
@@ -402,8 +408,10 @@ class MirasimAgent:
             "mcpCapabilities": {"http": False, "sse": False},
             "sessionCapabilities": {"list": {}, "resume": {}, "close": {}, "delete": {}},
         }
+        meta: dict[str, Any] = {SHUTDOWN_GRACE_META: SHUTDOWN_GRACE_S}
         if self.agent in STEER_AGENTS:
-            capabilities["_meta"] = {STEER_CAPABILITY: True}
+            meta[STEER_CAPABILITY] = True
+        capabilities["_meta"] = meta
         return {
             "protocolVersion": negotiated_version(params.get("protocolVersion")),
             "agentCapabilities": capabilities,

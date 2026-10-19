@@ -262,3 +262,22 @@ async def test_a_close_cancelled_during_the_grace_still_lets_go_of_what_it_held(
     await asyncio.sleep(0)
     assert released and answering and all(task.done() for task in answering)
     assert client.closed
+
+
+@pytest.mark.parametrize(("asked", "given"), [(3, 3.0), (60, 5.0), (0.2, 1.0), ("soon", 1.0), (True, 1.0), (None, 1.0)])
+async def test_a_local_agent_gets_the_grace_its_handshake_asks_for_up_to_a_cap(monkeypatch, asked, given):
+    from raven.acp_client.protocol import SHUTDOWN_GRACE_META
+
+    granted = []
+    endpoint = acp_client._ProcessEndpoint(SimpleNamespace(pid=4242, returncode=0, stdin=None), 4242)
+
+    async def end():
+        granted.append(endpoint.grace)
+
+    monkeypatch.setattr(endpoint, "end", end)
+    monkeypatch.setattr(endpoint, "release", Mock())
+    client = acp_client.AcpClient(name="asks", endpoint=endpoint)
+    meta = {} if asked is None else {SHUTDOWN_GRACE_META: asked}
+    client._heard_initialize({"agentCapabilities": {"_meta": meta}})
+    await client.close()
+    assert granted == [given]

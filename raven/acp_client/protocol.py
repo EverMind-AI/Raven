@@ -107,6 +107,13 @@ SESSION_MCP_CAPABILITY = "raven.mcp.session"
 #: silence.
 MENU_UNREAD_META = "modelMenuUnread"
 
+# How long the agent asks to be given, after its stdin closes, before its process
+# tree is ended: an agent that holds work outside its own process -- a turn on a
+# host it is one client of -- needs that long to call it off. Announced under
+# ``agentCapabilities._meta`` with the seconds as its value; raven's client grants
+# it up to a cap of its own, and an agent that exits sooner ends the wait sooner.
+SHUTDOWN_GRACE_META = "raven.shutdownGraceS"
+
 
 class AcpError(Exception):
     """Base for every ACP transport failure."""

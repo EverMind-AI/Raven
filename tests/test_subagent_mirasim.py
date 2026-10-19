@@ -185,6 +185,34 @@ async def test_closing_the_adapter_stops_its_turn_on_the_shared_host(
         await asyncio.gather(*pending, return_exceptions=True)
 
 
+async def test_closing_the_adapter_waits_for_a_first_prompt_the_host_takes_late_and_stops_it(
+    tmp_path: Path, host: FakeHost
+) -> None:
+    host.respond = lambda prompt, session: [("text", "working"), ("hold",)]
+    host.accepting = asyncio.Event()
+    cfg = adapter_config(tmp_path, host)
+    client = await AcpClient.launch(name=cfg.name, command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env))
+    pending = []
+    try:
+        await client.request("initialize", {"protocolVersion": 1}, timeout=30)
+        opened = await client.request("session/new", {"cwd": str(tmp_path), "mcpServers": []}, timeout=30)
+        prompt = {"sessionId": opened["sessionId"], "prompt": [{"type": "text", "text": "wait"}]}
+        pending.append(asyncio.create_task(client.request("session/prompt", prompt, timeout=30)))
+        await host.wait_for(lambda: host.frames("prompt"))
+        closing = asyncio.create_task(client.close())
+        # Past the grace every local agent gets: only the one this adapter asks for covers it.
+        await asyncio.sleep(1.5)
+        host.accepting.set()
+        await closing
+        session = host.session()
+        await host.wait_for(lambda: session.running is None)
+        assert [frame["sessionKey"] for frame in host.frames("stop")] == [session.key]
+    finally:
+        host.accepting.set()
+        await client.close()
+        await asyncio.gather(*pending, return_exceptions=True)
+
+
 @pytest.mark.slow
 async def test_the_live_preset_fixture_keeps_its_desktop_token_home(tmp_path: Path, monkeypatch) -> None:
     import importlib.util

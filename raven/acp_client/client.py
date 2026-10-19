@@ -95,6 +95,13 @@ needs to call that work off before it goes. One that exits at once costs nothing
 ends when the agent does.
 """
 
+_TEARDOWN_GRACE_MAX_S = 5.0
+"""The most grace an agent can ask for (``SHUTDOWN_GRACE_META``).
+
+Callers bound a whole close at ten seconds (the pool's drop, the probe's
+handshake), and the drain and the reap after the grace take up to two more.
+"""
+
 _GRACE_POLL_S = 0.02
 
 
@@ -170,6 +177,8 @@ class _ProcessEndpoint:
     def __init__(self, proc: asyncio.subprocess.Process, pgid: int, job: windows.JobObject | None = None) -> None:
         self.proc = proc
         self._job = job
+        self.grace: float | None = None
+        """The grace ``end`` gives the agent, when its handshake asked for one; else ``_TEARDOWN_GRACE_S``."""
         # Captured at spawn by the caller, not re-derived here: with
         # start_new_session the launcher's pid doubles as the group's pgid, and
         # once the launcher exits its pid can be recycled onto an unrelated
@@ -214,7 +223,7 @@ class _ProcessEndpoint:
                 except OSError:
                     pass
                 else:
-                    await self._exited_within(_TEARDOWN_GRACE_S)
+                    await self._exited_within(_TEARDOWN_GRACE_S if self.grace is None else self.grace)
         finally:
             if self._job is not None:
                 self._job.close()
@@ -386,6 +395,8 @@ class AcpClient:
         self._unsettled_cancels: set[str] = set()
         self._stderr: deque[str] = deque(maxlen=_STDERR_LINES)
         self._closed = False
+        # What the agent's last `initialize` answer asked for under SHUTDOWN_GRACE_META.
+        self._asked_grace: float | None = None
         self._reader_task: asyncio.Task | None = None
         self._stderr_task: asyncio.Task | None = None
         # Answering runs off the read loop: a handler may block on a human
@@ -559,6 +570,8 @@ class AcpClient:
         if self._closed:
             return
         self._closed = True
+        if isinstance(self._endpoint, _ProcessEndpoint):
+            self._endpoint.grace = self._granted_grace()
         try:
             await self._endpoint.end()
         except asyncio.CancelledError:
@@ -584,6 +597,17 @@ class AcpClient:
                     _TEARDOWN_REAP_S,
                 )
         self._let_go()
+
+    def _heard_initialize(self, result: Any) -> None:
+        caps = result.get("agentCapabilities") if isinstance(result, dict) else None
+        meta = caps.get("_meta") if isinstance(caps, dict) else None
+        asked = meta.get(protocol.SHUTDOWN_GRACE_META) if isinstance(meta, dict) else None
+        self._asked_grace = float(asked) if isinstance(asked, (int, float)) and not isinstance(asked, bool) else None
+
+    def _granted_grace(self) -> float:
+        if self._asked_grace is None:
+            return _TEARDOWN_GRACE_S
+        return max(_TEARDOWN_GRACE_S, min(self._asked_grace, _TEARDOWN_GRACE_MAX_S))
 
     def _stop_tasks(self) -> list[asyncio.Task]:
         """Cancel the read loops and every answer in progress; the tasks, to wait out."""
@@ -730,8 +754,12 @@ class AcpClient:
                 sent(request_id)
             await self._send(protocol.request(request_id, method, params))
             if timeout is None:
-                return await asyncio.shield(future)
-            return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
+                result = await asyncio.shield(future)
+            else:
+                result = await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
+            if method == "initialize":
+                self._heard_initialize(result)
+            return result
         except asyncio.TimeoutError:
             raise AcpTimeoutError(
                 f"acp agent {self.name!r}: {method} timed out after {timeout}s", method=method

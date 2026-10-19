@@ -146,7 +146,7 @@ async def test_initialize_answers_at_once_and_reads_the_menus_behind_it(harness:
     assert caps["loadSession"] is True
     assert caps["sessionCapabilities"] == {"list": {}, "resume": {}, "close": {}, "delete": {}}
     assert caps["promptCapabilities"] == {"image": True, "audio": False, "embeddedContext": True}
-    assert caps["_meta"] == {"raven.steer": True}
+    assert caps["_meta"] == {"raven.steer": True, "raven.shutdownGraceS": server_mod.SHUTDOWN_GRACE_S}
     assert result["agentInfo"] == {"name": "mirasim-claude", "title": "claude (Mirasim)", "version": "0.0.537"}
     await harness.agent._prefetch
     # The pool's liveness probe is a repeat initialize with five seconds: it
@@ -159,7 +159,8 @@ async def test_initialize_answers_at_once_and_reads_the_menus_behind_it(harness:
 async def test_an_agent_that_takes_no_steer_and_no_image_declares_neither(harness: Harness) -> None:
     harness.use("qwen")
     caps = (await harness.ok("initialize", protocolVersion=1))["agentCapabilities"]
-    assert "_meta" not in caps and caps["promptCapabilities"]["image"] is False
+    assert caps["_meta"] == {"raven.shutdownGraceS": server_mod.SHUTDOWN_GRACE_S}
+    assert caps["promptCapabilities"]["image"] is False
 
 
 async def test_with_no_host_running_initialize_still_answers_and_a_session_says_why_not(tmp_path: Path) -> None:
