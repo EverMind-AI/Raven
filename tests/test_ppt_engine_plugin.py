@@ -831,6 +831,49 @@ def test_a_seat_the_engine_never_wrote_is_left_alone(tmp_path: Path) -> None:
     assert (home / "TOOLS.md").is_file(), "the missing seats are still filled"
 
 
+def test_a_hosts_own_seats_are_left_alone_without_a_warning_in_every_process(tmp_path: Path, caplog) -> None:
+    """A host that enables the engine grants its own home: its three seats are
+    left alone on every process's first turn, and a WARNING each time gave the
+    operator nothing to act on."""
+    import logging
+
+    home = tmp_path / "home"
+    profile = home / "agent_memory" / "profile"
+    profile.mkdir(parents=True)
+    for seat in (profile / "soul.md", profile / "agent.md", home / "TOOLS.md"):
+        seat.write_text("the host's own\n", encoding="utf-8")
+    caplog.set_level(logging.DEBUG, logger="raven_ppt.plugin.hook")
+    _first_turn(home, tmp_path)
+    left = [record for record in caplog.records if "left " in record.getMessage()]
+    assert len(left) == 3 and all(record.levelno == logging.DEBUG for record in left)
+    assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
+
+
+def test_an_addendum_that_is_not_utf8_names_itself_and_holds_back_no_other_seat(tmp_path: Path, caplog) -> None:
+    """An editor saving in a legacy code page (GBK on a Chinese system) writes
+    an addendum the engine cannot read: the failure named the generated file,
+    and every seat after it and the template sync waited on it."""
+    import logging
+
+    home = tmp_path / "home"
+    profile = home / "agent_memory" / "profile"
+    profile.mkdir(parents=True)
+    local = profile / "agent.local.md"
+    local.write_bytes(b"\xbb\xd8\xb4\xf0\n")
+    caplog.set_level(logging.WARNING, logger="raven_ppt.plugin.hook")
+    _first_turn(home, tmp_path)
+    [failure] = [record.getMessage() for record in caplog.records if "retrying next turn" in record.getMessage()]
+    assert f"{local} is not UTF-8 text" in failure
+    assert (profile / "soul.md").is_file() and (home / "TOOLS.md").is_file()
+    assert not (profile / "agent.md").exists()
+    assert not (home / "HEARTBEAT.md").exists(), "the host's templates would fill the failed seat"
+
+    local.write_text("Keep every deck under twenty slides.\n", encoding="utf-8")
+    _first_turn(home, tmp_path)
+    assert (profile / "agent.md").read_text(encoding="utf-8").endswith("Keep every deck under twenty slides.\n")
+    assert (home / "HEARTBEAT.md").is_file()
+
+
 def test_prompts_another_product_generated_are_not_taken_for_the_engines(tmp_path: Path, monkeypatch) -> None:
     """raven-code generates its prompts first, then the engine is enabled on the
     same home. Code's receipts are not the engine's proof: its conduct, identity

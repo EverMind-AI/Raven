@@ -19,6 +19,7 @@ vendored twin keeps its own untouched launcher and config.
 import importlib.util
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -1459,6 +1460,16 @@ def test_the_operators_local_lines_reach_the_system_prompt(grounded, tmp_path):
     assert "The staging database is read-only." in system
     assert "## Tool usage policy" in system, "the product conduct is there too"
     assert "an edit outside the local file" not in system
+
+
+def test_a_local_file_that_is_not_utf8_is_named_when_the_launch_stops(grounded, tmp_path):
+    partition = tmp_path / "part"
+    profile = partition / "agent_memory" / "profile"
+    profile.mkdir(parents=True)
+    local = profile / "soul.local.md"
+    local.write_bytes(b"\xbb\xd8\xb4\xf0\n")
+    with pytest.raises(SystemExit, match=re.escape(f"{local} is not UTF-8 text")):
+        grounded.seed_soul(partition)
 
 
 def test_the_identity_is_regenerated_with_the_operators_local_lines(grounded, tmp_path):

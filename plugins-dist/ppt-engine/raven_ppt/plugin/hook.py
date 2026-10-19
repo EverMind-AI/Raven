@@ -187,11 +187,14 @@ def seed_identity(home: Path) -> list[str]:
     user's and stays write-if-missing.
 
     A raven older than ``write_generated`` seeds the prompts write-if-missing
-    instead, and the log says they will not be refreshed.
+    instead, and the log says they will not be refreshed. A seat that cannot
+    be written does not stop the other seats; ``OSError`` then names each one,
+    and the sync waits for the retry.
     """
     from raven.config import product_render
 
     seeded: list[str] = []
+    failed: list[str] = []
     prompts = pkg_files("raven_ppt") / "prompts"
     generate = getattr(product_render, "write_generated", None)
     if generate is None:
@@ -200,14 +203,24 @@ def seed_identity(home: Path) -> list[str]:
         target = home / seat
         text = (prompts / name).read_text(encoding="utf-8")
         if generate is not None:
-            action = generate(
-                target,
-                text,
-                owner="ppt-engine",
-                legacy_digests=_SHIPPED_PROMPT_DIGESTS,
-                adopt=False,
-                notify=lambda message: logger.warning("ppt-engine: %s", message),
-            )
+            said: list[str] = []
+            try:
+                action = generate(
+                    target,
+                    text,
+                    owner="ppt-engine",
+                    legacy_digests=_SHIPPED_PROMPT_DIGESTS,
+                    adopt=False,
+                    notify=said.append,
+                )
+            except (OSError, UnicodeDecodeError) as exc:
+                failed.append(f"{target}: {exc}")
+                continue
+            # A seat left alone is the host's own in a home the host granted,
+            # every process, with nothing for anyone to do.
+            level = logging.DEBUG if action == "kept" else logging.WARNING
+            for message in said:
+                logger.log(level, "ppt-engine: %s", message)
             if action == "written":
                 seeded.append(str(seat))
             continue
@@ -219,6 +232,10 @@ def seed_identity(home: Path) -> list[str]:
         # seat is asserted equal to the packaged source byte for byte.
         target.write_text(text, encoding="utf-8", newline="")
         seeded.append(str(seat))
+    if failed:
+        # Not synced yet: the host's templates would fill a failed seat, and a
+        # seat this engine did not write is never replaced (adopt=False).
+        raise OSError("cannot regenerate " + "; ".join(failed))
     seeded.extend(sync_workspace_templates(home, silent=True))
     return seeded
 

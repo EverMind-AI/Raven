@@ -194,9 +194,10 @@ Agent vocabulary:
   operator's own lines go in the file's `*.local.md` sibling (`agent.local.md`
   beside `agent_memory/profile/agent.md`, `soul.local.md` beside `soul.md`,
   `TOOLS.local.md` beside `TOOLS.md`), appended after the product text at the
-  next launch; keep only the lines still needed there. A file that does not
-  hold the text the product last wrote -- edited in place, or left by an
-  older release before receipts existed -- is saved as
+  next launch; keep only the lines still needed there, saved as UTF-8 -- one
+  in another encoding stops the launch, and the error names it. A file that
+  does not hold the text the product last wrote -- edited in place, or left
+  by an older release before receipts existed -- is saved as
   `<name>.bak-<time>-<pid>` before it is replaced, and the launcher's log
   names the backup. A backup is never readable by more accounts than the file
   was: an owner-only copy on POSIX, and on Windows a hard link to the file
@@ -207,7 +208,12 @@ Agent vocabulary:
   `*.local.md` file. The ppt engine writes into
   whatever home its plugin is granted, which can be a host's own or another
   product's, so it replaces only a seat its own receipt or a shipped prompt's
-  digest shows it wrote, and leaves any other file as it is. Each receipt
+  digest shows it wrote, and leaves any other file as it is. In Raven-PPT's
+  own home that includes a seat edited before prompts were regenerated: it
+  keeps the edit and its `*.local.md` is not applied until the seat is
+  deleted, and the next turn writes it fresh. The engine logs such a seat at
+  DEBUG only, since in a host's home it is the host's own, and retries a
+  failed write on the next turn instead of stopping. Each receipt
   line names the product that wrote the file, so one product's receipt is
   never another's proof. Two processes of one product share these
   files, so a launch can change what an older process still running reads

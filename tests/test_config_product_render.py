@@ -685,6 +685,27 @@ def test_turning_a_generated_file_off_removes_only_what_the_product_wrote(tmp_pa
     assert "is not applied" in said[-1] and not managed.exists()
 
 
+def test_an_addendum_that_is_not_utf8_is_named_and_nothing_is_written(tmp_path):
+    """A GBK addendum used to surface as a decode error about the generated
+    file, whose content is fine."""
+    target = tmp_path / "soul.md"
+    _write(target, "v1")
+    receipt = _receipt(target).read_text()
+    local = render.local_addendum(target)
+    local.write_bytes(b"\xbb\xd8\xb4\xf0\n")
+    with pytest.raises(UnicodeDecodeError, match=re.escape(f"{local} is not UTF-8 text; save it as UTF-8")):
+        _write(target, "v2")
+    assert target.read_text() == "v1" and _receipt(target).read_text() == receipt
+
+
+def test_a_seat_left_alone_says_how_to_hand_it_back(tmp_path):
+    target = tmp_path / "agent.md"
+    target.write_text("written before receipts")
+    said: list[str] = []
+    assert _write(target, "v1", adopt=False, notify=said.append) == "kept"
+    assert str(render.local_addendum(target)) in said[0] and "delete it" in said[0]
+
+
 def test_a_failed_backup_leaves_the_edited_file_and_its_receipt_alone(tmp_path, monkeypatch):
     target = tmp_path / "agent.md"
     _write(target, "v1")

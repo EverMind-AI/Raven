@@ -319,11 +319,13 @@ All notable changes to Raven are documented here.
   still asked for the three-heading report. They are now rewritten on every
   launch. Your own lines go in the sibling `*.local.md` file
   (`agent_memory/profile/agent.local.md`, for example) and are appended after
-  the product text; a file edited in place, or left by an older release, is
-  saved as `<name>.bak-<time>-<pid>` before it is replaced, never readable by
-  more accounts than the file was, and the launcher log names the backup. The
-  ppt engine, whose plugin can be granted a host's or another product's home,
-  replaces only a file it can show it wrote.
+  the product text; a `*.local.md` must be UTF-8, and one that is not stops
+  the launch with the file named. A file edited in place, or left by an older
+  release, is saved as `<name>.bak-<time>-<pid>` before it is replaced, never
+  readable by more accounts than the file was, and the launcher log names the
+  backup. The ppt engine, whose plugin can be granted a host's or another
+  product's home, replaces only a file it can show it wrote: in Raven-PPT's
+  own home a seat edited before this release stays until it is deleted.
 
 - A file Raven saves by replacing it -- `config.json`, an agent's prompt
   files, state files -- keeps its own access rights from the first byte of the

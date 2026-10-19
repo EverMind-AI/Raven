@@ -330,13 +330,23 @@ from the release and its config on every launch, so editing them in place
 does not last. Put your own lines in the sibling `*.local.md` file
 (`agent_memory/profile/agent.local.md`, for example); the next launch appends
 it after the product text. Copy in only what you still need: text from an
-older release can contradict the current one. A file that was edited in place,
+older release can contradict the current one. Save it as UTF-8; a file in
+another encoding (an editor's legacy code page, GBK for example) stops the
+launch, and the error names it. A file that was edited in place,
 or that an older release left behind, is saved as `<name>.bak-<time>-<pid>`
 before it is replaced, and the launcher log names the backup. The regenerated
 file keeps the access rights the old one had. On Windows the backup is a hard
 link to the file, so it keeps them too; on a volume that cannot hard-link, the
 launch stops and names the file instead.
 Backups are not deleted for you.
+
+Raven-PPT differs in one respect: its deck engine can share a home with the
+host, so it replaces only a file it can show it wrote. A `soul.md`, `agent.md`
+or `TOOLS.md` edited before this release is left as it is, without a backup,
+and its `*.local.md` is not applied. Move the lines you still need into the
+`*.local.md` file and delete the edited one; the next turn writes it fresh. A
+write the engine cannot make is logged and retried on the next turn instead
+of stopping it.
 
 ## Security and troubleshooting
 

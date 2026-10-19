@@ -11,8 +11,9 @@ import os
 import stat
 import threading
 from contextlib import contextmanager, suppress
+from functools import cache
 from pathlib import Path
-from typing import Callable, Iterator, TypeVar
+from typing import Any, Callable, Iterator, TypeVar
 
 from raven.utils.portable_lock import file_lock
 
@@ -96,14 +97,14 @@ _CREATE_NEW = 1
 _FILE_ATTRIBUTE_NORMAL = 0x80
 
 
-def _create_with_dacl_of(tmp_path: Path, like: Path) -> int:  # pragma: no cover - WinDLL does not load off Windows
-    """A write fd on a new ``tmp_path`` holding ``like``'s DACL from creation.
+@cache
+def _win32_security() -> tuple[Any, Any, Any]:  # pragma: no cover - WinDLL does not load off Windows
+    """advapi32 and kernel32 with the calls bound, and the SECURITY_ATTRIBUTES type.
 
-    Raises ``OSError`` when that DACL cannot be read: the tmp is then never
-    made with a wider one.
+    Declared once per process: ctypes keeps every pointer type it is asked
+    for, so a structure defined per call would pin one more type per save.
     """
     import ctypes
-    import msvcrt
     from ctypes import wintypes
 
     class _SecurityAttributes(ctypes.Structure):
@@ -135,7 +136,20 @@ def _create_with_dacl_of(tmp_path: Path, like: Path) -> int:  # pragma: no cover
     kernel32.CreateFileW.restype = wintypes.HANDLE
     kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
     kernel32.CloseHandle.restype = wintypes.BOOL
+    return advapi32, kernel32, _SecurityAttributes
 
+
+def _create_with_dacl_of(tmp_path: Path, like: Path) -> int:  # pragma: no cover - WinDLL does not load off Windows
+    """A write fd on a new ``tmp_path`` holding ``like``'s DACL from creation.
+
+    Raises ``OSError`` when that DACL cannot be read: the tmp is then never
+    made with a wider one.
+    """
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    advapi32, kernel32, security_attributes = _win32_security()
     source = str(like)
     needed = wintypes.DWORD(0)
     if (
@@ -148,7 +162,7 @@ def _create_with_dacl_of(tmp_path: Path, like: Path) -> int:  # pragma: no cover
         source, _DACL_SECURITY_INFORMATION, descriptor, needed.value, ctypes.byref(needed)
     ):
         raise ctypes.WinError(ctypes.get_last_error())
-    attributes = _SecurityAttributes(ctypes.sizeof(_SecurityAttributes), ctypes.addressof(descriptor), False)
+    attributes = security_attributes(ctypes.sizeof(security_attributes), ctypes.addressof(descriptor), False)
     handle = kernel32.CreateFileW(
         str(tmp_path), _GENERIC_WRITE, 0, ctypes.byref(attributes), _CREATE_NEW, _FILE_ATTRIBUTE_NORMAL, None
     )

@@ -758,7 +758,8 @@ def write_generated(
 
     Returns ``"written"``, ``"unchanged"``, ``"removed"``, ``"kept"`` or
     ``"absent"``. Raises ``OSError`` or ``UnicodeDecodeError`` when a file
-    cannot be read or written. An edit is never replaced before its backup
+    cannot be read or written; an addendum that is not UTF-8 raises the
+    latter naming the addendum. An edit is never replaced before its backup
     lands, and whatever text a failure leaves in the target, the receipt
     still names it.
     """
@@ -776,7 +777,13 @@ def write_generated(
         recorded = writers.get(owner, set())
         wanted = product_text
         if wanted is not None and local.is_file():
-            addendum = local.read_text(encoding="utf-8").strip("\n")
+            try:
+                addendum = local.read_text(encoding="utf-8").strip("\n")
+            except UnicodeDecodeError as exc:
+                # Hand-written, often by an editor saving in a legacy code
+                # page: the error names this file, not the generated one.
+                exc.reason = f"{local} is not UTF-8 text; save it as UTF-8"
+                raise
             if addendum.strip():
                 wanted = wanted.rstrip("\n") + "\n\n" + addendum + "\n"
         ours = current is not None and (current == wanted or _text_digest(current) in recorded | set(legacy_digests))
@@ -799,7 +806,11 @@ def write_generated(
 
         if current is not None and not ours:
             if not adopt and not recorded:
-                say(f"left {target} as it is: nothing shows this product wrote it")
+                say(
+                    f"left {target} as it is: nothing shows this product wrote it. If it is an edit of "
+                    f"this product's own prompt from before prompts were regenerated, move the lines you "
+                    f"still need into {local} and delete it; the next write puts the product text there"
+                )
                 return "kept"
             backup = _back_up(target, raw or b"")
             held = _text_digest(current)
