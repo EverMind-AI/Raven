@@ -12,7 +12,7 @@ import stat
 import tarfile
 import threading
 from collections.abc import AsyncIterator
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -21,6 +21,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from raven.trajectory import package_check as pcheck
 from raven.trajectory import receiver as rcv
 from raven.trajectory.receiver import ReceiverConfig, ReceiverStore, build_app
+from raven.trajectory.receiver_auth import client_response
 from tests.test_trajectory_package_check import OTHER_ID, ROOT, _chain, _entries, _metadata, _tar
 
 
@@ -77,18 +78,32 @@ async def client(config) -> AsyncIterator[TestClient]:
         await client.close()
 
 
-def _headers(report_id=ROOT, sha=SHA, content_type="application/gzip", **extra):
+def _receiver(client):
+    return client.server.app[rcv.RECEIVER_KEY]
+
+
+def _auth(client, report_id=ROOT, sha=SHA, size=len(PACKAGE)):
+    """The challenge and answer a Raven client would send for this package."""
+    challenge = _receiver(client).issue_challenge()
+    response = client_response(challenge, report_id=report_id or "", sha256=sha or "", size_bytes=size)
+    return {rcv.CHALLENGE_HEADER: challenge, rcv.RESPONSE_HEADER: response}
+
+
+def _headers(client, report_id=ROOT, sha=SHA, content_type="application/gzip", size=len(PACKAGE), auth=True, **extra):
     headers = {"Content-Type": content_type}
     if report_id is not None:
         headers[rcv.REPORT_ID_HEADER] = report_id
     if sha is not None:
         headers[rcv.SHA256_HEADER] = sha
+    if auth:
+        headers.update(_auth(client, report_id, sha, size))
     headers.update(extra)
     return headers
 
 
 async def _post(client, body=PACKAGE, **header_kw):
-    return await client.post(rcv.ENDPOINT_PATH, data=body, headers=_headers(**header_kw))
+    header_kw.setdefault("size", len(body))
+    return await client.post(rcv.ENDPOINT_PATH, data=body, headers=_headers(client, **header_kw))
 
 
 def _landed(save_dir, report_id=ROOT):
@@ -216,7 +231,7 @@ async def test_wrong_content_type(client):
 
 
 async def test_content_encoding_is_refused(client, save_dir):
-    resp = await client.post(rcv.ENDPOINT_PATH, data=PACKAGE, headers=_headers(**{"Content-Encoding": "gzip"}))
+    resp = await client.post(rcv.ENDPOINT_PATH, data=PACKAGE, headers=_headers(client, **{"Content-Encoding": "gzip"}))
     assert resp.status == 415
     assert "Content-Encoding" in (await resp.json())["message"]
     assert not _landed(save_dir)
@@ -227,7 +242,7 @@ async def test_chunked_bodies_need_a_length(client):
         yield PACKAGE[:10]
         yield PACKAGE[10:]
 
-    resp = await client.post(rcv.ENDPOINT_PATH, data=gen(), headers=_headers())
+    resp = await client.post(rcv.ENDPOINT_PATH, data=gen(), headers=_headers(client))
     assert resp.status == 411
     assert (await resp.json())["error"] == "length_required"
 
@@ -283,6 +298,119 @@ async def test_hello_spends_no_upload_tokens(make_client):
     for _ in range(5):
         assert (await client.get(rcv.HELLO_PATH)).status == 200
     assert (await _post(client)).status == 201
+
+
+# --- the upload challenge -----------------------------------------------------
+
+
+def _answer(challenge, report_id=ROOT, sha=SHA, size=len(PACKAGE)):
+    return {
+        rcv.CHALLENGE_HEADER: challenge,
+        rcv.RESPONSE_HEADER: client_response(challenge, report_id=report_id, sha256=sha, size_bytes=size),
+    }
+
+
+def _flip_last(value):
+    return value[:-1] + ("1" if value.endswith("0") else "0")
+
+
+def _refused_auth(client, kind):
+    good = _auth(client)
+    challenge, response = good[rcv.CHALLENGE_HEADER], good[rcv.RESPONSE_HEADER]
+    return {
+        "no-headers": lambda: {},
+        "no-response": lambda: {rcv.CHALLENGE_HEADER: challenge},
+        "tampered-challenge": lambda: {rcv.CHALLENGE_HEADER: _flip_last(challenge), rcv.RESPONSE_HEADER: response},
+        "tampered-response": lambda: {rcv.CHALLENGE_HEADER: challenge, rcv.RESPONSE_HEADER: _flip_last(response)},
+        "other-id": lambda: _auth(client, report_id=OTHER_ID),
+        "other-sha": lambda: _auth(client, sha=DIFFERENT_SHA),
+        "other-size": lambda: _auth(client, size=len(PACKAGE) + 1),
+    }[kind]()
+
+
+async def test_challenges_are_fresh_uncached_and_admit_an_upload(client, save_dir):
+    resp = await client.post(rcv.CHALLENGE_PATH)
+    assert resp.status == 200 and resp.headers["Cache-Control"] == "no-store"
+    body = await resp.json()
+    assert body["expires_in"] == 300
+    again = await (await client.post(rcv.CHALLENGE_PATH)).json()
+    assert again["challenge"] != body["challenge"]
+    headers = _headers(client, auth=False, **_answer(body["challenge"]))
+    assert (await client.post(rcv.ENDPOINT_PATH, data=PACKAGE, headers=headers)).status == 201
+    assert _landed(save_dir)
+
+
+async def test_challenges_answer_only_post(client):
+    resp = await client.get(rcv.CHALLENGE_PATH)
+    assert resp.status == 405 and (await resp.json())["error"] == "method_not_allowed"
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ["no-headers", "no-response", "tampered-challenge", "tampered-response", "other-id", "other-sha", "other-size"],
+)
+async def test_an_upload_without_a_valid_answer_is_refused_before_its_body(client, save_dir, monkeypatch, kind):
+    def _no_part(*_args, **_kwargs):
+        raise AssertionError("a refused upload must not open a temporary file")
+
+    monkeypatch.setattr(ReceiverStore, "new_part", _no_part)
+    headers = _headers(client, auth=False, **_refused_auth(client, kind))
+    resp = await client.post(rcv.ENDPOINT_PATH, data=PACKAGE, headers=headers)
+    assert resp.status == 401
+    assert resp.headers["WWW-Authenticate"] == "Raven-Challenge"
+    body = await resp.json()
+    assert body["error"] == "unauthorized"
+    assert "hmac" not in body["message"].lower() and "sha" not in body["message"].lower()
+    assert not _landed(save_dir)
+    assert list((save_dir / ".incoming").iterdir()) == []
+    day = _receiver(client).ledger.snapshot(DATE)
+    assert (day.landed_bytes, day.landed_count, day.reserved_bytes, day.reserved_count) == (0, 0, 0, 0)
+
+
+async def test_the_refusal_comes_from_the_headers_alone(client):
+    head = _request_head(client, len(PACKAGE)).replace(rcv.RESPONSE_HEADER, "X-Not-The-Answer")
+    data = await _raw(client, head)
+    assert _status_of(data) == 401 and _json_of(data)["error"] == "unauthorized"
+
+
+async def test_a_challenge_lasts_its_whole_lifetime(client, clock, save_dir):
+    headers = _headers(client)
+    clock.now += timedelta(seconds=300)
+    assert (await client.post(rcv.ENDPOINT_PATH, data=PACKAGE, headers=headers)).status == 201
+
+
+async def test_an_expired_challenge_is_refused_and_named(client, clock, save_dir):
+    headers = _headers(client)
+    clock.now += timedelta(seconds=301)
+    resp = await client.post(rcv.ENDPOINT_PATH, data=PACKAGE, headers=headers)
+    assert resp.status == 401 and (await resp.json())["error"] == "challenge_expired"
+    assert resp.headers["WWW-Authenticate"] == "Raven-Challenge"
+    assert not _landed(save_dir)
+
+
+async def test_a_challenge_from_another_receiver_process_is_refused(make_client):
+    first = await make_client()
+    second = await make_client()
+    resp = await second.post(rcv.ENDPOINT_PATH, data=PACKAGE, headers=_headers(first))
+    assert resp.status == 401 and (await resp.json())["error"] == "unauthorized"
+
+
+async def test_a_refused_upload_still_spends_a_rate_token(make_client):
+    client = await make_client(rate_burst=1, rate_per_10min=600)
+    refused = await client.post(rcv.ENDPOINT_PATH, data=PACKAGE, headers=_headers(client, auth=False))
+    assert refused.status == 401
+    assert (await _post(client)).status == 429
+
+
+async def test_only_the_upload_is_logged_with_its_refusal(client, monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        rcv.Receiver, "_log", lambda _self, _request, upload, status, _started: seen.append((status, upload.code))
+    )
+    await client.get(rcv.HELLO_PATH)
+    await client.post(rcv.CHALLENGE_PATH)
+    await client.post(rcv.ENDPOINT_PATH, data=PACKAGE, headers=_headers(client, auth=False))
+    assert seen == [("401", "unauthorized")]
 
 
 # --- startup and repair -----------------------------------------------------
@@ -539,11 +667,12 @@ class _GatedInspection:
             self.exited.set()
 
 
-def _request_head(length, report_id=ROOT, sha=SHA, extra=""):
+def _request_head(client, length, report_id=ROOT, sha=SHA, extra=""):
+    auth = "".join(f"{name}: {value}\r\n" for name, value in _auth(client, report_id, sha, length).items())
     return (
         f"POST {rcv.ENDPOINT_PATH} HTTP/1.1\r\nHost: t\r\nContent-Type: application/gzip\r\n"
         f"Content-Length: {length}\r\n{rcv.REPORT_ID_HEADER}: {report_id}\r\n{rcv.SHA256_HEADER}: {sha}\r\n"
-        f"Connection: close\r\n{extra}\r\n"
+        f"{auth}Connection: close\r\n{extra}\r\n"
     )
 
 
@@ -581,7 +710,7 @@ async def test_cancelled_request_waits_for_the_inspection_thread(client, save_di
     loop.set_exception_handler(lambda _loop, context: errors.append(context))
     try:
         _reader, writer = await asyncio.open_connection(client.server.host, client.server.port)
-        writer.write(_request_head(len(PACKAGE)).encode() + PACKAGE)
+        writer.write(_request_head(client, len(PACKAGE)).encode() + PACKAGE)
         await writer.drain()
         await asyncio.to_thread(gate.started.wait, 5)
         writer.close()
@@ -665,7 +794,7 @@ async def test_concurrent_identical_uploads_land_once(make_client, save_dir):
 
 async def test_over_delivery_in_two_writes_is_a_digest_mismatch(client, save_dir):
     half = len(PACKAGE) // 2
-    data = await _raw(client, _request_head(half), PACKAGE[:half], b"EXTRA", pause=0.2)
+    data = await _raw(client, _request_head(client, half), PACKAGE[:half], b"EXTRA", pause=0.2)
     assert _status_of(data) == 400
     assert _json_of(data)["error"] == "digest_mismatch"
     assert not _landed(save_dir)
@@ -674,20 +803,20 @@ async def test_over_delivery_in_two_writes_is_a_digest_mismatch(client, save_dir
 
 async def test_over_delivery_in_one_write_stores_nothing(client, save_dir):
     half = len(PACKAGE) // 2
-    data = await _raw(client, _request_head(half), PACKAGE[:half] + b"EXTRA")
+    data = await _raw(client, _request_head(client, half), PACKAGE[:half] + b"EXTRA")
     assert _status_of(data) == 400
     assert not _landed(save_dir)
     await _eventually(lambda: list((save_dir / ".incoming").iterdir()) == [])
 
 
 async def test_under_delivery_then_close_leaves_nothing(client, save_dir):
-    await _raw(client, _request_head(len(PACKAGE)), PACKAGE[:100], close=True)
+    await _raw(client, _request_head(client, len(PACKAGE)), PACKAGE[:100], close=True)
     await _eventually(lambda: list((save_dir / ".incoming").iterdir()) == [])
     assert not _landed(save_dir)
 
 
 async def test_oversized_length_is_refused_before_the_body(client, config):
-    data = await _raw(client, _request_head(config.limits.max_package_bytes + 1))
+    data = await _raw(client, _request_head(client, config.limits.max_package_bytes + 1))
     assert _status_of(data) == 413
     assert _json_of(data)["error"] == "too_large"
 
@@ -777,10 +906,6 @@ async def make_client(save_dir, clock):
     yield _make
     for client in clients:
         await client.close()
-
-
-def _receiver(client):
-    return client.server.app[rcv.RECEIVER_KEY]
 
 
 async def _post_other(client):
@@ -926,9 +1051,9 @@ async def test_every_exit_settles_the_reservation(make_client, save_dir, monkeyp
     assert (await _post(client, DIFFERENT, sha=DIFFERENT_SHA)).status == 409
     assert (await _post(client, b"junk", sha=hashlib.sha256(b"junk").hexdigest())).status == 400
     assert (await _post(client, sha="0" * 64)).status == 400
-    data = await _raw(client, _request_head(len(OTHER_PACKAGE), OTHER_ID, OTHER_SHA), OTHER_PACKAGE[:50])
+    data = await _raw(client, _request_head(client, len(OTHER_PACKAGE), OTHER_ID, OTHER_SHA), OTHER_PACKAGE[:50])
     assert _status_of(data) == 408
-    await _raw(client, _request_head(len(OTHER_PACKAGE), OTHER_ID, OTHER_SHA), OTHER_PACKAGE[:50], close=True)
+    await _raw(client, _request_head(client, len(OTHER_PACKAGE), OTHER_ID, OTHER_SHA), OTHER_PACKAGE[:50], close=True)
     await _eventually(lambda: list((save_dir / ".incoming").iterdir()) == [])
     monkeypatch.setattr(rcv, "inspect_package", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
     assert (await _post_other(client)).status == 500
@@ -1033,7 +1158,7 @@ async def test_forwarded_client_is_recorded_and_rate_limited(make_client, save_d
 
 async def test_idle_body_times_out(make_client, save_dir):
     client = await make_client(idle_timeout=0.2)
-    data = await _raw(client, _request_head(len(PACKAGE)), PACKAGE[: len(PACKAGE) // 2])
+    data = await _raw(client, _request_head(client, len(PACKAGE)), PACKAGE[: len(PACKAGE) // 2])
     assert _status_of(data) == 408
     assert "idle" in _json_of(data)["message"]
     await _eventually(lambda: list((save_dir / ".incoming").iterdir()) == [])
@@ -1126,7 +1251,7 @@ async def test_a_package_landed_after_the_client_left_is_still_charged(make_clie
     gate = _GatedCommit(where)
     monkeypatch.setattr(ReceiverStore, "commit", gate.patch())
     _reader, writer = await asyncio.open_connection(client.server.host, client.server.port)
-    writer.write(_request_head(len(PACKAGE)).encode() + PACKAGE)
+    writer.write(_request_head(client, len(PACKAGE)).encode() + PACKAGE)
     await writer.drain()
     await asyncio.to_thread(gate.entered.wait, 5)
     writer.close()
@@ -1187,9 +1312,18 @@ async def test_serve_binds_serves_and_stops(save_dir, clock):
     await asyncio.wait_for(bound.wait(), 10)
     assert address["port"] != 0
     assert list((save_dir / ".incoming").iterdir()) == []
-    url = f"http://{address['host']}:{address['port']}{rcv.ENDPOINT_PATH}"
+    base = f"http://{address['host']}:{address['port']}"
     async with aiohttp.ClientSession() as session:
-        async with session.post(url, data=PACKAGE, headers=_headers()) as resp:
+        async with session.post(base + rcv.CHALLENGE_PATH) as resp:
+            challenge = (await resp.json())["challenge"]
+        headers = {
+            "Content-Type": "application/gzip",
+            rcv.REPORT_ID_HEADER: ROOT,
+            rcv.SHA256_HEADER: SHA,
+            rcv.CHALLENGE_HEADER: challenge,
+            rcv.RESPONSE_HEADER: client_response(challenge, report_id=ROOT, sha256=SHA, size_bytes=len(PACKAGE)),
+        }
+        async with session.post(base + rcv.ENDPOINT_PATH, data=PACKAGE, headers=headers) as resp:
             assert resp.status == 201
     stop.set()
     await asyncio.wait_for(task, 10)

@@ -20,6 +20,13 @@ flag agrees with the status code. Anything else — a captive portal's 200, a
 proxy's HTML, a receiver that was pointed at the wrong directory — is a
 failure that keeps the package on disk, never a success.
 
+Every upload first asks the receiver for an Upload Challenge and sends,
+with the package, an answer bound to its report id, digest and size
+(:mod:`raven.trajectory.receiver_auth`). A 401 then means one of two things:
+the challenge expired on the way, which another attempt fixes, or the
+receiver does not take this client's answer, which no retry fixes -- the
+receiver and this Raven are most likely different versions.
+
 The whole exchange runs under one wall-clock deadline that cancels the
 request outright. Per-operation socket timeouts alone cannot bound a transfer:
 a peer that trickles a byte before each one expires can hold a call open
@@ -40,6 +47,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -59,14 +67,18 @@ from raven.trajectory.bugreport import (
     save_record,
 )
 from raven.trajectory.receiver import (
+    CHALLENGE_HEADER,
+    CHALLENGE_PATH,
     ENDPOINT_PATH,
     HELLO_PATH,
     PROTOCOL_VERSION,
     RECEIPT_ID,
     REPORT_ID_HEADER,
+    RESPONSE_HEADER,
     SERVICE_NAME,
     SHA256_HEADER,
 )
+from raven.trajectory.receiver_auth import CHALLENGE_EXPIRED, client_response
 
 DEFAULT_UPLOAD_URL = ""
 UPLOAD_URL_ENV = "RAVEN_BUGREPORT_URL"
@@ -77,6 +89,8 @@ PROBE_TIMEOUT = 5.0
 _TRUTHY = {"1", "true", "yes", "on"}
 _CHUNK = 64 * 1024
 _REDIRECT_CHARS = 200
+# The client treats a challenge as opaque and only checks that it is safe to send back as a header.
+_OPAQUE_CHALLENGE = re.compile(r"[A-Za-z0-9._~-]{1,256}", re.ASCII)
 _RETRYABLE_STATUSES = (408, 429)
 _RECEIPT_FIELDS = ("receipt_id", "report_id", "sha256", "size_bytes", "received_at", "duplicate")
 
@@ -245,12 +259,48 @@ def _parse_json(body: bytes) -> Any:
         return _NOT_JSON
 
 
+def _redirect_target(location: str) -> str:
+    """Where a redirect points, cut to what an error message may show; "" when nothing is left.
+
+    A Location comes from whatever stands in front of the receiver, and a
+    sign-in gateway puts tickets in the query and credentials before an ``@``.
+    It is cut on the string, not parsed, so no spelling of a URL (``//host``,
+    backslashes, no scheme) carries userinfo past it: the query and fragment
+    go first, then everything up to the last ``@``.
+    """
+    location = location.strip()
+    cut = min((i for i in (location.find("?"), location.find("#")) if i != -1), default=len(location))
+    head = location[:cut].rpartition("@")[2][:_REDIRECT_CHARS]
+    if not head:
+        return ""
+    return head + ("..." if cut < len(location) else "")
+
+
 def _rejection(status: int, body: bytes) -> str:
     payload = _parse_json(body)
     if isinstance(payload, dict) and isinstance(payload.get("error"), str):
         message = payload.get("message")
         return f"server rejected ({status} {payload['error']}): {message if isinstance(message, str) else ''}"
     return f"server returned {status}"
+
+
+def _unauthorized(body: bytes) -> UploadError:
+    payload = _parse_json(body)
+    fields = payload if isinstance(payload, dict) else {}
+    code = fields.get("error") if isinstance(fields.get("error"), str) else ""
+    if code == CHALLENGE_EXPIRED:
+        return UploadError(
+            "the challenge expired before the upload reached the receiver (401 challenge_expired); try again",
+            status=401,
+            retryable=True,
+        )
+    message = fields.get("message") if isinstance(fields.get("message"), str) else ""
+    detail = "401" + (f" {code}" if code else "") + (f": {message}" if message else "")
+    return UploadError(
+        f"the receiver did not accept this client ({detail}); the receiver and this Raven may be different versions",
+        status=401,
+        retryable=False,
+    )
 
 
 def _receipt_problem(payload: Any, *, report_id: str, sha256: str, size: int, duplicate: bool) -> str | None:
@@ -284,6 +334,8 @@ async def _receipt_of(response: httpx.Response, *, report_id: str, sha256: str, 
             retryable=False,
         )
     body = await _read_bounded(response)
+    if status == 401:
+        raise _unauthorized(body)
     if status not in (200, 201):
         retryable = status in _RETRYABLE_STATUSES or status >= 500
         raise UploadError(_rejection(status, body), status=status, retryable=retryable)
@@ -296,6 +348,39 @@ async def _receipt_of(response: httpx.Response, *, report_id: str, sha256: str, 
     if problem is not None:
         raise UploadError(f"malformed receipt: {problem}", status=status, retryable=False)
     return UploadReceipt(**{key: payload[key] for key in _RECEIPT_FIELDS})
+
+
+async def _fetch_challenge(client: httpx.AsyncClient, base_url: str, host: str) -> str:
+    """A fresh Upload Challenge from the receiver, or :class:`UploadError`."""
+    headers = {"Accept": "application/json", "Accept-Encoding": "identity", "User-Agent": f"raven/{__version__}"}
+    async with client.stream("POST", base_url.rstrip("/") + CHALLENGE_PATH, headers=headers) as response:
+        status = response.status_code
+        if 300 <= status < 400:
+            target = _redirect_target(response.headers.get("Location", ""))
+            where = (
+                f"redirected the challenge request to {target}"
+                if target
+                else "answered the challenge request with a redirect"
+            )
+            raise UploadError(
+                f"{host} {where}; point {UPLOAD_URL_ENV} at the receiver itself", status=status, retryable=False
+            )
+        body = await _read_bounded(response)
+        if status == 404:
+            raise UploadError(
+                f"the receiver does not issue challenges (HTTP 404 on {CHALLENGE_PATH}); it is older than this Raven",
+                status=status,
+                retryable=False,
+            )
+        if status != 200:
+            retryable = status in _RETRYABLE_STATUSES or status >= 500
+            raise UploadError(_rejection(status, body), status=status, retryable=retryable)
+        is_json = response.headers.get("Content-Type", "").lower().startswith("application/json")
+        payload = _parse_json(body) if is_json else _NOT_JSON
+        challenge = payload.get("challenge") if isinstance(payload, dict) else None
+        if not isinstance(challenge, str) or _OPAQUE_CHALLENGE.fullmatch(challenge) is None:
+            raise UploadError("malformed challenge", status=status, retryable=False)
+        return challenge
 
 
 async def upload_package_async(
@@ -330,6 +415,11 @@ async def upload_package_async(
     try:
         async with asyncio.timeout(total_timeout):
             async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+                challenge = await _fetch_challenge(client, base_url, host)
+                headers[CHALLENGE_HEADER] = challenge
+                headers[RESPONSE_HEADER] = client_response(
+                    challenge, report_id=report_id, sha256=sha256, size_bytes=size
+                )
                 async with client.stream("POST", url, content=_body(package), headers=headers) as response:
                     return await _receipt_of(response, report_id=report_id, sha256=sha256, size=size)
     except TimeoutError as exc:
@@ -374,23 +464,6 @@ def upload_package(
             total_timeout=total_timeout,
         )
     )
-
-
-def _redirect_target(location: str) -> str:
-    """Where a redirect points, cut to what an error message may show; "" when nothing is left.
-
-    A Location comes from whatever stands in front of the receiver, and a
-    sign-in gateway puts tickets in the query and credentials before an ``@``.
-    It is cut on the string, not parsed, so no spelling of a URL (``//host``,
-    backslashes, no scheme) carries userinfo past it: the query and fragment
-    go first, then everything up to the last ``@``.
-    """
-    location = location.strip()
-    cut = min((i for i in (location.find("?"), location.find("#")) if i != -1), default=len(location))
-    head = location[:cut].rpartition("@")[2][:_REDIRECT_CHARS]
-    if not head:
-        return ""
-    return head + ("..." if cut < len(location) else "")
 
 
 async def _check_hello(response: httpx.Response, host: str) -> None:
