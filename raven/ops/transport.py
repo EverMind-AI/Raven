@@ -149,19 +149,15 @@ def _kill_process_tree(proc: subprocess.Popen, grace_s: float = 2.0) -> None:
 # IdentitiesOnly and no agent still resolved to three identities.
 ISOLATE_IDENTITY = ("-F", "/dev/null", "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none")
 
-# The same restriction with the owner's config still read: ``-i key`` plus
-# whatever ``IdentityFile`` that config names for the host, the agent kept
-# out. What a probe uses when the key it has to prove is one this computer
-# made and installed itself, and the machine may be one only the config
-# reaches (a ``ProxyJump``, a ``HostName`` behind an alias, an algorithm an
-# old host needs): the config's own identities for that host are offered on
-# every later connection anyway, so proving the key against them proves it
-# the way it will be used.
-OWN_IDENTITY = ("-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none")
-
 # How ssh is told to log in with the password kept for the machine instead of
 # a key: no identity offered, the password methods first, and one try, since
 # the answer comes from a program rather than a person who might retype it.
+# And no connection sharing: the owner's ssh config may say ``ControlMaster
+# auto``, and a connection that rides a master another one authenticated never
+# authenticates itself -- a probe would then "prove" a password it never sent
+# (one refused after the master expires), and a password rotated on the
+# machine would go unnoticed until then. Each password connection logs in on
+# its own; the command line wins over the config.
 PASSWORD_AUTH = (
     "-o",
     "PubkeyAuthentication=no",
@@ -169,6 +165,10 @@ PASSWORD_AUTH = (
     "PreferredAuthentications=password,keyboard-interactive",
     "-o",
     "NumberOfPasswordPrompts=1",
+    "-o",
+    "ControlMaster=no",
+    "-o",
+    "ControlPath=none",
 )
 
 #: The variable the askpass helper reads the password file's path from.
@@ -193,7 +193,6 @@ def ssh_argv(
     user: str = "root",
     connect_timeout: int = 15,
     identities_only: bool = False,
-    keep_config: bool = False,
     password: bool = False,
     extra: tuple[str, ...] = (),
 ) -> list[str]:
@@ -205,8 +204,7 @@ def ssh_argv(
     on never stopping to ask for a password. ``extra`` is placed before the
     destination, where ssh reads options; a caller that keeps the session open
     passes its keepalives there. ``identities_only`` narrows auth to ``key``
-    (:data:`ISOLATE_IDENTITY`); with ``keep_config`` the owner's ssh config is
-    still read and only the agent is kept out (:data:`OWN_IDENTITY`). With
+    (:data:`ISOLATE_IDENTITY`). With
     ``password`` no key is offered and ``BatchMode`` is off, so ssh asks --
     the askpass helper :func:`ssh_env` names, never a terminal
     (:data:`PASSWORD_AUTH`); ``key`` is then unread.
@@ -221,7 +219,7 @@ def ssh_argv(
     if password:
         argv += list(PASSWORD_AUTH)
     elif identities_only:
-        argv += list(OWN_IDENTITY if keep_config else ISOLATE_IDENTITY)
+        argv += list(ISOLATE_IDENTITY)
     argv += list(extra)
     argv.append(f"{user}@{host}")
     return argv
@@ -280,7 +278,6 @@ def make_ssh_runner(
     user: str = "root",
     connect_timeout: int = 15,
     identities_only: bool = False,
-    keep_config: bool = False,
     cap_seconds: float | None = None,
     password: bool = False,
     env: dict[str, str] | None = None,
@@ -302,10 +299,7 @@ def make_ssh_runner(
     session has to prove WHICH key opened it -- the registry probe trying the
     keys ssh named when the owner gave no path -- and it takes every option in
     :data:`ISOLATE_IDENTITY` to get there. The cost is that an alias or a jump
-    host in the owner's config is not in play for that one call -- unless
-    ``keep_config`` says to read it: then only the agent is kept out
-    (:data:`OWN_IDENTITY`), for a key this computer made itself and has to
-    prove on a machine the config may be the only way to.
+    host in the owner's config is not in play for that one call.
 
     ``password`` logs in with the password kept for the machine, through the
     askpass helper ``env`` carries (:func:`ssh_env`); ``key`` is then unread.
@@ -319,7 +313,6 @@ def make_ssh_runner(
             user=user,
             connect_timeout=connect_timeout,
             identities_only=identities_only,
-            keep_config=keep_config,
             password=password,
         ) + [cmd]
         try:
