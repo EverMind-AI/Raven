@@ -66,6 +66,7 @@ BARE_MODEL = {
     "xirang": "deepseek-v3",
     "ph8": "gpt-5.5",
     "aionly": "gpt-5.5",
+    "atlascloud": "deepseek-ai/deepseek-v4-flash",
     "radeon_cloud": "deepseek-v3",
     "gpustack": "qwen3-8b",
     "ovms": "qwen3-8b",
@@ -138,6 +139,7 @@ QUALIFIED_RESOLUTION = {
     "xirang": "openai/deepseek-v3",
     "ph8": "openai/gpt-5.5",
     "aionly": "openai/gpt-5.5",
+    "atlascloud": "openai/deepseek-ai/deepseek-v4-flash",
     "radeon_cloud": "openai/deepseek-v3",
     # Two self-hosted servers with no LiteLLM driver, so the same borrowed
     # route -- and the address, supplied per deployment, is the whole of what
@@ -222,6 +224,7 @@ BARE_RESOLUTION = {
     "xirang": "openai/deepseek-v3",
     "ph8": "openai/gpt-5.5",
     "aionly": "openai/gpt-5.5",
+    "atlascloud": "openai/deepseek-ai/deepseek-v4-flash",
     "radeon_cloud": "openai/deepseek-v3",
     "gpustack": "openai/qwen3-8b",
     "ovms": "openai/qwen3-8b",

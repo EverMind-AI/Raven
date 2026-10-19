@@ -1255,6 +1255,7 @@ NO_SHORTLIST_VENDORS = [
     "xirang",
     "ph8",
     "aionly",
+    "atlascloud",
     "radeon_cloud",
 ]
 

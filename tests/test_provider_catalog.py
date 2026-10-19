@@ -65,6 +65,7 @@ EXPECTED_PROVIDER_NAMES = {
     "xirang",
     "ph8",
     "aionly",
+    "atlascloud",
     "radeon_cloud",
     "gpustack",
     "ovms",
@@ -72,9 +73,9 @@ EXPECTED_PROVIDER_NAMES = {
 }
 
 
-def test_registry_has_exactly_55_providers() -> None:
-    assert len(PROVIDERS) == 55
-    assert len(EXPECTED_PROVIDER_NAMES) == 55
+def test_registry_has_exactly_56_providers() -> None:
+    assert len(PROVIDERS) == 56
+    assert len(EXPECTED_PROVIDER_NAMES) == 56
 
 
 def test_registry_provider_name_set_is_pinned() -> None:
