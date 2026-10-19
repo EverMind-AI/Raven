@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from raven.acp.mirasim import host as host_mod
 from raven.acp.mirasim import server as server_mod
 from raven.acp.mirasim.server import MirasimAgent
 from raven.acp.mirasim.store import Binding, BindingStore
@@ -1263,6 +1264,32 @@ async def test_a_turn_unheard_of_long_after_the_connection_dropped_is_given_up(
     response = await turn
     assert "lost the connection to the Mirasim host" in response["error"]["message"]
     harness.agent.host._locate = lambda: real
+
+
+async def test_a_prompt_still_queued_when_the_connection_returns_is_not_given_up(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(server_mod, "LOST_TURN_S", 0.2)
+    monkeypatch.setattr(host_mod, "RECONNECT_PAUSES_S", (0.01,))
+    sid = await harness.new()
+    await harness.ok("session/prompt", sessionId=sid, prompt=text("hello"))
+    session = harness.host.session()
+    harness.host.respond = script(("text", "the app's turn"), ("hold",))
+    session.running = asyncio.ensure_future(harness.host._run(session, {"prompt": "from the app"}, "task-app"))
+    await harness.host.wait_for(lambda: session.snapshot.get("taskId") == "task-app")
+    queued = asyncio.ensure_future(harness.call("session/prompt", sessionId=sid, prompt=text("queued work")))
+    await harness.host.wait_for(lambda: len(session.queue) == 1)
+    cadences = len(harness.host.frames("setStreamCadence"))
+    await harness.host.drop()
+    await harness.host.wait_for(lambda: len(harness.host.frames("setStreamCadence")) > cadences)
+    await asyncio.sleep(0.4)
+    assert not queued.done()
+    harness.host.respond = script(("text", "queued work done"))
+    session.stopped = True
+    session.wake.set()
+    assert (await queued)["result"] == {"stopReason": "end_turn"}
+    assert harness.said(sid).endswith("queued work done")
+    assert not harness.host.frames("stop")
 
 
 async def test_a_gap_in_the_patches_asks_for_a_fresh_snapshot(harness: Harness) -> None:

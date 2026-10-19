@@ -1100,6 +1100,12 @@ class MirasimAgent:
                 return
             self._observe(session)
         elif kind == "outbox":
+            items = frame.get("items")
+            for item in items if isinstance(items, list) else ():
+                # A prompt the host still holds in its queue is alive however long it waits; the
+                # queue is listed again on every subscribe, so a reconnect hears of it at once.
+                if (queued := self._turns.get(_ref(item))) is not None and queued.task_id is None:
+                    queued.heard_at = time.monotonic()
             dispatched = frame.get("dispatched")
             turn = self._turns.get(_ref(dispatched))
             if turn is not None and (task_id := _text(dispatched.get("taskId"))):
