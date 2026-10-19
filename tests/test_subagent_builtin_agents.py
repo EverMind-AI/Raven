@@ -11,6 +11,7 @@ opted out.
 
 from __future__ import annotations
 
+from itertools import permutations
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from types import SimpleNamespace
 from typing import Any
@@ -25,7 +26,8 @@ from raven.agent.subagent.builtin_agents import (
     is_builtin_agent_name,
     merge_builtin_seeds,
 )
-from raven.config.schema import BuiltinAgentConfig
+from raven.agent.subagent.registry import AgentRegistry
+from raven.config.schema import BuiltinAgentConfig, SubagentsConfig
 from raven.utils import commands
 
 OWNS = "owns decks. Do not build the deck yourself."
@@ -178,13 +180,81 @@ class TestTheLegacyNamesStillNameTheSeed:
         # only line the model reads about this agent.
         assert "in-process sub-agent" in merged[0].description
 
-    def test_the_capitalised_row_wins_when_config_holds_both(self) -> None:
+    def test_the_current_row_wins_when_config_holds_both(self) -> None:
         legacy = BuiltinAgentConfig.model_validate({"name": "raven", "kind": "builtin", "skills": ["old"]})
         current = BuiltinAgentConfig.model_validate({"name": GENERIC_AGENT, "kind": "builtin", "skills": ["new"]})
         merged = merge_builtin_seeds([legacy, current])
 
         assert [row.name for row in merged] == [GENERIC_AGENT]
         assert merged[0].skills == ["new"]
+
+    @pytest.mark.parametrize(
+        "names", [*permutations(("raven", "Raven")), *permutations(("raven", "Raven", "Raven-General"))]
+    )
+    @pytest.mark.parametrize("through_registry", [False, True])
+    def test_the_newest_spelling_wins_wholesale(self, names, through_registry, monkeypatch) -> None:
+        winner = "Raven-General" if "Raven-General" in names else "Raven"
+        messages: list[str] = []
+        monkeypatch.setattr(builtin_agents.logger, "warning", lambda text, *args: messages.append(text.format(*args)))
+        config = SubagentsConfig.model_validate(
+            {
+                "agents": [
+                    {
+                        "name": name,
+                        "kind": "builtin",
+                        **(
+                            {"skills": ["new"]}
+                            if name == winner
+                            else {"model": "old/model", "restrict_to_workspace": False}
+                        ),
+                    }
+                    for name in names
+                ]
+                + [{"name": "Scribe", "kind": "builtin", "model": "scribe/model"}]
+            }
+        )
+        if through_registry:
+            registry = AgentRegistry()
+            registry.apply(config.agents)
+            merged = [row.config for row in registry.rows()]
+        else:
+            merged = merge_builtin_seeds(config.agents)
+
+        assert [row.name for row in merged] == ["Raven-General", "Scribe"]
+        assert merged[0].skills == ["new"]
+        seed = builtin_agent_seeds()[0]
+        assert merged[0].model == seed.model
+        assert merged[0].restrict_to_workspace == seed.restrict_to_workspace
+        assert merged[1].model == "scribe/model"
+        assert len(messages) == len(names) - 1
+        for loser in set(names) - {winner}:
+            assert any(repr(loser) in text and f"the entry under {winner!r} wins" in text for text in messages)
+
+    @pytest.mark.parametrize("names", list(permutations(("raven", "Raven"))))
+    @pytest.mark.parametrize("winner_kind", ["builtin", "acp", "cli", "openai"])
+    def test_spelling_priority_precedes_transport_selection(self, names, winner_kind, monkeypatch) -> None:
+        monkeypatch.setattr(builtin_agents, "host_raven_acp_command", lambda: "/usr/bin/raven acp")
+        rows = {
+            "raven": {"name": "raven", "kind": "acp", "command": "old acp"},
+            "Raven": {
+                "builtin": {"name": "Raven", "kind": "builtin", "skills": ["new"]},
+                "acp": {"name": "Raven", "kind": "acp", "command": ""},
+                "cli": {"name": "Raven", "kind": "cli", "command": "true {prompt}"},
+                "openai": {"name": "Raven", "kind": "openai", "base_url": "https://example.test/v1", "model": "test"},
+            }[winner_kind],
+        }
+        config = SubagentsConfig.model_validate({"agents": [rows[name] for name in names]})
+        registry = AgentRegistry()
+        registry.apply(config.agents)
+
+        assert len(registry.rows()) == 1
+        row = registry.get("Raven-General")
+        assert row is not None
+        assert row.kind == ("acp" if winner_kind == "acp" else "builtin")
+        if winner_kind == "acp":
+            assert row.config.command == "/usr/bin/raven acp"
+        elif winner_kind == "builtin":
+            assert row.config.skills == ["new"]
 
 
 class TestTheDescriptionStatesWhatTheAgentCannotDo:
