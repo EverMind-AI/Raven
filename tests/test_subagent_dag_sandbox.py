@@ -266,10 +266,15 @@ def test_the_loops_playbook_runtime_gets_the_sandbox_factory(tmp_path: Path, mon
     playbooks = tmp_path / "playbooks"
     playbooks.mkdir()
     seen = _record_dag_tool_constructions(monkeypatch)
+    # The loop built above also registers a graph tool carrying the same
+    # factory, so the assertion must look only at what the funnel builds here
+    # -- otherwise this guard stays green with the funnel's own
+    # ``sandbox_factory=`` line deleted.
     loop = _wired_loop(tmp_path)
+    built_before_funnel = len(seen)
 
     loop._build_playbook_runtime(PlaybookConfig(enabled=True, dir=str(playbooks)))
 
-    assert any(kwargs.get("sandbox_factory") == loop.subagents.sandbox_executor_for for kwargs in seen), (
-        "the playbook funnel's graph tool must ask the manager's recipe for its executor"
-    )
+    assert any(
+        kwargs.get("sandbox_factory") == loop.subagents.sandbox_executor_for for kwargs in seen[built_before_funnel:]
+    ), "the playbook funnel's graph tool must ask the manager's recipe for its executor"

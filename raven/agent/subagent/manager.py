@@ -1226,13 +1226,7 @@ class SubagentManager:
                 live_key=record.dir.name, instance=(session_key, agent, handle), prompt=recorded
             ) as did:
                 try:
-                    executor = build_executor(
-                        self._sandbox_config,
-                        effective_workspace,
-                        self._owned_ids,
-                        self._home_volume(effective_workspace),
-                        sandbox_dir=get_sandbox_dir,
-                    )
+                    executor = self._build_sandbox_executor(effective_workspace)
                     async with executor:
                         reply = await backend.run(
                             text,
@@ -1649,13 +1643,7 @@ class SubagentManager:
             # other shape: one VM for its whole run, built by SubAgentDagTool
             # before any node queues on this same gate.)
             async with self._gate:
-                executor = build_executor(
-                    self._sandbox_config,
-                    effective_workspace,
-                    self._owned_ids,
-                    self._home_volume(effective_workspace),
-                    sandbox_dir=get_sandbox_dir,
-                )
+                executor = self._build_sandbox_executor(effective_workspace)
                 async with executor:
                     dispatched = True
                     kwargs = {"mcp_grant": mcp_grant} if mcp_grant is not None else {}
@@ -1689,6 +1677,17 @@ class SubagentManager:
         """
         if self._sandbox_config is None:
             return None
+        return self._build_sandbox_executor(workspace)
+
+    def _build_sandbox_executor(self, workspace: Path) -> "SandboxExecutor":
+        """The one statement of the sandbox recipe, shared by all three builders.
+
+        Every executor this manager hands out -- a direct-chat turn, a spawned
+        task, a dispatched graph node (via ``sandbox_executor_for``) -- is this
+        same call: this sandbox config, the owned-id set, the agent-home mount
+        and the shared sandbox dir, over the workspace the run executes in.
+        Kept in one place so the three copies cannot drift.
+        """
         return build_executor(
             self._sandbox_config,
             workspace,

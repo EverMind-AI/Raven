@@ -608,10 +608,12 @@ class SubAgentDagTool(Tool):
         # The manager's sandbox recipe (``SubagentManager.sandbox_executor_for``),
         # asked with the workdir each run dispatches into. Injected rather than
         # imported for the same reason as ``state_for``: this tool is built from
-        # the same config as the manager but does not own one. ``None`` -- a host
-        # with no ``tools.sandbox``, or a test -- keeps the historical behavior:
-        # nodes are dispatched with no executor and a raven-loop node's ExecTool
-        # falls back to host execution.
+        # the same config as the manager but does not own one. ``None`` -- a
+        # test, or a caller built without a sandbox config; every production
+        # wiring passes the factory, and a default install's ``tools.sandbox``
+        # (``backend="none"``) builds a ``DirectExecutor`` -- keeps the
+        # historical behavior: nodes are dispatched with no executor and a
+        # raven-loop node's ExecTool falls back to host execution.
         self._sandbox_factory = sandbox_factory
         self._adopt = adopt
         self._charge = charge
@@ -2417,9 +2419,12 @@ class SubAgentDagTool(Tool):
         # the nodes share it, so each waits on the dispatch gate for its turn
         # inside a VM the run holds before its first dispatch -- one VM per
         # graph, not per node. Asked with the workdir the nodes will run in --
-        # the same workspace a spawn's executor is built over. Without a factory
-        # (no sandbox configured) nothing is built and the nodes are dispatched
-        # with ``sandbox=None``, exactly as they always were.
+        # the same workspace a spawn's executor is built over. The factory is
+        # what every production wiring passes, so in practice an executor is
+        # always built -- a default install's ``tools.sandbox`` (``backend=
+        # "none"``) builds a ``DirectExecutor``; only a construction without a
+        # factory (a test) dispatches nodes with ``sandbox=None``, exactly as
+        # they always were.
         sandbox = self._sandbox_factory(Path(dirs.workdir)) if self._sandbox_factory is not None else None
         try:
             provider, model = self._binding_for() if self._binding_for is not None else (None, None)
