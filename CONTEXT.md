@@ -430,10 +430,10 @@ as the command; or, with `auth: password`, a password this computer keeps for th
 under `~/.raven/keys/<id>.password`, the owner's alone, and hands to ssh on every connection
 through OpenSSH's askpass hook -- in no row, log, command line or answer,
 `connection_add.store_password`, `transport.ssh_env`; the row carries `auth: password` and no
-key, gets no ssh alias, and is refused on Windows, whose OpenSSH has no askpass), install the
-node in the background, doctor, and remove (`raven ops connection remove`, refused while a
-connected agent entry names the machine; the password kept for a machine goes with its row,
-`connection_add.forget_password`);
+key, gets no ssh alias, and is refused on Windows, whose OpenSSH cannot run Raven's
+POSIX askpass helper), install the node in the background, doctor, and remove (`raven ops
+connection remove`, refused while a connected agent entry names the machine; the password
+kept for a machine goes with its row, `connection_add.forget_password`);
 none of it hands the page an address, an account or a key path, and
 `node_install` on a row is the node the last install or contact found there,
 which is how a listing says a machine has this Raven's node without reaching it.

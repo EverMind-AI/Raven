@@ -609,7 +609,9 @@ def test_a_refused_password_is_one_sentence_that_names_the_other_cause_too_and_n
     assert "wrong-one" not in said
 
 
-def test_a_password_row_with_no_password_kept_here_is_refused_before_ssh_is_started(tmp_path, monkeypatch):
+def test_a_password_row_with_no_password_kept_here_is_refused_before_ssh_is_started(
+    tmp_path, monkeypatch, supported_host
+):
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
     _fake_ssh(tmp_path, monkeypatch, "echo 'ssh must not run' >&2; exit 99")
 

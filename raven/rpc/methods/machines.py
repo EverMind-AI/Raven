@@ -230,9 +230,10 @@ async def machines_add(params: dict) -> dict:
     if by_password:
         if sys.platform == "win32":
             # Judged before anything else the pick would set in motion: every
-            # password login rides OpenSSH's askpass, which this computer does
-            # not have, so nothing is kept and no 'nossh' asks for an OpenSSH
-            # that could not make the mode work either.
+            # password login rides OpenSSH's askpass, and the helper Raven
+            # writes is a POSIX script this computer cannot run, so nothing is
+            # kept and no 'nossh' asks for an OpenSSH that could not make the
+            # mode work either.
             return _refused("registering with a password is not supported on Windows; use a key instead", "platform")
         if not password:
             return _refused("registering with a password needs the password; nothing was written", "invalid")
