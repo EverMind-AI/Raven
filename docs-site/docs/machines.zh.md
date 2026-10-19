@@ -50,12 +50,18 @@ raven ops connection add --id gpu1 --name "GPU box 1" \
   [Oncall](oncall.md#prepare-the-agent-and-machine)。
 - 记录的是私钥的**路径**，从不记录私钥本身。
 - 只能用密码登录的机器，在 Agent Hub 里把**登录方式**选成**密码**来登记，或者用
-  `raven ops connection add --auth password --password-stdin`（密码从标准输入的第一行读，
-  不走命令行）。密码保存在本机的 `~/.raven/keys/<id>.password`，只有你的账号能读
+  `raven ops connection add --non-interactive --auth password --password-stdin --id <id>
+  --name <name> --host <地址> --port 22 --user <用户>`（密码从标准输入的第一行读，不走
+  命令行；`--password-stdin` 在第一个问题之前就读，带不带 `--non-interactive` 都行）。
+  密码至少 6 个字符，保存在本机的 `~/.raven/keys/<id>.password`，只有你的账号能读
   （权限 0600）；每次连接时经 OpenSSH 的 askpass 钩子交给 ssh，不进登记表、不进日志、
   不回显、不上命令行。这些连接每一条都自己登录（你 ssh 配置里的连接共享 `ControlMaster`
   对它们不生效），所以登记时证明的就是保存下来的这个密码，机器改了密码也会在下一次连接时
-  发现。登记表里这一行记 `auth: password`，没有密钥路径。机器的 sshd 必须允许
+  发现。它们启动时没有控制终端，所以 OpenSSH 8.4 以前的版本（只在开不了终端时才用
+  askpass）也会走助手而不是在终端上要密码。跳板机不行：密码连接关掉了 `ProxyJump` 和
+  `ProxyCommand`，因为跳板自己的 ssh 会拿到这台机器的密码；只能经跳板到达的机器请用
+  密钥登记。登记表里这一行记 `auth: password`，没有密钥路径。`raven ops connection
+  doctor` 把它算作可用，Oncall 只用密钥登录，会把它列为不可用并说明原因。机器的 sshd 必须允许
   密码登录（`PasswordAuthentication yes`），不允许的机器每次连接都会拒绝，拒绝语里会说明。
   登记时被机器拒绝的密码不会保存。机器改了密码，先移除这台机器再重新登记（id 已在用的登记
   会被拒）。本机是 Windows 时不提供：

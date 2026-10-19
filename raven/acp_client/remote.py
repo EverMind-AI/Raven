@@ -380,7 +380,11 @@ def push(target: Machine, command: str, data: bytes, *, timeout: float = 300.0) 
     env = {**os.environ, **ssh_environment(target)} if password else None
     argv = ssh_argv(host, port, key, user=user, password=password) + [wrapped]
     try:
-        done = subprocess.run(argv, input=data, capture_output=True, timeout=timeout, env=env)
+        # `start_new_session` for a password: no controlling terminal for ssh to
+        # ask on, so OpenSSH before 8.4 reaches the helper too (transport.askpass_helper).
+        done = subprocess.run(
+            argv, input=data, capture_output=True, timeout=timeout, env=env, start_new_session=password
+        )
     except subprocess.TimeoutExpired:
         return TIMED_OUT_RC, ""
     out = done.stdout.decode("utf-8", "replace")
@@ -452,6 +456,8 @@ async def tunnel(
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
                 env=env,
+                # A password tunnel gets no controlling terminal either.
+                start_new_session=password,
             )
         except OSError as exc:
             raise RemoteMachineError(f"machine {target.label}: ssh could not be started: {exc}") from None

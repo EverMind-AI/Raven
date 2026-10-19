@@ -110,6 +110,12 @@ def add(  # noqa: PLR0913 -- one option per field of the row; a dict would hide 
     kind = (transport or SSH).strip().lower()
     login = (auth or "key").strip().lower()
     password = ""
+    if login == "password" and password_stdin:
+        # Read here, before the first question: piped in, the password must not
+        # be left to answer a question of its own -- it used to answer the
+        # machine's name (reviewed 2026-10-19). Never an option: a command line
+        # is readable by every account here.
+        password = click.get_text_stream("stdin").readline().rstrip("\r\n")
     if not non_interactive:
         console.print(f"[dim]writing to {store_path()}[/dim]")
         name = name or _ask("What do you call this machine")
@@ -120,13 +126,10 @@ def add(  # noqa: PLR0913 -- one option per field of the row; a dict would hide 
             port = port or int(_ask("Port", "22"))
             user = user or _ask("Username", "root")
             login = (auth or _ask("Log in with a key or a password? (key/password)", "key")).strip().lower()
-            if login == "password" and sys.platform != "win32":
+            if login == "password" and not password and sys.platform != "win32":
                 password = typer.prompt("Password (kept on this computer, readable by you alone)", hide_input=True)
             elif login == "key":
                 key = key or _ask("Private key path", "~/.ssh/id_rsa")
-    elif login == "password" and password_stdin:
-        # Never an option: a command line is readable by every account here.
-        password = click.get_text_stream("stdin").readline().rstrip("\r\n")
     conn_id = conn_id or _slug(name)
     row: dict[str, Any] = {"id": conn_id, "display_name": name or conn_id, "transport": kind}
     if kind != LOCAL:

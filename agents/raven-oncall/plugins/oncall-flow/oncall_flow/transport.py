@@ -65,6 +65,14 @@ def make_local_runner(cap_seconds: float = 600.0) -> CommandRunner:
     return run
 
 
+def _row_of(meta: dict[str, Any]) -> dict[str, Any]:
+    """The registry row a campaign's meta names, when it names one and no address was filled in yet."""
+    from oncall_flow.connections import get
+
+    named = str(meta.get("connection") or "").strip()
+    return (get(named) or {}) if named else {}
+
+
 def runner_from(meta: dict[str, Any], *, what: str = "campaign", cap_seconds: float | None = None) -> CommandRunner:
     """The runner this meta -- or connection row -- calls for.
 
@@ -75,6 +83,14 @@ def runner_from(meta: dict[str, Any], *, what: str = "campaign", cap_seconds: fl
     as "your machine refused the connection" while that machine was answering in
     under 200ms.
     """
+    from oncall_flow.connections import PASSWORD_ROW_SAID, by_password
+
+    if by_password(meta) or by_password(_row_of(meta)):
+        # Judged before any ssh is started: this product logs in with a key
+        # only, and a password row would be offered by the listing and then
+        # refused at the campaign's first ssh (reviewed 2026-10-19).
+        raise JobBackendError(f"this {what} names a machine {PASSWORD_ROW_SAID}")
+
     if transport_of(meta) == LOCAL:
         # The caller's cap, not this module's default. Looking at a machine is
         # capped at one minute whichever way it is reached; without this the local

@@ -53,6 +53,11 @@ Ask the owner, in one message, and stop there until they answer:
     connects is kept
 Optional, only if they care to say: what is installed on it (with paths),
 which directories on it hold their work, and how its budget is counted.
+A machine that takes only a password is registered by the owner, not through a
+tool call: point them at the Agent Hub's Machines tab, Login: Password, or at
+`raven ops connection add --auth password --password-stdin --non-interactive`
+in a terminal. The password is typed or piped there and never passes through
+you.
 
 With the answers, call ops_connection_add: it reaches the machine before
 writing anything, and what the machine says about itself is read off it.

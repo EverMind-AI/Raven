@@ -1548,7 +1548,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.machine.password_note':
       "The password is kept on this computer, readable by your account alone, and handed to ssh on every connection: never on a command line, never in a log. The first connection records the machine's host key and then sends the password, so on a network you do not trust, ssh once from a terminal and check the fingerprint before registering. When the machine's password changes, remove the machine and register it again.",
     'gui.machine.auth_note':
-      "No ssh alias is written for it; an agent reads and writes its files through Raven's own file tools. When its password changes, register it again.",
+      "No ssh alias is written for it; an agent reads and writes its files through Raven's own file tools. When its password changes, remove the machine and register it again.",
     'gui.machine.f_paths': 'Work directories on the machine, one per line (optional)',
     'gui.machine.add_hint':
       "An ssh login, with a key or with a password. The machine's host key is recorded at the first contact and checked after.",
@@ -4861,7 +4861,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.machine.f_password': '密码',
     'gui.machine.password_note':
       '密码保存在这台电脑上，只有你的账号能读；每次连接时读出来交给 ssh，不进命令行、不进日志。第一次连接会先记下机器的主机密钥再送出密码，所以在不信任的网络上，先在终端里 ssh 一次核对指纹，再登记。机器改了密码，先移除这台机器再重新登记。',
-    'gui.machine.auth_note': '没有写 ssh 别名；Agent 读写它上面的文件走 Raven 的文件工具。机器改了密码，重新登记一次。',
+    'gui.machine.auth_note':
+      '没有写 ssh 别名；Agent 读写它上面的文件走 Raven 的文件工具。机器改了密码，先移除这台机器再重新登记。',
     'gui.machine.f_paths': '机器上的工作目录，每行一个（可不填）',
     'gui.machine.add_hint': '用密钥或密码 ssh 登录。第一次连接时记下它的主机密钥，之后每次核对。',
     'gui.machine.add_do': '连一次并登记',

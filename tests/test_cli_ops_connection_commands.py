@@ -956,6 +956,60 @@ def test_add_by_password_refuses_a_password_shorter_than_the_scrubbers_floor(sto
     assert _nothing_kept(rhome) and not store.exists()
 
 
+def test_password_stdin_is_read_before_the_first_question_without_non_interactive(
+    store, reached, monkeypatch, tmp_path
+):
+    """Piped in, the password must not be left to answer a question of its own: without --non-interactive the first
+    question used to eat it and the password became the machine's name (reviewed 2026-10-19)."""
+    point_home(monkeypatch, tmp_path)
+    rhome = tmp_path / "rhome"
+    monkeypatch.setenv("RAVEN_HOME", str(rhome))
+    monkeypatch.setattr(sys, "platform", "linux")
+    asked: list[str] = []
+
+    def ask(label, default="", *, required=True):
+        asked.append(label)
+        return {"What do you call this machine": "Box"}.get(label, default or "x")
+
+    import raven.cli.ops_connection_commands as cli
+
+    monkeypatch.setattr(cli, "_ask", ask)
+    monkeypatch.setattr(cli.typer, "prompt", lambda *a, **kw: pytest.fail("the password came from the prompt"))
+
+    out = CliRunner().invoke(
+        connection_app,
+        [
+            "add",
+            "--id",
+            "box",
+            "--host",
+            "14.103.100.27",
+            "--port",
+            "58717",
+            "--user",
+            "root",
+            "--auth",
+            "password",
+            "--password-stdin",
+            "--software",
+            "OpenFOAM (/opt/openfoam)",
+            "--budget-unit",
+            "core-minute",
+            "--concurrency",
+            "1",
+        ],
+        input="hunter2\n",
+    )
+
+    assert out.exit_code == 0, out.output
+    assert asked[0] == "What do you call this machine", "the password was not left to answer it"
+    row = json.loads(store.read_text(encoding="utf-8"))["connections"][0]
+    assert row["display_name"] == "Box", "the password was not left to answer the name"
+    from raven.ops.connection_add import password_path
+
+    assert password_path("box").read_text(encoding="utf-8") == "hunter2\n"
+
+
 def test_add_by_password_needs_the_password_and_a_refused_one_is_not_kept(store, unreachable, monkeypatch, tmp_path):
     point_home(monkeypatch, tmp_path)
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))

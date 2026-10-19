@@ -94,6 +94,11 @@ def test_a_password_row_s_argv_offers_no_key_and_leaves_the_asking_to_askpass():
         "ControlMaster=no",
         "-o",
         "ControlPath=none",
+        # A jump host's own ssh inherits the helper; it would be sent this machine's password.
+        "-o",
+        "ProxyJump=none",
+        "-o",
+        "ProxyCommand=none",
     ):
         assert option in argv, option
     assert "StrictHostKeyChecking=accept-new" in argv and "ConnectTimeout=15" in argv
@@ -154,10 +159,10 @@ def test_the_runner_hands_ssh_the_askpass_environment_for_a_password_row_and_not
 
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
     store_password("box", "hunter2")
-    sent: list[tuple[list[str], dict | None]] = []
+    sent: list[tuple[list[str], dict | None, bool]] = []
 
     def run(argv, **kwargs):
-        sent.append((argv, kwargs.get("env")))
+        sent.append((argv, kwargs.get("env"), kwargs.get("start_new_session", False)))
         return subprocess.CompletedProcess(argv, 0, "out", "")
 
     monkeypatch.setattr(transport.subprocess, "run", run)
@@ -165,8 +170,10 @@ def test_the_runner_hands_ssh_the_askpass_environment_for_a_password_row_and_not
     assert transport.runner_from(PASSWORD_ROW)("true") == (0, "out")
     assert transport.runner_from(KEY_ROW)("true") == (0, "out")
 
-    (argv_pw, env_pw), (argv_key, env_key) = sent
+    (argv_pw, env_pw, session_pw), (argv_key, env_key, session_key) = sent
     assert env_pw["SSH_ASKPASS_REQUIRE"] == "force" and env_pw["RAVEN_MACHINE_PASSWORD_FILE"].endswith("box.password")
+    # No controlling terminal, so an OpenSSH older than 8.4 reaches the helper instead of prompting.
+    assert session_pw is True and session_key is False, "a key connection keeps the caller's session"
     assert "PubkeyAuthentication=no" in argv_pw and "-i" not in argv_pw and "hunter2" not in " ".join(argv_pw)
     assert env_key is None and "-i" in argv_key
 

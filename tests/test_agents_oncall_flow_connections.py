@@ -223,3 +223,24 @@ def test_what_only_a_campaign_needs_stays_with_the_plugin(store):
     merged = connections.resolve_into({"connection": "conn_cpu", "port": 1})
     assert merged["host"] == TWO[0]["host"] and merged["port"] == 1, "a meta's own value wins over the row"
     assert not hasattr(trunk, "resolve_into")
+
+
+def test_a_password_machine_is_listed_as_unusable_with_the_reason(store):
+    """Raven reaches it -- the registry's reader passes the row -- but every ssh here logs in with a key, so the
+    listing says why instead of offering a machine whose campaign would fail at its first ssh (reviewed 2026-10-19)."""
+    store(
+        TWO[:1]
+        + [{"id": "conn_pw", "display_name": "my pw box", "host": "h", "port": 22, "user": "root", "auth": "password"}]
+    )
+
+    said = connections.describe()
+
+    assert "my pw box" in said and "(password: not for campaigns)" in said
+    assert "registered with a password" in said and "register it with a key" in said
+    assert "my CPU box" in said and "(password" not in said.split("my CPU box")[1].split("\n")[0]
+
+
+def test_a_direct_password_row_is_unusable_too(store):
+    store([{"id": "conn_pw", "display_name": "pw", "host": "h", "port": 22, "user": "root", "auth": "password"}])
+    assert connections.by_password(connections.get("conn_pw"))
+    assert not connections.by_password(TWO[0])

@@ -430,7 +430,10 @@ as the command; or, with `auth: password`, a password this computer keeps for th
 under `~/.raven/keys/<id>.password`, the owner's alone, and hands to ssh on every connection
 through OpenSSH's askpass hook -- in no row, log, command line or answer,
 `connection_add.store_password`, `transport.ssh_env`; the row carries `auth: password` and no
-key, gets no ssh alias, and is refused on Windows, whose OpenSSH has no askpass), install the
+key, gets no ssh alias, no jump host and no shared connection, and is refused on Windows,
+whose OpenSSH has no askpass; a password under six characters is refused, since the scrubber
+would pass it as ordinary text, and the id rule is the one owner `connections.password_path`;
+Oncall, which logs in with a key only, lists such a row as unusable with that reason), install the
 node in the background, doctor, and remove (`raven ops connection remove`, refused while a
 connected agent entry names the machine; the password kept for a machine goes with its row,
 `connection_add.forget_password`);
