@@ -1457,6 +1457,9 @@ class TurnPathMixin:
                         if stalled_verdict is NoProgressAction.END_TURN:
                             stalled_tool = tool_call.name
                     else:
+                        from raven.agent.subagent.delegate import current_delegate
+
+                        table_before = current_delegate()
                         result = await self.tools.execute(
                             tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta
                         )
@@ -1475,6 +1478,12 @@ class TurnPathMixin:
                             watch_request,
                             reasoning_effort=policy.reasoning_effort,
                         )
+                        # A call that bound a Worker Table (load_playbook) moved the
+                        # dispatch enums under an identity assembled before it.
+                        if (table := current_delegate()) and table is not table_before:
+                            from raven.context_engine.segments import render
+
+                            watch_note += render.worker_table_note(render.live_dispatch_tools(self.tools.get_definitions))
                     # The registry already unwrapped any ToolResult: `result` is
                     # the model-facing text, with the optional display string
                     # riding along on it (ToolOutput). The model always gets the

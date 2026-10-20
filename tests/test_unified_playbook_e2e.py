@@ -1194,6 +1194,76 @@ async def test_a_harness_loaded_mid_turn_leaves_the_next_turns_role_plain(tmp_pa
     assert f"and to `{GENERIC_AGENT}` only when no agent's does" in roles[1]
 
 
+class _LoadThenSendProvider(LLMProvider):
+    """Loads the stored Persona mid-turn, then sends the generic agent, recording what each result said."""
+
+    def __init__(self) -> None:
+        super().__init__(api_key="test")
+        self.calls: list[dict[str, Any]] = []
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, messages, tools=None, model=None, **kwargs) -> LLMResponse:
+        return await self._answer(messages, tools)
+
+    async def chat_with_retry(self, messages, tools=None, model=None, **kwargs) -> LLMResponse:
+        return await self._answer(messages, tools)
+
+    async def _answer(self, messages, tools) -> LLMResponse:
+        self.calls.append(
+            {
+                "spawn": _subagent_enum(tools, "spawn"),
+                "results": {str(m.get("name")): str(m.get("content")) for m in messages if m.get("role") == "tool"},
+            }
+        )
+        if len(self.calls) == 1:
+            call = ToolCallRequest(id="load", name="load_playbook", arguments={"name": "travel-concierge"})
+        elif len(self.calls) == 2:
+            call = ToolCallRequest(
+                id="fallback",
+                name="spawn",
+                arguments={
+                    "task_summary": "write the script",
+                    "node_id": "script",
+                    "prompt_template": "Write a Python script that sums one CSV column.",
+                    "subagent": GENERIC_AGENT,
+                },
+            )
+        else:
+            return LLMResponse(content="OK", finish_reason="stop")
+        return LLMResponse(content="", tool_calls=[call], finish_reason="tool_calls")
+
+
+@pytest.mark.asyncio
+async def test_a_harness_loaded_mid_turn_carries_its_routing_outside_the_fence(tmp_path) -> None:
+    """The identity was assembled before the load and still routes by agent name, while both
+    enums now take labels. The load's own result is fenced as data, so the routing arrives on
+    this system's note after the fence -- and only on the call that bound the table."""
+    provider = _LoadThenSendProvider()
+    loop = _load_playbook_loop(tmp_path, provider)
+
+    await loop.run_turn(
+        _request("Write a small Python script that sums a CSV column", "load-route", playbook_mode="off"),
+        _emit,
+        lambda: [],
+        stream=False,
+    )
+
+    before, after_load, after_send = provider.calls
+    loaded = after_load["results"]["load_playbook"]
+    fence = loaded.index("[END UNTRUSTED load_playbook")
+    assert GENERIC_AGENT in before["spawn"]
+    assert after_load["spawn"] == ["planner"]
+    assert "named by its label from the `subagent` enum" in loaded[fence:]
+    assert "When no worker's brief covers a piece of work, do not do it yourself" in loaded[fence:]
+    assert GENERIC_AGENT not in loaded[fence:]
+    assert "named by its label" not in loaded[:fence]
+    refused = after_send["results"]["spawn"]
+    assert "must be one of ['planner']" in refused
+    assert "named by its label" not in refused
+
+
 @pytest.mark.asyncio
 async def test_a_bound_harness_is_a_snapshot_the_library_can_no_longer_move(tmp_path) -> None:
     """The window the user opened keeps the Harness they chose."""

@@ -872,6 +872,28 @@ class TestHostRole:
         assert texts[0] == texts[1]
         assert "research-a" not in texts[0]
 
+    def test_a_table_bound_mid_turn_gets_the_routing_a_bound_turn_has(self, tmp_path: Path) -> None:
+        """``load_playbook`` binds a table after the identity was assembled, so the routing a
+        table-bound role carries travels on that call's result instead, in the same words."""
+        note = render.worker_table_note(("spawn", "run_subagent_dag"))
+        role = _role_of(render.identity_text(tmp_path, worker_table=True))
+        assert note.startswith("\n\nNote: ")
+        assert "takes its worker labels, not agent names" in note
+        for rule in (
+            "named by its label from the `subagent` enum",
+            "When no worker's brief covers a piece of work, do not do it yourself",
+        ):
+            assert rule in note
+            assert rule in role
+
+    def test_the_mid_turn_note_is_absent_where_no_role_routes(self, monkeypatch) -> None:
+        from raven.agent.subagent.role import SUBAGENT_ENV_VAR
+
+        assert render.worker_table_note(()) == ""
+        assert "named by its label" in render.worker_table_note(("run_subagent_dag",))
+        monkeypatch.setenv(SUBAGENT_ENV_VAR, "1")
+        assert render.worker_table_note(("spawn",)) == ""
+
 
 class TestDelegationNeedsSomewhereToDelegateTo:
     """The section prohibits a specialist's kind of work, so it must not outlive

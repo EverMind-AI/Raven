@@ -348,8 +348,29 @@ _WORKER_ROUTING = (
     "user which work no worker covers, ask how to go on -- such as a worker added for it, or another Harness for this "
     "conversation -- and dispatch it only once they have answered."
 )
-"""Where work goes on a turn that dispatches through a Worker Table, in the words the
-role of a turn assembled with one uses."""
+"""Where work goes on a turn that dispatches through a Worker Table: said by the role of
+a turn assembled with one, and by :func:`worker_table_note` for a table bound later."""
+
+
+def worker_table_note(dispatch: Sequence[str]) -> str:
+    """The line a tool result earns when its call bound a Worker Table, or "".
+
+    ``load_playbook`` binds a stored Harness for the rest of the turn that called it,
+    after that turn's identity was assembled: the dispatch enums take the table's
+    labels from the next model call on, while the role still routes by agent name --
+    on an ordinary turn, to `Raven-General` -- which those enums now refuse. The
+    load's own result is fenced as untrusted data, so the routing travels on this
+    system's note after the fence, in the words a table-bound role uses. Empty
+    wherever the role itself is: no dispatch path, or a process launched to do one task.
+    """
+    from raven.agent.subagent.role import is_subagent_process
+
+    if not dispatch or is_subagent_process():
+        return ""
+    return (
+        "\n\nNote: that call bound a Worker Table for the rest of this turn, so `subagent` now takes its worker "
+        f"labels, not agent names. Hand each piece of work {_WORKER_ROUTING}"
+    )
 
 
 def _host_role(dispatch: Sequence[str], worker_table: bool = False) -> tuple[str, str]:

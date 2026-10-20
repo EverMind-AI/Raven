@@ -597,7 +597,9 @@ itself only what needs no tools and belongs to no task. On a turn that dispatche
 **Worker Table** the same rule names the table's workers instead: the worker whose brief
 covers the work, by its label. Work no worker covers is put to the user -- a worker added for
 it, or another Harness -- rather than done by the host or sent to an agent outside the enum,
-which offers labels alone. Rendered only in a process that is
+which offers labels alone. A table a call binds mid-turn (`load_playbook`) arrives after the
+identity was assembled, so that call's result carries the same rule, after its untrusted
+fence. Rendered only in a process that is
 not a **Sub-agent role** and on a turn holding a dispatch path -- elsewhere the identity
 stays "a helpful AI assistant", byte for byte. **Ownership** names each agent's territory;
 this says what the host itself does and does not do.
