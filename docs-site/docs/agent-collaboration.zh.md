@@ -12,6 +12,8 @@ Raven 本身是你的 Agent 管家：把请求拆成任务、交给合适的子 
 无论是修改、追加的工作，还是问为什么这样做，都会交回做这件事的实例，它仍保有
 上下文。闲聊、Raven 已经知道的内容和任务进展，由 Raven 直接回答；任何需要产出的
 工作，再小也交给最合适的 Agent，没有合适的 Agent 时才交给内置的 `Raven-General`。
+如果对话运行在带 worker 的 Harness（例如 Persona）上，Raven 只把工作交给这些 worker；
+没有 worker 负责的工作，它会告诉你并询问如何继续，而不是自己去做。
 如果这一轮两个派发工具都被禁用，Raven 会自己完成工作。
 
 ## 在登记机器上工作 { #work-on-a-registered-machine }

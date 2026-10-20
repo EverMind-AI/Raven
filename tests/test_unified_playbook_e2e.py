@@ -1038,6 +1038,162 @@ async def test_unbinding_a_session_puts_it_back_on_the_plain_path(tmp_path) -> N
     assert loop.session_persona(key) is None
 
 
+def _research_only_harness() -> AgentPlaybookSpec:
+    return AgentPlaybookSpec(
+        name="pricing-desk",
+        description="Answers what a competitor charges",
+        coordinator={"brief": "Own the pricing conversation and report what the research found"},
+        delegate=[
+            DelegateEntry(
+                **{
+                    "as": "research-a",
+                    "name": "Raven-Research",
+                    "brief": "Research competitor A's public pricing; writes no code",
+                }
+            )
+        ],
+    )
+
+
+def _subagent_enum(tools: Any, name: str) -> list[str]:
+    for tool in tools or []:
+        fn = tool.get("function", tool) or {}
+        if fn.get("name") != name:
+            continue
+        params = fn["parameters"]
+        if name == "run_subagent_dag":
+            params = params["properties"]["nodes"]["items"]
+        return params["properties"]["subagent"]["enum"]
+    raise AssertionError(f"{name} is not on the tool array")
+
+
+class _RoleProvider(LLMProvider):
+    """Records the role and both dispatch enums of each main call, and once sends the generic agent."""
+
+    def __init__(self) -> None:
+        super().__init__(api_key="test")
+        self.calls: list[dict[str, Any]] = []
+        self.sent = False
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, messages, tools=None, model=None, **kwargs) -> LLMResponse:
+        return await self._answer(messages, tools)
+
+    async def chat_with_retry(self, messages, tools=None, model=None, **kwargs) -> LLMResponse:
+        return await self._answer(messages, tools)
+
+    async def _answer(self, messages, tools) -> LLMResponse:
+        content = next(m for m in messages if m.get("role") == "system")["content"]
+        system = content if isinstance(content, str) else "".join(block.get("text", "") for block in content)
+        self.calls.append(
+            {
+                "role": system.split("## Your role", 1)[1].split("\n## ", 1)[0] if "## Your role" in system else "",
+                "spawn": _subagent_enum(tools, "spawn"),
+                "dag": _subagent_enum(tools, "run_subagent_dag"),
+                "tool_results": [str(m.get("content")) for m in messages if m.get("role") == "tool"],
+            }
+        )
+        if self.sent:
+            return LLMResponse(content="OK", finish_reason="stop")
+        self.sent = True
+        return LLMResponse(
+            content="",
+            tool_calls=[
+                ToolCallRequest(
+                    id="fallback",
+                    name="spawn",
+                    arguments={
+                        "task_summary": "write the script",
+                        "node_id": "script",
+                        "prompt_template": "Write a Python script that sums one CSV column.",
+                        "subagent": GENERIC_AGENT,
+                    },
+                )
+            ],
+            finish_reason="tool_calls",
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_persona_turn_names_only_dispatch_values_its_enums_offer(tmp_path) -> None:
+    """The role, both dispatch enums and one dispatch, as a Persona turn sees them.
+
+    The Persona's one worker researches and the request is a script. The
+    generator never offers the generic agent as a worker, so a role that sent
+    unowned work there named a value both enums refuse, and the request had no
+    compliant action. Unbinding puts the ordinary role back.
+    """
+    provider = _RoleProvider()
+    loop = _persona_session_loop(tmp_path, provider)
+    key = "test:pricing"
+    loop.bind_session_harness(key, "pricing-desk", spec=_research_only_harness())
+    ask = "Write a small Python script that sums a CSV column"
+
+    await loop.run_turn(_request(ask, "pricing", playbook_mode="off"), _emit, lambda: [], stream=False)
+
+    bound, after = provider.calls[0], provider.calls[1]
+    assert bound["spawn"] == bound["dag"] == ["research-a"]
+    assert any("must be one of ['research-a']" in result for result in after["tool_results"])
+    assert GENERIC_AGENT not in bound["role"]
+    assert "named by its label from the `subagent` enum" in bound["role"]
+    assert "When no worker's brief covers a piece of work, do not do it yourself" in bound["role"]
+    assert "however small" in bound["role"]
+
+    loop.bind_session_harness(key, None)
+    await loop.run_turn(_request(ask, "pricing", playbook_mode="off"), _emit, lambda: [], stream=False)
+
+    plain = provider.calls[-1]
+    assert GENERIC_AGENT in plain["spawn"]
+    assert f"and to `{GENERIC_AGENT}` only when no agent's does" in plain["role"]
+    assert "When no worker's brief covers" not in plain["role"]
+
+
+def _load_playbook_loop(tmp_path, provider: LLMProvider) -> AgentLoop:
+    """An ordinary session that can load the stored travel Persona mid-turn."""
+    playbook_root = tmp_path / "playbooks"
+    PlaybookStore(playbook_root).save(_saved_persona())
+    return AgentLoop(
+        provider=provider,
+        workspace=tmp_path,
+        model="stub",
+        policy=TurnPolicy(max_iterations=4),
+        tools=ToolWiring(plugin_tools=[LoadPlaybookTool()], restrict_to_workspace=True),
+        engine=EngineWiring(
+            runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="never")),
+            playbook_config=PlaybookConfig(enabled=True, dir=str(playbook_root), agentHarness="generate"),
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_harness_loaded_mid_turn_leaves_the_next_turns_role_plain(tmp_path) -> None:
+    """A table ``load_playbook`` binds lasts for the rest of its turn: the next turn is assembled without it."""
+    provider = _LoadPersonaProvider()
+    loop = _load_playbook_loop(tmp_path, provider)
+    roles: list[str] = []
+    assemble = loop._assemble_context_messages
+
+    async def _recording(*args, **kwargs):
+        messages = await assemble(*args, **kwargs)
+        roles.append(str(messages[0]["content"]).split("## Your role", 1)[-1].split("\n## ", 1)[0])
+        return messages
+
+    loop._assemble_context_messages = _recording
+
+    for _ in range(2):
+        await loop.run_turn(
+            _request("Four days in Kyoto", "load-persona", playbook_mode="off"), _emit, lambda: [], stream=False
+        )
+
+    assert provider.seen[1][2] == ("planner",), "baseline: the load must bind its table, or this asserts nothing"
+    assert provider.seen[-1][2] == ()
+    assert len(roles) == 2
+    assert roles[0] == roles[1]
+    assert f"and to `{GENERIC_AGENT}` only when no agent's does" in roles[1]
+
+
 @pytest.mark.asyncio
 async def test_a_bound_harness_is_a_snapshot_the_library_can_no_longer_move(tmp_path) -> None:
     """The window the user opened keeps the Harness they chose."""

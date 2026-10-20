@@ -586,6 +586,14 @@ class TestActiveSkills:
 
         assert seg is None or "multi-agent-coding" not in seg.text
 
+    def test_coding_skill_picks_a_worker_label_when_a_table_is_bound(self, tmp_path: Path) -> None:
+        """On such a turn `subagent` takes labels alone, so a coding agent picked from the
+        roster -- first pick or a quota takeover -- is a value the enum refuses."""
+        body = " ".join(ContextBuilder(workspace=tmp_path).skills.load_skill("multi-agent-coding").split())
+        assert "pick the worker whose brief covers the coding work" in body
+        assert "another worker whose brief covers it and that runs on a different agent" in body
+        assert "outside the enum" in body
+
     async def test_unwired_tool_lookup_does_not_gate(self, tmp_path: Path) -> None:
         """No callable wired → unknown, not empty. A wiring gap must degrade to
         showing the skill, never to silently blanking the segment."""
@@ -791,6 +799,78 @@ class TestHostRole:
         role = _role_of(render.identity_text(tmp_path))
         assert "however small" in role
         assert "quick question" not in role
+
+    def test_on_a_worker_table_work_goes_to_a_worker_by_label(self, tmp_path: Path) -> None:
+        """A bound table narrows `subagent` to its labels, and a generated Persona never
+        offers the generic agent as a worker. The role must not name a value the enums
+        refuse, nor present the agents behind the labels as values."""
+        role = _role_of(render.identity_text(tmp_path, worker_table=True))
+        assert GENERIC_AGENT not in role
+        assert "whose ownership or description fits it" not in role
+        assert "named by its label from the `subagent` enum" in role
+        assert "they are not values to pass" in role
+        assert "however small" in role
+
+    def test_work_no_worker_covers_is_put_to_the_user(self, tmp_path: Path) -> None:
+        """Not done by the host, which the role forbids, and not sent outside the table,
+        which the enums refuse."""
+        role = _role_of(render.identity_text(tmp_path, worker_table=True))
+        assert "When no worker's brief covers a piece of work, do not do it yourself" in role
+        assert "tell the user which work no worker covers" in role
+        assert "dispatch it only once they have answered" in role
+
+    def test_a_worker_table_moves_only_the_production_rule(self, tmp_path: Path) -> None:
+        """The bullets were measured on replays; only the paragraph that says where work goes moves."""
+        plain = _role_of(render.identity_text(tmp_path))
+        bound = _role_of(render.identity_text(tmp_path, worker_table=True))
+        assert plain.split("\n\n", 1)[0] == bound.split("\n\n", 1)[0]
+        assert plain != bound
+
+    def test_a_worker_table_role_names_only_the_paths_the_turn_holds(self, tmp_path: Path) -> None:
+        dag_only = _role_of(render.identity_text(tmp_path, dispatch_tools=("run_subagent_dag",), worker_table=True))
+        assert "`run_subagent_dag`" in dag_only
+        assert "`spawn`" not in dag_only
+
+    def test_a_worker_table_adds_no_role_where_there_is_none(self, tmp_path: Path, monkeypatch) -> None:
+        """No dispatch path, or a process launched to do one task: nothing is routed, so
+        the identity those had stays byte for byte."""
+        from raven.agent.subagent.role import SUBAGENT_ENV_VAR
+
+        assert render.identity_text(tmp_path, dispatch_tools=(), worker_table=True) == render.identity_text(
+            tmp_path, dispatch_tools=()
+        )
+        monkeypatch.setenv(SUBAGENT_ENV_VAR, "1")
+        assert render.identity_text(tmp_path, worker_table=True) == render.identity_text(tmp_path)
+
+    async def test_the_builder_reads_the_table_bound_for_the_turn(self, tmp_path: Path) -> None:
+        """Read as the turn is assembled: an empty table and a closed scope read as no table."""
+        from raven.agent.subagent.delegate import DelegateTable, Worker, delegate_scope
+
+        builder = IdentitySegmentBuilder(tmp_path, get_tool_definitions=_tool_defs("spawn", "run_subagent_dag"))
+        plain = (await builder.build(_ctx(tmp_path))).text
+        table = DelegateTable(workers={"research-a": Worker("research-a", "Raven-Research", "competitor A's pricing")})
+        with delegate_scope(table):
+            bound = (await builder.build(_ctx(tmp_path))).text
+        with delegate_scope(DelegateTable(workers={})):
+            empty = (await builder.build(_ctx(tmp_path))).text
+
+        assert f"`{GENERIC_AGENT}` only when no agent's does" in _role_of(plain)
+        assert "named by its label from the `subagent` enum" in _role_of(bound)
+        assert empty == plain
+        assert (await builder.build(_ctx(tmp_path))).text == plain
+
+    def test_the_role_names_no_label_so_the_identity_stays_stable(self, tmp_path: Path) -> None:
+        """A Worker Table generated in Task mode can change its labels every turn, and the
+        identity is a stable segment: the role says how to route and leaves the labels to the enum."""
+        from raven.agent.subagent.delegate import DelegateTable, Worker, delegate_scope
+
+        texts = []
+        for label in ("research-a", "writer-b"):
+            with delegate_scope(DelegateTable(workers={label: Worker(label, "Raven-Research", "one job")})):
+                texts.append(render.identity_text(tmp_path))
+        assert "named by its label from the `subagent` enum" in _role_of(texts[0])
+        assert texts[0] == texts[1]
+        assert "research-a" not in texts[0]
 
 
 class TestDelegationNeedsSomewhereToDelegateTo:

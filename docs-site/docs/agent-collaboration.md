@@ -16,8 +16,11 @@ about a task's work -- a correction, more work, or a question about why it was
 done that way -- goes back to the instance that did the work, which still has
 its context. Raven answers conversation, what it already knows and where your
 tasks stand itself; anything to produce, however small, goes to the agent that
-fits it, and to the built-in `Raven-General` agent only when none does. On a turn
-where both dispatch tools are disabled, Raven does the work itself.
+fits it, and to the built-in `Raven-General` agent only when none does. In a
+conversation running on a Harness with workers, such as a Persona, Raven hands work
+only to those workers; work none of them covers, it tells you about and asks how to
+go on instead of doing it itself. On a turn where both dispatch tools are disabled,
+Raven does the work itself.
 
 ## Work on a registered machine
 

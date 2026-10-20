@@ -593,7 +593,11 @@ a request into tasks and dispatches each, keeps every task until the user accept
 sends each later message about a task's work -- a question included -- to that task's
 instance, and gathers the reports into one answer. Producing anything goes to the agent whose
 ownership or description fits it, to `Raven-General` only when none does; the host answers
-itself only what needs no tools and belongs to no task. Rendered only in a process that is
+itself only what needs no tools and belongs to no task. On a turn that dispatches through a
+**Worker Table** the same rule names the table's workers instead: the worker whose brief
+covers the work, by its label. Work no worker covers is put to the user -- a worker added for
+it, or another Harness -- rather than done by the host or sent to an agent outside the enum,
+which offers labels alone. Rendered only in a process that is
 not a **Sub-agent role** and on a turn holding a dispatch path -- elsewhere the identity
 stays "a helpful AI assistant", byte for byte. **Ownership** names each agent's territory;
 this says what the host itself does and does not do.

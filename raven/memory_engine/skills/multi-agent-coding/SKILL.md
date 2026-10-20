@@ -10,7 +10,10 @@ metadata: {"raven":{"emoji":"💻","always":true,"inject":"description","require
 
 Coding work goes to a coding agent on the roster: the one the user named, otherwise one
 the `## Delegation` section says owns coding, otherwise one whose description says it
-writes or edits code.
+writes or edits code. When a Worker Table is bound, `subagent` takes worker labels
+instead: pick the worker whose brief covers the coding work. When none does, tell the user
+and ask how to go on rather than writing the code yourself or sending it to an agent
+outside the enum.
 
 ## 2. One instance per task
 
@@ -62,6 +65,8 @@ task to another coding agent right away.
 
 - Pick one that does not draw on the same account: agents that run through one platform
   share its quota, and a spent platform credit fails them all.
+- When a Worker Table is bound, the takeover goes to another worker whose brief covers it
+  and that runs on a different agent, by the same account rule.
 - Use a new `node_id` and a new `instance`. The old instance's context does not carry
   over, so the prompt carries what the task needs: the user's requests on it, the worktree's
   branch and any path a report gave (the worktree may hold the first agent's unfinished

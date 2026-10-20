@@ -341,7 +341,18 @@ def _delegation_block(specialists: Sequence[tuple[str, str]], dispatch: Sequence
     return "\n## Delegation\n\nThese sub-agents own their kind of work:\n" + "\n".join(lines) + "\n\n"
 
 
-def _host_role(dispatch: Sequence[str]) -> tuple[str, str]:
+_WORKER_ROUTING = (
+    "to the worker whose brief covers it, named by its label from the `subagent` enum. The agent a worker runs on, "
+    "and that agent's ownership, only describe what the worker can do; they are not values to pass. When no worker's "
+    "brief covers a piece of work, do not do it yourself and do not send it to an agent outside the enum: tell the "
+    "user which work no worker covers, ask how to go on -- such as a worker added for it, or another Harness for this "
+    "conversation -- and dispatch it only once they have answered."
+)
+"""Where work goes on a turn that dispatches through a Worker Table, in the words the
+role of a turn assembled with one uses."""
+
+
+def _host_role(dispatch: Sequence[str], worker_table: bool = False) -> tuple[str, str]:
     """The identity sentence and the ``## Your role`` section that follows it.
 
     The host runs the user's work through the roster rather than doing it. Said
@@ -359,6 +370,15 @@ def _host_role(dispatch: Sequence[str]) -> tuple[str, str]:
     6 with it. The fallback ranks the fitting agent first: named bare, as where
     unowned work goes, the generic agent took a small script in 4 of 6 runs on an
     install whose coding agents declare no ownership, against 0 of 6 this way.
+
+    On a turn that dispatches through a Worker Table only the paragraph saying where
+    work goes changes. ``subagent`` takes the table's labels alone there, and a
+    generated Persona never offers the generic agent as a worker, so the ordinary
+    fallback named a value both enums refuse and left work no worker covers with no
+    compliant action. That work is put to the user instead. The labels themselves
+    are left to the enum: a generated table can change them every turn, and this
+    identity is a stable segment, so its text moves only where a turn binds or
+    drops a table -- where the dispatch tools' own schemas move as well.
     """
     from raven.agent.subagent.role import is_subagent_process
 
@@ -370,13 +390,27 @@ def _host_role(dispatch: Sequence[str]) -> tuple[str, str]:
         route = "with `spawn`"
     else:
         route = "with `run_subagent_dag`"
+    if worker_table:
+        production = (
+            "Producing anything, however small -- a script, a code change, research, a document, a design, a long "
+            f"run -- goes to one of this turn's workers: {_WORKER_ROUTING} Answer yourself only what needs no tools "
+            "and belongs to no task: conversation, what you already know, and which workers you have and where each "
+            "task stands."
+        )
+    else:
+        production = (
+            "Producing anything, however small -- a script, a code change, research, a document, a design, a long "
+            f"run -- goes to an agent: to the agent whose ownership or description fits it, and to `{GENERIC_AGENT}` "
+            "only when no agent's does. Answer yourself only what needs no tools and belongs to no task: "
+            "conversation, what you already know, and which agents you have and where each task stands."
+        )
     role = f"""## Your role
 - Sort out what the user wants into tasks and hand each to the agent that fits it, {route}. Brief it with the user's words and what it cannot see: files, links, earlier results, what done looks like.
 - Keep track of every task until the user accepts its result: which agent and instance has it and what it reported. A report does not close its task.
 - Send every later message about a task's work to that task's instance, in the user's words -- a question about how or why it was done, a doubt, a suggestion, a correction, more work -- even when you answered an earlier one yourself. Its agent knows the work and you know only the report, so do not answer for it.
 - Gather what the agents report into one answer: what was done, what is left, what the user must decide.
 
-Your own tools serve this: reading what a brief or a check needs, and looking up where things stand. Producing anything, however small -- a script, a code change, research, a document, a design, a long run -- goes to an agent: to the agent whose ownership or description fits it, and to `{GENERIC_AGENT}` only when no agent's does. Answer yourself only what needs no tools and belongs to no task: conversation, what you already know, and which agents you have and where each task stands.
+Your own tools serve this: reading what a brief or a check needs, and looking up where things stand. {production}
 
 """
     return (
@@ -393,6 +427,7 @@ def identity_text(
     dispatch_tools: Sequence[str] = DISPATCH_TOOLS,
     *,
     has_memory_backend: bool = False,
+    worker_table: bool | None = None,
 ) -> str:
     """Segment 1 - the core identity / runtime block.
 
@@ -409,7 +444,16 @@ def identity_text(
     wired. A backend keeps memory in its own store and surfaces it through
     per-turn recall into ``# Memory``, so naming a profile file there would
     hand the agent a write target that is not where its memory lives.
+
+    ``worker_table`` says whether this turn dispatches through a Worker Table.
+    ``None`` (the default) reads the table bound for the running turn, on the
+    terms ``model`` is read: both renderers of this block, the request path and
+    the token-estimation path, then agree without either being told.
     """
+    if worker_table is None:
+        from raven.agent.subagent.delegate import current_delegate
+
+        worker_table = bool(current_delegate())
     home_path = str(agent_home.expanduser().resolve())
     bound = work_dir or workdir.current()
     work_path = str(Path(bound).expanduser().resolve()) if bound else home_path
@@ -417,7 +461,7 @@ def identity_text(
     runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
     resolved_model = model if model is not None else _resolved_model_id()
     delegation = _delegation_block(specialists, dispatch_tools)
-    identity, role = _host_role(dispatch_tools)
+    identity, role = _host_role(dispatch_tools, worker_table)
     model_line = f"\nYou are running on model: {resolved_model}." if resolved_model else ""
 
     # A wired backend keeps memory in the plugin's own store and hands the
