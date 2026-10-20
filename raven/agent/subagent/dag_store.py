@@ -559,6 +559,57 @@ class DagRunStore:
         """
         return self._backend.join_path(self._nodes_root, f"{node_id}.attempt-{attempt}.prompt.md")
 
+    def follow_ups_path(self, node_id: str) -> str:
+        """Path of the follow-ups a continued node was sent, a JSON list, oldest first.
+
+        Absent until the node is continued. The judge reads it beside
+        ``prompt_path``, which keeps the prompt as first rendered: a follow-up
+        can change what the task asks for -- the user choosing another
+        deliverable after an attempt fell short -- and a judge holding only that
+        prompt would fail every attempt that did what the change asked.
+
+        Args:
+            node_id (`str`):
+                The node id.
+
+        Returns:
+            `str`:
+                ``<nodes_root>/<node_id>.follow_ups.json``.
+        """
+        return self._backend.join_path(self._nodes_root, f"{node_id}.follow_ups.json")
+
+    async def read_follow_ups(self, node_id: str) -> list[str]:
+        """The follow-ups recorded for ``node_id``, oldest first; empty when it was never continued.
+
+        Args:
+            node_id (`str`):
+                The node id.
+
+        Returns:
+            `list[str]`:
+                The messages as they were sent.
+        """
+        try:
+            recorded = json.loads(await self.read_text(self.follow_ups_path(node_id)))
+        except Exception:  # noqa: BLE001 - absent is the ordinary case: a node never continued
+            return []
+        if not isinstance(recorded, list):
+            return []
+        return [message for message in recorded if isinstance(message, str)]
+
+    async def record_follow_up(self, node_id: str, message: str) -> None:
+        """Append one follow-up to the node's record.
+
+        Args:
+            node_id (`str`):
+                The node id.
+            message (`str`):
+                The follow-up as sent -- not the prompt a stateless node gets,
+                which repeats the task around it.
+        """
+        sent = await self.read_follow_ups(node_id)
+        await self.write_text(self.follow_ups_path(node_id), json.dumps([*sent, message], ensure_ascii=False, indent=2))
+
     def output_path(self, node_id: str) -> str:
         """Path of a node's output file. See :func:`output_path_in`."""
         return output_path_in(self._backend, self._nodes_root, node_id)

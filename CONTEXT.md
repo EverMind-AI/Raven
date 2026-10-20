@@ -3310,11 +3310,16 @@ _Avoid_: "node name" — the id is an address, not a label. _Avoid_: "DAG node i
 name from when only a graph could claim one.
 
 **verdict** -- the judgement on whether a finished DAG node accomplished the task
-its prompt set. Made by one constrained model call over the node's prompt, its
-output, the tail of its transcript, and one fact read off the run's transport
-rather than out of its answer -- whether the generation stopped at the model's
-output ceiling (`raven/agent/subagent/dag_verdict.py`). That fact is stated outside
-the untrusted fence the other three arrive in, because it does not come from the
+its prompt set, as changed by any follow-up it was sent after an earlier attempt
+fell short. Made by one constrained model call over the node's prompt and those
+follow-ups, its output, the tail of its transcript, and one fact read off the run's
+transport rather than out of its answer -- whether the generation stopped at the
+model's output ceiling (`raven/agent/subagent/dag_verdict.py`). The follow-ups are
+recorded beside the prompt, oldest first (`<node>.follow_ups.json`), and are part of
+the task: one that changes what the task asks for changes what is judged, and where
+two disagree the later one stands; a node never continued is judged on its prompt
+alone. The transport fact is stated outside
+the untrusted fences the rest arrive in, because it does not come from the
 text the sub-agent composed; the wording says whose report it is, since for a
 delegated agent it is that agent's own Stop Reason rather than a measurement made
 here. It explains a cut and never excuses unfinished work: `output_limit` is a
@@ -3323,7 +3328,8 @@ its absence is "not known to have been cut" and never "ran to completion". A nod
 not thereby successful; the verdict is what decides.
 _Avoid_: confusing with JudgeVerdict or Trajectory Verdict -- both name a different
 judgement (a turn's completion, an Attempt's pass/fail) made by a different
-subsystem; this one judges a single DAG node's output against its own prompt.
+subsystem; this one judges a single DAG node's output against its own prompt and
+follow-ups.
 
 **exception** (node status) -- a DAG node that did not accomplish its task and is
 waiting for the main agent to decide whether to continue, abandon, or replan it.

@@ -6564,8 +6564,8 @@ async def test_a_bad_verdict_records_the_reason_as_the_nodes_error(tmp_path):
 async def test_a_continued_instance_node_is_sent_only_the_follow_up_and_keeps_its_task_pinned(tmp_path):
     """A stateful node's continuation is the bare follow-up on the wire, but
 
-    the task the judge (and dag_status/read_node) sees for it never moves off
-    attempt 1's original render.
+    the prompt dag_status/read_node show for it never moves off attempt 1's
+    original render. The follow-up is recorded beside it, for the judge.
     """
     from raven.agent.subagent.dag_adjudication import AdjudicationDesk
     from raven.agent.subagent.dag_verdict import Verdict
@@ -6607,6 +6607,88 @@ async def test_a_continued_instance_node_is_sent_only_the_follow_up_and_keeps_it
     attempt_2 = await store.read_text(store.attempt_prompt_path("a", 2))
     assert attempt_1 == task_prompt
     assert attempt_2 == "use the staging token"
+    assert json.loads(await store.read_text(store.follow_ups_path("a"))) == ["use the staging token"]
+
+
+async def test_the_judge_of_each_attempt_finds_every_follow_up_sent_before_it(tmp_path):
+    """The judge reads a node's follow-ups off the run's store, so each one must
+
+    be on disk before the attempt it started is judged, as the bare message
+    rather than the prompt a stateless node is sent, and none may replace an
+    earlier one: a change of plan in the first is still the task when the
+    second only adds a detail.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    messages = iter(["open a replacement PR instead", "name PR 918 in its description"])
+    told = []
+
+    async def _announce(run_id, node_id, report, origin, **_):
+        desk.resolve(node_id, "continue", next(messages))
+
+    async def _judge(*, node, store, **_):
+        if node.id != "a":
+            return Verdict(accomplished=True)
+        path = store.follow_ups_path("a")
+        told.append(json.loads(await store.read_text(path)) if os.path.exists(path) else None)
+        return Verdict(accomplished=len(told) > 2)
+
+    result = await _run_two_node_dag(tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce)
+
+    assert result.summary["completed"] == 2
+    assert told == [
+        None,
+        ["open a replacement PR instead"],
+        ["open a replacement PR instead", "name PR 918 in its description"],
+    ]
+
+
+async def test_a_continued_node_is_judged_against_the_follow_up_that_changed_its_task(tmp_path):
+    """Through the production judge, with a model that holds node `a` to its first
+
+    prompt until a request tells it the task changed. The continue message has to
+    reach the verdict of the attempt it started; held back, that attempt and every
+    later one fail for doing what it asked, and the node runs out of continuations.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+
+    calls = []
+
+    class _Model:
+        async def chat_with_retry(self, **kwargs):
+            calls.append(kwargs)
+            user = kwargs["messages"][-1]["content"]
+            held = "do a" in user and "open a replacement PR instead" not in user
+            report = (
+                {"outcome": "not_accomplished", "category": "missing_credential", "what_is_missing": "push access"}
+                if held
+                else {"outcome": "accomplished"}
+            )
+            return SimpleNamespace(tool_calls=[SimpleNamespace(arguments=json.dumps(report))])
+
+    model = _Model()
+    desk = AdjudicationDesk()
+
+    async def _announce(run_id, node_id, report, origin, **_):
+        desk.resolve(node_id, "continue", "open a replacement PR instead")
+
+    tool = SubAgentDagTool(workspace=tmp_path, provider_for=lambda: model)
+    # A fixed answer, not the echo: a stateless node's retry prompt carries the
+    # follow-up, and an answer quoting it would tell the model on its own.
+    result = await _run_two_node_dag(
+        tmp_path,
+        desk=desk,
+        judge_node=tool._judge_node(),
+        announce_exception=_announce,
+        exec_backend=_FakeExec(reply="opened PR 1022"),
+    )
+
+    assert result.summary["completed"] == 2
+    tries = [call["messages"] for call in calls if "do a" in call["messages"][-1]["content"]]
+    assert len(tries) == 2
+    assert "the later one stands" in tries[1][0]["content"]
 
 
 async def test_a_continued_stateless_node_sends_task_plus_previous_output_plus_message(tmp_path):

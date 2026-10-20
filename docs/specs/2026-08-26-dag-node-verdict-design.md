@@ -97,6 +97,13 @@ transcript -- the cli lane publishes only `note_console`, which is live-only and
 reaches a file -- degrade to prompt + output, and the report carries an
 evidence-incomplete marker so Raven knows the judgement was made on less.
 
+> **Amended 2026-10-20.** A continued node's follow-ups are inputs too. The rendered
+> prompt stays as first rendered, and each continue message is recorded beside
+> it, oldest first (`<node>.follow_ups.json`); the judge reads them as part of the
+> task, the later one standing where two disagree. Judged on the prompt alone, a node
+> whose user chose another deliverable in a continue message failed every attempt
+> that delivered it.
+
 **Where it lives.** A new `raven/agent/subagent/dag_verdict.py`: prompt construction,
 tool schema, parsing, and evidence truncation. `runner.py` only calls it. Keeping it
 out of the runner is what makes it testable without a graph.

@@ -347,6 +347,17 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- A continued DAG node is judged against what it was told after an attempt
+  fell short, not only against its first prompt. The judge read the task as
+  first given and nothing else, so when the user answered a stuck node by
+  choosing another deliverable through `resolve_dag_node` -- a replacement
+  pull request instead of a push to the original, say -- every attempt that
+  delivered it was judged not accomplished until the node ran out of
+  continuations and failed. Each continue message is now recorded beside the
+  node's prompt, oldest first (`<node>.follow_ups.json`), and the judge reads
+  them as part of the task, the later one standing where two disagree. A node
+  that was never continued is judged exactly as before.
+
 - What an agent on a registered machine writes on stderr reaches Raven even
   when no link held the agent at the time. The node kept those lines but, when
   a link attached, replayed only the agent's output: a run picked up after a
