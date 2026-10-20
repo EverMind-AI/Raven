@@ -34,9 +34,12 @@ Highlights before publishing. Structure:
   install.sh one-liner for Linux / macOS / WSL2
   install.ps1 one-liner for native Windows (plus the PowerShell 5.1 direct URL)
   then: the installer ends on `raven web` (first-run setup is on that page);
-  `raven` for the TUI, `raven onboard` to reconfigure
+  bare `raven` opens the page too, `raven tui` for the TUI, `raven onboard` to
+  reconfigure, `raven resources` for the knowledge models the Windows installer
+  does not download
 
 ## Upgrade
+  the sidebar's update row (a page served by 0.2.3 or later), or
   raven web --stop, raven upgrade, then raven web once the upgrade has finished,
   with its limits (latest stable unless on the beta channel, plugin wheels
   included, editable checkouts untouched, foreground on POSIX, external helper
@@ -46,7 +49,7 @@ Highlights before publishing. Structure:
 - Version: `X.Y.Z`
 - Tag: `vX.Y.Z`
 - Stability: <public preview patch | public preview minor | ...>   # fill by hand per release type
-- Assets: wheel, source distribution, the three plugin wheels, locked
+- Assets: wheel, source distribution, the four plugin wheels, locked
   constraints (`raven-constraints.txt`) and the plugin list (`raven-plugins.txt`)
 
 ## Notes
@@ -60,10 +63,11 @@ Highlights before publishing. Structure:
 
 1. Bump `version` in `pyproject.toml`, run `uv lock`, then open a PR; merge to `main`.
 2. `git tag vX.Y.Z && git push origin vX.Y.Z`.
-3. CI (`release.yml`) builds the wheel + sdist, exports the locked constraints
-   from `uv.lock` (`uv export --locked`, which fails the release if the lock is
-   stale vs pyproject), and creates a **draft** GitHub Release with all three
-   attached, titled and prefilled from the template.
+3. CI (`release.yml`) builds the wheel + sdist and the plugin wheels, writes the
+   plugin list, exports the locked constraints from `uv.lock`
+   (`uv export --locked`, which fails the release if the lock is stale vs
+   pyproject), and creates a **draft** GitHub Release with all of them attached,
+   titled and prefilled from the template.
 4. Fill the summary + Highlights in the draft, then click **Publish**.
    Publishing makes it `/releases/latest`, which `install.sh` serves.
 

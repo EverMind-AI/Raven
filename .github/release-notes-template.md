@@ -27,7 +27,8 @@ irm https://raw.githubusercontent.com/EverMind-AI/Raven/refs/heads/main/install.
 ```
 
 The installer puts uv, Node.js 22, Raven and its plugins in place, downloads the
-browser runtime, installs or offers LibreOffice, and then finishes by opening
+browser runtime and the word dictionary and PDF models the knowledge reader uses
+(about 110 MB), installs or offers LibreOffice, and then finishes by opening
 Raven in your browser. First-run setup happens on that page. The installer holds
 the terminal while the page is up; press Ctrl-C to stop it, then start Raven
 again with:
@@ -37,15 +38,22 @@ raven web
 ```
 
 That keeps Raven running in the background and opens the page; `raven web --stop`
-stops it. Prefer the terminal? `raven` runs the same first-run setup and opens
-the TUI, and `raven onboard` stays the explicit way to reconfigure later. Set
-`RAVEN_MINIMAL=1` to skip the browser and LibreOffice downloads, or
-`RAVEN_NO_LAUNCH=1` to have the installer return without opening the page.
+stops it. Bare `raven` does the same, and opens the TUI only where no browser
+can be opened. Prefer the terminal? `raven tui` runs the same first-run setup and
+opens the TUI, and `raven onboard` stays the explicit way to reconfigure later.
+Set `RAVEN_MINIMAL=1` to skip the browser, model and LibreOffice downloads, or
+`RAVEN_NO_LAUNCH=1` to have the installer return without opening the page. The
+Windows installer does not download the dictionary and models; there, and after
+`RAVEN_MINIMAL=1`, `raven resources` fetches them.
 
 ## Upgrade
 
 Already running Raven? Upgrade in place -- configuration, sessions, and memory
-are preserved. Stop the page first, then upgrade:
+are preserved. On a `raven web` install whose page is served by 0.2.3 or later,
+the update row at the bottom of the sidebar does this for you, and the page
+reloads itself, still signed in, once the new version is up. A page served by
+0.2.2 or earlier refuses it; from the command line, stop the page first, then
+upgrade:
 
 ```bash
 raven web --stop
@@ -75,9 +83,10 @@ one-line installer also upgrades, and ends on the running page.
 - Version: `__VERSION__`
 - Tag: `__TAG__`
 - Stability: <!-- TODO: e.g. public preview patch / public preview minor -->
-- Assets: the `raven` wheel and source distribution, the three plugin wheels
-  (`everos_memory`, `design_engine`, `ppt_engine`), the locked constraints file
-  `raven-constraints.txt`, and the plugin list `raven-plugins.txt`
+- Assets: the `raven` wheel and source distribution, four plugin wheels
+  (`everos_memory`, `everos_cloud_memory`, `design_engine`, `ppt_engine`), the
+  locked constraints file `raven-constraints.txt`, and the plugin list
+  `raven-plugins.txt`, which installs every plugin wheel but `everos_cloud_memory`
 
 ## Notes
 
