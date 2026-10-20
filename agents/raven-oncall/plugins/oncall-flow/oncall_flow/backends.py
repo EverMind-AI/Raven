@@ -130,7 +130,20 @@ def prepare_from_meta(meta: dict[str, Any], *, app_dir: str) -> None:
     )
 
 
+def _runs_here_on_windows(meta: dict[str, Any]) -> bool:
+    if os.name != "nt":
+        return False
+    transport = str(meta.get("transport") or "").strip()
+    return transport == "local" or (not transport and not meta.get("host"))
+
+
 def _process_from_meta(meta: dict[str, Any]) -> JobBackend:
+    # The process launcher is a /bin/sh script; on a Windows machine raven runs
+    # on there is no sh to run it, and the job would sit in RUNNING forever. The
+    # agent declares 'process' because that is what a command on the owner's
+    # machine is -- the native launcher is how that runs here.
+    if _runs_here_on_windows(meta):
+        return _windows_from_meta(meta)
     from oncall_flow.process_backend import process_from_meta
 
     return process_from_meta(meta)
@@ -140,6 +153,12 @@ def _openfoam_from_meta(meta: dict[str, Any]) -> JobBackend:
     from oncall_flow.openfoam_backend import openfoam_from_meta
 
     return openfoam_from_meta(meta)
+
+
+def _windows_from_meta(meta: dict[str, Any]) -> JobBackend:
+    from oncall_flow.windows_backend import windows_from_meta
+
+    return windows_from_meta(meta)
 
 
 def _docker_from_meta(meta: dict[str, Any]) -> JobBackend:
@@ -167,3 +186,4 @@ def _docker_from_meta(meta: dict[str, Any]) -> JobBackend:
 register_backend(DEFAULT_BACKEND, _docker_from_meta)
 register_backend("process", _process_from_meta)
 register_backend("openfoam", _openfoam_from_meta)
+register_backend("windows", _windows_from_meta)

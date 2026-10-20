@@ -234,6 +234,11 @@ def run_subprocess(
     if forward_signals:
 
         def _forward(sig, _frame):
+            if sys.platform == "win32" and sig == signal.SIGINT:
+                # The console hands Ctrl+C to every process attached to it, the
+                # child included, and Popen cannot send SIGINT on Windows: it
+                # raises ValueError, which took the TUI down with it.
+                return
             try:
                 proc.send_signal(sig)
             except ProcessLookupError:
@@ -755,6 +760,11 @@ def run_subprocess_with_rpc(
     if forward_signals:
 
         def _forward(sig, _frame):
+            if sys.platform == "win32" and sig == signal.SIGINT:
+                # The console hands Ctrl+C to every process attached to it, the
+                # child included, and Popen cannot send SIGINT on Windows: it
+                # raises ValueError, which took the TUI down with it.
+                return
             try:
                 proc.send_signal(sig)
             except ProcessLookupError:
