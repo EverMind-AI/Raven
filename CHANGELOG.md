@@ -6,6 +6,26 @@ All notable changes to Raven are documented here.
 
 ### Added
 
+- **The signed-records corpus**: real agent runs, attested, verifiable offline
+  (`scripts/evidence_corpus.py`, `evidence/agent-run-corpus/`). One run record in, one signed
+  DSSE envelope out: the in-toto statement's **subject is the run's own digest**, so a verifier
+  recomputes it from the run record and finds the same value, which is what ties the signature to
+  *this* run rather than to a description of it. The corpus is the empirical half of the
+  standards proposal, and it is built by a tool that takes a directory of run records, so it
+  grows as runs accumulate rather than being assembled by hand.
+
+  Three things it states rather than hides. The signatures are **local Ed25519**, verifiable
+  offline with the public key in the manifest and **not anchored in a transparency log**,
+  because Sigstore keyless signing needs an OIDC identity and a Fulcio/Rekor round trip that
+  this build does not have. The corpus **holds the runs that exist on the machine that built
+  it** and is not a sample of anything. And a check that could not be run is reported as
+  **not run**, never as a pass: the verifier's three states are passed, failed and not run,
+  and a corpus that reports a check it did not perform is worse than no corpus.
+
+  A run that called no tool is recorded as `transport-only`, and its predicate says in its own
+  words that what it establishes is that the transport worked, not that the agent did any
+  work. The seven runs on this machine are all of that kind.
+
 - The Agent Hub has a **Machines** tab: the registered machines with the state
   of each one's link and Raven node, a form that registers one (it reaches the
   machine first, like `raven ops connection add`, and explains a refusal by
