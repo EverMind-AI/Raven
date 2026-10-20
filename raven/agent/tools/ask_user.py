@@ -74,7 +74,7 @@ def _normalize_questions(raw: Any, *, strict_json: bool = False) -> list[dict[st
     return [{"question": q} for q in raw if isinstance(q, str) and q.strip()]
 
 
-def _normalize_options(raw: Any) -> list[str]:
+def _normalize_options(raw: Any, *, keep_unrendered: bool = False) -> list[Any]:
     """Coerce one entry's ``options`` into a list of strings.
 
     Same declared shape as ``questions`` and the same habit of arriving as a
@@ -82,6 +82,11 @@ def _normalize_options(raw: Any) -> list[str]:
     characters, and here that reaches the user as one suggested answer per
     letter instead of one per option. A string that is not JSON is one option,
     not its letters.
+
+    ``keep_unrendered`` leaves an object that `_renders_whole` declines as the
+    object, for the registry's validator to report; only the model-facing cast
+    asks for that, since host-side callers are never validated and must hand
+    the broker text.
     """
     if isinstance(raw, str):
         parsed = _loads(raw)
@@ -89,23 +94,41 @@ def _normalize_options(raw: Any) -> list[str]:
     if raw is None:
         return []
     if not isinstance(raw, list):
-        return [_option_text(raw)]
-    return [_option_text(o) for o in raw]
+        raw = [raw]
+    return [o if keep_unrendered and isinstance(o, dict) and not _renders_whole(o) else option_text(o) for o in raw]
 
 
 _OPTION_TEXT_KEYS = ("option", "label", "text", "value", "title", "name")
+_RENDERED_KEYS = frozenset((*_OPTION_TEXT_KEYS, "description", "recommended"))
 
 
-def _option_text(option: Any) -> str:
-    """One option as the words the user picks, whatever shape the model wrote it in.
+def _renders_whole(option: dict[str, Any]) -> bool:
+    """Whether an option uses only the kernel's accepted rendering fields.
+
+    It reads a name, a description and a flag. Live runs also nested a
+    question-level field one level too deep -- a ``question`` on each option, the
+    real choices in an ``options`` list inside one -- and rendering those
+    dropped exactly what the model meant, so the user was asked something it
+    never wrote. An object with neither a name nor a description has no words to
+    show at all.
+    """
+    return set(option) <= _RENDERED_KEYS and any(
+        isinstance(option.get(k), str) and option[k].strip() for k in (*_OPTION_TEXT_KEYS, "description")
+    )
+
+
+def option_text(option: Any) -> str:
+    """Render an option label for the kernel and product tools.
 
     The schema says strings; live runs wrote objects instead -- ``{"option": "dark",
     "description": "...", "recommended": true}``, and ``{"description": "...",
     "recommended": false}`` with no name at all -- and ``str()`` put each dict's repr
     on the user's screen as the thing to click. The option is the text under the
-    first key that names the answer, with its description after a dash so nothing
-    the model said is lost; an object that carries only a description is that
-    description. A flag on it is read by `_flagged`.
+    first key that names the answer, with its description after a dash; an object
+    that carries only a description is that description. Other fields are not
+    rendered. Callers choose whether to accept that loss or reject the object.
+    An object with no label or description keeps its historical repr fallback.
+    A flag on it is read separately by `_flagged`.
     """
     if not isinstance(option, dict):
         return str(option)
@@ -436,7 +459,10 @@ class AskUserTool(Tool):
         stays honest about what the model should send while a near miss still
         reaches the user. Runs before the registry's schema cast so it can coerce
         the leaves this exposes -- a non-string ``question``, options that are
-        not strings -- exactly as it does for a well-formed call.
+        not strings -- exactly as it does for a well-formed call. A near miss is
+        only what renders without loss: an option object carrying more than a
+        name, a description and a flag stays an object, so the validator names
+        it rather than the user being shown part of it.
         """
         params = dict(params)
         if "questions" in params:
@@ -448,7 +474,7 @@ class AskUserTool(Tool):
                     # model stated no index; read before the options become text.
                     if entry.get("recommended") is None and (flagged := _flagged(entry["options"])) is not None:
                         entry["recommended"] = flagged
-                    entry["options"] = _normalize_options(entry["options"])
+                    entry["options"] = _normalize_options(entry["options"], keep_unrendered=True)
                 entries.append(entry)
             params["questions"] = entries
         return params

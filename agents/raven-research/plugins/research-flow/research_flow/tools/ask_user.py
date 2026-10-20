@@ -29,7 +29,7 @@ from __future__ import annotations
 from contextvars import ContextVar
 from typing import Any
 
-from raven.agent.tools.ask_user import AskUserTool
+from raven.agent.tools.ask_user import AskUserTool, option_text
 from raven.contracts.tool import ToolResult
 
 # Returned when the model's call reaches execution, which happens whenever the
@@ -71,7 +71,7 @@ def _schema_shaped(entry: Any) -> dict[str, Any]:
     if (header := entry.get("header")) is not None:
         shaped["header"] = str(header)
     if isinstance(options := entry.get("options"), list):
-        shaped["options"] = [str(option) for option in options]
+        shaped["options"] = [option_text(option) for option in options]
     if isinstance(pick := entry.get("recommended"), int) and not isinstance(pick, bool):
         shaped["recommended"] = pick
     return shaped

@@ -448,6 +448,15 @@ def trajectory_report_bug(
         console.print("[red]--yes is required without a TTY; nothing was collected or pinned.[/red]")
         raise typer.Exit(code=1)
     base_url = _resolved_upload_url()
+    # The probe only informs: a person learns the receiver is down before
+    # spending a review on the report, and a local package can still be made.
+    if base_url and _receiver_problem(base_url) is not None:
+        if interactive and not yes:
+            if not typer.confirm(_CONTINUE_WITHOUT_RECEIVER, default=False):
+                console.print("Cancelled — nothing was collected or pinned.")
+                raise typer.Exit(code=1)
+        else:
+            console.print("  Continuing: if the upload fails, the package stays on this machine.")
 
     try:
         prep = breport.prepare_trajectory(id_, workspace=workspace, config_path=config)
@@ -605,6 +614,27 @@ def _resolved_upload_url() -> str:
     except tupload.UploadConfigError as exc:
         console.print(f"[red]✗ Bug report upload is misconfigured: {escape(str(exc))}[/red]", highlight=False)
         raise typer.Exit(code=1)
+
+
+_CONTINUE_WITHOUT_RECEIVER = "Continue anyway? If the upload fails, the package stays on this machine."
+
+
+def _receiver_problem(base_url: str) -> str | None:
+    """Probe the receiver behind a spinner; print and return why it cannot be used, None when it answers."""
+    from raven.trajectory import upload as tupload
+
+    try:
+        with console.status("Checking the bug report receiver...", spinner="dots"):
+            tupload.probe_receiver(base_url)
+    except tupload.ProbeError as exc:
+        console.print(
+            f"[red]✗ The bug report receiver at {escape(tupload.upload_target(base_url))} is not reachable: "
+            f"{escape(exc.reason)}[/red]",
+            highlight=False,
+            soft_wrap=True,
+        )
+        return exc.reason
+    return None
 
 
 def _upload_and_report(record_dir: Path, base_url: str) -> int:

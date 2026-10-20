@@ -1,17 +1,22 @@
 """The process a sub-agent spawns to reach a server the host holds.
 
-It knows no MCP and holds no credential: one argument, a unix socket path, and
-two byte pumps. Everything about which servers exist, how they authenticate and
-when they die stays on the host's side of that socket, whose 0600 mode is the
-whole of the boundary.
+It knows no MCP and holds no upstream credential: one endpoint argument and
+two byte pumps. Unix sockets use file permissions; loopback TCP endpoints use
+a per-endpoint token. Server definitions and credentials stay on the host.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import os
 import sys
+import threading
 from collections.abc import AsyncIterator
 from typing import BinaryIO
+
+from raven.mcp.transport import endpoint_label, open_endpoint
+from raven.mcp.transport import unix_sockets_available as unix_sockets_available
 
 # Above the 8 MiB the ACP frame reader allows, because an MCP tool result can
 # carry an image and this hop is not the place to decide that is too big. Still
@@ -20,13 +25,7 @@ from typing import BinaryIO
 BRIDGE_MAX_FRAME_BYTES = 32 * 1024 * 1024
 
 _READ_CHUNK = 64 * 1024
-
-
-def unix_sockets_available() -> bool:
-    """Whether this host can both listen on and connect to the MCP endpoint transport."""
-    return callable(getattr(asyncio, "start_unix_server", None)) and callable(
-        getattr(asyncio, "open_unix_connection", None)
-    )
+_CLOSE_TIMEOUT_S = 1.0
 
 
 async def iter_raw_frames(
@@ -69,34 +68,124 @@ async def _pump(reader: asyncio.StreamReader, write: "BinaryIO | asyncio.StreamW
             write.flush()
 
 
-async def run_bridge(socket_path: str, stdout: BinaryIO) -> int:
-    """Pump frames between this process's stdio and ``socket_path``.
+class _StdinTransport(asyncio.ReadTransport):
+    """Pass StreamReader backpressure and shutdown to the Windows stdin worker."""
 
-    stdin is attached with ``connect_read_pipe`` rather than read in a worker
-    thread: a thread blocked on stdin cannot be cancelled, and ``asyncio.run``
-    waits for the default executor on the way out -- which turns an upstream
-    death into the sub-agent hanging until its own timeout instead of seeing the
-    connection drop.
-    """
+    def __init__(self) -> None:
+        super().__init__()
+        self.ready = threading.Event()
+        self.ready.set()
+        self._stopped = threading.Event()
+        self._reading = True
+
+    def is_reading(self) -> bool:
+        return self._reading and not self.is_closing()
+
+    def pause_reading(self) -> None:
+        self._reading = False
+        self.ready.clear()
+
+    def resume_reading(self) -> None:
+        if not self.is_closing():
+            self._reading = True
+            self.ready.set()
+
+    def is_closing(self) -> bool:
+        return self._stopped.is_set()
+
+    def close(self) -> None:
+        self._stopped.set()
+        self.ready.set()
+
+
+@contextlib.asynccontextmanager
+async def _stdin_reader() -> AsyncIterator[asyncio.StreamReader]:
+    """Read inherited stdin without keeping the process alive after a disconnect."""
     loop = asyncio.get_running_loop()
+    reader = asyncio.StreamReader()
+    if sys.platform != "win32":
+        transport, _ = await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), sys.stdin)
+        try:
+            yield reader
+        finally:
+            transport.close()
+        return
+
+    # Inherited Windows pipes are not overlapped handles. A daemon reading the
+    # raw descriptor neither holds a buffered-stdio lock nor delays exit while
+    # stdin stays open after the endpoint dies, as a default-executor job would.
+    fd = sys.stdin.fileno()
+    transport = _StdinTransport()
+    reader.set_transport(transport)
+
+    def deliver(chunk: bytes) -> None:
+        if not transport.is_closing():
+            reader.feed_data(chunk)
+            if transport.is_reading():
+                transport.ready.set()
+
+    def feed() -> None:
+        try:
+            while True:
+                # Acknowledge delivery before reading again: queued callbacks
+                # would otherwise bypass the reader's buffer limit.
+                transport.ready.wait()
+                transport.ready.clear()
+                if transport.is_closing() or not (chunk := os.read(fd, _READ_CHUNK)):
+                    break
+                loop.call_soon_threadsafe(deliver, chunk)
+        except (OSError, RuntimeError):
+            pass
+        finally:
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(reader.feed_eof)
+
+    threading.Thread(target=feed, name="mcp-stdin", daemon=True).start()
     try:
-        sock_reader, sock_writer = await asyncio.open_unix_connection(socket_path)
+        yield reader
+    finally:
+        transport.close()
+
+
+async def run_bridge(socket_path: str, stdout: BinaryIO) -> int:
+    """Pump frames between stdio and a Unix or authenticated loopback endpoint."""
+    try:
+        sock_reader, sock_writer = await open_endpoint(socket_path)
     except OSError as exc:
-        print(f"raven mcp bridge: cannot reach {socket_path}: {exc}", file=sys.stderr, flush=True)
+        print(f"raven mcp bridge: cannot reach {endpoint_label(socket_path)}: {exc}", file=sys.stderr, flush=True)
         return 1
 
-    stdin_reader = asyncio.StreamReader()
-    await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(stdin_reader), sys.stdin)
-
-    tasks = [
-        asyncio.create_task(_pump(stdin_reader, sock_writer)),
-        asyncio.create_task(_pump(sock_reader, stdout)),
-    ]
-    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-    for task in pending:
-        task.cancel()
-    for task in done:
-        if (exc := task.exception()) is not None:
-            print(f"raven mcp bridge: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
-            return 1
-    return 0
+    tasks: list[asyncio.Task] = []
+    try:
+        async with _stdin_reader() as stdin_reader:
+            tasks = [
+                asyncio.create_task(_pump(stdin_reader, sock_writer)),
+                asyncio.create_task(_pump(sock_reader, stdout)),
+            ]
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                task.result()
+        return 0
+    except (OSError, ValueError) as exc:
+        print(f"raven mcp bridge: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+        return 1
+    finally:
+        for task in tasks:
+            task.cancel()
+        sock_writer.close()
+        try:
+            await asyncio.gather(*tasks, return_exceptions=True)
+            with contextlib.suppress(OSError, TimeoutError):
+                async with asyncio.timeout(_CLOSE_TIMEOUT_S):
+                    await sock_writer.wait_closed()
+        finally:
+            # A closing transport calls connection_lost only once its buffer
+            # is flushed, so bytes still buffered mean the close did not
+            # finish and are thrown away here. With none left it has finished
+            # or will on its own, and a selector transport that has run
+            # connection_lost has dropped its loop: abort() would reach
+            # call_soon on None. Read the buffer, not a flag set once
+            # wait_closed() returns: a cancel landing after the close finished
+            # but before this coroutine resumed would leave that flag unset.
+            if sock_writer.transport.get_write_buffer_size():
+                sock_writer.transport.abort()

@@ -955,3 +955,33 @@ def test_forbidding_extras_keeps_both_key_spellings() -> None:
     would reject the config file's own snake_case spelling."""
     assert WebProvidersConfig.model_validate({"tavily": {"apiKey": "sk-a"}}).key_for("tavily") == "sk-a"
     assert WebProvidersConfig.model_validate({"tavily": {"api_key": "sk-b"}}).key_for("tavily") == "sk-b"
+
+
+@pytest.mark.parametrize(
+    "queries,query,want",
+    [
+        ([], "a red fox", ["a red fox"]),
+        (["a blue bird"], "a red fox", ["a blue bird"]),
+        ([], None, []),
+        ([], "   ", []),
+    ],
+)
+async def test_registry_image_search_preserves_the_single_query_fallback(monkeypatch, queries, query, want):
+    from raven.agent.tools.registry import ToolRegistry
+
+    calls = []
+    tool = web_mod.ImageSearchTool(api_key="test-image-key")
+
+    async def search(said, count, floor, vendor, key):
+        calls.append(said)
+        return "picture found"
+
+    monkeypatch.setattr(tool, "_search_images", search)
+    registry = ToolRegistry()
+    registry.register(tool)
+    params = {"queries": queries, "query": query} if query is not None else {"queries": queries}
+    original = json.loads(json.dumps(params))
+    result = await registry.execute("image_search", params)
+    assert calls == want
+    assert params == original
+    assert ("Invalid parameters" in result) is (not want)

@@ -2278,10 +2278,125 @@ def test_report_bug_upload_failure_keeps_the_package(state, _no_machine_secrets,
     r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "it broke", "--yes"])
 
     assert r.exit_code == 1, r.output
+    assert "is not reachable" in r.output
     assert "✗ Upload failed:" in r.output and "raven trajectory upload-bug-report br-" in r.output
     ((_dir, record),) = breport.list_reports(state)
     assert record["status"] == "local_ready"
     assert record["upload"]["state"] == "failed" and record["upload"]["error"]
+
+
+def _record_confirms(monkeypatch, *answers):
+    """Script typer.confirm with ``answers`` in order; returns the messages it was asked."""
+    from raven.cli import trajectory_commands as tcmd
+
+    asked: list[str] = []
+    replies = list(answers)
+
+    def _confirm(message, *_a, **_k):
+        asked.append(message)
+        return replies.pop(0)
+
+    monkeypatch.setattr(tcmd.typer, "confirm", _confirm)
+    return asked
+
+
+def test_report_bug_probes_a_reachable_receiver_without_asking(state, _no_machine_secrets, receiver_url, monkeypatch):
+    from raven.trajectory import upload as tupload
+
+    probed: list[str] = []
+    real_probe = tupload.probe_receiver
+
+    def _counting(base_url, **kw):
+        probed.append(base_url)
+        return real_probe(base_url, **kw)
+
+    monkeypatch.setattr(tupload, "probe_receiver", _counting)
+    monkeypatch.setenv("RAVEN_BUGREPORT_URL", receiver_url)
+    _simple_log(state)
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "it broke", "--yes"])
+
+    assert r.exit_code == 0, r.output
+    assert probed == [receiver_url]
+    assert "not reachable" not in r.output and "Uploaded — receipt rc-" in r.output
+
+
+def test_report_bug_without_a_receiver_does_not_probe(state, _no_machine_secrets, monkeypatch):
+    from raven.trajectory import upload as tupload
+
+    def _no_probe(*_a, **_k):
+        raise AssertionError("nothing is probed when uploading is off")
+
+    monkeypatch.setattr(tupload, "probe_receiver", _no_probe)
+    monkeypatch.delenv("RAVEN_BUGREPORT_URL", raising=False)
+    _simple_log(state)
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "it broke", "--yes"])
+
+    assert r.exit_code == 0, r.output
+    assert "Not uploaded" in r.output
+
+
+def test_report_bug_unreachable_receiver_declined_collects_nothing(
+    state, _no_machine_secrets, monkeypatch, no_proxy_env
+):
+    from raven.cli import trajectory_commands as tcmd
+    from raven.trajectory import bugreport as breport
+    from raven.trajectory import store as tstore_module
+
+    monkeypatch.setattr(tcmd, "_stdin_is_tty", lambda: True)
+    asked = _record_confirms(monkeypatch, False)
+    monkeypatch.setenv("RAVEN_BUGREPORT_URL", _dead_url())
+    _simple_log(state)
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "it broke"])
+
+    assert r.exit_code == 1, r.output
+    assert "is not reachable: could not reach 127.0.0.1:" in _one_line(r.output)
+    assert "nothing was collected or pinned" in r.output
+    assert asked == [tcmd._CONTINUE_WITHOUT_RECEIVER]
+    assert breport.list_reports(state) == []
+    assert not (breport.bugreports_root(state) / breport.STAGING_DIR).exists()
+    assert tstore_module.pins(state) == {}
+
+
+def test_report_bug_unreachable_receiver_accepted_keeps_the_package(
+    state, _no_machine_secrets, monkeypatch, no_proxy_env
+):
+    from raven.cli import trajectory_commands as tcmd
+    from raven.trajectory import bugreport as breport
+
+    monkeypatch.setattr(tcmd, "_stdin_is_tty", lambda: True)
+    asked = _record_confirms(monkeypatch, True, True)
+    monkeypatch.setenv("RAVEN_BUGREPORT_URL", _dead_url())
+    _simple_log(state)
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "it broke"])
+
+    assert r.exit_code == 1, r.output
+    assert asked == [tcmd._CONTINUE_WITHOUT_RECEIVER, "Create the bug report?"]
+    assert "✗ Upload failed:" in r.output and "raven trajectory upload-bug-report br-" in r.output
+    ((_dir, record),) = breport.list_reports(state)
+    assert record["status"] == "local_ready" and record["upload"]["state"] == "failed"
+
+
+@pytest.mark.parametrize("tty", [False, True], ids=["no-tty", "tty"])
+def test_report_bug_unreachable_receiver_with_yes_continues_without_asking(
+    state, _no_machine_secrets, monkeypatch, no_proxy_env, tty
+):
+    from raven.cli import trajectory_commands as tcmd
+    from raven.trajectory import bugreport as breport
+
+    def _no_confirm(*_a, **_k):
+        raise AssertionError("--yes must not ask whether to continue")
+
+    monkeypatch.setattr(tcmd, "_stdin_is_tty", lambda: tty)
+    monkeypatch.setattr(tcmd.typer, "confirm", _no_confirm)
+    monkeypatch.setenv("RAVEN_BUGREPORT_URL", _dead_url())
+    _simple_log(state)
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "it broke", "--yes"])
+
+    assert r.exit_code == 1, r.output
+    assert "is not reachable" in r.output
+    assert "Continuing: if the upload fails, the package stays on this machine." in r.output
+    ((_dir, record),) = breport.list_reports(state)
+    assert record["status"] == "local_ready" and record["upload"]["state"] == "failed"
 
 
 def test_upload_bug_report_retries_and_repeats(state, _no_machine_secrets, receiver_url, monkeypatch):

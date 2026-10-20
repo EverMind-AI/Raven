@@ -509,6 +509,26 @@ _NODE_SCHEMA: dict[str, Any] = {
 }
 
 
+_NODE_ALIASES = {
+    field.alias: name
+    for name, field in DagNodeSpec.model_fields.items()
+    if isinstance(field.alias, str) and field.alias != name
+}
+_GRAPH_ALIASES = {
+    field.alias: name
+    for name, field in SubAgentDagSpec.model_fields.items()
+    if isinstance(field.alias, str) and field.alias != name
+}
+
+
+def _canonical_keys(value: dict[str, Any], aliases: dict[str, str]) -> dict[str, Any]:
+    result = dict(value)
+    for alias, name in aliases.items():
+        if alias in result and name not in result:
+            result[name] = result.pop(alias)
+    return result
+
+
 class SubAgentDagTool(Tool):
     """Orchestrate a graph of sub-agent tasks in one call (file-based passing)."""
 
@@ -1306,6 +1326,29 @@ class SubAgentDagTool(Tool):
             },
             "required": ["task_summary", "nodes"],
         }
+
+    def cast_params(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Accept the graph parser's declared aliases without guessing misspelled keys."""
+        from raven.agent.tools.params import cast_params
+
+        params = _canonical_keys(cast_params(self.parameters, params), _GRAPH_ALIASES)
+        if isinstance(nodes := params.get("nodes"), list):
+            params["nodes"] = [
+                _canonical_keys(node, _NODE_ALIASES) if isinstance(node, dict) else node for node in nodes
+            ]
+        return params
+
+    def validate_params(self, params: dict[str, Any]) -> list[str]:
+        errors = []
+        objects = [("", params, _GRAPH_ALIASES)]
+        if isinstance(nodes := params.get("nodes"), list):
+            objects.extend((f"nodes[{index}].", node, _NODE_ALIASES) for index, node in enumerate(nodes))
+        for path, obj, aliases in objects:
+            if isinstance(obj, dict):
+                for alias, name in aliases.items():
+                    if alias in obj and name in obj:
+                        errors.append(f"{path}{alias} conflicts with {path}{name}; send only {name}")
+        return errors
 
     def to_schema(self) -> dict[str, Any]:
         """Render the turn's worker roster instead of the admission snapshot.

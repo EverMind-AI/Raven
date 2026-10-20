@@ -20,7 +20,7 @@ import { claimDraft as claimComposerDraft } from '../../features/composer/mount'
 import { drawMeter, goPaint as goState, queuePush, queueShift, turn } from '../../features/composer/mount'
 import { reduce } from '../../features/composer/turn'
 import { claimDraft as claimDeskDraft } from '../../features/desk/store'
-import { chipModel, loadProviders, rememberUsed, stagedTier } from '../../features/model/source'
+import { adoptSelection, chipModel, loadProviders, rememberUsed, stagedTier } from '../../features/model/source'
 import { rowPreview, touchSession } from '../../features/rail/source'
 import { draw as sessionDraw } from '../../features/rail/store'
 import { plainTitle } from '../../features/rail/title'
@@ -510,6 +510,7 @@ export async function promote(preview?: string, atPointer?: (id: string) => void
      model, tier and permission mode, the lane it drew into -- belongs to the
      session that was just minted. */
   mint(draftRt, s.id)
+  adoptSelection(s.id, gen)
   /* The pointer has moved, and a caller with something to file under the new
      conversation files it HERE rather than after the round trips below: the
      send records the turn's owner at exactly this point, and a reader switching

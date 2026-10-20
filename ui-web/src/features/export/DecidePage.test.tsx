@@ -56,6 +56,7 @@ const src: ExportSource = {
   start: () => Promise.reject(new Error('not scripted')),
   status: () => Promise.reject(new Error('not scripted')),
   cancel: async () => ({ ok: true }),
+  reportProbe: async () => ({ reachable: true, target: 'https://bugs.example', reason: '' }),
   reportStart: async () => ({ report_id: 'rs-1' }),
   reportStatus: () => answer(),
   reportItem: async (_id, itemId) => contexts[itemId] ?? { groups: [], total_groups: 0 },

@@ -513,9 +513,11 @@ and the host pumps them into the endpoint it opened on its own side (`raven/node
 `NodePool.lend`). The host binds each dispatch's endpoints to the acquired agent's task
 and checks that binding against the daemon-authenticated task before connecting, and again
 after the connection opens. A bridge's dispatch/server names alone grant no access.
-The server's definition and keys stay here. On a host without Unix-socket endpoint
-support, remote MCP is withheld, the task still runs and its reply explains why; the
-roster does not advertise that capability. Only
+The server's definition and keys stay here. Host endpoints use Unix sockets where
+available; otherwise they bind an ephemeral port on `127.0.0.1` and authenticate
+with a random per-endpoint token before opening the upstream. Local ACP bridges
+and the host's Raven node client use the same transport, including on Windows.
+The loopback token stays on the host for a remote dispatch. Only
 `--stdio` (tests, a fallback) ties the agents to the connection.
 _Avoid_: "node" alone (a DAG node is a `run_subagent_dag` step, and the Machine
 entry already rules the bare word out for a computer); "node id" for the install
@@ -2371,10 +2373,13 @@ The standalone HTTP service that takes Bug Report Packages in: it validates each
 upload with `package_check.inspect_package` (streaming, never extracting), lands
 the original bytes under `<save_dir>/<UTC date>/<report-id>.tar.gz` beside an
 Upload Receipt sidecar, and answers idempotently by report id — the same bytes
-again return the stored receipt, different bytes are refused. It authenticates
-nobody and serves no listing or download; who can reach it is the network's
-job. The sidecar is written before the package is moved into place, so a
-package in a date directory is always a committed one.
+again return the stored receipt, different bytes are refused. It takes only
+uploads that answer its Upload Challenge, a shallow gate against HTTP clients
+that are not Raven that identifies nobody; it serves no listing or download,
+and who can reach it is still the network's job. `GET /v1/hello` names the
+service and its protocol so a client can check, before a report starts, that
+its URL leads to a receiver. The sidecar is written before the package is
+moved into place, so a package in a date directory is always a committed one.
 _Avoid_: "upload server" or "uploader backend" — it is not an `Uploader`
 implementation for Trajectory Reports; it is the far end a Bug Report Package
 is sent to.
@@ -2390,6 +2395,21 @@ is rebuilt from the package: the package is the source of truth, the receipt
 is derived from it.
 _Avoid_: "receipt" for the sidecar file — the sidecar carries the receipt plus
 server-side context; the receipt is what the client gets back.
+
+**Upload Challenge** (`raven/trajectory/receiver_auth.py`):
+The string a Bug Report Receiver hands out on `POST /v1/challenge` before an
+upload, together with the client's answer to it. The receiver seals each
+challenge with a key held only in its process memory, so it stores none and a
+restart retires them all; a challenge carries the second it was issued, lives
+`challenge_ttl` seconds (300 by default) and is not consumed. The client
+answers with an HMAC, under a constant built into Raven, of the challenge with
+the package's report id, sha256 and size, and sends both back as
+`X-Raven-Challenge` / `X-Raven-Response`; the receiver checks them from the
+headers alone and refuses with 401 before reading the body. The constant is
+published with the source: the gate keeps out clients that do not know the
+exchange, not anyone who has read the code.
+_Avoid_: "token", "credential" or "authentication" — it identifies nobody and
+nothing about it needs to be kept secret.
 
 **Trajectory Replay** (`raven/trajectory/replay.py`):
 Mock re-run of the harness against a Trajectory Bundle (`raven trajectory replay`):

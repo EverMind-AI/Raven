@@ -58,12 +58,19 @@ All notable changes to Raven are documented here.
 - Bug Report Packages can be sent to a Bug Report Receiver. `raven trajectory
   receiver --save-dir DIR` runs the receiver: it checks each package in a
   stream without extracting it, stores the original bytes by UTC day next to
-  a receipt sidecar, answers the same package with the same receipt, and
-  bounds abuse with per-address rate limits, daily budgets, a free-disk
-  reserve and timeouts rather than with authentication. `report-bug` and the
-  browser's *Report a bug* upload the package as soon as it lands when
+  a receipt sidecar, and answers the same package with the same receipt. It
+  takes only uploads that answer its Upload Challenge -- a shallow gate that
+  keeps out HTTP clients that are not Raven, built on a constant published
+  with the source, not a credential -- and bounds abuse with per-address rate
+  limits, daily budgets, a free-disk reserve and timeouts. `report-bug` and
+  the browser's *Report a bug* upload the package as soon as it lands when
   `RAVEN_BUGREPORT_URL` names a receiver, and `raven trajectory
-  upload-bug-report` sends a filed report again.
+  upload-bug-report` sends a filed report again. Before a report starts,
+  `report-bug`, the browser and the WebUI's *Report a problem* ask the
+  receiver's `/v1/hello` and say so when it does not answer: an interactive
+  run asks whether to go on (the WebUI offers *Continue anyway*), and
+  `report-bug --yes` goes on and keeps the package if the upload fails. A
+  proxy in front of the receiver must forward all of `/v1/`.
 
 - Memory runs on native Windows. EverOS 1.4.0 runs there without WSL, so
   the memory plugin's pin moves to `everos[multimodal]==1.4.1` and the
@@ -187,11 +194,10 @@ All notable changes to Raven are documented here.
   terminal shows as raw tags. The shape gate, the clarify exemption and
   `scripts/research_report_audit.py` read the new layout, and the old
   three-heading layout stays the class default (`finalShape.reportLayout`).
-  An install that has already run Raven-Research keeps the contract it seeded
-  into its workspace (`agent_memory/profile/agent.md`), because seeding is
-  once-only so that an operator's edits survive; it moves to the new layout
-  when that file is deleted, and until then the gate still accepts its
-  three-heading replies.
+  An install that has already run Raven-Research moves to the new layout at
+  its next launch, since the contract in its workspace
+  (`agent_memory/profile/agent.md`) is now regenerated on every launch (see
+  Fixed); the gate still accepts three-heading replies.
   The identity no longer carries the measured-guidance block, whose short-run
   and one-answer numbers came from a short-answer benchmark
   (`measuredGuidance` off). The product label moves to
@@ -339,6 +345,31 @@ All notable changes to Raven are documented here.
   asks the replay from the line its record kept as the prompt went out, not
   from the agent's first line; a CLI pick-up, whose task is the command's
   own, reads from the first line.
+
+- The research, code, oncall and ppt agents follow an upgrade or a config
+  change into the prompt files they keep in their workspace (`soul.md`,
+  `agent.md`, `TOOLS.md`). Those files were written only when absent, so the
+  model kept reading the text of the first launch while the gates enforced
+  the current release: a research contract seeded before the reader layout
+  still asked for the three-heading report. They are now rewritten on every
+  launch. Your own lines go in the sibling `*.local.md` file
+  (`agent_memory/profile/agent.local.md`, for example) and are appended after
+  the product text; a `*.local.md` must be UTF-8, and one that is not stops
+  the launch with the file named. A file edited in place, or left by an older
+  release, is saved as `<name>.bak-<time>-<pid>` before it is replaced, never
+  readable by more accounts than the file was, and the launcher log names the
+  backup. The ppt engine, whose plugin can be granted a host's or another
+  product's home, replaces only a file it can show it wrote: in Raven-PPT's
+  own home a seat edited before this release stays until it is deleted.
+
+- A file Raven saves by replacing it -- `config.json`, an agent's prompt
+  files, state files -- keeps its own access rights from the first byte of the
+  new text. On Windows the replacement took its folder's inherited ACL, so a
+  file kept private in a folder other accounts may read came back readable by
+  them; on POSIX the new text sat in a umask-default temp file until the
+  target's mode was copied over. On Windows a save refused by a read-only
+  target also left a read-only temp file that failed every later save, even
+  after the target was made writable again.
 
 - A task on a registered machine ends the way it ended, whatever happened on
   either side. A Raven node killed outright (`kill -9`) used to leave its

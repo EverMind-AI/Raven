@@ -779,13 +779,18 @@ async def test_a_dag_result_keeps_its_provenance_through_a_downgrade_notice(tmp_
     from raven.agent.tools.registry import ToolRegistry
     from raven.config.schema import ThirdPartyCliSubagentConfig
 
+    class HostConfiguredDag(SubAgentDagTool):
+        async def execute(self, nodes, **kwargs):
+            # Playbooks supply these fields after the model-facing schema boundary.
+            return await super().execute(nodes=[{**node, "mcps": ["any"]} for node in nodes], **kwargs)
+
     monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [(_HELD, "providers.openrouter.apiKey")])
     registry = ToolRegistry()
     # The CLI answers with its prompt, and a row with no `{mcp_file}` cannot take
     # injected servers, so the node's `mcps` list becomes a downgrade notice.
     command = f'"{sys.executable}" -c "import sys; sys.stdout.write(sys.stdin.read())"'
     registry.register(
-        SubAgentDagTool(workspace=tmp_path, agents=[ThirdPartyCliSubagentConfig(name="echo", command=command)])
+        HostConfiguredDag(workspace=tmp_path, agents=[ThirdPartyCliSubagentConfig(name="echo", command=command)])
     )
 
     out = await registry.execute(
@@ -798,7 +803,6 @@ async def test_a_dag_result_keeps_its_provenance_through_a_downgrade_notice(tmp_
                     "subagent": "echo",
                     "node_summary": "repeat the reply",
                     "prompt_template": f"the agent answered {_HELD}",
-                    "mcps": ["any"],
                 }
             ],
             "background": False,

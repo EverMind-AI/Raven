@@ -119,12 +119,12 @@ What one agent directory carries:
   slice is absent (what the scaffold's engine templates do), or by the
   operator's `plugins.disabled` list.
   Prompt assets ride with the plugin whose conduct they teach, under
-  `plugins/<id>/prompts/`: the workspace guide `run.py` seeds once
-  (oncall's TOOLS.md section, code's whole-file TOOLS.md) lives there.
+  `plugins/<id>/prompts/`: the workspace guide `run.py` regenerates on every
+  launch (oncall's TOOLS.md section, code's whole-file TOOLS.md) lives there.
   `raven-code` also seeds its identity as `soul.md` (beside `run.py`, the
   raven-research shape) and a coding conduct as `agent.md` (one variant per
-  model family, the fork's split; a partition still carrying the other
-  variant or older managed seed is refreshed, an operator's edit never is),
+  model family, the fork's split; every launch writes the variant its model
+  reads, and an operator's edit is backed up before it is replaced),
   and its code-flow hook
   contributes the working directory's own instruction files (`AGENTS.md` /
   `CLAUDE.md` / `CONTEXT.md`, the slice's `projectFiles`) to each turn's
@@ -150,7 +150,7 @@ What one agent directory carries:
   channel to ask on -- with the default it refused every write and the model
   reported the task incomplete.
 - `soul.md` + the contract the plugin renders into `agent.md` -- optional:
-  the agent's own identity, seeded into the workspace once, for an agent
+  the agent's own identity, regenerated into the workspace on every launch, for an agent
   that replaces the host identity (research does; its `context.dropSegments`
   keeps the host's own identity segment out of the prompt). An agent whose
   vendored twin served the host-generic identity carries no `soul.md` and
@@ -187,9 +187,39 @@ Agent vocabulary:
 - **Tool-face pin** -- each launcher test pins the exact tool face the
   rendered config exposes (`VENDORED_TOOL_FACE` in
   `tests/test_agents_<agent>_launcher.py`) to its vendored twin's face.
-- **Seed-once** -- workspace assets (guides, identity) are written only when
-  absent (`seed_once()` in `raven/config/product_render.py`), so a user's
-  later edits survive relaunches.
+- **Regenerated prompts** -- the prompt files a product owns (identity,
+  contract, tool guide) are rewritten on every launch from the release and the
+  rendered config (`write_generated()` in `raven/config/product_render.py`),
+  so the text the model reads matches the gates of the same release. An
+  operator's own lines go in the file's `*.local.md` sibling (`agent.local.md`
+  beside `agent_memory/profile/agent.md`, `soul.local.md` beside `soul.md`,
+  `TOOLS.local.md` beside `TOOLS.md`), appended after the product text at the
+  next launch; keep only the lines still needed there, saved as UTF-8 -- one
+  in another encoding stops the launch, and the error names it. A file that
+  does not hold the text the product last wrote -- edited in place, or left
+  by an older release before receipts existed -- is saved as
+  `<name>.bak-<time>-<pid>` before it is replaced, and the launcher's log
+  names the backup. A backup is never readable by more accounts than the file
+  was: an owner-only copy on POSIX, and on Windows a hard link to the file
+  itself, which keeps its ACL; a Windows volume that cannot hard-link stops
+  the launch and names the file rather than copy it. The regenerated file
+  keeps the file's own mode, and on Windows its DACL. Backups are never
+  deleted for you: remove one once what you need from it is in the
+  `*.local.md` file. The ppt engine writes into
+  whatever home its plugin is granted, which can be a host's own or another
+  product's, so it replaces only a seat its own receipt or a shipped prompt's
+  digest shows it wrote, and leaves any other file as it is. In Raven-PPT's
+  own home that includes a seat edited before prompts were regenerated: it
+  keeps the edit and its `*.local.md` is not applied until the seat is
+  deleted, and the next turn writes it fresh. The engine logs such a seat at
+  DEBUG only, since in a host's home it is the host's own, and retries a
+  failed write on the next turn instead of stopping. Each receipt
+  line names the product that wrote the file, so one product's receipt is
+  never another's proof. Two processes of one product share these
+  files, so a launch can change what an older process still running reads
+  next turn. Rolling back the code does not roll back the files: stop the
+  product's processes, delete each file whose `.<name>.generated.sha256`
+  receipt still matches it, and relaunch on the older code.
 
 Agent notes:
 

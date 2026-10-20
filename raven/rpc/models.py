@@ -2103,6 +2103,7 @@ class ModelOptionProvider(_Strict):
 
 class ModelOptionsParams(_Strict):
     session_id: str | None = None
+    include_providers: bool = True
 
 
 class ModelOptionsResult(_Strict):
@@ -6583,6 +6584,16 @@ class BugReportProblem(_Strict):
     reporter: str = ""
 
 
+class BugReportProbeParams(_StrictParams):
+    pass
+
+
+class BugReportProbeResult(_Strict):
+    reachable: bool
+    target: str
+    reason: str
+
+
 class BugReportStartParams(_StrictParams):
     session_key: str
     trace_ids: list[str]
@@ -6880,6 +6891,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "trajectory.export_status": (TrajectoryExportStatusParams, TrajectoryExportStatusResult),
     "trajectory.export_cancel": (TrajectoryExportCancelParams, TrajectoryExportCancelResult),
     # bugreport.* -- the web page's bug report, held as a Report Session
+    "bugreport.probe": (BugReportProbeParams, BugReportProbeResult),
     "bugreport.start": (BugReportStartParams, BugReportStartResult),
     "bugreport.status": (BugReportStatusParams, BugReportStatusResult),
     "bugreport.item": (BugReportItemParams, BugReportItemResult),

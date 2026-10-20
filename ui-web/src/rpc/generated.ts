@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 247 methods, 138 component schemas.
+// 248 methods, 138 component schemas.
 
 /* eslint-disable */
 /**
@@ -3064,6 +3064,7 @@ export interface SkillUnpinResult {
 }
 export interface ModelOptionsParams {
   session_id?: string;
+  include_providers?: boolean;
 }
 export interface ModelOptionsResult {
   model: string;
@@ -6226,6 +6227,18 @@ export interface TrajectoryExportCancelParams {
 export interface TrajectoryExportCancelResult {
   ok: boolean;
 }
+export interface BugreportProbeParams {}
+export interface BugreportProbeResult {
+  reachable: boolean;
+  /**
+   * The receiver's scheme and host, as the page may show it.
+   */
+  target: string;
+  /**
+   * Why the receiver cannot be used; empty when it is reachable.
+   */
+  reason: string;
+}
 export interface BugreportStartParams {
   session_key: string;
   trace_ids: string[];
@@ -6602,6 +6615,7 @@ export interface RpcMethods {
   'trajectory.export': { params: TrajectoryExportParams; result: TrajectoryExportResult };
   'trajectory.export_status': { params: TrajectoryExportStatusParams; result: TrajectoryExportStatusResult };
   'trajectory.export_cancel': { params: TrajectoryExportCancelParams; result: TrajectoryExportCancelResult };
+  'bugreport.probe': { params: BugreportProbeParams; result: BugreportProbeResult };
   'bugreport.start': { params: BugreportStartParams; result: BugreportStartResult };
   'bugreport.status': { params: BugreportStatusParams; result: BugreportStatusResult };
   'bugreport.item': { params: BugreportItemParams; result: BugreportItemResult };
@@ -6636,6 +6650,7 @@ export const RPC_METHODS = [
   "bugreport.cancel",
   "bugreport.decide",
   "bugreport.item",
+  "bugreport.probe",
   "bugreport.retry_upload",
   "bugreport.start",
   "bugreport.status",

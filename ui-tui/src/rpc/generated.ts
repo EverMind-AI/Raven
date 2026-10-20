@@ -3810,6 +3810,7 @@ export interface SkillUnpinResult {
  */
 export interface ModelOptionsParams {
   session_id?: string;
+  include_providers?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -8247,6 +8248,26 @@ export interface TrajectoryExportCancelParams {
  */
 export interface TrajectoryExportCancelResult {
   ok: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugreportProbeParams".
+ */
+export interface BugreportProbeParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BugreportProbeResult".
+ */
+export interface BugreportProbeResult {
+  reachable: boolean;
+  /**
+   * The receiver's scheme and host, as the page may show it.
+   */
+  target: string;
+  /**
+   * Why the receiver cannot be used; empty when it is reachable.
+   */
+  reason: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

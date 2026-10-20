@@ -161,3 +161,28 @@ async def test_a_repeated_cursor_stops_paging(monkeypatch) -> None:
 
     assert connected.names == ["mcp_srv_a", "mcp_srv_b"]
     assert asked == [None, "same"]
+
+
+async def test_registry_respects_the_mcp_servers_declared_extra_property_policy() -> None:
+    for closed in (True, False):
+        session = _Session(_result(is_error=False, text="received"))
+        tool_def = SimpleNamespace(
+            name="read",
+            description="Read a path.",
+            inputSchema={
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "additionalProperties": not closed,
+            },
+        )
+        wrapper = MCPToolWrapper(session, "server-x", tool_def, tool_timeout=30, taken=frozenset())
+        registry = ToolRegistry()
+        registry.register(wrapper)
+        args = {"path": "/synthetic", "show_hidden": True}
+        result = await registry.execute(wrapper.name, args)
+        if closed:
+            assert "Invalid parameters" in result and "show_hidden is not allowed" in result
+            assert session.calls == []
+        else:
+            assert result == "received"
+            assert session.calls == [("read", args)]

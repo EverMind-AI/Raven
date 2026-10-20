@@ -691,6 +691,12 @@ class ImageSearchTool(Tool):
         """Whether a key resolves for the vendor, from the config value or the environment."""
         return bool(cls(api_key=config_key or None, provider=provider).api_key)
 
+    def cast_params(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Keep the single-query fallback when a caller also supplies an empty batch."""
+        if params.get("queries") == [] and isinstance(params.get("query"), str) and params["query"].strip():
+            return {key: value for key, value in params.items() if key != "queries"}
+        return params
+
     async def execute(
         self,
         queries: list[str] | None = None,

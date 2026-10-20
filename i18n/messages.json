@@ -2919,6 +2919,30 @@
       "en": "A model ID the catalogue lacks",
       "zh": "目录里没有的 model ID，手动加"
     },
+    "gui.model.loading": {
+      "en": "Loading model...",
+      "zh": "正在加载模型..."
+    },
+    "gui.model.load_failed": {
+      "en": "Model unavailable",
+      "zh": "模型加载失败"
+    },
+    "gui.model.retry_load": {
+      "en": "Click to retry loading the model",
+      "zh": "点击重试加载模型"
+    },
+    "gui.model.choose": {
+      "en": "Choose a model",
+      "zh": "选择模型"
+    },
+    "gui.model.provider_catalogue_loading": {
+      "en": "The model list is still loading. Try again shortly.",
+      "zh": "模型列表正在加载，请稍后重试。"
+    },
+    "gui.model.provider_catalogue_failed": {
+      "en": "Could not load the model list. Click the model to retry.",
+      "zh": "模型列表加载失败，点击模型重试。"
+    },
     "gui.model.base_ph": {
       "en": "API base (optional, for your own gateway)",
       "zh": "API Base（可选，自建网关才填）"
@@ -12784,6 +12808,34 @@
     "gui.export.unavailable": {
       "en": "No bug report receiver is configured on this gateway.",
       "zh": "该网关没有配置问题报告服务器。"
+    },
+    "gui.export.probe_down": {
+      "en": "The bug report service at {target} cannot be reached: {reason}",
+      "zh": "无法连接问题报告服务 {target}：{reason}"
+    },
+    "gui.export.probe_failed": {
+      "en": "The bug report service could not be checked: {error}",
+      "zh": "无法检查问题报告服务：{error}"
+    },
+    "gui.export.probe_late": {
+      "en": "The bug report service did not answer the check in time.",
+      "zh": "问题报告服务未能及时响应检查。"
+    },
+    "gui.export.probe_note": {
+      "en": "You can still go on: if the upload fails, the package stays on this machine and can be sent again later.",
+      "zh": "仍可继续：上传失败时，报告包会保留在本机，之后可以重新发送。"
+    },
+    "gui.export.probe_recheck": {
+      "en": "Check again",
+      "zh": "重新检查"
+    },
+    "gui.export.probe_checking": {
+      "en": "Checking the bug report service...",
+      "zh": "正在检查问题报告服务…"
+    },
+    "gui.export.probe_continue": {
+      "en": "Continue anyway",
+      "zh": "仍然继续"
     },
     "gui.export.report_limit": {
       "en": "Too many bug reports are in progress. Finish or cancel one first.",

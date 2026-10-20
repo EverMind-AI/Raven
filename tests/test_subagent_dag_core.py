@@ -5034,3 +5034,116 @@ def test_the_changelog_entry_names_the_feature_and_the_retired_switch() -> None:
     assert "`raven playbook run` judges its nodes too" in changed
     assert "A host with no model to judge with refuses a graph that declares routes." in changed
     assert "reads exactly as it did" not in added
+
+
+@pytest.mark.parametrize("encoded", [False, True])
+async def test_registry_dag_node_aliases_reach_the_parser_in_canonical_form(tmp_path, monkeypatch, encoded):
+    from copy import deepcopy
+
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+    from raven.agent.tools.registry import ToolRegistry
+
+    tool = SubAgentDagTool(
+        workspace=tmp_path, agents=[ThirdPartyCliSubagentConfig(name="x", command="unused-test-agent")]
+    )
+    captured = []
+
+    async def execute(**params):
+        captured.append(parse_dag_spec(params).model_dump())
+        return "accepted graph"
+
+    monkeypatch.setattr(tool, "execute", execute)
+    registry = ToolRegistry()
+    registry.register(tool)
+    nodes = [
+        {"id": "a", "subagent": "x", "nodeSummary": "first", "promptTemplate": "First task"},
+        {"id": "b", "subagent": "x", "nodeSummary": "second", "promptTemplate": "Next task", "dependsOn": ["a"]},
+    ]
+    params = {"taskSummary": "two tasks", "nodes": json.dumps(nodes) if encoded else nodes}
+    original = deepcopy(params)
+    result = await registry.execute(tool.name, params)
+    assert result == "accepted graph"
+    assert captured[0]["task_summary"] == "two tasks"
+    assert captured[0]["nodes"][1]["depends_on"] == ["a"]
+    assert captured[0]["nodes"][0]["node_summary"] == "first"
+    assert params == original
+
+
+@pytest.mark.parametrize(
+    "extra,graph_extra,fragment",
+    [
+        ({"dependsOn": ["a"], "depends_on": []}, {}, "conflicts"),
+        ({"task_summary": "not a node summary"}, {}, "task_summary is not allowed"),
+        ({}, {"taskSummary": "another title"}, "taskSummary conflicts with task_summary"),
+    ],
+)
+async def test_registry_dag_aliases_do_not_overwrite_or_guess_keys(tmp_path, monkeypatch, extra, graph_extra, fragment):
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+    from raven.agent.tools.registry import ToolRegistry
+
+    tool = SubAgentDagTool(
+        workspace=tmp_path, agents=[ThirdPartyCliSubagentConfig(name="x", command="unused-test-agent")]
+    )
+    called = []
+
+    async def execute(**params):
+        called.append(params)
+        return "unexpected"
+
+    monkeypatch.setattr(tool, "execute", execute)
+    registry = ToolRegistry()
+    registry.register(tool)
+    node = {"id": "b", "subagent": "x", "node_summary": "second", "prompt_template": "Next task", **extra}
+    result = await registry.execute(tool.name, {"task_summary": "two tasks", "nodes": [node], **graph_extra})
+    assert result.startswith("Error: Invalid parameters")
+    assert fragment in result
+    assert called == []
+
+
+@pytest.mark.parametrize("field,value", [("id", "not an id"), ("subagent", " padded "), ("instance", " padded ")])
+def test_dag_node_patterns_are_still_enforced_by_the_native_parser(field, value):
+    from pydantic import ValidationError
+
+    from raven.agent.subagent.dag_graph import DagNodeSpec
+
+    valid = {"id": "node", "subagent": "x", "node_summary": "work", "prompt_template": "Task", "instance": "worker"}
+    DagNodeSpec.model_validate(valid)
+    with pytest.raises(ValidationError) as caught:
+        DagNodeSpec.model_validate({**valid, field: value})
+    assert [(error["loc"], error["type"]) for error in caught.value.errors()] == [((field,), "string_pattern_mismatch")]
+
+
+def test_the_node_schema_omits_only_the_playbook_resource_fields(tmp_path):
+    from raven.agent.subagent.dag_graph import DagNodeSpec
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+
+    assert set(SubAgentDagTool(workspace=tmp_path).node_schema()["properties"]) == set(DagNodeSpec.model_fields) - {
+        "skills",
+        "mcps",
+    }
+
+
+@pytest.mark.parametrize("field", ["skills", "mcps"])
+@pytest.mark.parametrize("value", [None, [], ["resource"]])
+async def test_registry_dag_nodes_reject_playbook_resource_fields(tmp_path, monkeypatch, field, value):
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+    from raven.agent.tools.registry import ToolRegistry
+
+    tool = SubAgentDagTool(
+        workspace=tmp_path, agents=[ThirdPartyCliSubagentConfig(name="x", command="unused-test-agent")]
+    )
+    captured = []
+
+    async def execute(**params):
+        captured.append(params)
+        return "unexpected dispatch"
+
+    monkeypatch.setattr(tool, "execute", execute)
+    registry = ToolRegistry()
+    registry.register(tool)
+    node = {"id": "a", "subagent": "x", "node_summary": "work", "prompt_template": "Task", field: value}
+    result = await registry.execute(tool.name, {"task_summary": "work", "nodes": [node]})
+    assert result.startswith("Error: Invalid parameters")
+    assert f"nodes[0].{field} is not allowed" in result
+    assert captured == []
+    assert getattr(parse_dag_spec({"task_summary": "work", "nodes": [node]}).nodes[0], field) == value

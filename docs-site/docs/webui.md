@@ -41,6 +41,11 @@ decide the values the redaction scan was unsure about (this page is skipped
 when the redaction history already decided them all), then upload and get a
 receipt. Every decision on that page, including "keep all" and the bulk
 buttons, is remembered in the redaction history with `web` as its source.
+When the wizard opens it checks that the receiver answers. If it does not, the
+wizard says why, and the report starts only when you choose **Continue
+anyway**; **Check again** asks once more, for instance after the receiver is
+back. Going on without it is safe: if the upload then fails, the report is kept
+on this machine as described below.
 Closing the wizard before the upload starts discards the report being
 prepared. Once an upload has started the report is saved on this machine: if
 the upload fails, a failure marked as retryable offers a retry, and either way

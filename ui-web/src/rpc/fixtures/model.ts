@@ -139,7 +139,7 @@ export function createModel(_env: FixtureEnv): ModelFixture {
 
   return {
     fixtures: {
-      'model.options': () => ({ model, provider, providers: rows.map((p) => wire(p, provider)) }),
+      'model.options': (p) => ({ model, provider, providers: p.include_providers === false ? [] : rows.map((p) => wire(p, provider)) }),
       'model.save_key': (p) => {
         const row = find(p.slug)
         if (row) row.authenticated = true
@@ -221,7 +221,9 @@ export function onboardDemoOverrides(schedule: (ms: number, fn: () => void) => v
   const current = (): string => picked?.provider ?? ''
 
   return {
-    'model.options': () => wait({ model: picked?.model ?? '', provider: current(), providers: rows.map((p) => wire(p, current())) }),
+    'model.options': (p) => p.include_providers === false
+      ? { model: picked?.model ?? '', provider: current(), providers: [] }
+      : wait({ model: picked?.model ?? '', provider: current(), providers: rows.map((p) => wire(p, current())) }),
     'model.save_key': (p) => {
       const row = rows.find((x) => x.slug === p.slug)
       /* The contract's answer is a provider, so a slug this library does not

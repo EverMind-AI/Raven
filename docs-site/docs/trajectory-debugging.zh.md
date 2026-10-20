@@ -81,8 +81,8 @@ WebUI 中的报告有意采用不同的规则：决策页上的每个决定都�
 ### 接收器 { #the-receiver }
 
 Bug Report Receiver 是一个小型 HTTP 服务：接收 Bug Report Package、校验、按日
-落盘、返回回执。它不做别的事：不鉴权，也不提供列表或下载。谁能连上它，由它
-监听的网络决定。
+落盘、返回回执。它只接收答对其挑战的上传（见[上传挑战](#the-upload-challenge)），
+不提供列表或下载。谁能连上它，仍由它监听的网络决定。
 
 ```bash
 raven trajectory receiver --save-dir /srv/raven-bugreports
@@ -109,13 +109,46 @@ raven trajectory receiver --save-dir /srv/raven-bugreports
 录真实落地时刻。同一个包再发一次返回已存的回执；同一 report id 的不同内容会被
 拒绝。保留与清理由运维负责——按日的目录让 `find -mtime` 式清理很简单。
 
+### 上传挑战 { #the-upload-challenge }
+
+接收器响应四种请求：
+
+| 请求 | 应答 |
+| --- | --- |
+| `GET /v1/hello` | `{"service": "raven-bug-report-receiver", "protocol": 1}`；客户端在报告开始前用它探测 |
+| `POST /v1/challenge` | `{"challenge": "...", "expires_in": 300}`：为一次上传签发的新挑战 |
+| `POST /v1/bugreports` | 上传，在 report id 与 sha256 之外带上 `X-Raven-Challenge` 和 `X-Raven-Response` |
+| `GET /healthz` | `{"status": "ok"}`，供运维探活 |
+
+挑战由接收器只保存在内存里的密钥签名，所以接收器不需要记录发出过哪些挑战，重启后
+旧挑战全部失效；挑战在 300 秒内有效，可以重复使用。Raven 客户端用内置在 Raven 中
+的常量，对"挑战 + 包的 report id、sha256 与大小"计算 HMAC 作为应答。接收器在读取
+body 之前就校验这两个头：缺失、伪造、过期或与包不符的应答一律返回 `401`，带
+`WWW-Authenticate: Raven-Challenge`，错误码为 `unauthorized`（或
+`challenge_expired`）；不写入任何文件，但这次尝试仍计入该地址的限速。
+
+这是一道浅层门槛，不是身份鉴权：那个常量随源码公开、不可配置，也不标识任何人。
+
+| 谁在尝试 | 结果 |
+| --- | --- |
+| 用 `curl`、脚本或扫描器直接发文件 | `401`，不落盘 |
+| 抓到一次上传，换一个包重放 | `401`：应答绑定了 report id、摘要和大小 |
+| 抓到一次上传，原样重放 | 至多拿到该包已存的回执 |
+| 读过 Raven 源码的人（仓库是公开的） | 挡不住，这是预期的 |
+| 用 Raven 本身发送垃圾 | 由包校验、限速和每日预算约束 |
+
+接收器和客户端要一起升级。较旧的接收器没有 `/v1/hello` 与 `/v1/challenge`：新客户端
+会在报告开始前提示对方不是 Raven 接收器，上传时报"the receiver does not issue
+challenges"；两种情况下包都会保留。
+
 ### 部署 { #deployment }
 
 接收器只说明文 HTTP，默认只绑 loopback。要让本机以外访问，必须放在终止 TLS 的
-反代之后；绝不要把端口直接暴露到公网。可用的 nginx location：
+反代之后；绝不要把端口直接暴露到公网。可用的 nginx location——它覆盖整个
+`/v1/`，因为客户端除了上传，还会请求 `/v1/hello` 和 `/v1/challenge`：
 
 ```nginx
-location /v1/bugreports {
+location /v1/ {
     proxy_pass http://127.0.0.1:18795;
     proxy_request_buffering off;
     client_max_body_size 64m;      # 不小于 --max-package-mib
@@ -125,7 +158,7 @@ location /v1/bugreports {
 
 加上 `--trusted-proxy 127.0.0.0/8`（或反代所在网段），限速和 sidecar 的 `client`
 地址才按真实发送方计，否则经反代的所有上传共用一个桶。`GET /healthz` 返回
-`{"status": "ok"}` 供探活。用非特权账号运行，并把 `--save-dir` 当作敏感材料的
+`{"status": "ok"}` 供运维探活；客户端探测的是其 base URL 下的 `/v1/hello`。用非特权账号运行，并把 `--save-dir` 当作敏感材料的
 目录：包只做了凭据脱敏，没有匿名化。
 
 ### 告诉客户端往哪发 { #telling-clients-where-to-send }
@@ -148,6 +181,20 @@ URL 配置错误会让 `report-bug` 在采集任何东西之前停下。配置�
 ```bash
 raven trajectory upload-bug-report REPORT_ID
 ```
+
+配置了 URL 时，`report-bug` 与浏览器里的 *Report a bug* 会在采集任何东西之前先请求
+接收器的 `/v1/hello`。没有应答时先打印原因，然后：
+
+- 有 TTY 且未给 `--yes`：询问是否继续（默认否；选否则什么都不采集、不 pin）；
+- 给了 `--yes`（有没有 TTY 都一样）：说明正在继续并照常进行；之后若上传失败，包会
+  保留，可用 `upload-bug-report` 重传；
+- 没有 TTY 且未给 `--yes`：按既有规则先以 `--yes is required without a TTY` 停下，
+  不探测也不打包。
+
+浏览器里的 *Report a bug* 运行在 TTY 上，同样询问；按 Esc 等同于否。WebUI 的
+*Report a problem* 在向导打开时检查，见
+[导出与问题报告](webui.md#export-and-report-a-problem)。`upload-bug-report` 不探测：
+上传本身就会说明出了什么问题。
 
 ### 接收器校验什么 { #what-the-receiver-checks }
 

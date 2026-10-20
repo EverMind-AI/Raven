@@ -598,11 +598,15 @@ async def run_dag(
                 # Before `_apply_replan`, so the `cancelled` it records is true.
                 await _reap_carried(carried)
                 carried = set()
-                # The second settle pass announces what it decides before the ready
-                # set, so this finds nothing; it keeps this exit, which skips the
-                # sweep below, from relying on that. Only `not_executed`: a graph
-                # without routes or guards gets no event from this line.
-                await publish_terminal((NOT_EXECUTED,))
+                # The second settle pass announces what it decides before the
+                # ready set, so of `not_executed` this finds nothing; it stays
+                # as the backstop for an exit that skips the sweep below. What
+                # the widened states are for is this very pass's own: the
+                # cascade's skips and the stop's cancels, which the break would
+                # otherwise leave unannounced. NOT_EXECUTED itself only ever
+                # names a guarded node or a dependency of one, so a graph
+                # without routes or guards sees none of it.
+                await publish_terminal(("skipped", "cancelled", NOT_EXECUTED))
                 plan = desk.take_plan()
                 if plan is not None:
                     await _apply_replan(
@@ -933,10 +937,11 @@ async def _publish_terminal(
     """Announce, once each, every node the scheduler itself put in one of ``states``.
 
     `_run_node` announces the nodes it ran; a node the scheduler skipped, cancelled
-    or left unexecuted is announced here or by `_apply_replan`, never by both. Two
-    cases are announced by neither: a node the cascade or a stop marked in the pass
-    that meets a replan (that pass sweeps only `not_executed`), and the nodes
-    stopped by cancelling the run's task.
+    or left unexecuted is announced here or by `_apply_replan`, never by both,
+    including on the pass that meets a replan, whose exit publishes all three
+    before it breaks. Two cases are announced by neither: the nodes stopped by
+    cancelling the run's task, and a decision node completed but not yet
+    adjudicated when a replan cancels its group.
     """
     for nid, st in status.items():
         if st not in states or nid in published_terminal:
@@ -982,6 +987,8 @@ async def _apply_replan(
     an unrelated cascade -- is untouched. A completed node's output is what the
     new run references; a failed or skipped node's status and error are the real
     reason it ended, and overwriting them with the replan's would erase that.
+    The pass's own skipped and cancelled are published by the replan exit
+    before this runs, through the same `_publish_terminal` the sweep uses.
     """
     reason = f"Superseded by replan into run {plan.run_id}: {plan.reason}"
     now = _now_ms()

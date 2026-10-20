@@ -457,7 +457,7 @@ def test_every_retirement_this_product_declares_names_a_label_it_can_load():
         assert FlowConfig._resolve_successor(end) is None, "the end of a chain is not itself retired"
 
 
-def test_the_contract_is_seeded_beside_the_identity_once(grounded, tmp_path):
+def test_the_contract_is_regenerated_beside_the_identity(grounded, tmp_path, capsys):
     grounded.render_config(RUN_PY.parent / "config.json")
     profile = tmp_path / "home" / "subagent_sessions" / "raven-research-ng" / "acp" / "agent_memory" / "profile"
     soul = (profile / "soul.md").read_text()
@@ -469,7 +469,62 @@ def test_the_contract_is_seeded_beside_the_identity_once(grounded, tmp_path):
     assert "contract" in text.lower()
     contract.write_text("operator tuned")
     grounded.render_config(RUN_PY.parent / "config.json")
+    assert contract.read_text() == text, "the contract the gates enforce is back"
+    [backup] = profile.glob("agent.md.bak-*")
+    assert backup.read_text() == "operator tuned"
+    assert str(backup) in capsys.readouterr().err
+
+
+def test_a_config_change_reaches_the_contract_at_the_next_launch(grounded, tmp_path):
+    """The gates read the rendered config on every launch; the contract has to
+    follow it there, or a layout switch ships gates against a prompt that still
+    describes the other layout."""
+    source = tmp_path / "config.json"
+    config = json.loads((RUN_PY.parent / "config.json").read_text())
+    config["plugins"]["config"]["research-flow"]["finalShape"]["reportLayout"] = "sections"
+    source.write_text(json.dumps(config))
+    grounded.render_config(source)
+    contract = (
+        tmp_path / "home" / "subagent_sessions" / "raven-research-ng" / "acp" / "agent_memory" / "profile" / "agent.md"
+    )
+    assert "`## Answer`" in contract.read_text()
+    grounded.render_config(RUN_PY.parent / "config.json")
+    assert "`## Answer`" not in contract.read_text()
+    assert "opening blockquote" in contract.read_text()
+    assert not list(contract.parent.glob("agent.md.bak-*")), "a config change is not an edit"
+
+
+def test_the_operators_local_lines_follow_the_identity(grounded, tmp_path):
+    grounded.render_config(RUN_PY.parent / "config.json")
+    profile = tmp_path / "home" / "subagent_sessions" / "raven-research-ng" / "acp" / "agent_memory" / "profile"
+    (profile / "soul.local.md").write_text("Answer in British English.\n")
+    grounded.render_config(RUN_PY.parent / "config.json")
+    soul = (profile / "soul.md").read_text()
+    assert soul.startswith((RUN_PY.parent / "soul.md").read_text().rstrip("\n"))
+    assert soul.endswith("\n\nAnswer in British English.\n")
+
+
+def test_a_raven_without_regenerated_prompts_seeds_once_and_says_so(grounded, tmp_path, monkeypatch, capsys):
+    """A home tree copied out by a newer wheel also serves an older checkout,
+    whose launcher library has no write_generated."""
+    monkeypatch.delattr(grounded.render, "write_generated")
+    grounded.render_config(RUN_PY.parent / "config.json")
+    contract = (
+        tmp_path / "home" / "subagent_sessions" / "raven-research-ng" / "acp" / "agent_memory" / "profile" / "agent.md"
+    )
+    contract.write_text("operator tuned")
+    grounded.render_config(RUN_PY.parent / "config.json")
     assert contract.read_text() == "operator tuned"
+    assert "seeded once, never refreshed" in capsys.readouterr().err
+
+
+def test_an_unwritable_prompt_refuses_the_launch(grounded, monkeypatch):
+    def unwritable(*_args, **_kwargs):
+        raise PermissionError("read-only home")
+
+    monkeypatch.setattr(grounded.render, "write_generated", unwritable)
+    with pytest.raises(SystemExit, match="cannot regenerate .*soul.md: read-only home"):
+        grounded.render_config(RUN_PY.parent / "config.json")
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not available on Windows")
@@ -487,15 +542,17 @@ def test_the_render_loads_through_trunks_own_loader(grounded):
     assert config.tools.web.search.api_key == "serper-key"
 
 
-def test_the_identity_is_seeded_once_and_never_overwritten(grounded, tmp_path):
+def test_the_identity_is_regenerated_and_an_edit_is_backed_up(grounded, tmp_path):
     grounded.render_config(RUN_PY.parent / "config.json")
     soul = (
         tmp_path / "home" / "subagent_sessions" / "raven-research-ng" / "acp" / "agent_memory" / "profile" / "soul.md"
     )
     assert "research agent" in soul.read_text()
+    shipped = soul.read_text()
     soul.write_text("operator tuned")
     grounded.render_config(RUN_PY.parent / "config.json")
-    assert soul.read_text() == "operator tuned"
+    assert soul.read_text() == shipped
+    assert [b.read_text() for b in soul.parent.glob("soul.md.bak-*")] == ["operator tuned"]
 
 
 def test_no_llm_key_anywhere_refuses_before_serving(grounded, monkeypatch):
