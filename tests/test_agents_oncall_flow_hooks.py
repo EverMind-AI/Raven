@@ -580,12 +580,17 @@ def test_no_hold_without_a_pending_wake_or_once_the_campaign_concluded(tmp_path:
 # ── The hold read from inside the wake's own turn ───────────────────────
 
 
-def _turn_inside_the_wake(tmp_path: Path, during=None, *, entrance: str = "loop", clock=None) -> dict:
+def _turn_inside_the_wake(
+    tmp_path: Path, during=None, *, entrance: str = "loop", clock=None, origin: Origin = Origin.CRON
+) -> dict:
     """Fire camp-a's wake through the real scheduler and run a turn inside it.
 
     The scheduler that fires the wake is the one the grant reads, as in a
     running agent. ``during`` acts inside the turn before it ends: re-arm,
-    pull forward, move the clock. Returns the observers the turn's send left.
+    pull forward, move the clock. ``origin`` CRON is the wake's own turn, as
+    ``make_on_session_wake`` submits it; USER is a steer that ends while the
+    claimed wake's turn still waits behind it. Returns the observers the
+    turn's send left.
     """
     svc = CronService(tmp_path / "jobs.json", allowed_channels=None, now_fn=clock)
     grant = NamespacedWakeScheduler(svc, NS)
@@ -596,6 +601,9 @@ def _turn_inside_the_wake(tmp_path: Path, during=None, *, entrance: str = "loop"
 
     async def on_job(fired) -> None:
         assert fired.id == job.id
+        await hook.before_user_inbound(
+            _inbound(meta, "look", session_key="acp:w1", origin=origin, channel="acp", chat_id="w1")
+        )
         if during is not None:
             during(grant)
         await hook.after_iteration(_iteration(meta, response=LLMResponse(content="ok"), session_key="acp:w1"))
@@ -630,6 +638,15 @@ def test_a_wake_turn_through_the_manual_entrance_ends_the_held_prompt(tmp_path: 
     assert "acp_meta" not in _turn_inside_the_wake(tmp_path, entrance="manual")
 
 
+def test_a_steer_ending_while_a_claimed_wake_waits_keeps_the_hold(tmp_path: Path) -> None:
+    """A wake is claimed and its turn queues on the session lane behind a
+    steer. The steer ends first: it is not the wake's run, and the wake has
+    still to come, so the prompt stays held. Leaving the executing wake out
+    on every turn answered the prompt here while the wake's turn was queued."""
+    observers = _turn_inside_the_wake(tmp_path, origin=Origin.USER)
+    assert "raven.holdTurn" in observers["acp_meta"]
+
+
 def test_a_wake_turn_that_arms_the_next_look_keeps_the_hold(tmp_path: Path) -> None:
     def rearm(grant) -> None:
         wakes.schedule_next_look(grant, campaign="camp-a", eta_seconds=600, message="look", channel="acp", to="w1")
@@ -659,3 +676,71 @@ def test_an_owner_answer_inside_the_wake_turn_keeps_the_hold(tmp_path: Path) -> 
     must still be waited for."""
     observers = _turn_inside_the_wake(tmp_path, lambda grant: wakes.advance_look(grant, "camp-a"))
     assert "raven.holdTurn" in observers["acp_meta"]
+
+
+def test_a_steer_ahead_of_a_claimed_wake_on_the_real_lane_keeps_the_hold(tmp_path: Path) -> None:
+    """The same interleaving through the production seams: the spine's own
+    scheduler and session lane, the real ``make_on_session_wake``, the real
+    scheduler loop and grant, and the plugin's own hook; only the turn body is
+    a stand-in. A steer holds the lane; the wake is claimed and its CRON turn
+    queues behind the steer; the steer ends first and must keep the prompt
+    held, and the wake's own turn, arming nothing, then ends it."""
+    from raven.core.cron_stack import make_on_session_wake
+    from raven.spine import OriginPools, Scheduler
+    from raven.spine.events import Usage
+    from raven.spine.runner import TurnOutcome
+
+    svc = CronService(tmp_path / "jobs.json", allowed_channels=None)
+    grant = NamespacedWakeScheduler(svc, NS)
+    _bound_campaign_with_wake(tmp_path, grant=grant)
+    hook = OncallFlowHook()
+    held: list[tuple[str, bool]] = []
+
+    async def scenario() -> None:
+        steer_may_end = asyncio.Event()
+
+        class _Runner:
+            async def run(self, req, emit, drain):
+                meta: dict = {}
+                await hook.before_user_inbound(
+                    AgentHookContext(session_key="acp:w1", turn_request=req, inbound_content=req.text, metadata=meta)
+                )
+                if req.origin is Origin.USER:
+                    await steer_may_end.wait()
+                await hook.after_iteration(_iteration(meta, response=LLMResponse(content="ok"), session_key="acp:w1"))
+                await hook.after_send(AgentHookContext(session_key="acp:w1", outbound_content="done", metadata=meta))
+                held.append((str(req.origin), "raven.holdTurn" in meta.get("observers", {}).get("acp_meta", {})))
+                return TurnOutcome(
+                    usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0), explicit_reply=False
+                )
+
+        async def sink(event) -> None:
+            pass
+
+        sched = Scheduler(_Runner(), OriginPools(user=1, system=1), sink)
+        svc.on_job = make_on_session_wake(submit=sched.submit, channel="acp")
+        steer = sched.submit(
+            TurnRequest(
+                origin=Origin.USER,
+                source=Source(channel="acp", chat_id="w1", sender_id="owner", chat_type=ChatType.DM),
+                text="how is it going?",
+                conversation="acp:w1",
+            )
+        )
+        svc._store.jobs[0].state.next_run_at_ms = 1
+        svc._save_store()
+        wake = asyncio.create_task(svc._process_due())
+        for _ in range(200):
+            if svc._in_flight:
+                break
+            await asyncio.sleep(0.005)
+        assert svc._in_flight, "the wake is claimed while the steer still holds the lane"
+        for _ in range(10):
+            await asyncio.sleep(0)
+        assert held == [], "nothing has ended yet: the wake's turn waits behind the steer"
+        steer_may_end.set()
+        await steer.result()
+        await asyncio.wait_for(wake, 5)
+
+    asyncio.run(scenario())
+    assert held == [("user", True), ("cron", False)]
