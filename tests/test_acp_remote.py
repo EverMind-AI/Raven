@@ -11,7 +11,6 @@ import json
 import os
 import re
 import shlex
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -20,6 +19,8 @@ import pytest
 
 from raven.acp_client import remote
 from raven.acp_client.remote import Machine, RemoteMachineError
+
+pytestmark = pytest.mark.usefixtures("no_real_ssh_g")
 
 HOST = "203.0.113.7"
 PORT = 58717
@@ -573,24 +574,6 @@ PASSWORD_ROW = {k: v for k, v in ROW.items() if k != "key"} | {"auth": "password
 
 def _pw() -> Machine:
     return Machine(id="box", display_name="Lab box", _row=dict(PASSWORD_ROW))
-
-
-@pytest.fixture(autouse=True)
-def _no_ssh_config_but_the_test_s(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """No test here runs the computer's own ``ssh -G``: it reads the config of whoever runs the suite -- found
-    through the passwd entry, which the suite's ``HOME`` does not move -- and a ``Match exec`` there runs. A
-    stand-in under the test's own directory, or an ``-F`` naming its config, is what a test resolves with."""
-    real = subprocess.run
-
-    def run(argv, *args, **kwargs):
-        if isinstance(argv, list) and argv[:1] == ["ssh"] and "-G" in argv and "-F" not in argv:
-            path = (kwargs.get("env") or os.environ).get("PATH")
-            found = shutil.which("ssh", path=path)
-            if found is None or not Path(found).resolve().is_relative_to(tmp_path.resolve()):
-                raise AssertionError(f"the real ssh -G ran against the owner's own config: {found}")
-        return real(argv, *args, **kwargs)
-
-    monkeypatch.setattr(subprocess, "run", run)
 
 
 def _resolving_ssh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

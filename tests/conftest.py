@@ -1226,3 +1226,28 @@ def _this_process_goes_on() -> Iterator[None]:
     remote = sys.modules.get("raven.acp_client.remote")
     if remote is not None:
         remote.staying()
+
+
+@pytest.fixture
+def no_real_ssh_g(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail a test that runs the computer's own ``ssh -G``.
+
+    It reads the ssh config of whoever runs the suite -- found through the
+    passwd entry, which the suite's ``HOME`` does not move -- and a ``Match
+    exec`` there runs. A stand-in under the test's own directory, or an ``-F``
+    naming the test's config, is what a test resolves with; with no ssh on
+    PATH at all nothing runs, and the lookup's own error stands. Used by the
+    modules whose code asks ``ssh -G`` (``transport.resolve_with_ssh``).
+    """
+    import subprocess
+
+    real = subprocess.run
+
+    def run(argv, *args, **kwargs):
+        if isinstance(argv, list) and argv[:1] == ["ssh"] and "-G" in argv and "-F" not in argv:
+            found = shutil.which("ssh", path=(kwargs.get("env") or os.environ).get("PATH"))
+            if found is not None and not Path(found).resolve().is_relative_to(tmp_path.resolve()):
+                raise AssertionError(f"the real ssh -G ran against the owner's own config: {found}")
+        return real(argv, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", run)

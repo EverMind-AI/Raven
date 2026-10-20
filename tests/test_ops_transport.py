@@ -17,6 +17,8 @@ import pytest
 from raven.ops import transport
 from raven.ops.transport import ISOLATE_IDENTITY, TransportError, make_ssh_runner, ssh_argv, ssh_target
 
+pytestmark = pytest.mark.usefixtures("no_real_ssh_g")
+
 BASE = [
     "ssh",
     "-i",
@@ -499,9 +501,7 @@ def test_resolving_the_host_hands_ssh_no_askpass_so_nothing_it_starts_reaches_th
 @_posix_helper
 @pytest.mark.skipif(_REAL_SSH is None, reason="an OpenSSH client resolves the host")
 @pytest.mark.parametrize("setting", ["yes", "always"])
-def test_a_password_connection_never_canonicalizes_so_it_logs_in_where_ssh_g_said(
-    tmp_path, monkeypatch, setting
-):
+def test_a_password_connection_never_canonicalizes_so_it_logs_in_where_ssh_g_said(tmp_path, monkeypatch, setting):
     """``ssh -G`` prints the configuration without the DNS lookups ``CanonicalizeHostname`` makes, and a real
     connection then re-reads the config under the canonical name -- where a ``Host <id>`` block Raven wrote
     for another machine can apply (measured with OpenSSH 8.9: ``-G -v`` reports applying it in that pass).
@@ -654,3 +654,23 @@ def test_a_stale_askpass_helper_is_replaced_whole_and_never_rewritten_in_place(t
     assert helper.read_text(encoding="utf-8") == transport._ASKPASS
     assert oct(helper.stat().st_mode & 0o777) == "0o700"
     assert sorted(path.name for path in keys.iterdir()) == ["askpass"], "nothing is left beside it"
+
+
+def test_one_function_builds_the_environment_that_hands_ssh_a_kept_password():
+    """Every way a kept password reaches ssh -- registration probes, the CLI, ``machines.add``, exec's machine
+    channel, the ACP tunnel and node link, on-call's runners and rsync -- takes it from :func:`transport.ssh_env`,
+    so the refusals there (no password kept, Windows, a host that is one of Raven's own aliases) stand on every
+    one of them. A second module naming the helper's password-file variable, or ordering askpass by force, would
+    be a path around them."""
+    import re
+
+    repo = Path(__file__).resolve().parent.parent
+    builds = re.compile(r"RAVEN_MACHINE_PASSWORD_FILE|ASKPASS_FILE_ENV|SSH_ASKPASS_REQUIRE[\"']?\s*[:=,]\s*[\"']force")
+    found = sorted(
+        str(path.relative_to(repo))
+        for root in ("raven", "agents", "plugins-dist")
+        for path in (repo / root).rglob("*.py")
+        if builds.search(path.read_text(encoding="utf-8", errors="replace"))
+    )
+
+    assert found == ["raven/ops/transport.py"]

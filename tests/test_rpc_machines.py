@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 import threading
 
@@ -25,6 +26,8 @@ from raven.rpc.errors import ConfigValidationError
 from raven.rpc.methods import machines as rpc
 from raven.rpc.models import METHOD_MODELS
 from tests._home import point_home
+
+pytestmark = pytest.mark.usefixtures("no_real_ssh_g")
 
 
 def _check(method: str, payload: dict) -> None:
@@ -956,7 +959,7 @@ async def test_a_pair_one_machine_s_alias_would_redirect_is_refused_before_anyth
 @pytest.mark.parametrize("cancelled", [False, True])
 @pytest.mark.parametrize("failed_index", [0, 1])
 async def test_a_failed_registration_keeps_the_same_password_of_another_registration_still_probing(
-    supported_host, pool, rhome, monkeypatch, cancelled, failed_index
+    supported_host, pool, rhome, monkeypatch, tmp_path, cancelled, failed_index
 ):
     from raven.ops.transport import ssh_env
 
@@ -995,6 +998,11 @@ async def test_a_failed_registration_keeps_the_same_password_of_another_registra
     assert out["ok"]
     (row,) = _rows()
     assert connection_add.password_path("box").is_file(), "the successful registration must keep its password"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    (bin_dir / "ssh").write_text('#!/bin/sh\n[ "$1" = -G ] && echo "hostname 203.0.113.7"\n', encoding="utf-8")
+    (bin_dir / "ssh").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
     assert ssh_env(row), "the registered machine must still be able to start its next connection"
 
 

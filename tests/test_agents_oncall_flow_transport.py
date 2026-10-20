@@ -32,6 +32,8 @@ from oncall_flow.transport import (
 
 from raven.ops.connections import password_path  # noqa: E402
 
+pytestmark = pytest.mark.usefixtures("no_real_ssh_g")
+
 
 def test_a_campaign_that_says_nothing_is_still_reached_over_ssh():
     # Every campaign written before this seam existed says nothing, and has to go

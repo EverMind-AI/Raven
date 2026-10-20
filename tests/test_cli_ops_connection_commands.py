@@ -15,6 +15,7 @@ has to still have the last word in it.
 from __future__ import annotations
 
 import json
+import os
 import sys
 
 import pytest
@@ -23,6 +24,8 @@ from typer.testing import CliRunner
 from raven.cli.ops_connection_commands import connection_app
 from raven.ops import connections
 from tests._home import point_home
+
+pytestmark = pytest.mark.usefixtures("no_real_ssh_g")
 
 FULL = [
     "--non-interactive",
@@ -1004,6 +1007,11 @@ def test_an_aborted_add_keeps_the_same_password_of_a_registration_that_has_not_w
     row = {"id": "box", "host": "192.0.2.10", "port": 22, "user": "alice", "auth": "password"}
     connection_add.write(row)
     assert connection_add.password_path("box").is_file(), "the pending registration still owns the password"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    (bin_dir / "ssh").write_text('#!/bin/sh\n[ "$1" = -G ] && echo "hostname 192.0.2.10"\n', encoding="utf-8")
+    (bin_dir / "ssh").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
     assert ssh_env(row)
 
 

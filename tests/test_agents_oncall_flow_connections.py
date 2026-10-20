@@ -28,6 +28,8 @@ from oncall_flow.tools import base as tools_base  # noqa: E402
 from raven.ops import connections as trunk  # noqa: E402
 from raven.ops.transport import PASSWORD_AUTH  # noqa: E402
 
+pytestmark = pytest.mark.usefixtures("no_real_ssh_g")
+
 
 @pytest.fixture(autouse=True)
 def _campaign_root(tmp_path):

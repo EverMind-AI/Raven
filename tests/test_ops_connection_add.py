@@ -25,6 +25,8 @@ from raven.ops import connection_add as adder
 from raven.ops import connections
 from tests._home import point_home
 
+pytestmark = pytest.mark.usefixtures("no_real_ssh_g")
+
 # Taken before the autouse fixture below replaces it for every test.
 _REAL_STORE_PATH = connections.store_path
 
