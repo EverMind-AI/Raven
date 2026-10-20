@@ -18,6 +18,9 @@
 #                   selected without one degrades back to it
 #   proxy           optional HTTP(S) proxy URL for both web tools
 #   stateRoot       session-store root; defaults to <workspace>/research_flow
+#   corpusEndpoint  a retrieval service over one fixed document collection;
+#                   when set, both web tools read it, keyless, and the
+#                   vendor, key and proxy keys above are not consulted
 #
 # config_schema stays empty on purpose: admission with an empty declaration is
 # verbatim pass-through, and the slice is validated by the plugin's own
@@ -37,7 +40,8 @@ factory = "research_flow.plugin:make_hook"
 # overwrites by name; plugin tools register after the defaults). A factory
 # declines by returning None, and each has its own reason to: ask_user unless
 # askUser.enabled and conversation.enabled are both on, web_search when no key
-# resolves for the SELECTED search vendor, and all three (plus the hook) when
+# resolves for the SELECTED search vendor and no corpusEndpoint is set, and all
+# three (plus the hook) when
 # the flow cannot be installed at all. A registered tool the contract never
 # asks for, or one whose every call is an error string, is the mismatch the
 # prompt clause exists to prevent; declining leaves the kernel's own built-in
