@@ -143,7 +143,9 @@ class TestARowTheFileCannotHoldGoesNoFurther:
 
 class TestARowWrittenUnderAFormerNameOfItsAgent:
     """The generic agent was renamed, ``raven`` -> ``Raven`` -> ``Raven-General``,
-    without this file being rewritten. A spawn continuing one of its instances asks
+    and the rename itself rewrote nothing here: a row keeps its former name on disk
+    until the registry's next write, which saves every loaded row under the current
+    one. A spawn continuing one of its instances asks
     under the current name, and has to reach the session the old row bound -- or
     the instance silently restarts without its context."""
 

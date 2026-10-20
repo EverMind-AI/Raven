@@ -30,9 +30,13 @@ and the UI labels the host's own row and approvals that way -- so a roster entry
 spelled the same made the sub-agent's approvals indistinguishable from the host's
 and told the agent called Raven to hand work to `Raven`.
 
-Direct-chat records under ``subagents/direct/<agent>/<handle>/``, instance logs
-and instance-registry rows written under the row's earlier names were not
-rewritten; ``LEGACY_AGENT_ALIASES`` is what they resolve through."""
+Direct-chat records under ``subagents/direct/<agent>/<handle>/`` and instance
+logs written under the row's earlier names stay as they were written;
+``LEGACY_AGENT_ALIASES`` is what they resolve through. The instance registry
+reads its rows the same way but does not leave them as written: its next write,
+of any row for any session, saves every loaded row under this name, and where two
+spellings of one instance collide it keeps one -- the more recently updated, the
+later in the file on a tie. A build from before the rename cannot look those rows up."""
 
 BUILTIN_AGENT_NAMES: frozenset[str] = frozenset({GENERIC_AGENT})
 """Names the package seeds. Used to tell an override from an addition, and by the

@@ -1,8 +1,9 @@
 """Name resolution across the agent table.
 
 The generic built-in row was renamed twice, ``raven`` -> ``Raven`` ->
-``Raven-General``, and the names written into instance-registry rows, direct-chat
-records and stored dag nodes before each rename were not rewritten. Every one of
+``Raven-General``, and no rename rewrote the names already written into
+instance-registry rows, direct-chat records and stored dag nodes -- a registry row
+changes only when the registry next writes. Every one of
 those references still has to resolve, which is what :data:`LEGACY_AGENT_ALIASES`
 is for -- and it has to resolve *without* the roster ever offering an old spelling
 back to the model, or the table would advertise two names for one agent.

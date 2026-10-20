@@ -69,8 +69,9 @@ def test_the_generic_agent_is_not_named_like_the_host() -> None:
 
 
 def test_every_earlier_name_of_the_generic_agent_resolves_to_it() -> None:
-    """Instance rows, transcripts, direct chats and stored graphs written under a
-    former name are not rewritten, so each former name has to keep resolving."""
+    """Transcripts, direct chats and stored graphs written under a former name keep
+    it, and instance rows keep it until the registry's next write, so each former
+    name has to keep resolving."""
     for former in ("raven", "Raven"):
         assert LEGACY_AGENT_ALIASES.get(former) == GENERIC_AGENT
         assert canonical_agent_name(former) == GENERIC_AGENT
