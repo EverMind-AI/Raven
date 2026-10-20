@@ -1446,7 +1446,8 @@ class VideoGenerateTool(_OpenRouterMediaTool):
                     "Optional MiniMax params. MiniMax-H3 and MiniMax-H3-Max take duration, resolution, "
                     "callback_url, extra and, without a first frame, ratio (and aigc_watermark on "
                     "MiniMax CN); the other models take duration, resolution, prompt_optimizer, "
-                    "fast_pretreatment and callback_url. Any other key is refused"
+                    "fast_pretreatment and callback_url. A text-only call takes a concrete ratio, "
+                    "not adaptive. Any other key is refused"
                 ),
             },
         },
@@ -1606,7 +1607,18 @@ class VideoGenerateTool(_OpenRouterMediaTool):
                     )
                 content.append({**part, "role": "first_frame"})
             else:
-                # Text-to-video takes a ratio and refuses ``adaptive``.
+                # Text-to-video takes a ratio and refuses ``adaptive``. The default
+                # only fills an omitted value: spread over it, an explicit
+                # ``adaptive`` would reach an API that does not take it.
+                if options.get("ratio", "16:9") == "adaptive":
+                    return json.dumps(
+                        {
+                            "error": "a text-only MiniMax call takes a concrete ratio",
+                            "detail": f"leave ratio out for 16:9, or name one; got {options['ratio']!r}",
+                            "model": model_id,
+                        },
+                        ensure_ascii=False,
+                    )
                 defaults["ratio"] = "16:9"
             body = {"model": model_id, "content": content, **defaults, **options}
         else:

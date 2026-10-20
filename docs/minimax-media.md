@@ -53,7 +53,9 @@ not read for these tools, and the OpenRouter key is never sent to MiniMax. An em
   - the other models: `duration`, `resolution`, `prompt_optimizer`,
     `fast_pretreatment`, `callback_url`.
 - `MiniMax-H3` and `MiniMax-H3-Max` default to `768P`, 6 seconds, and `16:9` without a
-  first frame. Their ranges differ: `MiniMax-H3` takes `768P` or `2K` and 4-15 seconds,
+  first frame. A text-only call that names `adaptive` is refused before a request is
+  sent, since only a first frame takes it; naming another ratio is passed through.
+  Their ranges differ: `MiniMax-H3` takes `768P` or `2K` and 4-15 seconds,
   `MiniMax-H3-Max` `480P` or `768P` and 5-15 seconds. MiniMax answers a value outside
   them with an error.
 

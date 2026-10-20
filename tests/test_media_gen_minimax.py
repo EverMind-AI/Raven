@@ -133,6 +133,36 @@ async def test_a_ratio_beside_a_first_frame_is_refused_before_anything_is_sent(m
     assert "ratio" in out["error"] and seen == []
 
 
+@pytest.mark.parametrize("provider", ["minimax", "minimax_cn_api"])
+@pytest.mark.parametrize("model", ["MiniMax-H3", "MiniMax-H3-Max"])
+async def test_a_text_only_v2_adaptive_ratio_is_refused_before_anything_is_sent(
+    monkeypatch, tmp_path, provider, model
+) -> None:
+    """``adaptive`` beside a first frame is the only mode that takes it; a text-only
+    call that names it would override the default ratio and be refused upstream."""
+    seen = _serve(monkeypatch, _v2())
+    out = json.loads(
+        await _tool(tmp_path, provider=provider, model=model).execute(prompt="x", params={"ratio": "adaptive"})
+    )
+    assert "ratio" in out["error"] and "adaptive" in out["detail"] and seen == []
+
+
+async def test_a_text_only_v2_call_keeps_a_concrete_ratio_it_is_given(monkeypatch, tmp_path) -> None:
+    seen = _serve(monkeypatch, _v2())
+    out = json.loads(await _tool(tmp_path).execute(prompt="x", params={"ratio": "9:16"}))
+    assert out["success"] and json.loads(seen[0].content)["ratio"] == "9:16"
+
+
+async def test_a_first_frame_takes_an_explicit_adaptive_ratio(monkeypatch, tmp_path) -> None:
+    seen = _serve(monkeypatch, _v2())
+    out = json.loads(
+        await _tool(tmp_path).execute(
+            prompt="x", first_frame_image="https://img.example/a.png", params={"ratio": "adaptive"}
+        )
+    )
+    assert out["success"] and json.loads(seen[0].content)["ratio"] == "adaptive"
+
+
 async def test_h3_max_is_a_v2_model_too(monkeypatch, tmp_path) -> None:
     seen = _serve(monkeypatch, _v2())
     assert json.loads(await _tool(tmp_path, model="MiniMax-H3-Max").execute(prompt="x"))["success"]
