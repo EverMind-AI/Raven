@@ -38,6 +38,7 @@ from rich.table import Table
 # ``add`` reads them as its own globals -- which is also what a test that
 # stands in a reachable machine patches.
 from raven.ops.connection_add import NODE_FIELD, probe
+from raven.ops.connection_add import alias_collision as _alias_collision
 from raven.ops.connection_add import forget_password as _forget_password
 from raven.ops.connection_add import forget_unowned_password as _forget_unowned_password
 from raven.ops.connection_add import parse_probe as _parse_probe  # noqa: F401 -- re-export, the tests read it here
@@ -185,6 +186,9 @@ def add(  # noqa: PLR0913 -- one option per field of the row; a dict would hide 
             f"[red]a machine with id {conn_id!r} is already listed in {store_path()}; remove it first "
             f"(raven ops connection remove {conn_id}). Nothing was written.[/red]"
         )
+        raise typer.Exit(1)
+    if collision := _alias_collision(row, list(registry.rows)):
+        console.print(f"[red]{collision}. Nothing was written.[/red]")
         raise typer.Exit(1)
 
     kept = None

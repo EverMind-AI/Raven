@@ -929,6 +929,30 @@ async def test_a_password_machine_at_another_machine_s_alias_is_refused_as_a_fie
     assert not connection_add.password_path("box").exists()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="password machines are refused on Windows before this point")
+@pytest.mark.parametrize("order", ["key-after-password", "password-after-key"])
+async def test_a_pair_one_machine_s_alias_would_redirect_is_refused_before_anything_is_kept_or_reached(
+    supported_host, pool, rhome, monkeypatch, order
+):
+    """Either order: a key machine whose id is a registered password machine's address (``LabBox``, ssh matches
+    ``Host`` case-blind), or a password machine at a registered key machine's id whose alias is not written.
+    Refused as a field that cannot be used, naming the other machine, before a password is kept or a probe
+    runs (reviewed 2026-10-20)."""
+    monkeypatch.setattr(connection_add, "probe", lambda row, **kw: pytest.fail("reached a pair that cannot register"))
+    if order == "key-after-password":
+        _store({"id": "lab", "transport": "ssh", "host": "LabBox", "user": "alice", "auth": "password"})
+        out = await rpc.machines_add({**FORM, "id": "labbox"})
+        named = "password machine 'lab'"
+    else:
+        _store({"id": "labbox", "transport": "ssh", "host": "198.51.100.66", "user": "root", "key": "~/k"})
+        out = await rpc.machines_add(BY_PASSWORD | {"host": "labbox"})
+        named = "key machine 'labbox'"
+
+    _check("machines.add", out)
+    assert (out["ok"], out["reason"]) == (False, "invalid") and named in out["detail"]
+    assert len(_rows()) == 1 and not connection_add.password_path("box").exists()
+
+
 @pytest.mark.parametrize("cancelled", [False, True])
 @pytest.mark.parametrize("failed_index", [0, 1])
 async def test_a_failed_registration_keeps_the_same_password_of_another_registration_still_probing(

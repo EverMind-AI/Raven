@@ -116,6 +116,9 @@ class ConnectionAddTool(Tool):
         kind = connections.LOCAL if str(transport).strip().lower() == connections.LOCAL else connections.SSH
         conn_id = str(id).strip() or mint_slug(label)
         row: dict[str, Any] = {"id": conn_id, "display_name": label, "transport": kind}
+        # Asked before anything is resolved or reached; the registry write asks again.
+        if collision := adder.alias_collision(row, connections.load()):
+            return f"REFUSED: {collision}. Nothing was written."
         if kind == connections.LOCAL:
             reached, message, found = await asyncio.to_thread(adder.probe, row)
         else:

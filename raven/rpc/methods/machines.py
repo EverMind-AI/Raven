@@ -288,6 +288,8 @@ async def machines_add(params: dict) -> dict:
         return _refused(f"{found.detail} Give those entries an id (or remove them) first.", "registry")
     if any(str(r.get("id") or "").strip() == conn_id for r in found.rows):
         return _refused(f"a machine with id {conn_id!r} is registered already", "duplicate")
+    if collision := connection_add.alias_collision(row, list(found.rows)):
+        return _refused(collision, "invalid")
     kept = None
     if by_password:
         # Kept before the probe, which reaches the machine the way every later

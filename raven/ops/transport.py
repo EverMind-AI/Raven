@@ -340,7 +340,7 @@ def ssh_env(row: dict[str, Any], *, password_file: Path | None = None) -> dict[s
             f"no password is kept here for machine {label!r} ({secret}); remove the machine and register it again"
         )
     host, port, _key, user = ssh_target(row)
-    if host.lower() in _managed_aliases():
+    if host.lower() in managed_aliases():
         # ssh would follow the block Raven wrote for that other machine, and
         # the helper would then wait for that machine's prompt: the password
         # goes only where the owner registered it, whatever ssh resolves.
@@ -379,7 +379,7 @@ def passwd_home() -> Path | None:
         return None
 
 
-def _managed_aliases() -> set[str]:
+def managed_aliases() -> set[str]:
     """The ids, lowercased, of the ``Host`` blocks Raven keeps in the ssh config ssh reads or the one Raven writes.
 
     A mark counts on its own: a block the owner cut short is still not theirs.

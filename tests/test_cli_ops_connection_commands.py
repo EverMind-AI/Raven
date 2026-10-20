@@ -1217,3 +1217,37 @@ def test_password_stdin_with_a_key_login_is_refused_and_nothing_is_written(store
     assert "--password-stdin goes with --auth password" in said(out) and "Nothing was written" in out.output
     assert _nothing_kept(rhome) and not store.exists()
     assert "hunter2" not in out.output
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="password machines are refused on Windows")
+@pytest.mark.parametrize("order", ["key-after-password", "password-after-key"])
+def test_add_refuses_a_pair_one_machine_s_alias_would_redirect_even_without_a_probe(
+    store, monkeypatch, tmp_path, order
+):
+    """``--skip-probe`` writes with no connection at all, so the registry write is where the pair is judged:
+    a key machine whose ``Host`` alias would take a registered password machine's logins, or a password machine
+    at a registered key machine's id. Nothing is kept or written (reviewed 2026-10-20)."""
+    point_home(monkeypatch, tmp_path)
+    rhome = tmp_path / "rhome"
+    monkeypatch.setenv("RAVEN_HOME", str(rhome))
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr("raven.cli.ops_connection_commands.probe", lambda row, **kw: pytest.fail("reached it"))
+    if order == "key-after-password":
+        theirs = {"id": "lab", "transport": "ssh", "host": "LabBox", "user": "alice", "auth": "password"}
+        argv = ["add", "--id", "labbox", "--name", "Lab box", *SSH, "--skip-probe", *FULL]
+        given = None
+        named = "password machine 'lab'"
+    else:
+        theirs = {"id": "labbox", "transport": "ssh", "host": "198.51.100.66", "user": "root", "key": "~/k"}
+        argv = [*PW_ADD[:6], "labbox", *PW_ADD[7:], "--auth", "password", "--password-stdin", "--skip-probe", *FULL]
+        given = "hunter2\n"
+        named = "key machine 'labbox'"
+    store.write_text(json.dumps({"connections": [theirs]}), encoding="utf-8")
+
+    out = CliRunner().invoke(connection_app, argv, input=given)
+
+    assert out.exit_code == 1, out.output
+    assert named in " ".join(out.output.split()) and "Nothing was written" in out.output
+    assert [r["id"] for r in json.loads(store.read_text())["connections"]] == [theirs["id"]]
+    assert not (rhome / "keys" / "box.password").exists()
+    assert not (tmp_path / ".ssh" / "config").exists()

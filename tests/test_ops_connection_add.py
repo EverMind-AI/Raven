@@ -1035,3 +1035,80 @@ def test_a_password_row_is_refused_on_windows_before_ssh_is_started(tmp_path, mo
     reached, said, _ = adder.probe(PASSWORD_ROW, timeout=10)
 
     assert not reached and "Windows" in said and "use a key" in said
+
+
+# ---- a registration that would let one machine's ssh alias take another's password is refused up front ----
+
+KEY_LAB = {"id": "labbox", "transport": "ssh", "host": "198.51.100.66", "port": 22, "user": "root", "key": "~/k"}
+PASSWORD_LAB = {"id": "lab", "transport": "ssh", "host": "LabBox", "port": 22, "user": "alice", "auth": "password"}
+
+
+def _registered(_home, *rows):
+    (_home / "connections.json").write_text(json.dumps({"connections": list(rows)}), encoding="utf-8")
+
+
+def test_a_key_machine_whose_id_is_a_password_machine_s_address_is_not_written(_home):
+    """Its ``Host labbox`` alias would take the password machine at ``LabBox`` (ssh matches ``Host`` case-blind)
+    to this machine's address. Connecting refuses that pair by name, but only once the alias exists; the
+    writer every registration goes through refuses it before (reviewed 2026-10-20)."""
+    _registered(_home, PASSWORD_LAB)
+
+    with pytest.raises(ValueError, match="password machine 'lab'") as refused:
+        adder.write(dict(KEY_LAB))
+
+    assert "Pick another id" in str(refused.value)
+    assert [r["id"] for r in connections.load()] == ["lab"]
+
+
+def test_a_password_machine_at_a_key_machine_s_id_is_not_written_even_before_its_alias_exists(_home):
+    """The key machine's alias may not be written yet (it is written after its row, and a failed write is only a
+    warning), so the registry is asked as well as ~/.ssh/config."""
+    _registered(_home, KEY_LAB)
+
+    with pytest.raises(ValueError, match="key machine 'labbox'") as refused:
+        adder.write(dict(PASSWORD_LAB), password="hunter2")
+
+    assert "its own address" in str(refused.value)
+    assert [r["id"] for r in connections.load()] == ["labbox"]
+    assert not connections.password_path("lab").exists()
+
+
+def test_a_password_machine_at_an_alias_left_with_one_mark_and_no_machine_is_not_written(_home):
+    """A block whose machine is gone, cut short to one mark, is still Raven's alias and still decides where ssh
+    goes for that name."""
+    (_home / ".ssh").mkdir()
+    (_home / ".ssh" / "config").write_text(
+        adder.ALIAS_MARK.format(conn_id="labbox") + "\nHost labbox\n  HostName 198.51.100.66\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="ssh alias Raven keeps"):
+        adder.write(dict(PASSWORD_LAB, host="labbox"))
+
+    assert not (_home / "connections.json").exists()
+
+
+def test_rows_that_do_not_meet_register_as_before(_home):
+    """Only the colliding pair is refused: a key machine with another id, a password machine elsewhere, a local
+    machine named like an address."""
+    _registered(_home, PASSWORD_LAB)
+
+    adder.write(dict(KEY_LAB, id="labbox2"))
+    adder.write(dict(PASSWORD_LAB, id="lab2", host="203.0.113.9"))
+    adder.write({"id": "labbox-local", "transport": "local"})
+
+    assert [r["id"] for r in connections.load()] == ["lab", "labbox2", "lab2", "labbox-local"]
+
+
+def test_the_model_cannot_register_a_key_machine_whose_id_is_a_password_machine_s_address(_home, monkeypatch):
+    """The reviewed path: ops_connection_add, callable by the model, registered the key machine whose alias then
+    redirected the password machine. Refused before anything is reached or resolved."""
+    _registered(_home, PASSWORD_LAB)
+    monkeypatch.setattr(adder, "probe", lambda row, **kw: pytest.fail("probed a machine that cannot be registered"))
+    monkeypatch.setattr(
+        adder, "ssh_defaults", lambda host, **kw: pytest.fail("resolved a machine that cannot be registered")
+    )
+
+    out = add(id="labbox", host="198.51.100.66", key="", port=0, user="")
+
+    assert out.startswith("REFUSED") and "password machine 'lab'" in out and "Nothing was written" in out
+    assert not (_home / ".ssh" / "config").exists()

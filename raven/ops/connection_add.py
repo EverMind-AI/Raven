@@ -369,6 +369,55 @@ def parse_probe(out: str) -> dict[str, Any]:
     return found
 
 
+def alias_collision(row: dict[str, Any], rows: list[dict[str, Any]]) -> str:
+    """Why registering ``row`` beside ``rows`` would let a ``Host`` alias Raven writes decide where a password
+    machine logs in; empty when it would not.
+
+    Raven writes ``Host <id>`` for every key machine (:func:`write_ssh_alias`),
+    and ssh follows it for any connection to that name, case-blind. A password
+    machine registered at such a name would log in at the key machine's
+    address, with its password (reviewed 2026-10-20). Both orders are refused:
+    a key machine whose id is a registered password machine's address, and a
+    password machine at a registered key machine's id or at an alias Raven
+    keeps with no machine left behind it. Connecting refuses the pair again by
+    name (``transport.ssh_env``), which is what still covers a pair written
+    before this check existed.
+    """
+    from raven.ops.transport import managed_aliases
+
+    if transport_of(row) == LOCAL:
+        return ""
+    conn_id = str(row.get("id") or "").strip()
+    if not password_auth(row):
+        for other in rows:
+            if transport_of(other) == SSH and password_auth(other):
+                host = str(other.get("host") or "").strip()
+                if host.lower() == conn_id.lower():
+                    return (
+                        f"id {conn_id!r} is the address password machine {str(other.get('id') or '?')!r} is "
+                        f"registered at ({host!r}): the ssh alias Raven writes for this id would take that "
+                        "machine's logins, and its password, to this machine. Pick another id"
+                    )
+        return ""
+    host = str(row.get("host") or "").strip()
+    for other in rows:
+        other_id = str(other.get("id") or "").strip()
+        if transport_of(other) == SSH and not password_auth(other) and other_id.lower() == host.lower():
+            return (
+                f"machine {conn_id!r} would log in at {host!r}, the id of key machine {other_id!r}: the ssh alias "
+                f"Raven keeps for {other_id!r} would take this machine's logins, and its password, to "
+                f"{other_id!r}'s address. Register {conn_id!r} at its own address, or remove {other_id!r} first"
+            )
+    if host.lower() in managed_aliases():
+        return (
+            f"machine {conn_id!r} would log in at {host!r}, the ssh alias Raven keeps in ~/.ssh/config for a "
+            f"machine {host.lower()!r} that is no longer registered: ssh would follow it to that address. Take "
+            f"the '{ALIAS_MARK.format(conn_id=host.lower())}' block out of ~/.ssh/config, or register "
+            f"{conn_id!r} at its own address"
+        )
+    return ""
+
+
 def write(row: dict[str, Any], *, password: str | None = None) -> Path:
     """Append one machine, keeping whatever shape the file already had.
 
@@ -393,6 +442,10 @@ def write(row: dict[str, Any], *, password: str | None = None) -> Path:
         rows = list(found.rows)
         if any(str(r.get("id")).strip() == row["id"] for r in rows):
             raise ValueError(f"a machine with id {row['id']!r} is already listed in {path}")
+        # Judged here too, under the registry's lock: the callers ask before
+        # they reach the machine, and a registration can land in between.
+        if collision := alias_collision(row, rows):
+            raise ValueError(collision)
         rows.append(row)
         payload = json.dumps({"connections": rows}, indent=2, ensure_ascii=False) + "\n"
         if password is None:
