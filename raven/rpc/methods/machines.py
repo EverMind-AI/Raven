@@ -252,18 +252,22 @@ async def machines_add(params: dict) -> dict:
         return _refused(f"{found.detail} Give those entries an id (or remove them) first.", "registry")
     if any(str(r.get("id") or "").strip() == conn_id for r in found.rows):
         return _refused(f"a machine with id {conn_id!r} is registered already", "duplicate")
+    kept = None
     if by_password:
         # Kept before the probe, which reaches the machine the way every later
         # connection will: through the askpass helper reading this file. Last
         # of all the checks, so a refusal has nothing to clean up but this
         # file -- which the finally below sees to.
         try:
-            connection_add.store_password(conn_id, password)
+            kept = connection_add.store_registration_password(conn_id, password)
         except ValueError as exc:
-            return _refused(str(exc), "invalid")
+            return _refused(str(exc), "duplicate" if "already listed" in str(exc) else "invalid")
     written = False
     try:
-        reached, message, detected = await asyncio.to_thread(connection_add.probe, row)
+        if by_password:
+            reached, message, detected = await asyncio.to_thread(connection_add.probe, row, password=password)
+        else:
+            reached, message, detected = await asyncio.to_thread(connection_add.probe, row)
         if not reached:
             said = _scrubbed(message, row)
             if by_password:
@@ -277,18 +281,21 @@ async def machines_add(params: dict) -> dict:
         if not connections.resource_unit(row):
             row["concurrency"] = 1
         try:
-            connection_add.write(row)
+            if by_password:
+                connection_add.write(row, password=password)
+            else:
+                connection_add.write(row)
         except ValueError as exc:
             said = str(exc)
             return _refused(said, "duplicate" if "already listed" in said else "registry")
         written = True
     finally:
-        if by_password and not written:
+        if kept is not None and not written:
             # No row was written -- the machine refused, or the registry did --
             # so the password kept a moment ago goes too, unless a registration
             # of the same id landed meanwhile: the file is keyed by id alone,
             # and is that row's now (`forget_unowned_password` has the rule).
-            connection_add.forget_unowned_password(conn_id, password)
+            connection_add.forget_unowned_password(conn_id, password, identity=kept)
     said = [f"{detected['cores']} cores" if "cores" in detected else "", str(detected.get("memory") or "")]
     said.append(str(detected.get("device") or ""))
     detail = f"reached machine {_label(row)}: " + (

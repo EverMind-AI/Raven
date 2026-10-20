@@ -28,6 +28,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +38,7 @@ from typing import Any
 from raven.ops import connections
 from raven.ops.connections import LOCAL, SSH, UNREADABLE, password_auth, password_path, transport_of
 from raven.ops.transport import TransportError
+from raven.utils.atomic_io import atomic_replace, write_transaction
 
 # What the owner has to be asked for, when the registry lists nothing that
 # fits. Shared text: the on-call agent's listing reply and the coding agent's
@@ -102,7 +104,9 @@ def ssh_defaults(host: str, *, port: int = 0, user: str = "") -> dict[str, Any]:
     return out
 
 
-def probe(row: dict[str, Any], *, timeout: float = 30.0, isolate_key: bool = False) -> tuple[bool, str, dict[str, Any]]:
+def probe(
+    row: dict[str, Any], *, timeout: float = 30.0, isolate_key: bool = False, password: str | None = None
+) -> tuple[bool, str, dict[str, Any]]:
     """Reach the machine and read what it is. ``(reached, message, detected)``.
 
     The reaching is the point and the reading is the bonus. A row that cannot be
@@ -122,17 +126,27 @@ def probe(row: dict[str, Any], *, timeout: float = 30.0, isolate_key: bool = Fal
     fully: no config read at all. A password row (``auth: password``) is reached the one
     way every later connection reaches it, through the askpass helper
     (``transport.ssh_env``), and ``isolate_key`` does not apply: there is no
-    key to prove.
+    key to prove. A registration supplies its own ``password`` so overlapping
+    probes do not authenticate with another registration's password file.
     """
     from raven.ops.transport import TIMED_OUT_RC, make_ssh_runner, runner_from, ssh_target
 
     where = "this computer" if transport_of(row) == LOCAL else f"{row.get('user')}@{row.get('host')}:{row.get('port')}"
+    password_file = None
     try:
+        if password_auth(row) and password is not None:
+            path = password_path(str(row["id"]))
+            fd, name = tempfile.mkstemp(prefix=f".{row['id']}.probe.", suffix=".password", dir=path.parent)
+            password_file = Path(name)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(password + "\n")
         if isolate_key and transport_of(row) == SSH and not password_auth(row):
             # The row read the one way every other route onto a machine reads
             # it; only the key restriction is added.
             host, port, key, user = ssh_target(row)
             runner = make_ssh_runner(host, port, key, user=user, identities_only=True, cap_seconds=timeout)
+        elif password_file is not None:
+            runner = runner_from(row, cap_seconds=timeout, password_file=password_file)
         else:
             runner = runner_from(row, cap_seconds=timeout)
         code, out = runner(PROBE_SCRIPT)
@@ -140,6 +154,9 @@ def probe(row: dict[str, Any], *, timeout: float = 30.0, isolate_key: bool = Fal
         return False, f"could not reach {where}: {exc}", {}
     except FileNotFoundError:
         return False, f"could not reach {where}: ssh not found on this computer", {}
+    finally:
+        if password_file is not None:
+            password_file.unlink(missing_ok=True)
     if code == TIMED_OUT_RC:
         # Reached and then silent, or never answering at all: either way a row
         # is not written on it, and the owner is told how long was waited.
@@ -173,6 +190,20 @@ def store_password(conn_id: str, password: str) -> Path:
     Refused, too, for an id the registry refuses (``password_path``), before
     anything is written. Removing the machine deletes the file.
     """
+    return _store_password(conn_id, password)[0]
+
+
+def store_registration_password(conn_id: str, password: str) -> tuple[int, int, int]:
+    """Keep a registration's password and return the file identity its cleanup may remove."""
+    return _store_password(conn_id, password, unregistered=True)[1]
+
+
+def _password_identity(path: Path) -> tuple[int, int, int]:
+    stamp = path.stat()
+    return stamp.st_dev, stamp.st_ino, stamp.st_ctime_ns
+
+
+def _store_password(conn_id: str, password: str, *, unregistered: bool = False) -> tuple[Path, tuple[int, int, int]]:
     from raven.config.held_secrets import PASSWORD_MIN_LEN
 
     if "\n" in password or "\r" in password:
@@ -193,52 +224,69 @@ def store_password(conn_id: str, password: str) -> Path:
     path = password_path(conn_id)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(path.parent, 0o700)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.write(password + "\n")
-    os.chmod(path, 0o600)
-    return path
+    with write_transaction(path):
+        if unregistered:
+            found = connections.read()
+            if found.state == UNREADABLE:
+                raise ValueError(found.detail)
+            if any(str(r.get("id") or "").strip() == conn_id for r in found.rows):
+                raise ValueError(f"a machine with id {conn_id!r} is already listed in the registry")
+        atomic_replace(path, password + "\n", mode=0o600)
+        return path, _password_identity(path)
 
 
-def forget_password(conn_id: str, *, holding: str | None = None) -> bool:
+def forget_password(conn_id: str, *, holding: str | None = None, identity: tuple[int, int, int] | None = None) -> bool:
     """Delete the password kept for ``conn_id``; whether one was deleted. An id none could be kept under has none.
 
     With ``holding``, only a file that still holds exactly that password is
     deleted: the file is keyed by id alone, and a registration cleaning up after
     itself must not take away what a registration of the same id that landed
     meanwhile keeps there -- the landed row would then be refused at its every
-    connection, for a password it never lost.
+    connection, for a password it never lost. ``identity`` also distinguishes
+    overlapping registrations that keep the same password before either row
+    is written.
     """
     try:
         path = password_path(conn_id)
     except ValueError:
         return False
-    if holding is not None:
-        try:
-            if path.read_text(encoding="utf-8") != holding + "\n":
+    if not path.exists():
+        return False
+    with write_transaction(path):
+        if holding is not None or identity is not None:
+            try:
+                if identity is not None and _password_identity(path) != identity:
+                    return False
+                if holding is not None and path.read_text(encoding="utf-8") != holding + "\n":
+                    return False
+            except OSError:
                 return False
-        except OSError:
-            return False
-    had = path.exists()
-    path.unlink(missing_ok=True)
-    return had
+        had = path.exists()
+        path.unlink(missing_ok=True)
+        return had
 
 
-def forget_unowned_password(conn_id: str, password: str) -> bool:
+def forget_unowned_password(conn_id: str, password: str, *, identity: tuple[int, int, int]) -> bool:
     """After a registration that wrote no row: forget the password it kept, unless it is a row's now; whether it did.
 
     The file is keyed by id alone, so another registration of the same id can
     land between this one's duplicate check and its write -- most often the
-    same machine submitted twice. The file is deleted only while it still holds
-    this registration's password and no row of the id is listed: a landed row
-    keeps what is there, whichever call wrote it, and a registry that cannot be
-    read is left alone too. A password file nothing lists is harmless; a listed
-    row without one is refused at its every connection.
+    same machine submitted twice. The file is deleted only while it is this
+    registration's write, still holds its password and no row of the id is
+    listed: a landed row keeps what is there, whichever call wrote it, and an
+    unreadable registry is left alone too. A password file nothing lists is
+    harmless; a listed row without one is refused at its every connection.
     """
-    found = connections.read()
-    if found.state == UNREADABLE or any(str(r.get("id") or "").strip() == conn_id for r in found.rows):
+    path = password_path(conn_id)
+    if not path.exists():
         return False
-    return forget_password(conn_id, holding=password)
+    # The identity check and unlink share the writer's lock: another store
+    # must not replace the checked file before cleanup removes it.
+    with write_transaction(path):
+        found = connections.read()
+        if found.state == UNREADABLE or any(str(r.get("id") or "").strip() == conn_id for r in found.rows):
+            return False
+        return forget_password(conn_id, holding=password, identity=identity)
 
 
 def parse_probe(out: str) -> dict[str, Any]:
@@ -272,30 +320,44 @@ def parse_probe(out: str) -> dict[str, Any]:
     return found
 
 
-def write(row: dict[str, Any]) -> Path:
+def write(row: dict[str, Any], *, password: str | None = None) -> Path:
     """Append one machine, keeping whatever shape the file already had.
 
     Refuses rather than rewrites when the file holds entries the reader skips:
     serialising the survivors would erase rows the owner wrote by hand, and a
     recoverable typo is theirs to fix, not ours to delete on the way past. A
     file that does not exist yet is started here -- the first machine an agent
-    adds for an owner who never ran the command is the common case.
+    adds for an owner who never ran the command is the common case. With
+    ``password``, publish the successful registration's password with its row
+    under the cleanup lock, even if another attempt removed the earlier file.
     """
     path = connections.store_path()
-    found = connections.read()
-    if found.state == UNREADABLE:
-        raise ValueError(f"{found.detail}\nFix or move that file before adding to it.")
-    if found.detail:
-        raise ValueError(
-            f"{found.detail}\nAdding a machine here would rewrite the file without them. "
-            "Give those entries an id (or remove them) first, then add this machine."
-        )
-    rows = list(found.rows)
-    if any(str(r.get("id")).strip() == row["id"] for r in rows):
-        raise ValueError(f"a machine with id {row['id']!r} is already listed in {path}")
-    rows.append(row)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"connections": rows}, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    with write_transaction(path):
+        found = connections.read()
+        if found.state == UNREADABLE:
+            raise ValueError(f"{found.detail}\nFix or move that file before adding to it.")
+        if found.detail:
+            raise ValueError(
+                f"{found.detail}\nAdding a machine here would rewrite the file without them. "
+                "Give those entries an id (or remove them) first, then add this machine."
+            )
+        rows = list(found.rows)
+        if any(str(r.get("id")).strip() == row["id"] for r in rows):
+            raise ValueError(f"a machine with id {row['id']!r} is already listed in {path}")
+        rows.append(row)
+        payload = json.dumps({"connections": rows}, indent=2, ensure_ascii=False) + "\n"
+        if password is None:
+            atomic_replace(path, payload)
+        else:
+            # A newer registration may have removed its own file while this
+            # probe was pending. Publish this successful login's password and
+            # row together, after checking duplicates and before cleanup can run.
+            with write_transaction(password_path(row["id"])):
+                identity = store_registration_password(row["id"], password)
+                try:
+                    atomic_replace(path, payload)
+                finally:
+                    forget_unowned_password(row["id"], password, identity=identity)
     return path
 
 

@@ -531,11 +531,59 @@ def test_a_password_is_kept_under_the_home_for_the_owner_alone_and_forgotten_on_
     assert path.read_text(encoding="utf-8") == "hunter2\n", "one line, which is what askpass hands ssh"
     assert oct(path.stat().st_mode & 0o777) == "0o600"
     assert oct(path.parent.stat().st_mode & 0o777) == "0o700"
-    # Registered again with another password: rewritten in place, still the owner's alone.
+    # Registered again with another password: replaced whole, still the owner's alone.
     assert adder.store_password("gpu1", "s3cret") == path
     assert path.read_text(encoding="utf-8") == "s3cret\n" and oct(path.stat().st_mode & 0o777) == "0o600"
     assert adder.forget_password("gpu1") is True and not path.exists()
     assert adder.forget_password("gpu1") is False, "nothing kept is nothing to forget"
+
+
+def test_a_duplicate_registration_cannot_replace_the_registered_password(_home, monkeypatch):
+    monkeypatch.setenv("RAVEN_HOME", str(_home / "rhome"))
+    row = {"id": "box", "host": "192.0.2.10", "port": 22, "user": "alice", "auth": "password"}
+    adder.write(row, password="working-password")
+
+    with pytest.raises(ValueError, match="already listed"):
+        adder.write(row, password="other-password")
+    with pytest.raises(ValueError, match="already listed"):
+        adder.store_registration_password("box", "other-password")
+
+    assert adder.password_path("box").read_text(encoding="utf-8") == "working-password\n"
+
+
+@pytest.mark.parametrize("registration_only", [True, False])
+def test_password_registration_refuses_a_registry_that_became_unreadable(_home, monkeypatch, registration_only):
+    monkeypatch.setenv("RAVEN_HOME", str(_home / "rhome"))
+    path = adder.store_password("box", "working-password")
+    connections.store_path().write_text("{broken", encoding="utf-8")
+    row = {"id": "box", "host": "192.0.2.10", "port": 22, "user": "alice", "auth": "password"}
+
+    with pytest.raises(ValueError, match="not valid JSON"):
+        if registration_only:
+            adder.store_registration_password("box", "other-password")
+        else:
+            adder.write(row, password="other-password")
+
+    assert path.read_text(encoding="utf-8") == "working-password\n"
+
+
+def test_a_failed_registry_write_cleans_up_the_password_it_published(_home, monkeypatch):
+    monkeypatch.setenv("RAVEN_HOME", str(_home / "rhome"))
+    replace = adder.atomic_replace
+
+    def fail_registry(path, data, **kwargs):
+        if path == connections.store_path():
+            raise OSError("registry write failed")
+        replace(path, data, **kwargs)
+
+    monkeypatch.setattr(adder, "atomic_replace", fail_registry)
+    row = {"id": "box", "host": "192.0.2.10", "port": 22, "user": "alice", "auth": "password"}
+
+    with pytest.raises(OSError, match="registry write failed"):
+        adder.write(row, password="working-password")
+
+    assert not connections.load()
+    assert not adder.password_path("box").exists()
 
 
 def test_a_password_shorter_than_the_scrubbers_floor_is_refused_before_anything_is_written(_home, monkeypatch):
@@ -583,16 +631,51 @@ def test_a_refused_registration_forgets_its_password_only_while_no_row_of_the_id
     listed: list[dict] = []
     state = {"kind": connections.OK}
     monkeypatch.setattr(adder.connections, "read", lambda: connections.Read(list(listed), state["kind"]))
-    path = adder.store_password("gpu1", "same-pw-11")
+    identity = adder.store_registration_password("gpu1", "same-pw-11")
+    path = adder.password_path("gpu1")
 
     listed.append({"id": "gpu1", "auth": "password"})
-    assert adder.forget_unowned_password("gpu1", "same-pw-11") is False and path.read_text() == "same-pw-11\n"
+    assert adder.forget_unowned_password("gpu1", "same-pw-11", identity=identity) is False
+    assert path.read_text() == "same-pw-11\n"
     listed.clear()
     state["kind"] = connections.UNREADABLE
-    assert adder.forget_unowned_password("gpu1", "same-pw-11") is False and path.exists(), "unreadable: left alone"
+    assert adder.forget_unowned_password("gpu1", "same-pw-11", identity=identity) is False
+    assert path.exists(), "unreadable: left alone"
     state["kind"] = connections.OK
-    assert adder.forget_unowned_password("gpu1", "other-pw-22") is False and path.exists(), "not this call's"
-    assert adder.forget_unowned_password("gpu1", "same-pw-11") is True and not path.exists()
+    assert adder.forget_unowned_password("gpu1", "other-pw-22", identity=identity) is False
+    assert path.exists(), "not this call's"
+    assert adder.forget_unowned_password("gpu1", "same-pw-11", identity=identity) is True and not path.exists()
+
+
+def test_only_the_latest_password_write_can_be_forgotten_before_any_registration_lands(_home, monkeypatch):
+    monkeypatch.setenv("RAVEN_HOME", str(_home / "rhome"))
+    first = adder.store_registration_password("gpu1", "same-pw-11")
+    second = adder.store_registration_password("gpu1", "same-pw-11")
+
+    assert not connections.load(), "both registrations are still pending"
+    assert adder.forget_unowned_password("gpu1", "same-pw-11", identity=first) is False
+    assert adder.password_path("gpu1").read_text(encoding="utf-8") == "same-pw-11\n"
+    assert adder.forget_unowned_password("gpu1", "same-pw-11", identity=second) is True
+    assert not adder.password_path("gpu1").exists()
+
+
+def test_registration_cleanup_leaves_an_unreadable_password_file_alone(_home, monkeypatch):
+    from pathlib import Path
+
+    monkeypatch.setenv("RAVEN_HOME", str(_home / "rhome"))
+    identity = adder.store_registration_password("gpu1", "same-pw-11")
+    path = adder.password_path("gpu1")
+    read_text = Path.read_text
+
+    def read(candidate, *args, **kwargs):
+        if candidate == path:
+            raise PermissionError("password file cannot be read")
+        return read_text(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read)
+
+    assert adder.forget_unowned_password("gpu1", "same-pw-11", identity=identity) is False
+    assert path.is_file()
 
 
 def test_a_password_is_never_kept_under_a_path_shaped_id_and_forgetting_one_is_quiet(_home, monkeypatch):
@@ -658,6 +741,38 @@ def test_the_probe_reaches_a_password_machine_through_askpass_and_the_password_i
     words = saw["argv"].split()
     assert "hunter2" not in saw["argv"] and "-i" not in words and "BatchMode=yes" not in words
     assert "PubkeyAuthentication=no" in words and "NumberOfPasswordPrompts=1" in words
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the stand-in ssh is a POSIX shell script")
+@pytest.mark.parametrize("accepted", [True, False])
+def test_a_registration_probe_uses_its_own_password_when_another_registration_overwrites_the_shared_file(
+    tmp_path, monkeypatch, accepted
+):
+    from raven.config import held_secrets
+    from raven.ops import transport
+
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    adder.store_password("box", "hunter2")
+    config = tmp_path / "rhome" / "config.json"
+    config.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(held_secrets, "get_config_path", lambda: config)
+    _fake_ssh_that_takes_a_password(tmp_path, monkeypatch, accept="hunter2" if accepted else "other-password")
+    runner_from = transport.runner_from
+
+    def overwrite(row, **kwargs):
+        adder.store_password("box", "other-password")
+        assert "hunter2" not in held_secrets.scrub_held_secrets("probe password: hunter2")
+        assert kwargs["password_file"].stat().st_mode & 0o777 == 0o600
+        return runner_from(row, **kwargs)
+
+    monkeypatch.setattr(transport, "runner_from", overwrite)
+
+    reached, _, _ = adder.probe(PASSWORD_ROW, password="hunter2", timeout=10)
+
+    assert reached is accepted
+    path = adder.password_path("box")
+    assert list(path.parent.glob("*.password")) == [path], "the temporary probe password is removed"
+    assert path.read_text(encoding="utf-8") == "other-password\n"
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="the stand-in ssh is a POSIX shell script")

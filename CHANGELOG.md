@@ -24,9 +24,10 @@ All notable changes to Raven are documented here.
   line, in a log or in an answer; such a machine gets no ssh alias and no jump
   host, its password answers the registered account's own password prompt and
   no other, Oncall campaigns run on it as Raven's own connections do and at
-  the registered address alone, and the mode is not offered on Windows. New
-  RPC group
-  `machines.{list,add,install_node,doctor,remove}`.
+  the registered address alone, and the mode is not offered on Windows. A failed
+  or cancelled registration preserves the password written by another pending
+  registration of the same machine, including when both passwords are identical.
+  New RPC group `machines.{list,add,install_node,doctor,remove}`.
 
 - The bug report review remembers your redaction decisions. Every keep or
   replace answer is stored in `redaction_history.json` under the Raven home

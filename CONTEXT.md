@@ -440,8 +440,14 @@ password's included; Oncall's ssh and rsync log in to such a row the same way, a
 address alone, `oncall_flow.transport.password_row`), install the node in the background, doctor,
 and remove (`raven ops connection remove`, refused while a connected agent entry names the
 machine; a password file kept under the id goes with the row whatever its login,
-`connection_add.forget_password`, and a refused registration forgets only a file that still holds
-its own password while no row of the id is listed, `connection_add.forget_unowned_password`);
+`connection_add.forget_password`, and a refused registration forgets only its own file write
+while no row of the id is listed, `connection_add.forget_unowned_password`;
+`connection_add.store_registration_password` atomically replaces the password file and records
+its identity under the same file lock used by cleanup, so an overlapping registration's file
+survives even while its probe is pending and its password is identical; a registration probe
+uses its own temporary 0600 password file under `keys/` (included in held-secret scrubbing),
+and `connection_add.write` publishes its password and row under the cleanup lock after
+checking duplicates again, so either completion order keeps the successful login usable);
 none of it hands the page an address, an account or a key path, and
 `node_install` on a row is the node the last install or contact found there,
 which is how a listing says a machine has this Raven's node without reaching it.

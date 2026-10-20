@@ -92,7 +92,10 @@ What gets recorded, and where:
   user. The machine's sshd has to accept
   password logins (`PasswordAuthentication yes`); one that does not refuses
   every connection, and the refusal says so. A password the machine refuses at
-  registration is not kept. When the machine's password changes, remove the
+  registration is not kept. A failed or cancelled registration preserves the
+  password kept by another registration of the same machine, even if that
+  registration is still connecting and uses the same password.
+  When the machine's password changes, remove the
   machine and register it again (a registration under an id in use is
   refused). Not available when this computer is Windows, whose OpenSSH cannot
   run the POSIX script that hands ssh the password. Such a machine gets no

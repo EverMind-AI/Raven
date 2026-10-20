@@ -282,7 +282,7 @@ def askpass_helper(keys_dir: Path) -> Path:
     return path
 
 
-def ssh_env(row: dict[str, Any]) -> dict[str, str]:
+def ssh_env(row: dict[str, Any], *, password_file: Path | None = None) -> dict[str, str]:
     """What a password row's ssh needs in its environment; ``{}`` for a key row.
 
     The askpass helper, the order to use it (``SSH_ASKPASS_REQUIRE=force``,
@@ -310,6 +310,8 @@ def ssh_env(row: dict[str, Any]) -> dict[str, str]:
         # blocks it, and a caller that reaches it anyway gets the one kind of
         # refusal this function gives rather than a crash.
         raise TransportError(str(exc)) from None
+    if password_file is not None:
+        secret = password_file
     if not secret.is_file():
         raise TransportError(f"no password is kept here for machine {label!r} ({secret}); register it again")
     host, _port, _key, user = ssh_target(row)
@@ -393,7 +395,9 @@ def make_ssh_runner(
     return run
 
 
-def runner_from(row: dict[str, Any], *, cap_seconds: float | None = None) -> CommandRunner:
+def runner_from(
+    row: dict[str, Any], *, cap_seconds: float | None = None, password_file: Path | None = None
+) -> CommandRunner:
     """The runner this connection row calls for.
 
     Raises rather than handing back something half-connected: a runner built on
@@ -415,7 +419,7 @@ def runner_from(row: dict[str, Any], *, cap_seconds: float | None = None) -> Com
         # Judged here, before ssh is started: a password that is not kept here
         # any more, or a Windows host, is a refusal with a name, not a login
         # that fails minutes into a dispatch.
-        extra = ssh_env(row)
+        extra = ssh_env(row, password_file=password_file)
         return make_ssh_runner(
             host, port, "", user=user, cap_seconds=cap_seconds, password=True, env={**os.environ, **extra}
         )

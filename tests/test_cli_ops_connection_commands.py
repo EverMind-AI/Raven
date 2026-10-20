@@ -912,7 +912,7 @@ def test_a_write_refused_because_the_id_landed_meanwhile_leaves_the_password_fil
     import raven.cli.ops_connection_commands as cli
     from raven.ops.connection_add import password_path, store_password
 
-    def refuse(row):
+    def refuse(row, **kwargs):
         store_password(row["id"], "rpc-pw-2222")  # the competitor's, kept under the same id
         raise ValueError(f"a machine with id {row['id']!r} is already listed in {store}")
 
@@ -966,6 +966,45 @@ def test_an_add_aborted_after_another_registration_of_the_id_landed_leaves_that_
 
     assert out.exit_code == 1 and "Aborted" in out.output
     assert password_path("box").read_text(encoding="utf-8") == "rpc-pw-2222\n", "the landed row's password stays"
+
+
+def test_an_aborted_add_keeps_the_same_password_of_a_registration_that_has_not_written_its_row(
+    store, reached, monkeypatch, tmp_path, supported_host
+):
+    import typer
+
+    import raven.cli.ops_connection_commands as cli
+    from raven.ops import connection_add
+    from raven.ops.transport import ssh_env
+
+    point_home(monkeypatch, tmp_path)
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    password = "same-password-1"
+
+    def reach(row, **kwargs):
+        assert kwargs["password"] == password
+        return True, "reached", {}
+
+    monkeypatch.setattr(cli, "probe", reach)
+
+    def ask(label, default="", *, required=True):
+        assert label.startswith("What is installed on it")
+        connection_add.store_password("box", password)
+        assert not store.exists(), "the other registration is still probing"
+        raise typer.Abort()
+
+    monkeypatch.setattr(cli, "_ask", ask)
+    out = CliRunner().invoke(
+        connection_app,
+        ["add", "--id", "box", "--name", "Box", "--transport", "ssh", *SSH, "--password-stdin"],
+        input=password + "\n",
+    )
+
+    assert out.exit_code == 1 and "Aborted" in out.output
+    row = {"id": "box", "host": "192.0.2.10", "port": 22, "user": "alice", "auth": "password"}
+    connection_add.write(row)
+    assert connection_add.password_path("box").is_file(), "the pending registration still owns the password"
+    assert ssh_env(row)
 
 
 def test_an_add_aborted_at_a_later_question_leaves_no_password_behind(store, reached, monkeypatch, tmp_path):

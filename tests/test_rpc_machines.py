@@ -8,8 +8,10 @@ answer is validated against its declared result model.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
+import threading
 
 import pytest
 from pydantic import ValidationError
@@ -717,6 +719,7 @@ async def test_add_by_password_keeps_the_password_here_proves_it_through_the_pro
     probed: list[tuple[dict, str]] = []
 
     def probe(row, **kw):
+        assert kw["password"] == BY_PASSWORD["password"]
         # The probe runs as every later connection will: with the password already kept here.
         probed.append((dict(row), connection_add.password_path("box").read_text(encoding="utf-8")))
         return True, "reached alice@203.0.113.7:2222", {"cores": 8}
@@ -757,7 +760,7 @@ async def test_a_write_refused_because_the_id_landed_meanwhile_leaves_the_passwo
     password under the same file name: the file is that row's now, and the refused registration leaves it."""
     monkeypatch.setattr(connection_add, "probe", lambda row, **kw: (True, "reached", {}))
 
-    def refuse(row):
+    def refuse(row, **kwargs):
         connection_add.store_password(row["id"], "rpc-pw-2222")  # the competitor's, kept under the same id
         raise ValueError(f"a machine with id {row['id']!r} is already listed in the registry")
 
@@ -808,6 +811,51 @@ async def test_a_refusal_after_the_same_machine_registered_meanwhile_leaves_the_
 
     assert (out["ok"], out["reason"]) == (False, "login")
     assert connection_add.password_path("box").read_text(encoding="utf-8") == BY_PASSWORD["password"] + "\n"
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+@pytest.mark.parametrize("failed_index", [0, 1])
+async def test_a_failed_registration_keeps_the_same_password_of_another_registration_still_probing(
+    supported_host, pool, rhome, monkeypatch, cancelled, failed_index
+):
+    from raven.ops.transport import ssh_env
+
+    entered = [threading.Event(), threading.Event()]
+    release = [threading.Event(), threading.Event()]
+
+    def probe(row, **kw):
+        index = int(row["display_name"])
+        assert connection_add.password_path("box").read_text(encoding="utf-8") == BY_PASSWORD["password"] + "\n"
+        entered[index].set()
+        assert release[index].wait(5), "the registration's probe was not released"
+        return (False, "no answer within 30s", {}) if index == failed_index else (True, "reached", {})
+
+    monkeypatch.setattr(connection_add, "probe", probe)
+    first = asyncio.create_task(rpc.machines_add({**BY_PASSWORD, "name": "0"}))
+    tasks = [first]
+    try:
+        assert await asyncio.to_thread(entered[0].wait, 5)
+        second = asyncio.create_task(rpc.machines_add({**BY_PASSWORD, "name": "1"}))
+        tasks.append(second)
+        assert await asyncio.to_thread(entered[1].wait, 5)
+        if cancelled:
+            tasks[failed_index].cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await tasks[failed_index]
+        else:
+            release[failed_index].set()
+            assert (await tasks[failed_index])["reason"] == "timeout"
+        release[1 - failed_index].set()
+        out = await tasks[1 - failed_index]
+    finally:
+        for event in release:
+            event.set()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    assert out["ok"]
+    (row,) = _rows()
+    assert connection_add.password_path("box").is_file(), "the successful registration must keep its password"
+    assert ssh_env(row), "the registered machine must still be able to start its next connection"
 
 
 async def test_add_by_password_refuses_a_password_with_a_line_break_before_the_probe(
