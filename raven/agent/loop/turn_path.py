@@ -1483,7 +1483,9 @@ class TurnPathMixin:
                         if (table := current_delegate()) and table is not table_before:
                             from raven.context_engine.segments import render
 
-                            watch_note += render.worker_table_note(render.live_dispatch_tools(self.tools.get_definitions))
+                            watch_note += render.worker_table_note(
+                                render.live_dispatch_tools(self.tools.get_definitions)
+                            )
                     # The registry already unwrapped any ToolResult: `result` is
                     # the model-facing text, with the optional display string
                     # riding along on it (ToolOutput). The model always gets the
