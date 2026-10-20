@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import subprocess
 import sys
 
 import pytest
@@ -241,7 +242,32 @@ def test_the_ask_is_one_text_the_on_call_listing_and_the_tool_share():
     assert "ops_connection_add" in adder.ASK_OWNER
 
 
-# ---- the probe, through a stand-in ssh on PATH ------------------------------
+# ---- the probe, through SSH stand-ins -------------------------------------
+
+
+def _python_ssh(tmp_path, monkeypatch, body: str):
+    """Run a Python stand-in through the real subprocess machinery on every platform."""
+    script_dir = tmp_path / "ssh stand-in"
+    script_dir.mkdir()
+    script = script_dir / "ssh.py"
+    record = script_dir / "started.json"
+    script.write_text(
+        '"""An SSH stand-in for a connection test."""\n'
+        "import json\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        f"Path({str(record)!r}).write_text(json.dumps(sys.argv[1:]), encoding='utf-8')\n" + body + "\n",
+        encoding="utf-8",
+    )
+    popen = subprocess.Popen
+
+    def start(argv, *args, **kwargs):
+        if isinstance(argv, (list, tuple)) and argv and argv[0] == "ssh":
+            argv = [sys.executable, str(script), *argv[1:]]
+        return popen(argv, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", start)
+    return record
 
 
 def _fake_ssh(tmp_path, monkeypatch, body: str):
@@ -266,7 +292,7 @@ def test_a_machine_that_answers_and_then_goes_silent_is_given_up_on(tmp_path, mo
     its ssh paths, and nothing is written on a machine that went quiet."""
     import time
 
-    _fake_ssh(tmp_path, monkeypatch, "sleep 30")
+    _python_ssh(tmp_path, monkeypatch, "import time\ntime.sleep(30)")
     started = time.monotonic()
     reached, message, found = adder.probe(dict(SSH_ROW), timeout=0.5, isolate_key=isolate_key)
     assert time.monotonic() - started < 10
@@ -275,7 +301,7 @@ def test_a_machine_that_answers_and_then_goes_silent_is_given_up_on(tmp_path, mo
 
 
 def test_a_machine_that_refuses_says_what_ssh_said(tmp_path, monkeypatch):
-    _fake_ssh(tmp_path, monkeypatch, "echo 'Permission denied (publickey).' >&2; exit 255")
+    _python_ssh(tmp_path, monkeypatch, "print('Permission denied (publickey).', file=sys.stderr)\nsys.exit(255)")
     reached, message, _ = adder.probe(dict(SSH_ROW), timeout=5)
     assert not reached and "Permission denied" in message
 
@@ -296,17 +322,19 @@ def test_a_row_with_no_address_is_refused_by_the_transport():
 def test_ssh_defaults_reads_what_ssh_resolves_and_keeps_only_keys_that_exist(tmp_path, monkeypatch):
     real = tmp_path / "id_real"
     real.write_text("")
-    _fake_ssh(
+    output = f"user cfd\nport 58717\nidentityfile {real}\nidentityfile {tmp_path}/id_gone\n"
+    _python_ssh(
         tmp_path,
         monkeypatch,
-        f"printf 'user cfd\\nport 58717\\nidentityfile {real}\\nidentityfile {tmp_path}/id_gone\\n'",
+        f"print({output!r}, end='')",
     )
     assert adder.ssh_defaults("203.0.113.7") == {"user": "cfd", "port": 58717, "keys": [str(real)]}
 
 
 def test_ssh_defaults_is_empty_when_ssh_cannot_answer(tmp_path, monkeypatch):
-    _fake_ssh(tmp_path, monkeypatch, "exit 255")
+    record = _python_ssh(tmp_path, monkeypatch, "sys.exit(255)")
     assert adder.ssh_defaults("203.0.113.7", port=22, user="root") == {}
+    assert "-G" in json.loads(record.read_text(encoding="utf-8"))
 
 
 def test_the_probe_reads_the_c_library_line_into_the_note():
