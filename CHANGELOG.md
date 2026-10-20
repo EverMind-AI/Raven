@@ -347,6 +347,24 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- **The pinchbench task ids agree with their filenames again.** Two task files
+  were renamed to make room for two insertions and their front-matter ids were
+  left behind, so `task_18_market_research.md` answered to
+  `task_16_market_research` and `task_19_spreadsheet_summary.md` answered to
+  `task_18_spreadsheet_summary`. The bench loads the **front-matter id** and
+  selects on it, so a runner asked for the id in the filename - which is what a
+  reader types - matched nothing and ran nothing: a silent no-op that looks
+  like a run that found nothing to do. The routing classifier named the tasks
+  by their filenames and so dispatched to ids no task file carried, and the
+  offline routing snapshot named the old ids and so pointed at tasks that did
+  not exist. The filenames are the current series and the ids are the stale
+  half, so the ids now follow the files, and the snapshot's ids were relabelled
+  to match (the score belongs to the same task under its current name; nothing
+  about the measurement changed). A new test pins the invariant from both
+  sides: every task file answers to its own filename, and every id the
+  classifier, the embeddings table and the routing snapshot name is a task
+  that exists.
+
 - What an agent on a registered machine writes on stderr reaches Raven even
   when no link held the agent at the time. The node kept those lines but, when
   a link attached, replayed only the agent's output: a run picked up after a
