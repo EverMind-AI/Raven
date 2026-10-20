@@ -65,6 +65,50 @@ All notable changes to Raven are documented here.
   The new vocabulary is in `CONTEXT.md`: Evidence Bundle, Bundle Stamp, build-time
   evidence, run-time evidence, evidence freshness, assurance rung, independent verifier.
 
+- **The market rung now reads the pages the turn opened, not the ledger file.**
+  The research flow writes its ledger when the turn *closes*, so a gate that
+  ran mid-turn read a file that had not been written yet and concluded the
+  run had opened nothing — which made every cited fact "a page the run did
+  not open" and left the market rung silently inert on the flow's own
+  market-research report. The flow now exposes its stashed turn rows
+  without consuming them (`turn_rows()`, beside `take_turn_rows()`), the
+  market gate reads them there, and the flow's process appendix still gets
+  them. A gate that has no way to confirm a page was opened now **refuses
+  and says so** rather than inventing a gap. The gate's unit tests had all
+  passed, because they handed it a ledger path with rows in it — a
+  situation the flow never produces; a test that drives the gate the way
+  the flow does now covers it.
+
+- **The market-scan rung.** A research turn whose answer carries a market
+  table now has that table read as a set of claims with their sources: one
+  company per row, one fact per cell, one page per fact, and the field
+  names normalised (`What it does` becomes `what_it_does`) so the same
+  table reads the same way to the scan's own criteria. A fact that cannot
+  be traced to one page is not carried — two pages in a cell is a refusal
+  rather than a guess, and a cell with no page of its own falls back to
+  the row's source column and is dropped when there is none. The scan
+  refuses a fact with no source, a source whose terms do not permit the
+  use (the same registry the records store and the web tool consult), a
+  page the run never opened, a fact that cannot be dated, and a field
+  cleared for a different use. Three gates sit over it, **each ablatable
+  on its own**: a **mechanical** gate that is pass/fail only and costs no
+  model call; a **sufficiency** gate that checks the scan against criteria
+  **declared before retrieval** — the criteria are the operator's
+  configuration, read when the gate is built, and the gate compares that
+  declaration's timestamp against the run's first fetch and refuses a
+  criterion written after the pages were read, because that describes the
+  answer rather than requiring it; and a **judge** that runs last, on a
+  cheap model, and is measured against a second reading with the
+  companies in the opposite order — a judge whose verdict changes when the
+  order changes is reacting to the presentation, and the gate says so. The
+  stop policy reports **precision and calibration error apart from
+  accuracy**, and a regression in either fails the gate even when accuracy
+  holds: the cheap way to raise accuracy is to stop more often, and that
+  is a trade rather than an improvement. The scan replaces the answer only
+  when the gates pass; otherwise the turn's own answer stands and the note
+  says which gate said no. The shipped profile label moves with it, to
+  `dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-market`.
+
 - The Agent Hub has a **Machines** tab: the registered machines with the state
   of each one's link and Raven node, a form that registers one (it reaches the
   machine first, like `raven ops connection add`, and explains a refusal by

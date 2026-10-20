@@ -39,6 +39,8 @@ from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
 
+from research_flow.market.gates import CHEAP_JUDGE_MODEL
+
 
 class _Base(BaseModel):
     """Accepts both camelCase and snake_case keys; unknown keys are ignored."""
@@ -257,6 +259,46 @@ class FinalShapeConfig(_Base):
         return self.report_layout if self.report_depth else "sections"
 
 
+class MarketConfig(_Base):
+    """The market-scan rung: the criteria a scan must meet, and its three gates.
+
+    Product-only; the fork has no such section.
+
+    **The criteria are read at the moment the gate is built**, which is before the
+    turn retrieves anything. That is the whole point of the sufficiency gate: a
+    criterion written before the pages were read is a requirement on the search,
+    and a criterion written afterwards is a description of the answer. The gate
+    checks the declaration's timestamp against the run's first fetch and refuses
+    a retrofit, so the criteria have to be somewhere that exists before the run
+    starts - which is here.
+
+    **The three gates have three switches.** Each is ablatable on its own so an
+    arm can be attributed to the gate that changed: the mechanical gate is a
+    pass/fail check that costs no model call, the sufficiency gate is the check
+    against the criteria above, and the judge is a model that reads the report
+    and answers one question - run on a cheap model, and measured against a
+    second reading with the companies in the opposite order.
+    """
+
+    enabled: bool = False
+    use: str = "competitive_brief"
+
+    # The criteria, declared here and checked against the retrieved set.
+    min_entities: int = 0
+    required_fields: tuple[str, ...] = ()
+    require_price_for_all: bool = False
+    min_source_hosts: int = 0
+
+    # The three gates, each switchable on its own.
+    mechanical: bool = True
+    sufficiency: bool = True
+    judge: bool = True
+    judge_model: str = CHEAP_JUDGE_MODEL
+    position_swap: bool = True
+    judge_timeout_seconds: float = 30.0
+    judge_max_tokens: int = 600
+
+
 class ConversationConfig(_Base):
     """Multi-turn behaviour: the per-turn research decision and the memo."""
 
@@ -432,6 +474,16 @@ PRODUCT_SUPERSEDED_PROFILES: dict[str, str] = {
     # the cite-rank clause and the dr@3.7 rung; never shipped, retired so those bench
     # configs still load.
     "dr@3.5-filetools-askuser-derive-numeric-tiers-plain": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain",
+    # 2026-10-20: the market-scan rung. A turn whose answer carries a market table
+    # now has that table read as claims with their sources, checked against the
+    # pages the run actually opened and the terms of the readers that served them,
+    # and put through three gates -- mechanical, sufficiency, judge -- before it
+    # may ship as a scan. Same base rung, different distribution: a market answer
+    # that was never checked is now a possible output of the old label, and the
+    # fork runs none of it. The successor is the old label with the market
+    # suffix dropped and put back: the ablation arm is the old label, and it is
+    # the arm this table sends an operator to.
+    "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-market",
 }
 
 
@@ -575,6 +627,7 @@ class FlowConfig(_Base):
     final_shape: FinalShapeConfig = Field(default_factory=FinalShapeConfig)
     conversation: ConversationConfig = Field(default_factory=ConversationConfig)
     ask_user: AskUserConfig = Field(default_factory=AskUserConfig)
+    market: MarketConfig = Field(default_factory=MarketConfig)
 
     _SUPERSEDED_VERSIONS: ClassVar[tuple[str, ...]] = SUPERSEDED_VERSIONS
     _SUPERSEDED_PROFILES: ClassVar[dict[str, str]] = SUPERSEDED_PROFILES

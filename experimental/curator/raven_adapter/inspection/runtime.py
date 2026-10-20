@@ -98,6 +98,13 @@ def describe_runtime(runtime: RavenRuntime, baseline: Baseline, authored: Artifa
             sources[f"skill.{row['source']}/{row['name']}"] = {**file_source(path), "root": str(path.parent)}
     for path in sorted((baseline.config.workspace_path / "playbooks").glob("*/playbook.md")):
         sources[f"playbook.{path.parent.name}"] = {**file_source(path), "root": str(path.parent)}
+    # The design index, when the workspace has one. A Curator about to build
+    # something needs to know whether it already exists, and the index is the
+    # answer; a workspace with no index simply does not get the source, which
+    # is not a failure.
+    design_index = baseline.config.workspace_path / "docs" / "design-index.json"
+    if design_index.is_file():
+        sources["design-index"] = {**file_source(design_index), "root": str(design_index.parent)}
     uploads = baseline.config.workspace_path / "uploads"
     uploaded = sorted(path for path in uploads.rglob("*") if path.is_file()) if uploads.is_dir() else []
     for path in uploaded:

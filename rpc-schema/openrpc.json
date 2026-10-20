@@ -12088,6 +12088,500 @@
           "$ref": "#/components/errors/ImportedBusy"
         }
       ]
+    },
+    {
+      "name": "records.get",
+      "summary": "One record, by id.",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "description": "The record's id.",
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "RecordsGetResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "record": {
+              "$ref": "#/components/schemas/RecordPayload"
+            }
+          },
+          "required": [
+            "record"
+          ],
+          "type": "object"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/RecordNotFound"
+        }
+      ]
+    },
+    {
+      "name": "records.upsert",
+      "summary": "Write a record, merging into the one already there.",
+      "params": [
+        {
+          "name": "type",
+          "required": true,
+          "schema": {
+            "enum": [
+              "company",
+              "contact",
+              "artifact",
+              "interaction",
+              "opportunity"
+            ],
+            "type": "string"
+          }
+        },
+        {
+          "name": "dedupe_key",
+          "required": true,
+          "schema": {
+            "description": "The identity of the thing, not of the record: two records for the same company carry the same key, and the store keeps one of them.",
+            "type": "string"
+          }
+        },
+        {
+          "name": "fields",
+          "required": false,
+          "schema": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        {
+          "name": "provenance",
+          "required": false,
+          "schema": {
+            "items": {
+              "$ref": "#/components/schemas/RecordProvenancePayload"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        {
+          "name": "state",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "RecordsUpsertResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "record": {
+              "$ref": "#/components/schemas/RecordPayload"
+            }
+          },
+          "required": [
+            "record"
+          ],
+          "type": "object"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/SourcePolicyRefused"
+        }
+      ]
+    },
+    {
+      "name": "records.list",
+      "summary": "The records, filtered by kind and by state.",
+      "params": [
+        {
+          "name": "type",
+          "required": false,
+          "schema": {
+            "enum": [
+              "company",
+              "contact",
+              "artifact",
+              "interaction",
+              "opportunity"
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        {
+          "name": "state",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        {
+          "name": "limit",
+          "required": false,
+          "schema": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "RecordsListResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "items": {
+              "items": {
+                "$ref": "#/components/schemas/RecordPayload"
+              },
+              "type": "array"
+            },
+            "total": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "items",
+            "total"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "records.transition",
+      "summary": "Move a record along its chain.",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "description": "The record to move.",
+            "type": "string"
+          }
+        },
+        {
+          "name": "to_state",
+          "required": true,
+          "schema": {
+            "description": "The next state, or one of the chain's declared outcomes.",
+            "type": "string"
+          }
+        },
+        {
+          "name": "reason",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "RecordsTransitionResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "record": {
+              "$ref": "#/components/schemas/RecordPayload"
+            }
+          },
+          "required": [
+            "record"
+          ],
+          "type": "object"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/RecordNotFound"
+        },
+        {
+          "$ref": "#/components/errors/RecordTransitionRefused"
+        }
+      ]
+    },
+    {
+      "name": "records.grants.set",
+      "summary": "Record, or withdraw, why one source's terms may be kept for one record.",
+      "params": [
+        {
+          "name": "record_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "source",
+          "required": true,
+          "schema": {
+            "description": "The source whose terms are being accepted for this record.",
+            "type": "string"
+          }
+        },
+        {
+          "name": "allowed",
+          "required": true,
+          "schema": {
+            "description": "True records the acceptance, false withdraws it.",
+            "type": "boolean"
+          }
+        },
+        {
+          "name": "basis",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "RecordsGrantsSetResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "grants": {
+              "items": {
+                "$ref": "#/components/schemas/RecordGrantPayload"
+              },
+              "type": "array"
+            },
+            "changed": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "grants",
+            "changed"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "sources.list",
+      "summary": "The source registry: what each source's terms permit.",
+      "params": [
+        {
+          "name": "tier",
+          "required": false,
+          "schema": {
+            "enum": [
+              "public",
+              "attributed",
+              "licensed",
+              "restricted"
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "SourcesListResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "items": {
+              "items": {
+                "$ref": "#/components/schemas/SourcePolicyPayload"
+              },
+              "type": "array"
+            },
+            "total": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "items",
+            "total"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "sources.check",
+      "summary": "May this deployment use this source for this use, and if not, why not.",
+      "params": [
+        {
+          "name": "source",
+          "required": true,
+          "schema": {
+            "description": "The source the deployment wants to use.",
+            "type": "string"
+          }
+        },
+        {
+          "name": "use",
+          "required": true,
+          "schema": {
+            "description": "What the deployment wants to do with it.",
+            "type": "string"
+          }
+        },
+        {
+          "name": "has_opt_in",
+          "required": false,
+          "schema": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "SourcesCheckResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "allowed": {
+              "type": "boolean"
+            },
+            "source": {
+              "type": "string"
+            },
+            "tier": {
+              "description": "Empty when the source is not in the registry.",
+              "type": "string"
+            },
+            "restriction": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reason": {
+              "type": "string"
+            },
+            "remedy": {
+              "type": "string"
+            },
+            "citation": {
+              "description": "Where the terms are written down.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "allowed",
+            "source",
+            "reason",
+            "remedy"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "sources.optin.set",
+      "summary": "Record, or withdraw, why this deployment may use a source.",
+      "params": [
+        {
+          "name": "source",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "allowed",
+          "required": true,
+          "schema": {
+            "description": "True records the acceptance, false withdraws it.",
+            "type": "boolean"
+          }
+        },
+        {
+          "name": "basis",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        {
+          "name": "use",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        {
+          "name": "granted_by",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "SourcesOptinSetResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "opt_ins": {
+              "items": {
+                "$ref": "#/components/schemas/SourceOptInPayload"
+              },
+              "type": "array"
+            },
+            "changed": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "opt_ins",
+            "changed"
+          ],
+          "type": "object"
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/SourcePolicyRefused"
+        }
+      ]
     }
   ],
   "components": {
@@ -18564,6 +19058,215 @@
             "description": "The agent entries on the machine that are switched off, by name: they still hold the machine for the add, so the card says so instead of counting them nowhere."
           }
         }
+      },
+      "RecordPayload": {
+        "additionalProperties": false,
+        "description": "One durable belief, with the evidence for it.\n\n``fields`` holds the record's own values and ``provenance`` holds the\nsources for them, so a field can be corrected and re-sourced without\nrewriting the record's identity.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "company",
+              "contact",
+              "artifact",
+              "interaction",
+              "opportunity"
+            ],
+            "type": "string"
+          },
+          "dedupe_key": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "fields": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "type": "object"
+          },
+          "provenance": {
+            "items": {
+              "$ref": "#/components/schemas/RecordProvenancePayload"
+            },
+            "type": "array"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "dedupe_key",
+          "state",
+          "fields",
+          "provenance",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "RecordProvenancePayload": {
+        "additionalProperties": false,
+        "description": "Why one field of a record is entitled to say what it says.\n\nOne entry per field the source supports: a source that backs three fields\nis three entries, because the support is per field.",
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "source_url": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "retrieved_at": {
+            "type": "string"
+          },
+          "tier": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "reason_kind": {
+            "type": "string"
+          },
+          "metric_basis": {
+            "type": "string"
+          },
+          "timeframe": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "field",
+          "source_url"
+        ],
+        "type": "object"
+      },
+      "RecordGrantPayload": {
+        "additionalProperties": false,
+        "description": "Why one source's terms may be kept for one record.\n\nThe basis is required: an acceptance nobody can be shown to have made is\nnot an acceptance.",
+        "properties": {
+          "source": {
+            "type": "string"
+          },
+          "basis": {
+            "type": "string"
+          },
+          "granted_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "basis",
+          "granted_at"
+        ],
+        "type": "object"
+      },
+      "SourcePolicyPayload": {
+        "additionalProperties": false,
+        "description": "One row of the source registry: what this source's terms permit.",
+        "properties": {
+          "source": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "tier": {
+            "enum": [
+              "public",
+              "attributed",
+              "licensed",
+              "restricted"
+            ],
+            "type": "string"
+          },
+          "citation": {
+            "type": "string"
+          },
+          "cache_allowed": {
+            "type": "boolean"
+          },
+          "store_allowed": {
+            "type": "boolean"
+          },
+          "attribution_required": {
+            "type": "boolean"
+          },
+          "derivation_allowed": {
+            "type": "boolean"
+          },
+          "commercial_use": {
+            "type": "boolean"
+          },
+          "retention": {
+            "type": "string"
+          },
+          "restrictions": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "source",
+          "label",
+          "tier",
+          "citation",
+          "cache_allowed",
+          "store_allowed",
+          "attribution_required",
+          "derivation_allowed",
+          "commercial_use",
+          "retention",
+          "restrictions"
+        ],
+        "type": "object"
+      },
+      "SourceOptInPayload": {
+        "additionalProperties": false,
+        "description": "Why this deployment may use one source.",
+        "properties": {
+          "source": {
+            "type": "string"
+          },
+          "use": {
+            "type": "string"
+          },
+          "basis": {
+            "type": "string"
+          },
+          "granted_at": {
+            "type": "string"
+          },
+          "granted_by": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "use",
+          "basis",
+          "granted_at"
+        ],
+        "type": "object"
       }
     },
     "errors": {
@@ -18682,6 +19385,18 @@
       "ImportedBusy": {
         "code": -32031,
         "message": "imported_busy"
+      },
+      "RecordNotFound": {
+        "code": -32032,
+        "message": "record_not_found"
+      },
+      "RecordTransitionRefused": {
+        "code": -32033,
+        "message": "record_transition_refused"
+      },
+      "SourcePolicyRefused": {
+        "code": -32034,
+        "message": "source_policy_refused"
       }
     }
   }

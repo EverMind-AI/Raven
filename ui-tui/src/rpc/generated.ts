@@ -3322,6 +3322,97 @@ export interface MachineRow {
   agents_off_here: string[];
 }
 /**
+ * One durable belief, with the evidence for it.
+ *
+ * ``fields`` holds the record's own values and ``provenance`` holds the
+ * sources for them, so a field can be corrected and re-sourced without
+ * rewriting the record's identity.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "RecordPayload".
+ */
+export interface RecordPayload {
+  id: string;
+  type: 'company' | 'contact' | 'artifact' | 'interaction' | 'opportunity';
+  dedupe_key: string;
+  state: string;
+  fields: {
+    [k: string]: JsonValue;
+  };
+  provenance: RecordProvenancePayload[];
+  created_at: string;
+  updated_at: string;
+}
+/**
+ * Why one field of a record is entitled to say what it says.
+ *
+ * One entry per field the source supports: a source that backs three fields
+ * is three entries, because the support is per field.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "RecordProvenancePayload".
+ */
+export interface RecordProvenancePayload {
+  field: string;
+  source_url: string;
+  source?: string;
+  method?: string;
+  retrieved_at?: string;
+  tier?: string;
+  confidence?: number | null;
+  reason_kind?: string;
+  metric_basis?: string;
+  timeframe?: string;
+}
+/**
+ * Why one source's terms may be kept for one record.
+ *
+ * The basis is required: an acceptance nobody can be shown to have made is
+ * not an acceptance.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "RecordGrantPayload".
+ */
+export interface RecordGrantPayload {
+  source: string;
+  basis: string;
+  granted_at: string;
+}
+/**
+ * One row of the source registry: what this source's terms permit.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SourcePolicyPayload".
+ */
+export interface SourcePolicyPayload {
+  source: string;
+  label: string;
+  tier: 'public' | 'attributed' | 'licensed' | 'restricted';
+  citation: string;
+  cache_allowed: boolean;
+  store_allowed: boolean;
+  attribution_required: boolean;
+  derivation_allowed: boolean;
+  commercial_use: boolean;
+  retention: string;
+  restrictions: {
+    [k: string]: string;
+  };
+}
+/**
+ * Why this deployment may use one source.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SourceOptInPayload".
+ */
+export interface SourceOptInPayload {
+  source: string;
+  use: string;
+  basis: string;
+  granted_at: string;
+  granted_by?: string;
+}
+/**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "SessionListParams".
  */
@@ -8473,6 +8564,180 @@ export interface ImportedUploadResult {
    * When it was imported, ISO 8601 in UTC.
    */
   imported_at: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "RecordsGetParams".
+ */
+export interface RecordsGetParams {
+  /**
+   * The record's id.
+   */
+  id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "RecordsGetResult".
+ */
+export interface RecordsGetResult {
+  record: RecordPayload;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "RecordsUpsertParams".
+ */
+export interface RecordsUpsertParams {
+  type: 'company' | 'contact' | 'artifact' | 'interaction' | 'opportunity';
+  /**
+   * The identity of the thing, not of the record: two records for the same company carry the same key, and the store keeps one of them.
+   */
+  dedupe_key: string;
+  fields?: {
+    [k: string]: JsonValue;
+  } | null;
+  provenance?: RecordProvenancePayload[] | null;
+  state?: string | null;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "RecordsUpsertResult".
+ */
+export interface RecordsUpsertResult {
+  record: RecordPayload;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "RecordsListParams".
+ */
+export interface RecordsListParams {
+  type?: ('company' | 'contact' | 'artifact' | 'interaction' | 'opportunity') | null;
+  state?: string | null;
+  limit?: number | null;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "RecordsListResult".
+ */
+export interface RecordsListResult {
+  items: RecordPayload[];
+  total: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "RecordsTransitionParams".
+ */
+export interface RecordsTransitionParams {
+  /**
+   * The record to move.
+   */
+  id: string;
+  /**
+   * The next state, or one of the chain's declared outcomes.
+   */
+  to_state: string;
+  reason?: string | null;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "RecordsTransitionResult".
+ */
+export interface RecordsTransitionResult {
+  record: RecordPayload;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "RecordsGrantsSetParams".
+ */
+export interface RecordsGrantsSetParams {
+  record_id: string;
+  /**
+   * The source whose terms are being accepted for this record.
+   */
+  source: string;
+  /**
+   * True records the acceptance, false withdraws it.
+   */
+  allowed: boolean;
+  basis?: string | null;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "RecordsGrantsSetResult".
+ */
+export interface RecordsGrantsSetResult {
+  grants: RecordGrantPayload[];
+  changed: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SourcesListParams".
+ */
+export interface SourcesListParams {
+  tier?: ('public' | 'attributed' | 'licensed' | 'restricted') | null;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SourcesListResult".
+ */
+export interface SourcesListResult {
+  items: SourcePolicyPayload[];
+  total: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SourcesCheckParams".
+ */
+export interface SourcesCheckParams {
+  /**
+   * The source the deployment wants to use.
+   */
+  source: string;
+  /**
+   * What the deployment wants to do with it.
+   */
+  use: string;
+  has_opt_in?: boolean | null;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SourcesCheckResult".
+ */
+export interface SourcesCheckResult {
+  allowed: boolean;
+  source: string;
+  /**
+   * Empty when the source is not in the registry.
+   */
+  tier?: string;
+  restriction?: string | null;
+  reason: string;
+  remedy: string;
+  /**
+   * Where the terms are written down.
+   */
+  citation?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SourcesOptinSetParams".
+ */
+export interface SourcesOptinSetParams {
+  source: string;
+  /**
+   * True records the acceptance, false withdraws it.
+   */
+  allowed: boolean;
+  basis?: string | null;
+  use?: string | null;
+  granted_by?: string | null;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SourcesOptinSetResult".
+ */
+export interface SourcesOptinSetResult {
+  opt_ins: SourceOptInPayload[];
+  changed: boolean;
 }
 
 // ---- Schema-name aliases for structurally-deduplicated types ----

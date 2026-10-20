@@ -26,6 +26,9 @@ lists its subcommands and options.
 | `raven gateway status` / `raven gateway reload` / `raven gateway stop` | Inspect, reload configuration, or gracefully stop a running gateway |
 | `raven serve` | Start the WebSocket RPC service and serve the WebUI when its build is available |
 | `raven skill` | Browse SkillForge skills, inspect their contents, block or unblock skills, and remove installed bundles |
+| `raven records` | Inspect the durable record store, and record why one source's terms may be kept |
+| `raven sources` | Inspect the source registry, check whether a source may be used, and record why |
+| `raven outbound` | Inspect outbound sends, and the ones whose outcome nobody knows |
 | `raven plugins` | List installed plugins and the active memory backend |
 | `raven plugin auth <server>` | Authenticate or refresh OAuth access for an MCP server |
 | `raven mcp bridge <socket-path>` | Bridge a subagent's MCP connection over stdio to a host-managed server |

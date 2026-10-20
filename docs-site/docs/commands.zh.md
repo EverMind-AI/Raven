@@ -25,6 +25,9 @@
 | `raven gateway status` / `raven gateway reload` / `raven gateway stop` | 查看网关状态、重新加载配置，或有序停止网关 |
 | `raven serve` | 启动 WebSocket RPC 服务，并在 WebUI 构建产物可用时提供页面 |
 | `raven skill` | 浏览 SkillForge 技能、查看内容、屏蔽或解除屏蔽技能，以及移除已安装的技能包 |
+| `raven records` | 查看持久化记录存储，并记录为何可留存某来源的数据 |
+| `raven sources` | 查看来源注册表、检查某来源是否可用，并记录理由 |
+| `raven outbound` | 查看出站发送，以及结果无人知晓的那些发送 |
 | `raven plugins` | 列出已安装的插件和当前记忆后端 |
 | `raven plugin auth <server>` | 为 MCP 服务完成认证或刷新 OAuth 授权 |
 | `raven mcp bridge <socket-path>` | 通过标准输入输出，将子 Agent 的 MCP 连接桥接到宿主管理的服务 |

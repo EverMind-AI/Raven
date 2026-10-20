@@ -1649,6 +1649,168 @@ configured one. Refused rather than searched: its vectors answer to the old mode
 so a query embedded with the new one lands somewhere unrelated in the same space.
 Moving the endpoint or rotating the key does not make a base stale.
 
+### Records
+
+**Record** (`records/`):
+One durable belief about one thing -- a company, a person, a file Raven produced,
+a message it sent -- held with the evidence for that belief beside it. A record
+is keyed by what it is about rather than by when it was seen, so a second run
+that meets the same company finds the first run's record rather than making a
+second one. That is what stops a prospect being told twice that nobody ever
+contacted them.
+_Avoid_: a "ledger" -- in this tree a ledger is the PlugHub record of one
+install of a plugin (`plugins/<catalog_id>.json`). A record is a belief about a
+thing; a ledger is a record of what was done to a plugin.
+
+**Dedupe Key**:
+The identity of the thing a Record is about, as opposed to the identity of the
+record. Two records for the same company carry the same dedupe key, and the
+store keeps one of them: a repeated write is a merge, not a second row. The key
+and the record's type together are unique, so a company and a person may share
+a name without becoming one row.
+
+**Provenance**:
+Why one field of a Record is entitled to say what it says. It names the field
+the source supports, the source it came from, how it was reached, when it was
+read, and how much the reading is worth. It is kept apart from the field
+itself so a wrong field can be corrected without discarding the parts that were
+right, and so a reader can ask about one field without trusting the whole
+record. A field with no provenance is a guess the record cannot defend.
+
+**State**:
+Where a Record has got to -- discovered, qualified, researched, artifact_built,
+pitched, engaged, replied, followed_up, won, lost -- and the moves that are
+allowed from there. The moves are declared per kind of record, and a move that
+is not declared is refused rather than performed: a resumed run that cannot
+tell whether it already wrote to somebody would write to them again.
+
+**Grant**:
+The record of a deployment accepting to keep a field the source's terms do not
+let it keep. It is named against the record it applies to, and the store checks
+it before the write lands, because a grant nothing consults is a note and a
+note does not stop a write.
+
+### Sources
+
+**Source** (`sources/`):
+A place a deployment may learn something from -- a search service, a filings
+database, a company registry. Sources are not interchangeable, and the registry
+holds what each one's terms permit, so the question is asked before the request
+rather than after it. A source that is not in the registry is refused: a
+source added to the code without a row here has not been looked at, and
+looking at it is the whole point of the table.
+
+**Source Tier**:
+What a source's terms allow a deployment to do with it, in four steps -- `public`
+(free to read and to build on), `attributed` (usable, with the source's name to
+travel with the result), `licensed` (usable under a licence the operator holds)
+and `restricted` (not usable until the operator records why). A tier is not a
+quality score: it is a statement about permission.
+
+**Source Policy**:
+What one source permits, and the uses it does not permit as it stands. A use
+that the policy refuses is refused unless the operator has recorded why this
+deployment may make it, and the refusal names the rule that was hit and what
+would change the answer -- the person who can change it is the operator and
+not the model.
+
+**Opt-in**:
+The record of why this deployment may use a source it may not use as it
+stands: a licence held, a contract signed, a decision made and pointable later.
+The reason is required, because an opt-in with no reason behind it would let a
+later reader conclude the deployment had been checked when it had not.
+_Avoid_: a "grant" -- a grant is about keeping a field on one record, an opt-in
+is about using a source at all.
+
+### Market Scans
+
+**Market Scan** (`research_flow/market/`):
+A research turn's answer read as a set of claims with their sources -- one
+company, the facts said about it, and the page each fact came from -- and
+checked before it may ship as a scan. A scan is not a report about a market;
+it is a report whose every fact is traceable to a page the run opened, and
+one that cannot be traced is refused rather than softened.
+_Avoid_: a "market report" -- a report is prose with a shape, and a scan is
+prose whose claims carry their sources.
+
+**Market Entity**:
+One company in the market, with its fields and the page behind each one. A
+field the source does not state is **absent** rather than present and empty: a
+present-and-empty field is an unsourced claim, and the scan refuses one. A
+fact cell citing two pages has no one page, and the scan refuses that too
+rather than picking one.
+_Avoid_: a "company record" -- a Record is a durable belief about a thing
+held in the store, and a Market Entity is one company's place in one scan.
+
+**Market Criteria**:
+The requirements a scan was declared to meet, read from the operator's
+configuration **before the run retrieves anything**. A criterion written
+after the pages were read describes the result instead of requiring it, and
+the sufficiency gate refuses those by comparing the declaration's timestamp
+against the run's first fetch.
+_Avoid_: a "rubric" -- a rubric scores what is there; a criterion says what
+must be there.
+
+**Market Gate**:
+One of the three checks a scan passes, each ablatable on its own so an arm
+can be attributed to the gate that changed. The **mechanical** gate is
+pass/fail only and costs no model call; the **sufficiency** gate checks the
+scan against the Market Criteria; the **judge** runs last, on a cheap model,
+and is measured against a second reading with the companies in the opposite
+order -- a judge whose verdict changes when the order changes is reacting to
+the presentation, and the gate says so. The judge fails open, because a
+judge with no verdict is a scan the reader still gets; the other two do not,
+because a check that could not be performed is not a pass.
+
+**Stop Decision**:
+One decision by a stop policy -- the rule that says *enough* -- with the
+ground truth beside it. The policy's answer and how sure it was, and what
+actually happened.
+
+**Stop Metrics**:
+A stop policy's three numbers, kept apart. **Accuracy** is the share of
+decisions that were right; **precision** is the share of the times it said
+*stop* that were right; **expected calibration error** is how far its
+confidence is from how often it is right. A gate that watched accuracy alone
+would reward a policy that stops more often, which is the change that trades
+precision away -- so a regression in precision or in calibration error fails
+the gate even when accuracy holds. A policy that never stops has no
+precision to report, and saying so is not the same as reporting zero.
+
+### Outbound
+
+**Outbound Guard** (`outbound/`):
+The thing that stands between a retry and a second email to the same prospect. A
+send is written down as an `interaction` record *before* it leaves the machine, so
+the question "did we already write to this person" is answered by the store rather
+than by a retry's optimism. It sends nothing itself and decides nothing: it writes
+down what was attempted, refuses a second attempt while the first is unresolved, and
+hands the rest to a person.
+
+**Correlation Token**:
+A short, quotable handle on one outbound message -- `rv-` and ten hex characters.
+It goes in the message, and a reply that quotes it resolves back to the interaction
+that sent it. It is a handle and not a secret: it is quoted in a body anybody may
+read, so it carries no authority over the record behind it.
+_Avoid_: an "idempotency key" -- a key says "do not do this twice"; a token says
+"this is the message I am answering".
+
+**Unresolved Send**:
+A send that was prepared and whose outcome nobody knows. The interaction rests in
+the `prepared` state, and while one is outstanding a second attempt at the same
+subject is refused. It is the state a crash leaves behind, and it is not an error:
+it is the honest record of an attempt that might have gone out.
+_Avoid_: an "ambiguous outcome" -- an unresolved send is the thing in the store, an
+ambiguous outcome is what it is called when it is reported.
+
+**Ambiguous Outcome**:
+What an unresolved send is called when it is surfaced. It is reported to a person
+and never resolved automatically: a send that cannot be told apart from one that
+did not happen is exactly the case that must not be guessed at, because "probably
+did not go out" is the guess that double-sends. A person resolves it as sent -- the
+record moves to `sent` -- or as not sent -- the record is removed, because a record
+of a message that never left is a claim that does not belong in the store.
+
 ### Plugins
 
 **Plugin** (`plugins/`):
@@ -1886,9 +2048,12 @@ _Avoid_: "telemetry" for either half -- it names neither the machinery nor the m
 Where every package sits, as the machine enforces it. Inner (may not import a surface):
 the shelves and engines the contract lists as sources (`tracing` among them -- a kernel
 member, seated inner here as well so every package appears in one roster), `config` and
-`utils` and `i18n` (cross-cutting leaves), `mcp`, `playbook`, `knowledge`, `skill_hub`, `trajectory`,
-`permissions` (the gate the registry consults; its turn context is bound by entrances),
-`eval_engine` and `proactive_engine` (L3 shelf members -- proactive_engine originates
+`utils` and `i18n` (cross-cutting leaves), `mcp`, `playbook`, `knowledge`, `skill_hub`, `trajectory`, `records` and `sources`
+(the durable belief store and the registry of what a deployment may learn it from; the
+store consults the registry before it keeps anything a source's terms do not let it
+keep), `outbound` (the guard that writes a send down before it leaves the machine, and
+refuses a second attempt while the first is unresolved), `permissions` (the gate the registry consults; its turn context is bound by
+entrances), `eval_engine` and `proactive_engine` (L3 shelf members -- proactive_engine originates
 turns through its schedulers and sentinel but is an engine the loop and the assembly root
 consume, not a transport), and `core` (the L2 assembly root). `templates` is packaged data
 and takes no seat. Surfaces: `cli`, `rpc`, `acp` (an entrance: Raven serving as an

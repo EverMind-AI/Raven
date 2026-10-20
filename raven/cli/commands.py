@@ -165,11 +165,14 @@ from raven.cli.channel_commands import channels_app
 from raven.cli.cron_commands import cron_app
 from raven.cli.mcp_commands import mcp_app
 from raven.cli.ops_connection_commands import ops_app
+from raven.cli.outbound_commands import outbound_app
 from raven.cli.playbook_commands import playbook_app
 from raven.cli.provider_commands import provider_app
+from raven.cli.records_commands import records_app
 from raven.cli.sandbox_commands import sandbox_app
 from raven.cli.sentinel_commands import sentinel_app
 from raven.cli.skill_commands import skill_app
+from raven.cli.sources_commands import sources_app
 from raven.cli.trajectory_commands import trajectory_app
 
 app.add_typer(a2a_app, name="a2a")
@@ -177,12 +180,15 @@ app.add_typer(acp_app, name="acp")
 app.add_typer(channels_app, name="channels")
 app.add_typer(cron_app, name="cron")
 app.add_typer(ops_app, name="ops")
+app.add_typer(outbound_app, name="outbound")
 app.add_typer(mcp_app, name="mcp")
 app.add_typer(playbook_app, name="playbook")
 app.add_typer(provider_app, name="provider")
+app.add_typer(records_app, name="records")
 app.add_typer(sandbox_app, name="sandbox")
 app.add_typer(sentinel_app, name="sentinel")
 app.add_typer(skill_app, name="skill")
+app.add_typer(sources_app, name="sources")
 app.add_typer(trajectory_app, name="trajectory")
 
 

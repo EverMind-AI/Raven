@@ -271,6 +271,13 @@ TWIN_DRFLOW_PRODUCT_ONLY = {
         "false plain answer and on 35 settled ones with 29 accepted; the fork has no such "
         "gate and its schema would refuse the key"
     ),
+    "market": (
+        "the market-scan rung: a turn whose answer carries a market table has that "
+        "table read as claims with their sources, checked against the pages the run "
+        "opened and the terms of the readers that served them, and put through three "
+        "gates before it may ship as a scan. The fork has no market gate and no "
+        "criteria to declare before retrieval, and its schema would refuse the key"
+    ),
 }
 
 TWIN_DRFLOW_DIVERGED = {
@@ -439,7 +446,7 @@ def test_the_shipped_label_moves_when_the_shipped_prompt_does():
     )[1]
     digest = hashlib.sha256(" ".join(segment.split()).encode("utf-8")).hexdigest()[:16]
 
-    assert shipped["version"] == "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader"
+    assert shipped["version"] == "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-market"
     assert digest == "86337de7a030f8aa", f"the shipped prompt moved; advance the label and re-stamp to {digest}"
 
 

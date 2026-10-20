@@ -124,6 +124,10 @@ nav:
           - Browser and Human Collaboration: browser-collaboration.md
           - Knowledge Bases: knowledge.md
           - Playbooks: playbooks.md
+          - Records and Evidence: records.md
+          - Sources and Their Terms: sources.md
+          - Market Scans: market-scan.md
+          - Outbound Sends: outbound.md
           - Proactive Reminders and Follow-ups: proactivity.md
           - Long-running Work (Oncall): oncall.md
       - Channels and Messaging: channels.md

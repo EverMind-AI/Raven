@@ -113,7 +113,18 @@
           "enabled": true,
           "judge": true
         },
-        "version": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader"
+        "market": {
+          "enabled": true,
+          "use": "competitive_brief",
+          "minEntities": 3,
+          "minSourceHosts": 2,
+          "requirePriceForAll": false,
+          "mechanical": true,
+          "sufficiency": true,
+          "judge": true,
+          "positionSwap": true
+        },
+        "version": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-market"
       }
     }
   },
