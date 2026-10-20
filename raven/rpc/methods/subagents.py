@@ -1525,8 +1525,10 @@ async def subagents_presets(params: dict) -> dict:
     starts are listed (acp, cli): a built-in agent is this process's own loop,
     a Mirasim shim runs on this host's interpreter, and an openai endpoint
     takes a key this form does not. The page greys a preset the machine
-    already has (``on_machines``) and says when this computer has it too
-    (``connected_here``), so the add's own refusals are not the first word.
+    already has connected (``on_machines``), offers one it has switched off
+    back under its entry's name (``off_on_machines``), and says when this
+    computer has it too (``connected_here``), so the add's own refusals are
+    not the first word.
     """
     configured = _as_configs(_read_agents())
     presets: list[dict[str, Any]] = []
@@ -1537,15 +1539,30 @@ async def subagents_presets(params: dict) -> dict:
             continue
         name = str(preset.get("name") or key)
         holders = [c for c in configured if getattr(c, "preset", None) == key or getattr(c, "name", "") == name]
-        wheres = [(getattr(c, "machine", None) or "").strip() for c in holders]
+        # (machine, switched on, entry name) per holder: a machine's entry that
+        # is switched off still holds the machine for the add's duplicate rule,
+        # so the form has to see it -- as something to switch back on, by name
+        # -- rather than count it nowhere.
+        wheres = [
+            (
+                (getattr(c, "machine", None) or "").strip(),
+                bool(getattr(c, "enabled", True)),
+                str(getattr(c, "name", "")),
+            )
+            for c in holders
+        ]
         presets.append(
             {
                 "preset": key,
                 "name": name,
                 "kind": kind,
                 "description": str(preset.get("description") or ""),
-                "connected_here": any(not where for where in wheres),
-                "on_machines": sorted({where for where in wheres if where}),
+                "connected_here": any(not where for where, _on, _name in wheres),
+                "on_machines": sorted({where for where, on, _name in wheres if where and on}),
+                "off_on_machines": sorted(
+                    ({"machine": where, "name": held} for where, on, held in wheres if where and not on),
+                    key=lambda entry: (entry["machine"], entry["name"]),
+                ),
             }
         )
     return {"presets": presets}

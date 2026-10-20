@@ -48,6 +48,17 @@ All notable changes to Raven are documented here.
   `subagents.presets` and `machines.local_keys`; `machines.list` rows carry
   `agents_here`.
 
+- A machine's switched-off agent entries are shown, not counted nowhere. A
+  card that listed only connected entries read *No agent connected here yet*
+  beside a connect form that greyed the preset as *already connected on this
+  machine*, because the entry still holds the machine for the add. The card,
+  the sheet and the form now show such an entry marked *switched off*, and
+  picking its preset in the form offers **Reconnect**, which switches the
+  existing entry back on (with the same proof prompt) instead of adding a
+  second one. `machines.list` rows carry `agents_off_here`; `subagents.presets`
+  lists `on_machines` (connected) apart from `off_on_machines` (switched off,
+  with the entry's name).
+
 - The bug report review remembers your redaction decisions. Every keep or
   replace answer is stored in `redaction_history.json` under the Raven home
   (hashes and masked samples only), and the next `report-bug` or browser

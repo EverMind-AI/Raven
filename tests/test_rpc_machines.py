@@ -131,6 +131,7 @@ async def test_list_says_what_a_machine_is_and_how_its_link_is_doing_and_never_t
         "paths": ["/data/work"],
         "problems": [],
         "agents_here": [],
+        "agents_off_here": [],
     }
     assert here["transport"] == "local" and here["state"] == "off" and "node_version" not in here
     for secret in SECRETS:
@@ -144,7 +145,9 @@ async def test_list_names_the_connected_agent_entries_that_run_on_each_machine(p
 
     def named(conn_id: str, only_enabled: bool = False) -> list[str]:
         asked.append((conn_id, only_enabled))
-        return ["Claude Code@box", "codex@box"] if conn_id == "box" else []
+        if conn_id != "box":
+            return []
+        return ["Claude Code@box", "codex@box"] if only_enabled else ["Claude Code@box", "codex@box", "hermes@box"]
 
     monkeypatch.setattr(rpc, "agents_on_machine", named)
 
@@ -153,9 +156,11 @@ async def test_list_names_the_connected_agent_entries_that_run_on_each_machine(p
     _check("machines.list", out)
     box, here = out["rows"]
     assert box["agents_here"] == ["Claude Code@box", "codex@box"]
-    assert here["agents_here"] == []
-    # Connected entries only: a switched-off one still names the machine, but is not what "runs here" means.
-    assert ("box", True) in asked
+    # The switched-off one is listed apart, not dropped: it still holds the machine for the add
+    # (seen 2026-10-20: the card said "no agent here" while the form greyed the preset as taken).
+    assert box["agents_off_here"] == ["hermes@box"]
+    assert here["agents_here"] == [] and here["agents_off_here"] == []
+    assert ("box", True) in asked and ("box", False) in asked
 
 
 async def test_list_lists_no_agent_over_a_config_file_that_does_not_parse_rather_than_failing(
@@ -185,7 +190,7 @@ async def test_list_lists_no_agent_over_a_malformed_agents_section_rather_than_f
     out = await rpc.machines_list({})
 
     _check("machines.list", out)
-    assert out["rows"][0]["agents_here"] == []
+    assert out["rows"][0]["agents_here"] == [] and out["rows"][0]["agents_off_here"] == []
 
 
 # --- machines.local_keys ---------------------------------------------------------

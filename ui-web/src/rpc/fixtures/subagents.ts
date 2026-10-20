@@ -129,7 +129,10 @@ export function createSubagents(env: FixtureEnv): SubagentsFixture {
         presets: PRESETS.map((p) => ({
           ...p,
           connected_here: rows.some((r) => r.preset === p.preset && r.configured && !r.machine),
-          on_machines: rows.filter((r) => r.preset === p.preset && r.configured && !!r.machine).map((r) => String(r.machine)),
+          on_machines: rows.filter((r) => r.preset === p.preset && r.configured && !!r.machine && r.enabled).map((r) => String(r.machine)),
+          off_on_machines: rows
+            .filter((r) => r.preset === p.preset && r.configured && !!r.machine && !r.enabled)
+            .map((r) => ({ machine: String(r.machine), name: r.name })),
         })),
       }),
       'subagents.add': (p) => {

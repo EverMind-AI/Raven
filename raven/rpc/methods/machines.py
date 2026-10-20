@@ -121,6 +121,7 @@ def _row_out(row: dict[str, Any]) -> dict[str, Any]:
     status = get_node_pool().status(conn_id) if transport_of(row) == SSH else MachineStatus("off")
     version, current = _node_of(row, status)
     install = _INSTALLS.get(conn_id)
+    on_here, off_here = _agents_here(conn_id)
     out: dict[str, Any] = {
         "id": conn_id,
         "name": str(row.get("display_name") or conn_id),
@@ -132,7 +133,8 @@ def _row_out(row: dict[str, Any]) -> dict[str, Any]:
         "install": install.as_json() if install is not None else dict(_NO_INSTALL),
         "paths": [str(x) for x in row["paths"]] if isinstance(row.get("paths"), list) else [],
         "problems": [p.text for p in row_problems(row) if p.blocking],
-        "agents_here": _agents_here(conn_id),
+        "agents_here": on_here,
+        "agents_off_here": off_here,
     }
     if version:
         out["node_version"] = version
@@ -141,20 +143,26 @@ def _row_out(row: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _agents_here(conn_id: str) -> list[str]:
-    """The connected agent entries that run on the machine, by name.
+def _agents_here(conn_id: str) -> tuple[list[str], list[str]]:
+    """The agent entries that name the machine: the connected ones, then the switched-off ones, by name.
 
-    Connected ones only (``only_enabled``), which is what the agents page
-    calls connected too; an entry switched off still names the machine, and
-    the removal refuses over it, but it is not what the card means by "runs
-    here". A malformed agents section, or a config file that does not parse
-    at all (a comment, a trailing comma), is the agents page's to report:
-    the machine is still what it is, with nothing listed.
+    Both lists, because the card and the connect form have to agree with the
+    add's own rule: a preset's entry on the machine, switched off, still holds
+    the machine (``subagents.add`` refuses a second under the default name,
+    saying to switch it back on), so a card that counted only connected
+    entries read "no agent connected here" beside a form that greyed the
+    preset as "already on this machine" (seen 2026-10-20). The connected ones
+    are what the agents page calls connected; the switched-off ones are shown
+    as such, and offered back. A malformed agents section, or a config file
+    that does not parse at all (a comment, a trailing comma), is the agents
+    page's to report: the machine is still what it is, with nothing listed.
     """
     try:
-        return agents_on_machine(conn_id, only_enabled=True)
+        every = agents_on_machine(conn_id)
+        on = agents_on_machine(conn_id, only_enabled=True)
     except (ValidationError, ConfigReadError):
-        return []
+        return [], []
+    return on, [name for name in every if name not in on]
 
 
 def _registry() -> connections.Read:

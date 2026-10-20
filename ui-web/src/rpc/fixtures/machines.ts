@@ -17,12 +17,12 @@ const ROWS: Row[] = [
     id: 'ravenx2', name: 'RavenX 2', transport: 'ssh', state: 'idle', detail: '', agents: 0,
     node_version: '0.2.4', node_current: true, auth: 'key',
     install: { running: false, ok: true, detail: 'Installed the Raven node 0.2.4-f5bd06f5d991 in /root/.raven-node (62 MB). The node answers: Python 3.12.3.' },
-    paths: ['/root/raven-work'], problems: [], agents_here: ['claude_code@ravenx2'],
+    paths: ['/root/raven-work'], problems: [], agents_here: ['claude_code@ravenx2'], agents_off_here: [],
   },
   {
     id: 'gpu1', name: 'GPU box 1', transport: 'ssh', state: 'off', detail: '', agents: 0,
     node_current: false, auth: 'key', install: { running: false, detail: '' },
-    paths: ['/data/alice/projects'], problems: ["gpu1: 'key' is missing, so there is no way onto it"], agents_here: [],
+    paths: ['/data/alice/projects'], problems: ["gpu1: 'key' is missing, so there is no way onto it"], agents_here: [], agents_off_here: [],
   },
 ]
 
@@ -39,7 +39,7 @@ const REFUSALS: Record<string, [ResultOf<'machines.add'>['reason'], string]> = {
 export function createMachines(_env: FixtureEnv): { fixtures: Fixtures } {
   let rows = ROWS.map((r) => ({ ...r }))
   let installReads = 0
-  const copy = (r: Row): Row => ({ ...r, install: { ...r.install }, paths: [...r.paths], problems: [...r.problems], agents_here: [...r.agents_here] })
+  const copy = (r: Row): Row => ({ ...r, install: { ...r.install }, paths: [...r.paths], problems: [...r.problems], agents_here: [...r.agents_here], agents_off_here: [...r.agents_off_here] })
   const fixtures: Fixtures = {
     'machines.list': async (p) => {
       const running = rows.find((r) => r.install.running)
@@ -86,7 +86,7 @@ export function createMachines(_env: FixtureEnv): { fixtures: Fixtures } {
       const row: Row = {
         id, name: String(p.name || id), transport: 'ssh', state: 'off', detail: '', agents: 0,
         node_current: false, auth: p.auth === 'password' ? 'password' : 'key', install: { running: false, detail: '' },
-        paths: Array.isArray(p.paths) ? p.paths.map(String) : [], problems: [], agents_here: [],
+        paths: Array.isArray(p.paths) ? p.paths.map(String) : [], problems: [], agents_here: [], agents_off_here: [],
       }
       rows = [...rows, row]
       return { ok: true, detail: `reached machine '${row.name}' (${id}): 32 cores, 128 GB, 2 x NVIDIA A800`, reason: '', row: copy(row) }

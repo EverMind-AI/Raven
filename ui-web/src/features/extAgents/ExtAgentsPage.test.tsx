@@ -76,6 +76,7 @@ function mrow(over: Partial<MachineRow> = {}): MachineRow {
     paths: [],
     problems: [],
     agents_here: [],
+    agents_off_here: [],
     ...over,
   }
 }
@@ -2699,11 +2700,14 @@ describe('the machines module', () => {
 
   it('says on the card and in the sheet which agent entries run on the machine, and the next step on a ready one', async () => {
     install([row()], {
-      machines: [ready({ agents_here: ['Claude Code@box', 'codex@box'] }), mrow({ id: 'gpu1', name: 'GPU 1' })]
+      machines: [ready({ agents_here: ['Claude Code@box', 'codex@box'], agents_off_here: ['hermes@box'] }), mrow({ id: 'gpu1', name: 'GPU 1' })]
     })
     await mount()
     await openMachines()
-    expect(agentsLineOf('Lab box')).toBe('gui.machine.agents_line {"n":"2","names":"Claude Code@box, codex@box"}')
+    /* The switched-off entry counts and is marked: it still holds the machine for the add. */
+    expect(agentsLineOf('Lab box')).toBe(
+      'gui.machine.agents_line {"n":"3","names":"Claude Code@box, codex@box, gui.machine.off_suffix {\\"name\\":\\"hermes@box\\"}"}'
+    )
     expect(agentsLineOf('GPU 1')).toBe('gui.machine.agents_line_none')
     expect(rowNamed('Lab box').querySelector('.extAgents-foot-say')!.textContent).toBe('gui.machine.state_idle')
     await openSheet('Lab box')
@@ -2713,7 +2717,7 @@ describe('the machines module', () => {
       f.querySelector('.extAgents-k')!.textContent,
       f.querySelector('.extAgents-ro')?.textContent
     ])
-    expect(fields).toContainEqual(['gui.machine.agents_here', 'Claude Code@box\ncodex@box'])
+    expect(fields).toContainEqual(['gui.machine.agents_here', 'Claude Code@box\ncodex@box\ngui.machine.off_suffix {"name":"hermes@box"}'])
     /* A machine without the node has nothing to connect onto yet: no pointer, no button. */
     await openSheet('GPU 1')
     expect(sheet()!.querySelector('.extAgents-note-next')).toBeNull()
@@ -2723,14 +2727,14 @@ describe('the machines module', () => {
 
   it('connects an agent on the machine from its sheet: the presets a node can start, the one here greyed, the add under preset@machine, then back to the sheet', async () => {
     const presets: PresetChoice[] = [
-      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, on_machines: ['box'] },
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: ['box'] },
       {
         preset: 'claude_code',
         name: 'Claude Code',
         kind: 'acp',
         description: 'Claude Code CLI',
         connected_here: true,
-        on_machines: []
+        off_on_machines: [], on_machines: []
       }
     ]
     const { acts, loads, toasts, mcalls } = install([row()], {
@@ -2764,7 +2768,7 @@ describe('the machines module', () => {
 
   it('keeps the agent s own refusal on the connect form, and says there is nothing to connect when the machine has them all', async () => {
     const presets: PresetChoice[] = [
-      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, on_machines: [] }
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] }
     ]
     const { acts } = install([row()], {
       machines: [ready()],
@@ -2788,6 +2792,61 @@ describe('the machines module', () => {
       'gui.machine.presets_none'
     )
     expect((sheetAct('gui.machine.connect_do') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('offers a preset the machine has switched off back under its entry, and Reconnect switches that entry on', async () => {
+    const presets: PresetChoice[] = [
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [{ machine: 'box', name: 'codex@box' }], on_machines: [] },
+      { preset: 'hermes', name: 'Hermes', kind: 'acp', description: 'h', connected_here: false, off_on_machines: [], on_machines: ['box'] },
+    ]
+    const offRow = row({ name: 'codex@box', preset: 'codex', configured: true, enabled: false, machine: 'box' })
+    const { acts, toasts, mcalls } = install([row(), offRow], {
+      machines: [ready({ agents_here: ['hermes@box'], agents_off_here: ['codex@box'] })],
+      presets: async () => presets,
+    })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    const pick = field('gui.machine.f_preset') as HTMLSelectElement
+    /* Switched off: pickable, said so; connected: greyed as before. */
+    expect([...pick.options].map(o => [o.value, o.disabled, o.textContent])).toEqual([
+      ['codex', false, 'gui.machine.preset_off_on_machine {"name":"Codex"}'],
+      ['hermes', true, 'gui.machine.preset_on_machine {"name":"Hermes"}'],
+    ])
+    expect(pick.value).toBe('codex')
+    expect(sheetStatus()).toBe('gui.machine.reconnect_hint')
+    /* The entry keeps the directory it was connected with: no field for one. */
+    expect(field('gui.machine.remote_cwd')).toBeNull()
+    expect(sheetActs()).toEqual(['gui.machine.reconnect_do'])
+    const listsBefore = mcalls.filter(c => c[0] === 'list').length
+    await click(sheetAct('gui.machine.reconnect_do'))
+    /* The agents page's own switch, on the existing entry -- not a second add. */
+    expect(acts).toEqual([['toggle', 'codex@box', { enabled: true }]])
+    expect(toasts).toEqual(['gui.machine.reconnected_said {"name":"codex@box"}'])
+    expect(mcalls.filter(c => c[0] === 'list').length).toBeGreaterThan(listsBefore)
+    expect(sheetName()).toBe('Lab box')
+    expect(offRow.enabled).toBe(true)
+  })
+
+  it('keeps the refusal of a Reconnect on the form, in the agent s words', async () => {
+    const presets: PresetChoice[] = [
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [{ machine: 'box', name: 'codex@box' }], on_machines: [] },
+    ]
+    const { acts } = install([row(), row({ name: 'codex@box', preset: 'codex', configured: true, enabled: false, machine: 'box' })], {
+      machines: [ready({ agents_off_here: ['codex@box'] })],
+      presets: async () => presets,
+      refuse: op => (op === 'toggle' ? 'it is installed but has no usable credential' : null),
+    })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    await click(sheetAct('gui.machine.reconnect_do'))
+    expect(acts).toEqual([['toggle', 'codex@box', { enabled: true }]])
+    expect(sheetStatus()).toBe('gui.machine.connect_bad')
+    expect(note()).toEqual({ t: 'gui.machine.connect_bad', said: 'it is installed but has no usable credential' })
+    expect(sheetName()).toBe('gui.machine.connect_title {"name":"Lab box"}')
   })
 
   it('fills the key path with a key this computer has, offers the rest, and says when it has none', async () => {
@@ -2899,7 +2958,7 @@ describe('the machines module', () => {
 
   it('leaves the drawer alone when a machine-side connect ends after the reader opened another machine', async () => {
     const presets: PresetChoice[] = [
-      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, on_machines: [] }
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] }
     ]
     const held = heldConnect()
     const { toasts, mcalls } = install([row()], {
@@ -2931,7 +2990,7 @@ describe('the machines module', () => {
 
   it('tells a refusal that arrives after its form was replaced in a line, not on the form that replaced it', async () => {
     const presets: PresetChoice[] = [
-      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, on_machines: [] }
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] }
     ]
     const held = heldConnect()
     const { toasts } = install([row()], {
@@ -2956,7 +3015,7 @@ describe('the machines module', () => {
 
   it('does not reopen a drawer the reader closed while a machine-side connect ran, even inside the close fade', async () => {
     const presets: PresetChoice[] = [
-      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, on_machines: [] }
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] }
     ]
     const held = heldConnect()
     const { toasts } = install([row()], {
@@ -2993,7 +3052,7 @@ describe('the machines module', () => {
 
   it('tells a refusal that lands inside the close fade in a line, and leaves nothing on the next form', async () => {
     const presets: PresetChoice[] = [
-      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, on_machines: [] }
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] }
     ]
     const held = heldConnect()
     const { toasts } = install([row()], {
@@ -3059,8 +3118,8 @@ describe('the machines module', () => {
        `on_machines`, which is what the form greys on after the re-read. */
     let on: string[] = []
     const presets = async (): Promise<PresetChoice[]> => [
-      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, on_machines: on },
-      { preset: 'opencode', name: 'OpenCode', kind: 'acp', description: 'd', connected_here: false, on_machines: [] }
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: on },
+      { preset: 'opencode', name: 'OpenCode', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] }
     ]
     const held = heldConnect()
     let asked = 0
@@ -3116,8 +3175,8 @@ describe('the machines module', () => {
        read answers, the preset stays greyed as being connected rather than offered for a press the
        server would refuse as a duplicate. */
     const presets: PresetChoice[] = [
-      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, on_machines: [] },
-      { preset: 'opencode', name: 'OpenCode', kind: 'acp', description: 'd', connected_here: false, on_machines: [] }
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] },
+      { preset: 'opencode', name: 'OpenCode', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] }
     ]
     const held = heldConnect()
     let reads = 0
@@ -3174,8 +3233,8 @@ describe('the machines module', () => {
     /* The form opened again while the add ran asks for its presets; that read can answer after
        the one the landed add asks for, with what the server said before the write. */
     const presets: PresetChoice[] = [
-      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, on_machines: [] },
-      { preset: 'opencode', name: 'OpenCode', kind: 'acp', description: 'd', connected_here: false, on_machines: [] }
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] },
+      { preset: 'opencode', name: 'OpenCode', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] }
     ]
     const held = heldConnect()
     let reads = 0

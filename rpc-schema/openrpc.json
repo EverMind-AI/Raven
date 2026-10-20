@@ -2145,7 +2145,8 @@
                   "kind",
                   "description",
                   "connected_here",
-                  "on_machines"
+                  "on_machines",
+                  "off_on_machines"
                 ],
                 "properties": {
                   "preset": {
@@ -2173,7 +2174,27 @@
                     "items": {
                       "type": "string"
                     },
-                    "description": "The registered machines (ids) an entry of this preset already runs on."
+                    "description": "The registered machines (ids) a connected entry of this preset runs on."
+                  },
+                  "off_on_machines": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "machine",
+                        "name"
+                      ],
+                      "properties": {
+                        "machine": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "description": "The machines where an entry of this preset exists but is switched off, with that entry's name: it still holds the machine for the add, and is what the form offers to switch back on."
                   }
                 }
               }
@@ -18443,7 +18464,8 @@
           "install",
           "paths",
           "problems",
-          "agents_here"
+          "agents_here",
+          "agents_off_here"
         ],
         "properties": {
           "id": {
@@ -18533,6 +18555,13 @@
               "type": "string"
             },
             "description": "The connected agent entries that run on the machine, by name: empty on a machine whose next step is to connect one."
+          },
+          "agents_off_here": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The agent entries on the machine that are switched off, by name: they still hold the machine for the add, so the card says so instead of counting them nowhere."
           }
         }
       }

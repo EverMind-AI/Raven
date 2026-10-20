@@ -393,6 +393,9 @@ export const extAgentsSource: ExtAgentsSource = {
       description: p.description || '',
       connected_here: !!p.connected_here,
       on_machines: Array.isArray(p.on_machines) ? p.on_machines.map(String) : [],
+      off_on_machines: Array.isArray(p.off_on_machines)
+        ? p.off_on_machines.map((e) => ({ machine: String(e.machine), name: String(e.name) }))
+        : [],
     }))
   },
   /* The same add a preset's sheet makes, from the machine's side, under the
@@ -482,6 +485,7 @@ export function machineRowOf(r: MachineRowWire): MachineRow {
     paths: Array.isArray(r.paths) ? r.paths.map(String) : [],
     problems: Array.isArray(r.problems) ? r.problems.map(String) : [],
     agents_here: Array.isArray(r.agents_here) ? r.agents_here.map(String) : [],
+    agents_off_here: Array.isArray(r.agents_off_here) ? r.agents_off_here.map(String) : [],
   }
 }
 

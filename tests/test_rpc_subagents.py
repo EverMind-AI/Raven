@@ -191,6 +191,14 @@ async def test_presets_lists_what_a_machine_can_start_whether_or_not_an_entry_ho
                             "model": "m",
                             "apiKey": "k",
                         },
+                        {
+                            "name": "codex@box",
+                            "preset": "codex",
+                            "kind": "acp",
+                            "command": "npx -y @zed-industries/codex-acp",
+                            "machine": "box",
+                            "enabled": False,
+                        },
                     ]
                 }
             }
@@ -207,9 +215,11 @@ async def test_presets_lists_what_a_machine_can_start_whether_or_not_an_entry_ho
     # Held here AND on a machine: listed all the same, saying both.
     assert by_key["claude_code"]["name"] == "Claude Code"
     assert by_key["claude_code"]["connected_here"] is True
-    assert by_key["claude_code"]["on_machines"] == ["box"]
-    # Held nowhere: listed, saying so.
+    assert by_key["claude_code"]["on_machines"] == ["box"] and by_key["claude_code"]["off_on_machines"] == []
+    # Held on a machine but switched off: not "on" it -- the form would grey it as taken -- yet not
+    # nowhere either: the entry still holds the machine for the add, so it is offered back by name.
     assert by_key["codex"]["connected_here"] is False and by_key["codex"]["on_machines"] == []
+    assert by_key["codex"]["off_on_machines"] == [{"machine": "box", "name": "codex@box"}]
     # Only what a machine's node starts: no openai endpoint, no Mirasim shim, no built-in.
     assert "mirothinker" not in by_key
     assert not any(key.startswith("mirasim_") for key in by_key)

@@ -595,6 +595,42 @@ export async function connectOnMachine(
   return { landed: false, current: current(), name: `${choice.preset}@${machine}` }
 }
 
+/* The other press the connect form has: an entry of the preset is already
+   on the machine, switched off, and Reconnect switches it back on under the
+   name it has -- the agents page's own toggle, with its proof ping, run from
+   the machine's side -- rather than adding a second one, which the server
+   would refuse. Guarded like `connectOnMachine`: the generation says whose
+   form the write is, `current()` whether that form is still on screen. */
+export async function reconnectOnMachine(
+  name: string,
+  machine: string
+): Promise<{ landed: boolean; current: boolean; name: string }> {
+  const gen = get().mconnectGen
+  const current = (): boolean =>
+    get().mconnect === machine && get().mconnectGen === gen && detail.get().open && detail.get().owner === 'extAgents'
+  set({ mconnectBusy: gen, mconnectFailed: '', mconnectPending: [...get().mconnectPending, name] })
+  /* The roster row, so the source's toggle addresses it the way the agents
+     page does; a roster that has not caught up yet still knows the name. */
+  const row = get().rows.find(r => r.name === name) ?? ({ name, kind: 'acp', configured: true, enabled: false } as ExtAgentRow)
+  let refused: string | null = null
+  try {
+    const rows = await source().act('toggle', row, { enabled: true })
+    set({ rows, epoch: get().epoch + 1 })
+  } catch (e) {
+    refused = failure(e)
+  }
+  if (get().mconnectBusy === gen) set({ mconnectBusy: null })
+  const settled = (): void => set({ mconnectPending: get().mconnectPending.filter(n => n !== name) })
+  if (refused === null) {
+    if (get().mconnect === machine) await loadPresets()
+    settled()
+    return { landed: true, current: current(), name }
+  }
+  settled()
+  if (current()) set({ mconnectFailed: refused })
+  return { landed: false, current: current(), name }
+}
+
 export function closeSheet(): void {
   detail.close()
 }

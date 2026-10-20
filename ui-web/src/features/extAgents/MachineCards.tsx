@@ -28,7 +28,7 @@ import * as store from './store'
 
 import type { MachinesState } from './machines'
 import type { ExtAgentsState } from './store'
-import type { MachineLink, MachineRow, PresetChoice, RegisterForm, RegisterReason } from './types'
+import type { MachineLink, MachineRow, RegisterForm, RegisterReason } from './types'
 import type { JSX } from 'react'
 
 const MACHINE = 'M4 5.5h16v9.5H4zM9.5 19h5M12 15.5V19'
@@ -107,9 +107,18 @@ const installLabel = (row: MachineRow): string => t(row.node_version ? 'gui.mach
 /* Which connected agent entries run on the machine. The line a reader whose
    machine is up and idle was missing: "no agent running" says what the link
    is doing now, this says whether anything is connected here at all. */
+/* Every entry on the machine, the switched-off ones marked: those still hold
+   the machine for the add, so a card that counted only the connected ones
+   said "no agent connected here" beside a form that greyed the preset. */
+const agentsHere = (row: MachineRow): string[] => [
+  ...row.agents_here,
+  ...row.agents_off_here.map((name) => t('gui.machine.off_suffix', { name })),
+]
+
 function agentsLine(row: MachineRow): string {
-  return row.agents_here.length
-    ? t('gui.machine.agents_line', { n: String(row.agents_here.length), names: row.agents_here.join(', ') })
+  const names = agentsHere(row)
+  return names.length
+    ? t('gui.machine.agents_line', { n: String(names.length), names: names.join(', ') })
     : t('gui.machine.agents_line_none')
 }
 
@@ -315,7 +324,7 @@ export function MachineSheet({ row, ms }: { row: MachineRow; ms: MachinesState }
         <Field k={t('gui.machine.paths')}>{row.paths.length ? row.paths.join('\n') : t('gui.machine.paths_none')}</Field>
         {row.transport === 'ssh' ? (
           <Field k={t('gui.machine.agents_here')}>
-            {row.agents_here.length ? row.agents_here.join('\n') : t('gui.machine.agents_here_none')}
+            {agentsHere(row).length ? agentsHere(row).join('\n') : t('gui.machine.agents_here_none')}
           </Field>
         ) : null}
         <Field k={t('gui.machine.problems')}>
@@ -371,19 +380,29 @@ export function MachineConnectSheet({ row, s }: { row: MachineRow; s: ExtAgentsS
      the reader closed -- the server has not written it yet, so `on_machines`
      cannot say, and a second press would be a second ping ending in the
      duplicate refusal. */
-  const choices = (s.presets ?? []).map(p => ({
-    ...p,
-    taken: p.on_machines.includes(row.id),
-    pending: s.mconnectPending.includes(`${p.preset}@${row.id}`)
-  }))
+  const choices = (s.presets ?? []).map(p => {
+    /* `off`: the machine has an entry of it switched off, by that entry's
+       name. It still holds the machine (the server refuses a second), so it
+       is offered back -- Reconnect switches that entry on -- rather than
+       greyed as taken or counted nowhere. */
+    const off = p.off_on_machines.find(e => e.machine === row.id)?.name ?? ''
+    return {
+      ...p,
+      off,
+      taken: p.on_machines.includes(row.id),
+      pending: s.mconnectPending.includes(`${p.preset}@${row.id}`) || (!!off && s.mconnectPending.includes(off))
+    }
+  })
   const pickable = choices.filter(c => !c.taken && !c.pending)
-  const chosen: PresetChoice | undefined = pickable.find(c => c.preset === picked) ?? pickable[0]
+  const chosen: (typeof choices)[number] | undefined = pickable.find(c => c.preset === picked) ?? pickable[0]
   const busy = s.mconnectBusy !== null && s.mconnectBusy === s.mconnectGen
   const submit = async (): Promise<void> => {
     if (!chosen) return
-    const { landed, current, name } = await store.connectOnMachine(chosen, row.id, cwdRef.current?.value.trim() || '')
+    const { landed, current, name } = chosen.off
+      ? await store.reconnectOnMachine(chosen.off, row.id)
+      : await store.connectOnMachine(chosen, row.id, cwdRef.current?.value.trim() || '')
     if (landed) {
-      toast(t('gui.machine.connected_said', { name }))
+      toast(t(chosen.off ? 'gui.machine.reconnected_said' : 'gui.machine.connected_said', { name }))
       /* The card's own line changes with it; back to the sheet that says so --
          if this form is still the one open. The reader may have closed the
          drawer or opened another machine while the ping ran, and what they
@@ -400,9 +419,11 @@ export function MachineConnectSheet({ row, s }: { row: MachineRow; s: ExtAgentsS
       ? t('gui.machine.preset_on_machine', { name: c.name })
       : c.pending
         ? t('gui.machine.preset_connecting', { name: c.name })
-        : c.connected_here
-          ? t('gui.machine.preset_connected_here', { name: c.name })
-          : c.name
+        : c.off
+          ? t('gui.machine.preset_off_on_machine', { name: c.name })
+          : c.connected_here
+            ? t('gui.machine.preset_connected_here', { name: c.name })
+            : c.name
   return createPortal(
     <div className="extAgents-sheet" aria-label={t('gui.machine.connect_title', { name: row.name })} role="document">
       <div className="extAgents-head">
@@ -414,7 +435,9 @@ export function MachineConnectSheet({ row, s }: { row: MachineRow; s: ExtAgentsS
               ? t('gui.machine.connecting')
               : s.mconnectFailed
                 ? t('gui.machine.connect_bad')
-                : t('gui.machine.connect_hint')}
+                : chosen?.off
+                  ? t('gui.machine.reconnect_hint')
+                  : t('gui.machine.connect_hint')}
           </div>
         </div>
       </div>
@@ -445,16 +468,20 @@ export function MachineConnectSheet({ row, s }: { row: MachineRow; s: ExtAgentsS
               </select>
             </label>
             {chosen?.description ? <div className="extAgents-about">{chosen.description}</div> : null}
-            <label className="extAgents-fld">
-              <span className="extAgents-k">{t('gui.machine.remote_cwd')}</span>
-              <input
-                aria-label={t('gui.machine.remote_cwd')}
-                className="extAgents-in extAgents-in-mono"
-                placeholder="~/raven-work"
-                ref={cwdRef}
-                type="text"
-              />
-            </label>
+            {/* A switched-off entry keeps the directory it was connected with;
+                only a new entry takes one here. */}
+            {chosen?.off ? null : (
+              <label className="extAgents-fld">
+                <span className="extAgents-k">{t('gui.machine.remote_cwd')}</span>
+                <input
+                  aria-label={t('gui.machine.remote_cwd')}
+                  className="extAgents-in extAgents-in-mono"
+                  placeholder="~/raven-work"
+                  ref={cwdRef}
+                  type="text"
+                />
+              </label>
+            )}
             <div className="extAgents-about">{t('gui.machine.next_body')}</div>
           </>
         )}
@@ -468,7 +495,7 @@ export function MachineConnectSheet({ row, s }: { row: MachineRow; s: ExtAgentsS
       <div className="extAgents-act">
         <button className="mini go" disabled={busy || !chosen} onClick={() => void submit()} type="button">
           {busy ? <Spin /> : null}
-          {t(busy ? 'gui.machine.connecting' : 'gui.machine.connect_do')}
+          {t(busy ? 'gui.machine.connecting' : chosen?.off ? 'gui.machine.reconnect_do' : 'gui.machine.connect_do')}
         </button>
       </div>
     </div>,

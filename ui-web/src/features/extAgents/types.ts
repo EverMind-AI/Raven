@@ -124,7 +124,12 @@ export interface PresetChoice {
   kind: 'acp' | 'cli'
   description: string
   connected_here: boolean
+  /* Machines (ids) a connected entry of it runs on: the form greys these. */
   on_machines: string[]
+  /* Machines where an entry of it exists but is switched off, with that
+     entry's name: it still holds the machine for the add (the server refuses
+     a second), so the form offers it back under its own name instead. */
+  off_on_machines: Array<{ machine: string; name: string }>
 }
 
 export interface ExtAgentsSource {
@@ -214,6 +219,9 @@ export interface MachineRow {
      that tells a reader whose machine is up and idle where the next step is.
      Empty on a machine nothing is connected on yet. */
   agents_here: string[]
+  /* The entries on this machine that are switched off, by name: shown as
+     such, since they still hold the machine for the add. */
+  agents_off_here: string[]
 }
 
 export interface MachineProblem {

@@ -2869,7 +2869,14 @@ class PresetChoice(_Strict):
     connected_here: bool
     """Whether an entry of this preset runs on this computer; one on a machine is a second entry, not a conflict."""
     on_machines: list[str]
-    """The registered machines (ids) an entry of this preset already runs on."""
+    """The registered machines (ids) a connected entry of this preset runs on."""
+    off_on_machines: list[PresetOffEntry]
+    """The machines where an entry of this preset exists but is switched off, with that entry's name: it still holds the machine for the add, and is what the form offers to switch back on."""
+
+
+class PresetOffEntry(_Strict):
+    machine: str
+    name: str
 
 
 class SubagentsPresetsResult(_Strict):
@@ -3048,6 +3055,8 @@ class MachineRow(_Strict):
     problems: list[str]
     agents_here: list[str]
     """The connected agent entries that run on the machine, by name; what tells a reader the next step is on the agents side."""
+    agents_off_here: list[str]
+    """The agent entries on the machine that are switched off, by name: they still hold the machine for the add, so the card says so instead of counting them nowhere."""
 
 
 class MachinesListParams(_Strict):

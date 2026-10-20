@@ -3316,6 +3316,10 @@ export interface MachineRow {
    * The connected agent entries that run on the machine, by name: empty on a machine whose next step is to connect one.
    */
   agents_here: string[];
+  /**
+   * The agent entries on the machine that are switched off, by name: they still hold the machine for the add, so the card says so instead of counting them nowhere.
+   */
+  agents_off_here: string[];
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -4206,9 +4210,16 @@ export interface SubagentsPresetsResult {
      */
     connected_here: boolean;
     /**
-     * The registered machines (ids) an entry of this preset already runs on.
+     * The registered machines (ids) a connected entry of this preset runs on.
      */
     on_machines: string[];
+    /**
+     * The machines where an entry of this preset exists but is switched off, with that entry's name: it still holds the machine for the add, and is what the form offers to switch back on.
+     */
+    off_on_machines: {
+      machine: string;
+      name: string;
+    }[];
   }[];
 }
 /**
