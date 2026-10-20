@@ -1,0 +1,1305 @@
+{
+  "schema": "raven_evidence_corpus",
+  "version": 1,
+  "predicate_type": "https://evermind.ai/attestation/agent-run/v1",
+  "statement_type": "https://in-toto.io/Statement/v1",
+  "payload_type": "application/vnd.in-toto+json",
+  "key_id": "2083841cd8e69be6",
+  "public_key": "fr8Dp/aSmVNP9YxkDIHzxZGG/wXi8XU7CJPURzMUWrI=",
+  "key_algorithm": "ed25519",
+  "built_at": null,
+  "run_kinds": {
+    "transport-only": 7,
+    "tool-using": 100
+  },
+  "entries": [
+    {
+      "entry": "entries/b72c76d1-4c0f-4d7f-8df8-1363a80ced8a.envelope.json",
+      "session_id": "b72c76d1-4c0f-4d7f-8df8-1363a80ced8a",
+      "source": "Claude-Code-063215133833.jsonl",
+      "subject": {
+        "name": "agent-run:b72c76d1-4c0f-4d7f-8df8-1363a80ced8a",
+        "digest": {
+          "sha256": "af3f87760f2959826ffc72eb8ab40595263dc5d4584bf4a9e3fe758f5195c075"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/01a0ebdd-31c1-7aa1-a3a3-1c364b870574.envelope.json",
+      "session_id": "01a0ebdd-31c1-7aa1-a3a3-1c364b870574",
+      "source": "Codex-063213809541.jsonl",
+      "subject": {
+        "name": "agent-run:01a0ebdd-31c1-7aa1-a3a3-1c364b870574",
+        "digest": {
+          "sha256": "bb9c83bda38e4e628a0e8d782d17e7c7f28522afc37ba0264bfaf617797ce888"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/01a0ebde-9cd0-7483-82af-7662777f9992.envelope.json",
+      "session_id": "01a0ebde-9cd0-7483-82af-7662777f9992",
+      "source": "Codex-063346500458.jsonl",
+      "subject": {
+        "name": "agent-run:01a0ebde-9cd0-7483-82af-7662777f9992",
+        "digest": {
+          "sha256": "45fa94b29f7956e65cab31c2b7158f25fdd6ed1e3bf8df4f3f1c08b0a10a4438"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/886a6123-8b90-4730-af10-79761f9d5b3f.envelope.json",
+      "session_id": "886a6123-8b90-4730-af10-79761f9d5b3f",
+      "source": "Hermes-Agent-063216937875.jsonl",
+      "subject": {
+        "name": "agent-run:886a6123-8b90-4730-af10-79761f9d5b3f",
+        "digest": {
+          "sha256": "edc218eee6990023667264086d97f060825e2f664b5eb62598ba2eb2d4f76425"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/a1a1e5e2-3d2b-4bdf-9653-1235507af1b4.envelope.json",
+      "session_id": "a1a1e5e2-3d2b-4bdf-9653-1235507af1b4",
+      "source": "Hermes-Agent-063400789083.jsonl",
+      "subject": {
+        "name": "agent-run:a1a1e5e2-3d2b-4bdf-9653-1235507af1b4",
+        "digest": {
+          "sha256": "c4f123c263508095c0c598032e9cbda7b5e561fb332f792fa5fffc0001302e3e"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/23241db2-e40b-43c6-a702-5ede136663a3.envelope.json",
+      "session_id": "23241db2-e40b-43c6-a702-5ede136663a3",
+      "source": "Hermes-Agent-063506000791.jsonl",
+      "subject": {
+        "name": "agent-run:23241db2-e40b-43c6-a702-5ede136663a3",
+        "digest": {
+          "sha256": "60203460253a824ff43c847eb62e852776dd2ca2e21ad3928bb5e477124a0ef0"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/ses_f1422b508ffeB5BMVEVzkRIgKN.envelope.json",
+      "session_id": "ses_f1422b508ffeB5BMVEVzkRIgKN",
+      "source": "OpenCode-063219131875.jsonl",
+      "subject": {
+        "name": "agent-run:ses_f1422b508ffeB5BMVEVzkRIgKN",
+        "digest": {
+          "sha256": "5d9718bed816c99defd7ca25c81172fa49ff5331598c9c4fd72a928a928441ee"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170222_e64716.envelope.json",
+      "session_id": "acp:20261020_170222_e64716",
+      "source": "raven-self-0-210221142333.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170222_e64716",
+        "digest": {
+          "sha256": "b7290b801e3104e0f9af8f66294900e56c29e79fbf256b9b66e21863a4425ed9"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170229_db14cb.envelope.json",
+      "session_id": "acp:20261020_170229_db14cb",
+      "source": "raven-self-1-210228398375.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170229_db14cb",
+        "digest": {
+          "sha256": "b7fe295b88a53a3cc4f82466759bc6c950396bc85f9ac45490455110b5cbb713"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170326_26fdf6.envelope.json",
+      "session_id": "acp:20261020_170326_26fdf6",
+      "source": "raven-self-10-210325965458.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170326_26fdf6",
+        "digest": {
+          "sha256": "74dc425db281c8831853e404b08eae583f45887296e1f02af17181e039675997"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170331_7faf09.envelope.json",
+      "session_id": "acp:20261020_170331_7faf09",
+      "source": "raven-self-11-210330831333.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170331_7faf09",
+        "digest": {
+          "sha256": "289d1528172a55cf9873f7b1a30b1ce7dd2aa38a22befd70156e6721f58d06e3"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170337_55306a.envelope.json",
+      "session_id": "acp:20261020_170337_55306a",
+      "source": "raven-self-12-210336784333.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170337_55306a",
+        "digest": {
+          "sha256": "8596a4d77e6399f3802b46d764544bfb148a4b99d0407c170e9a80a20932f2a6"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170342_38100f.envelope.json",
+      "session_id": "acp:20261020_170342_38100f",
+      "source": "raven-self-13-210341565208.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170342_38100f",
+        "digest": {
+          "sha256": "c868cb53aa60e89c9d6a148e48778f0d59fc9ecc82070b281210737b20e5cccd"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170348_9e3447.envelope.json",
+      "session_id": "acp:20261020_170348_9e3447",
+      "source": "raven-self-14-210347815666.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170348_9e3447",
+        "digest": {
+          "sha256": "293b9e50200dedbc6840af9e715f7a863a85aad469f50a9f84bd3ccc5c86d84b"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170355_197079.envelope.json",
+      "session_id": "acp:20261020_170355_197079",
+      "source": "raven-self-15-210354611458.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170355_197079",
+        "digest": {
+          "sha256": "9faaccafb6623d6413a198473c0869d5e1816719a4f4c57ce55f7eaf571f58c4"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170359_db9cd5.envelope.json",
+      "session_id": "acp:20261020_170359_db9cd5",
+      "source": "raven-self-16-210358089041.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170359_db9cd5",
+        "digest": {
+          "sha256": "826868963bd341b509fcd12fffb165e9fc6a27ee3e67649adfa3e4b80eb5ae38"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170405_ea7aff.envelope.json",
+      "session_id": "acp:20261020_170405_ea7aff",
+      "source": "raven-self-17-210404676000.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170405_ea7aff",
+        "digest": {
+          "sha256": "f9da2846bc953eb25ab8960e3d102360b1e5b0566a910eaf551c438ac845090a"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170409_70210a.envelope.json",
+      "session_id": "acp:20261020_170409_70210a",
+      "source": "raven-self-18-210408840666.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170409_70210a",
+        "digest": {
+          "sha256": "1dcf1c343e4b13e281ec54993ed922313dcb8767ca28bd4cf2fbd5fcbb1e10b1"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170427_7d4ddc.envelope.json",
+      "session_id": "acp:20261020_170427_7d4ddc",
+      "source": "raven-self-19-210426546333.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170427_7d4ddc",
+        "digest": {
+          "sha256": "6f5a3901badf90d5fb93d03cac61ced4e7980e0bedcbc32a68f843448fac9bba"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170234_198a84.envelope.json",
+      "session_id": "acp:20261020_170234_198a84",
+      "source": "raven-self-2-210233694916.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170234_198a84",
+        "digest": {
+          "sha256": "a5f04d8368bf1ced1c44795be95100373ebebd91cf606e0c71ef8d3970adfead"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170432_4dfab5.envelope.json",
+      "session_id": "acp:20261020_170432_4dfab5",
+      "source": "raven-self-20-210431966458.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170432_4dfab5",
+        "digest": {
+          "sha256": "3596ae3c991bbde4d045817907fa56afd4ba2242664a7babb6e8c5c9847006a5"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170438_d19559.envelope.json",
+      "session_id": "acp:20261020_170438_d19559",
+      "source": "raven-self-21-210437354791.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170438_d19559",
+        "digest": {
+          "sha256": "b82b81d36104b519ad36a184e8689e8e6fd4ddb891b3d19f2cda0b7d5829020d"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170445_29433a.envelope.json",
+      "session_id": "acp:20261020_170445_29433a",
+      "source": "raven-self-22-210444093958.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170445_29433a",
+        "digest": {
+          "sha256": "fcd8b607d707515072e39e007120287828f00f969616fb6e0b8636d3f4b5147e"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170511_690059.envelope.json",
+      "session_id": "acp:20261020_170511_690059",
+      "source": "raven-self-23-210510871041.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170511_690059",
+        "digest": {
+          "sha256": "368c2623ad3c1cd1fc34fe5feda3ca746bfe35ac080c8e131bdd83e03051d00f"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170519_db6846.envelope.json",
+      "session_id": "acp:20261020_170519_db6846",
+      "source": "raven-self-24-210518004375.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170519_db6846",
+        "digest": {
+          "sha256": "23ee679a88f8e40988a1ff3a6e9909b74ea3ef6e74d2e309d575d40aae06c114"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170526_cca924.envelope.json",
+      "session_id": "acp:20261020_170526_cca924",
+      "source": "raven-self-25-210525170000.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170526_cca924",
+        "digest": {
+          "sha256": "2e5ecc5032b3c828bc53569916e2e8c438b8f95d436a87a1e9ccc1b54bec3d90"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170535_f21940.envelope.json",
+      "session_id": "acp:20261020_170535_f21940",
+      "source": "raven-self-26-210534727833.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170535_f21940",
+        "digest": {
+          "sha256": "9c49bacd9ee747ffab876882bdff1bc870696b1f42c68c3276b35c0a5e44316c"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170540_639e4f.envelope.json",
+      "session_id": "acp:20261020_170540_639e4f",
+      "source": "raven-self-27-210539580875.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170540_639e4f",
+        "digest": {
+          "sha256": "0181dec83fc0780e1c1438d27a4107529223014975716efeb5d937b48e8c3b58"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170544_1f7f7b.envelope.json",
+      "session_id": "acp:20261020_170544_1f7f7b",
+      "source": "raven-self-28-210543151125.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170544_1f7f7b",
+        "digest": {
+          "sha256": "1ce7729cc0b8c69dd54b9c32761d7eac32f11cfdc2d51f8933eee87f190c4a13"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170549_ba4fb7.envelope.json",
+      "session_id": "acp:20261020_170549_ba4fb7",
+      "source": "raven-self-29-210548395833.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170549_ba4fb7",
+        "digest": {
+          "sha256": "6a2e51f837341e00d9876acf8cbee97fce7557f203c36b68a4d9bba8dfed97a7"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170244_c322dc.envelope.json",
+      "session_id": "acp:20261020_170244_c322dc",
+      "source": "raven-self-3-210243762750.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170244_c322dc",
+        "digest": {
+          "sha256": "6c26675a29fd4cffb723702ad67b79eec53cefcc8c4e5688bfdf80e91e0173fc"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170554_13e92e.envelope.json",
+      "session_id": "acp:20261020_170554_13e92e",
+      "source": "raven-self-30-210553613708.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170554_13e92e",
+        "digest": {
+          "sha256": "312eeeeabe664e658d462af98c8a85e846aeb582c2bc6b1802b7eca84ec17c1d"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170559_a1d9cb.envelope.json",
+      "session_id": "acp:20261020_170559_a1d9cb",
+      "source": "raven-self-31-210558516875.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170559_a1d9cb",
+        "digest": {
+          "sha256": "e0c31e0f054cb6250c9ccfea137973366bb6776b0237a7c0a9540f689cc56bd6"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170605_99a2ed.envelope.json",
+      "session_id": "acp:20261020_170605_99a2ed",
+      "source": "raven-self-32-210604349208.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170605_99a2ed",
+        "digest": {
+          "sha256": "07902ed4f9776a5d41b04c7bd79159f66b1b22f75046336e1e7196a9ea668961"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170617_f38b97.envelope.json",
+      "session_id": "acp:20261020_170617_f38b97",
+      "source": "raven-self-33-210616691166.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170617_f38b97",
+        "digest": {
+          "sha256": "9ae9964c91430fffe172caed0f4aeb77aa7dc85cbe9ba523232bb98d51efd753"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170624_82a7d2.envelope.json",
+      "session_id": "acp:20261020_170624_82a7d2",
+      "source": "raven-self-34-210623298875.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170624_82a7d2",
+        "digest": {
+          "sha256": "971b9508d4e83b9752352309506d5ee0be06abce05eb6343bfbb917b33953b1f"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170632_4b99cd.envelope.json",
+      "session_id": "acp:20261020_170632_4b99cd",
+      "source": "raven-self-35-210631222208.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170632_4b99cd",
+        "digest": {
+          "sha256": "e0070cc87c5da4cbdafbc1dd3cfbc2531688157839205a4cdb89ceafbec659ab"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170644_c28f44.envelope.json",
+      "session_id": "acp:20261020_170644_c28f44",
+      "source": "raven-self-36-210643655833.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170644_c28f44",
+        "digest": {
+          "sha256": "ec6a04f0ff773493558ca20f81a8d2568ccfc1f6a5f79921fef85ffd4a51b098"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170650_db6f95.envelope.json",
+      "session_id": "acp:20261020_170650_db6f95",
+      "source": "raven-self-37-210649247083.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170650_db6f95",
+        "digest": {
+          "sha256": "a2dc847d2e7a1358ab4c1d090535cc13519dd0dbd530bd8d6d47510d01b113cc"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170657_fc3247.envelope.json",
+      "session_id": "acp:20261020_170657_fc3247",
+      "source": "raven-self-38-210656652750.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170657_fc3247",
+        "digest": {
+          "sha256": "00efcb9856612a500b67840c140405bc0038e526d8432b5fadd480554275021d"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170702_b0e57b.envelope.json",
+      "session_id": "acp:20261020_170702_b0e57b",
+      "source": "raven-self-39-210701975250.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170702_b0e57b",
+        "digest": {
+          "sha256": "87e32a1b6e730a2f642db2e5a963bdf4967d3a297fcae6ddd6babe6cdc560387"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170251_c25d2b.envelope.json",
+      "session_id": "acp:20261020_170251_c25d2b",
+      "source": "raven-self-4-210250523333.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170251_c25d2b",
+        "digest": {
+          "sha256": "338bb3213c36a3c3797d90d7e489e3241bb05b9c85fff5b804a5f2207900c2b7"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170709_59fa6c.envelope.json",
+      "session_id": "acp:20261020_170709_59fa6c",
+      "source": "raven-self-40-210708769791.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170709_59fa6c",
+        "digest": {
+          "sha256": "464f15b00264d6c592ed9dd198fe53cfecec0c68665595ccc91c4fa8a97a5074"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170722_72bb0a.envelope.json",
+      "session_id": "acp:20261020_170722_72bb0a",
+      "source": "raven-self-41-210721315125.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170722_72bb0a",
+        "digest": {
+          "sha256": "1f42234a3377a3b876c303f012d25594dfc832c474c8706aa0c311a9961aaa6f"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170727_b02ad5.envelope.json",
+      "session_id": "acp:20261020_170727_b02ad5",
+      "source": "raven-self-42-210726104625.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170727_b02ad5",
+        "digest": {
+          "sha256": "484f1f50a23aaa5e3427f40076319e3b91793b5bb51378113beefc6528508f94"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170733_9697a7.envelope.json",
+      "session_id": "acp:20261020_170733_9697a7",
+      "source": "raven-self-43-210732496125.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170733_9697a7",
+        "digest": {
+          "sha256": "69ed0729decd6a6e1b30edb4196ec3970151276be602b9511d5a53a29f84b0ac"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170738_3faa63.envelope.json",
+      "session_id": "acp:20261020_170738_3faa63",
+      "source": "raven-self-44-210737291458.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170738_3faa63",
+        "digest": {
+          "sha256": "f9c31c13fdadd315842607e4c32bd9ca1399550ef2b7c8084e3e5aa83e6cd206"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170744_82b363.envelope.json",
+      "session_id": "acp:20261020_170744_82b363",
+      "source": "raven-self-45-210743510000.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170744_82b363",
+        "digest": {
+          "sha256": "436f3ad5d4a52eb5439d476391ccc4784522fd90bf206d86d493bf602b1adbad"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170748_4a95a1.envelope.json",
+      "session_id": "acp:20261020_170748_4a95a1",
+      "source": "raven-self-46-210748868916.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170748_4a95a1",
+        "digest": {
+          "sha256": "b6d5cd8b5a2ed48b4aa22ba43e00561008ec86b0ff3156e3e5fb036de58f1a06"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170753_1c7aed.envelope.json",
+      "session_id": "acp:20261020_170753_1c7aed",
+      "source": "raven-self-47-210752218833.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170753_1c7aed",
+        "digest": {
+          "sha256": "8c561b7b616e0d66bbb45e6004315e7bbaddc6cd31376f93b9a6b9a1a82ed8ea"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170757_d94f8a.envelope.json",
+      "session_id": "acp:20261020_170757_d94f8a",
+      "source": "raven-self-48-210756741125.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170757_d94f8a",
+        "digest": {
+          "sha256": "efd521dd32bf89d51df4fd9c3e2b8d06479d3a51798cf51906710dc4f7ab8030"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170802_112fad.envelope.json",
+      "session_id": "acp:20261020_170802_112fad",
+      "source": "raven-self-49-210801183500.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170802_112fad",
+        "digest": {
+          "sha256": "84dc3448b5b92e5abb08599f4d9a1e8b485bd8978e7ef3aebee94d9c4b4fb141"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170256_033457.envelope.json",
+      "session_id": "acp:20261020_170256_033457",
+      "source": "raven-self-5-210256316125.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170256_033457",
+        "digest": {
+          "sha256": "ac24cca46b9847e17c39c0b002761959eeca7986c772ee1e677966135e3f9bf7"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170808_f23c44.envelope.json",
+      "session_id": "acp:20261020_170808_f23c44",
+      "source": "raven-self-50-210807101375.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170808_f23c44",
+        "digest": {
+          "sha256": "bfaf9a33d1486945e7ca6fe5249f93050b458d8853109baffc6c3f3877b31096"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170815_9fe463.envelope.json",
+      "session_id": "acp:20261020_170815_9fe463",
+      "source": "raven-self-51-210814925291.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170815_9fe463",
+        "digest": {
+          "sha256": "a74df9a73494b15de20eef0f8784190c021f07276ed1a45d07dba7d7cede1bc5"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170820_bc594f.envelope.json",
+      "session_id": "acp:20261020_170820_bc594f",
+      "source": "raven-self-52-210819776833.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170820_bc594f",
+        "digest": {
+          "sha256": "04aa32ab3adaf07211d5c198dcf7dcffe411d8d991b456cf07dafac801f8e601"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170827_8af9d6.envelope.json",
+      "session_id": "acp:20261020_170827_8af9d6",
+      "source": "raven-self-53-210826869916.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170827_8af9d6",
+        "digest": {
+          "sha256": "bdf7673e27bac2b828ae0fe9ebc64cf1a7c0bbbbe1f9527e30896356ebb551a6"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170831_4ffcb8.envelope.json",
+      "session_id": "acp:20261020_170831_4ffcb8",
+      "source": "raven-self-54-210830088416.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170831_4ffcb8",
+        "digest": {
+          "sha256": "7c01dab6072fc0269b1375a2f322de3b7f0204c56fde5f9f07900094cb1fd65e"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170837_9d483a.envelope.json",
+      "session_id": "acp:20261020_170837_9d483a",
+      "source": "raven-self-55-210836244583.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170837_9d483a",
+        "digest": {
+          "sha256": "5e775694839281929b56adb89445f0d8c020c7d5d1137364e637f04d1846887b"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170842_9c4b0b.envelope.json",
+      "session_id": "acp:20261020_170842_9c4b0b",
+      "source": "raven-self-56-210841967875.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170842_9c4b0b",
+        "digest": {
+          "sha256": "5e25904e77671dc29f1357f01f55fd2fbc0b775299f0596e5ccd56982f22f776"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170904_aa5356.envelope.json",
+      "session_id": "acp:20261020_170904_aa5356",
+      "source": "raven-self-57-210902749833.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170904_aa5356",
+        "digest": {
+          "sha256": "dec3148f379c5b5a9da67b88649e7d22f3e0c4141e7085e45e7be97dcde74e00"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170909_89ad59.envelope.json",
+      "session_id": "acp:20261020_170909_89ad59",
+      "source": "raven-self-58-210908770125.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170909_89ad59",
+        "digest": {
+          "sha256": "24a4dfcc2e0fc107dd332226212c9da72c5096e195eadf49700521a57e2c96f3"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170915_8bafdc.envelope.json",
+      "session_id": "acp:20261020_170915_8bafdc",
+      "source": "raven-self-59-210913939000.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170915_8bafdc",
+        "digest": {
+          "sha256": "0066910e65e5feee1bc102c8e0b7f1906cd2f6db69a80766f1b08fbb73984b48"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170303_8f06a1.envelope.json",
+      "session_id": "acp:20261020_170303_8f06a1",
+      "source": "raven-self-6-210302316250.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170303_8f06a1",
+        "digest": {
+          "sha256": "fa6c536bed16818b969729c3bd682184a761f25847f5d7b7a1ec8f9d32dcc235"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170919_d0ecc1.envelope.json",
+      "session_id": "acp:20261020_170919_d0ecc1",
+      "source": "raven-self-60-210918183833.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170919_d0ecc1",
+        "digest": {
+          "sha256": "4c726df738fae1afc16bd11012ce01d3a28777238fd1d5767d2a9c598b5a73f7"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170931_c5f470.envelope.json",
+      "session_id": "acp:20261020_170931_c5f470",
+      "source": "raven-self-61-210930599916.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170931_c5f470",
+        "digest": {
+          "sha256": "7eee9f5392638e6a82c2d13c7a4869e5e09effaab78681e59104a1d243f869c7"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170935_8cf6a1.envelope.json",
+      "session_id": "acp:20261020_170935_8cf6a1",
+      "source": "raven-self-62-210934536916.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170935_8cf6a1",
+        "digest": {
+          "sha256": "ac50770655ad7316d05d6ebc34cd04084a0f715a6e5dc94571879a0964a5844b"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170941_17c196.envelope.json",
+      "session_id": "acp:20261020_170941_17c196",
+      "source": "raven-self-63-210940531666.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170941_17c196",
+        "digest": {
+          "sha256": "1dcac3f8f49c16177e3ee7371de014b7190677b9d498ffa4173f6a47981b43a8"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170957_c3c743.envelope.json",
+      "session_id": "acp:20261020_170957_c3c743",
+      "source": "raven-self-64-210951177041.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170957_c3c743",
+        "digest": {
+          "sha256": "480ea7acaaa1d3f1cacebc6c72b5e53d83b6858d28ffa5503625a12ca69a2287"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171008_ada9e8.envelope.json",
+      "session_id": "acp:20261020_171008_ada9e8",
+      "source": "raven-self-65-211005322250.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171008_ada9e8",
+        "digest": {
+          "sha256": "25d5583ccce7fc5b703c577cfc9b7103aa0b1e88c3677f1390bbbf1d49834f72"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171014_292863.envelope.json",
+      "session_id": "acp:20261020_171014_292863",
+      "source": "raven-self-66-211013838666.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171014_292863",
+        "digest": {
+          "sha256": "98992ef22b109555991edc6d6c1d2ffcbb1322e69de9e251dbf6fc6afa316fd5"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171022_02fe7d.envelope.json",
+      "session_id": "acp:20261020_171022_02fe7d",
+      "source": "raven-self-67-211020438083.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171022_02fe7d",
+        "digest": {
+          "sha256": "1a5801fcbc9867370b714df8d5c0c14f474d0ffdba1046af6fd70eb95025cc80"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171032_660a28.envelope.json",
+      "session_id": "acp:20261020_171032_660a28",
+      "source": "raven-self-68-211028247875.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171032_660a28",
+        "digest": {
+          "sha256": "a20503a50f6ac85f2dc876d85bf8c9573cc3415b36c8839e9dee1354c82a4c8c"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171039_54bcf9.envelope.json",
+      "session_id": "acp:20261020_171039_54bcf9",
+      "source": "raven-self-69-211037339125.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171039_54bcf9",
+        "digest": {
+          "sha256": "d36786fd8d48b122f8aeebc1e32d6dc71cd576ddbe4641b1b666f282c1b85d28"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170309_e8c63b.envelope.json",
+      "session_id": "acp:20261020_170309_e8c63b",
+      "source": "raven-self-7-210308710750.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170309_e8c63b",
+        "digest": {
+          "sha256": "f79f38519fdce7b9e90db43953cfd8f7205eb81cf555b9bf4809962ac1f0e2e2"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171044_2453f3.envelope.json",
+      "session_id": "acp:20261020_171044_2453f3",
+      "source": "raven-self-70-211043943916.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171044_2453f3",
+        "digest": {
+          "sha256": "abde253f367f2ca32b2fa812a7ad155b95b43ffdc83ab10fd349bfbcced23cc2"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171052_f2c8e3.envelope.json",
+      "session_id": "acp:20261020_171052_f2c8e3",
+      "source": "raven-self-71-211050815875.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171052_f2c8e3",
+        "digest": {
+          "sha256": "c7982dd6d268fd6c7d32d7c00e93d6654a85a2b1acbba7c0622576cd8ef8b25a"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171056_1b2a5a.envelope.json",
+      "session_id": "acp:20261020_171056_1b2a5a",
+      "source": "raven-self-72-211055471916.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171056_1b2a5a",
+        "digest": {
+          "sha256": "775f859075dbcc6130a689ad1e43e81291c03fd041423fc59ad8c3bf0d2acf84"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171101_72f38f.envelope.json",
+      "session_id": "acp:20261020_171101_72f38f",
+      "source": "raven-self-73-211100095750.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171101_72f38f",
+        "digest": {
+          "sha256": "66f494e570916be115c1a2d3522c120a159f2502225666c79a02eb6529096bd7"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171108_4eadbc.envelope.json",
+      "session_id": "acp:20261020_171108_4eadbc",
+      "source": "raven-self-74-211107860541.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171108_4eadbc",
+        "digest": {
+          "sha256": "f247cd3dbb065d00970c041816343163a44fe0e18d557e0794392b74ffa2b364"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171114_fe1cf2.envelope.json",
+      "session_id": "acp:20261020_171114_fe1cf2",
+      "source": "raven-self-75-211113302958.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171114_fe1cf2",
+        "digest": {
+          "sha256": "3808af33f5c6f76def450017ef0a95a55ef7c2c60c4bfeffcd75ba6c872a66e9"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171119_2eb0e6.envelope.json",
+      "session_id": "acp:20261020_171119_2eb0e6",
+      "source": "raven-self-76-211118068166.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171119_2eb0e6",
+        "digest": {
+          "sha256": "84236f1c91e1519efafdb303f0cc92c3b2d434c89f7ccd7c2a3ed5e5ef283312"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171125_d81637.envelope.json",
+      "session_id": "acp:20261020_171125_d81637",
+      "source": "raven-self-77-211124555791.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171125_d81637",
+        "digest": {
+          "sha256": "1518550c1eb0dc7fb7eb7a0d002baf48008a6a103736793282e66f13c917e3ee"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171130_8495bc.envelope.json",
+      "session_id": "acp:20261020_171130_8495bc",
+      "source": "raven-self-78-211129162958.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171130_8495bc",
+        "digest": {
+          "sha256": "77e8da6dcdea6d0117d191facd24ef71a16be8120fb8c35de7522fe1d2af435b"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171136_08cc27.envelope.json",
+      "session_id": "acp:20261020_171136_08cc27",
+      "source": "raven-self-79-211135719250.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171136_08cc27",
+        "digest": {
+          "sha256": "2b5c018e0ae27b2f9996d71f5a0e6f92e0c9edd6aa10b722761ffc9bac2e79ae"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170315_a47edd.envelope.json",
+      "session_id": "acp:20261020_170315_a47edd",
+      "source": "raven-self-8-210314191416.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170315_a47edd",
+        "digest": {
+          "sha256": "23e91ad5541cb4c1f359ecd88aa48f30a0b1d81d96e99aeb58d6a284e6489917"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171141_29c15a.envelope.json",
+      "session_id": "acp:20261020_171141_29c15a",
+      "source": "raven-self-80-211140702916.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171141_29c15a",
+        "digest": {
+          "sha256": "c1599c85cf41b3a8190e72fd1c5fad47564e9d1ce3fdf68c9c962c67cb9fb983"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171147_57a0f5.envelope.json",
+      "session_id": "acp:20261020_171147_57a0f5",
+      "source": "raven-self-81-211146493125.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171147_57a0f5",
+        "digest": {
+          "sha256": "55f95b8175f13e23021055edbeab5075a98d042df842e20b869c9fabe4c7c12b"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171152_0a9238.envelope.json",
+      "session_id": "acp:20261020_171152_0a9238",
+      "source": "raven-self-82-211151166291.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171152_0a9238",
+        "digest": {
+          "sha256": "bed5bc36b0ccd45201230f1ceddfe479ec2405fc9869d5987ff61da9f160dad7"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171201_e9ca55.envelope.json",
+      "session_id": "acp:20261020_171201_e9ca55",
+      "source": "raven-self-83-211159611583.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171201_e9ca55",
+        "digest": {
+          "sha256": "0bd163944572e8301a3346a8980d01ca89c3bbdd4077b6842ea8d28bc468cdaa"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171205_310f19.envelope.json",
+      "session_id": "acp:20261020_171205_310f19",
+      "source": "raven-self-84-211204838250.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171205_310f19",
+        "digest": {
+          "sha256": "32dd930b7af1af49cab2685c5a0f34f9f7f7955377f2519d3ad1f61a32bdb66f"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171209_61dc8b.envelope.json",
+      "session_id": "acp:20261020_171209_61dc8b",
+      "source": "raven-self-85-211208937125.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171209_61dc8b",
+        "digest": {
+          "sha256": "3ef0bd38d5695459b606d9ebb8cc4051778c4675beaa6dc63d7065dfae47abfa"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171215_0d6928.envelope.json",
+      "session_id": "acp:20261020_171215_0d6928",
+      "source": "raven-self-86-211214003875.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171215_0d6928",
+        "digest": {
+          "sha256": "68b6bee7b92b9060fcf6af4f86afa6044ca16c4339bf1b886e8c5b89a37522fa"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171219_61fdf2.envelope.json",
+      "session_id": "acp:20261020_171219_61fdf2",
+      "source": "raven-self-87-211218544000.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171219_61fdf2",
+        "digest": {
+          "sha256": "aad5ebf888116bed9c5ca88112261cb9ebbbf8dc0b8206c49ec61b287ee1c49f"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171224_e8b9a1.envelope.json",
+      "session_id": "acp:20261020_171224_e8b9a1",
+      "source": "raven-self-88-211223414958.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171224_e8b9a1",
+        "digest": {
+          "sha256": "ecf0517a6f2a92a25f4c5affcf119ee5dfe0909a436a3ea2650f9a0206ab2f43"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171230_221a8d.envelope.json",
+      "session_id": "acp:20261020_171230_221a8d",
+      "source": "raven-self-89-211229637000.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171230_221a8d",
+        "digest": {
+          "sha256": "2faa4cfc938b75306f976e0e1f1bcf8441ec5db5e2610afa199cfc0877fbcf63"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_170321_8dc9c4.envelope.json",
+      "session_id": "acp:20261020_170321_8dc9c4",
+      "source": "raven-self-9-210320934583.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_170321_8dc9c4",
+        "digest": {
+          "sha256": "14aeb85d4215b53db0a42f2c0f3e7aa6175bd71737b398ec4e7be78d36062d24"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171235_fd7de3.envelope.json",
+      "session_id": "acp:20261020_171235_fd7de3",
+      "source": "raven-self-90-211234640875.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171235_fd7de3",
+        "digest": {
+          "sha256": "1e48dc8c26352c660c79eab4d2ba1442ae6e2ba776fcd0db08b74c03748d21d0"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171241_8c1654.envelope.json",
+      "session_id": "acp:20261020_171241_8c1654",
+      "source": "raven-self-91-211240258666.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171241_8c1654",
+        "digest": {
+          "sha256": "b73474df5d07e5fc1520eaf42342ef2bdfe5ecd2d90d6356f0bd760947041e2e"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171247_236132.envelope.json",
+      "session_id": "acp:20261020_171247_236132",
+      "source": "raven-self-92-211246935583.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171247_236132",
+        "digest": {
+          "sha256": "3f44f5f4a200d12028b1089a5856866bcc3d536bb45ebea0c6f0dbbe94df47b3"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171252_06411a.envelope.json",
+      "session_id": "acp:20261020_171252_06411a",
+      "source": "raven-self-93-211251683041.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171252_06411a",
+        "digest": {
+          "sha256": "ec1740088ad395aae353e7235b72e6f9b33f2876d6c12a22c8a8d2db54eba5ec"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171258_b9b9d9.envelope.json",
+      "session_id": "acp:20261020_171258_b9b9d9",
+      "source": "raven-self-94-211257501958.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171258_b9b9d9",
+        "digest": {
+          "sha256": "07d6be6c979580821d26c0389d92e95b85fdda7d70ac2512c2b84e0367c5112e"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171305_4a5a38.envelope.json",
+      "session_id": "acp:20261020_171305_4a5a38",
+      "source": "raven-self-95-211304809083.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171305_4a5a38",
+        "digest": {
+          "sha256": "c9cd6e7cb9ac4cf0565589b1af12a0f8d2eaa19a4180d0fd97ad15367b4621fd"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171310_eaaaa1.envelope.json",
+      "session_id": "acp:20261020_171310_eaaaa1",
+      "source": "raven-self-96-211309227625.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171310_eaaaa1",
+        "digest": {
+          "sha256": "5847a7a66a92445e53c1cb0c822727e007cd86a9493fd8c761a9124fbe23759e"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171315_f68b4a.envelope.json",
+      "session_id": "acp:20261020_171315_f68b4a",
+      "source": "raven-self-97-211314134333.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171315_f68b4a",
+        "digest": {
+          "sha256": "133ede9fd711a50cbc677a3c39884331c1c8cf26ca00cbbda4e64e0cff676d9b"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171319_e1dd92.envelope.json",
+      "session_id": "acp:20261020_171319_e1dd92",
+      "source": "raven-self-98-211318469833.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171319_e1dd92",
+        "digest": {
+          "sha256": "2d273970c0ffabc3c907de7eb0de5a1f0dfd18888fd0a4832234f82fcc626323"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    },
+    {
+      "entry": "entries/acp:20261020_171324_7b3267.envelope.json",
+      "session_id": "acp:20261020_171324_7b3267",
+      "source": "raven-self-99-211323985416.jsonl",
+      "subject": {
+        "name": "agent-run:acp:20261020_171324_7b3267",
+        "digest": {
+          "sha256": "d66672e51b283d6baeffb0bfe168da334e614a37f922376c173cfc66ec148859"
+        }
+      },
+      "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
+    }
+  ],
+  "known_gaps": [
+    "The signing key is local and the signatures are not anchored in a transparency log.",
+    "The corpus holds the runs that exist on the machine that built it (100 tool-using, 7 transport-only). It is not a sample of anything, and it does not claim to be representative."
+  ]
+}
