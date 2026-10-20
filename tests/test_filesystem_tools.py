@@ -8,9 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from raven.agent.tools import filesystem
+from raven.agent.tools import filesystem, remote_files
 from raven.agent.tools.filesystem import (
     EditFileTool,
+    ListDirTool,
     ReadFileTool,
     WriteFileTool,
     _is_reserved_windows_component,
@@ -18,6 +19,7 @@ from raven.agent.tools.filesystem import (
 )
 from raven.agent.tools.registry import ToolRegistry
 from raven.contracts.tool import ToolOutput, ToolResult
+from raven.ops import remote_path
 
 
 def _diff_of(result: ToolResult | str) -> str | None:
@@ -432,6 +434,8 @@ async def test_a_first_line_that_just_fills_the_page_is_shown_whole_and_the_page
     got = await read.execute(path=str(target))
 
     assert got == "1| " + "z" * room + "\n\n(Showing lines 1-1 of 2. Use offset=2 to continue.)"
+
+
 # ---------------------------------------------------------------------------
 # The Windows reserved-name fence
 # ---------------------------------------------------------------------------
@@ -684,3 +688,107 @@ async def test_a_read_of_a_url_still_answers_the_fetch_hint_with_the_gate_on(mon
 
     assert isinstance(answer, str)
     assert "web_fetch" in answer
+
+
+REMOTE_RESERVED_SPELLINGS = (
+    "box:raven-work/t1/bundle.js",
+    "root@203.0.113.7:/srv/x.md",
+    "box:raven-work/nul",
+    "box:nul",
+    "root@203.0.113.7:/srv/aux",
+    "box:raven-work/com1",
+    "box:raven-work/nul.md",
+    "box:raven-work/nul:hidden",
+    "scp://box:2222//raven-work/nul",
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("spelling", REMOTE_RESERVED_SPELLINGS)
+@pytest.mark.parametrize(
+    "tool_name,call",
+    [
+        ("read_file", {}),
+        ("write_file", {"content": "hello\n"}),
+        ("edit_file", {"old_text": "a", "new_text": "b"}),
+        ("list_dir", {}),
+    ],
+)
+async def test_a_remote_path_reaches_its_machine_with_the_gate_on(
+    monkeypatch, tmp_path: Path, spelling: str, tool_name: str, call: dict
+):
+    """A remote path's components are that machine's files, ordinary names there.
+
+    ``nul``, ``aux`` and ``com1`` are legal file names on a Linux machine, so a
+    remote spelling must reach ``remote_files.answer`` whatever its components
+    say. Only the head, before the separator, could be the device instead of a
+    machine. The native Windows CI job caught the earlier guard refusing
+    ``box:raven-work/...``; the remote reserved-name shapes are the same class
+    one component further in.
+    """
+    monkeypatch.setattr(filesystem, "_WINDOWS", True)
+    seen: list[tuple[str, str]] = []
+
+    async def answer(tool: str, path: str, params: dict) -> str | None:
+        if not remote_path.looks_remote(path):
+            return None
+        seen.append((tool, path))
+        return f"Error: {path} is on another machine, and this process does not read registered machines' files"
+
+    monkeypatch.setattr(remote_files, "answer", answer)
+    tools = {
+        "read_file": ReadFileTool,
+        "write_file": WriteFileTool,
+        "edit_file": EditFileTool,
+        "list_dir": ListDirTool,
+    }
+
+    out = await tools[tool_name](workspace=tmp_path).execute(path=spelling, **call)
+
+    assert isinstance(out, str)
+    assert "reserved name on Windows" not in out
+    assert "another machine" in out
+    assert seen == [(tool_name, spelling)]
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_a_local_reserved_component_still_answers_the_refusal_with_the_gate_on(monkeypatch, tmp_path: Path):
+    """The control for the test above: a local spelling keeps every component checked."""
+    monkeypatch.setattr(filesystem, "_WINDOWS", True)
+    seen: list[tuple[str, str]] = []
+
+    async def answer(tool: str, path: str, params: dict) -> str | None:
+        if not remote_path.looks_remote(path):
+            return None
+        seen.append((tool, path))
+        return f"Error: {path} is on another machine"
+
+    monkeypatch.setattr(remote_files, "answer", answer)
+
+    for spelling in ("subdir/nul", "nul/report.md", "notes.md.", "notes.md "):
+        out = await WriteFileTool(workspace=tmp_path).execute(path=spelling, content="hello\n")
+        assert isinstance(out, str)
+        assert "reserved name on Windows" in out, spelling
+    assert seen == []
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_a_colon_device_spelling_never_reaches_its_machine_with_the_gate_on(monkeypatch, tmp_path: Path):
+    """The control for the test above: ``NUL:`` is the device, not a host named ``NUL``."""
+    monkeypatch.setattr(filesystem, "_WINDOWS", True)
+    seen: list[str] = []
+
+    async def answer(tool: str, path: str, params: dict) -> str:
+        seen.append(path)
+        return f"Error: {path} is on another machine"
+
+    monkeypatch.setattr(remote_files, "answer", answer)
+
+    refused = await WriteFileTool(workspace=tmp_path).execute(path="NUL:", content="hello\n")
+
+    assert isinstance(refused, str)
+    assert "reserved name on Windows" in refused
+    assert seen == []
+    assert list(tmp_path.iterdir()) == []
