@@ -121,3 +121,110 @@ def test_a_running_job_that_never_writes_pid_is_billed_through_the_launchers_own
     spent = asyncio.run(ex.spent_minutes())
     assert 9.9 <= spent <= 11
     assert asyncio.run(ex.remaining_minutes()) <= 50.1
+
+
+@pytest.mark.parametrize(
+    "meta, here",
+    [
+        ({"transport": "local"}, True),
+        ({"connection": "gpu"}, False),
+        ({}, False),
+        ({"host": "10.0.0.2", "transport": "ssh"}, False),
+    ],
+)
+def test_only_a_local_transport_runs_on_this_windows_host(monkeypatch, meta, here):
+    # A campaign whose connection row is gone carries neither host nor
+    # transport; it must reach the registry refusal, not run on this machine.
+    import types
+
+    from oncall_flow import backends
+
+    monkeypatch.setattr(backends, "os", types.SimpleNamespace(name="nt"))
+    assert backends._runs_here_on_windows(meta) is here
+
+
+def test_a_campaign_whose_connection_is_gone_is_refused_on_windows(monkeypatch):
+    import types
+
+    from oncall_flow import backends
+    from oncall_flow.backend import JobBackendError
+
+    monkeypatch.setattr(backends, "os", types.SimpleNamespace(name="nt"))
+    with pytest.raises(JobBackendError, match="not in the connection registry"):
+        backends._process_from_meta({"connection": "gpu", "command": "python run.py"})
+
+
+def test_the_executor_offers_no_shell_so_the_baseline_still_records(tmp_path):
+    # Callers read ``_run`` as "the machine's shell, or None"; a runner that
+    # raised made the apparatus baseline fail silently for a staged case.
+    from oncall_flow.apparatus import baseline_of
+    from oncall_flow.backend import JobBackendError
+    from oncall_flow.windows_backend import WindowsExecutor
+
+    ex = WindowsExecutor(remote_dir=str(tmp_path / "ops"), command="unused")
+    assert ex._run is None
+    (tmp_path / "meta.json").write_text(json.dumps({"staged_case": str(tmp_path / "case")}), encoding="utf-8")
+    assert baseline_of(tmp_path, ex._run)["meta_sha"]
+    import asyncio
+
+    with pytest.raises(JobBackendError, match="no shell"):
+        asyncio.run(ex._arun("true"))
+
+
+_SLEEPER = r"""
+import time
+time.sleep(120)
+"""
+
+
+def _wait_for(path, seconds=30):
+    deadline = time.time() + seconds
+    while not path.exists() and time.time() < deadline:
+        time.sleep(0.2)
+    return path.exists()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="taskkill and DETACHED_PROCESS are Windows'")
+def test_a_cancelled_job_keeps_its_result_and_its_minutes(tmp_path):
+    # Killing the launcher with /F ran none of its wrap-up: no result.json, the
+    # minutes went back to the budget, and a re-submit ran the job again.
+    import asyncio
+
+    from oncall_flow.backend import JobSpec
+    from oncall_flow.windows_backend import WindowsExecutor
+
+    (tmp_path / "sleeper.py").write_text(_SLEEPER, encoding="utf-8")
+    ex = WindowsExecutor(remote_dir=str(tmp_path / "ops"), command=f'"{sys.executable}" "{tmp_path / "sleeper.py"}"')
+    handle = asyncio.run(ex.submit(JobSpec(payload={"x": 1}, idem_key="k1", labels={})))
+    job = tmp_path / "ops" / "jobs" / "k1"
+    assert _wait_for(job / ".raven-child-pid")
+    time.sleep(1.0)
+
+    assert "when killed" in asyncio.run(ex.cancel(handle))
+    result = json.loads((job / "result.json").read_text(encoding="utf-8"))
+    assert result["written_by"] == "launcher" and result["status"] == "failed"
+    assert result["gpu_minutes_used"] > 0
+    assert ex._existing_state(str(job)) == "done"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="taskkill is Windows'")
+def test_a_cancel_before_the_command_started_writes_the_record_itself(tmp_path):
+    import asyncio
+
+    from oncall_flow.backend import JobHandle
+    from oncall_flow.windows_backend import WindowsExecutor
+
+    job = tmp_path / "ops" / "jobs" / "k2"
+    job.mkdir(parents=True)
+    (tmp_path / "sleeper.py").write_text(_SLEEPER, encoding="utf-8")
+    launcher = subprocess.Popen([sys.executable, str(tmp_path / "sleeper.py")])
+    try:
+        (job / ".raven-pid").write_text(str(launcher.pid), encoding="utf-8")
+        ex = WindowsExecutor(remote_dir=str(tmp_path / "ops"), command="unused")
+        assert "when killed" in asyncio.run(ex.cancel(JobHandle("windows", "ops-k2")))
+        launcher.wait(timeout=10)
+        result = json.loads((job / "result.json").read_text(encoding="utf-8"))
+        assert result["written_by"] == "cancel" and result["status"] == "failed"
+    finally:
+        if launcher.poll() is None:
+            launcher.kill()

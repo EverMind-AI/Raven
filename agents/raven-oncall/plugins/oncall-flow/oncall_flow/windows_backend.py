@@ -173,6 +173,10 @@ def pid_alive(pid: int) -> bool:
 # is the interpreter raven is already running under, so this is the one
 # interpreter the machine is guaranteed to have.
 _LAUNCHER_NAME = ".raven-launch.py"
+# The command's pid as the launcher started it; what a cancel stops.
+_CHILD_PID = ".raven-child-pid"
+# How long a cancel waits for the launcher to record the stopped job.
+_CANCEL_WRAPUP_S = 15.0
 
 _LAUNCHER_SRC = '''\
 """Run one job, then make sure a result.json exists.
@@ -244,7 +248,13 @@ def main():
     if ids:
         env = dict(os.environ, CUDA_VISIBLE_DEVICES=",".join(str(x) for x in ids))
 
-    rc = subprocess.call(COMMAND, cwd=HERE, shell=True, env=env)
+    # The command's own pid, beside the launcher's: a cancel stops this one and
+    # leaves the launcher alive to write the result below, as the POSIX
+    # launcher survives the kill of its job.
+    child = subprocess.Popen(COMMAND, cwd=HERE, shell=True, env=env)
+    with open(os.path.join(HERE, ".raven-child-pid"), "w") as fh:
+        fh.write(str(child.pid))
+    rc = child.wait()
     minutes = round((time.time() - t0) / 60.0, 3)
 
     # A command that detached itself leaves nothing to wait for: `pid` then names
@@ -333,10 +343,6 @@ def _alive(pid):
 """
 
 
-def _unused_runner(command: str) -> tuple[int, str]:
-    raise JobBackendError("the windows backend runs no shell commands")
-
-
 class WindowsExecutor(ProcessExecutor):
     """``ProcessExecutor``'s contract, executed locally on Windows.
 
@@ -358,8 +364,11 @@ class WindowsExecutor(ProcessExecutor):
         staged_case: str = "",
         prefix: str = "ops-",
     ) -> None:
+        # No runner, rather than one that raises: callers read ``_run`` as "the
+        # machine's shell, or None", and a stub that raised made the apparatus
+        # baseline fail silently instead of falling back to the meta alone.
         super().__init__(
-            _unused_runner,
+            None,  # type: ignore[arg-type]
             remote_dir=remote_dir,
             command=command,
             budget_minutes_total=budget_minutes_total,
@@ -369,6 +378,9 @@ class WindowsExecutor(ProcessExecutor):
             prefix=prefix,
         )
         self._remote_dir = os.path.normpath(remote_dir)
+
+    async def _arun(self, cmd: str) -> tuple[int, str]:
+        raise JobBackendError("the windows backend runs no shell commands")
 
     # ---- paths ----
 
@@ -727,23 +739,67 @@ class WindowsExecutor(ProcessExecutor):
         note: str | None = None
         # Looked at before the kill: what the record needs is what was there when
         # the decision landed, not what is left afterwards.
-        for name in (_OWN_PID, "pid"):
+        live = {}
+        for name in (_OWN_PID, "pid", _CHILD_PID):
             pid = self._read_pid(os.path.join(job_dir, name))
             if pid and pid_alive(pid):
-                started = self._mtime(os.path.join(job_dir, _MARKER))
-                minutes = max(0.0, (time.time() - started) / 60.0) if started else None
-                note = (
-                    f"process was alive (pid {pid}, running {minutes:.1f} min) when killed"
-                    if minutes is not None
-                    else f"process was alive (pid {pid}) when killed"
-                )
-                subprocess.call(
-                    [shutil.which("taskkill") or "taskkill", "/T", "/F", "/PID", str(pid)],  # noqa: S607
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.STDOUT,
-                )
-                break
+                live[name] = pid
+        if not live:
+            return None
+        started = self._mtime(os.path.join(job_dir, _MARKER))
+        minutes = max(0.0, (time.time() - started) / 60.0) if started else None
+        first = next(iter(live.values()))
+        note = (
+            f"process was alive (pid {first}, running {minutes:.1f} min) when killed"
+            if minutes is not None
+            else f"process was alive (pid {first}) when killed"
+        )
+
+        # The job, not the launcher. ``/F`` is TerminateProcess, which runs no
+        # code in its target: killing the launcher loses the wrap-up that writes
+        # result.json, so the minutes went back to the budget and a re-submit of
+        # the key ran the job again. Stopping the command lets the launcher
+        # record a failed result with its minutes, as the POSIX launcher does.
+        own = live.get(_OWN_PID)
+        stopped = False
+        for name in (_CHILD_PID, "pid"):
+            pid = live.get(name)
+            if pid and pid != own:
+                self._taskkill(pid)
+                stopped = True
+        result = os.path.join(job_dir, "result.json")
+        waits = bool(own) and stopped
+        deadline = time.time() + _CANCEL_WRAPUP_S
+        while waits and not os.path.isfile(result) and time.time() < deadline:
+            await asyncio.sleep(0.2)
+        if os.path.isfile(result):
+            return note
+
+        # The launcher had not started the command yet, or did not get to its
+        # wrap-up: stop it too, and write the record it would have written.
+        if own and pid_alive(own):
+            self._taskkill(own)
+        stamps = [t for t in (self._mtime(os.path.join(job_dir, _OWN_PID)), started) if t is not None]
+        payload = {
+            "status": "failed",
+            "gpu_minutes_used": round(max(0.0, (time.time() - min(stamps)) / 60.0), 3) if stamps else 0.0,
+            "written_by": "cancel",
+            "error": "cancelled before the launcher could record a result",
+        }
+        if not os.path.isfile(result):
+            tmp = result + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh)
+            os.replace(tmp, result)
         return note
+
+    @staticmethod
+    def _taskkill(pid: int) -> None:
+        subprocess.call(
+            [shutil.which("taskkill") or "taskkill", "/T", "/F", "/PID", str(pid)],  # noqa: S607
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.STDOUT,
+        )
 
     async def list_artifacts(self, handle: JobHandle, pattern: str = "step-*") -> tuple[str, ...] | None:
         import glob as _glob

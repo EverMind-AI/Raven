@@ -131,10 +131,14 @@ def prepare_from_meta(meta: dict[str, Any], *, app_dir: str) -> None:
 
 
 def _runs_here_on_windows(meta: dict[str, Any]) -> bool:
+    # Locality is the transport seam's call, not this module's: a meta that
+    # names a connection the registry no longer has carries neither host nor
+    # transport, and must reach runner_from's refusal rather than run here.
     if os.name != "nt":
         return False
-    transport = str(meta.get("transport") or "").strip()
-    return transport == "local" or (not transport and not meta.get("host"))
+    from oncall_flow.transport import LOCAL, transport_of
+
+    return transport_of(meta) == LOCAL
 
 
 def _process_from_meta(meta: dict[str, Any]) -> JobBackend:
