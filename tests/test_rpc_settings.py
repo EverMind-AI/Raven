@@ -1497,6 +1497,60 @@ def _tool_row(name: str, call_id: str) -> dict:
     }
 
 
+async def test_usage_reads_each_daily_file_once(telemetry, tmp_path, monkeypatch):
+    for day in (0, 1):
+        telemetry(day, [_telemetry_row("a", 1.0), _tool_row("exec", f"call-{day}")])
+    opened = []
+    original_open = Path.open
+
+    def track_open(path, *args, **kwargs):
+        if path.parent == tmp_path / "telemetry":
+            opened.append(path.name)
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", track_open)
+    report = await rpc_console.settings_usage({"days": 2})
+
+    assert report["llm"]["total"]["calls"] == 2
+    assert report["tools"]["total"] == 2
+    assert sorted(opened) == sorted(f"usage-{_iso(day)}.jsonl" for day in (0, 1))
+
+
+@pytest.mark.parametrize("invalid", ["not-json", "null", "[]", ""])
+async def test_usage_keeps_valid_calls_after_an_invalid_record(telemetry, tmp_path, invalid):
+    telemetry(0, [_telemetry_row("a", 1.0), _tool_row("exec", "before")])
+    path = tmp_path / "telemetry" / f"usage-{_iso(0)}.jsonl"
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(invalid + "\n")
+    telemetry(0, [_telemetry_row("a", 2.0), _tool_row("exec", "after")])
+
+    report = await rpc_console.settings_usage({"days": 1})
+
+    assert report["llm"]["total"]["calls"] == 2
+    assert report["llm"]["total"]["cost_usd"] == 3.0
+    assert report["tools"] == {"total": 2, "counts": [{"name": "exec", "count": 2}]}
+
+
+async def test_usage_filters_both_tallies_by_the_delegation_root(telemetry):
+    child = {"session_key": "sub:child", "root_session_key": "web:s1"}
+    other = {"session_key": "web:other", "root_session_key": None}
+    telemetry(
+        0,
+        [
+            {**_telemetry_row("a", 1.0), **child},
+            {**_tool_row("exec", "child"), **child},
+            {**_telemetry_row("b", 9.0), **other},
+            {**_tool_row("read_file", "other"), **other},
+        ],
+    )
+    report = await rpc_console.settings_usage({"days": 1, "session_key": "web:s1"})
+
+    assert report["sessions"] == ["web:other", "web:s1"]
+    assert report["llm"]["total"]["calls"] == 1
+    assert report["llm"]["total"]["cost_usd"] == 1.0
+    assert report["tools"] == {"total": 1, "counts": [{"name": "exec", "count": 1}]}
+
+
 def _transcript(home, name: str, days_ago: int, calls: list[str], channel: str = "tui") -> None:
     """One session file carrying tool calls, with its mtime set by ``days_ago``.
 

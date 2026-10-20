@@ -1136,9 +1136,9 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
 
     Both halves read the same UsageTracker telemetry files
     (``~/.raven/telemetry/usage-YYYY-MM-DD.jsonl``, one JSON row per call, one
-    per tool call), so one range means one thing across the whole reply. The
-    scan is read-only and bounded by ``days`` (default 30, max 90). Session
-    transcripts are read for their titles only.
+    per tool call) in one streaming pass, so one range means one thing across
+    the whole reply. The scan is read-only and bounded by ``days`` (default
+    30, max 90). Session transcripts are read for their titles only.
     """
     from datetime import datetime
 
@@ -1148,6 +1148,7 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
     days = len(dates)
 
     from raven.providers.usage import reported_cost, token_count
+    from raven.token_wise.usage_tracker import read_usage_rows, row_root
 
     def empty_totals() -> dict[str, Any]:
         return {
@@ -1168,6 +1169,8 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
     selected_session = params.get("session_key") or None
     sessions: set[str] = set()
     models: dict[str, dict[str, Any]] = {}
+    tools: dict[str, int] = {}
+    tool_total = 0
     total = empty_totals()
     # The same resolution the writer uses (usage_tracker._default_telemetry_dir):
     # both used to hardcode ~/.raven, which held together only until RAVEN_HOME
@@ -1181,20 +1184,16 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
         p = tel_dir / f"usage-{day_key}.jsonl"
         if not p.is_file():
             continue
-        try:
-            lines = p.read_text(encoding="utf-8").splitlines()
-        except Exception:
-            continue
-        for line in lines:
-            try:
-                row = json.loads(line)
-            except ValueError:
-                continue
-            if not isinstance(row, dict):
-                continue
+        for row in read_usage_rows(p):
+            root = row_root(row)
             if row.get("_type") == "tool_call":
+                if selected_session and root != selected_session:
+                    continue
+                name = row.get("name")
+                if isinstance(name, str):
+                    tools[name] = tools.get(name, 0) + 1
+                    tool_total += 1
                 continue
-            root = row.get("root_session_key") or row.get("session_key")
             if isinstance(root, str) and root:
                 sessions.add(root)
             if selected_session and root != selected_session:
@@ -1219,27 +1218,7 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
                         target[key] = (target[key] or 0) + value
 
     session_titles: dict[str, str] = {}
-    tools: dict[str, int] = {}
-    tool_total = 0
     try:
-        for day in dates:
-            p = tel_dir / f"usage-{day.isoformat()}.jsonl"
-            if not p.is_file():
-                continue
-            try:
-                for line in p.read_text(encoding="utf-8").splitlines():
-                    row = json.loads(line)
-                    if row.get("_type") != "tool_call":
-                        continue
-                    root = row.get("root_session_key") or row.get("session_key")
-                    if selected_session and root != selected_session:
-                        continue
-                    name = row.get("name")
-                    if isinstance(name, str):
-                        tools[name] = tools.get(name, 0) + 1
-                        tool_total += 1
-            except Exception:
-                continue
         # Titles only. Tool calls were also counted from transcripts here, to
         # cover conversations older than the day tool rows started being
         # written, and a transcript counted as in-range when its file mtime
@@ -1271,7 +1250,7 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
                 if isinstance(key, str) and key in sessions and isinstance(title, str):
                     session_titles[key] = title
     except Exception:
-        logger.exception("settings.usage: tool scan failed")
+        logger.exception("settings.usage: session title scan failed")
 
     return {
         "days": days,
