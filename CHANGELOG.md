@@ -148,6 +148,17 @@ All notable changes to Raven are documented here.
 
 ### Changed
 
+- A complete install now carries the `everos-cloud-memory` plugin, so the
+  hosted EverOS is a memory backend a user can pick rather than a wheel
+  attached to the release with no install path: the one-line installer,
+  `raven upgrade`, the beta channel and the Docker image all name it beside
+  the local `everos-memory`, and the rung that drops the product engines when
+  a native build refuses keeps both memory backends rather than only the local
+  one. Installed is not selected -- `memory.backend` still decides, and an
+  install that never picks the cloud behaves exactly as before, except that
+  `raven onboard` now asks which memory backend to use instead of taking the
+  only one installed.
+
 - Memory runs on EverOS 1.4.2, which fixes what a memory server that stays up
   for days ran into: a LanceDB index reader leaked file descriptors until
   searches took seconds, an interactive search queued behind the cascade's

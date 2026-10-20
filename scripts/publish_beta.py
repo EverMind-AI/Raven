@@ -122,11 +122,11 @@ def _next_version(base_version: str, published: str | None) -> str:
 
 
 # The plugin distributions a complete install carries beside raven. The release
-# workflow builds the same three (tests/test_release_plugin_list.py holds the
+# workflow builds the same four (tests/test_release_plugin_list.py holds the
 # two lists equal); the beta channel has to ship them too, or the upgrade
 # helper, which refuses to install raven without its version's plugin list,
 # would have nothing to read.
-PLUGIN_DISTRIBUTIONS = ("everos-memory", "design-engine", "ppt-engine")
+PLUGIN_DISTRIBUTIONS = ("everos-memory", "everos-cloud-memory", "design-engine", "ppt-engine")
 PLUGIN_LIST_NAME = "raven-plugins.txt"
 
 
