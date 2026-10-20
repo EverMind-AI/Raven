@@ -289,7 +289,8 @@ def ssh_env(row: dict[str, Any], *, password_file: Path | None = None) -> dict[s
     OpenSSH 8.4+), the password file it reads, and a ``DISPLAY``, which ssh
     requires to consult askpass at all and never looks at. The password itself
     is in none of it. Refused, by name, when no password is kept here for the
-    machine -- registering it again puts one back -- and on Windows, whose
+    machine -- removing it and registering it again puts one back, since a
+    registration under an id in use is refused -- and on Windows, whose
     OpenSSH runs an askpass helper but not a POSIX one: the helper here is a
     shell script, and Windows cannot execute it (measured 2026-10-19,
     OpenSSH_for_Windows_9.5p2: a ``.cmd`` helper is run, a ``#!/bin/sh`` one
@@ -313,7 +314,9 @@ def ssh_env(row: dict[str, Any], *, password_file: Path | None = None) -> dict[s
     if password_file is not None:
         secret = password_file
     if not secret.is_file():
-        raise TransportError(f"no password is kept here for machine {label!r} ({secret}); register it again")
+        raise TransportError(
+            f"no password is kept here for machine {label!r} ({secret}); remove the machine and register it again"
+        )
     host, _port, _key, user = ssh_target(row)
     return {
         "SSH_ASKPASS": str(askpass_helper(secret.parent)),

@@ -139,9 +139,12 @@ def test_the_askpass_environment_names_the_helper_and_the_password_file_never_th
 
 
 def test_a_password_row_with_no_password_kept_here_is_refused_by_name(tmp_path, monkeypatch, supported_host):
+    """And told the way back that works: a registration under an id in use is refused, so the machine goes first."""
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
 
-    with pytest.raises(TransportError, match="no password is kept here for machine 'box'.*register it again"):
+    with pytest.raises(
+        TransportError, match=r"no password is kept here for machine 'box' \(.*\); remove the machine and register it"
+    ):
         transport.ssh_env(PASSWORD_ROW)
     with pytest.raises(TransportError, match="no password is kept here"):
         transport.runner_from(PASSWORD_ROW)
