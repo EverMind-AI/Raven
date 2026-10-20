@@ -15,7 +15,10 @@ plugin-only keys ``search.provider`` / ``fetch.provider`` (a vendor from
 default, out loud), ``search.apiKey`` / ``fetch.apiKey`` (each falling back to
 the SELECTED vendor's own env var), ``fetch.fallbackApiKey`` (the default
 reader's key, for when a keyed reader selected without one degrades back to
-it), ``proxy``, and ``stateRoot`` (defaults to ``<workspace>/research_flow``).
+it), ``proxy``, ``stateRoot`` (defaults to ``<workspace>/research_flow``), and
+``corpusEndpoint`` (a retrieval service over one fixed document collection;
+when set, both web tools read it instead of any vendor, keyless, and the
+vendor, key and proxy keys above are not consulted).
 """
 
 from __future__ import annotations
@@ -122,6 +125,11 @@ class _Shared:
         self.search_provider = resolve_search_provider(search_slice.get("provider"))
         self.fetch_provider = resolve_fetch_provider(fetch_slice.get("provider"))
         self.proxy = raw.get("proxy")
+        # One key for both halves, so a run cannot search the collection while it
+        # reads pages off the web.
+        self.corpus_endpoint = raw.get("corpusEndpoint") or None
+        if self.corpus_endpoint:
+            logger.info("research-flow: web_search and web_fetch read the corpus at {}", self.corpus_endpoint)
         state_root = raw.get("stateRoot")
         root = Path(state_root) if state_root else Path(ctx.services.workspace) / "research_flow"
         self.store = SessionStore(root)
@@ -175,7 +183,7 @@ class _Shared:
         return self._installable
 
     def web_search(self) -> WebSearchTool | None:
-        """The search tool, or ``None`` when it has no key to search with.
+        """The search tool, or ``None`` when it has no key to search with and no corpus.
 
         The fork refused to register a keyless ``web_search`` rather than
         advertise a tool whose every call is an error string, and the contract
@@ -221,8 +229,9 @@ class _Shared:
                 repeat_notice=cfg.search.repeat_notice,
                 evidence_round_factory=evidence_round_factory,
                 saturation_factory=saturation_factory,
+                corpus_endpoint=self.corpus_endpoint,
             )
-            if tool.api_key:
+            if tool.corpus_endpoint or tool.api_key:
                 self._web_search = tool
             else:
                 spec = SEARCH_PROVIDERS[self.search_provider]
@@ -270,6 +279,9 @@ class _Shared:
                         digest_threshold_chars=cfg.digest.threshold_chars,
                         digest_timeout_s=cfg.digest.timeout_seconds,
                     )
+            if self.corpus_endpoint:
+                self._web_fetch = WebFetchTool(corpus_endpoint=self.corpus_endpoint, **kwargs)
+                return self._web_fetch
             # Resolved here, at the build, exactly where the kernel resolves it:
             # a keyed backend with no key would be advertised and refuse every
             # call, and this tool replaces the kernel's, so declining to degrade

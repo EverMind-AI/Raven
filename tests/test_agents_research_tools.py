@@ -1196,3 +1196,141 @@ async def test_research_option_labels_reach_the_broker_as_text(option, expected)
     assert "User answered" in result and expected in result
     assert params == original
     assert not tool._take_round_trip_grant()
+
+
+# --------------------------------------------------------------------------
+# A fixed corpus in place of the web
+# --------------------------------------------------------------------------
+
+_CORPUS = "http://127.0.0.1:8081/r/tag"
+
+
+class _CorpusTransport(httpx.AsyncBaseTransport):
+    """The corpus service: ``/search`` answers its rows, ``/fetch`` the page it holds or 404."""
+
+    def __init__(self, rows: list[dict], pages: dict[str, str]) -> None:
+        self.rows = rows
+        self.pages = pages
+        self.seen: list[httpx.Request] = []
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        self.seen.append(request)
+        if request.url.path.endswith("/search"):
+            return httpx.Response(200, json={"results": self.rows}, request=request)
+        url = request.url.params.get("url", "")
+        if url not in self.pages:
+            return httpx.Response(404, json={"error": "not in corpus"}, request=request)
+        return httpx.Response(200, json={"docid": "d1", "url": url, "text": self.pages[url]}, request=request)
+
+
+def _corpus_client(monkeypatch, transport) -> list[dict]:
+    """``_patch_client``, recording the arguments each client was built with."""
+    built: list[dict] = []
+    real = httpx.AsyncClient
+
+    def factory(**kwargs):
+        built.append(dict(kwargs))
+        kwargs.pop("proxy", None)
+        return real(transport=transport, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", factory)
+    _shorten_the_retry_ladder(monkeypatch)
+    return built
+
+
+def test_a_corpus_endpoint_puts_both_tools_on_it_with_no_key_anywhere(tmp_path, monkeypatch):
+    """One key for both halves, and keyless: a run that searched the collection while
+    it read pages off the web would not be a closed-corpus run at all."""
+    for var in ("SERPER_API_KEY", "JINA_API_KEY", "TAVILY_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    slice_ = {"enabled": True, "corpusEndpoint": _CORPUS + "/", "fetch": {"provider": "tavily"}, **_NO_LLM_GATES}
+    ctx = _ctx(tmp_path, slice_)
+
+    search, fetch = make_web_search(ctx), make_web_fetch(ctx)
+
+    assert isinstance(search, WebSearchTool) and isinstance(fetch, WebFetchTool)
+    assert search.corpus_endpoint == fetch.corpus_endpoint == _CORPUS
+    assert search.provider == fetch.provider == "corpus"
+
+
+@pytest.mark.asyncio
+async def test_a_corpus_search_asks_the_service_and_renders_its_rows(monkeypatch):
+    row = {"docid": "d1", "url": "https://zh.wikipedia.org/wiki/A", "title": "Page A", "snippet": "a snippet"}
+    transport = _CorpusTransport([row], {})
+    built = _corpus_client(monkeypatch, transport)
+    rows = _capture_ledger(monkeypatch)
+    set_current_session("t")
+
+    rendered = await WebSearchTool(proxy="http://proxy.invalid:3128", corpus_endpoint=_CORPUS).execute(
+        query="q", count=3
+    )
+
+    sent = transport.seen[0]
+    assert str(sent.url).startswith(f"{_CORPUS}/search?")
+    assert dict(sent.url.params) == {"q": "q", "k": "3"}
+    assert "Page A" in rendered and row["url"] in rendered and "a snippet" in rendered
+    # The service is usually local: neither the configured proxy nor one from the
+    # environment may reroute it.
+    assert built[0].get("trust_env") is False and "proxy" not in built[0]
+    assert rows[-1]["op"] == "search" and rows[-1]["source"] == "corpus"
+
+
+@pytest.mark.asyncio
+async def test_a_corpus_search_is_asked_deep_when_cross_query_dedup_is_on(monkeypatch):
+    """The service honours depth where the vendors ignore it, so dedup has a pool to
+    backfill from instead of only subtracting from the rendered list."""
+    transport = _CorpusTransport([], {})
+    _corpus_client(monkeypatch, transport)
+    set_current_session("t")
+
+    await WebSearchTool(corpus_endpoint=_CORPUS, cross_query_dedup=True, search_depth=20).execute(query="q", count=3)
+
+    assert transport.seen[0].url.params["k"] == "20"
+
+
+@pytest.mark.asyncio
+async def test_a_corpus_page_is_read_from_the_service_without_resolving_its_host(monkeypatch):
+    """The URL names a document in the collection; nothing connects to its host, so
+    a run with no resolver must still read it."""
+
+    def unresolvable(*args, **kwargs):
+        raise socket.gaierror("no resolver")
+
+    monkeypatch.setattr(socket, "getaddrinfo", unresolvable)
+    page = "body " * 200
+    transport = _CorpusTransport([], {"https://zh.wikipedia.org/wiki/A": page})
+    _corpus_client(monkeypatch, transport)
+    rows = _capture_ledger(monkeypatch)
+    set_current_session("t")
+
+    answer = json.loads(await WebFetchTool(corpus_endpoint=_CORPUS).execute(url="https://zh.wikipedia.org/wiki/A"))
+
+    assert answer["text"] == page and answer["extractor"] == "corpus"
+    assert len(transport.seen) == 1 and transport.seen[0].url.params["url"] == "https://zh.wikipedia.org/wiki/A"
+    assert rows[-1]["op"] == "fetch" and rows[-1]["source"] == "corpus"
+
+
+@pytest.mark.asyncio
+async def test_a_page_outside_the_collection_is_said_so_and_not_retried(monkeypatch):
+    transport = _CorpusTransport([], {})
+    _corpus_client(monkeypatch, transport)
+    set_current_session("t")
+
+    answer = json.loads(await WebFetchTool(corpus_endpoint=_CORPUS).execute(url="https://e.com/missing"))
+
+    assert answer["error"] == "Corpus: not in the collection"
+    assert len(transport.seen) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_short_corpus_page_is_returned_as_the_collection_holds_it(monkeypatch):
+    """On the web a stub is re-read where the document lives; here the collection's
+    copy is the document, and every fallback address would only ask again."""
+    transport = _CorpusTransport([], {"https://arxiv.org/abs/2410.04728": "Abstract page shell"})
+    _corpus_client(monkeypatch, transport)
+    set_current_session("t")
+
+    answer = json.loads(await WebFetchTool(corpus_endpoint=_CORPUS).execute(url="https://arxiv.org/abs/2410.04728"))
+
+    assert answer["text"] == "Abstract page shell" and "fallbacks_tried" not in answer
+    assert len(transport.seen) == 1

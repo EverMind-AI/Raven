@@ -11,7 +11,7 @@ writes them in ``config.json`` (``plugins.config["research-flow"]``), so every m
 accepts both camelCase and snake_case (``alias_generator=to_camel`` +
 ``populate_by_name``) and ignores unknown keys instead of forbidding them - the slice
 also carries plugin-only keys (``search.apiKey``, ``fetch.apiKey``, ``proxy``,
-``stateRoot``) that the flow models do not own.
+``stateRoot``, ``corpusEndpoint``) that the flow models do not own.
 
 Four of the fork's fields are deliberately absent: ``toolsAllowlist``,
 ``minimalContext``, ``truncationWrapup`` and ``reactiveClamp`` were consumed by

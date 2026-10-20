@@ -14,6 +14,14 @@ A vendor that serves no result offset cannot answer the saturation rule's page-2
 rung, so ``SearchProviderSpec.paginates`` tells the rule up front rather than
 letting it escalate into requests that come back identical.
 
+Built with a ``corpus_endpoint``, both tools read a retrieval service over one
+fixed document collection instead of the web: ``GET <endpoint>/search?q=&k=``
+answers ``{"results": [{"url", "title", "snippet", ...}]}`` and
+``GET <endpoint>/fetch?url=`` answers ``{"text": ...}``, or 404 for a URL outside
+the collection. It is not a vendor - no key, no proxy, nothing reachable beyond
+the collection - so it sits outside the vendor tables, and the harness around
+the call is the one a web run gets.
+
 Per-session state
 -----------------
 The kernel builds ONE instance of each tool for every session it serves, where the
@@ -334,6 +342,10 @@ FETCH_PROVIDERS: dict[str, FetchProviderSpec] = {
 }
 
 
+CORPUS_SEARCH_SPEC = SearchProviderSpec(vendor="corpus", label="Corpus", env_var="", paginates=False)
+CORPUS_FETCH_SPEC = FetchProviderSpec(vendor="corpus", label="Corpus", env_var="", extractor="corpus", needs_key=False)
+
+
 def resolve_search_provider(name: str | None) -> str:
     """A configured ``web_search`` vendor name, degrading to the default.
 
@@ -605,11 +617,13 @@ class WebSearchTool(Tool):
         repeat_notice: bool = False,
         evidence_round_factory: Callable[[], EvidenceRound] | None = None,
         saturation_factory: Callable[[], SearchSaturation] | None = None,
+        corpus_endpoint: str | None = None,
     ):
         self._init_api_key = api_key
         self.max_results = max_results
         self.proxy = proxy
-        self.provider = resolve_search_provider(provider)
+        self.corpus_endpoint = corpus_endpoint.rstrip("/") if corpus_endpoint else None
+        self.provider = CORPUS_SEARCH_SPEC.vendor if self.corpus_endpoint else resolve_search_provider(provider)
         # Deep-research profiles disable these: direct answers (answerBox /
         # knowledgeGraph) and snippets let the model answer without ever
         # opening a page, which shallows browse-and-digest behavior.
@@ -635,7 +649,7 @@ class WebSearchTool(Tool):
 
     @property
     def spec(self) -> SearchProviderSpec:
-        return SEARCH_PROVIDERS[self.provider]
+        return CORPUS_SEARCH_SPEC if self.corpus_endpoint else SEARCH_PROVIDERS[self.provider]
 
     @property
     def api_key(self) -> str:
@@ -893,7 +907,7 @@ class WebSearchTool(Tool):
                 "urls": urls,
                 "n": len(urls),
                 "replay": replay,
-                "source": "web",
+                "source": "corpus" if self.corpus_endpoint else "web",
                 # Kept, unchanged, and meaning what it always meant: "this result was not
                 # cached for replay". Renaming it would break readers of landed batches.
                 "failed": self._failed(rendered) if not replay else False,
@@ -1030,7 +1044,7 @@ class WebSearchTool(Tool):
         making it one read makes them unable to disagree.
         """
         saturation = state.saturation
-        if not self.api_key:
+        if not self.corpus_endpoint and not self.api_key:
             return (
                 f"Error: {self.spec.label} API key not configured. Set it in "
                 '~/.raven/config.json under plugins.config["research-flow"].search.apiKey '
@@ -1068,6 +1082,8 @@ class WebSearchTool(Tool):
             # this half single-shot would keep a smaller copy of the same arm-correlated
             # tax on the arm that searches most.
             async def _send() -> httpx.Response:
+                if self.corpus_endpoint:
+                    return await self._corpus_request(query, n, k)
                 async with httpx.AsyncClient(proxy=self.proxy) as client:
                     return await self._provider_request(client, query, n, page)
 
@@ -1145,6 +1161,17 @@ class WebSearchTool(Tool):
         except Exception as e:
             logger.error("WebSearch error: {}", e)
             return f"Error: {e}", [], _error_shaping(e)
+
+    async def _corpus_request(self, query: str, n: int, k: int | None) -> httpx.Response:
+        """One search against the corpus service, asked ``k`` deep.
+
+        Unlike the vendors, the service honours depth, so cross-query dedup has a
+        deeper pool to backfill from. ``trust_env=False``: the service is usually a
+        local address, and an ``HTTP_PROXY`` in the environment must not reroute it.
+        """
+        depth = min(max(k or n, n), _MAX_SEARCH_DEPTH)
+        async with httpx.AsyncClient(trust_env=False, timeout=30.0) as client:
+            return await client.get(f"{self.corpus_endpoint}/search", params={"q": query, "k": depth})
 
     async def _provider_request(self, client: httpx.AsyncClient, query: str, n: int, page: int) -> httpx.Response:
         """One search request, built the way the selected provider expects.
@@ -1264,6 +1291,8 @@ class WebSearchTool(Tool):
         provider does not carry is absent rather than empty, so a missing
         answer box and a suppressed one stay distinguishable in the shaping row.
         """
+        if self.corpus_endpoint:
+            return {"organic": _rows(data.get("results"), url="url", snippet="snippet")}
         if self.provider == "serper":
             return data
         if self.provider == "serpapi":
@@ -1578,11 +1607,13 @@ class WebFetchTool(Tool):
         digest_fn: DigestFn | None = None,
         digest_threshold_chars: int = 8000,
         digest_timeout_s: float = 30.0,
+        corpus_endpoint: str | None = None,
     ):
         self._init_api_key = api_key
         self.max_chars = max_chars
         self.proxy = proxy
-        self.provider = resolve_fetch_provider(provider)
+        self.corpus_endpoint = corpus_endpoint.rstrip("/") if corpus_endpoint else None
+        self.provider = CORPUS_FETCH_SPEC.vendor if self.corpus_endpoint else resolve_fetch_provider(provider)
         # Targeted-extraction path: long pages are distilled by a cheap model
         # instead of blind truncation. The tool never talks to a provider
         # itself - the flow assembly injects ``digest_fn`` so this module
@@ -1649,7 +1680,7 @@ class WebFetchTool(Tool):
 
     @property
     def spec(self) -> FetchProviderSpec:
-        return FETCH_PROVIDERS[self.provider]
+        return CORPUS_FETCH_SPEC if self.corpus_endpoint else FETCH_PROVIDERS[self.provider]
 
     @property
     def api_key(self) -> str:
@@ -1743,7 +1774,7 @@ class WebFetchTool(Tool):
             "ts": time.time(),
             "op": "fetch",
             "url": url,
-            "source": "web",
+            "source": "corpus" if self.corpus_endpoint else "web",
         }
         record["ok"] = fetch_result_ok(out)
         try:
@@ -1842,7 +1873,10 @@ class WebFetchTool(Tool):
             )
         # Off the event loop: ``socket.getaddrinfo`` is synchronous and can hang for
         # seconds on a slow resolver, and one process serves every session's turn.
-        is_valid, error_msg = await asyncio.to_thread(_judge_fetch_target, url)
+        # Not asked of a corpus URL: it names a document in the collection, nothing
+        # connects to its host, and a host that does not resolve here must not
+        # refuse a page the service holds.
+        is_valid, error_msg = (True, "") if self.corpus_endpoint else await asyncio.to_thread(_judge_fetch_target, url)
         if not is_valid:
             # The same rule as the handlers below: most of these reasons name the
             # hostname, and a reader whose every target is refused is one cause.
@@ -1891,7 +1925,9 @@ class WebFetchTool(Tool):
         # back under 3,000 characters and the report estimated what it could not find.
         served_url, fallbacks_tried, requested_chars = url, [], len(text)
         requested_text, requested_status = text, status
-        if len(text) < _THIN_PAGE_CHARS:
+        # A corpus page is the whole document the collection holds: there is no other
+        # address to read it at.
+        if len(text) < _THIN_PAGE_CHARS and not self.corpus_endpoint:
             text, status, served_url, fallbacks_tried = await self._recover_thin(url, text, status)
 
         encoding_lost = _encoding_lost(text)
@@ -2033,6 +2069,26 @@ class WebFetchTool(Tool):
         in the text, so synthesising a partial imitation of that block would
         misreport an undated page.
         """
+        if self.corpus_endpoint:
+
+            async def _send_corpus() -> httpx.Response:
+                async with httpx.AsyncClient(trust_env=False, timeout=30.0) as client:
+                    return await client.get(f"{self.corpus_endpoint}/fetch", params={"url": url})
+
+            try:
+                r = await _send_with_retry(_send_corpus, op="fetch_retry", key=url, budget=self._state().retry_budget)
+            except httpx.HTTPStatusError as e:
+                # Information, not an outage: the collection is all this run can read,
+                # so the model should search again rather than retry the address.
+                if e.response.status_code == 404:
+                    raise _ProviderPageError("Corpus: not in the collection") from e
+                raise
+            doc = r.json()
+            text = doc.get("text") if isinstance(doc, dict) else None
+            if not isinstance(text, str):
+                raise _ProviderPageError("Corpus returned no page content")
+            return text, r.status_code
+
         if self.provider == "jina":
             headers = {"Accept": "text/plain"}
             if key := self.api_key:
