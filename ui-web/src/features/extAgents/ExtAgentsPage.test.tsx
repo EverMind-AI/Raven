@@ -2468,6 +2468,18 @@ describe('the machines module', () => {
     expect(sent[1]).toEqual({ id: 'gpu1', name: 'GPU box 1', host: '203.0.113.7', port: 0, user: 'alice', auth: 'key', key: '~/.ssh/id_gpu1', password: '', paths: ['/data/alice/projects', '/scratch'] })
   })
 
+  it('names a question the kept password does not answer as its own kind, not as a refused password', async () => {
+    const refused = 'could not reach the machine: raven: the password kept for this machine answers its own password prompt only, and this prompt is not one'
+    install([row()], { machinesOver: { list: async () => [], add: async () => ({ ok: false, detail: refused, reason: 'prompt' as const }) } })
+    await mount()
+    await openMachines()
+    await click(rowNamed('gui.machine.register'))
+    for (const [label, value] of [['gui.machine.f_name', 'GPU box 1'], ['gui.machine.f_id', 'gpu1'], ['gui.machine.f_host', '203.0.113.7'], ['gui.machine.f_user', 'alice'], ['gui.machine.f_key', '~/.ssh/id_gpu1']] as const) await typeInto(field(label), value)
+    await click(sheet()!.querySelector<HTMLButtonElement>('.extAgents-act button')!)
+    expect(sheetStatus()).toBe('gui.machine.why_prompt')
+    expect(note()).toEqual({ t: 'gui.machine.add_bad', said: refused })
+  })
+
   it('registers with a password once the login pick says so, and sends the password in place of a key path', async () => {
     const rows: MachineRow[] = []
     const { mcalls } = install([row()], {

@@ -37,7 +37,7 @@ from typing import Any
 # and a test that stands a scratch registry in patches it there.
 from raven.ops import connections
 from raven.ops.connections import LOCAL, SSH, UNREADABLE, password_auth, password_path, transport_of
-from raven.ops.transport import ALIAS_MARK, ASKPASS_REFUSED, TransportError
+from raven.ops.transport import ALIAS_MARK, ASKPASS_REFUSED, ASKPASS_UNRESOLVED, TransportError
 from raven.utils.atomic_io import atomic_replace, write_transaction
 
 # What the owner has to be asked for, when the registry lists nothing that
@@ -196,7 +196,17 @@ def probe(
         return False, f"could not reach {where}: no answer within {timeout:.0f}s", {}
     if code != 0:
         said = out.strip() or f"exit {code}"
-        if password_auth(row) and ASKPASS_REFUSED in said:
+        if password_auth(row) and ASKPASS_UNRESOLVED in said:
+            # The helper waited for the row's spelling because ssh could not
+            # resolve the host; the machine's prompt may name the host ssh
+            # did resolve when it connected, so this is no other question.
+            said += (
+                "\nRaven could not learn from ssh which host this machine's password prompt names (above), so the "
+                "kept password waited for the prompt at the registered address, and this prompt was not that one, so "
+                "it was not sent. Check that `ssh -G` for this address works on this computer, or register the "
+                "machine at the address ssh logs in to."
+            )
+        elif password_auth(row) and ASKPASS_REFUSED in said:
             # The helper gave ssh nothing, so the refusal that follows is no
             # verdict on the password: the machine asked another question.
             said += (

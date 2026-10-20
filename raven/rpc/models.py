@@ -3128,7 +3128,17 @@ class MachinesAddResult(_Strict):
     ok: bool
     detail: str
     reason: Literal[
-        "", "unreachable", "login", "hostkey", "timeout", "nossh", "platform", "duplicate", "invalid", "registry"
+        "",
+        "unreachable",
+        "login",
+        "prompt",
+        "hostkey",
+        "timeout",
+        "nossh",
+        "platform",
+        "duplicate",
+        "invalid",
+        "registry",
     ]
     row: MachineRow | None = None
 

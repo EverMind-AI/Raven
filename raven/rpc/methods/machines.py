@@ -48,6 +48,7 @@ from raven.node.client import MachineStatus, NodeError, get_node_pool
 from raven.ops import connection_add, connections
 from raven.ops.connection_add import NODE_FIELD
 from raven.ops.connections import SSH, UNREADABLE, password_auth, row_problems, transport_of
+from raven.ops.transport import ASKPASS_REFUSED
 from raven.rpc.errors import ConfigValidationError
 
 if TYPE_CHECKING:
@@ -214,6 +215,9 @@ async def machines_list(params: dict) -> dict:
 # language; the sentence itself stays, for the reader who wants ssh's words.
 _REASONS = (
     (re.compile(r"ssh(-keygen)? not found on this computer", re.IGNORECASE), "nossh"),
+    # Before ``login``: the askpass helper declined the prompt, so the refusal
+    # ssh reports after it says nothing about the password.
+    (re.compile(re.escape(ASKPASS_REFUSED)), "prompt"),
     (re.compile(r"which is also the ssh alias Raven keeps"), "invalid"),
     (re.compile(r"REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed", re.IGNORECASE), "hostkey"),
     (re.compile(r"Permission denied|Too many authentication failures|publickey", re.IGNORECASE), "login"),

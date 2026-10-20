@@ -732,6 +732,51 @@ async def test_the_tunnel_asks_ssh_whose_prompt_to_answer_off_the_event_loop(
     assert ticks >= 5, f"the loop ran {ticks} ticks of 50 ms while ssh -G took a second"
 
 
+def test_a_prompt_the_kept_password_does_not_answer_is_not_blamed_on_the_password():
+    """The helper gave ssh nothing, so the refusal that follows says nothing about the password; telling the
+    owner to check it sent them after a fault it did not have (reviewed 2026-10-20)."""
+    from raven.ops.transport import ASKPASS_REFUSED
+
+    refused = f"{ASKPASS_REFUSED}\nalice@203.0.113.7: Permission denied (keyboard-interactive)."
+
+    said = remote.explain(_pw(), remote.SSH_FAILED_RC, refused)
+
+    assert said is not None and "check the password" not in said and "was not sent" in said
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the askpass helper and the stand-in ssh are POSIX scripts")
+def test_a_host_ssh_could_not_resolve_is_named_when_the_helper_then_gives_the_prompt_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, supported_host
+):
+    """With ``ssh -G`` failing the helper waits for the row's own spelling; when the machine's prompt names the
+    host ssh did resolve, the helper declines. Saying the machine asked another question, and to use a key,
+    sent the owner the wrong way: the failed resolution is what is named."""
+    from raven.ops import transport
+    from raven.ops.connection_add import store_password
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "ssh").write_text("#!/bin/sh\necho 'ssh: Could not resolve hostname' >&2; exit 255\n")
+    (bin_dir / "ssh").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    store_password("box", "hunter2")
+    env = transport.ssh_env({**PASSWORD_ROW, "host": "ownerbox"})
+    helper = subprocess.run(
+        [env["SSH_ASKPASS"], "worker@192.0.2.8's password: "],
+        capture_output=True,
+        text=True,
+        env={**os.environ, **env},
+        timeout=30,
+    )
+    assert (helper.returncode, helper.stdout) == (1, "")
+
+    said = remote.explain(_pw(), remote.SSH_FAILED_RC, helper.stderr + "worker@192.0.2.8: Permission denied.\n")
+
+    assert said is not None and "check the password" not in said and "a key" not in said
+    assert "could not say which host" in said and "exited 255" in said
+
+
 def test_a_refused_login_names_the_password_for_a_password_machine_and_the_key_for_a_key_machine():
     out = "worker@203.0.113.7: Permission denied (publickey,password)."
 

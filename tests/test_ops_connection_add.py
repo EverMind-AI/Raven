@@ -892,6 +892,33 @@ def test_a_question_the_kept_password_does_not_answer_is_named_and_the_password_
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="the stand-in ssh is a POSIX shell script")
+def test_a_host_ssh_could_not_resolve_is_named_and_the_owner_is_not_sent_to_a_key(tmp_path, monkeypatch):
+    """``ssh -G`` fails, so the helper waits for the row's spelling ``ownerbox``; the machine then asks exactly
+    for its password, at the address ssh did resolve, and the helper declines. That is no other question: the
+    registration says the host could not be resolved, keeps that the password was not sent, and does not tell
+    the owner to register with a key (reviewed 2026-10-20)."""
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    adder.store_password("box", "hunter2")
+    _fake_ssh(
+        tmp_path,
+        monkeypatch,
+        """
+        [ "$1" = -G ] && { echo 'ssh: Could not resolve hostname ownerbox' >&2; exit 255; }
+        given=$("$SSH_ASKPASS" "root@192.0.2.8's password: ")
+        echo "given=$given" >&2
+        echo 'root@192.0.2.8: Permission denied (password).' >&2; exit 255
+        """,
+    )
+
+    reached, said, _ = adder.probe(dict(PASSWORD_ROW, host="ownerbox"), timeout=10)
+
+    assert not reached
+    assert "given=\n" in said and "hunter2" not in said
+    assert "could not say which host" in said and "ssh -G exited 255" in said and "so it was not sent" in said
+    assert "registered with a key" not in said and "The password was refused" not in said
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the stand-in ssh is a POSIX shell script")
 def test_a_password_machine_at_another_machine_s_alias_is_refused_before_ssh_is_started(tmp_path, monkeypatch):
     """The key machine ``labbox`` was registered first, so ``Host labbox`` in ~/.ssh/config is Raven's. A password
     machine registered at ``labbox`` would log in at the key machine's address; it is refused by name, before

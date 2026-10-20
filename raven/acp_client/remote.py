@@ -45,7 +45,16 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from raven.ops import connections, remote_path
-from raven.ops.transport import TIMED_OUT_RC, TransportError, runner_from, ssh_argv, ssh_env, ssh_target
+from raven.ops.transport import (
+    ASKPASS_REFUSED,
+    ASKPASS_UNRESOLVED,
+    TIMED_OUT_RC,
+    TransportError,
+    runner_from,
+    ssh_argv,
+    ssh_env,
+    ssh_target,
+)
 
 #: Where an agent works on its machine when its entry names nowhere else
 #: (:data:`raven.ops.remote_path.DEFAULT_ROOT`, which the file tools read from
@@ -582,6 +591,22 @@ def explain(target: Machine, rc: int, output: str) -> str | None:
         return agent_missing(target)
     if rc != SSH_FAILED_RC:
         return None
+    if connections.password_auth(target._row) and ASKPASS_REFUSED in output:
+        # The helper gave ssh nothing, so the refusal after it is no verdict
+        # on the password (``connection_add.probe`` reads it the same way).
+        unresolved = next((line for line in output.splitlines() if line.startswith(ASKPASS_UNRESOLVED)), "")
+        if unresolved:
+            why = unresolved[len(ASKPASS_UNRESOLVED) :].split(", so it waited", 1)[0].strip(" ()")
+            return (
+                f"machine {target.label} was not sent its password: ssh could not say which host its password "
+                f"prompt names ({why}), and the prompt it asked for did not name the registered address; check that "
+                "ssh -G for that address works on this computer"
+            )
+        return (
+            f"machine {target.label} asked something other than the password prompt the password kept for it "
+            "answers (a one-time code, another account's password, or a question worded another way), so the "
+            "password was not sent"
+        )
     for pattern, said in _SSH_FAILURES:
         if pattern.search(output):
             if said is _LOGIN_REFUSED and connections.password_auth(target._row):

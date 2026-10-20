@@ -371,6 +371,75 @@ def test_when_ssh_cannot_say_how_it_resolves_the_host_the_helper_waits_for_the_r
 
 
 @_posix_helper
+@pytest.mark.parametrize(
+    ("stand_in", "why"),
+    [
+        ("echo 'ssh: Could not resolve hostname: Name or service not known' >&2; exit 255", "ssh -G exited 255"),
+        ("echo 'usage: ssh [-46AaCfGgKkMNnqsTtVvXxYy] destination [command]'", "ssh -G named no host"),
+        (None, "ssh -G could not be started"),
+        ("/bin/sleep 3; echo 'hostname 10.9.9.9'", "ssh -G took over 0.3 s"),
+    ],
+    ids=["ssh-fails", "nothing-resolved", "no-ssh-here", "ssh-hangs"],
+)
+def test_when_ssh_cannot_say_how_it_resolves_the_host_the_helper_s_refusal_says_so(
+    tmp_path, monkeypatch, supported_host, stand_in, why
+):
+    """The fallback to the row's spelling is safe and was silent: a machine whose prompt names the host ssh did
+    resolve was then declined, and its registration read as a machine asking another question. The helper's
+    refusal names the failed resolution, which is no secret, and still gives the prompt nothing."""
+    from raven.ops.connection_add import store_password
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    if stand_in is not None:
+        (bin_dir / "ssh").write_text(f"#!/bin/sh\n{stand_in}\n", encoding="utf-8")
+        (bin_dir / "ssh").chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+    monkeypatch.setattr(transport, "_RESOLVE_TIMEOUT_S", 0.3)
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    store_password("box", "hunter2")
+
+    env = transport.ssh_env({**PASSWORD_ROW, "host": "ownerbox"})
+    done = subprocess.run(
+        [env["SSH_ASKPASS"], "alice@192.0.2.8's password: "],
+        capture_output=True,
+        text=True,
+        env={**os.environ, **env, "PATH": "/usr/bin:/bin"},
+        timeout=30,
+    )
+
+    assert (done.returncode, done.stdout) == (1, "")
+    assert done.stderr.splitlines() == [
+        transport.ASKPASS_REFUSED,
+        f"{transport.ASKPASS_UNRESOLVED} ({why}), so it waited for the prompt of alice@ownerbox",
+    ]
+
+
+@_posix_helper
+def test_a_host_ssh_resolves_adds_nothing_to_the_helper_s_refusal(tmp_path, monkeypatch, supported_host):
+    from raven.ops.connection_add import store_password
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "ssh").write_text("#!/bin/sh\necho 'hostname 203.0.113.7'\n", encoding="utf-8")
+    (bin_dir / "ssh").chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    store_password("box", "hunter2")
+
+    env = transport.ssh_env(PASSWORD_ROW)
+    done = subprocess.run(
+        [env["SSH_ASKPASS"], "(alice@203.0.113.7) Verification code: "],
+        capture_output=True,
+        text=True,
+        env={**os.environ, **env, "PATH": "/usr/bin:/bin"},
+        timeout=30,
+    )
+
+    assert (done.returncode, done.stdout, done.stderr) == (1, "", transport.ASKPASS_REFUSED + "\n")
+
+
+@_posix_helper
 def test_a_config_dump_carrying_bytes_that_are_not_utf_8_still_names_the_host(tmp_path, monkeypatch, supported_host):
     """ssh prints the owner's config values as they are on disk. One that is not UTF-8 must not take the
     resolution down, and with it every connection to the machine."""

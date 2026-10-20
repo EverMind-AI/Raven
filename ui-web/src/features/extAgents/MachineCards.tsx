@@ -39,6 +39,7 @@ const PLUS = 'M12 5v14M5 12h14'
 const WHY: Record<Exclude<RegisterReason, ''>, string> = {
   unreachable: 'gui.machine.why_unreachable',
   login: 'gui.machine.why_login',
+  prompt: 'gui.machine.why_prompt',
   hostkey: 'gui.machine.why_hostkey',
   timeout: 'gui.machine.why_timeout',
   nossh: 'gui.machine.why_nossh',

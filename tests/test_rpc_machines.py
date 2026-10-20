@@ -20,6 +20,7 @@ from raven.acp_client import remote
 from raven.node import install as node_install
 from raven.node.client import MachineStatus, NodeError
 from raven.ops import connection_add, connections
+from raven.ops.transport import ASKPASS_REFUSED
 from raven.rpc.errors import ConfigValidationError
 from raven.rpc.methods import machines as rpc
 from raven.rpc.models import METHOD_MODELS
@@ -377,6 +378,11 @@ async def test_add_refuses_before_reaching_anything_over_a_missing_field_a_bad_i
         ("could not reach alice@203.0.113.7:2222: Host key verification failed.", "hostkey"),
         ("could not reach alice@203.0.113.7:2222: no answer within 30s", "timeout"),
         ("could not reach alice@203.0.113.7:2222: ssh not found on this computer", "nossh"),
+        (
+            f"could not reach alice@203.0.113.7:2222: {ASKPASS_REFUSED}\n"
+            "alice@203.0.113.7: Permission denied (keyboard-interactive).",
+            "prompt",
+        ),
     ],
 )
 async def test_a_machine_that_cannot_be_reached_is_not_written_and_the_refusal_names_its_kind_not_the_address(

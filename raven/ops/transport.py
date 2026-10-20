@@ -190,6 +190,11 @@ ASKPASS_FOR_ENV = "RAVEN_MACHINE_PASSWORD_FOR"
 ASKPASS_REFUSED = (
     "raven: the password kept for this machine answers its own password prompt only, and this prompt is not one"
 )
+#: The variable that tells the helper why the prompt it waits for names the row's own spelling: ssh could not
+#: say how it resolves the host. Empty when it could.
+ASKPASS_UNRESOLVED_ENV = "RAVEN_MACHINE_PROMPT_UNRESOLVED"
+#: What the helper adds to that refusal when the variable is set, with the reason and the prompt it waited for.
+ASKPASS_UNRESOLVED = "raven: ssh could not say which host this machine's password prompt names"
 
 # The helper itself: OpenSSH runs it when ``SSH_ASKPASS_REQUIRE=force`` and
 # reads the password from its stdout. It prints the one line of the file the
@@ -202,7 +207,9 @@ ASKPASS_REFUSED = (
 # verification code, a passcode) and a one-time password's -- "password" is
 # in that wording too -- get nothing, since the password is the machine's
 # alone and a PAM module may pass what it is given on to its vendor. The
-# question is ssh's first argument; trailing blanks and case are ignored.
+# question is ssh's first argument; trailing blanks and case are ignored. A
+# refusal says so on stderr, and also why the prompt it waited for is the
+# row's own spelling when ssh could not resolve the host.
 _ASKPASS = (
     "#!/bin/sh\n"
     "# Raven: hands ssh the password kept for a registered machine, at that account's own password prompt only.\n"
@@ -213,6 +220,8 @@ _ASKPASS = (
     f'  "$who\'s password:"|"($who) password:") exec cat "${ASKPASS_FILE_ENV}" ;;\n'
     "esac\n"
     f"echo '{ASKPASS_REFUSED}' >&2\n"
+    f"[ -n \"${ASKPASS_UNRESOLVED_ENV}\" ] && printf '%s (%s), so it waited for the prompt of %s\\n' "
+    f'"{ASKPASS_UNRESOLVED}" "${ASKPASS_UNRESOLVED_ENV}" "${ASKPASS_FOR_ENV}" >&2\n'
     "exit 1\n"
 )
 
@@ -333,11 +342,13 @@ def ssh_env(row: dict[str, Any], *, password_file: Path | None = None) -> dict[s
             f"password kept for {label!r} is not sent; remove one of the two machines, or register {label!r} "
             "again at its own address"
         )
+    target, unresolved = _prompt_target(host, port, user)
     return {
         "SSH_ASKPASS": str(askpass_helper(secret.parent)),
         "SSH_ASKPASS_REQUIRE": "force",
         ASKPASS_FILE_ENV: str(secret),
-        ASKPASS_FOR_ENV: _prompt_target(host, port, user),
+        ASKPASS_FOR_ENV: target,
+        ASKPASS_UNRESOLVED_ENV: unresolved,
         "DISPLAY": os.environ.get("DISPLAY") or "raven-askpass",
     }
 
@@ -383,8 +394,10 @@ def _managed_aliases() -> set[str]:
 _RESOLVE_TIMEOUT_S = 10.0
 
 
-def _prompt_target(host: str, port: int, user: str) -> str:
-    """The ``user@host`` ssh's password prompt names for this destination: whose prompt the helper answers.
+def _prompt_target(host: str, port: int, user: str) -> tuple[str, str]:
+    """The ``user@host`` ssh's password prompt names for this destination, and why not when ssh could not say.
+
+    The first is whose prompt the helper answers.
 
     ssh names the host it resolved, not the one on its command line: the
     ``HostName`` the owner's ssh config gives an alias, the canonical form of
@@ -393,7 +406,9 @@ def _prompt_target(host: str, port: int, user: str) -> str:
     spelling refused every such machine, and its registration then blamed the
     password (reviewed 2026-10-20). ``ssh -G`` prints that resolution without
     connecting, and is asked with the password connection's own options. The
-    row's spelling when ssh cannot say.
+    row's spelling when ssh cannot say, which sends the password nowhere else;
+    the reason then goes to the helper (:data:`ASKPASS_UNRESOLVED_ENV`), whose
+    refusal would otherwise read as a machine asking another question.
 
     Asked here, before the connection, never by the helper: a helper that ran
     ``ssh -G`` itself recursed into thousands of processes against a stand-in
@@ -415,14 +430,18 @@ def _prompt_target(host: str, port: int, user: str) -> str:
             timeout=_RESOLVE_TIMEOUT_S,
             env=env,
         )
-    except (OSError, subprocess.TimeoutExpired):
-        return f"{user}@{host}"
+    except OSError:
+        return f"{user}@{host}", "ssh -G could not be started"
+    except subprocess.TimeoutExpired:
+        return f"{user}@{host}", f"ssh -G took over {_RESOLVE_TIMEOUT_S:g} s"
+    if done.returncode != 0:
+        return f"{user}@{host}", f"ssh -G exited {done.returncode}"
     resolved: dict[str, str] = {}
-    if done.returncode == 0:
-        for line in done.stdout.splitlines():
-            key, _, value = line.partition(" ")
-            resolved[key] = value.strip()
-    return f"{user}@{resolved.get('hostkeyalias') or resolved.get('hostname') or host}"
+    for line in done.stdout.splitlines():
+        key, _, value = line.partition(" ")
+        resolved[key] = value.strip()
+    named = resolved.get("hostkeyalias") or resolved.get("hostname")
+    return (f"{user}@{named}", "") if named else (f"{user}@{host}", "ssh -G named no host")
 
 
 def make_ssh_runner(

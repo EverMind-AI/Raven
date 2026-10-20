@@ -1592,6 +1592,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
       'The machine could not be reached: check the address and port, and that the machine is on and reachable from this computer.',
     'gui.machine.why_login':
       "The machine refused the login. With a key: check the user name and the private key path, and that the key's public half is on the machine. With a password: check it, and that the machine accepts password logins at all.",
+    'gui.machine.why_prompt':
+      "The machine asked something the kept password does not answer -- a one-time code, another account's password, or a password prompt that names a host other than the registered one -- so the password was not sent: see the line below.",
     'gui.machine.why_hostkey':
       "The machine's host key differs from the one on record: check the machine before trusting it again, then take the old line out of ~/.ssh/known_hosts.",
     'gui.machine.why_timeout': 'The machine did not answer in time: check that it is on and that the port is open.',
@@ -4969,6 +4971,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.machine.why_unreachable': '连不上这台机器：检查地址和端口，确认机器开着、从这台电脑能连到它。',
     'gui.machine.why_login':
       '机器拒绝了登录。用密钥时：检查用户名和私钥路径，确认对应的公钥已经放到机器上。用密码时：检查密码，并确认这台机器允许密码登录。',
+    'gui.machine.why_prompt':
+      '机器问的不是这个账号自己的密码提示（比如一次性验证码、别的账号的密码，或者提示里的主机不是登记的那台），所以没有发送密码：详见下一行。',
     'gui.machine.why_hostkey':
       '机器的主机密钥和记录的不一样：先确认机器没问题，再把 ~/.ssh/known_hosts 里的旧记录删掉。',
     'gui.machine.why_timeout': '机器没有按时应答：确认机器开着、端口放行。',
