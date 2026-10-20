@@ -390,3 +390,58 @@ def test_a_docker_campaign_on_a_key_machine_is_reached_as_it_always_was(store, t
         "root@14.103.100.27:/srv/ops/app",
     ]
     assert sync["require"] == "" and not sync["own_session"]
+
+
+def _password_campaign(tmp_path: Path) -> Path:
+    """A docker campaign on the password machine, one trial running: what ops_tune_status builds a backend for."""
+    cdir = tmp_path / "ops" / "lab-run"
+    cdir.mkdir(parents=True)
+    meta = {"connection": "conn_lab", "remote_dir": "/srv/ops", "budget": {"unit": "core-minute", "total": 60}}
+    (cdir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    trial = {
+        "idem_key": "t1",
+        "status": "running",
+        "campaign": "lab-run",
+        "handle": {"backend": "docker", "job_id": "ops-t1"},
+        "result": None,
+        "attempts": 0,
+        "escalated": False,
+    }
+    (cdir / "ledger.json").write_text(json.dumps({"version": 1, "records": {"t1": trial}}), encoding="utf-8")
+    return cdir
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="password machines are refused on Windows; the stand-ins are POSIX")
+async def test_the_status_of_a_password_machine_campaign_leaves_the_loop_free_while_ssh_resolves_the_host(
+    password_machine, tmp_path, monkeypatch
+):
+    """A password machine's runner asks a local ``ssh -G`` which host its prompt names. Built on the loop, one
+    status call held every other turn for as long as that took: 2.06 s for a 2 s resolution (reviewed
+    2026-10-20), and up to the 10 s cap per build with a slow ``Match exec``."""
+    from oncall_flow.tools.ops import OpsTuneStatusTool
+
+    tools_base.set_home(tmp_path / "ops")
+    cdir = _password_campaign(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "ssh").write_text(
+        '#!/bin/sh\nif [ "$1" = -G ]; then sleep 1; echo "hostname 203.0.113.7"; fi\nexit 0\n', encoding="utf-8"
+    )
+    (bin_dir / "ssh").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    ticks = 0
+
+    async def tick():
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.05)
+            ticks += 1
+
+    ticker = asyncio.create_task(tick())
+    try:
+        out = await OpsTuneStatusTool().execute(ledger=str(cdir / "ledger.json"))
+    finally:
+        ticker.cancel()
+
+    assert "t1" in out
+    assert ticks >= 5, f"the loop ran {ticks} ticks of 50 ms while ssh -G took a second"

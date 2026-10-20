@@ -372,3 +372,27 @@ async def test_check_later_refuses_a_concluded_campaign(home) -> None:
     text = getattr(out, "model_text", None) or str(out)
     assert "REFUSED" in text and "concluded" in text.lower()
     assert scheduled == []
+
+
+async def test_a_reading_s_runner_is_built_off_the_loop(home, monkeypatch) -> None:
+    """A password machine's runner asks a local ``ssh -G`` which host its prompt names; built on the loop, that
+    wait held every other turn (reviewed 2026-10-20). Only the commands were run in a thread."""
+    import asyncio
+
+    where: list[bool] = []
+    built = r._runner
+
+    def runner(meta):
+        try:
+            asyncio.get_running_loop()
+            where.append(True)
+        except RuntimeError:
+            where.append(False)
+        return built(meta)
+
+    monkeypatch.setattr(r, "_runner", runner)
+
+    out = await _declare(readings=[{"name": "free", "command": "echo 41.5", "when": "at_declare"}])
+
+    assert "-> now 41.5" in out
+    assert where == [False], "the runner was built on the event loop"

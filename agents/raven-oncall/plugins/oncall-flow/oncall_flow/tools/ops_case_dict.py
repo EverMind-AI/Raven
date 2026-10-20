@@ -34,6 +34,7 @@ syntax only.
 
 from __future__ import annotations
 
+import asyncio
 import json as _json
 import shlex
 from pathlib import Path
@@ -185,7 +186,7 @@ class OpsEditCaseDictTool(Tool):
     ) -> str:
         from oncall_flow.instrument import log_event
 
-        resolved = _campaign(campaign, ledger)
+        resolved = await asyncio.to_thread(_campaign, campaign, ledger)
         if isinstance(resolved, str):
             return resolved
         backend, led, cdir, _meta = resolved  # _meta carries the solver env path
@@ -303,7 +304,7 @@ class OpsCaseChangesTool(Tool):
         }
 
     async def execute(self, campaign: str, trial: str | None = None, ledger: str | None = None, **kwargs: Any) -> str:
-        resolved = _campaign(campaign, ledger)
+        resolved = await asyncio.to_thread(_campaign, campaign, ledger)
         if isinstance(resolved, str):
             return resolved
         backend, led, _cdir, meta = resolved
