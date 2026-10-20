@@ -5,6 +5,17 @@ All notable changes to Raven are documented here.
 ## Unreleased
 
 ### Added
+- **A draft `agent-decision` predicate for in-toto**, in
+  `docs/specs/2026-10-20-agent-decision-predicate-proposal.md`. in-toto has predicate types
+  for builds (`slsa.dev/provenance/v1`) and for vulnerabilities, and **none for an autonomous
+  agent's decision** -- which is what the buyers of AI assurance ask about, since an
+  underwriter's published criteria ask for a technical system description, a governance and
+  oversight record, an incident history, written scope limits, evaluation and red-team
+  results, and performance data, and **not one of them mentions supply-chain provenance**.
+  The draft states the shape, the eight constraints it has to satisfy, the signer model, what
+  v0.1 deliberately does not carry, and the five questions the maintainers would have to
+  answer. **Nothing has been posted to in-toto, no issue has been claimed, and no account
+  has been used.**
 
 - **The signed-records corpus**: real agent runs, attested, verifiable offline
   (`scripts/evidence_corpus.py`, `evidence/agent-run-corpus/`). One run record in, one signed
