@@ -2831,9 +2831,9 @@ describe('the machines module', () => {
   })
 
   it('keeps every switched-off entry of one preset reconnectable, each as a choice of its own', async () => {
-    /* Two explicitly named entries of one preset on one machine, both off: the
-       review bot's case -- with one choice per preset, reconnecting the first
-       made the preset taken and left the second unreachable from here. */
+    /* Two explicitly named entries of one preset on one machine, both off:
+       with one choice per preset, reconnecting the first made the preset read
+       as taken and left the second unreachable from here. */
     const presets: PresetChoice[] = [
       {
         preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false,
@@ -2866,6 +2866,69 @@ describe('the machines module', () => {
     expect(sheetActs()).toEqual(['gui.machine.reconnect_do'])
     await click(sheetAct('gui.machine.reconnect_do'))
     expect(acts.at(-1)).toEqual(['toggle', 'codex@box', { enabled: true }])
+  })
+
+  /* A toggle held in flight: the source answers only when the test releases it. */
+  const heldToggle = (rows: ExtAgentRow[]): { act: ExtAgentsSource['act']; writes: string[]; release: () => Promise<void> } => {
+    let release: (rows: ExtAgentRow[]) => void = () => {}
+    const writes: string[] = []
+    return {
+      writes,
+      act: (op, r) => {
+        writes.push(`${op}:${r.name}`)
+        return new Promise<ExtAgentRow[]>(res => { release = res })
+      },
+      release: async () => {
+        await act(async () => { release(rows) })
+        for (let i = 0; i < 4; i++) await act(async () => { await new Promise(res => setTimeout(res, 0)) })
+      },
+    }
+  }
+  const offPresets = (): PresetChoice[] => [
+    { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [{ machine: 'box', name: 'codex@box' }], on_machines: [] },
+  ]
+
+  it('holds the agents page s own Connect while a Reconnect from the machine runs, so one ping is made', async () => {
+    const offRow = row({ name: 'codex@box', preset: 'codex', configured: true, enabled: false, machine: 'box' })
+    const rows = [row(), offRow]
+    const held = heldToggle(rows)
+    const { toasts } = install(rows, { machines: [ready({ agents_off_here: ['codex@box'] })], presets: async () => offPresets(), act: held.act })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    await click(sheetAct('gui.machine.reconnect_do'))
+    expect(held.writes).toEqual(['toggle:codex@box'])
+    /* The row is joining for the length of the ping: the agents page draws it
+       pending and offers no control. */
+    expect(store.get().joining['codex@box']).toBeDefined()
+    await act(async () => { detail.close() })
+    await act(async () => { store.open() })
+    expect(buttonOf('codex@box')).toBeNull()
+    offRow.enabled = true
+    await held.release()
+    expect(held.writes).toEqual(['toggle:codex@box'])
+    expect(store.get().joining['codex@box']).toBeUndefined()
+    expect(toasts).toEqual(['gui.machine.reconnected_said {"name":"codex@box"}'])
+  })
+
+  it('greys the entry in the machine form while the agents page s own Connect on it runs, and says so', async () => {
+    const offRow = row({ name: 'codex@box', preset: 'codex', configured: true, enabled: false, machine: 'box' })
+    const rows = [row(), offRow]
+    const held = heldToggle(rows)
+    install(rows, { machines: [ready({ agents_off_here: ['codex@box'] })], presets: async () => offPresets(), act: held.act })
+    await mount()
+    await click(buttonOf('codex@box'))
+    expect(held.writes).toEqual(['toggle:codex@box'])
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    expect(field('gui.machine.f_preset')).toBeNull()
+    expect([...sheet()!.querySelectorAll('.extAgents-about')].map(n => n.textContent)).toContain('gui.machine.presets_pending')
+    expect((sheetAct('gui.machine.connect_do') as HTMLButtonElement).disabled).toBe(true)
+    offRow.enabled = true
+    await held.release()
+    expect(held.writes).toEqual(['toggle:codex@box'])
   })
 
   it('keeps the refusal of a Reconnect on the form, in the agent s words', async () => {

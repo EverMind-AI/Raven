@@ -52,7 +52,8 @@ All notable changes to Raven are documented here.
   card that listed only connected entries read *No agent connected here yet*
   beside a connect form that greyed the preset as *already connected on this
   machine*, because the entry still holds the machine for the add. The card,
-  the sheet and the form now show such an entry marked *switched off*; in the
+  the sheet and the form now show such an entry marked *switched off* (the
+  card line reads *N on this machine*, not *connected here*); in the
   form each such entry is a choice of its own, by name, with **Reconnect**,
   which switches that entry back on (with the same proof prompt) instead of
   adding a second one. `machines.list` rows carry `agents_off_here`; `subagents.presets`

@@ -185,9 +185,9 @@ sheet keeps how it ended. The sheet's *Install into* field is the command's
 `--dir`. A machine whose node is another Raven's shows *needs updating* and
 offers **Update node**.
 
-Once the node is up, the card says which agent entries are connected on the
-machine (*No agent connected here yet* until one is; the state line, *Link
-up, no agent running*, is about this moment), and the sheet says the next
+Once the node is up, the card lists the agent entries on the machine,
+connected or switched off (*No agent connected here yet* until there is one;
+the state line, *Link up, no agent running*, is about this moment), and the sheet says the next
 step and offers **Connect an agent on this machine**: pick the agent, give
 its working directory there, and **Connect** adds `<preset>@<machine id>`
 (`codex@gpu1`) the way section 4's `subagents.add` does, one real prompt run

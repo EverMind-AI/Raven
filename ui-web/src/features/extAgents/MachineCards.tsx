@@ -396,7 +396,9 @@ export function MachineConnectSheet({ row, s }: { row: MachineRow; s: ExtAgentsS
       preset: p,
       off: e.name,
       taken: false,
-      pending: s.mconnectPending.includes(e.name)
+      /* In flight from this form, or from the agents page's own Connect on
+         that row (`joining`): one ping at a time, whichever side pressed. */
+      pending: s.mconnectPending.includes(e.name) || e.name in s.joining
     }))
     const add: Choice = {
       key: p.preset,
@@ -463,7 +465,9 @@ export function MachineConnectSheet({ row, s }: { row: MachineRow; s: ExtAgentsS
             <div className="extAgents-note-said">{s.presetsFailed}</div>
           </div>
         ) : pickable.length === 0 ? (
-          <div className="extAgents-about">{t('gui.machine.presets_none')}</div>
+          <div className="extAgents-about">
+            {t(choices.some(c => c.pending) ? 'gui.machine.presets_pending' : 'gui.machine.presets_none')}
+          </div>
         ) : (
           <>
             <label className="extAgents-fld">

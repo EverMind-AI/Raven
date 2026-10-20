@@ -1605,9 +1605,9 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.machine.remove_bad_said': 'Not removed: {said}',
     'gui.machine.err_no_node': 'No Raven node on it yet: press Install node. {said}',
     'gui.machine.err_stale_node': "Its node is another Raven's: press Update node. {said}",
-    'gui.machine.agents_here': 'Agents connected here',
+    'gui.machine.agents_here': 'Agents on this machine',
     'gui.machine.agents_here_none': 'None yet',
-    'gui.machine.agents_line': '{n} connected here: {names}',
+    'gui.machine.agents_line': '{n} on this machine: {names}',
     'gui.machine.agents_line_none': 'No agent connected here yet',
     'gui.machine.next_title': 'Next',
     'gui.machine.next_body':
@@ -1632,6 +1632,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.machine.presets_none':
       'Nothing to connect: every agent that can run on a machine is already connected on this one.',
     'gui.machine.presets_loading': 'Reading the agents',
+    'gui.machine.presets_pending':
+      'Something is still being connected on this machine; the choices come back when it ends.',
     'gui.machine.keys_found': 'Found on this computer and filled in; pick another or type a path.',
     'gui.machine.keys_none':
       'No ssh key was found on this computer. Type a path, or pick Password: Raven then keeps the password on this computer and logs in with it.',
@@ -4975,9 +4977,9 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.machine.remove_bad_said': '没有移除：{said}',
     'gui.machine.err_no_node': '机器上还没有节点，点「安装节点」。{said}',
     'gui.machine.err_stale_node': '节点是另一个版本的 Raven 装的，点「更新节点」。{said}',
-    'gui.machine.agents_here': '接在这台机器上的 Agent',
+    'gui.machine.agents_here': '这台机器上的 Agent',
     'gui.machine.agents_here_none': '还没有',
-    'gui.machine.agents_line': '接了 {n} 个 Agent：{names}',
+    'gui.machine.agents_line': '这台机器上有 {n} 个 Agent：{names}',
     'gui.machine.agents_line_none': '还没有 Agent 接到这里',
     'gui.machine.next_title': '下一步',
     'gui.machine.next_body':
@@ -5001,6 +5003,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.machine.connect_do': '接入',
     'gui.machine.presets_none': '没有可接的：能跑在机器上的 Agent 都已经接在这台机器上了。',
     'gui.machine.presets_loading': '正在读取 Agent 列表',
+    'gui.machine.presets_pending': '这台机器上还有接入在进行，结束后再选。',
     'gui.machine.keys_found': '已填入这台电脑上找到的密钥，也可以换一把或自己填路径。',
     'gui.machine.keys_none':
       '这台电脑上没找到 ssh 密钥。可以自己填路径，或改选「密码」：Raven 会把密码保存在本机，每次用它登录。',
