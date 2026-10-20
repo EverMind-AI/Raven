@@ -181,6 +181,13 @@ PASSWORD_AUTH = (
     "ProxyJump=none",
     "-o",
     "ProxyCommand=none",
+    # ``ssh -G`` makes none of the DNS lookups canonicalization makes, and a
+    # connection that canonicalizes re-reads the config under the new name --
+    # where a ``Host <id>`` block Raven wrote for another machine can apply.
+    # Off, the connection reaches the host ``ssh -G`` named, the one the
+    # helper's prompt is for (reviewed 2026-10-20).
+    "-o",
+    "CanonicalizeHostname=no",
 )
 
 #: The variable the askpass helper reads the password file's path from.

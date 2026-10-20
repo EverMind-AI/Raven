@@ -496,6 +496,52 @@ def test_resolving_the_host_hands_ssh_no_askpass_so_nothing_it_starts_reaches_th
     assert seen.read_text(encoding="utf-8").splitlines() == ["-G||never"]
 
 
+@_posix_helper
+@pytest.mark.skipif(_REAL_SSH is None, reason="an OpenSSH client resolves the host")
+@pytest.mark.parametrize("setting", ["yes", "always"])
+def test_a_password_connection_never_canonicalizes_so_it_logs_in_where_ssh_g_said(
+    tmp_path, monkeypatch, setting
+):
+    """``ssh -G`` prints the configuration without the DNS lookups ``CanonicalizeHostname`` makes, and a real
+    connection then re-reads the config under the canonical name -- where a ``Host <id>`` block Raven wrote
+    for another machine can apply (measured with OpenSSH 8.9: ``-G -v`` reports applying it in that pass).
+    So the host the helper is told to answer for could differ from the one the connection reaches. A password
+    connection turns canonicalization off on its command line, which outranks the owner's config, and the
+    resolution, asked with the same options, says so."""
+    _owner_ssh_config(tmp_path, monkeypatch, f"CanonicalizeHostname {setting}\nHost devbox\n  HostName 10.0.0.5\n")
+    argv = ssh_argv("devbox", 22, "", user="alice", password=True)
+
+    resolved = transport.resolve_with_ssh(argv)
+
+    assert resolved.failure == "" and resolved.first("canonicalizehostname") == "false"
+    assert resolved.first("hostname") == "10.0.0.5"
+    assert "CanonicalizeHostname=no" in argv
+
+
+@_posix_helper
+@pytest.mark.skipif(_REAL_SSH is None, reason="an OpenSSH client resolves the host")
+def test_a_managed_block_a_final_pass_applies_never_supplies_the_address(tmp_path, monkeypatch, supported_host):
+    """With canonicalization off, the one later pass left is ``Match final``, which re-reads the config under
+    the name the owner's ``HostName`` gave: a ``Host <id>`` block Raven wrote then applies (OpenSSH 8.9 says
+    so under ``-v``), but ssh keeps the first ``HostName`` it read, the owner's. A Raven block can only
+    supply the address when it matches the row's own host, and that row is refused by name."""
+    from raven.ops.connection_add import ALIAS_MARK, store_password
+
+    mark = ALIAS_MARK.format(conn_id="labbox")
+    _owner_ssh_config(
+        tmp_path,
+        monkeypatch,
+        f"Match final\nHost lab\n  HostName labbox\n\n{mark}\nHost labbox\n  HostName 198.51.100.66\n{mark}\n",
+    )
+    monkeypatch.setattr(transport, "passwd_home", lambda: tmp_path / "nobody")
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    store_password("lab", "hunter2")
+
+    env = transport.ssh_env({"id": "lab", "transport": "ssh", "host": "lab", "user": "alice", "auth": "password"})
+
+    assert env[transport.ASKPASS_FOR_ENV] == "alice@labbox"
+
+
 # ---- an alias Raven keeps for one machine never picks who gets another machine's password ----
 
 
