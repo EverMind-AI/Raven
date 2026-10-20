@@ -891,6 +891,23 @@ def test_a_question_the_kept_password_does_not_answer_is_named_and_the_password_
     assert "so it was not sent" in said
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="the stand-in ssh is a POSIX shell script")
+def test_a_password_machine_at_another_machine_s_alias_is_refused_before_ssh_is_started(tmp_path, monkeypatch):
+    """The key machine ``labbox`` was registered first, so ``Host labbox`` in ~/.ssh/config is Raven's. A password
+    machine registered at ``labbox`` would log in at the key machine's address; it is refused by name, before
+    ssh starts, and the password is offered to nothing."""
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    assert adder.write_ssh_alias(dict(SSH_ROW, id="labbox", host="198.51.100.66")) == "labbox"
+    adder.store_password("lab", "hunter2")
+    _fake_ssh(tmp_path, monkeypatch, f"echo started >> {tmp_path / 'ssh-ran'}; exit 0")
+
+    reached, said, _ = adder.probe(dict(PASSWORD_ROW, id="lab", host="labbox"), timeout=10)
+
+    assert not reached
+    assert "ssh alias Raven keeps" in said and "'labbox'" in said and "not sent" in said
+    assert not (tmp_path / "ssh-ran").exists()
+
+
 def test_a_password_row_with_no_password_kept_here_is_refused_before_ssh_is_started(
     tmp_path, monkeypatch, supported_host
 ):

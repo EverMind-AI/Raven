@@ -214,6 +214,7 @@ async def machines_list(params: dict) -> dict:
 # language; the sentence itself stays, for the reader who wants ssh's words.
 _REASONS = (
     (re.compile(r"ssh(-keygen)? not found on this computer", re.IGNORECASE), "nossh"),
+    (re.compile(r"which is also the ssh alias Raven keeps"), "invalid"),
     (re.compile(r"REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed", re.IGNORECASE), "hostkey"),
     (re.compile(r"Permission denied|Too many authentication failures|publickey", re.IGNORECASE), "login"),
     (re.compile(r"no answer within|timed out", re.IGNORECASE), "timeout"),

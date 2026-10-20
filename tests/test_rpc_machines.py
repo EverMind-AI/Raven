@@ -906,6 +906,23 @@ async def test_a_refusal_after_the_same_machine_registered_meanwhile_leaves_the_
     assert connection_add.password_path("box").read_text(encoding="utf-8") == BY_PASSWORD["password"] + "\n"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="password machines are refused on Windows before this point")
+async def test_a_password_machine_at_another_machine_s_alias_is_refused_as_a_field_that_cannot_be_used(
+    supported_host, pool, rhome, monkeypatch
+):
+    """``Host labbox`` in ~/.ssh/config is the alias Raven keeps for the key machine ``labbox``; a password machine
+    registered at ``labbox`` would log in at that machine's address. The sheet names the host field, not the
+    network, and the password is forgotten again."""
+    connection_add.write_ssh_alias({"id": "labbox", "transport": "ssh", "host": "198.51.100.66", "key": "~/k"})
+
+    out = await rpc.machines_add(BY_PASSWORD | {"host": "labbox"})
+
+    _check("machines.add", out)
+    assert (out["ok"], out["reason"]) == (False, "invalid")
+    assert "ssh alias Raven keeps" in out["detail"] and "hunter2" not in out["detail"]
+    assert not connection_add.password_path("box").exists()
+
+
 @pytest.mark.parametrize("cancelled", [False, True])
 @pytest.mark.parametrize("failed_index", [0, 1])
 async def test_a_failed_registration_keeps_the_same_password_of_another_registration_still_probing(

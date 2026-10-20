@@ -427,6 +427,102 @@ def test_resolving_the_host_hands_ssh_no_askpass_so_nothing_it_starts_reaches_th
     assert seen.read_text(encoding="utf-8").splitlines() == ["-G||never"]
 
 
+# ---- an alias Raven keeps for one machine never picks who gets another machine's password ----
+
+
+def _key_machine_alias(conn_id: str, host: str) -> Path:
+    """The ``Host <conn_id>`` block Raven writes into ``~/.ssh/config`` when a key machine is registered."""
+    from raven.ops.connection_add import write_ssh_alias
+
+    write_ssh_alias({"id": conn_id, "transport": "ssh", "host": host, "port": 22, "user": "root", "key": "~/k"})
+    return Path(os.path.expanduser("~/.ssh/config"))
+
+
+@_posix_helper
+@pytest.mark.skipif(_REAL_SSH is None, reason="an OpenSSH client resolves the host")
+@pytest.mark.parametrize("spelled", ["labbox", "LabBox"], ids=["as-written", "another-case"])
+def test_a_password_machine_whose_host_is_another_machine_s_managed_alias_is_refused_and_its_password_stays(
+    tmp_path, monkeypatch, supported_host, spelled
+):
+    """A key machine registered under the id ``labbox`` makes Raven write ``Host labbox`` / ``HostName <its
+    address>``. Following ssh's resolution through that block handed the password kept for ``lab`` -- a password
+    machine at ``labbox`` -- to the key machine's address, and the model can register such a machine (reviewed
+    2026-10-20). ssh matches ``Host`` case-blind, so the refusal does too."""
+    from raven.ops.connection_add import store_password
+
+    config = _key_machine_alias("labbox", "198.51.100.66")
+    wrapper_dir = tmp_path / "bin"
+    wrapper_dir.mkdir()
+    (wrapper_dir / "ssh").write_text(f'#!/bin/sh\nexec "{_REAL_SSH}" -F "{config}" "$@"\n', encoding="utf-8")
+    (wrapper_dir / "ssh").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{wrapper_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    store_password("lab", "hunter2")
+
+    with pytest.raises(TransportError) as refused:
+        transport.ssh_env({"id": "lab", "transport": "ssh", "host": spelled, "user": "alice", "auth": "password"})
+
+    said = str(refused.value)
+    assert "'lab'" in said and "'labbox'" in said and "not sent" in said
+    assert "198.51.100.66" not in said and "hunter2" not in said
+
+
+@_posix_helper
+@pytest.mark.parametrize("where", ["passwd-home", "raven-home"])
+@pytest.mark.parametrize("whole", [True, False], ids=["block", "one-mark-left"])
+def test_a_managed_alias_counts_in_the_config_ssh_reads_and_in_the_one_raven_writes_even_cut_short(
+    tmp_path, monkeypatch, supported_host, where, whole
+):
+    """ssh reads ``~/.ssh/config`` from the account's passwd entry, Raven writes the one under ``$HOME``; a block
+    in either may be the one ssh follows. A block with one of its marks gone is still Raven's, not the owner's.
+    The ssh stand-in names the managed address, as the real one would, and is never what decides."""
+    from raven.ops.connection_add import ALIAS_MARK, store_password
+
+    passwd_home = tmp_path / "passwd-home"
+    monkeypatch.setattr(transport, "passwd_home", lambda: passwd_home, raising=False)
+    home = passwd_home if where == "passwd-home" else Path(os.path.expanduser("~"))
+    mark = ALIAS_MARK.format(conn_id="labbox")
+    block = [mark, "Host labbox", "  HostName 198.51.100.66"] + ([mark] if whole else [])
+    (home / ".ssh").mkdir(parents=True, exist_ok=True)
+    (home / ".ssh" / "config").write_text("Host ownerbox\n  HostName 192.0.2.8\n\n" + "\n".join(block) + "\n")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "ssh").write_text("#!/bin/sh\necho 'hostname 198.51.100.66'\n", encoding="utf-8")
+    (bin_dir / "ssh").chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    store_password("lab", "hunter2")
+
+    with pytest.raises(TransportError, match="'labbox'"):
+        transport.ssh_env({"id": "lab", "transport": "ssh", "host": "labbox", "user": "alice", "auth": "password"})
+
+
+@_posix_helper
+@pytest.mark.skipif(_REAL_SSH is None, reason="an OpenSSH client resolves the host")
+def test_the_owner_s_own_alias_beside_raven_s_blocks_still_names_the_prompt_it_resolves(
+    tmp_path, monkeypatch, supported_host
+):
+    """What the resolution exists for keeps working with Raven's blocks in the same file: only a host that is a
+    managed id is refused."""
+    from raven.ops.connection_add import store_password
+
+    config = _key_machine_alias("labbox", "198.51.100.66")
+    with config.open("a", encoding="utf-8") as fh:
+        fh.write("\nHost ownerbox\n  HostName 192.0.2.8\n")
+    monkeypatch.setattr(transport, "passwd_home", lambda: config.parent.parent, raising=False)
+    wrapper_dir = tmp_path / "bin"
+    wrapper_dir.mkdir()
+    (wrapper_dir / "ssh").write_text(f'#!/bin/sh\nexec "{_REAL_SSH}" -F "{config}" "$@"\n', encoding="utf-8")
+    (wrapper_dir / "ssh").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{wrapper_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    store_password("own", "hunter2")
+
+    env = transport.ssh_env({"id": "own", "transport": "ssh", "host": "ownerbox", "user": "alice", "auth": "password"})
+
+    assert env[transport.ASKPASS_FOR_ENV] == "alice@192.0.2.8"
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not available on Windows")
 def test_a_stale_askpass_helper_is_replaced_whole_and_never_rewritten_in_place(tmp_path):
     keys = tmp_path / "keys"

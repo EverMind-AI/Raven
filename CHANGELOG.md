@@ -24,7 +24,8 @@ All notable changes to Raven are documented here.
   line, in a log or in an answer; such a machine gets no ssh alias and no jump
   host, its password answers the registered account's own password prompt (at
   the address as ssh resolves it, so a `Host` alias from the owner's ssh config
-  works too) and no other, Oncall campaigns run on it as Raven's own
+  works too, though not one Raven wrote for another machine, which is refused)
+  and no other, Oncall campaigns run on it as Raven's own
   connections do and at
   the registered address alone, and the mode is not offered on Windows. A failed
   or cancelled registration preserves the password written by another pending

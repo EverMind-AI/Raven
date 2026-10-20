@@ -37,7 +37,7 @@ from typing import Any
 # and a test that stands a scratch registry in patches it there.
 from raven.ops import connections
 from raven.ops.connections import LOCAL, SSH, UNREADABLE, password_auth, password_path, transport_of
-from raven.ops.transport import ASKPASS_REFUSED, TransportError
+from raven.ops.transport import ALIAS_MARK, ASKPASS_REFUSED, TransportError
 from raven.utils.atomic_io import atomic_replace, write_transaction
 
 # What the owner has to be asked for, when the registry lists nothing that
@@ -434,8 +434,6 @@ def set_fields(conn_id: str, fields: dict[str, Any]) -> Path:
 #: the listing to say whether the machine has this Raven's node without
 #: reaching it.
 NODE_FIELD = "node_install"
-
-ALIAS_MARK = "# raven connection {conn_id} (managed; rewritten on every add)"
 
 
 def write_ssh_alias(row: dict[str, Any]) -> str | None:

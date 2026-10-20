@@ -85,6 +85,10 @@ What gets recorded, and where:
   at the registered address (`user@host`), named as ssh resolves it -- the
   `HostName` or `HostKeyAlias` your ssh config gives an alias, an address in
   its canonical form -- so the address can be an alias from your ssh config.
+  Not one of the `Host <id>` aliases Raven itself writes for key machines,
+  though: a password machine whose address is such an id would log in at that
+  other machine's address, so it is refused by name and its password is not
+  sent.
   Another account's prompt, a second factor's (a verification code, a
   passcode) and a one-time password's get no answer, so a machine whose login
   also asks for one is registered with a key as well; a registration refused

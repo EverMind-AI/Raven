@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -322,6 +323,16 @@ def ssh_env(row: dict[str, Any], *, password_file: Path | None = None) -> dict[s
             f"no password is kept here for machine {label!r} ({secret}); remove the machine and register it again"
         )
     host, port, _key, user = ssh_target(row)
+    if host.lower() in _managed_aliases():
+        # ssh would follow the block Raven wrote for that other machine, and
+        # the helper would then wait for that machine's prompt: the password
+        # goes only where the owner registered it, whatever ssh resolves.
+        raise TransportError(
+            f"machine {label!r} is registered at {host!r}, which is also the ssh alias Raven keeps in "
+            f"~/.ssh/config for machine {host.lower()!r}: ssh would log in at that machine's address, so the "
+            f"password kept for {label!r} is not sent; remove one of the two machines, or register {label!r} "
+            "again at its own address"
+        )
     return {
         "SSH_ASKPASS": str(askpass_helper(secret.parent)),
         "SSH_ASKPASS_REQUIRE": "force",
@@ -329,6 +340,42 @@ def ssh_env(row: dict[str, Any], *, password_file: Path | None = None) -> dict[s
         ASKPASS_FOR_ENV: _prompt_target(host, port, user),
         "DISPLAY": os.environ.get("DISPLAY") or "raven-askpass",
     }
+
+
+#: The line before and after each ``Host <id>`` block Raven keeps in ``~/.ssh/config`` for a key machine
+#: (``connection_add.write_ssh_alias``).
+ALIAS_MARK = "# raven connection {conn_id} (managed; rewritten on every add)"
+_ALIAS_MARK_LINE = re.compile(
+    "^" + re.escape(ALIAS_MARK).replace(re.escape("{conn_id}"), r"(\S+)") + r"[ \t]*\r?$", re.MULTILINE
+)
+
+
+def passwd_home() -> Path | None:
+    """The home ssh reads ``~/.ssh/config`` under: the account's passwd entry, which ``$HOME`` does not move."""
+    try:
+        import pwd
+
+        return Path(pwd.getpwuid(os.getuid()).pw_dir)
+    except (ImportError, KeyError):
+        return None
+
+
+def _managed_aliases() -> set[str]:
+    """The ids, lowercased, of the ``Host`` blocks Raven keeps in the ssh config ssh reads or the one Raven writes.
+
+    A mark counts on its own: a block the owner cut short is still not theirs.
+    A file that cannot be read adds nothing: ssh, run as the same account,
+    skips a user config it cannot open, so it follows none of its blocks.
+    """
+    homes = {Path(os.path.expanduser("~")), passwd_home()}
+    found: set[str] = set()
+    for home in homes - {None}:
+        try:
+            text = (home / ".ssh" / "config").read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        found.update(conn_id.lower() for conn_id in _ALIAS_MARK_LINE.findall(text))
+    return found
 
 
 #: How long ``ssh -G`` may take to say how it resolves a host (config, and DNS
