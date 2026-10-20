@@ -54,11 +54,23 @@ The envelope is the ordinary in-toto Statement; only the predicate is new.
   "predicate": {
     "version": "0.1",
     "agent": { "name": "<agent>", "version": "<version>" },
-    "decision": {
-      "action": "tool_call",
-      "tool": "<tool name>",
-      "arguments_digest": { "sha256": "<64 hex>" },
-      "outcome": "succeeded"
+    "run": {
+      "kind": "tool-using | transport-only",
+      "agent": { "name": "<agent>", "version": "<version>" },
+      "started_at": "<instant>",
+      "ended_at": "<instant>"
+    },
+    "decisions": [
+      {
+        "action": "tool_call",
+        "tool": "<tool name>",
+        "arguments_digest": { "sha256": "<64 hex>" },
+        "outcome": "succeeded"
+      }
+    ],
+    "tool_chain": {
+      "tools": [ "<tool name>" ],
+      "digest": { "sha256": "<64 hex>" }
     },
     "authority": {
       "principal": "who the agent acted for",
@@ -72,6 +84,8 @@ The envelope is the ordinary in-toto Statement; only the predicate is new.
       "red_team": { "uri": "<uri>", "date": "<date>" },
       "incidents": [ { "id": "<id>", "at": "<instant>", "resolution": "<text>" } ]
     },
+    "what_this_establishes": "<the sentence, in the predicate, that says what the statement is worth>",
+    "known_gaps": [ "<what it does not cover>" ],
     "observed_at": "<instant>",
     "provenance": {
       "source_url": "<uri>",
@@ -81,6 +95,18 @@ The envelope is the ordinary in-toto Statement; only the predicate is new.
   }
 }
 ```
+
+**The unit is a run, not a decision.** A run can make many decisions, and the evidence a
+buyer wants (the event log, the guardrails, the incident history) is about the run. So one
+statement covers one run, `decisions` is a list inside it, and the subject is the run's
+own digest. A decision-level predicate is a plausible v0.2, and the questions in §6 are
+where it should be settled rather than guessed.
+
+**`what_this_establishes` and `known_gaps` are part of the predicate, not comments on it.**
+They are the two fields that make C5 and C7 mechanical rather than a matter of taste:
+the first says what the statement is worth, in the statement; the second says what it does
+not cover, in the statement. A predicate format that cannot carry a limitation will have
+limitations read into it that it does not have.
 
 **The subject is the run's own digest.** A verifier recomputes the digest from the run
 record and finds the same value. That is what ties the signature to *this* run rather
@@ -227,6 +253,16 @@ A reference implementation exists in this repository, on the branch
   did not perform as a pass;
 - **refuses** a SKU or a run whose identifiers are placeholders, rather than sending
   anything on the strength of a TODO.
+
+**What the implementation emits today, and what v0.1 proposes.** The reference
+implementation emits the **run** half of the predicate: `run`, `tool_chain`,
+`what_this_establishes` and `known_gaps`, with the run's own digest as the subject. It
+does **not** yet emit `decisions`, `authority` or `evidence`, and the seven runs it has
+would carry an **empty** `decisions` list — they called no tool at all. **So the gap
+between the implementation and this proposal is named rather than glossed:** the
+`decisions`, `authority` and `evidence` blocks are the part of the predicate that is
+**proposed and not yet implemented**, and the part that is implemented is the part that
+the seven runs can honestly support.
 
 **What it is not.** The corpus holds **seven** real runs and **every one is a transport
 check with no tool call at all**, so what it demonstrates is the **machinery** — the
