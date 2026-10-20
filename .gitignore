@@ -160,3 +160,7 @@ plugins-dist/ppt-engine/raven_ppt/assets/templates/covers/
 # MkDocs build output. The site is published from CI; HTML is never committed
 # (AGENTS.md section 7).
 docs-site/site/
+
+# The research agent's launcher writes its rendered config, workspace and flow
+# state here when no state root is set. It is runtime state, not source.
+agents/raven-research/.state/

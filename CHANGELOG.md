@@ -124,6 +124,17 @@ All notable changes to Raven are documented here.
   sub-agent's search tool routes through it too and pages with a result
   offset like SerpApi.
 
+- TinyFish joins the `web_search` vendors: `tools.web.search.provider: tinyfish`
+  with the key under `tools.web.providers.tinyfish.apiKey` (or
+  `TINYFISH_API_KEY`). Ranked rows normalised into the shared render path;
+  the research sub-agent's search tool routes through it too and pages with a
+  **zero-based page index**, so the saturation rule's page N is N-1. Its API
+  takes no result-count parameter -- the page size is the service's and the
+  tool slices the rows to the count it asked for -- so the onboard wizard's
+  probe sends the same request the tool sends in full rather than a smaller
+  one. It is the one search vendor whose key is **free to a published daily
+  allowance** rather than metered per call.
+
 - Two dark templates join the bundled catalogue, cut from user uploads: a
   near-black circuit-board deck for product launches and a green aurora deck
   for trend reports. Hidden vendor pages are gone, vendor marks are stripped,

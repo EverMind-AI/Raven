@@ -373,7 +373,7 @@ interface WebVendorPick {
 export const WEB_VENDOR: Record<string, WebVendorPick> = {
   web_search: {
     path: 'tools.web.search.provider',
-    vendors: ['serper', 'anysearch', 'serpapi', 'tavily', 'exa', 'brave', 'firecrawl', 'serply'],
+    vendors: ['serper', 'anysearch', 'serpapi', 'tavily', 'exa', 'brave', 'firecrawl', 'serply', 'tinyfish'],
     fallback: 'serper',
   },
   web_fetch: {
@@ -392,12 +392,14 @@ export const WEB_VENDOR_LABEL: Record<string, string> = {
   brave: 'Brave Search',
   firecrawl: 'Firecrawl',
   serply: 'Serply',
+  tinyfish: 'TinyFish',
 }
 /* Where each vendor hands out keys. */
 export const WEB_VENDOR_URL: Record<string, string> = {
   serper: 'https://serper.dev', anysearch: 'https://anysearch.com', serpapi: 'https://serpapi.com',
   jina: 'https://jina.ai/reader', tavily: 'https://tavily.com', exa: 'https://exa.ai',
   brave: 'https://brave.com/search/api', firecrawl: 'https://firecrawl.dev', serply: 'https://serply.io',
+  tinyfish: 'https://tinyfish.ai',
 }
 /* Jina reads without a key; every other reader needs one. */
 export const FETCH_KEYLESS = new Set(['jina'])

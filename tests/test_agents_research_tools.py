@@ -641,6 +641,10 @@ _SEARCH_PAYLOADS: dict[str, tuple[dict, dict]] = {
         {"results": [{"title": "T", "link": "https://e.com/a", "description": "S"}]},
         {"title": "T", "link": "https://e.com/a", "snippet": "S"},
     ),
+    "tinyfish": (
+        {"results": [{"title": "T", "url": "https://e.com/a", "snippet": "S"}]},
+        {"title": "T", "link": "https://e.com/a", "snippet": "S"},
+    ),
 }
 
 
@@ -760,7 +764,7 @@ async def test_a_paginating_vendor_sends_its_own_offset_parameter(monkeypatch):
     in results, Brave a page index under a third name. One page number, three
     encodings, and sending the wrong one reads as a duplicate first page."""
     seen: dict[str, httpx.Request] = {}
-    for vendor in ("serper", "serpapi", "brave", "serply"):
+    for vendor in ("serper", "serpapi", "brave", "serply", "tinyfish"):
         transport = _CaptureTransport(_SEARCH_PAYLOADS[vendor][0])
         # One patch per vendor, undone before the next: patching the already
         # patched factory would pass ``transport`` twice and the request would
@@ -780,6 +784,9 @@ async def test_a_paginating_vendor_sends_its_own_offset_parameter(monkeypatch):
     assert seen["brave"].url.params["offset"] == "1"
     # A result offset again, under Google's own parameter name.
     assert seen["serply"].url.params["start"] == "3"
+    # A zero-based page index, so the rung's page 2 is the second page and not
+    # a third: sending ``page=2`` would skip a page of results.
+    assert seen["tinyfish"].url.params["page"] == "1"
 
 
 @pytest.mark.parametrize("status", [401, 429])
