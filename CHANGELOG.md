@@ -5,6 +5,37 @@ All notable changes to Raven are documented here.
 ## Unreleased
 
 ### Added
+- **A draft `agent-decision` predicate for in-toto**, in
+  `docs/specs/2026-10-20-agent-decision-predicate-proposal.md`. in-toto has predicate types
+  for builds (`slsa.dev/provenance/v1`) and for vulnerabilities, and **none for an autonomous
+  agent's decision** -- which is what the buyers of AI assurance ask about, since an
+  underwriter's published criteria ask for a technical system description, a governance and
+  oversight record, an incident history, written scope limits, evaluation and red-team
+  results, and performance data, and **not one of them mentions supply-chain provenance**.
+  The draft states the shape, the eight constraints it has to satisfy, the signer model, what
+  v0.1 deliberately does not carry, and the five questions the maintainers would have to
+  answer. **Nothing has been posted to in-toto, no issue has been claimed, and no account
+  has been used.**
+
+- **The signed-records corpus**: real agent runs, attested, verifiable offline
+  (`scripts/evidence_corpus.py`, `evidence/agent-run-corpus/`). One run record in, one signed
+  DSSE envelope out: the in-toto statement's **subject is the run's own digest**, so a verifier
+  recomputes it from the run record and finds the same value, which is what ties the signature to
+  *this* run rather than to a description of it. The corpus is the empirical half of the
+  standards proposal, and it is built by a tool that takes a directory of run records, so it
+  grows as runs accumulate rather than being assembled by hand.
+
+  Three things it states rather than hides. The signatures are **local Ed25519**, verifiable
+  offline with the public key in the manifest and **not anchored in a transparency log**,
+  because Sigstore keyless signing needs an OIDC identity and a Fulcio/Rekor round trip that
+  this build does not have. The corpus **holds the runs that exist on the machine that built
+  it** and is not a sample of anything. And a check that could not be run is reported as
+  **not run**, never as a pass: the verifier's three states are passed, failed and not run,
+  and a corpus that reports a check it did not perform is worse than no corpus.
+
+  A run that called no tool is recorded as `transport-only`, and its predicate says in its own
+  words that what it establishes is that the transport worked, not that the agent did any
+  work. The seven runs on this machine are all of that kind.
 
 - **The evidence bundle spec** (`docs/specs/2026-10-20-evidence-bundle-design.md`): one
   portable artefact that attests to how an AI system was built and how it behaved, with a
