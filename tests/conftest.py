@@ -1168,11 +1168,19 @@ def _this_process_goes_on() -> Iterator[None]:
     the leak check of ``tests/test_subagent_acp_remote.py`` fails for the
     rest of the worker's life (``tests/test_rpc_bootstrap.py`` runs that
     shutdown).
+
+    The dispatches such a shutdown marked as left go too: the mark waits for
+    the manager to read it (``raven.acp_client.remote_runs.was_left``), a test
+    that drives a backend alone never does, and a later test of the same
+    dispatch id would read the earlier test's run as left.
     """
     yield
     remote = sys.modules.get("raven.acp_client.remote")
     if remote is not None:
         remote.staying()
+    remote_runs = sys.modules.get("raven.acp_client.remote_runs")
+    if remote_runs is not None:
+        remote_runs._LEFT.clear()
 
 
 @pytest.fixture
