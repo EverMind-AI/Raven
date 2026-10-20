@@ -141,6 +141,22 @@ def take_turn_rows() -> list[dict[str, Any]]:
     return rows or []
 
 
+def turn_rows() -> list[dict[str, Any]]:
+    """The turn's ledger rows, **without** taking them.
+
+    ``take_turn_rows`` consumes them, and the flow's process appendix reads
+    them after the last generation. A gate that runs *during* the turn has
+    to see them without spending them, or the appendix ends up with an
+    empty trail.
+
+    The ledger *file* is no help for this: the flow writes the file when
+    the turn closes, so a gate that reads the file mid-turn reads a file
+    that has not been written yet. That is not a corner case -- it is every
+    turn.
+    """
+    return list(_TURN_LEDGER_ROWS.get() or [])
+
+
 _GATE_SYSTEM = """You decide whether a follow-up message in an ongoing research \
 conversation needs a new round of web research, or can be answered from what is \
 already in the conversation.

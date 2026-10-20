@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import itertools
 import os
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
@@ -66,6 +67,7 @@ from research_flow.gates.fetch_floor import FetchFloorObserver
 from research_flow.gates.fetch_gate import FetchGateObserver
 from research_flow.gates.final_shape import shape_final_answer
 from research_flow.gates.finalize import ForcedFinalizeGate
+from research_flow.gates.market_scan import MarketScanGate
 from research_flow.gates.plain_first import (
     PLAIN_TURN_SOURCE,
     PlainFirstGate,
@@ -86,6 +88,7 @@ from research_flow.gates.report_shape import (
 from research_flow.gates.spin_breaker import SpinEntryBreaker
 from research_flow.gates.sufficiency import SufficiencyGate
 from research_flow.gates.verify import DraftReviewerGate
+from research_flow.market.gates import MarketCriteria, MarketGateConfig
 from research_flow.state import SessionStore
 from research_flow.support.answer_text import visible_answer
 from research_flow.support.evidence_round import EvidenceRound
@@ -757,6 +760,38 @@ def build_chain(
             if ask_user_on:
                 reviewer = ClarifyExemptHook(reviewer, layout)
             observers.append(reviewer)
+    if cfg.market.enabled:
+        # The market rung, after the reviewer and before the wrap below: it
+        # reads the turn's final answer, so it has to run on a researched turn
+        # and it has to run last among the gates that look at that answer.
+        #
+        # The criteria are stamped here, at assembly, which is before the turn
+        # retrieves anything - that is what makes the sufficiency gate's
+        # "declared before retrieval" check a real check rather than a
+        # formality. A criterion written after the pages were read describes
+        # the result instead of requiring it, and the gate refuses those.
+        observers.append(
+            MarketScanGate(
+                provider,
+                criteria=MarketCriteria(
+                    declared_at=time.time(),
+                    min_entities=cfg.market.min_entities,
+                    required_fields=tuple(cfg.market.required_fields),
+                    require_price_for_all=cfg.market.require_price_for_all,
+                    min_source_hosts=cfg.market.min_source_hosts,
+                    require_use=cfg.market.use,
+                ),
+                gate_config=MarketGateConfig(
+                    mechanical=cfg.market.mechanical,
+                    sufficiency=cfg.market.sufficiency,
+                    judge=cfg.market.judge,
+                    judge_model=cfg.market.judge_model,
+                    position_swap=cfg.market.position_swap,
+                    judge_timeout_seconds=cfg.market.judge_timeout_seconds,
+                    judge_max_tokens=cfg.market.judge_max_tokens,
+                ),
+            )
+        )
 
     # Wrapping happens here, after every observer is built, so the gate covers
     # the whole observer set by construction - an observer added later cannot

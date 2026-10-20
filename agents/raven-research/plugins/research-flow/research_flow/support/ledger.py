@@ -294,6 +294,13 @@ def verbatim_append(record: dict[str, Any]) -> None:
         logger.error("verbatim sink append failed ({}): {}", path, e)
 
 
+def stashed_turn_rows() -> list[dict[str, Any]]:
+    """The rows this turn has appended so far."""
+    from research_flow.gates.conversation import turn_rows
+
+    return turn_rows()
+
+
 def ledger_append(record: dict[str, Any]) -> None:
     """Append one line to the client-side ledger, if one is configured.
 
@@ -314,6 +321,14 @@ def ledger_append(record: dict[str, Any]) -> None:
     # ``setdefault``, so a caller that has a better answer keeps it and this never
     # silently overwrites a field it did not own.
     record.setdefault("session_seq", _session_seq[path])
+    # Stash the row as well as writing it. The file is written for the run's
+    # readers, and a reader that runs *during* the turn cannot see it: the flow
+    # writes the ledger when the turn closes. The stashed rows are the same
+    # rows, live, and they are what a gate that has to know what the turn
+    # opened reads.
+    from research_flow.gates.conversation import stash_turn_rows
+
+    stash_turn_rows([*stashed_turn_rows(), record])
     try:
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")

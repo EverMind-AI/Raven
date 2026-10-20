@@ -38,6 +38,7 @@ from raven.rpc.methods.model import register_model_methods
 from raven.rpc.methods.playbooks import register_playbooks_methods
 from raven.rpc.methods.plughub import register_plughub_methods
 from raven.rpc.methods.question import register_question_methods
+from raven.rpc.methods.records import register_records_methods
 from raven.rpc.methods.reload import register_reload_methods
 from raven.rpc.methods.session import register_session_methods
 from raven.rpc.methods.setup import register_setup_methods
@@ -45,6 +46,7 @@ from raven.rpc.methods.shell import register_shell_methods
 from raven.rpc.methods.skillhub import register_skillhub_methods
 from raven.rpc.methods.skills import register_skills_methods
 from raven.rpc.methods.slash_routing import register_slash_routing_methods
+from raven.rpc.methods.sources import register_sources_methods
 from raven.rpc.methods.subagent import register_subagent_methods
 from raven.rpc.methods.subagents import register_subagents_methods
 from raven.rpc.methods.system import register_system_methods
@@ -243,6 +245,11 @@ def register_aligned_methods_except_system(
     # transcript writer that would give it anything to list.)
     register_memory_methods(dispatcher)
     register_trajectory_methods(dispatcher)
+    # records.* and sources.* -- the durable record store and the source
+    # registry. Registered unconditionally: both are files on disk under the
+    # active agent home, with no engine or network behind them.
+    register_records_methods(dispatcher)
+    register_sources_methods(dispatcher)
     register_trajectory_export_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_bugreport_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     # imported.* plus the guard that keeps every write off an Imported Conversation.

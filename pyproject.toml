@@ -705,6 +705,17 @@ source_modules = [
     # The Raven node: this Raven's own file tools run on a registered machine;
     # consumed by the CLI, it imports no surface itself.
     "raven.node",
+    # The durable record store and the source registry. A record is what a
+    # run learned and where it learned it from; a source is what a deployment
+    # is allowed to learn it from. The record store consults the source
+    # registry before it keeps anything the source's terms do not let us keep,
+    # so the two are seated together.
+    "raven.records", "raven.sources",
+    # The outbound guard. A send that leaves the machine is written down
+    # before it leaves, and a send whose outcome is unknown is surfaced
+    # rather than retried. It sits with the record store it writes to and
+    # imports no surface itself.
+    "raven.outbound",
 ]
 forbidden_modules = ["raven.cli", "raven.rpc", "raven.acp", "raven.a2a"]
 # Debt allowlist: none. The last allowlisted edge (market reaching the skill
@@ -742,8 +753,9 @@ forbidden_modules = [
     "raven.i18n", "raven.importer", "raven.knowledge", "raven.market", "raven.mcp",
     "raven.memory_engine", "raven.ops", "raven.playbook", "raven.plugins",
     "raven.proactive_engine", "raven.providers", "raven.routing", "raven.rpc",
-    "raven.observability", "raven.sandbox", "raven.security", "raven.session",
-    "raven.skill_hub", "raven.token_wise", "raven.trajectory", "raven.updates", "raven.utils",
+    "raven.observability", "raven.records", "raven.sandbox", "raven.security",
+    "raven.session", "raven.skill_hub", "raven.sources", "raven.token_wise",
+    "raven.trajectory", "raven.updates", "raven.utils", "raven.outbound",
 ]
 
 [[tool.importlinter.contracts]]

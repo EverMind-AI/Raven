@@ -6755,6 +6755,195 @@ class ImportedUploadResult(_Strict):
     imported_at: str = Field(..., description="When it was imported, ISO 8601 in UTC.")
 
 
+# ---------------------------------------------------------------------------
+# records.* and sources.* -- the durable record store and the source registry
+# ---------------------------------------------------------------------------
+#
+# The record kinds and the source tiers are written out here as literals
+# rather than imported from the domain packages: this module is the wire
+# contract, and it stays readable without pulling the store in. The values are
+# pinned against the domain enums in ``tests/test_rpc_records.py``, so a kind
+# added there without a change here fails a test rather than a client.
+
+RecordTypeName = Literal["company", "contact", "artifact", "interaction", "opportunity"]
+SourceTierName = Literal["public", "attributed", "licensed", "restricted"]
+
+
+class RecordProvenancePayload(_Strict):
+    """Why one field of a record is entitled to say what it says.
+
+    One entry per field the source supports: a source that backs three fields
+    is three entries, because the support is per field.
+    """
+
+    field: str
+    source_url: str
+    source: str = ""
+    method: str = "fetch"
+    retrieved_at: str = ""
+    tier: str = ""
+    confidence: float | None = None
+    reason_kind: str = ""
+    metric_basis: str = ""
+    timeframe: str = ""
+
+
+class RecordPayload(_Strict):
+    """One durable belief, with the evidence for it.
+
+    ``fields`` holds the record's own values and ``provenance`` holds the
+    sources for them, so a field can be corrected and re-sourced without
+    rewriting the record's identity.
+    """
+
+    id: str
+    type: RecordTypeName
+    dedupe_key: str
+    state: str
+    fields: dict[str, JsonValue]
+    provenance: list[RecordProvenancePayload]
+    created_at: str
+    updated_at: str
+
+
+class RecordGrantPayload(_Strict):
+    """Why one source's terms may be kept for one record.
+
+    The basis is required: an acceptance nobody can be shown to have made is
+    not an acceptance.
+    """
+
+    source: str
+    basis: str
+    granted_at: str
+
+
+class SourcePolicyPayload(_Strict):
+    """One row of the source registry: what this source's terms permit."""
+
+    source: str
+    label: str
+    tier: SourceTierName
+    citation: str
+    cache_allowed: bool
+    store_allowed: bool
+    attribution_required: bool
+    derivation_allowed: bool
+    commercial_use: bool
+    retention: str
+    restrictions: dict[str, str]
+
+
+class SourceOptInPayload(_Strict):
+    """Why this deployment may use one source."""
+
+    source: str
+    use: str
+    basis: str
+    granted_at: str
+    granted_by: str = ""
+
+
+class RecordsGetParams(_Strict):
+    id: str = Field(..., description="The record's id.")
+
+
+class RecordsGetResult(_Strict):
+    record: RecordPayload
+
+
+class RecordsUpsertParams(_Strict):
+    type: RecordTypeName
+    dedupe_key: str = Field(
+        ...,
+        description=(
+            "The identity of the thing, not of the record: two records for the "
+            "same company carry the same key, and the store keeps one of them."
+        ),
+    )
+    fields: dict[str, JsonValue] | None = None
+    provenance: list[RecordProvenancePayload] | None = None
+    state: str | None = Field(default=None, description="Where the record starts. Defaults to 'new'.")
+
+
+class RecordsUpsertResult(_Strict):
+    record: RecordPayload
+
+
+class RecordsListParams(_Strict):
+    type: RecordTypeName | None = None
+    state: str | None = None
+    limit: int | None = Field(default=None, description="Capped at 200.")
+
+
+class RecordsListResult(_Strict):
+    items: list[RecordPayload]
+    total: int
+
+
+class RecordsTransitionParams(_Strict):
+    id: str = Field(..., description="The record to move.")
+    to_state: str = Field(..., description="The next state, or one of the chain's declared outcomes.")
+    reason: str | None = Field(default=None, description="Written into the journal beside the move.")
+
+
+class RecordsTransitionResult(_Strict):
+    record: RecordPayload
+
+
+class RecordsGrantsSetParams(_Strict):
+    record_id: str
+    source: str = Field(..., description="The source whose terms are being accepted for this record.")
+    allowed: bool = Field(..., description="True records the acceptance, false withdraws it.")
+    basis: str | None = Field(default=None, description="Required when recording an acceptance.")
+
+
+class RecordsGrantsSetResult(_Strict):
+    grants: list[RecordGrantPayload]
+    changed: bool
+
+
+class SourcesListParams(_Strict):
+    tier: SourceTierName | None = None
+
+
+class SourcesListResult(_Strict):
+    items: list[SourcePolicyPayload]
+    total: int
+
+
+class SourcesCheckParams(_Strict):
+    source: str = Field(..., description="The source the deployment wants to use.")
+    use: str = Field(..., description="What the deployment wants to do with it.")
+    has_opt_in: bool | None = Field(
+        default=None,
+        description="Whether the operator has recorded why. Null asks the registry, not the caller's guess.",
+    )
+
+
+class SourcesCheckResult(_Strict):
+    allowed: bool
+    source: str
+    tier: str = Field(default="", description="Empty when the source is not in the registry.")
+    restriction: str | None = Field(default=None, description="Why this use is refused, when it is.")
+    reason: str
+    remedy: str
+    citation: str = Field(default="", description="Where the terms are written down.")
+
+
+class SourcesOptinSetParams(_Strict):
+    source: str
+    allowed: bool = Field(..., description="True records the acceptance, false withdraws it.")
+    basis: str | None = Field(default=None, description="Required when recording an acceptance.")
+    use: str | None = Field(default=None, description="The use the acceptance covers. Empty covers the source outright.")
+    granted_by: str | None = None
+
+
+class SourcesOptinSetResult(_Strict):
+    opt_ins: list[SourceOptInPayload]
+    changed: bool
+
+
 METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     # knowledge.* -- bases and their documents, served by the in-process engine
     "knowledge.status": (KnowledgeStatusParams, KnowledgeStatusResult),
@@ -6889,6 +7078,17 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     # memory.*
     "memory.stats": (MemoryStatsParams, MemoryStatsResult),
     "memory.list": (MemoryListParams, MemoryListResult),
+    # records.* -- the durable record store: what a run learned, and where it
+    # learned it from
+    "records.get": (RecordsGetParams, RecordsGetResult),
+    "records.upsert": (RecordsUpsertParams, RecordsUpsertResult),
+    "records.list": (RecordsListParams, RecordsListResult),
+    "records.transition": (RecordsTransitionParams, RecordsTransitionResult),
+    "records.grants.set": (RecordsGrantsSetParams, RecordsGrantsSetResult),
+    # sources.* -- the source registry: what a deployment may learn it from
+    "sources.list": (SourcesListParams, SourcesListResult),
+    "sources.check": (SourcesCheckParams, SourcesCheckResult),
+    "sources.optin.set": (SourcesOptinSetParams, SourcesOptinSetResult),
     # trajectory.* -- the Web trajectory view
     "trajectory.state": (TrajectoryStateParams, TrajectoryStateResult),
     "trajectory.list": (TrajectoryListParams, TrajectoryListResult),

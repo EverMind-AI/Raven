@@ -294,6 +294,13 @@ PRODUCT_ONLY_FIELDS: dict[str, str] = {
         "answer judged or escalated to research (gates/plain_first.py). Off as a class "
         "default; the product's base slice turns it on and only the max overlay turns it off"
     ),
+    "market": (
+        "the market-scan rung: a turn whose answer carries a market table has that "
+        "table read as claims with their sources, checked against the pages the run "
+        "opened and the terms of the readers that served them, and put through three "
+        "gates before it may ship as a scan (gates/market_scan.py, market/). Off as a "
+        "class default; the product's shipped slice turns it on"
+    ),
 }
 
 

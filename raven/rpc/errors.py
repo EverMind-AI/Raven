@@ -33,6 +33,9 @@ Code table (server-defined range -32000..-32099):
 | -32029 | imported_read_only            | imported conversation is fixed   |
 | -32030 | imported_package_invalid      | package refused; data.reason     |
 | -32031 | imported_busy                 | another import is running        |
+| -32032 | record_not_found              | no record carries that id        |
+| -32033 | record_transition_refused     | the chain refused the move       |
+| -32034 | source_policy_refused         | the source's terms refuse the use |
 
 JSON-RPC pre-defined codes (-32700/-32600/-32601) are emitted directly by the
 dispatcher and have no dedicated exception class.
@@ -239,6 +242,42 @@ class ImportedBusyError(RpcError):
     MESSAGE = "imported_busy"
 
 
+class RecordNotFoundError(RpcError):
+    """No record carries the id that was asked for.
+
+    A distinct code rather than a null result, because "we have never heard
+    of this record" and "this record is empty" are different answers and a
+    client that guesses between them will ask a prospect twice.
+    """
+
+    CODE = -32032
+    MESSAGE = "record_not_found"
+
+
+class RecordTransitionRefusedError(RpcError):
+    """The record's chain refused the move.
+
+    The chain is the point of the store: an artifact cannot be delivered
+    without passing QA, and a record's state only moves forward. A refused
+    move is a refusal with a reason, not a failure of the call.
+    """
+
+    CODE = -32033
+    MESSAGE = "record_transition_refused"
+
+
+class SourcePolicyRefusedError(RpcError):
+    """The source registry refused the source for this use.
+
+    The refusal carries the reason and the remedy in ``data``, because the
+    remedy is what the operator needs and it is written down once, in the
+    registry, rather than restated by every caller.
+    """
+
+    CODE = -32034
+    MESSAGE = "source_policy_refused"
+
+
 # JSON-RPC pre-defined ``invalid_params`` (-32602). Class added for the same
 # reason as the one below: a handler that validates its own params answers the
 # caller with the code for a bad request, instead of letting the pydantic
@@ -300,6 +339,9 @@ JSONRPC_ERROR_REGISTRY: dict[int, type[RpcError]] = {
         ImportedReadOnlyError,
         ImportedPackageError,
         ImportedBusyError,
+        RecordNotFoundError,
+        RecordTransitionRefusedError,
+        SourcePolicyRefusedError,
         InvalidParamsError,
         InternalError,
     )
@@ -338,6 +380,9 @@ __all__ = [
     "ImportedReadOnlyError",
     "ImportedPackageError",
     "ImportedBusyError",
+    "RecordNotFoundError",
+    "RecordTransitionRefusedError",
+    "SourcePolicyRefusedError",
     "InvalidParamsError",
     "InternalError",
     "JSONRPC_ERROR_REGISTRY",

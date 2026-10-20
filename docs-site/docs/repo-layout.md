@@ -59,7 +59,9 @@ repository's commit conventions.
 | `playbook` | Reusable workflow library, validation, generation, and execution |
 | `plugins` | Plugin manifests, discovery, contribution registry, and bundled plugins |
 | `proactive_engine` | Sentinel event processing, cron scheduling, heartbeat, and proactive decisions |
+| `outbound` | The guard that writes an outbound send down before it leaves, and refuses a second attempt while the first is unresolved |
 | `providers` | LLM adapters, provider pool, and model-to-provider binding |
+| `records` | Durable beliefs about things, with the evidence for each field kept beside the claim |
 | `resources` | Downloads the dictionary and parser models that are too large to track |
 | `routing` | Task classification and model selection by quality and cost |
 | `rpc` | Shared typed RPC methods, streaming events, and the gateway control interface |
@@ -67,6 +69,7 @@ repository's commit conventions.
 | `security` | Outbound address policy and prompt-injection fences |
 | `session` | Conversation storage, session resolution, titles, and transcript export |
 | `skill_hub` | SkillHub search, skill retrieval, bundle installation, and install policy |
+| `sources` | Which data a deployment may reach for, and what it may do with it |
 | `spine` | Turn scheduling, concurrency lanes, cancellation, and event delivery |
 | `stint` | What one multi-round run needs: the record, its checkout, ownership grades, the journal window and the checks |
 | `templates` | Packaged workspace files, prompt packs, and agent scaffolding templates |

@@ -47,6 +47,9 @@ TOP_LEVEL_COMMANDS = [
     # lifted from the on-call agent's checkout. Campaigns stay in that checkout;
     # what the host registers here is which machines exist and how to reach them.
     "ops",
+    # The outbound sends, and the ones whose outcome nobody knows: the
+    # operator's side of the guard that stops a retry writing twice.
+    "outbound",
     "gateway",
     "agent",
     "status",
@@ -58,6 +61,9 @@ TOP_LEVEL_COMMANDS = [
     "sandbox",
     "sentinel",
     "skill",
+    "records",
+    "sources",
+    "outbound",
 ]
 
 
@@ -197,12 +203,20 @@ REGISTERED_COMMAND_NAMES = {
     # lifted from the on-call agent's checkout. Campaigns stay in that checkout;
     # what the host registers here is which machines exist and how to reach them.
     "ops",
+    # The outbound sends, and the ones whose outcome nobody knows: the
+    # operator's side of the guard that stops a retry writing twice.
+    "outbound",
     "playbook",
     # Singular: per-server actions (`plugin auth <server>`). Distinct from the
     # plural listing below, which answers "what is installed".
     "plugin",
     "plugins",
     "provider",
+    # The durable record store (`raven records list|get|grant`) and the
+    # source registry (`raven sources list|check|optin`). Both are how an
+    # operator reaches the remedy a refusal names, so both are commands a
+    # person types rather than plumbing.
+    "records",
     # The weights and dictionaries that cannot live in git. On the CLI rather
     # than only under `scripts/`, because the wheel carries no scripts: this is
     # the command the two "not installed" errors name, and the one a one-line
@@ -213,6 +227,9 @@ REGISTERED_COMMAND_NAMES = {
     "serve",
     "sessions",
     "skill",
+    # The source registry, beside the record store above: the refusal a
+    # source's terms produce names `raven sources optin` as the remedy.
+    "sources",
     "status",
     "tracing",
     "trajectory",

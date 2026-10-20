@@ -717,6 +717,9 @@ EXPECTED_ERROR_CODES = {
     -32029: "imported_read_only",
     -32030: "imported_package_invalid",
     -32031: "imported_busy",
+    -32032: "record_not_found",
+    -32033: "record_transition_refused",
+    -32034: "source_policy_refused",
 }
 
 
