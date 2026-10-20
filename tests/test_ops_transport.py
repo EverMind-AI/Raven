@@ -667,7 +667,7 @@ def test_one_function_builds_the_environment_that_hands_ssh_a_kept_password():
     repo = Path(__file__).resolve().parent.parent
     builds = re.compile(r"RAVEN_MACHINE_PASSWORD_FILE|ASKPASS_FILE_ENV|SSH_ASKPASS_REQUIRE[\"']?\s*[:=,]\s*[\"']force")
     found = sorted(
-        str(path.relative_to(repo))
+        path.relative_to(repo).as_posix()
         for root in ("raven", "agents", "plugins-dist")
         for path in (repo / root).rglob("*.py")
         if builds.search(path.read_text(encoding="utf-8", errors="replace"))
