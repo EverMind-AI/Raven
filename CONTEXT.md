@@ -442,7 +442,8 @@ key, gets no ssh alias, no jump host and no shared connection, and is refused on
 whose OpenSSH cannot run Raven's POSIX askpass helper; a password under six characters is
 refused, since the scrubber would pass it as ordinary text, one with a line break too, since
 ssh would take only its first line, and the id rule is the one owner `connections.password_path`;
-the askpass helper answers the registered account's own password prompt (`user@host`, named by
+the askpass helper answers the registered account's own password prompt (`user@host`, the host as
+`ssh -G` resolves it -- the `HostKeyAlias`, else the `HostName` in canonical form -- named by
 `transport.ASKPASS_FOR_ENV`) and no other, another account's, a second factor's and a one-time
 password's included; Oncall's ssh and rsync log in to such a row the same way, at the registry's
 address alone, `oncall_flow.transport.password_row`), install the node in the background, doctor,

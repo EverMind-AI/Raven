@@ -37,7 +37,7 @@ from typing import Any
 # and a test that stands a scratch registry in patches it there.
 from raven.ops import connections
 from raven.ops.connections import LOCAL, SSH, UNREADABLE, password_auth, password_path, transport_of
-from raven.ops.transport import TransportError
+from raven.ops.transport import ASKPASS_REFUSED, TransportError
 from raven.utils.atomic_io import atomic_replace, write_transaction
 
 # What the owner has to be asked for, when the registry lists nothing that
@@ -196,7 +196,15 @@ def probe(
         return False, f"could not reach {where}: no answer within {timeout:.0f}s", {}
     if code != 0:
         said = out.strip() or f"exit {code}"
-        if password_auth(row) and re.search(r"permission denied|password|authentication", said, re.IGNORECASE):
+        if password_auth(row) and ASKPASS_REFUSED in said:
+            # The helper gave ssh nothing, so the refusal that follows is no
+            # verdict on the password: the machine asked another question.
+            said += (
+                "\nssh asked something other than this account's password (a one-time code, another account's "
+                "password, or a question worded another way); the kept password answers only its own prompt, so it "
+                "was not sent. A machine that asks that is registered with a key."
+            )
+        elif password_auth(row) and re.search(r"permission denied|password|authentication", said, re.IGNORECASE):
             # ssh says only that the login was refused; the other cause is a
             # sshd that takes no password at all, which looks the same.
             said += (

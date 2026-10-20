@@ -247,9 +247,14 @@ PASSWORD_ROW = {
 
 # Stands in for ssh and rsync alike: one JSON line a call saying what it was
 # handed, whether it has a session of its own, and -- as ssh, under
-# SSH_ASKPASS_REQUIRE=force -- what the askpass helper answered.
+# SSH_ASKPASS_REQUIRE=force -- what the askpass helper answered. ssh's ``-G``,
+# the config dump a password login reads first, names the host as given and
+# is no call.
 _STAND_IN = """#!{python}
 import json, os, subprocess, sys
+if os.path.basename(sys.argv[0]) == "ssh" and "-G" in sys.argv[1:]:
+    print("hostname " + sys.argv[-1].rpartition("@")[2])
+    sys.exit(0)
 saw = {{
     "name": os.path.basename(sys.argv[0]),
     "argv": sys.argv[1:],

@@ -7,6 +7,7 @@ so these pin what the runner sent before the two shared it.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -115,6 +116,7 @@ def test_the_askpass_environment_names_the_helper_and_the_password_file_never_th
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
     monkeypatch.delenv("DISPLAY", raising=False)
     store_password("box", "hunter2")
+    _owner_ssh_config(tmp_path, monkeypatch, "")
 
     env = transport.ssh_env(PASSWORD_ROW)
 
@@ -171,6 +173,9 @@ def test_the_runner_hands_ssh_the_askpass_environment_for_a_password_row_and_not
     sent: list[tuple[list[str], dict | None, bool]] = []
 
     def run(argv, **kwargs):
+        if "-G" in argv:
+            # How ssh resolves the host for the helper's prompt: a config dump, not a connection.
+            return subprocess.CompletedProcess(argv, 0, "hostname 203.0.113.7\n", "")
         sent.append((argv, kwargs.get("env"), kwargs.get("start_new_session", False)))
         return subprocess.CompletedProcess(argv, 0, "out", "")
 
@@ -272,6 +277,154 @@ def test_the_askpass_helper_gives_every_other_prompt_nothing(tmp_path, prompt):
 
     assert (done.returncode, done.stdout) == (1, "")
     assert done.stderr.startswith("raven: ") and "hunter2" not in done.stderr
+
+
+# ---- the prompt the helper waits for is the one ssh writes, for the host ssh resolves ----
+
+_REAL_SSH = shutil.which("ssh")
+
+
+def _owner_ssh_config(tmp_path: Path, monkeypatch, config: str) -> None:
+    """The real ssh first on PATH, reading ``config`` as the owner's ``~/.ssh/config``."""
+    conf = tmp_path / "ssh_config"
+    conf.write_text(config, encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    wrapper = bin_dir / "ssh"
+    wrapper.write_text(f'#!/bin/sh\nexec "{_REAL_SSH}" -F "{conf}" "$@"\n', encoding="utf-8")
+    wrapper.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+
+
+@_posix_helper
+@pytest.mark.skipif(_REAL_SSH is None, reason="an OpenSSH client resolves the host")
+@pytest.mark.parametrize(
+    ("host", "prompt"),
+    [
+        ("devbox", "alice@10.0.0.5's password: "),
+        ("devbox", "(alice@10.0.0.5) Password: "),
+        ("aliasbox", "alice@labbox's password: "),
+        ("0:0:0:0:0:0:0:1", "alice@::1's password: "),
+    ],
+    ids=["config-hostname", "config-hostname-keyboard-interactive", "host-key-alias", "non-canonical-address"],
+)
+def test_the_helper_answers_the_prompt_ssh_writes_for_the_host_it_resolves(
+    tmp_path, monkeypatch, supported_host, host, prompt
+):
+    """ssh's prompt names the host ssh resolved, not the row's spelling of it: an alias's HostName, a
+    HostKeyAlias in place of either, an address in its canonical form. Waiting for the row's spelling
+    refused every such machine, and its registration then blamed the password (reviewed 2026-10-20)."""
+    from raven.ops.connection_add import store_password
+
+    _owner_ssh_config(
+        tmp_path,
+        monkeypatch,
+        "Host devbox\n  HostName 10.0.0.5\nHost aliasbox\n  HostName 10.0.0.6\n  HostKeyAlias labbox\n",
+    )
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    store_password("box", "hunter2")
+
+    env = transport.ssh_env({**PASSWORD_ROW, "host": host})
+    done = subprocess.run(
+        [env["SSH_ASKPASS"], prompt], capture_output=True, text=True, env={**os.environ, **env}, timeout=30
+    )
+
+    assert (done.returncode, done.stdout) == (0, "hunter2\n"), done.stderr
+
+
+@_posix_helper
+@pytest.mark.parametrize(
+    "stand_in",
+    [
+        "echo 'hostname 10.9.9.9'; echo 'ssh: Could not resolve hostname: Name or service not known' >&2; exit 255",
+        "echo 'usage: ssh [-46AaCfGgKkMNnqsTtVvXxYy] destination [command]'",
+        None,
+        "/bin/sleep 3; echo 'hostname 10.9.9.9'",
+    ],
+    ids=["ssh-fails", "nothing-resolved", "no-ssh-here", "ssh-hangs"],
+)
+def test_when_ssh_cannot_say_how_it_resolves_the_host_the_helper_waits_for_the_row_s_own_address(
+    tmp_path, monkeypatch, supported_host, stand_in
+):
+    from raven.ops.connection_add import store_password
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    if stand_in is not None:
+        (bin_dir / "ssh").write_text(f"#!/bin/sh\n{stand_in}\n", encoding="utf-8")
+        (bin_dir / "ssh").chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+    monkeypatch.setattr(transport, "_RESOLVE_TIMEOUT_S", 0.3)
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    store_password("box", "hunter2")
+
+    env = transport.ssh_env(PASSWORD_ROW)
+    done = subprocess.run(
+        [env["SSH_ASKPASS"], "alice@203.0.113.7's password: "],
+        capture_output=True,
+        text=True,
+        env={**os.environ, **env, "PATH": "/usr/bin:/bin"},
+        timeout=30,
+    )
+
+    assert (done.returncode, done.stdout) == (0, "hunter2\n"), done.stderr
+
+
+@_posix_helper
+def test_a_config_dump_carrying_bytes_that_are_not_utf_8_still_names_the_host(tmp_path, monkeypatch, supported_host):
+    """ssh prints the owner's config values as they are on disk. One that is not UTF-8 must not take the
+    resolution down, and with it every connection to the machine."""
+    from raven.ops.connection_add import store_password
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "ssh").write_text(
+        "#!/bin/sh\nprintf 'remotecommand caf\\351\\nhostname 10.9.9.9\\n'\n", encoding="utf-8"
+    )
+    (bin_dir / "ssh").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    store_password("box", "hunter2")
+
+    env = transport.ssh_env(PASSWORD_ROW)
+    done = subprocess.run(
+        [env["SSH_ASKPASS"], "alice@10.9.9.9's password: "],
+        capture_output=True,
+        text=True,
+        env={**os.environ, **env},
+        timeout=30,
+    )
+
+    assert (done.returncode, done.stdout) == (0, "hunter2\n"), done.stderr
+
+
+@_posix_helper
+def test_resolving_the_host_hands_ssh_no_askpass_so_nothing_it_starts_reaches_the_helper(
+    tmp_path, monkeypatch, supported_host
+):
+    """A helper that ran ``ssh -G`` itself, against a stand-in ssh that called askpass, recursed into
+    thousands of processes (2026-10-19). The resolution now runs before ssh is started, and whatever it
+    starts finds no askpass to call."""
+    from raven.ops.connection_add import store_password
+
+    seen = tmp_path / "seen"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "ssh").write_text(
+        f'#!/bin/sh\nprintf "%s|%s|%s\\n" "$1" "$SSH_ASKPASS" "$SSH_ASKPASS_REQUIRE" >> "{seen}"\n'
+        'echo "hostname 203.0.113.7"\n',
+        encoding="utf-8",
+    )
+    (bin_dir / "ssh").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("SSH_ASKPASS", str(tmp_path / "an-askpass-already-set"))
+    monkeypatch.setenv("SSH_ASKPASS_REQUIRE", "force")
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    store_password("box", "hunter2")
+
+    transport.ssh_env(PASSWORD_ROW)
+
+    assert seen.read_text(encoding="utf-8").splitlines() == ["-G||never"]
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not available on Windows")

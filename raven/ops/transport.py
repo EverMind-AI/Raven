@@ -183,8 +183,12 @@ PASSWORD_AUTH = (
 
 #: The variable the askpass helper reads the password file's path from.
 ASKPASS_FILE_ENV = "RAVEN_MACHINE_PASSWORD_FILE"
-#: The variable that tells the helper whose prompt it may answer: the registered ``user@host``.
+#: The variable that tells the helper whose prompt it may answer: the registered account, at the host ssh resolves.
 ASKPASS_FOR_ENV = "RAVEN_MACHINE_PASSWORD_FOR"
+#: What the helper writes on ssh's stderr when the question is not that prompt, so it gave ssh nothing.
+ASKPASS_REFUSED = (
+    "raven: the password kept for this machine answers its own password prompt only, and this prompt is not one"
+)
 
 # The helper itself: OpenSSH runs it when ``SSH_ASKPASS_REQUIRE=force`` and
 # reads the password from its stdout. It prints the one line of the file the
@@ -207,7 +211,7 @@ _ASKPASS = (
     'case "$asked" in\n'
     f'  "$who\'s password:"|"($who) password:") exec cat "${ASKPASS_FILE_ENV}" ;;\n'
     "esac\n"
-    "echo 'raven: the password kept for this machine answers its own password prompt only, and this prompt is not one' >&2\n"
+    f"echo '{ASKPASS_REFUSED}' >&2\n"
     "exit 1\n"
 )
 
@@ -317,16 +321,61 @@ def ssh_env(row: dict[str, Any], *, password_file: Path | None = None) -> dict[s
         raise TransportError(
             f"no password is kept here for machine {label!r} ({secret}); remove the machine and register it again"
         )
-    host, _port, _key, user = ssh_target(row)
+    host, port, _key, user = ssh_target(row)
     return {
         "SSH_ASKPASS": str(askpass_helper(secret.parent)),
         "SSH_ASKPASS_REQUIRE": "force",
         ASKPASS_FILE_ENV: str(secret),
-        # Whose prompt the helper answers: the account and address the row
-        # registers, which is also the destination on the command line.
-        ASKPASS_FOR_ENV: f"{user}@{host}",
+        ASKPASS_FOR_ENV: _prompt_target(host, port, user),
         "DISPLAY": os.environ.get("DISPLAY") or "raven-askpass",
     }
+
+
+#: How long ``ssh -G`` may take to say how it resolves a host (config, and DNS
+#: when the owner's config canonicalizes) before the row's spelling stands.
+_RESOLVE_TIMEOUT_S = 10.0
+
+
+def _prompt_target(host: str, port: int, user: str) -> str:
+    """The ``user@host`` ssh's password prompt names for this destination: whose prompt the helper answers.
+
+    ssh names the host it resolved, not the one on its command line: the
+    ``HostName`` the owner's ssh config gives an alias, the canonical form of
+    a numeric address (``::1`` for ``0:0:0:0:0:0:0:1``), or the
+    ``HostKeyAlias`` in place of either. A helper waiting for the row's own
+    spelling refused every such machine, and its registration then blamed the
+    password (reviewed 2026-10-20). ``ssh -G`` prints that resolution without
+    connecting, and is asked with the password connection's own options. The
+    row's spelling when ssh cannot say.
+
+    Asked here, before the connection, never by the helper: a helper that ran
+    ``ssh -G`` itself recursed into thousands of processes against a stand-in
+    ssh that called askpass (2026-10-19). Nothing this call starts finds an
+    askpass to call either.
+    """
+    argv = ssh_argv(host, port, "", user=user, password=True)
+    argv.insert(1, "-G")
+    env = {**os.environ, "SSH_ASKPASS": "", "SSH_ASKPASS_REQUIRE": "never"}
+    try:
+        # ``errors``: ssh prints config values as they are on disk, in no
+        # promised encoding, and one undecodable byte must not cost the resolution.
+        done = subprocess.run(
+            argv,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=_RESOLVE_TIMEOUT_S,
+            env=env,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return f"{user}@{host}"
+    resolved: dict[str, str] = {}
+    if done.returncode == 0:
+        for line in done.stdout.splitlines():
+            key, _, value = line.partition(" ")
+            resolved[key] = value.strip()
+    return f"{user}@{resolved.get('hostkeyalias') or resolved.get('hostname') or host}"
 
 
 def make_ssh_runner(

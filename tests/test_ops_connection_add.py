@@ -867,6 +867,30 @@ def test_a_refused_password_is_one_sentence_that_names_the_other_cause_too_and_n
     assert "wrong-one" not in said
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="the stand-in ssh is a POSIX shell script")
+def test_a_question_the_kept_password_does_not_answer_is_named_and_the_password_is_not_blamed(tmp_path, monkeypatch):
+    """The helper gives a second factor's question nothing, and ssh then reports the login refused; saying the
+    password was refused sent the owner after a fault the password did not have."""
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    adder.store_password("box", "hunter2")
+    _fake_ssh(
+        tmp_path,
+        monkeypatch,
+        """
+        [ "$1" = -G ] && { echo 'hostname 203.0.113.7'; exit 0; }
+        "$SSH_ASKPASS" "(root@203.0.113.7) Verification code: " > /dev/null
+        echo 'root@203.0.113.7: Permission denied (keyboard-interactive).' >&2; exit 255
+        """,
+    )
+
+    reached, said, _ = adder.probe(PASSWORD_ROW, timeout=10)
+
+    assert not reached
+    assert "Permission denied (keyboard-interactive)." in said
+    assert "The password was refused" not in said
+    assert "so it was not sent" in said
+
+
 def test_a_password_row_with_no_password_kept_here_is_refused_before_ssh_is_started(
     tmp_path, monkeypatch, supported_host
 ):

@@ -82,10 +82,14 @@ What gets recorded, and where:
   the jump's own ssh would be handed this machine's password; a machine
   reached only through one has to be registered with a key. The helper
   answers one prompt: ssh's own, for the password of the registered account
-  at the registered address (`user@host`). Another account's prompt, a
-  second factor's (a verification code, a passcode) and a one-time
-  password's get no answer, so a machine whose login also asks for one is
-  registered with a key as well. The row carries `auth: password` and no key
+  at the registered address (`user@host`), named as ssh resolves it -- the
+  `HostName` or `HostKeyAlias` your ssh config gives an alias, an address in
+  its canonical form -- so the address can be an alias from your ssh config.
+  Another account's prompt, a second factor's (a verification code, a
+  passcode) and a one-time password's get no answer, so a machine whose login
+  also asks for one is registered with a key as well; a registration refused
+  that way says the password was not sent. The row carries `auth: password`
+  and no key
   path. `raven ops connection doctor` counts the row usable, and Oncall
   campaigns run on it too, logging in the same way at the registered address
   alone: a campaign cannot point such a connection at another host, port or

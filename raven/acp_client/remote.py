@@ -432,7 +432,9 @@ async def tunnel(
         raise RemoteMachineError(f"machine {target.label}: the endpoint's URL names no host to reach from it")
     host, port, key, user = _target(target)
     password = connections.password_auth(target._row)
-    env = {**os.environ, **ssh_environment(target)} if password else None
+    # Off the loop: the environment asks a local ``ssh -G`` which host the
+    # password prompt will name (``transport.ssh_env``).
+    env = {**os.environ, **(await asyncio.to_thread(ssh_environment, target))} if password else None
     # An IPv6 address is bracketed in the forward as it is in the URL, which
     # ``hostname`` gives bare; ssh refuses the bare one.
     far = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname

@@ -61,8 +61,10 @@ raven ops connection add --id gpu1 --name "GPU box 1" \
   askpass）也会走助手而不是在终端上要密码。跳板机不行：密码连接关掉了 `ProxyJump` 和
   `ProxyCommand`，因为跳板自己的 ssh 会拿到这台机器的密码；只能经跳板到达的机器请用
   密钥登记。助手只回答一种提示：ssh 自己向登记的账号、登记的地址（`user@host`）索要密码的
-  那一句。别的账号的提示、第二重验证的提示（验证码、passcode）、一次性密码的提示都拿不到
-  回答，所以登录时还要第二重验证的机器也请用密钥登记。登记表里这一行记 `auth: password`，
+  那一句，地址按 ssh 解析后的写法来认（别名取你 ssh 配置里的 `HostName` 或 `HostKeyAlias`，
+  IP 地址取规范写法），所以地址也可以填 ssh 配置里的别名。别的账号的提示、第二重验证的提示
+  （验证码、passcode）、一次性密码的提示都拿不到回答，所以登录时还要第二重验证的机器也请用
+  密钥登记；这样被拒的登记会说明密码没有发出去。登记表里这一行记 `auth: password`，
   没有密钥路径。`raven ops connection doctor` 把它算作可用，Oncall 的 campaign 也能在上面跑，
   登录方式相同，而且只登录到登记的地址：campaign 不能把这样一条连接指到别的主机、端口或
   用户名上。机器的 sshd 必须允许

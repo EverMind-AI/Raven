@@ -612,6 +612,9 @@ def test_push_hands_ssh_the_askpass_environment_for_a_password_machine_and_nothi
     seen: list[tuple[list[str], dict | None, bool]] = []
 
     def run(argv, **kwargs):
+        if "-G" in argv:
+            # How ssh resolves the host for the helper's prompt: a config dump, not a connection.
+            return subprocess.CompletedProcess(argv, 0, "hostname 203.0.113.7\n", "")
         seen.append((argv, kwargs.get("env"), kwargs.get("start_new_session", False)))
         return subprocess.CompletedProcess(argv, 0, b"ok", b"")
 
@@ -669,6 +672,64 @@ async def test_the_tunnel_hands_ssh_the_askpass_environment(
     (one,) = spawned
     assert one["env"]["SSH_ASKPASS_REQUIRE"] == "force" and "-i" not in one["argv"] and "-L" in one["argv"]
     assert one["session"] is True, "no controlling terminal for the tunnel's ssh either"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the stand-in ssh is a POSIX script")
+async def test_the_tunnel_asks_ssh_whose_prompt_to_answer_off_the_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, supported_host
+):
+    """The askpass environment runs ``ssh -G`` to learn which host ssh's prompt will name. On the loop, a
+    resolution waiting on DNS or a slow ``Match exec`` would hold every other turn the loop serves."""
+    import asyncio
+
+    from raven.ops.connection_add import store_password
+
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    monkeypatch.setattr("raven.config.paths.get_logs_dir", lambda: tmp_path / "logs")
+    store_password("box", "hunter2")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "ssh").write_text(f'#!/bin/sh\nsleep 1\necho "hostname {HOST}"\n', encoding="utf-8")
+    (bin_dir / "ssh").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+
+    class _Proc:
+        returncode = None
+
+        async def wait(self):
+            self.returncode = 0
+            return 0
+
+        def terminate(self):
+            self.returncode = 0
+
+        def kill(self):
+            self.returncode = -9
+
+    async def spawn(*argv, **kwargs):
+        return _Proc()
+
+    async def up(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(remote.asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(remote, "_tunnel_up", up)
+    ticks = 0
+
+    async def tick():
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.05)
+            ticks += 1
+
+    ticker = asyncio.create_task(tick())
+    try:
+        async with remote.tunnel(_pw(), "http://127.0.0.1:8000/v1", ssh_log=tmp_path / "tunnel.log"):
+            pass
+    finally:
+        ticker.cancel()
+
+    assert ticks >= 5, f"the loop ran {ticks} ticks of 50 ms while ssh -G took a second"
 
 
 def test_a_refused_login_names_the_password_for_a_password_machine_and_the_key_for_a_key_machine():

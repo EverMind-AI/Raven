@@ -22,8 +22,10 @@ All notable changes to Raven are documented here.
   logins (`~/.raven/keys/<id>.password`, readable by the owner alone), handed
   to ssh on every connection through its askpass hook, and never on a command
   line, in a log or in an answer; such a machine gets no ssh alias and no jump
-  host, its password answers the registered account's own password prompt and
-  no other, Oncall campaigns run on it as Raven's own connections do and at
+  host, its password answers the registered account's own password prompt (at
+  the address as ssh resolves it, so a `Host` alias from the owner's ssh config
+  works too) and no other, Oncall campaigns run on it as Raven's own
+  connections do and at
   the registered address alone, and the mode is not offered on Windows. A failed
   or cancelled registration preserves the password written by another pending
   registration of the same machine, including when both passwords are identical.
