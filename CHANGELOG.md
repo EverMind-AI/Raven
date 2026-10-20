@@ -6,6 +6,34 @@ All notable changes to Raven are documented here.
 
 ### Added
 
+- **The evidence bundle spec** (`docs/specs/2026-10-20-evidence-bundle-design.md`): one
+  portable artefact that attests to how an AI system was built and how it behaved, with a
+  manifest naming every part and a **Bundle Stamp** per part answering the same five
+  questions **Provenance** answers for a field. Shipped as an **open spec** — donated,
+  not a product — so anyone may produce one and anyone may verify one.
+
+  The design is shaped by what the market actually asks for, read from primary sources
+  on 2026-10-20. The buyer who pays for an AI-assurance artefact asks for **run-time**
+  evidence: a technical system description, a governance and oversight record, an incident
+  history, written scope limits, evaluation and red-team results, performance data, a
+  guardrail specification, monitoring and alert configuration, an incident playbook with
+  named kill-switch access, and evidence no more than twelve months old. Supply-chain
+  provenance appears in **none** of those criteria, so the bundle carries **both
+  halves** — build-time for the security reviewer, run-time for the underwriter.
+
+  Two things the spec deliberately refuses. It does not claim conformity: a bundle states
+  what was done, what was observed and what evidence exists, and says in its own
+  limitations what it does not cover. And it does not invent a verifier register — the
+  EU AI Act lists **zero** notified bodies in NANDO while the AI Omnibus defers the
+  Annex III high-risk obligations to 2027-12-02, so a new register would be a directory
+  of directories beside NANDO's Art. 35 list and IAF CertSearch under ISO/IEC 42006.
+  The bundle points at those registers instead.
+
+  **Assurance rung** (`same_principal`, `third_party`, `third_party + L3`) is a declared
+  field rather than an inference, and **evidence freshness** is a field on every part.
+  The new vocabulary is in `CONTEXT.md`: Evidence Bundle, Bundle Stamp, build-time
+  evidence, run-time evidence, evidence freshness, assurance rung, independent verifier.
+
 - The Agent Hub has a **Machines** tab: the registered machines with the state
   of each one's link and Raven node, a form that registers one (it reaches the
   machine first, like `raven ops connection add`, and explains a refusal by

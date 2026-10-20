@@ -3524,3 +3524,46 @@ _Avoid_: lumping `user.md` in — the user profile enters via the `# Memory` seg
 The receiving session persists this ownership and binds it for each turn;
 connection-pool bindings remain independent of task identity. A missing owner remains unassigned and is
 included only in global usage totals. Each call is persisted once, with both keys.
+
+### Evidence and assurance vocabulary
+
+**Evidence Bundle** (`docs/specs/2026-10-20-evidence-bundle-design.md`):
+A portable directory that attests to how an AI system was built and how it behaved, together
+with the records needed to check both, and a manifest naming every part. Open spec, donated
+rather than hosted: the format is published so that anyone may produce and verify one.
+_Avoid_: "Trajectory Bundle" (`raven/trajectory/bundle.py`) -- that packs one Attempt's run
+for a reader who will replay it; an Evidence Bundle packs assurance records for a third party
+who never sees the run.
+
+**Bundle Stamp**:
+The per-part record that says what the part is, what produced it, from what inputs, when, and
+what it is worth. It is the artefact-level counterpart of **Provenance** (above), which
+answers the same five questions for one field of a Record.
+
+**Build-time evidence**:
+The records describing how a system was constructed: the tool-chain SBOM and VEX, the source
+and build provenance, the dependency attestations.
+
+**Run-time evidence**:
+The records describing how a system behaved while it ran: the event log with lineage, the
+guardrail configuration, the human-oversight and decision-authority record, the red-team
+report and its remediation, the incident log and the incident playbook. The buyer who pays
+for an assurance artefact asks for this half; the security reviewer asks for the build-time
+half, and a buyer is often both.
+
+**Evidence freshness**:
+The age of the oldest record a bundle's claims rest on. A claim that a guardrail is in force
+is a claim about the configuration as it stood on a date, and freshness is what makes that
+claim readable.
+
+**Assurance rung**:
+Which of `same_principal`, `third_party` or `third_party + L3` a bundle is. A rung is a
+property of the bundle, declared by the producer and checked by the verifier rather than
+assumed.
+_Avoid_: "ladder" unqualified; this file reserves ladders for the Model-Error Ladder, the
+No-Progress Ladder and the Session Tier.
+
+**Independent verifier**:
+The party that is neither the system operator nor the producer of the evidence. The two upper
+rungs differ in whether the verifier is independent of the **operator** or also of the
+**producer**.
