@@ -598,6 +598,7 @@ async def test_a_cancel_while_the_launch_is_answered_still_ends_what_it_started(
     with pytest.raises(asyncio.CancelledError):
         await opening
 
+    await _until(lambda: not pool._ending, timeout=2)
     (launch, params, _), (cancel, ended, _) = client.asked
     assert (launch, cancel) == (protocol.AGENT_LAUNCH, protocol.AGENT_CANCEL)
     assert ended == {"channel": params["channel"]}
@@ -615,8 +616,49 @@ async def test_a_cancel_while_a_refused_launch_is_answered_leaves_no_channel(tmp
     with pytest.raises(asyncio.CancelledError):
         await opening
 
+    await _until(lambda: not pool._ending, timeout=2)
     assert [method for method, _, _ in client.asked] == [protocol.AGENT_LAUNCH]
     assert pool.live() == ["box"] and pool._nodes["box"].channels == {}
+
+
+async def test_a_cancel_while_the_launch_is_unanswered_returns_at_once_and_the_agent_is_ended_on_the_answer(tmp_path):
+    pool = NodePool()
+    client = _live(pool, tmp_path, client=_HeldLaunch(result={"pid": 4242}))
+    opening = asyncio.ensure_future(pool.open_channel("box", name="a@box", command="agent", cwd="~", env={}))
+    await asyncio.wait_for(client.launching.wait(), 2)
+
+    opening.cancel()
+    await asyncio.wait({opening}, timeout=1)
+    assert opening.done(), "the cancelled caller does not wait for the node's answer"
+    assert [method for method, _, _ in client.asked] == [] and len(pool._ending) == 1
+
+    client.answer.set()
+    await _until(lambda: not pool._ending, timeout=2)
+    (launch, params, _), (cancel, ended, _) = client.asked
+    assert (launch, cancel) == (protocol.AGENT_LAUNCH, protocol.AGENT_CANCEL)
+    assert ended == {"channel": params["channel"]}
+    with pytest.raises(asyncio.CancelledError):
+        await opening
+
+
+async def test_a_second_cancel_while_the_launch_is_unanswered_still_ends_the_agent(tmp_path):
+    pool = NodePool()
+    client = _live(pool, tmp_path, client=_HeldLaunch(result={"pid": 4242}))
+    opening = asyncio.ensure_future(pool.open_channel("box", name="a@box", command="agent", cwd="~", env={}))
+    await asyncio.wait_for(client.launching.wait(), 2)
+
+    opening.cancel()
+    await asyncio.sleep(0.05)
+    opening.cancel()
+    await asyncio.sleep(0.05)
+    client.answer.set()
+    with pytest.raises(asyncio.CancelledError):
+        await opening
+
+    await _until(lambda: len(client.asked) == 2, timeout=2)
+    (launch, params, _), (cancel, ended, _) = client.asked
+    assert (launch, cancel) == (protocol.AGENT_LAUNCH, protocol.AGENT_CANCEL)
+    assert ended == {"channel": params["channel"]}
 
 
 @pytest.mark.slow

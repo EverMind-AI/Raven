@@ -446,6 +446,8 @@ class NodePool:
         self._reconnects: dict[str, asyncio.Task[None]] = {}
         self._parked: dict[str, list[ChannelEndpoint]] = {}
         """The endpoints waiting for a machine's link to come back, by machine."""
+        self._ending: set[asyncio.Task[None]] = set()
+        """The ends of agents whose launch's caller was cancelled before the answer, held until they are done."""
         self._idle_close_s = idle_close_s
         self._heartbeat_s = heartbeat_s
         self._lost_after_s = lost_after_s
@@ -592,16 +594,24 @@ class NodePool:
         except asyncio.CancelledError:
             # The Raven node starts the agent before it answers, and a caller
             # cancelled in between never holds the endpoint that ends it: the
-            # answer is still read, and an agent it started is ended there.
-            with contextlib.suppress(NodeError):
-                await launch
-                await endpoint.end()
+            # pool reads the answer and ends the agent it started, and the
+            # caller returns at once, out of reach of a second cancel.
+            ending = asyncio.create_task(self._end_once_launched(launch, endpoint), name=f"node-end-{task}")
+            self._ending.add(ending)
+            ending.add_done_callback(self._ending.discard)
             raise
         if isinstance(started, dict) and isinstance(started.get("pid"), int):
             endpoint.pid = started["pid"]
         node.used = time.monotonic()
         logger.info("acp agent {!r}: started on {}", name, endpoint.describe())
         return endpoint
+
+    @staticmethod
+    async def _end_once_launched(launch: asyncio.Future[Any], endpoint: ChannelEndpoint) -> None:
+        """End the agent ``launch`` started once the node has answered it; nothing for a launch it refused."""
+        with contextlib.suppress(NodeError):
+            await launch
+            await endpoint.end()
 
     async def _launch_agent(self, machine_id: str, node: _Node, channel: int, name: str, params: dict[str, Any]) -> Any:
         """The Raven node's answer to ``agent/launch`` on ``channel``, or :class:`NodeError` saying why there is none."""
