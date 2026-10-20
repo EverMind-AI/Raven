@@ -196,9 +196,9 @@ that preset. The list has every preset a machine's node can start, including
 one already connected on this computer -- that is a second entry, on the
 machine, not a conflict. An entry on the machine that is switched off is shown
 too, marked *switched off*, on the card and in the form: it still holds the
-machine, so its preset stays pickable there and the button reads
-**Reconnect**, which switches that entry back on (with the same proof prompt)
-rather than adding another. An agent's own sheet connects it onto a
+machine, so the form lists each such entry as a choice of its own, by name,
+and the button reads **Reconnect**, which switches that entry back on (with
+the same proof prompt) rather than adding another. An agent's own sheet connects it onto a
 machine too (*Runs on*), which lists the registered machines, lets only those
 with this Raven's node be picked (the others say why), and takes the working
 directory there; an agent that is not installed on this computer offers it

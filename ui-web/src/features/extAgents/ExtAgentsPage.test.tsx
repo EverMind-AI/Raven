@@ -2809,12 +2809,13 @@ describe('the machines module', () => {
     await openSheet('Lab box')
     await click(sheetAct('gui.machine.connect_here'))
     const pick = field('gui.machine.f_preset') as HTMLSelectElement
-    /* Switched off: pickable, said so; connected: greyed as before. */
+    /* Switched off: a choice of its own, by the entry's name, and no add beside
+       it (the server would refuse one); connected: greyed as before. */
     expect([...pick.options].map(o => [o.value, o.disabled, o.textContent])).toEqual([
-      ['codex', false, 'gui.machine.preset_off_on_machine {"name":"Codex"}'],
+      ['codex::codex@box', false, 'gui.machine.preset_off_entry {"name":"Codex","entry":"codex@box"}'],
       ['hermes', true, 'gui.machine.preset_on_machine {"name":"Hermes"}'],
     ])
-    expect(pick.value).toBe('codex')
+    expect(pick.value).toBe('codex::codex@box')
     expect(sheetStatus()).toBe('gui.machine.reconnect_hint')
     /* The entry keeps the directory it was connected with: no field for one. */
     expect(field('gui.machine.remote_cwd')).toBeNull()
@@ -2827,6 +2828,44 @@ describe('the machines module', () => {
     expect(mcalls.filter(c => c[0] === 'list').length).toBeGreaterThan(listsBefore)
     expect(sheetName()).toBe('Lab box')
     expect(offRow.enabled).toBe(true)
+  })
+
+  it('keeps every switched-off entry of one preset reconnectable, each as a choice of its own', async () => {
+    /* Two explicitly named entries of one preset on one machine, both off: the
+       review bot's case -- with one choice per preset, reconnecting the first
+       made the preset taken and left the second unreachable from here. */
+    const presets: PresetChoice[] = [
+      {
+        preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false,
+        off_on_machines: [{ machine: 'box', name: 'codex@box' }, { machine: 'box', name: 'lab-2' }], on_machines: [],
+      },
+    ]
+    const first = row({ name: 'codex@box', preset: 'codex', configured: true, enabled: false, machine: 'box' })
+    const second = row({ name: 'lab-2', preset: 'codex', configured: true, enabled: false, machine: 'box' })
+    const { acts } = install([row(), first, second], {
+      machines: [ready({ agents_off_here: ['codex@box', 'lab-2'] })],
+      presets: async () => presets,
+    })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    const options = (): Array<[string, boolean]> =>
+      [...(field('gui.machine.f_preset') as HTMLSelectElement).options].map(o => [o.value, o.disabled])
+    expect(options()).toEqual([['codex::codex@box', false], ['codex::lab-2', false]])
+    await pickOption(field('gui.machine.f_preset') as HTMLSelectElement, 'codex::lab-2')
+    await click(sheetAct('gui.machine.reconnect_do'))
+    expect(acts).toEqual([['toggle', 'lab-2', { enabled: true }]])
+    /* The roster now has one on and one off; the form, opened again, greys the
+       preset's add and still offers the other entry. */
+    presets[0]!.on_machines = ['box']
+    presets[0]!.off_on_machines = [{ machine: 'box', name: 'codex@box' }]
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    expect(options()).toEqual([['codex', true], ['codex::codex@box', false]])
+    expect(sheetActs()).toEqual(['gui.machine.reconnect_do'])
+    await click(sheetAct('gui.machine.reconnect_do'))
+    expect(acts.at(-1)).toEqual(['toggle', 'codex@box', { enabled: true }])
   })
 
   it('keeps the refusal of a Reconnect on the form, in the agent s words', async () => {

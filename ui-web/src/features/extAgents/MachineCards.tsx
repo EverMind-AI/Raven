@@ -28,7 +28,7 @@ import * as store from './store'
 
 import type { MachinesState } from './machines'
 import type { ExtAgentsState } from './store'
-import type { MachineLink, MachineRow, RegisterForm, RegisterReason } from './types'
+import type { MachineLink, MachineRow, PresetChoice, RegisterForm, RegisterReason } from './types'
 import type { JSX } from 'react'
 
 const MACHINE = 'M4 5.5h16v9.5H4zM9.5 19h5M12 15.5V19'
@@ -380,27 +380,41 @@ export function MachineConnectSheet({ row, s }: { row: MachineRow; s: ExtAgentsS
      the reader closed -- the server has not written it yet, so `on_machines`
      cannot say, and a second press would be a second ping ending in the
      duplicate refusal. */
-  const choices = (s.presets ?? []).map(p => {
-    /* `off`: the machine has an entry of it switched off, by that entry's
-       name. It still holds the machine (the server refuses a second), so it
-       is offered back -- Reconnect switches that entry on -- rather than
-       greyed as taken or counted nowhere. */
-    const off = p.off_on_machines.find(e => e.machine === row.id)?.name ?? ''
-    return {
-      ...p,
-      off,
-      taken: p.on_machines.includes(row.id),
-      pending: s.mconnectPending.includes(`${p.preset}@${row.id}`) || (!!off && s.mconnectPending.includes(off))
+  /* One choice per thing the press would do. A preset the machine has
+     nothing of is one choice, the add. An entry of it switched off on the
+     machine is a choice of its own, by that entry's name -- the machine may
+     hold several, explicitly named, and each has to stay reconnectable (the
+     server refuses a second default-named add while any of them is there,
+     so the add is not offered beside them). A preset the machine has
+     connected is listed greyed, as the reason there is no add. */
+  type Choice = { key: string; preset: PresetChoice; off: string; taken: boolean; pending: boolean }
+  const choices: Choice[] = (s.presets ?? []).flatMap((p): Choice[] => {
+    const taken = p.on_machines.includes(row.id)
+    const offs = p.off_on_machines.filter(e => e.machine === row.id)
+    const own: Choice[] = offs.map(e => ({
+      key: `${p.preset}::${e.name}`,
+      preset: p,
+      off: e.name,
+      taken: false,
+      pending: s.mconnectPending.includes(e.name)
+    }))
+    const add: Choice = {
+      key: p.preset,
+      preset: p,
+      off: '',
+      taken,
+      pending: s.mconnectPending.includes(`${p.preset}@${row.id}`)
     }
+    return taken || offs.length === 0 ? [add, ...own] : own
   })
   const pickable = choices.filter(c => !c.taken && !c.pending)
-  const chosen: (typeof choices)[number] | undefined = pickable.find(c => c.preset === picked) ?? pickable[0]
+  const chosen: Choice | undefined = pickable.find(c => c.key === picked) ?? pickable[0]
   const busy = s.mconnectBusy !== null && s.mconnectBusy === s.mconnectGen
   const submit = async (): Promise<void> => {
     if (!chosen) return
     const { landed, current, name } = chosen.off
       ? await store.reconnectOnMachine(chosen.off, row.id)
-      : await store.connectOnMachine(chosen, row.id, cwdRef.current?.value.trim() || '')
+      : await store.connectOnMachine(chosen.preset, row.id, cwdRef.current?.value.trim() || '')
     if (landed) {
       toast(t(chosen.off ? 'gui.machine.reconnected_said' : 'gui.machine.connected_said', { name }))
       /* The card's own line changes with it; back to the sheet that says so --
@@ -414,16 +428,16 @@ export function MachineConnectSheet({ row, s }: { row: MachineRow; s: ExtAgentsS
       toast(t('gui.machine.connect_bad_named', { name }))
     }
   }
-  const label = (c: (typeof choices)[number]): string =>
+  const label = (c: Choice): string =>
     c.taken
-      ? t('gui.machine.preset_on_machine', { name: c.name })
+      ? t('gui.machine.preset_on_machine', { name: c.preset.name })
       : c.pending
-        ? t('gui.machine.preset_connecting', { name: c.name })
+        ? t('gui.machine.preset_connecting', { name: c.off || c.preset.name })
         : c.off
-          ? t('gui.machine.preset_off_on_machine', { name: c.name })
-          : c.connected_here
-            ? t('gui.machine.preset_connected_here', { name: c.name })
-            : c.name
+          ? t('gui.machine.preset_off_entry', { name: c.preset.name, entry: c.off })
+          : c.preset.connected_here
+            ? t('gui.machine.preset_connected_here', { name: c.preset.name })
+            : c.preset.name
   return createPortal(
     <div className="extAgents-sheet" aria-label={t('gui.machine.connect_title', { name: row.name })} role="document">
       <div className="extAgents-head">
@@ -458,16 +472,16 @@ export function MachineConnectSheet({ row, s }: { row: MachineRow; s: ExtAgentsS
                 aria-label={t('gui.machine.f_preset')}
                 className="extAgents-in"
                 onChange={e => setPicked(e.target.value)}
-                value={chosen?.preset ?? ''}
+                value={chosen?.key ?? ''}
               >
                 {choices.map(c => (
-                  <option disabled={c.taken || c.pending} key={c.preset} value={c.preset}>
+                  <option disabled={c.taken || c.pending} key={c.key} value={c.key}>
                     {label(c)}
                   </option>
                 ))}
               </select>
             </label>
-            {chosen?.description ? <div className="extAgents-about">{chosen.description}</div> : null}
+            {chosen?.preset.description ? <div className="extAgents-about">{chosen.preset.description}</div> : null}
             {/* A switched-off entry keeps the directory it was connected with;
                 only a new entry takes one here. */}
             {chosen?.off ? null : (
