@@ -70,7 +70,8 @@ if os.path.exists(expect):
         sys.exit(255)
     if "-i" in args or os.environ.get("SSH_ASKPASS_REQUIRE") != "force" or not os.environ.get("SSH_ASKPASS"):
         refuse("worker@{host}: Permission denied (password).")
-    given = sp.run([os.environ["SSH_ASKPASS"], "password:"], capture_output=True, text=True).stdout.rstrip("\\n")
+    prompt = os.environ.get("RAVEN_MACHINE_PASSWORD_FOR", "") + "'s password: "
+    given = sp.run([os.environ["SSH_ASKPASS"], prompt], capture_output=True, text=True).stdout.rstrip("\\n")
     if given != open(expect).read().strip():
         refuse("worker@{host}: Permission denied (password).")
 command = args[args.index("--") + 1] if "--" in args else args[-1]
@@ -1683,6 +1684,7 @@ def _password_row() -> dict[str, Any]:
     return {k: v for k, v in row().items() if k != "key"} | {"auth": "password"}
 
 
+@pytest.mark.slow
 async def test_the_link_to_a_password_machine_logs_in_through_askpass_and_offers_no_key(
     box, pool, monkeypatch, supported_host
 ):

@@ -183,24 +183,31 @@ PASSWORD_AUTH = (
 
 #: The variable the askpass helper reads the password file's path from.
 ASKPASS_FILE_ENV = "RAVEN_MACHINE_PASSWORD_FILE"
+#: The variable that tells the helper whose prompt it may answer: the registered ``user@host``.
+ASKPASS_FOR_ENV = "RAVEN_MACHINE_PASSWORD_FOR"
 
 # The helper itself: OpenSSH runs it when ``SSH_ASKPASS_REQUIRE=force`` and
 # reads the password from its stdout. It prints the one line of the file the
 # environment names, so the password is in no process's environment and on no
-# command line; the file is readable by the owner alone. It answers a prompt
-# for a password and no other -- ssh's own (``user@host's password: ``) or a
-# keyboard-interactive server's (``Password:``, ``Passwort:``): a second
-# factor's (a verification code, a passcode) gets nothing, since Raven cannot
-# answer one and a PAM module may pass what it is given on to its vendor
-# (reviewed 2026-10-19). The question is ssh's first argument.
+# command line; the file is readable by the owner alone. It answers the
+# registered account's own password prompt and no other: ssh's
+# ``user@host's password: `` and the keyboard-interactive ``(user@host)
+# Password: ``, with ``user@host`` from the environment. Another account's
+# prompt (an ssh this one started inherits the helper), a second factor's (a
+# verification code, a passcode) and a one-time password's -- "password" is
+# in that wording too -- get nothing, since the password is the machine's
+# alone and a PAM module may pass what it is given on to its vendor. The
+# question is ssh's first argument; trailing blanks and case are ignored.
 _ASKPASS = (
     "#!/bin/sh\n"
-    "# Raven: hands ssh the password kept for a registered machine, at a password prompt only.\n"
+    "# Raven: hands ssh the password kept for a registered machine, at that account's own password prompt only.\n"
     "# Managed; rewritten when it differs.\n"
-    "case $(printf '%s' \"$1\" | tr '[:upper:]' '[:lower:]') in\n"
-    f'  *passw*) exec cat "${ASKPASS_FILE_ENV}" ;;\n'
+    f"who=$(printf '%s' \"${ASKPASS_FOR_ENV}\" | tr '[:upper:]' '[:lower:]')\n"
+    "asked=$(printf '%s' \"$1\" | tr '[:upper:]' '[:lower:]' | sed 's/[[:space:]]*$//')\n"
+    'case "$asked" in\n'
+    f'  "$who\'s password:"|"($who) password:") exec cat "${ASKPASS_FILE_ENV}" ;;\n'
     "esac\n"
-    "echo 'raven: the password kept for this machine answers a password prompt only, and this prompt is not one' >&2\n"
+    "echo 'raven: the password kept for this machine answers its own password prompt only, and this prompt is not one' >&2\n"
     "exit 1\n"
 )
 
@@ -275,14 +282,15 @@ def askpass_helper(keys_dir: Path) -> Path:
     return path
 
 
-def ssh_env(row: dict[str, Any]) -> dict[str, str]:
+def ssh_env(row: dict[str, Any], *, password_file: Path | None = None) -> dict[str, str]:
     """What a password row's ssh needs in its environment; ``{}`` for a key row.
 
     The askpass helper, the order to use it (``SSH_ASKPASS_REQUIRE=force``,
     OpenSSH 8.4+), the password file it reads, and a ``DISPLAY``, which ssh
     requires to consult askpass at all and never looks at. The password itself
     is in none of it. Refused, by name, when no password is kept here for the
-    machine -- registering it again puts one back -- and on Windows, whose
+    machine -- removing it and registering it again puts one back, since a
+    registration under an id in use is refused -- and on Windows, whose
     OpenSSH runs an askpass helper but not a POSIX one: the helper here is a
     shell script, and Windows cannot execute it (measured 2026-10-19,
     OpenSSH_for_Windows_9.5p2: a ``.cmd`` helper is run, a ``#!/bin/sh`` one
@@ -303,12 +311,20 @@ def ssh_env(row: dict[str, Any]) -> dict[str, str]:
         # blocks it, and a caller that reaches it anyway gets the one kind of
         # refusal this function gives rather than a crash.
         raise TransportError(str(exc)) from None
+    if password_file is not None:
+        secret = password_file
     if not secret.is_file():
-        raise TransportError(f"no password is kept here for machine {label!r} ({secret}); register it again")
+        raise TransportError(
+            f"no password is kept here for machine {label!r} ({secret}); remove the machine and register it again"
+        )
+    host, _port, _key, user = ssh_target(row)
     return {
         "SSH_ASKPASS": str(askpass_helper(secret.parent)),
         "SSH_ASKPASS_REQUIRE": "force",
         ASKPASS_FILE_ENV: str(secret),
+        # Whose prompt the helper answers: the account and address the row
+        # registers, which is also the destination on the command line.
+        ASKPASS_FOR_ENV: f"{user}@{host}",
         "DISPLAY": os.environ.get("DISPLAY") or "raven-askpass",
     }
 
@@ -382,7 +398,9 @@ def make_ssh_runner(
     return run
 
 
-def runner_from(row: dict[str, Any], *, cap_seconds: float | None = None) -> CommandRunner:
+def runner_from(
+    row: dict[str, Any], *, cap_seconds: float | None = None, password_file: Path | None = None
+) -> CommandRunner:
     """The runner this connection row calls for.
 
     Raises rather than handing back something half-connected: a runner built on
@@ -404,7 +422,7 @@ def runner_from(row: dict[str, Any], *, cap_seconds: float | None = None) -> Com
         # Judged here, before ssh is started: a password that is not kept here
         # any more, or a Windows host, is a refusal with a name, not a login
         # that fails minutes into a dispatch.
-        extra = ssh_env(row)
+        extra = ssh_env(row, password_file=password_file)
         return make_ssh_runner(
             host, port, "", user=user, cap_seconds=cap_seconds, password=True, env={**os.environ, **extra}
         )

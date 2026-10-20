@@ -39,11 +39,12 @@ from rich.table import Table
 # stands in a reachable machine patches.
 from raven.ops.connection_add import NODE_FIELD, probe
 from raven.ops.connection_add import forget_password as _forget_password
+from raven.ops.connection_add import forget_unowned_password as _forget_unowned_password
 from raven.ops.connection_add import parse_probe as _parse_probe  # noqa: F401 -- re-export, the tests read it here
 from raven.ops.connection_add import password_auth as _password_auth
 from raven.ops.connection_add import remove as _remove
 from raven.ops.connection_add import remove_ssh_alias as _remove_ssh_alias
-from raven.ops.connection_add import store_password as _store_password
+from raven.ops.connection_add import store_registration_password as _store_registration_password
 from raven.ops.connection_add import write as _write
 from raven.ops.connection_add import write_ssh_alias as _write_ssh_alias
 
@@ -186,23 +187,22 @@ def add(  # noqa: PLR0913 -- one option per field of the row; a dict would hide 
         )
         raise typer.Exit(1)
 
-    kept = False
+    kept = None
     written = None
     try:
         if password:
             # Kept before the probe, which reaches the machine the way every later connection will.
             try:
-                _store_password(conn_id, password)
+                kept = _store_registration_password(conn_id, password)
             except ValueError as exc:
                 console.print(f"[red]{exc}. Nothing was written.[/red]")
                 raise typer.Exit(1) from None
-            kept = True
         if skip_probe:
             console.print(
                 "[yellow]--skip-probe: this machine was not contacted, so nothing here is confirmed.[/yellow]"
             )
         else:
-            reached, message, found = probe(row)
+            reached, message, found = probe(row, password=password) if password else probe(row)
             if not reached:
                 if password:
                     message = message.replace(password, "the password")
@@ -240,17 +240,18 @@ def add(  # noqa: PLR0913 -- one option per field of the row; a dict would hide 
             console.print("[red]Nothing was written.[/red]")
             raise typer.Exit(1)
         try:
-            written = _write(row)
+            written = _write(row, password=password) if password else _write(row)
         except ValueError as exc:
             console.print(f"[red]{exc}[/red]")
             console.print("[red]Nothing was written.[/red]")
             raise typer.Exit(1) from None
     finally:
-        if kept and written is None:
-            # Refused, aborted at a question, or the write failed: no row holds
-            # this password, so it is not kept either -- a password file with no
-            # row is one nothing lists and `remove` cannot reach.
-            _forget_password(conn_id)
+        if kept is not None and written is None:
+            # Refused, aborted at a question, or the write failed: no row of
+            # this call's holds the password, so it is not kept either --
+            # unless a registration of the same id landed meanwhile, whose row
+            # it is now (`forget_unowned_password` has the rule).
+            _forget_unowned_password(conn_id, password, identity=kept)
     console.print(f"[green]wrote {row['id']} to {written}[/green]")
     if password:
         console.print(f"[green]password kept for {row['id']} (readable by you alone; used on every connection)[/green]")
@@ -418,8 +419,8 @@ def remove_connection(
     console.print(
         "The Raven node installed on it, if any, stays there: remove its node directory on the machine by hand."
     )
-    if _password_auth(rows[0]):
-        _forget_password(wanted)
+    if _forget_password(wanted):
+        # Whatever the row's login: a file kept under this id is nobody's once the row is gone.
         console.print("[green]the password kept here for it is deleted[/green]")
     if named:
         console.print(

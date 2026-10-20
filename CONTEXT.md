@@ -432,12 +432,22 @@ through OpenSSH's askpass hook -- in no row, log, command line or answer,
 `connection_add.store_password`, `transport.ssh_env`; the row carries `auth: password` and no
 key, gets no ssh alias, no jump host and no shared connection, and is refused on Windows,
 whose OpenSSH cannot run Raven's POSIX askpass helper; a password under six characters is
-refused, since the scrubber would pass it as ordinary text, and the id rule is the one owner
-`connections.password_path`; the askpass helper answers a password prompt and no other, a
-second factor's included; Oncall's ssh and rsync log in to such a row the same way,
-`oncall_flow.transport.password_row`), install the node in the background, doctor, and remove (`raven ops
-connection remove`, refused while a connected agent entry names the machine; the password kept
-for a machine goes with its row, `connection_add.forget_password`);
+refused, since the scrubber would pass it as ordinary text, one with a line break too, since
+ssh would take only its first line, and the id rule is the one owner `connections.password_path`;
+the askpass helper answers the registered account's own password prompt (`user@host`, named by
+`transport.ASKPASS_FOR_ENV`) and no other, another account's, a second factor's and a one-time
+password's included; Oncall's ssh and rsync log in to such a row the same way, at the registry's
+address alone, `oncall_flow.transport.password_row`), install the node in the background, doctor,
+and remove (`raven ops connection remove`, refused while a connected agent entry names the
+machine; a password file kept under the id goes with the row whatever its login,
+`connection_add.forget_password`, and a refused registration forgets only its own file write
+while no row of the id is listed, `connection_add.forget_unowned_password`;
+`connection_add.store_registration_password` atomically replaces the password file and records
+its identity under the same file lock used by cleanup, so an overlapping registration's file
+survives even while its probe is pending and its password is identical; a registration probe
+uses its own temporary 0600 password file under `keys/` (included in held-secret scrubbing),
+and `connection_add.write` publishes its password and row under the cleanup lock after
+checking duplicates again, so either completion order keeps the successful login usable);
 none of it hands the page an address, an account or a key path, and
 `node_install` on a row is the node the last install or contact found there,
 which is how a listing says a machine has this Raven's node without reaching it.

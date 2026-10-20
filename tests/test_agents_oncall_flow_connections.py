@@ -259,7 +259,8 @@ saw = {{
     "own_session": os.getsid(0) == os.getpid(),
 }}
 if saw["name"] == "ssh" and saw["require"] == "force" and saw["askpass"]:
-    asked = subprocess.run([saw["askpass"], "password:"], capture_output=True, text=True)
+    prompt = os.environ.get("RAVEN_MACHINE_PASSWORD_FOR", "") + "'s password: "
+    asked = subprocess.run([saw["askpass"], prompt], capture_output=True, text=True)
     saw["given"] = asked.stdout.rstrip("\\n")
 with open({log!r}, "a", encoding="utf-8") as fh:
     fh.write(json.dumps(saw) + "\\n")

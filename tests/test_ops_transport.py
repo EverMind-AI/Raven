@@ -107,7 +107,9 @@ def test_a_password_row_s_argv_offers_no_key_and_leaves_the_asking_to_askpass():
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not available on Windows")
-def test_the_askpass_environment_names_the_helper_and_the_password_file_never_the_password(tmp_path, monkeypatch):
+def test_the_askpass_environment_names_the_helper_and_the_password_file_never_the_password(
+    tmp_path, monkeypatch, supported_host
+):
     from raven.ops.connection_add import store_password
 
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
@@ -120,9 +122,15 @@ def test_the_askpass_environment_names_the_helper_and_the_password_file_never_th
     assert helper == tmp_path / "rhome" / "keys" / "askpass" and oct(helper.stat().st_mode & 0o777) == "0o700"
     assert env["SSH_ASKPASS_REQUIRE"] == "force" and env["DISPLAY"]
     assert env["RAVEN_MACHINE_PASSWORD_FILE"] == str(tmp_path / "rhome" / "keys" / "box.password")
+    assert env["RAVEN_MACHINE_PASSWORD_FOR"] == f"{PASSWORD_ROW['user']}@{PASSWORD_ROW['host']}"
     assert "hunter2" not in "".join(env.values())
-    # The helper answers ssh with the file's line, whichever machine the environment names.
-    out = subprocess.run([str(helper), "password:"], capture_output=True, text=True, env={**os.environ, **env})
+    # The helper answers ssh with the file's line, at the registered account's own prompt.
+    out = subprocess.run(
+        [str(helper), f"{env['RAVEN_MACHINE_PASSWORD_FOR']}'s password: "],
+        capture_output=True,
+        text=True,
+        env={**os.environ, **env},
+    )
     assert out.stdout == "hunter2\n", out.stderr
     assert transport.ssh_env(KEY_ROW) == {}
     before = helper.read_text(encoding="utf-8")
@@ -131,9 +139,12 @@ def test_the_askpass_environment_names_the_helper_and_the_password_file_never_th
 
 
 def test_a_password_row_with_no_password_kept_here_is_refused_by_name(tmp_path, monkeypatch, supported_host):
+    """And told the way back that works: a registration under an id in use is refused, so the machine goes first."""
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
 
-    with pytest.raises(TransportError, match="no password is kept here for machine 'box'.*register it again"):
+    with pytest.raises(
+        TransportError, match=r"no password is kept here for machine 'box' \(.*\); remove the machine and register it"
+    ):
         transport.ssh_env(PASSWORD_ROW)
     with pytest.raises(TransportError, match="no password is kept here"):
         transport.runner_from(PASSWORD_ROW)
@@ -195,17 +206,21 @@ def _askpass(tmp_path: Path, prompt: str) -> subprocess.CompletedProcess[str]:
     helper = transport.askpass_helper(keys)
     secret = keys / "box.password"
     secret.write_text("hunter2\n", encoding="utf-8")
-    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "RAVEN_MACHINE_PASSWORD_FILE": str(secret)}
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "RAVEN_MACHINE_PASSWORD_FILE": str(secret),
+        "RAVEN_MACHINE_PASSWORD_FOR": "alice@203.0.113.7",
+    }
     return subprocess.run(["sh", str(helper), prompt], capture_output=True, text=True, env=env, timeout=30)
 
 
 @_posix_helper
 @pytest.mark.parametrize(
     "prompt",
-    ["alice@203.0.113.7's password: ", "(alice@203.0.113.7) Password: ", "Password: ", "(alice@box) Passwort: "],
-    ids=["password-method", "keyboard-interactive", "older-openssh", "other-language"],
+    ["alice@203.0.113.7's password: ", "(alice@203.0.113.7) Password: ", "ALICE@203.0.113.7's Password:"],
+    ids=["password-method", "keyboard-interactive", "case-and-blank"],
 )
-def test_the_askpass_helper_answers_a_prompt_for_the_password(tmp_path, prompt):
+def test_the_askpass_helper_answers_the_registered_account_s_own_password_prompt(tmp_path, prompt):
     done = _askpass(tmp_path, prompt)
 
     assert (done.returncode, done.stdout) == (0, "hunter2\n"), done.stderr
@@ -215,15 +230,44 @@ def test_the_askpass_helper_answers_a_prompt_for_the_password(tmp_path, prompt):
 @pytest.mark.parametrize(
     "prompt",
     [
+        "root@203.0.113.7's password: ",
+        "other@198.51.100.7's password: ",
+        "(root@203.0.113.7) Password: ",
+        "Password: ",
+        "(alice@box) Passwort: ",
+        "(alice@203.0.113.7) One-time password: ",
+        "One-time password (OATH) for alice: ",
+        "Password 042: ",
+        "Password & verification code: ",
         "(alice@203.0.113.7) Verification code: ",
         "(alice@203.0.113.7) Passcode or option (1-3): ",
         "Verification code: ",
         "Enter passphrase for key '/home/alice/.ssh/id_ed25519': ",
+        "Are you sure you want to continue connecting (yes/no/[fingerprint])? ",
+        "Enter PIN for authenticator: ",
     ],
-    ids=["code", "passcode", "code-older-openssh", "key-passphrase"],
+    ids=[
+        "other-user-same-host",
+        "other-account",
+        "other-user-kbd",
+        "bare-password",
+        "other-language",
+        "otp-kbd",
+        "otp-oath",
+        "otp-numbered",
+        "password-and-code",
+        "code",
+        "passcode",
+        "code-bare",
+        "key-passphrase",
+        "host-key-question",
+        "security-key-pin",
+    ],
 )
-def test_the_askpass_helper_gives_a_second_factor_s_prompt_nothing(tmp_path, prompt):
-    """Raven cannot answer a second factor, and a PAM module may pass what it is given on to its vendor."""
+def test_the_askpass_helper_gives_every_other_prompt_nothing(tmp_path, prompt):
+    """Another account's prompt (an ssh this one started inherits the helper), a second factor's, a one-time
+    password's: the password is the machine's alone, and a PAM module may pass what it is given on to its vendor.
+    A substring test for "passw" answered every one of these."""
     done = _askpass(tmp_path, prompt)
 
     assert (done.returncode, done.stdout) == (1, "")

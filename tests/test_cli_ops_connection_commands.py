@@ -629,6 +629,21 @@ def test_remove_forgets_the_password_kept_for_a_password_row(store, monkeypatch,
     assert json.loads(store.read_text(encoding="utf-8"))["connections"] == []
 
 
+def test_remove_of_a_key_row_deletes_a_password_file_left_under_its_id(store, monkeypatch, tmp_path):
+    point_home(monkeypatch, tmp_path)
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    from raven.ops.connection_add import password_path, store_password
+
+    _box_row(store)
+    store_password("box", "left-behind-1")
+
+    out = CliRunner().invoke(connection_app, ["remove", "box", "--yes"])
+
+    assert out.exit_code == 0, out.output
+    assert "the password kept here for it is deleted" in said(out)
+    assert not password_path("box").exists()
+
+
 def test_remove_refuses_while_agent_entries_name_the_machine_unless_forced(store, monkeypatch, tmp_path):
     point_home(monkeypatch, tmp_path)
     _named(monkeypatch, "claude_code@box")
@@ -885,16 +900,20 @@ def test_add_by_password_refuses_an_unreadable_registry_before_it_keeps_anything
     assert _nothing_kept(rhome) and store.read_text(encoding="utf-8") == broken
 
 
-def test_a_password_kept_for_a_registration_whose_write_fails_is_forgotten(store, reached, monkeypatch, tmp_path):
-    """Between the duplicate check and the write another registration of the same id can land; the write refuses,
-    and the password kept for a row that was never written goes with the refusal."""
+def test_a_write_refused_because_the_id_landed_meanwhile_leaves_the_password_file_to_that_row(
+    store, reached, monkeypatch, tmp_path
+):
+    """Between the duplicate check and the write another registration of the same id can land, with its own
+    password under the same file name: the file is that row's now, and the refused registration leaves it."""
     point_home(monkeypatch, tmp_path)
     rhome = tmp_path / "rhome"
     monkeypatch.setenv("RAVEN_HOME", str(rhome))
     monkeypatch.setattr(sys, "platform", "linux")
     import raven.cli.ops_connection_commands as cli
+    from raven.ops.connection_add import password_path, store_password
 
-    def refuse(row):
+    def refuse(row, **kwargs):
+        store_password(row["id"], "rpc-pw-2222")  # the competitor's, kept under the same id
         raise ValueError(f"a machine with id {row['id']!r} is already listed in {store}")
 
     monkeypatch.setattr(cli, "_write", refuse)
@@ -905,7 +924,87 @@ def test_a_password_kept_for_a_registration_whose_write_fails_is_forgotten(store
 
     assert out.exit_code == 1, out.output
     assert "already listed" in out.output and "Nothing was written" in out.output
-    assert _nothing_kept(rhome)
+    assert password_path("box").read_text(encoding="utf-8") == "rpc-pw-2222\n"
+
+
+def test_an_add_aborted_after_another_registration_of_the_id_landed_leaves_that_rows_password(
+    store, reached, monkeypatch, tmp_path
+):
+    """An interactive add parked at a later question, `machines.add` registered the same id with its own
+    password meanwhile, the add was aborted -- and its cleanup deleted the landed row's password."""
+    point_home(monkeypatch, tmp_path)
+    rhome = tmp_path / "rhome"
+    monkeypatch.setenv("RAVEN_HOME", str(rhome))
+    monkeypatch.setattr(sys, "platform", "linux")
+    import typer
+
+    import raven.cli.ops_connection_commands as cli
+    from raven.ops.connection_add import password_path, store_password
+
+    answers = {
+        "What do you call this machine": "Box",
+        "Reached over ssh, or is it this computer? (ssh/local)": "ssh",
+        "Short id for it": "box",
+        "Address": "14.103.100.27",
+        "Port": "58717",
+        "Username": "root",
+        "Log in with a key or a password? (key/password)": "password",
+    }
+
+    def ask(label, default="", *, required=True):
+        if label.startswith("What is installed on it"):
+            # The other registration lands while this one is parked here: its row, and its password.
+            _box_row(store)
+            store_password("box", "rpc-pw-2222")
+            raise typer.Abort()
+        return answers[label]
+
+    monkeypatch.setattr(cli, "_ask", ask)
+    monkeypatch.setattr(cli.typer, "prompt", lambda label, **kw: "cli-pw-1111")
+
+    out = CliRunner().invoke(connection_app, ["add"])
+
+    assert out.exit_code == 1 and "Aborted" in out.output
+    assert password_path("box").read_text(encoding="utf-8") == "rpc-pw-2222\n", "the landed row's password stays"
+
+
+def test_an_aborted_add_keeps_the_same_password_of_a_registration_that_has_not_written_its_row(
+    store, reached, monkeypatch, tmp_path, supported_host
+):
+    import typer
+
+    import raven.cli.ops_connection_commands as cli
+    from raven.ops import connection_add
+    from raven.ops.transport import ssh_env
+
+    point_home(monkeypatch, tmp_path)
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    password = "same-password-1"
+
+    def reach(row, **kwargs):
+        assert kwargs["password"] == password
+        return True, "reached", {}
+
+    monkeypatch.setattr(cli, "probe", reach)
+
+    def ask(label, default="", *, required=True):
+        assert label.startswith("What is installed on it")
+        connection_add.store_password("box", password)
+        assert not store.exists(), "the other registration is still probing"
+        raise typer.Abort()
+
+    monkeypatch.setattr(cli, "_ask", ask)
+    out = CliRunner().invoke(
+        connection_app,
+        ["add", "--id", "box", "--name", "Box", "--transport", "ssh", *SSH, "--password-stdin"],
+        input=password + "\n",
+    )
+
+    assert out.exit_code == 1 and "Aborted" in out.output
+    row = {"id": "box", "host": "192.0.2.10", "port": 22, "user": "alice", "auth": "password"}
+    connection_add.write(row)
+    assert connection_add.password_path("box").is_file(), "the pending registration still owns the password"
+    assert ssh_env(row)
 
 
 def test_an_add_aborted_at_a_later_question_leaves_no_password_behind(store, reached, monkeypatch, tmp_path):

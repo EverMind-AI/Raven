@@ -62,8 +62,11 @@ the private key bytes. A machine registered with a password
 ([Working on registered machines](machines.md#1-register-the-machine)) runs
 campaigns too: their ssh and their rsync log in with the password Raven keeps
 for it, through the same options and askpass hook as every other connection,
-and a campaign carries the connection id and `auth`, never the password. Do
-not put keys or passwords in a task message.
+and a campaign carries the connection id and `auth`, never the password. The
+address and account are the registry's: a campaign meta that gives such a
+connection another host, port or user is refused before any ssh starts, since
+the kept password goes only to the machine it was registered for. Do not put
+keys or passwords in a task message.
 
 An agent can register a machine too. The `ops_connection_add` tool (on in
 raven-oncall and raven-code through `tools.connectionAdd`; off elsewhere) takes

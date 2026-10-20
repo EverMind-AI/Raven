@@ -44,25 +44,45 @@ def logs_in_by_password(meta: dict[str, Any]) -> bool:
 def password_row(meta: dict[str, Any], *, what: str = "campaign") -> dict[str, Any]:
     """The registry row trunk logs in with, for a meta that logs in by password.
 
-    Built from the meta, so a field the campaign overrides holds here as it does
-    for a key machine. Its id is the meta's connection, because that is what the
-    password is kept under: a meta that names none has nothing to log in with,
-    and is refused saying so rather than sent to a machine that would refuse it.
+    Its id is the meta's connection, because that is what the password is kept
+    under: a meta that names none has nothing to log in with, and is refused
+    saying so rather than sent to a machine that would refuse it. The address
+    and account are the registry's, never the meta's: a kept password goes
+    only to the machine it was registered for, and a meta -- which the model's
+    own tool calls write -- that carries another host, port or user for such a
+    connection is refused before any ssh is started. A key machine's meta may
+    still override those, since a key never leaves this computer.
     """
+    from oncall_flow.connections import get
+
     named = str(meta.get("connection") or "").strip()
     if not named:
         raise JobBackendError(
             f"this {what} logs in with a password and names no connection: a password is kept for a "
             "registered machine, under its id, so the machine has to be named by its connection"
         )
-    return {
-        "id": named,
-        "transport": SSH,
-        "host": str(meta.get("host") or "").strip(),
-        "port": int(meta.get("port") or 22),
-        "user": str(meta.get("user") or "root"),
-        "auth": AUTH_PASSWORD,
-    }
+    registered = get(named)
+    if registered is None:
+        raise JobBackendError(
+            f"this {what} names connection {named!r}, which is not in the connection registry; the password kept "
+            "for a machine goes only to the machine it was registered for"
+        )
+    host = str(registered.get("host") or "").strip()
+    port = int(registered.get("port") or 22)
+    user = str(registered.get("user") or "root")
+    for field, given, theirs in (
+        ("host", str(meta.get("host") or "").strip().lower(), host.lower()),
+        ("port", int(meta.get("port") or port), port),
+        ("user", str(meta.get("user") or user), user),
+    ):
+        if given and given != theirs:
+            raise JobBackendError(
+                f"this {what} names connection {named!r}, a machine logged in to with the password kept for it, but "
+                f"carries a {field} of its own that differs from the registered one: a kept password goes only to "
+                "the machine it was registered for -- leave host, port and user to the registry, or register that "
+                "other machine"
+            )
+    return {"id": named, "transport": SSH, "host": host, "port": port, "user": user, "auth": AUTH_PASSWORD}
 
 
 def password_env(row: dict[str, Any]) -> dict[str, str]:
