@@ -191,6 +191,14 @@ _SEARCH_REQUESTS: dict[str, tuple[str, str, dict[str, Any], dict[str, str]]] = {
         {"params": {"q": "q1", "num": 4}},
         {"X-Api-Key": "k"},
     ),
+    # No result-count parameter: the page size is the service's, and the tool
+    # slices the normalised rows to the count it asked for.
+    "tinyfish": (
+        "GET",
+        "https://api.search.tinyfish.ai",
+        {"params": {"query": "q1"}},
+        {"X-API-Key": "k"},
+    ),
 }
 
 
@@ -227,7 +235,7 @@ async def test_probe_spends_exactly_one_result_on_the_vendors_own_request(
     """The onboard wizard's key check is a real search, so it must be the same
     request ``execute`` sends -- a probe built any other way could pass a key
     the tool then fails with -- and the smallest one the shape allows."""
-    method, url, _body, auth = _SEARCH_REQUESTS[vendor]
+    method, url, body, auth = _SEARCH_REQUESTS[vendor]
     with _patched(monkeypatch, {"organic": [{"title": "t", "link": "u"}]}) as client:
         ok, detail = await WebSearchTool(api_key="k", provider=vendor).probe("q1")
 
@@ -235,7 +243,15 @@ async def test_probe_spends_exactly_one_result_on_the_vendors_own_request(
     got_method, got_url, kwargs = client.calls[0]
     assert (got_method, got_url) == (method, url)
     size = kwargs.get("json") or kwargs.get("params")
-    assert 1 in size.values(), "one result is the whole budget of a probe"
+    # A shape with a result-count parameter spends exactly one result on the
+    # probe. A shape without one cannot spend anything: its smallest request
+    # is the one the tool sends in full, and the probe has to be that request
+    # or a key could pass here and fail there.
+    documented = body.get("params") or body.get("json")
+    if 4 in documented.values():
+        assert 1 in size.values(), "one result is the whole budget of a probe"
+    else:
+        assert size == documented
     for header, value in auth.items():
         assert kwargs["headers"][header] == value
     assert detail == ("1 result(s)" if vendor == "serper" else "0 result(s)")
@@ -299,6 +315,7 @@ _SEARCH_PAYLOADS: dict[str, Any] = {
     "brave": {"web": {"results": [{"title": "T1", "url": "https://a.example", "description": "S1"}]}},
     "firecrawl": {"success": True, "data": [{"title": "T1", "url": "https://a.example", "description": "S1"}]},
     "serply": {"results": [{"title": "T1", "link": "https://a.example", "description": "S1"}]},
+    "tinyfish": {"results": [{"title": "T1", "url": "https://a.example", "snippet": "S1"}]},
 }
 
 
@@ -911,7 +928,7 @@ def test_the_settings_page_offers_exactly_the_schemas_vendors() -> None:
     assert search["vendors"] == list(get_args(WebSearchProvider))
     assert fetch["vendors"] == list(get_args(WebFetchProvider))
     # Not vacuous: the parse found real lists, so an empty one cannot pass.
-    assert len(search["vendors"]) == 8 and len(fetch["vendors"]) == 5
+    assert len(search["vendors"]) == 9 and len(fetch["vendors"]) == 5
     assert search["fallback"] == DEFAULT_SEARCH_PROVIDER
     assert fetch["fallback"] == DEFAULT_FETCH_PROVIDER
     assert search["path"] == "tools.web.search.provider"

@@ -149,9 +149,9 @@ class Section:
 
 
 _REASONING = ("minimal", "low", "medium", "high")
-_WEB_SEARCH = ("serper", "anysearch", "serpapi", "tavily", "exa", "brave", "firecrawl", "serply")
+_WEB_SEARCH = ("serper", "anysearch", "serpapi", "tavily", "exa", "brave", "firecrawl", "serply", "tinyfish")
 _WEB_FETCH = ("jina", "anysearch", "tavily", "exa", "firecrawl")
-_WEB_VENDORS = ("serper", "anysearch", "serpapi", "jina", "tavily", "exa", "brave", "firecrawl", "serply")
+_WEB_VENDORS = ("serper", "anysearch", "serpapi", "jina", "tavily", "exa", "brave", "firecrawl", "serply", "tinyfish")
 
 _E = Effect
 
@@ -1248,6 +1248,7 @@ _VENDOR_NAMES = {
     "brave": "Brave",
     "firecrawl": "Firecrawl",
     "serply": "Serply",
+    "tinyfish": "TinyFish",
 }
 
 

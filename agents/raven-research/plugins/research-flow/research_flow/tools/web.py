@@ -263,6 +263,13 @@ SEARCH_PROVIDERS: dict[str, SearchProviderSpec] = {
         # ``start`` is a result offset like SerpApi's, so page N is start=(N-1)*num.
         paginates=True,
     ),
+    "tinyfish": SearchProviderSpec(
+        vendor="tinyfish",
+        label="TinyFish",
+        env_var="TINYFISH_API_KEY",
+        # ``page`` is a zero-based page index, so the rung's page N is N-1.
+        paginates=True,
+    ),
 }
 
 
@@ -1245,6 +1252,21 @@ class WebSearchTool(Tool):
                 headers={"Accept": "application/json", "X-Api-Key": self.api_key},
                 timeout=10.0,
             )
+        if self.provider == "tinyfish":
+            # A GET, the query in the parameters and the key in a header.
+            # ``page`` is a zero-based page index rather than a result offset,
+            # so the rung's page N is N-1. There is no result-count parameter:
+            # the page size is the service's, and the caller slices the
+            # normalised rows to the count it asked for.
+            params: dict[str, Any] = {"query": query}
+            if page > 1:
+                params["page"] = page - 1
+            return await client.get(
+                "https://api.search.tinyfish.ai",
+                params=params,
+                headers={"Accept": "application/json", "X-API-Key": self.api_key},
+                timeout=10.0,
+            )
         # AnySearch.
         return await client.post(
             "https://api.anysearch.com/v1/search",
@@ -1318,6 +1340,10 @@ class WebSearchTool(Tool):
         if self.provider == "serply":
             # Google SERP rows under ``results``; the snippet is ``description``.
             return {"organic": _rows(data.get("results"), url="link", snippet="description")}
+        if self.provider == "tinyfish":
+            # Ranked rows under ``results``; the URL is ``url`` and the text
+            # ``snippet``.
+            return {"organic": _rows(data.get("results"), url="url", snippet="snippet")}
         # AnySearch publishes the request shape but not the response. Parse
         # tolerantly: results may sit at the top level or inside the
         # ``{code, message, data}`` envelope its auth endpoint uses, and an item
