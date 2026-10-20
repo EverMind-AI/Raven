@@ -175,6 +175,16 @@ def store_password(conn_id: str, password: str) -> Path:
     """
     from raven.config.held_secrets import PASSWORD_MIN_LEN
 
+    if "\n" in password or "\r" in password:
+        # ssh takes the askpass answer up to the first line break, and the
+        # scrubber reads the file back line by line: a password with one in it
+        # would reach the machine as one string, be kept as another and be
+        # measured against the floor as a third. One owner for what a
+        # password is, so a client that reads one from a file is held to it.
+        raise ValueError(
+            "a password cannot contain a line break: ssh takes the askpass answer up to the first one, so what the "
+            "machine is given and what is kept here would differ; use a password on one line, or register with a key"
+        )
     if len(password) < PASSWORD_MIN_LEN:
         raise ValueError(
             f"a password shorter than {PASSWORD_MIN_LEN} characters cannot be kept: that short, it would pass the "
@@ -190,15 +200,45 @@ def store_password(conn_id: str, password: str) -> Path:
     return path
 
 
-def forget_password(conn_id: str) -> bool:
-    """Delete the password kept for ``conn_id``; whether there was one. An id none could be kept under has none."""
+def forget_password(conn_id: str, *, holding: str | None = None) -> bool:
+    """Delete the password kept for ``conn_id``; whether one was deleted. An id none could be kept under has none.
+
+    With ``holding``, only a file that still holds exactly that password is
+    deleted: the file is keyed by id alone, and a registration cleaning up after
+    itself must not take away what a registration of the same id that landed
+    meanwhile keeps there -- the landed row would then be refused at its every
+    connection, for a password it never lost.
+    """
     try:
         path = password_path(conn_id)
     except ValueError:
         return False
+    if holding is not None:
+        try:
+            if path.read_text(encoding="utf-8") != holding + "\n":
+                return False
+        except OSError:
+            return False
     had = path.exists()
     path.unlink(missing_ok=True)
     return had
+
+
+def forget_unowned_password(conn_id: str, password: str) -> bool:
+    """After a registration that wrote no row: forget the password it kept, unless it is a row's now; whether it did.
+
+    The file is keyed by id alone, so another registration of the same id can
+    land between this one's duplicate check and its write -- most often the
+    same machine submitted twice. The file is deleted only while it still holds
+    this registration's password and no row of the id is listed: a landed row
+    keeps what is there, whichever call wrote it, and a registry that cannot be
+    read is left alone too. A password file nothing lists is harmless; a listed
+    row without one is refused at its every connection.
+    """
+    found = connections.read()
+    if found.state == UNREADABLE or any(str(r.get("id") or "").strip() == conn_id for r in found.rows):
+        return False
+    return forget_password(conn_id, holding=password)
 
 
 def parse_probe(out: str) -> dict[str, Any]:

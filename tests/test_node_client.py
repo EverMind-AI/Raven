@@ -70,7 +70,8 @@ if os.path.exists(expect):
         sys.exit(255)
     if "-i" in args or os.environ.get("SSH_ASKPASS_REQUIRE") != "force" or not os.environ.get("SSH_ASKPASS"):
         refuse("worker@{host}: Permission denied (password).")
-    given = sp.run([os.environ["SSH_ASKPASS"], "password:"], capture_output=True, text=True).stdout.rstrip("\\n")
+    prompt = os.environ.get("RAVEN_MACHINE_PASSWORD_FOR", "") + "'s password: "
+    given = sp.run([os.environ["SSH_ASKPASS"], prompt], capture_output=True, text=True).stdout.rstrip("\\n")
     if given != open(expect).read().strip():
         refuse("worker@{host}: Permission denied (password).")
 command = args[args.index("--") + 1] if "--" in args else args[-1]
@@ -1683,8 +1684,10 @@ def _password_row() -> dict[str, Any]:
     return {k: v for k, v in row().items() if k != "key"} | {"auth": "password"}
 
 
-async def test_the_link_to_a_password_machine_logs_in_through_askpass_and_offers_no_key(box, pool, monkeypatch):
-    monkeypatch.setattr(sys, "platform", "linux")  # the mode is refused on Windows first of all
+@pytest.mark.slow
+async def test_the_link_to_a_password_machine_logs_in_through_askpass_and_offers_no_key(
+    box, pool, monkeypatch, supported_host
+):
     from raven.ops.connection_add import store_password
 
     monkeypatch.setenv("RAVEN_HOME", str(box.root / "rhome"))
@@ -1701,9 +1704,8 @@ async def test_the_link_to_a_password_machine_logs_in_through_askpass_and_offers
 
 
 async def test_a_password_the_machine_refuses_ends_the_link_with_the_login_named_and_nothing_else(
-    box, pool, monkeypatch
+    box, pool, monkeypatch, supported_host
 ):
-    monkeypatch.setattr(sys, "platform", "linux")  # the mode is refused on Windows first of all
     from raven.ops.connection_add import store_password
 
     monkeypatch.setenv("RAVEN_HOME", str(box.root / "rhome"))
@@ -1721,9 +1723,8 @@ async def test_a_password_the_machine_refuses_ends_the_link_with_the_login_named
 
 
 async def test_a_password_machine_whose_password_is_not_kept_here_is_refused_before_ssh_is_started(
-    box, pool, monkeypatch
+    box, pool, monkeypatch, supported_host
 ):
-    monkeypatch.setattr(sys, "platform", "linux")  # the mode is refused on Windows first of all
     monkeypatch.setenv("RAVEN_HOME", str(box.root / "rhome"))
     box.rows([_password_row()])
     box.node()

@@ -558,6 +558,22 @@ async def test_remove_of_a_key_row_forgets_nothing_and_says_nothing_about_a_pass
     assert out["removed"] and "password" not in out["detail"]
 
 
+async def test_remove_of_a_key_row_deletes_a_password_file_left_under_its_id_and_says_so(
+    pool, _home, agents, monkeypatch
+):
+    """A file kept under the id by a registration refused later, or by a row since re-registered with a key, is
+    nobody's once the row is gone; removal is the one place that reaches it."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setenv("RAVEN_HOME", str(_home / "rhome"))
+    _store(BOX)
+    connection_add.store_password("box", "left-behind-1")
+
+    out = await rpc.machines_remove({"id": "box"})
+
+    assert out["removed"] and out["detail"].endswith("; the password kept here for it is deleted")
+    assert not connection_add.password_path("box").exists()
+
+
 async def test_remove_refuses_while_agent_entries_name_the_machine_and_force_says_what_is_left_pointing_at_nothing(
     pool, agents
 ):
@@ -734,14 +750,15 @@ async def test_add_by_password_refuses_a_password_shorter_than_the_scrubbers_flo
     assert not connections.store_path().exists(), "and no row was written"
 
 
-async def test_a_password_kept_for_a_registration_whose_write_fails_is_forgotten(
+async def test_a_write_refused_because_the_id_landed_meanwhile_leaves_the_password_file_to_that_row(
     supported_host, pool, rhome, monkeypatch
 ):
-    """A registration of the same id landing between the duplicate check and the write: the write refuses, and the
-    password kept a moment ago goes with the refusal rather than outliving a row that was never written."""
+    """Between the duplicate check and the write another registration of the same id can land, with its own
+    password under the same file name: the file is that row's now, and the refused registration leaves it."""
     monkeypatch.setattr(connection_add, "probe", lambda row, **kw: (True, "reached", {}))
 
     def refuse(row):
+        connection_add.store_password(row["id"], "rpc-pw-2222")  # the competitor's, kept under the same id
         raise ValueError(f"a machine with id {row['id']!r} is already listed in the registry")
 
     monkeypatch.setattr(connection_add, "write", refuse)
@@ -750,7 +767,60 @@ async def test_a_password_kept_for_a_registration_whose_write_fails_is_forgotten
 
     _check("machines.add", out)
     assert (out["ok"], out["reason"]) == (False, "duplicate")
-    assert not connection_add.password_path("box").exists()
+    assert connection_add.password_path("box").read_text(encoding="utf-8") == "rpc-pw-2222\n"
+
+
+async def test_a_refusal_forgets_only_a_file_that_still_holds_this_registration_s_password(
+    supported_host, pool, rhome, monkeypatch
+):
+    """The machine refuses after a registration of the same id replaced the file: the file is left as it is."""
+
+    def probe(row, **kw):
+        connection_add.store_password(row["id"], "rpc-pw-2222")
+        return False, "could not reach alice@203.0.113.7:2222: alice@203.0.113.7: Permission denied (password).", {}
+
+    monkeypatch.setattr(connection_add, "probe", probe)
+
+    out = await rpc.machines_add(BY_PASSWORD)
+
+    assert (out["ok"], out["reason"]) == (False, "login")
+    assert connection_add.password_path("box").read_text(encoding="utf-8") == "rpc-pw-2222\n"
+
+
+async def test_a_refusal_after_the_same_machine_registered_meanwhile_leaves_the_password_it_shares(
+    supported_host, pool, rhome, monkeypatch
+):
+    """The realistic interleaving: the same machine submitted twice with the same password. The second
+    submission's probe is refused (the machine saw one login too many, say) after the first wrote its row; the
+    file now holds the first row's password, byte for byte the same, and the refusal must leave it."""
+    import raven.ops.connections as registry
+
+    listed: list[dict] = []
+    monkeypatch.setattr(registry, "read", lambda: registry.Read(list(listed), registry.OK))
+
+    def probe(row, **kw):
+        listed.append({**row, "auth": "password"})  # the first submission's row lands during this probe
+        return False, "could not reach alice@203.0.113.7:2222: alice@203.0.113.7: Permission denied (password).", {}
+
+    monkeypatch.setattr(connection_add, "probe", probe)
+
+    out = await rpc.machines_add(BY_PASSWORD)
+
+    assert (out["ok"], out["reason"]) == (False, "login")
+    assert connection_add.password_path("box").read_text(encoding="utf-8") == BY_PASSWORD["password"] + "\n"
+
+
+async def test_add_by_password_refuses_a_password_with_a_line_break_before_the_probe(
+    supported_host, pool, rhome, monkeypatch
+):
+    monkeypatch.setattr(connection_add, "probe", lambda row, **kw: pytest.fail("the probe is not reached"))
+
+    out = await rpc.machines_add({**BY_PASSWORD, "password": "abcde\n"})
+
+    _check("machines.add", out)
+    assert (out["ok"], out["reason"]) == (False, "invalid")
+    assert "cannot contain a line break" in out["detail"] and "abcde" not in out["detail"]
+    assert not (rhome / "keys").exists()
 
 
 async def test_a_password_the_machine_refuses_is_forgotten_here_and_named_as_a_login_refusal(

@@ -555,6 +555,46 @@ def test_a_password_shorter_than_the_scrubbers_floor_is_refused_before_anything_
     assert adder.password_path("gpu1").read_text(encoding="utf-8") == "admin1\n"
 
 
+def test_a_password_with_a_line_break_is_refused_whatever_its_length(_home, monkeypatch):
+    """ssh takes the askpass answer up to the first line break and the scrubber reads the file back line by line,
+    so `abcde\\n` was accepted as six characters, reached the machine as five, and was held below the floor."""
+    import pytest
+
+    monkeypatch.setenv("RAVEN_HOME", str(_home / "rhome"))
+    for broken in ("abcde\n", "hunter2\n", "hun\rter2", "hunter2\r\n"):
+        with pytest.raises(ValueError, match="cannot contain a line break"):
+            adder.store_password("gpu1", broken)
+    assert not (_home / "rhome" / "keys").exists()
+
+
+def test_forgetting_a_password_can_be_held_to_what_the_file_must_still_hold(_home, monkeypatch):
+    """Keyed by id alone, the file may be another registration's by the time a refused one cleans up."""
+    monkeypatch.setenv("RAVEN_HOME", str(_home / "rhome"))
+    path = adder.store_password("gpu1", "rpc-pw-2222")
+    assert adder.forget_password("gpu1", holding="cli-pw-1111") is False and path.read_text() == "rpc-pw-2222\n"
+    assert adder.forget_password("gpu1", holding="rpc-pw-2222") is True and not path.exists()
+    assert adder.forget_password("gpu1", holding="rpc-pw-2222") is False, "nothing kept is nothing to forget"
+
+
+def test_a_refused_registration_forgets_its_password_only_while_no_row_of_the_id_is_listed(_home, monkeypatch):
+    """The file is keyed by id alone: a registration of the same id that landed meanwhile owns it now, whichever
+    call wrote it -- most often the same machine submitted twice, with the same password."""
+    monkeypatch.setenv("RAVEN_HOME", str(_home / "rhome"))
+    listed: list[dict] = []
+    state = {"kind": connections.OK}
+    monkeypatch.setattr(adder.connections, "read", lambda: connections.Read(list(listed), state["kind"]))
+    path = adder.store_password("gpu1", "same-pw-11")
+
+    listed.append({"id": "gpu1", "auth": "password"})
+    assert adder.forget_unowned_password("gpu1", "same-pw-11") is False and path.read_text() == "same-pw-11\n"
+    listed.clear()
+    state["kind"] = connections.UNREADABLE
+    assert adder.forget_unowned_password("gpu1", "same-pw-11") is False and path.exists(), "unreadable: left alone"
+    state["kind"] = connections.OK
+    assert adder.forget_unowned_password("gpu1", "other-pw-22") is False and path.exists(), "not this call's"
+    assert adder.forget_unowned_password("gpu1", "same-pw-11") is True and not path.exists()
+
+
 def test_a_password_is_never_kept_under_a_path_shaped_id_and_forgetting_one_is_quiet(_home, monkeypatch):
     import pytest
 
@@ -584,7 +624,7 @@ def _fake_ssh_that_takes_a_password(tmp_path, monkeypatch, *, accept: str, body:
         monkeypatch,
         f"""
         # OpenSSH reads the password from SSH_ASKPASS when SSH_ASKPASS_REQUIRE=force.
-        given=$("$SSH_ASKPASS" "password:")
+        given=$("$SSH_ASKPASS" "$RAVEN_MACHINE_PASSWORD_FOR's password: ")
         argv=$(printf '%s' "$*" | sed 's/\\\\/\\\\\\\\/g; s/"/\\\\"/g')
         printf '{{"argv": "%s", "given": "%s", "require": "%s", "file": "%s"}}\\n' "$argv" "$given" "$SSH_ASKPASS_REQUIRE" "$RAVEN_MACHINE_PASSWORD_FILE" > {record}
         [ "$given" = '{accept}' ] || {{ echo 'Permission denied (password).' >&2; exit 255; }}

@@ -115,7 +115,8 @@ saw = {{
     "file": os.environ.get("RAVEN_MACHINE_PASSWORD_FILE", ""),
 }}
 if saw["require"] == "force" and saw["askpass"]:
-    asked = subprocess.run([saw["askpass"], "password:"], capture_output=True, text=True)
+    prompt = os.environ.get("RAVEN_MACHINE_PASSWORD_FOR", "") + "'s password: "
+    asked = subprocess.run([saw["askpass"], prompt], capture_output=True, text=True)
     saw["given"] = asked.stdout.rstrip("\\n")
 with open({log!r}, "a", encoding="utf-8") as fh:
     fh.write(json.dumps(saw) + "\\n")
@@ -187,6 +188,37 @@ def test_a_password_machine_is_logged_in_to_through_askpass_and_offered_no_key(p
 def test_a_password_machine_with_no_password_kept_here_is_refused_by_name_before_ssh_starts(password_machine):
     with pytest.raises(JobBackendError, match="no password is kept here for machine 'lab-box'.*register it again"):
         runner_from(resolve_into({"connection": "lab-box"}))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the stand-in ssh is a POSIX script")
+@pytest.mark.parametrize(
+    "meta",
+    [
+        {"connection": "lab-box", "host": "198.51.100.99"},
+        {"connection": "lab-box", "host": "203.0.113.7", "port": 22},
+        {"connection": "lab-box", "host": "203.0.113.7", "port": 2222, "user": "root"},
+    ],
+    ids=["other-host", "other-port", "other-user"],
+)
+def test_a_password_meta_that_carries_another_address_or_account_is_refused_before_ssh_starts(
+    password_machine, tmp_path, monkeypatch, meta
+):
+    """The login row took host, port and user from the meta, which the model's own tool calls write, so a
+    campaign could send a machine's kept password to a host of its choosing. The address is the registry's
+    alone, and a meta that says otherwise for a password connection is refused by name."""
+    password_machine.store_password("lab-box", "hunter2")
+    log = _stand_in_ssh(tmp_path, monkeypatch)
+
+    with pytest.raises(JobBackendError, match="goes only to the machine it was registered for") as exc:
+        runner_from(resolve_into(dict(meta)))
+
+    assert "198.51.100.99" not in str(exc.value)
+    assert not log.exists(), "ssh never ran"
+
+
+def test_a_password_meta_naming_a_connection_the_registry_lost_is_refused_by_name(password_machine):
+    with pytest.raises(JobBackendError, match="not in the connection registry"):
+        runner_from({"connection": "gone-box", "auth": "password", "host": "203.0.113.7"})
 
 
 def test_a_password_meta_that_names_no_connection_is_refused_by_name():

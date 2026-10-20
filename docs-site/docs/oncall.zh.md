@@ -48,7 +48,9 @@ raven ops connection add --id local-lab --name "Local lab" \
 主人的注册表，不是一份副本。SSH 注册还可能在 `~/.ssh/config` 写入受管理的别名；
 只记录私钥路径，不记录私钥内容。用密码登记的机器（见[在登记机器上工作](machines.md#1-register-the-machine)）
 同样能跑 campaign：它们的 ssh 和 rsync 用 Raven 为这台机器保存的密码登录，用的选项和 askpass
-钩子与其他每条连接相同；campaign 里记的是连接 id 和 `auth`，从不记密码。不要把密钥或密码放进任务消息。
+钩子与其他每条连接相同；campaign 里记的是连接 id 和 `auth`，从不记密码。地址和账号以登记表为准：
+campaign 的 meta 若给这样一条连接写了别的主机、端口或用户名，在任何 ssh 启动之前就会被拒绝，
+因为保存的密码只送往登记它的那台机器。不要把密钥或密码放进任务消息。
 
 agent 也能登记机器。`ops_connection_add` 工具（raven-oncall 与 raven-code 通过
 `tools.connectionAdd` 开启，其他产品关闭）接主人在对话里说的话——是这台电脑还是

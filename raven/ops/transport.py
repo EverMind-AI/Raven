@@ -183,24 +183,31 @@ PASSWORD_AUTH = (
 
 #: The variable the askpass helper reads the password file's path from.
 ASKPASS_FILE_ENV = "RAVEN_MACHINE_PASSWORD_FILE"
+#: The variable that tells the helper whose prompt it may answer: the registered ``user@host``.
+ASKPASS_FOR_ENV = "RAVEN_MACHINE_PASSWORD_FOR"
 
 # The helper itself: OpenSSH runs it when ``SSH_ASKPASS_REQUIRE=force`` and
 # reads the password from its stdout. It prints the one line of the file the
 # environment names, so the password is in no process's environment and on no
-# command line; the file is readable by the owner alone. It answers a prompt
-# for a password and no other -- ssh's own (``user@host's password: ``) or a
-# keyboard-interactive server's (``Password:``, ``Passwort:``): a second
-# factor's (a verification code, a passcode) gets nothing, since Raven cannot
-# answer one and a PAM module may pass what it is given on to its vendor
-# (reviewed 2026-10-19). The question is ssh's first argument.
+# command line; the file is readable by the owner alone. It answers the
+# registered account's own password prompt and no other: ssh's
+# ``user@host's password: `` and the keyboard-interactive ``(user@host)
+# Password: ``, with ``user@host`` from the environment. Another account's
+# prompt (an ssh this one started inherits the helper), a second factor's (a
+# verification code, a passcode) and a one-time password's -- "password" is
+# in that wording too -- get nothing, since the password is the machine's
+# alone and a PAM module may pass what it is given on to its vendor. The
+# question is ssh's first argument; trailing blanks and case are ignored.
 _ASKPASS = (
     "#!/bin/sh\n"
-    "# Raven: hands ssh the password kept for a registered machine, at a password prompt only.\n"
+    "# Raven: hands ssh the password kept for a registered machine, at that account's own password prompt only.\n"
     "# Managed; rewritten when it differs.\n"
-    "case $(printf '%s' \"$1\" | tr '[:upper:]' '[:lower:]') in\n"
-    f'  *passw*) exec cat "${ASKPASS_FILE_ENV}" ;;\n'
+    f"who=$(printf '%s' \"${ASKPASS_FOR_ENV}\" | tr '[:upper:]' '[:lower:]')\n"
+    "asked=$(printf '%s' \"$1\" | tr '[:upper:]' '[:lower:]' | sed 's/[[:space:]]*$//')\n"
+    'case "$asked" in\n'
+    f'  "$who\'s password:"|"($who) password:") exec cat "${ASKPASS_FILE_ENV}" ;;\n'
     "esac\n"
-    "echo 'raven: the password kept for this machine answers a password prompt only, and this prompt is not one' >&2\n"
+    "echo 'raven: the password kept for this machine answers its own password prompt only, and this prompt is not one' >&2\n"
     "exit 1\n"
 )
 
@@ -305,10 +312,14 @@ def ssh_env(row: dict[str, Any]) -> dict[str, str]:
         raise TransportError(str(exc)) from None
     if not secret.is_file():
         raise TransportError(f"no password is kept here for machine {label!r} ({secret}); register it again")
+    host, _port, _key, user = ssh_target(row)
     return {
         "SSH_ASKPASS": str(askpass_helper(secret.parent)),
         "SSH_ASKPASS_REQUIRE": "force",
         ASKPASS_FILE_ENV: str(secret),
+        # Whose prompt the helper answers: the account and address the row
+        # registers, which is also the destination on the command line.
+        ASKPASS_FOR_ENV: f"{user}@{host}",
         "DISPLAY": os.environ.get("DISPLAY") or "raven-askpass",
     }
 

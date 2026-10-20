@@ -284,12 +284,11 @@ async def machines_add(params: dict) -> dict:
         written = True
     finally:
         if by_password and not written:
-            # No row was written -- the machine refused, or the write did (a
-            # registration of the same id that landed in between) -- so the
-            # password kept a moment ago goes too: a password file with no row
-            # is one nothing lists and `remove` cannot reach (reviewed
-            # 2026-10-19).
-            connection_add.forget_password(conn_id)
+            # No row was written -- the machine refused, or the registry did --
+            # so the password kept a moment ago goes too, unless a registration
+            # of the same id landed meanwhile: the file is keyed by id alone,
+            # and is that row's now (`forget_unowned_password` has the rule).
+            connection_add.forget_unowned_password(conn_id, password)
     said = [f"{detected['cores']} cores" if "cores" in detected else "", str(detected.get("memory") or "")]
     said.append(str(detected.get("device") or ""))
     detail = f"reached machine {_label(row)}: " + (
@@ -303,10 +302,15 @@ async def machines_add(params: dict) -> dict:
 
 
 def _forget_password(row: dict[str, Any], conn_id: str) -> str:
-    """For a row registered with a password: the password kept here goes with the row; one clause, or none."""
-    if not password_auth(row):
+    """The password kept here under this id goes with the row; one clause when there was one, else none.
+
+    Whatever the row's login: a file kept under the id by a registration that
+    was later refused, or by a row since re-registered with a key, is nobody's
+    once the row is gone, and this is the one place that reaches it.
+    """
+    del row
+    if not connection_add.forget_password(conn_id):
         return ""
-    connection_add.forget_password(conn_id)
     return "; the password kept here for it is deleted"
 
 
