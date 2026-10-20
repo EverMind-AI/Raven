@@ -232,7 +232,19 @@ def main():
     with open(os.path.join(HERE, ".raven-pid"), "w") as fh:
         fh.write(str(os.getpid()))
 
-    rc = subprocess.call(COMMAND, cwd=HERE, shell=True)
+    # The devices the gate assigned, exported so the job never picks a card --
+    # the same promise the POSIX launcher keeps with its `export` line.
+    # ops_declare refuses commands that set this themselves for that reason.
+    env = None
+    try:
+        with open(os.path.join(HERE, ".raven-resources"), "r") as fh:
+            ids = json.load(fh).get("device_ids") or []
+    except (OSError, ValueError, AttributeError):
+        ids = []
+    if ids:
+        env = dict(os.environ, CUDA_VISIBLE_DEVICES=",".join(str(x) for x in ids))
+
+    rc = subprocess.call(COMMAND, cwd=HERE, shell=True, env=env)
     minutes = round((time.time() - t0) / 60.0, 3)
 
     # A command that detached itself leaves nothing to wait for: `pid` then names
@@ -805,9 +817,22 @@ class WindowsExecutor(ProcessExecutor):
             minutes = "-"
             if data is not None and data.get("gpu_minutes_used") is not None:
                 minutes = repr(data["gpu_minutes_used"])
-            pid = self._read_pid(os.path.join(job_dir, "pid"))
-            alive = "1" if pid and pid_alive(pid) else "0"
-            started = self._mtime(os.path.join(job_dir, "pid"))
+            # The body's `pid` and the launcher's own: the POSIX launcher writes
+            # `pid` itself, this one leaves it to the body (see ``submit``), so a
+            # bare command that never writes it is still a running job -- and
+            # billed as one -- through ``.raven-pid``. The earlier of the two is
+            # the start: the launcher's comes first, and over-charging is the
+            # safe direction for a budget.
+            alive, stamps = "0", []
+            for pid_name in ("pid", _OWN_PID):
+                pid_path = os.path.join(job_dir, pid_name)
+                pid = self._read_pid(pid_path)
+                if pid and pid_alive(pid):
+                    alive = "1"
+                stamp = self._mtime(pid_path)
+                if stamp is not None:
+                    stamps.append(stamp)
+            started = min(stamps) if stamps else None
             elapsed, progress_mtime = "-", "-"
             prog = os.path.join(job_dir, "progress.jsonl")
             if os.path.isfile(prog):

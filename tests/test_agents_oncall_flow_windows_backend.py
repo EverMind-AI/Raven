@@ -9,6 +9,7 @@ directory, or a trial that finished is read as one that vanished.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -80,3 +81,43 @@ def test_a_job_outlives_a_tree_kill_of_the_agent_that_submitted_it(tmp_path):
     finally:
         if agent.poll() is None:
             agent.kill()
+
+
+_ENV_BODY = r"""
+import json, os
+json.dump({"status": "succeeded", "devices": os.environ.get("CUDA_VISIBLE_DEVICES")}, open("result.json", "w"))
+"""
+
+
+@pytest.mark.parametrize("resources, seen", [({"width": 2, "device_ids": ["1", "3"]}, "1,3"), ({"width": 1}, None)])
+def test_the_launcher_hands_the_job_the_devices_it_was_assigned(tmp_path, resources, seen, monkeypatch):
+    # The gate picks the ids and ops_declare refuses commands that pick their
+    # own, so the launcher is the only place they can reach the job from.
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    from oncall_flow.windows_backend import WindowsExecutor
+
+    (tmp_path / "body.py").write_text(_ENV_BODY, encoding="utf-8")
+    (tmp_path / ".raven-resources").write_text(json.dumps(resources), encoding="utf-8")
+    launcher = WindowsExecutor(remote_dir=str(tmp_path), command="unused")._write_launcher(str(tmp_path))
+    subprocess.run([sys.executable, launcher, f'"{sys.executable}" body.py'], cwd=tmp_path, check=True, timeout=60)
+    assert json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))["devices"] == seen
+
+
+def test_a_running_job_that_never_writes_pid_is_billed_through_the_launchers_own(tmp_path):
+    # A bare command has no reason to write `pid`; the launcher always writes
+    # `.raven-pid`. Ten minutes into such a run, ten minutes are spent.
+    import asyncio
+
+    from oncall_flow.windows_backend import WindowsExecutor
+
+    job = tmp_path / "jobs" / "running"
+    job.mkdir(parents=True)
+    own = job / ".raven-pid"
+    own.write_text(str(os.getpid()), encoding="utf-8")
+    ten_minutes_ago = time.time() - 600
+    os.utime(own, (ten_minutes_ago, ten_minutes_ago))
+
+    ex = WindowsExecutor(remote_dir=str(tmp_path), command="unused", budget_minutes_total=60)
+    spent = asyncio.run(ex.spent_minutes())
+    assert 9.9 <= spent <= 11
+    assert asyncio.run(ex.remaining_minutes()) <= 50.1
