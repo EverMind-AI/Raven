@@ -1175,12 +1175,12 @@ def _this_process_goes_on() -> Iterator[None]:
     dispatch id would read the earlier test's run as left.
     """
     yield
-    remote = sys.modules.get("raven.acp_client.remote")
-    if remote is not None:
-        remote.staying()
     remote_runs = sys.modules.get("raven.acp_client.remote_runs")
     if remote_runs is not None:
         remote_runs._LEFT.clear()
+    remote = sys.modules.get("raven.acp_client.remote")
+    if remote is not None:
+        remote.staying()
 
 
 @pytest.fixture
