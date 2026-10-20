@@ -216,6 +216,26 @@ def find_node() -> Tuple[Optional[str], Optional[Tuple[int, int, int]]]:
     return best_below_min if best_below_min is not None else (None, None)
 
 
+def _forward_signals_to(proc: subprocess.Popen) -> None:
+    """Relay this process's SIGINT, SIGTERM and SIGHUP to ``proc``."""
+
+    def _forward(sig, _frame):
+        if sys.platform == "win32" and sig == signal.SIGINT:
+            # The console hands Ctrl+C to every process attached to it, the
+            # child included, and Popen cannot send SIGINT on Windows: it
+            # raises ValueError, which took the TUI down with it.
+            return
+        try:
+            proc.send_signal(sig)
+        except ProcessLookupError:
+            pass
+
+    signal.signal(signal.SIGINT, _forward)
+    signal.signal(signal.SIGTERM, _forward)
+    if hasattr(signal, "SIGHUP"):
+        signal.signal(signal.SIGHUP, _forward)
+
+
 def run_subprocess(
     node_path: str,
     args: list[str],
@@ -232,22 +252,7 @@ def run_subprocess(
     )
 
     if forward_signals:
-
-        def _forward(sig, _frame):
-            if sys.platform == "win32" and sig == signal.SIGINT:
-                # The console hands Ctrl+C to every process attached to it, the
-                # child included, and Popen cannot send SIGINT on Windows: it
-                # raises ValueError, which took the TUI down with it.
-                return
-            try:
-                proc.send_signal(sig)
-            except ProcessLookupError:
-                pass
-
-        signal.signal(signal.SIGINT, _forward)
-        signal.signal(signal.SIGTERM, _forward)
-        if hasattr(signal, "SIGHUP"):
-            signal.signal(signal.SIGHUP, _forward)
+        _forward_signals_to(proc)
 
     try:
         return proc.wait()
@@ -758,22 +763,7 @@ def run_subprocess_with_rpc(
     proc, server_sock, auth_token = _spawn_with_rpc_socket(node_path, args, cwd)
 
     if forward_signals:
-
-        def _forward(sig, _frame):
-            if sys.platform == "win32" and sig == signal.SIGINT:
-                # The console hands Ctrl+C to every process attached to it, the
-                # child included, and Popen cannot send SIGINT on Windows: it
-                # raises ValueError, which took the TUI down with it.
-                return
-            try:
-                proc.send_signal(sig)
-            except ProcessLookupError:
-                pass
-
-        signal.signal(signal.SIGINT, _forward)
-        signal.signal(signal.SIGTERM, _forward)
-        if hasattr(signal, "SIGHUP"):
-            signal.signal(signal.SIGHUP, _forward)
+        _forward_signals_to(proc)
 
     proc_done = asyncio.Event()
 

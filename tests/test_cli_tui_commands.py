@@ -1350,3 +1350,80 @@ async def test_the_tui_host_leaves_the_agents_on_machines_running_at_exit_and_pi
 
     assert leaving_at_cancel == [True], "said before the cancel, so a run on a machine is left, not ended"
     assert scheduled == [ctx["agent_loop"].subagents]
+
+
+# ---------------------------------------------------------------------------
+# Signal relay to the Node child
+# ---------------------------------------------------------------------------
+
+
+class _Child:
+    """A spawned child that records what it was sent."""
+
+    def __init__(self, gone: bool = False) -> None:
+        self.sent: list[int] = []
+        self._gone = gone
+
+    def send_signal(self, sig: int) -> None:
+        if self._gone:
+            raise ProcessLookupError
+        self.sent.append(sig)
+
+
+def _relay_handlers(monkeypatch: pytest.MonkeyPatch, child: _Child) -> dict[int, Any]:
+    import signal
+
+    from raven.cli import tui_commands
+
+    handlers: dict[int, Any] = {}
+    monkeypatch.setattr(signal, "signal", lambda sig, handler: handlers.__setitem__(sig, handler))
+    tui_commands._forward_signals_to(child)
+    return handlers
+
+
+def test_ctrl_c_is_left_to_the_console_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows delivers Ctrl+C to the child itself, and Popen.send_signal(SIGINT)
+    raises there: relaying it would take the TUI down instead."""
+    import signal
+    import sys
+
+    child = _Child()
+    handlers = _relay_handlers(monkeypatch, child)
+    monkeypatch.setattr(sys, "platform", "win32")
+    handlers[signal.SIGINT](signal.SIGINT, None)
+    handlers[signal.SIGTERM](signal.SIGTERM, None)
+    assert child.sent == [signal.SIGTERM]
+
+
+def test_ctrl_c_is_relayed_to_the_child_elsewhere(monkeypatch: pytest.MonkeyPatch) -> None:
+    import signal
+    import sys
+
+    child = _Child()
+    handlers = _relay_handlers(monkeypatch, child)
+    monkeypatch.setattr(sys, "platform", "linux")
+    handlers[signal.SIGINT](signal.SIGINT, None)
+    assert child.sent == [signal.SIGINT]
+
+
+def test_a_signal_for_a_child_already_gone_is_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
+    import signal
+
+    handlers = _relay_handlers(monkeypatch, _Child(gone=True))
+    handlers[signal.SIGTERM](signal.SIGTERM, None)
+
+
+def test_the_rpc_launch_relays_signals_only_when_asked(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import sys
+
+    from raven.cli import tui_commands
+
+    relayed: list[object] = []
+    monkeypatch.setattr(tui_commands, "_forward_signals_to", relayed.append)
+    monkeypatch.setattr(tui_commands, "_RPC_HANDSHAKE_TIMEOUT_S", 0.1)
+    for forward in (False, True):
+        code = tui_commands.run_subprocess_with_rpc(
+            sys.executable, ["-c", "import time; time.sleep(30)"], cwd=tmp_path, forward_signals=forward
+        )
+        assert code == tui_commands._RPC_HANDSHAKE_EXIT_CODE
+    assert len(relayed) == 1
