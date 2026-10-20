@@ -11,6 +11,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -574,6 +575,33 @@ def _pw() -> Machine:
     return Machine(id="box", display_name="Lab box", _row=dict(PASSWORD_ROW))
 
 
+@pytest.fixture(autouse=True)
+def _no_ssh_config_but_the_test_s(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """No test here runs the computer's own ``ssh -G``: it reads the config of whoever runs the suite -- found
+    through the passwd entry, which the suite's ``HOME`` does not move -- and a ``Match exec`` there runs. A
+    stand-in under the test's own directory, or an ``-F`` naming its config, is what a test resolves with."""
+    real = subprocess.run
+
+    def run(argv, *args, **kwargs):
+        if isinstance(argv, list) and argv[:1] == ["ssh"] and "-G" in argv and "-F" not in argv:
+            path = (kwargs.get("env") or os.environ).get("PATH")
+            found = shutil.which("ssh", path=path)
+            if found is None or not Path(found).resolve().is_relative_to(tmp_path.resolve()):
+                raise AssertionError(f"the real ssh -G ran against the owner's own config: {found}")
+        return real(argv, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", run)
+
+
+def _resolving_ssh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An ssh first on PATH that answers ``-G`` with the row's address, as a machine with no config would."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    (bin_dir / "ssh").write_text(f'#!/bin/sh\n[ "$1" = -G ] && echo "hostname {HOST}"\nexit 0\n', encoding="utf-8")
+    (bin_dir / "ssh").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+
+
 def test_the_ssh_command_for_a_password_machine_offers_no_key_and_the_link_gets_the_askpass_environment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, supported_host
 ):
@@ -581,6 +609,7 @@ def test_the_ssh_command_for_a_password_machine_offers_no_key_and_the_link_gets_
 
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
     store_password("box", "hunter2")
+    _resolving_ssh(tmp_path, monkeypatch)
 
     argv = remote.ssh_command(_pw(), "node --stdio", ssh_log=tmp_path / "box.log")
 
@@ -639,6 +668,7 @@ async def test_the_tunnel_hands_ssh_the_askpass_environment(
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
     monkeypatch.setattr("raven.config.paths.get_logs_dir", lambda: tmp_path / "logs")
     store_password("box", "hunter2")
+    _resolving_ssh(tmp_path, monkeypatch)
     spawned: list[dict] = []
 
     class _Proc:
