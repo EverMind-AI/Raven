@@ -385,6 +385,86 @@ def test_ssh_defaults_is_empty_when_ssh_cannot_answer(tmp_path, monkeypatch):
     assert "-G" in json.loads(record.read_text(encoding="utf-8"))
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="the stand-in ssh is a POSIX shell script")
+def test_ssh_defaults_reads_a_config_dump_carrying_bytes_that_are_not_utf_8(tmp_path, monkeypatch):
+    """ssh prints the owner's config values as they are on disk. One that is not UTF-8 raised out of the key
+    registration while the password machine's reader of the same dump went on (reviewed 2026-10-20)."""
+    real = tmp_path / "id_real"
+    real.write_text("")
+    _fake_ssh(
+        tmp_path,
+        monkeypatch,
+        f"printf 'remotecommand caf\\351\\nuser cfd\\nport 58717\\nidentityfile {real}\\n'",
+    )
+
+    assert adder.ssh_defaults("203.0.113.7") == {"user": "cfd", "port": 58717, "keys": [str(real)]}
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the stand-in ssh is a POSIX shell script")
+def test_ssh_defaults_is_empty_when_ssh_is_there_and_cannot_be_started(tmp_path, monkeypatch):
+    """An ssh that cannot be executed answers nothing, as a missing one does, rather than raising out of the
+    registration: the password machine's reader already read it that way."""
+    _fake_ssh(tmp_path, monkeypatch, "echo 'user cfd'")
+    (tmp_path / "bin" / "ssh").chmod(0o644)
+    # Alone on PATH: a lookup skips an entry it cannot execute and would go on to the computer's own ssh.
+    monkeypatch.setenv("PATH", str(tmp_path / "bin"))
+
+    assert adder.ssh_defaults("203.0.113.7") == {}
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the stand-in ssh is a POSIX shell script")
+def test_ssh_defaults_gives_what_it_starts_no_askpass_and_no_terminal_input(tmp_path, monkeypatch):
+    """The key machine's resolution is the same call as the password machine's: nothing it starts finds an
+    askpass to call, and it reads no input from whoever started Raven."""
+    seen = tmp_path / "seen"
+    _fake_ssh(
+        tmp_path,
+        monkeypatch,
+        f'printf "%s|%s|%s|" "$1" "$SSH_ASKPASS" "$SSH_ASKPASS_REQUIRE" > {seen}\n'
+        f'if read -r line; then printf "read:%s" "$line" >> {seen}; else printf "eof" >> {seen}; fi\n'
+        "echo 'user cfd'",
+    )
+    monkeypatch.setenv("SSH_ASKPASS", str(tmp_path / "an-askpass-already-set"))
+    monkeypatch.setenv("SSH_ASKPASS_REQUIRE", "force")
+    typed, feed = os.pipe()
+    os.write(feed, b"typed at the terminal\n")
+    os.close(feed)
+    saved = os.dup(0)
+    os.dup2(typed, 0)
+    try:
+        adder.ssh_defaults("203.0.113.7")
+    finally:
+        os.dup2(saved, 0)
+        os.close(saved)
+        os.close(typed)
+
+    assert seen.read_text(encoding="utf-8") == "-G||never|eof"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="password machines are refused on Windows")
+def test_key_and_password_machines_resolve_through_one_reader_of_ssh_g(tmp_path, monkeypatch, supported_host):
+    """Two readers of ``ssh -G`` disagreed on decoding and on which failures they survived (reviewed
+    2026-10-20). Both machines' resolutions are now one call, with each caller's own command line."""
+    from raven.ops import transport
+
+    asked: list[list[str]] = []
+
+    def resolve(argv):
+        asked.append(list(argv))
+        return transport.SshResolution({"hostname": ("203.0.113.7",), "user": ("cfd",), "port": ("58717",)}, "")
+
+    monkeypatch.setattr(transport, "resolve_with_ssh", resolve, raising=False)
+    _fake_ssh(tmp_path, monkeypatch, "echo 'a reader of its own ran ssh' >&2; exit 99")
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    adder.store_password("box", "hunter2")
+
+    assert adder.ssh_defaults("203.0.113.7") == {"user": "cfd", "port": 58717, "keys": []}
+    transport.ssh_env(PASSWORD_ROW)
+
+    assert asked[0] == ["ssh", "203.0.113.7"]
+    assert asked[1][0] == "ssh" and asked[1][-1] == "root@203.0.113.7" and "PubkeyAuthentication=no" in asked[1]
+
+
 def test_the_probe_reads_the_c_library_line_into_the_note():
     assert adder.parse_probe("CORES=8\nLIBC=ldd (GNU libc) 2.31\n")["note"] == "ldd (GNU libc) 2.31"
 

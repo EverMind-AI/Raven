@@ -27,7 +27,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -83,24 +82,23 @@ def ssh_defaults(host: str, *, port: int = 0, user: str = "") -> dict[str, Any]:
     included -- so an owner who left the port, the user or the key path out
     gets the values their own ssh would pick, not a guess. ``keys`` lists only
     identity files that exist here, in ssh's own order; the caller probes each
-    and keeps the one that connects. Empty when ssh is not on this computer.
+    and keeps the one that connects. Empty when ssh is not on this computer,
+    or cannot say: the same reader a password machine's prompt is resolved by
+    (``transport.resolve_with_ssh``), with plain ssh's command line.
     """
-    argv = ["ssh", "-G"] + (["-p", str(port)] if port else []) + [f"{user}@{host}" if user else host]
-    try:
-        done = subprocess.run(argv, capture_output=True, text=True, timeout=10, check=False)
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return {}
-    if done.returncode != 0:
+    from raven.ops.transport import resolve_with_ssh
+
+    resolved = resolve_with_ssh(["ssh"] + (["-p", str(port)] if port else []) + [f"{user}@{host}" if user else host])
+    if resolved.failure:
         return {}
     out: dict[str, Any] = {"keys": []}
-    for line in done.stdout.splitlines():
-        key, _, value = line.partition(" ")
-        if key == "port" and value.strip().isdigit():
-            out["port"] = int(value)
-        elif key == "user" and value.strip():
-            out["user"] = value.strip()
-        elif key == "identityfile" and value.strip() and Path(os.path.expanduser(value.strip())).exists():
-            out["keys"].append(value.strip())
+    if resolved.first("port").isdigit():
+        out["port"] = int(resolved.first("port"))
+    if resolved.first("user"):
+        out["user"] = resolved.first("user")
+    for path in resolved.values.get("identityfile", ()):
+        if path and Path(os.path.expanduser(path)).exists():
+            out["keys"].append(path)
     return out
 
 

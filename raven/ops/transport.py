@@ -15,6 +15,7 @@ own filesystem.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import os
 import re
 import shutil
@@ -413,16 +414,47 @@ def _prompt_target(host: str, port: int, user: str) -> tuple[str, str]:
     Asked here, before the connection, never by the helper: a helper that ran
     ``ssh -G`` itself recursed into thousands of processes against a stand-in
     ssh that called askpass (2026-10-19). Nothing this call starts finds an
-    askpass to call either.
+    askpass to call either (:func:`resolve_with_ssh`).
     """
-    argv = ssh_argv(host, port, "", user=user, password=True)
-    argv.insert(1, "-G")
+    resolved = resolve_with_ssh(ssh_argv(host, port, "", user=user, password=True))
+    if resolved.failure:
+        return f"{user}@{host}", resolved.failure
+    named = resolved.first("hostkeyalias") or resolved.first("hostname")
+    return (f"{user}@{named}", "") if named else (f"{user}@{host}", "ssh -G named no host")
+
+
+@dataclasses.dataclass(frozen=True)
+class SshResolution:
+    """What ``ssh -G`` printed for one command line: each key's values in ssh's order, or why there are none."""
+
+    values: dict[str, tuple[str, ...]]
+    #: Empty when ssh answered; otherwise what went wrong, in words a refusal can quote.
+    failure: str
+
+    def first(self, key: str) -> str:
+        return next(iter(self.values.get(key, ())), "")
+
+
+def resolve_with_ssh(argv: list[str]) -> SshResolution:
+    """The configuration ssh resolves for ``argv`` -- an ssh command line up to its destination -- without connecting.
+
+    The one reader of ``ssh -G``: a password machine's prompt
+    (:func:`_prompt_target`) and a key machine's registration defaults
+    (``connection_add.ssh_defaults``) both resolve here, each with its own
+    command line. Two readers disagreed (reviewed 2026-10-20): the key one
+    raised on a byte that is not UTF-8 and on an ssh it could not start, and
+    handed its ``ssh -G`` the caller's terminal and askpass. Here nothing the
+    call starts finds an askpass or a terminal to read, a value keeps every
+    occurrence (``identityfile`` repeats, in the order ssh offers them), and
+    a failure is a reason rather than an exception.
+    """
+    probe = [argv[0], "-G", *argv[1:]]
     env = {**os.environ, "SSH_ASKPASS": "", "SSH_ASKPASS_REQUIRE": "never"}
     try:
         # ``errors``: ssh prints config values as they are on disk, in no
         # promised encoding, and one undecodable byte must not cost the resolution.
         done = subprocess.run(
-            argv,
+            probe,
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
@@ -431,17 +463,17 @@ def _prompt_target(host: str, port: int, user: str) -> tuple[str, str]:
             env=env,
         )
     except OSError:
-        return f"{user}@{host}", "ssh -G could not be started"
+        return SshResolution({}, "ssh -G could not be started")
     except subprocess.TimeoutExpired:
-        return f"{user}@{host}", f"ssh -G took over {_RESOLVE_TIMEOUT_S:g} s"
+        return SshResolution({}, f"ssh -G took over {_RESOLVE_TIMEOUT_S:g} s")
     if done.returncode != 0:
-        return f"{user}@{host}", f"ssh -G exited {done.returncode}"
-    resolved: dict[str, str] = {}
+        return SshResolution({}, f"ssh -G exited {done.returncode}")
+    values: dict[str, list[str]] = {}
     for line in done.stdout.splitlines():
         key, _, value = line.partition(" ")
-        resolved[key] = value.strip()
-    named = resolved.get("hostkeyalias") or resolved.get("hostname")
-    return (f"{user}@{named}", "") if named else (f"{user}@{host}", "ssh -G named no host")
+        if key:
+            values.setdefault(key, []).append(value.strip())
+    return SshResolution({key: tuple(found) for key, found in values.items()}, "")
 
 
 def make_ssh_runner(
