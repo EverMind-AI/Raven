@@ -18,9 +18,13 @@ Two verdicts, asked in that order. The client library keeps a copy of the value
 it renamed (``provider_specific_fields["native_finish_reason"]``, written in
 ``Choices.__init__``), so wherever a response was assembled through that
 constructor the upstream's own word is still readable and nothing has to be
-inferred. Where it was not -- several vendors map the reason and assign it to an
-already-built choice, destroying the original -- the accounting evidence is all
-there is.
+inferred. OpenRouter puts the same field in every choice of its own body -- its
+backend's reason, rename or not -- and the library's dict conversion passes
+every non-standard choice field through, so from that gateway a plain ``stop``
+arrives under this name as well; the allow list below names it, so an empty
+reply from there reads as the silent model it is and not as a failure. Where no
+copy exists -- several vendors map the reason and assign it to an already-built
+choice, destroying the original -- the accounting evidence is all there is.
 
 Either way a response that delivered something is left alone: the invariant is
 that a failure must be *visible*, not that a usable answer be thrown away.
@@ -43,13 +47,17 @@ if TYPE_CHECKING:
 _UPSTREAM_SENTINELS = ("<|endoftext|>", "<|im_end|>", "<|eot_id|>")
 
 #: Upstream spellings of a normal end that the client library renames to
-#: ``stop``. Any *other* value it renamed to ``stop`` did not say this call
-#: ended normally. An allow list rather than a list of failures, because the
-#: spellings of "finished" are finite and stable across vendors while the
-#: dialects for "failed" are invented per gateway -- so an unrecognised value
-#: has to land on the side that keeps the failure visible.
+#: ``stop`` -- and ``stop`` itself, because OpenRouter reports its backend's
+#: reason as ``native_finish_reason`` on every choice, rename or not, and the
+#: library passes that field through, so a plain ``stop`` reaches the verdict
+#: under this name from there. Any *other* value renamed to ``stop`` did not
+#: say this call ended normally. An allow list rather than a list of failures,
+#: because the spellings of "finished" are finite and stable across vendors
+#: while the dialects for "failed" are invented per gateway -- so an
+#: unrecognised value has to land on the side that keeps the failure visible.
 _NORMAL_STOP_ALIASES = frozenset(
     {
+        "stop",
         "stop_sequence",
         "end_turn",
         "COMPLETE",
@@ -123,11 +131,14 @@ def prompt_chars(messages: list[dict[str, Any]]) -> int:
 
 
 def native_finish_reason(choice: Any) -> str | None:
-    """The finish reason the upstream sent, where the library kept a copy of it.
+    """The finish reason the upstream sent, where a copy of it was kept.
 
-    Read defensively on purpose: the field is written only when the mapping
-    actually renamed something, so on an ordinary ``stop`` the attribute is
-    absent from the choice altogether and reaching for it raises.
+    Read defensively on purpose: the library writes the field only when its
+    mapping actually renamed something, so on an ordinary ``stop`` from most
+    vendors the attribute is absent from the choice altogether and reaching for
+    it raises. OpenRouter is the exception -- its body carries the field on
+    every choice and the library passes it through -- which is why a value of
+    ``stop`` can come back from here.
     """
     fields = getattr(choice, "provider_specific_fields", None) or {}
     value = fields.get("native_finish_reason") if isinstance(fields, dict) else None

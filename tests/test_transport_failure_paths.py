@@ -625,6 +625,75 @@ def test_every_spelling_of_stop_the_library_knows_is_classified() -> None:
     )
 
 
+def test_the_upstreams_own_stop_is_a_normal_end() -> None:
+    """The shape OpenRouter handed back on 2026-10-21, from the session record.
+
+    A reply of one space, `finish_reason: "stop"` -- and `native_finish_reason:
+    "stop"` beside it, because that gateway names its backend's reason on every
+    choice, rename or not. Read as "a value renamed to stop that is not a known
+    normal end", a plain stop became an upstream failure: twelve retries over
+    five minutes, then the verdict's own sentence delivered as the answer. A
+    model that said nothing is the loop's case (prefill, nudge, retry), and it
+    is only reachable when this verdict stays out of the way.
+    """
+    blank = _Response(
+        choices=[
+            _Choice(
+                message=_Msg(content=" "),
+                provider_specific_fields={"native_finish_reason": "stop"},
+            )
+        ],
+        usage=_Usage(prompt_tokens=367412, completion_tokens=27, total_tokens=367439),
+    )
+
+    response = _provider()._parse_response(blank, sent_chars=SENT)
+
+    assert response.finish_reason == "stop"
+    assert response.error_classification is None
+    assert "failed call" not in (response.content or "")
+
+
+def test_openrouter_names_its_backends_reason_on_every_choice() -> None:
+    """The premise, on the real conversion.
+
+    `Choices.__init__` records a copy only when it renamed something, which is
+    what the reader relies on for most vendors. OpenRouter's body carries
+    `native_finish_reason` itself, and the dict conversion passes every
+    non-standard choice field through -- so a plain `stop` reaches the verdict
+    under that name. If the library ever stopped passing it through, this goes
+    red before the allow list's `stop` entry turns into dead weight.
+    """
+    from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+        convert_to_model_response_object,
+    )
+    from litellm.types.utils import ModelResponse
+
+    from raven.providers.transport_failure import native_finish_reason
+
+    body = {
+        "id": "gen-1792555321-59XScE7pyZzOA2G0vlxy",
+        "object": "chat.completion",
+        "created": 1792555321,
+        "model": "z-ai/glm-5.3-flash",
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "stop",
+                "native_finish_reason": "stop",
+                "message": {"role": "assistant", "content": " "},
+            }
+        ],
+        "usage": {"prompt_tokens": 367412, "completion_tokens": 27, "total_tokens": 367439},
+    }
+
+    converted = convert_to_model_response_object(response_object=body, model_response_object=ModelResponse())
+    choice = converted.choices[0]
+
+    assert choice.finish_reason == "stop"
+    assert native_finish_reason(choice) == "stop"
+    assert flag_transport_failure(finish_reason="stop", content=" ", tool_calls=[], native_finish_reason="stop") is None
+
+
 async def test_a_real_model_response_is_judged_and_retried() -> None:
     """End to end on the library's own type, through the real `chat`.
 
