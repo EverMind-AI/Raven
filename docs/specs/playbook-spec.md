@@ -1,5 +1,7 @@
 # Playbook file format
 
+**Date:** 2026-09-11
+
 > **Implementation status (2026-08-20, `refactor/unified_agent_registry`)**: node definitions are now one with dag's
 > (`DagNodeSpec`; both camelCase and snake_case wire spellings kept). Three changes relative to this doc:
 > node-level `confirm` **field deleted** (the gate exists only at graph level); `skills` / `mcps` become **playbook-only,

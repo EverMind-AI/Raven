@@ -1,5 +1,7 @@
 # Adding a benchmark: the evolution plugin contract
 
+**Date:** 2026-09-11
+
 The unified entry `python -m evolver run --config <yaml>` runs the SOP
 self-evolution loop on any registered benchmark (methodology:
 [`self-evolution-loop-sop.md`](self-evolution-loop-sop.md); implementation

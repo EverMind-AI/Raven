@@ -1,5 +1,7 @@
 # Self-evolution SOP <-> Raven implementation map
 
+**Date:** 2026-09-11
+
 **Companion:** [`self-evolution-loop-sop.md`](self-evolution-loop-sop.md) — an
 English translation of the upstream project's SOP, the authoritative
 methodology spec. This document answers: which code

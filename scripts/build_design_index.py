@@ -30,8 +30,6 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
-import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -233,45 +231,7 @@ def _bucket(status: str, title: str) -> str:
     return "unknown"
 
 
-def _author_dates() -> dict[str, str]:
-    """When each document was first written, from git.
-
-    A handful of documents carry no date in their filename -- ``playbook-spec.md``
-    among them -- and their date is still knowable: git knows the day the file
-    was added. The author date is used rather than the committer date, so a
-    rebase does not move it.
-    """
-    if not (ROOT / ".git").exists():
-        return {}
-    git = shutil.which("git")
-    if not git:
-        return {}
-    try:
-        result = subprocess.run(
-            [git, "log", "--diff-filter=A", "--name-only", "--format=%aI"],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return {}
-    dates: dict[str, str] = {}
-    stamp = ""
-    for line in result.stdout.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        if "T" in line and line[:4].isdigit():
-            stamp = line[:10]
-            continue
-        if line.endswith(".md") and stamp and line not in dates:
-            dates[Path(line).stem] = stamp
-    return dates
-
-
-def _read(path: Path, author_date: str = "") -> Document:
+def _read(path: Path) -> Document:
     text = path.read_text(encoding="utf-8", errors="replace")
     head = text[:HEAD_CHARS]
     cjk = len(_CJK.findall(text))
@@ -313,7 +273,9 @@ def _read(path: Path, author_date: str = "") -> Document:
         doc_date = date_match.group(1)
     else:
         inline = re.search(
-            rf"^\s*Date\s*[:{_FULLWIDTH_COLON}]\s*(\d{{4}}-\d{{2}}-\d{{2}})", head, re.M
+            rf"^\s*\*{{0,2}}Date\s*[:{_FULLWIDTH_COLON}]\*{{0,2}}\s*(\d{{4}}-\d{{2}}-\d{{2}})",
+            head,
+            re.M,
         )
         doc_date = inline.group(1) if inline else ""
 
@@ -321,7 +283,7 @@ def _read(path: Path, author_date: str = "") -> Document:
         id=path.stem,
         path=path.relative_to(ROOT).as_posix(),
         title=title,
-        date=doc_date or author_date,
+        date=doc_date,
         language="zh" if share > CJK_SHARE else "en",
         status=status,
         decision=_bucket(status, title),
@@ -336,8 +298,7 @@ def _read(path: Path, author_date: str = "") -> Document:
 def build() -> list[Document]:
     """Every design document, with the supersede relation resolved both ways."""
     paths = sorted(SPECS.glob("*.md")) + sorted(PLANS.glob("*.md"))
-    written = _author_dates()
-    documents = [_read(path, written.get(path.stem, "")) for path in paths]
+    documents = [_read(path) for path in paths]
     by_id = {doc.id: doc for doc in documents}
 
     for doc in documents:

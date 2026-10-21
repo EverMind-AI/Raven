@@ -9,6 +9,7 @@ cannot join the backlog without an index entry.
 
 | Date | Document | Decision | Status | Baseline | Supersedes |
 |---|---|---|---|---|---|
+| 2026-06-24 | [Self-Evolution Main Loop — Standard Operating Procedure (SOP)](docs/specs/self-evolution-loop-sop.md) | unknown |  | — | — |
 | 2026-08-05 | [Session Workspace Implementation Plan](docs/plans/2026-08-05-session-workspace.md) | plan |  | — | — |
 | 2026-08-05 | [Working directories and session storage — design](docs/specs/2026-08-05-session-workspace-design.md) | implemented | implemented | — | — |
 | 2026-08-05 | [Subagents preset configuration Implementation Plan](docs/plans/2026-08-05-subagents-preset-config.md) | plan |  | — | — |
@@ -85,6 +86,9 @@ cannot join the backlog without an index entry.
 | 2026-09-04 | [DAG node adjudication: a third decision, `replan`](docs/specs/2026-09-04-dag-replan-design.md) | design | design, approved 2026-09-04. | — | — |
 | 2026-09-10 | [Per-message content addressing for llm.input Implementation Plan](docs/plans/2026-09-10-llm-input-message-addressing.md) | implemented | ** Fully executed. This document is the historical planning record, | — | — |
 | 2026-09-10 | [Per-message content addressing for llm.input artifacts - design](docs/specs/2026-09-10-llm-input-message-addressing-design.md) | design | designed | — | — |
+| 2026-09-11 | [Adding a benchmark: the evolution plugin contract](docs/specs/evolve-bench-contract.md) | unknown |  | — | — |
+| 2026-09-11 | [Playbook file format](docs/specs/playbook-spec.md) | unknown |  | — | — |
+| 2026-09-11 | [Self-evolution SOP <-> Raven implementation map](docs/specs/self-evolution-loop-raven-mapping.md) | unknown |  | — | — |
 | 2026-09-13 | [A2A protocol support: the host speaks it, sub-agents do not](docs/specs/2026-09-13-a2a-protocol-design.md) | design | design, approved 2026-09-14. | — | — |
 | 2026-09-14 | [A2A Protocol Support Implementation Plan](docs/plans/2026-09-14-a2a-protocol.md) | plan |  | — | — |
 | 2026-09-17 | [`mode: stint` -- 在 playbook 和 DAG 上实现多轮角色循环](docs/specs/2026-09-17-playbook-rounds-design.md) | implemented | **提案**，已落地。本文保留提案时的原貌，作为设计记录。 | — | — |
@@ -109,9 +113,5 @@ cannot join the backlog without an index entry.
 | 2026-10-12 | [Episodic log writer: a periodic annotator after the turn](docs/specs/2026-10-12-episodic-log-writer-design.md) | unknown |  | 829eb28e1 | — |
 | 2026-10-15 | [Full Failure Text Implementation Plan](docs/plans/2026-10-15-full-failure-text.md) | plan |  | — | — |
 | 2026-10-15 | [Turn Continuation: resuming a failed turn from its recorded model request](docs/specs/2026-10-15-turn-continuation-design.md) | unknown |  | — | — |
-| 2026-10-15 | [Adding a benchmark: the evolution plugin contract](docs/specs/evolve-bench-contract.md) | unknown |  | — | — |
-| 2026-10-15 | [Playbook file format](docs/specs/playbook-spec.md) | unknown |  | — | — |
-| 2026-10-15 | [Self-evolution SOP <-> Raven implementation map](docs/specs/self-evolution-loop-raven-mapping.md) | unknown |  | — | — |
-| 2026-10-15 | [Self-Evolution Main Loop — Standard Operating Procedure (SOP)](docs/specs/self-evolution-loop-sop.md) | unknown |  | — | — |
 | 2026-10-20 | [A draft `agent-decision` predicate for in-toto](docs/specs/2026-10-20-agent-decision-predicate-proposal.md) | design | ** a proposal draft, prepared for the proposer to put in front of the in-toto | — | — |
 | 2026-10-20 | [Evidence Bundle: one artefact a buyer can hand an auditor](docs/specs/2026-10-20-evidence-bundle-design.md) | unknown |  | — | — |
