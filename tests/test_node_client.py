@@ -608,6 +608,7 @@ async def test_a_cancel_while_a_refused_launch_is_answered_leaves_no_channel(tmp
     pool = NodePool()
     busy = AcpRemoteError(protocol.AGENT_LAUNCH, protocol.BUSY, "8 agents are already running on this machine")
     client = _live(pool, tmp_path, client=_HeldLaunch(raises=busy))
+    pool._ending = ending = _Recorded()
     opening = asyncio.ensure_future(pool.open_channel("box", name="b@box", command="agent", cwd="~", env={}))
     await asyncio.wait_for(client.launching.wait(), 2)
 
@@ -617,6 +618,8 @@ async def test_a_cancel_while_a_refused_launch_is_answered_leaves_no_channel(tmp
         await opening
 
     await _until(lambda: not pool._ending, timeout=2)
+    (end,) = ending.ever
+    assert end.exception() is None, "a refused launch leaves the pool nothing to end, and no error"
     assert [method for method, _, _ in client.asked] == [protocol.AGENT_LAUNCH]
     assert pool.live() == ["box"] and pool._nodes["box"].channels == {}
 
@@ -832,6 +835,18 @@ class _HeldLaunch(_Client):
             self.launching.set()
             await self.answer.wait()
         return await super().request(method, params, timeout=timeout)
+
+
+class _Recorded(set):
+    """A set that also keeps every task ever put in it, for a test to read how each ended."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.ever: list[Any] = []
+
+    def add(self, item: Any) -> None:
+        self.ever.append(item)
+        super().add(item)
 
 
 def _box(machine_id: str = "box") -> remote.Machine:
