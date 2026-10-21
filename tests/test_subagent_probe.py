@@ -2145,7 +2145,7 @@ async def test_a_modes_relearn_during_the_boot_verify_does_not_stop_its_write(tm
     manager = _FakeManager(rows, with_refresh=True)
     boot = asyncio.ensure_future(probe_mod._verify_missing_snapshots(manager, rows))
     await asyncio.wait_for(boot_parked.wait(), 2)
-    relearned = caps.relearn_session_modes(
+    relearned = caps.relearn_session_menus(
         store.load([cfg])[cfg.name],
         {"sessionId": "s1", "modes": {"availableModes": [{"id": "fast", "name": "Fast"}], "currentModeId": "fast"}},
         store=store,

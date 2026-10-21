@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,7 @@ from raven.acp.mirasim.host import (
     mirasim_home,
     parse_address,
     port_token,
+    upgrade_url,
 )
 from tests.mirasim_fake_host import FakeHost
 
@@ -225,6 +227,89 @@ async def test_a_socket_its_host_left_behind_is_unavailable(socket_dir: Path) ->
     conn = HostConnection(on_frame=lambda f: None, locate=lambda: HostAddress(socket=str(path)))
     with pytest.raises(HostUnavailableError, match=f"cannot reach the Mirasim host at unix socket {path}"):
         await conn.connect()
+
+
+@pytest.mark.parametrize("token_in", ["query", "header"])
+async def test_the_token_goes_in_the_upgrades_query_as_the_host_reads_it_and_in_the_header_earlier_hosts_read(
+    token_in: str,
+) -> None:
+    """A host from 0.0.571 on reads the token off the upgrade's query and answers a header alone with 401
+    (measured against 0.0.571, 0.0.576 and 0.0.585, and how Mirasim's own clients send it); the hosts this
+    adapter was written against read the header. One request satisfies both."""
+    host = FakeHost(token="local-secret", token_in=token_in)
+    address = await host.start()
+    try:
+        conn = HostConnection(on_frame=lambda f: None, locate=lambda: address)
+        await conn.connect()
+        assert conn.connected
+        assert host.upgrades == [{"header": "local-secret", "query": "local-secret"}]
+        await conn.close()
+    finally:
+        await host.stop()
+
+
+def test_the_upgrade_url_carries_the_token_url_encoded_and_nothing_without_one() -> None:
+    assert upgrade_url(HostAddress(port=4970, token="a b/c&d=e")) == "http://127.0.0.1:4970/ws?token=a%20b%2Fc%26d%3De"
+    assert upgrade_url(HostAddress(port=4970)) == "http://127.0.0.1:4970/ws"
+    assert upgrade_url(HostAddress(socket="/run/s.sock")).endswith("/ws")
+
+
+async def test_a_refused_upgrade_names_the_token_file_and_never_the_token_or_the_url(fake: FakeHost) -> None:
+    """aiohttp's own words for a refused upgrade quote the request's URL, which now carries the token."""
+    from raven.acp_client.capabilities import looks_like_auth
+
+    assert fake.address is not None
+    conn = HostConnection(on_frame=lambda f: None, locate=lambda: HostAddress(port=fake.address.port, token="wrong"))
+    with pytest.raises(HostUnavailableError) as raised:
+        await conn.connect()
+    said = str(raised.value)
+    assert said.startswith(
+        f"cannot reach the Mirasim host at 127.0.0.1:{fake.address.port}: it turned this connection away"
+    )
+    assert f"run/local-{fake.address.port}.token" in said and "Start Mirasim again" in said
+    assert "wrong" not in said and "url=" not in said and "/ws" not in said
+    # Not in the chain either: the refused upgrade's own exception holds the request, URL and token
+    # included, and a formatted traceback prints a cause and a context.
+    assert raised.value.__cause__ is None and raised.value.__context__ is None
+    chain = "".join(traceback.format_exception(raised.value))
+    assert "wrong" not in chain and "token=" not in chain and "/ws" not in chain
+    # The token is Raven's way in to the host, not the agent's sign-in: the roster must not send its reader
+    # to sign in to Claude Code over it. Judged on the wording alone, with the port masked: the fake host's
+    # port is random, and `_AUTH_HINTS` matches the bare digits `401`, which a port such as 40123 contains.
+    assert not looks_like_auth(said.replace(str(fake.address.port), "<port>"))
+
+
+async def test_a_host_that_is_not_there_keeps_its_cause_which_names_no_url() -> None:
+    """Only a refused upgrade is cut off; a refused connection is kept for whoever reads the chain."""
+    import socket
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    conn = HostConnection(on_frame=lambda f: None, locate=lambda: HostAddress(port=port, token="s3cret"))
+    with pytest.raises(HostUnavailableError) as raised:
+        await conn.connect()
+    assert isinstance(raised.value.__cause__, OSError)
+    chain = "".join(traceback.format_exception(raised.value))
+    assert "s3cret" not in chain and "token=" not in chain
+
+
+async def test_another_refusal_of_the_upgrade_is_worded_from_its_status_without_the_token(fake: FakeHost) -> None:
+    import aiohttp
+
+    assert fake.address is not None
+    address = HostAddress(port=fake.address.port, token="s3cret")
+    gone = aiohttp.ClientResponseError(
+        request_info=None,  # type: ignore[arg-type]
+        history=(),
+        status=503,
+        message="busy, see http://127.0.0.1/ws?token=s3cret",
+    )
+    assert (
+        host_mod._reason(gone, address) == "its upgrade answered HTTP 503: busy, see http://127.0.0.1/ws?token=<token>"
+    )
+    assert host_mod._reason(OSError("no route to s3cret"), address) == "no route to <token>"
+    assert host_mod._reason(TimeoutError(), address) == "it did not answer in time"
 
 
 async def test_a_wrong_token_or_no_host_is_unavailable(fake: FakeHost, tmp_path: Path) -> None:
