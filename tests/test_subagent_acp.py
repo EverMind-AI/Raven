@@ -1283,6 +1283,56 @@ def test_a_backend_that_stood_down_refreshes_on_its_next_reply(tmp_path: Path, m
     assert rebuilds == [1, 1]
 
 
+def test_a_newer_row_this_build_cannot_read_is_neither_overwritten_nor_adopted(tmp_path: Path) -> None:
+    """A newer measurement written by a Raven that knows a status this one does
+    not: its stamp still says it is newer, so nothing is written over it, and
+    it cannot be loaded, so there is no record to hand back either. The
+    backend keeps what it holds and rebuilds nothing."""
+    cfg = stub_config("a")
+    path = tmp_path / "caps.json"
+    older = _with_model_choices(cfg, AcpModelChoice(value="old/retired"))
+    SnapshotStore(path=path).record(older)
+    unreadable = {**older.to_row(), "status": "a-status-from-a-later-release", "measuredAtMs": 2}
+    path.write_text(json.dumps({"version": 1, "snapshots": [unreadable]}), encoding="utf-8")
+    stored_bytes = path.read_bytes()
+
+    assert relearn_session_menus(older, _menu_reply(models=_GROUPED_MODELS), store=SnapshotStore(path=path)) is None
+    assert path.read_bytes() == stored_bytes
+
+    backend = AcpAgentBackend(name="a", command="true", snapshot=older)
+    rebuilds: list[int] = []
+    backend.bind_caps_listener(lambda: rebuilds.append(1))
+    with patch("raven.acp_client.capabilities.default_snapshot_path", lambda: path):
+        backend._relearn_menus(_menu_reply(models=_GROUPED_MODELS))
+    assert backend._snapshot is older
+    assert rebuilds == []
+    assert path.read_bytes() == stored_bytes
+
+
+def test_a_snapshot_file_that_cannot_be_written_costs_only_the_refresh(tmp_path: Path) -> None:
+    """The store is a cache: a write that fails is said once in the log and
+    the relearn reports nothing learned, rather than raising into the turn or
+    handing the backend a record that was never stored."""
+    cfg = stub_config("a")
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("a file where the store's directory should be", encoding="utf-8")
+    store = SnapshotStore(path=blocker / "caps.json")
+    stored = _with_model_choices(cfg, AcpModelChoice(value="old/retired"))
+
+    with _loguru_capture("WARNING") as logs:
+        assert relearn_session_menus(stored, _menu_reply(models=_GROUPED_MODELS), store=store) is None
+    assert any("acp capability snapshot write failed" in line for line in logs), logs
+    assert blocker.read_text(encoding="utf-8") == "a file where the store's directory should be"
+
+    backend = AcpAgentBackend(name="a", command="true", snapshot=stored)
+    rebuilds: list[int] = []
+    backend.bind_caps_listener(lambda: rebuilds.append(1))
+    with patch("raven.acp_client.capabilities.default_snapshot_path", lambda: blocker / "caps.json"):
+        backend._relearn_menus(_menu_reply(models=_GROUPED_MODELS))
+    assert backend._snapshot is stored
+    assert rebuilds == []
+
+
 def test_a_relearn_writes_only_the_menu_its_reply_reported(tmp_path: Path) -> None:
     """Backends of one agent each hold the record they were built from, and a
     relearn on one does not reach the others' copies. A second backend whose
