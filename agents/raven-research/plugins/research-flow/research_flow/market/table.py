@@ -1,9 +1,21 @@
 """A market table, read as what it is: companies, facts, and their pages.
 
-The flow's deep-report clause already asks for a comparison table whose
-citations are markdown links. This module reads one of those tables as a
-**set of claims with their sources** - one entity per row, one fact per
-cell, one page per fact - so the facts can be checked instead of read.
+**What the flow's report clause actually asks for.** It asks for a
+comparison table whose *prose* carries the URL of the page each finding came
+from, and it says the opposite about the table itself: a candidate's
+provenance "belongs under it as prose or in a second table, because a row
+nobody can read across is a list with extra punctuation". So a report
+written to that contract has a vendor table whose cells carry **no
+citation at all** - and this module used to refuse exactly that table,
+because a market table was defined as one whose cells cite a page.
+
+That definition was written against a belief that the report clause asked
+for a link-cited table. It does not, and the belief cost two batches of
+measurement: the gate found no table, said nothing, and the rung looked
+inert rather than broken. A table is therefore now found in two ways:
+``find_market_table`` reads a table whose facts can be traced, and
+``find_vendor_table`` finds the table by its **shape** so that a gate can
+see it and ask the turn for the sources it is missing.
 
 Two things it will not do.
 
@@ -37,10 +49,13 @@ from .ledger import DEFAULT_USE, MarketEntity
 __all__ = [
     "MarketTable",
     "OpenedPage",
+    "carries_provenance",
     "entities_from_table",
     "find_market_table",
+    "find_vendor_table",
     "normalise_field",
     "opened_pages",
+    "swap_table_rows",
 ]
 
 _INLINE_LINK_RE = re.compile(r"\[(?P<text>[^\]]*)\]\((?P<url>[^)\s]+)\)")
@@ -64,6 +79,14 @@ _NAME_HEADER_RE = re.compile(
     rf"company|vendor|provider|player|brand|{_GONG_SI}|{_CHAN_SHANG}|{_CHAN_PIN}", re.I
 )
 
+#: The same idea, anchored to the start of the cell, for finding a table by
+#: its shape rather than by its citations. "Typical vendors" names a list of
+#: vendors inside a cell, not the company a row is about, so the match has to
+#: be at the front of the header.
+_NAMED_HEADER_RE = re.compile(
+    r"^(company|vendor|provider|player|brand|competitor|supplier)", re.I
+)
+
 
 @dataclass(frozen=True)
 class OpenedPage:
@@ -83,6 +106,15 @@ class MarketTable:
     name_index: int
     field_indices: list[int]
     source_index: int | None = None
+    row_start: int = -1
+    row_end: int = -1
+    """The table's own lines in the markdown it was read from.
+
+    ``row_start`` is the first row line and ``row_end`` the line after the
+    last one, so the rows are ``markdown.split("\\n")[row_start:row_end]``.
+    The header and its delimiter are outside the span: a table that is
+    rewritten keeps the columns it was written with.
+    """
 
 
 def normalise_field(name: str) -> str:
@@ -129,8 +161,9 @@ def _fenced(lines: Sequence[str]) -> list[bool]:
     return marks
 
 
-def _tables(lines: Sequence[str]) -> list[tuple[list[str], list[list[str]]]]:
-    tables: list[tuple[list[str], list[list[str]]]] = []
+def _tables(lines: Sequence[str]) -> list[tuple[list[str], list[list[str]], int, int]]:
+    """Every markdown table in ``lines``, with the span its rows occupy."""
+    tables: list[tuple[list[str], list[list[str]], int, int]] = []
     fenced = _fenced(lines)
     i = 0
     while i < len(lines) - 1:
@@ -146,7 +179,7 @@ def _tables(lines: Sequence[str]) -> list[tuple[list[str], list[list[str]]]]:
         while j < len(lines) and not fenced[j] and "|" in lines[j]:
             rows.append(_cells(lines[j]))
             j += 1
-        tables.append((header, rows))
+        tables.append((header, rows, i + 2, j))
         i = j
     return tables
 
@@ -161,7 +194,12 @@ def _only_links(cell: str) -> bool:
     return bool(_links(cell)) and not text
 
 
-def find_market_table(markdown: str) -> MarketTable | None:
+def find_market_table(
+    markdown: str,
+    *,
+    require_sources: bool = True,
+    require_named_header: bool = False,
+) -> MarketTable | None:
     """The first table in ``markdown`` that reads as a market.
 
     A market table names a company in one column, carries at least one
@@ -173,8 +211,21 @@ def find_market_table(markdown: str) -> MarketTable | None:
     nor empty, unless the header says otherwise: a table that starts with
     a rank and then names the company is still a market table, and the
     rank is not a fact about the company.
+
+    Two flags turn off parts of that, and both exist for one reason: the
+    research flow's own report contract tells the model to keep a
+    candidate's provenance **out** of the comparison table and under it as
+    prose, so a report that follows the contract well has a table this
+    function would refuse. A gate that cannot find the table cannot ask
+    for the sources it is missing, so the finder has to be able to find a
+    table first and ask second.
+
+    * ``require_sources=False`` accepts a table whose cells carry no
+      citation at all.
+    * ``require_named_header=True`` insists that the name column's header
+      says what it holds, and says it at the front of the cell.
     """
-    for header, rows in _tables(markdown.split("\n")):
+    for header, rows, row_start, row_end in _tables(markdown.split("\n")):
         if not rows:
             continue
         width = len(header)
@@ -182,7 +233,7 @@ def find_market_table(markdown: str) -> MarketTable | None:
         # A market table cites a page. A table with no citation anywhere is a
         # table of numbers and labels - a metrics table, a spec table - and
         # reading it as a market would invent companies out of row headers.
-        if not any(_links(cell) for row in rows for cell in row):
+        if require_sources and not any(_links(cell) for row in rows for cell in row):
             continue
 
         link_cols = [
@@ -194,6 +245,14 @@ def find_market_table(markdown: str) -> MarketTable | None:
         for idx in range(width):
             if idx in link_cols:
                 continue
+            if require_named_header:
+                # The header has to name the column, and it has to name it at
+                # the start of the cell: "Typical vendors" names a list of
+                # vendors inside a cell, not the company the row is about.
+                if not _NAMED_HEADER_RE.match(header[idx]):
+                    continue
+                name_index = idx
+                break
             header_says = bool(_NAME_HEADER_RE.search(header[idx]))
             cells_say = (
                 sum(1 for r in rows if idx < len(r) and r[idx] and not _only_links(r[idx])) / len(rows) >= 0.6
@@ -228,8 +287,39 @@ def find_market_table(markdown: str) -> MarketTable | None:
             name_index=name_index,
             field_indices=field_indices,
             source_index=source_index,
+            row_start=row_start,
+            row_end=row_end,
         )
     return None
+
+
+def find_vendor_table(markdown: str) -> MarketTable | None:
+    """The table that compares vendors, found by its shape rather than by its citations.
+
+    The research flow's report contract keeps a comparison table to the
+    columns that decide it, and puts a candidate's provenance under it as
+    prose. A report written to that contract has a vendor table whose cells
+    carry no citation, so the strict reader refuses it - and a gate that
+    cannot see the table cannot ask the turn for the sources it is missing.
+    """
+    return find_market_table(markdown, require_sources=False, require_named_header=True)
+
+
+def carries_provenance(table: MarketTable) -> bool:
+    """Whether any of the table's **facts** can be traced to a page.
+
+    The name column does not count: a company name written as a link is a
+    citation for the company, not for the facts the row states beside it.
+    """
+    if table.source_index is not None:
+        for row in table.rows:
+            if table.source_index < len(row) and _links(row[table.source_index]):
+                return True
+    for idx in table.field_indices:
+        for row in table.rows:
+            if idx < len(row) and _links(row[idx]):
+                return True
+    return False
 
 
 def opened_pages(
@@ -360,3 +450,85 @@ def entities_from_table(
     if not entities:
         raise MarketScanError("the table names no company with a fact behind it")
     return entities
+
+
+def swap_table_rows(markdown: str, table: MarketTable, entities: Sequence[MarketEntity]) -> str:
+    """The markdown with the table's rows replaced by the scan's verified rows.
+
+    **The report is kept; the table is checked.** The reader still gets the
+    sections, the argument and the other tables they were given. What
+    changes is the comparison table: every fact in it now carries the page
+    it came from, and every row in it is a row whose facts were traced to a
+    page the run actually opened. A row that could not be traced is not in
+    the scan, so it is not in the table that ships.
+
+    The swap keeps the table's own columns, so the report's shape - and the
+    length that lets the flow's file sync write this reply over the file
+    the turn drafted - is the report's, not the scan's.
+    """
+    if table.row_start < 0 or table.row_end < table.row_start:
+        return markdown
+    rows = [_verified_row(table, entity) for entity in entities]
+    if not rows:
+        return markdown
+    lines = markdown.split("\n")
+    return "\n".join([*lines[: table.row_start], *rows, *lines[table.row_end :]])
+
+
+def _verified_row(table: MarketTable, entity: MarketEntity) -> str:
+    """One row of the verified table: the entity's facts, each with its page."""
+    cells: list[str] = []
+    for idx in range(len(table.header)):
+        if idx == table.name_index:
+            cells.append(_escape_cell(entity.name))
+            continue
+        if table.source_index is not None and idx == table.source_index:
+            urls = entity.source_urls()
+            cells.append(
+                "<br>".join(f"[{_link_text(_page_label(url))}]({url})" for url in urls)
+                or "not obtained"
+            )
+            continue
+        field = normalise_field(table.header[idx])
+        text = entity.fields.get(field)
+        url = _field_url(entity, field)
+        if not text:
+            # The flow's own rule for a cell the evidence does not support:
+            # say so, rather than leave a blank that reads as an absence.
+            cells.append("not obtained")
+        elif url:
+            cells.append(f"[{_link_text(str(text))}]({url})")
+        else:
+            cells.append(_escape_cell(str(text)))
+    return "| " + " | ".join(cells) + " |"
+
+
+def _page_label(url: str) -> str:
+    """The page as a reader names it: the host and path, without the scheme.
+
+    The same label the scan's own renderer uses, so a table written by one
+    and a table written by the other read alike.
+    """
+    return url.split("//", 1)[-1]
+
+
+def _field_url(entity: MarketEntity, field: str) -> str | None:
+    for item in entity.provenance:
+        if item.field == field and item.source_url:
+            return item.source_url
+    return None
+
+
+def _escape_cell(text: str) -> str:
+    """A cell that reads back as one cell: the pipe is escaped, the line ends."""
+    return str(text).replace("|", "\\|").replace("\n", " ").strip()
+
+
+def _link_text(text: str) -> str:
+    """Link text that cannot break the link it is written in.
+
+    A fact that carries brackets in its own words would otherwise close the
+    link early and turn the rest of the cell into prose. The brackets are
+    rendered as parentheses, which says the same thing and parses back.
+    """
+    return text.replace("[", "(").replace("]", ")").replace("|", "\\|")

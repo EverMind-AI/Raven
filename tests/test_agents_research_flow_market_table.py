@@ -213,7 +213,7 @@ async def test_the_gate_leaves_the_answer_alone_when_there_is_no_table(tmp_path)
     gate = _gate(tmp_path)
     decision = await gate.after_iteration(_ctx("There is no market here."))
     assert decision.short_circuit_result is None
-    assert decision.notes == ["market_scan_no_table"]
+    assert any("market_scan_no_table" in n for n in decision.notes)
 
 
 @pytest.mark.asyncio
@@ -250,7 +250,7 @@ async def test_the_gate_leaves_the_answer_alone_when_the_run_opened_nothing(tmp_
     )
     decision = await gate.after_iteration(_ctx(TABLE))
     assert decision.short_circuit_result is None
-    assert decision.notes == ["market_scan_no_ledger"]
+    assert any("market_scan_no_ledger" in n for n in decision.notes)
 
 
 @pytest.mark.asyncio
@@ -260,4 +260,128 @@ async def test_the_gate_does_not_run_on_a_turn_that_is_still_working(tmp_path):
     ctx.response = SimpleNamespace(content=TABLE, has_tool_calls=True)
     decision = await gate.after_iteration(ctx)
     assert decision.short_circuit_result is None
-    assert decision.notes == []
+    # It says why it stood aside. A gate that declines in silence is
+    # indistinguishable from a gate that was never wired.
+    assert any("market_scan_skipped_tool_calls" in n for n in decision.notes)
+
+
+# -- the table the flow's own contract produces -------------------------------
+#
+# The report clause asks for the URL of the page a finding came from in the
+# **prose**, and says a candidate's provenance belongs under the comparison
+# table rather than in it. So the comparison table a flow run writes names
+# companies and carries no citation, and the strict reader refuses it.
+
+CONTRACT_TABLE = """| Vendor | 2025 Gartner MQ | Pricing model | Key risk |
+|---|---|---|---|
+| Datadog | Leader (5th yr) | Per host + per-GB ingest | TCO spikes in k8s |
+| Dynatrace | Leader (15th yr) | DPS (consumption commit) | Opaque enterprise pricing |
+"""
+
+PRICING_TABLE = """| Model | How it charges | Typical vendors |
+|---|---|---|
+| Per host | Fixed monthly fee per monitored host | Datadog, New Relic |
+| Per GB | Per GB of telemetry | Grafana Cloud |
+"""
+
+
+def test_the_contract_table_is_found_by_its_shape_even_with_no_citations():
+    """The shape finder sees the table the flow's report clause produces."""
+    from research_flow.market.table import find_vendor_table
+
+    table = find_vendor_table(CONTRACT_TABLE)
+    assert table is not None
+    assert table.header[table.name_index] == "Vendor"
+    assert table.rows[0][0] == "Datadog"
+    # No citation anywhere, so the strict reader refuses it.
+    assert find_market_table(CONTRACT_TABLE) is None
+
+
+def test_a_table_that_does_not_name_companies_is_not_a_vendor_table():
+    """A pricing table lists vendors in a cell; it does not compare them."""
+    from research_flow.market.table import find_vendor_table
+
+    assert find_vendor_table(PRICING_TABLE) is None
+
+
+def test_a_table_carrying_no_source_cannot_be_traced():
+    """Whether any **fact** can be traced - a linked company name is not a fact."""
+    from research_flow.market.table import carries_provenance, find_vendor_table
+
+    table = find_vendor_table(CONTRACT_TABLE)
+    assert table is not None
+    assert carries_provenance(table) is False
+
+    sourced = find_vendor_table(
+        f"""| Vendor | Price | Read from |
+|---|---|---|
+| Datadog | $15/host | [acme]({ACME}) |
+| Dynatrace | $2k/mo | [globex]({GLOBEX}) |
+"""
+    )
+    assert sourced is not None
+    assert carries_provenance(sourced) is True
+
+
+def test_the_swap_keeps_the_report_and_checks_the_table():
+    """The report is kept; the table inside it is the verified one."""
+    from research_flow.market.table import find_vendor_table, swap_table_rows
+
+    # The table the turn writes **after** it was asked for the sources.
+    report = f"""# Competitive landscape
+
+> The market is led by two vendors.
+
+| Vendor | Pricing model | Read from |
+|---|---|---|
+| Datadog | Per host + per-GB ingest | [acme]({ACME}) |
+| Dynatrace | DPS (consumption commit) | [globex]({GLOBEX}) |
+## Trends
+
+OpenTelemetry is the default now.
+"""
+    table = find_vendor_table(report)
+    assert table is not None
+    pages = {
+        ACME: SimpleNamespace(url=ACME, retrieved_at=1_700_000_000.0, source="jina"),
+        GLOBEX: SimpleNamespace(url=GLOBEX, retrieved_at=1_700_000_000.0, source="jina"),
+    }
+    entities = entities_from_table(find_market_table(report), pages)
+    swapped = swap_table_rows(report, table, entities)
+
+    # The report's own shape survives - that is what lets the flow's file
+    # sync write the reply over the file the turn drafted.
+    assert swapped.startswith("# Competitive landscape")
+    assert "> The market is led by two vendors." in swapped
+    assert "## Trends" in swapped
+    assert "OpenTelemetry is the default now." in swapped
+
+    # And the table is the verified one: every fact carries its page.
+    assert "| Datadog |" in swapped
+    assert f"[Per host + per-GB ingest]({ACME})" in swapped
+    assert f"[DPS (consumption commit)]({GLOBEX})" in swapped
+    # The source column still names the pages.
+    assert f"[acme.example/pricing]({ACME})" in swapped
+    assert f"[globex.example/pricing]({GLOBEX})" in swapped
+
+
+def test_a_row_citing_a_page_the_run_never_opened_refuses_the_whole_scan():
+    """One untraceable row refuses the scan - it does not drop the row.
+
+    A scan that states something the sources do not support is worse than no
+    scan, because the next reader cannot tell which parts to trust. So the
+    refusal is the whole scan's, and the turn's own answer stands.
+    """
+    from research_flow.market.table import find_market_table
+
+    report = f"""| Vendor | Price | Read from |
+|---|---|---|
+| Datadog | $15 per host | [acme]({ACME}) |
+| Dynatrace | Contact Sales | [globex]({GLOBEX}) |
+"""
+    pages = {
+        ACME: SimpleNamespace(url=ACME, retrieved_at=1_700_000_000.0, source="jina"),
+    }
+    with pytest.raises(MarketScanError) as excinfo:
+        entities_from_table(find_market_table(report), pages)
+    assert "which the run did not open" in str(excinfo.value)

@@ -16,8 +16,26 @@ ladder rather than a shape a report happens to have:
    permit the use, a fact that cannot be dated.
 3. The **three gates** run over the result - mechanical, sufficiency,
    judge - each switchable on its own.
-4. If they pass, the scan **replaces** the answer: the reader gets the
-   table with its trace, not the prose that surrounded it.
+4. If they pass, the **table** is replaced by the verified one: the reader
+   gets the report they were given, with a comparison table whose every
+   fact carries the page it came from.
+
+**The report is kept; the table is checked.** Replacing the whole report
+with the scan's own rendering would ship a different document - a shorter
+one, with different headings - and the flow's file sync would then leave
+the report file the turn drafted untouched. So the gate swaps the table
+inside the report and leaves the argument, the sections and the other
+tables where they are.
+
+**The table is found by its shape, and the sources are asked for.** The
+flow's report contract tells the model to keep a candidate's provenance
+out of the comparison table and under it as prose, so a report written to
+that contract has a vendor table whose cells carry no citation. A gate
+that cannot see the table cannot ask for the sources it is missing, so
+the table is found by shape first, and a table whose facts cannot be
+traced is **asked about once**: the turn is bounced with the request to
+add a ``Read from`` column. A turn that was asked and did not answer
+keeps its own answer, and the record says it was asked.
 
 **Fail-open, and say so.** A scan that cannot be built, or whose gates
 fail, leaves the turn's own answer standing. The turn is a research turn
@@ -41,13 +59,31 @@ from typing import Any, Callable, Mapping
 from raven.contracts.loop_hooks import HookDecision
 from research_flow.gates.base import Gate, GateCtx
 from research_flow.market.gates import MarketCriteria, MarketGateConfig, run_market_gates
-from research_flow.market.scan import MarketScanError, build_scan, render_markdown
-from research_flow.market.table import entities_from_table, find_market_table, opened_pages
+from research_flow.market.scan import MarketScanError, build_scan
+from research_flow.market.table import (
+    carries_provenance,
+    entities_from_table,
+    find_vendor_table,
+    opened_pages,
+    swap_table_rows,
+)
 from research_flow.support.answer_text import visible_answer
 from research_flow.support.ledger import ledger_append
-from research_flow.support.process_appendix import build_appendix, read_ledger
+from research_flow.support.process_appendix import read_ledger
 
 logger = logging.getLogger(__name__)
+
+_SOURCE_COLUMN_PROMPT = """The comparison table in this report does not say where its
+facts came from, so none of it can be checked against what was actually read.
+
+Add a `Read from` column to that table: one URL per row, written out in full
+and starting with `https://`, naming the page you opened that the row's facts
+come from. A row whose facts came from two pages names both.
+
+Keep everything else in the report as it is - the sections, the argument, the
+other tables, and the wording of the comparison table's own columns. The table
+keeps the columns that decide it; the sources go in the new column beside
+them."""
 
 
 def _extractor_keys() -> dict[str, str]:
@@ -122,21 +158,32 @@ class MarketScanGate(Gate):
 
     async def after_iteration(self, ctx: GateCtx) -> HookDecision:
         if getattr(ctx.response, "has_tool_calls", False):
-            return HookDecision()
+            # Say so. A gate that declines in silence is a gate whose absence
+            # is invisible, and an invisible gate is indistinguishable from a
+            # gate that was never wired - which is exactly what two batches of
+            # measurements cost.
+            return HookDecision(notes=["market_scan_skipped_tool_calls"])
         content = getattr(ctx.response, "content", None) or ""
         answer = visible_answer(content)
         if not answer:
-            return HookDecision()
+            return HookDecision(notes=["market_scan_skipped_empty_answer"])
 
-        table = find_market_table(answer)
+        # Found by its shape, not by its citations. The flow's report contract
+        # keeps a candidate's provenance out of the comparison table and under
+        # it as prose, so a report written to that contract has a vendor table
+        # whose cells carry no link - and a gate that cannot see the table
+        # cannot ask the turn for the sources it is missing.
+        table = find_vendor_table(answer)
         if table is None:
-            return HookDecision(notes=["market_scan_no_table"])
+            return self._decline(ctx, "no_table", "the answer carries no table that compares companies")
+        if not carries_provenance(table):
+            return self._ask_for_sources(ctx, answer)
 
         path = self._path()
         rows = self._turn_rows(path)
         pages = opened_pages(rows, extractor_keys=self._extractor_keys or _extractor_keys())
         if not pages:
-            return HookDecision(notes=["market_scan_no_ledger"])
+            return self._decline(ctx, "no_ledger", "the turn opened no page the scan could read")
 
         try:
             entities = entities_from_table(table, pages, use=self._use)
@@ -147,11 +194,16 @@ class MarketScanGate(Gate):
                 opened_urls=list(pages),
             )
         except MarketScanError as exc:
-            self._record(ctx, "refused", str(exc))
-            logger.warning("market-scan: refused (%s)", exc)
-            return HookDecision(notes=[f"market_scan_refused: {exc}"])
+            return self._decline(ctx, "refused", str(exc))
 
-        report = render_markdown(scan)
+        # The report is kept and the table inside it is checked: the reader
+        # gets the argument, the sections and the other tables, and a
+        # comparison table whose every fact carries the page it came from.
+        # Replacing the whole report with the scan's own rendering would ship
+        # a different document - a shorter one, with different headings - and
+        # the flow's file sync would then leave the report file the turn
+        # drafted untouched, so the check would never reach the reader.
+        report = swap_table_rows(answer, table, entities)
         results = await run_market_gates(
             scan,
             self._criteria,
@@ -164,19 +216,67 @@ class MarketScanGate(Gate):
         failed = [r for r in results if r.enabled and not r.passed]
         if failed:
             detail = "; ".join(f"{r.name}: {', '.join(r.findings)}" for r in failed)
-            self._record(ctx, "gated_out", detail)
-            logger.warning("market-scan: gates refused the scan (%s)", detail)
-            return HookDecision(notes=[f"market_scan_gated: {detail}"])
-
-        if path:
-            appendix, _counters = build_appendix(path, report)
-            report = report.rstrip("\n") + "\n" + appendix.rstrip("\n") + "\n"
+            return self._decline(ctx, "gated", detail)
 
         self._record(ctx, "shipped", f"{len(scan.entities)} entities, {len(scan.pages())} pages")
+        logger.warning(
+            "market-scan: shipped %d entities from %d pages", len(scan.entities), len(scan.pages())
+        )
         return HookDecision(
             short_circuit_result=report,
             notes=[f"market_scan_shipped: {len(scan.entities)} entities"],
         )
+
+    def _ask_for_sources(self, ctx: GateCtx, answer: str) -> HookDecision:
+        """Ask the turn once for the sources its comparison table does not carry.
+
+        The table is found and it names companies, but none of its facts can
+        be traced to a page: the run opened nine pages and the table says
+        nothing about which of them backs which row. That is the one gap the
+        gate can close, and it closes it by asking - the same way the report
+        shape gate asks for a report in three sections.
+
+        **Once.** A turn that was asked and did not answer keeps its own
+        answer, and the record says it was asked: "asked and still had no
+        source" and "never asked" are different states, and only the first is
+        evidence that the prompt-side fix has run out of road.
+        """
+        state = ctx.metadata.setdefault("market_scan", {})
+        if state.get("asked_for_sources"):
+            return self._decline(
+                ctx, "no_sources", "the comparison table still carries no source for its facts"
+            )
+        state["asked_for_sources"] = True
+        self._record(
+            ctx, "bounced", "the comparison table carries no source for its facts; asked for one"
+        )
+        logger.warning(
+            "market-scan: the comparison table carries no source; asking for a Read from column"
+        )
+        return HookDecision(
+            rollback=True,
+            rollback_inject=[
+                {"role": "assistant", "content": answer, "_recovery_synthetic": True},
+                {
+                    "role": "user",
+                    "content": _SOURCE_COLUMN_PROMPT,
+                    "_recovery_synthetic": True,
+                },
+            ],
+            notes=["market_scan_bounced: asked for a Read from column"],
+        )
+
+    def _decline(self, ctx: GateCtx, event: str, detail: str) -> HookDecision:
+        """Leave the turn's own answer standing, and say why in the record.
+
+        A decline that is only a note leaves no trace in the turn's own
+        record, so "the gate refused" and "the gate never ran" look the
+        same from the outside - which is what two batches of measurement
+        paid for.
+        """
+        self._record(ctx, event, detail)
+        logger.warning("market-scan: declined (%s: %s)", event, detail)
+        return HookDecision(notes=[f"market_scan_{event}: {detail}"])
 
     @staticmethod
     def _as_of(pages: Mapping[str, Any]) -> str:
