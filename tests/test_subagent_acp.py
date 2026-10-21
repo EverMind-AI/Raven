@@ -1068,6 +1068,21 @@ def test_a_session_response_rewrites_a_model_menu_the_probe_captured_long_ago(tm
     assert store.load([cfg])["a"].model_choices == _GROUPED_CHOICES
 
 
+def test_a_relearned_record_measured_under_an_old_launch_config_stays_stale(tmp_path: Path) -> None:
+    """Re-reading the menus is not a handshake, so a record already flagged
+    stale against the agent's current launch config is handed back flagged."""
+    cfg = stub_config("a")
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    store.record(replace(_with_model_choices(cfg, AcpModelChoice(value="old/retired")), fingerprint="an-older-config"))
+    stale = store.load([cfg], allow_stale=True)["a"]
+    assert stale.stale is True
+
+    updated = relearn_session_menus(stale, _menu_reply(models=_GROUPED_MODELS), store=store)
+
+    assert updated is not None and updated.stale is True
+    assert updated.fingerprint == "an-older-config"
+
+
 def test_a_response_without_a_model_menu_keeps_the_one_recorded(tmp_path: Path) -> None:
     """Silence is "this route did not report it", never "the agent has none".
 
@@ -1194,6 +1209,28 @@ def test_a_relearn_from_an_older_record_does_not_overwrite_a_newer_measurement(t
     assert relearn_session_menus(older, _menu_reply(models=_GROUPED_MODELS), store=store) is None
     assert relearn_session_menus(older, _session_result({"id": "deep"}), store=store) is None
     assert store.load([cfg])["a"] == newer
+
+
+def test_a_relearn_writes_only_the_menu_its_reply_reported(tmp_path: Path) -> None:
+    """Backends of one agent each hold the record they were built from, and a
+    relearn on one does not reach the others' copies. A second backend whose
+    reply reported only modes must therefore leave the model menu the first
+    one stored alone, rather than writing back the one it was built with."""
+    cfg = stub_config("a")
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    built_from = replace(
+        _with_modes(cfg, AcpMode(id="fast", description="old")),
+        model_choices=(AcpModelChoice(value="old/retired"),),
+    )
+    store.record(built_from)
+
+    assert relearn_session_menus(built_from, _menu_reply(models=_GROUPED_MODELS), store=store) is not None
+    other = relearn_session_menus(built_from, _session_result({"id": "deep", "description": "new"}), store=store)
+
+    assert other is not None and other.model_choices == _GROUPED_CHOICES
+    reread = store.load([cfg])["a"]
+    assert reread.model_choices == _GROUPED_CHOICES
+    assert [m.id for m in reread.available_modes] == ["deep"]
 
 
 def test_has_model_menu_is_false_for_a_row_recorded_before_the_key_existed(tmp_path: Path) -> None:

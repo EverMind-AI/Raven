@@ -396,32 +396,37 @@ class SnapshotStore:
         except OSError as exc:  # a snapshot is a cache, never a dependency
             logger.warning("acp capability snapshot write failed (not remembered): {}", exc)
 
-    def revise(self, snapshot: CapabilitySnapshot) -> bool:
-        """Store ``snapshot`` unless a newer measurement has replaced the row it was read from.
+    def revise(self, snapshot: CapabilitySnapshot, **changes: Any) -> CapabilitySnapshot | None:
+        """Apply ``changes`` to the stored record ``snapshot`` was read from, and return the result.
 
-        For a write that re-measured part of a record and carries the rest of it
-        unchanged: the stored row must still hold the measurement stamp the
-        caller started from. A Test or the boot backfill that recorded in the
-        meantime is newer evidence about everything, and writing the older
-        record back over it would undo that verdict and its fingerprint. The
-        same "newest measurement wins" rule the boot backfill applies to its own
-        late verdicts. ``False`` when the write stood down.
+        For a write that re-measured some fields of a record, so only those are
+        written, onto the row as it stands inside the lock: another holder of
+        the same record may have revised a different field since ``snapshot``
+        was read, and writing the caller's whole copy back would undo it.
+
+        ``None`` -- nothing written -- when the stored row carries another
+        measurement stamp than ``snapshot``. A Test or the boot backfill that
+        recorded in the meantime is newer evidence about everything, the same
+        "newest measurement wins" rule the boot backfill applies to its own
+        late verdicts. With no stored row, ``snapshot`` itself is the base.
         """
 
-        def merge(current: str | None) -> tuple[str | None, bool]:
+        def merge(current: str | None) -> tuple[str | None, CapabilitySnapshot | None]:
             rows = self._parse(current)
             stored = next((r for r in rows if r.get("agent") == snapshot.agent), None)
             if stored is not None and int(stored.get("measuredAtMs") or 0) != snapshot.measured_at_ms:
-                return None, False
+                return None, None
+            base = (CapabilitySnapshot.from_row(stored) if stored is not None else None) or snapshot
+            updated = replace(base, stale=snapshot.stale, **changes)
             rows = [r for r in rows if r.get("agent") != snapshot.agent]
-            rows.append(snapshot.to_row())
-            return self._dump(rows), True
+            rows.append(updated.to_row())
+            return self._dump(rows), updated
 
         try:
             return atomic_update(self._path, merge)
         except OSError as exc:  # a snapshot is a cache, never a dependency
             logger.warning("acp capability snapshot write failed (not remembered): {}", exc)
-            return False
+            return None
 
     def load(self, configs: Sequence[Any], *, allow_stale: bool = False) -> dict[str, CapabilitySnapshot]:
         """Snapshots for these configs, keyed by agent name.
@@ -720,9 +725,10 @@ def relearn_session_menus(
 
     The stored fingerprint and measurement stamp are kept rather than renewed.
     Only the menus were re-measured here, and claiming a fresh handshake would
-    clear a staleness flag the rest of the snapshot has not earned. The write
-    stands down when the stored row carries a newer stamp than ``snapshot``
-    (``SnapshotStore.revise``), since this record would undo that measurement.
+    clear a staleness flag the rest of the snapshot has not earned. Only the
+    menus this response reported are written, and none when a newer
+    measurement has replaced the record ``snapshot`` was read from
+    (``SnapshotStore.revise``).
 
     ``None`` when there was nothing to learn, which includes a response carrying
     neither menu. Each menu is judged on its own, and an absent or empty one is
@@ -739,14 +745,17 @@ def relearn_session_menus(
     if modes and modes != snapshot.available_modes:
         changes["available_modes"] = modes
     choices = () if _read_session_menu_unread(result) else _read_session_model_choices(result)
-    if choices and (choices != snapshot.model_choices or not snapshot.model_menu_measured):
+    if choices and choices != snapshot.model_choices:
         changes["model_choices"] = choices
         changes["model_menu_measured"] = True
     if not changes:
         return None
-    updated = replace(snapshot, **changes)
-    if not (store or SnapshotStore()).revise(updated):
-        logger.info("acp agent {!r}: a newer measurement is stored; session menus not re-recorded", snapshot.agent)
+    updated = (store or SnapshotStore()).revise(snapshot, **changes)
+    if updated is None:
+        logger.info(
+            "acp agent {!r}: session menus not re-recorded; a newer measurement stands or the store is unwritable",
+            snapshot.agent,
+        )
         return None
     logger.info(
         "acp agent {!r}: re-recorded {} mode(s) and {} model(s) from a session response",
