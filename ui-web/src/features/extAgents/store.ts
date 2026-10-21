@@ -627,7 +627,13 @@ const stops = new Map<number, (why: Stopped) => void>()
    stopped or with an answer that was already on its way. Past that, the wait
    is over whatever the write does later; the caller still reads a late
    landing. Without this the form sat on one line for as long as the socket
-   stayed silent, with nothing to press. */
+   stayed silent, with nothing to press.
+
+   The stop request is sent, not awaited: the transport gives a call no
+   timeout of its own, so on the socket that went silent -- the case the
+   ceiling exists for -- awaiting it would hang the wait on a second call
+   exactly as the first one hung it. The grace runs from the moment the stop
+   is sent, whatever becomes of that call. */
 async function awaitRun<T>(gen: number, name: string, write: Promise<T>): Promise<Outcome<T>> {
   const answered = write.then((got): Outcome<T> => ({ got }))
   const stopped = new Promise<Outcome<T>>((resolve) => {
@@ -637,8 +643,8 @@ async function awaitRun<T>(gen: number, name: string, write: Promise<T>): Promis
   try {
     const first = await Promise.race([answered, stopped])
     if ('got' in first) return first
-    await source().cancelRun(name).catch(() => false)
     const grace = new Promise<null>((resolve) => setTimeout(() => resolve(null), stopGraceMs))
+    void source().cancelRun(name).catch(() => false)
     return (await Promise.race([answered, grace])) ?? first
   } finally {
     clearTimeout(ceiling)

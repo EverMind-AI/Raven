@@ -3482,6 +3482,55 @@ describe('the machines module', () => {
     expect(loads.slice(before)).toEqual([true])
   })
 
+  it('ends the wait inside the grace even when the stop request itself never answers', async () => {
+    /* The socket that went silent without closing is the case the ceiling exists for, and
+       on that socket the stop request hangs exactly as the connect did: awaited, it would
+       have held the form open for ever a second time. The stop is sent and the grace runs
+       from that moment, on the ceiling's path and on the Cancel press alike. */
+    const presets: PresetChoice[] = [
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] }
+    ]
+    let stopsAsked = 0
+    const { toasts } = install([row()], {
+      machines: [ready()],
+      presets: async () => presets,
+      /* Neither the connect nor the stop ever answers. */
+      connectOnMachine: () => new Promise(() => {}),
+      cancelRun: () => {
+        stopsAsked += 1
+        return new Promise(() => {})
+      }
+    })
+    store._resetForTests({ ceilingMs: 40, graceMs: 20 })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    await click(sheetAct('gui.machine.connect_do'))
+    expect(sheetActs()).toEqual(['gui.cancel', 'gui.machine.connecting'])
+    await act(async () => {
+      await new Promise(res => setTimeout(res, 120))
+    })
+    expect(stopsAsked).toBe(1)
+    expect(sheetStatus()).toBe('gui.machine.connect_timeout_head')
+    expect(store.get().mconnectBusy).toBeNull()
+    expect(store.get().mconnectPending).toEqual([])
+    expect(sheetActs()).toEqual(['gui.machine.connect_do'])
+    /* Pressed again and cancelled by hand: the same bound, from the press. */
+    await click(sheetAct('gui.machine.connect_do'))
+    await click(sheetAct('gui.cancel'))
+    expect(stopsAsked).toBe(2)
+    expect(sheetActs()).toEqual(['gui.machine.cancelling', 'gui.machine.connecting'])
+    await act(async () => {
+      await new Promise(res => setTimeout(res, 60))
+    })
+    expect(sheetStatus()).toBe('gui.machine.connect_cancelled_head')
+    expect(store.get().mconnectBusy).toBeNull()
+    expect(store.get().mconnectCancelling).toBe(false)
+    expect(sheetActs()).toEqual(['gui.machine.connect_do'])
+    expect(toasts).toEqual([])
+  })
+
   it('leaves a cancelled Reconnect off the row as a failure, and says the cancel on the form', async () => {
     /* Reconnect is the agents page's own switch, run from the machine's side, so
        its run is the row's: Cancel stops it the same way, the refusal that says
