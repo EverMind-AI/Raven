@@ -218,6 +218,8 @@ def register_aligned_methods_except_system(
             turn_ids=turn_ids,
             direct_targets=direct_targets,
             build_error=build_error,
+            # A message typed while an ask_user question waits answers it.
+            question_broker=question_broker,
             # Must equal the channel ``build_rpc_spine`` registered its outlet
             # under; ``turn.py`` documents that a mismatch drops the reply.
             default_channel=default_channel,
