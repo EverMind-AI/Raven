@@ -404,11 +404,12 @@ def test_the_launcher_under_mirasims_home_or_on_the_path_means_installed_but_no_
     assert presence(nowhere["env"], path=nowhere["path"]) == ("installed", str(launcher))
 
     launcher.unlink()
-    on_path = tmp_path / "bin" / "mirasim"
+    # `shutil.which` on Windows finds a command only under a PATHEXT extension; elsewhere, an executable bit.
+    on_path = tmp_path / "bin" / ("mirasim.cmd" if sys.platform == "win32" else "mirasim")
     on_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     on_path.chmod(0o755)
     state, where = presence(nowhere["env"], path=nowhere["path"])
-    assert state == "installed" and Path(where) == on_path
+    assert state == "installed" and str(Path(where)).lower() == str(on_path).lower()
 
 
 def test_a_token_file_counts_as_a_host_only_while_something_listens(
