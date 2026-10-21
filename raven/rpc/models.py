@@ -2423,6 +2423,14 @@ class ModelFetchModelsResult(_Strict):
     models: list[ModelCandidate]
     status: str
     error: str | None = None
+    refused: bool = Field(
+        default=False,
+        description=(
+            "With `verify`: the vendor itself refused the stored key -- answered it with 401, or named it invalid. "
+            "`invalid_key` alone is broader (a 403 maps to it too, and a 403 can mean a region, a plan or a proxy), "
+            "so a surface that says a key was rejected reads this, not the status."
+        ),
+    )
 
 
 class ModelAddModelParams(_Strict):

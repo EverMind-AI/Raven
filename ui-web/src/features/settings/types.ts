@@ -189,6 +189,9 @@ export interface ModelCatalogue {
   models: ModelCandidate[]
   status: string
   error?: string | null
+  /* With a verify: the vendor itself refused the stored key. `invalid_key`
+     alone also covers a 403, which is not that. */
+  refused?: boolean
 }
 
 /* What a provider's credential check answered, after a connect or on a
@@ -201,6 +204,10 @@ export interface ConnectProbe {
   http_status?: number | null
   models_count?: number | null
   error?: string | null
+  /* The vendor's own refusal of the key -- the one verdict a row calls
+     "rejected". `invalid_key` alone is broader: a 403 maps to it as well, and
+     a 403 can mean a region, a plan or a proxy, not the key. */
+  refused?: boolean
 }
 
 /* The DS.settings contract the rpc source implements. A write that fails

@@ -210,9 +210,9 @@ describe('ModelStepBody', () => {
 
   it('connect asks the vendor first; a key it did not refuse is saved, the form closes, and the row carries the verdict', async () => {
     /* A 403 is reported but not refused -- vendors answer it for a region or a
-       plan as well -- so the key is stored, the row says the vendor rejects it
-       rather than "Connected", and a retry is offered. No second test on the
-       side: the check already was the test. */
+       plan as well -- so the key is stored, the row keeps "Connected" in the
+       warning colour with the note beside it, and a retry is offered. No
+       second test on the side: the check already was the test. */
     const data = snap()
     const { calls } = install(data, {
       provider: async (op, params) => {
@@ -237,8 +237,26 @@ describe('ModelStepBody', () => {
     const row = (): Element => [...document.querySelectorAll('.settings-prow2')].find((r) => r.querySelector('.settings-pnote'))!
     expect(row().querySelector('.settings-pnote')!.textContent).toContain('gui.settings.providers.probe_invalid_saved')
     expect(row().querySelector('.settings-chip')!.className).toContain('settings-warn')
-    expect(row().querySelector('.settings-chip')!.textContent).toBe('gui.settings.providers.key_rejected')
+    expect(row().querySelector('.settings-chip')!.textContent).toBe('gui.settings.providers.connected')
     expect(screen.getByText('gui.settings.providers.probe_recheck')).toBeTruthy()
+  })
+
+  it('a stored key the vendor refuses on a re-check reads Key rejected; a 403 does not', async () => {
+    /* `refused` is the backend's own verdict (a 401, or the key named invalid).
+       `invalid_key` alone also covers a 403, which can mean a region, a plan or
+       a proxy, so that row keeps "Connected". */
+    const data = snap()
+    let answer: { status: string; refused?: boolean } = { status: 'invalid_key', refused: true }
+    install(data, { fetchModels: async () => ({ ...answer, models: [], error: 'HTTP 401' }) })
+    await openBody(ModelStepBody)
+    const chip = (): Element => [...document.querySelectorAll('.settings-prow2')].find((r) => r.textContent!.includes('OpenRouter'))!.querySelector('.settings-chip')!
+    await act(async () => { await store.recheck('openrouter') })
+    expect(chip().textContent).toBe('gui.settings.providers.key_rejected')
+    expect(chip().className).toContain('settings-warn')
+    answer = { status: 'invalid_key' }
+    await act(async () => { await store.recheck('openrouter') })
+    expect(chip().textContent).toBe('gui.settings.providers.connected')
+    expect(chip().className).toContain('settings-warn')
   })
 
   it('a key the vendor refuses is not saved, and the form says so', async () => {

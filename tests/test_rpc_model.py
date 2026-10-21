@@ -445,6 +445,30 @@ async def test_check_key_sends_only_the_fields_the_form_holds(fake_home: Path, m
     assert seen["section_override"] == {"api_base": "http://localhost:11434"}
 
 
+@pytest.mark.parametrize(
+    ("answer", "status", "refused"),
+    [
+        ({"ok": False, "status": "invalid_key", "http_status": 401, "error": "HTTP 401"}, "invalid_key", True),
+        # A 403 is `invalid_key` to the status table and not a refusal: a region,
+        # a plan or a proxy answers it as well.
+        ({"ok": False, "status": "invalid_key", "http_status": 403, "error": "HTTP 403"}, "invalid_key", False),
+        ({"ok": False, "status": "network_error", "error": "refused"}, "network_error", False),
+        ({"ok": True, "status": "valid", "http_status": 200, "model_ids": ["m1"]}, "ok", False),
+    ],
+)
+async def test_fetch_models_says_whether_the_vendor_itself_refused_the_key(
+    fake_home: Path, monkeypatch: pytest.MonkeyPatch, answer: dict, status: str, refused: bool
+) -> None:
+    """The verdict a row may call "rejected", kept apart from the broader status."""
+    _write_config(fake_home, {"providers": {"openrouter": {"apiKey": "sk-or"}}})
+    monkeypatch.setattr("raven.config.update_providers.test_provider", _probe_answering(answer, {}))
+
+    out = await model_fetch_models({"slug": "openrouter", "verify": True})
+
+    assert out["status"] == status
+    assert out["refused"] is refused
+
+
 # ----------------------------------------------------------------------------
 # model.disconnect
 # ----------------------------------------------------------------------------

@@ -451,7 +451,7 @@ export async function connect(key: string, slug: string, params: Record<string, 
   if (!stored) return false
   const verdict = seen.verdict
   if (verdict) {
-    setProbe(slug, { ok: verdict.ok, status: verdict.status, models_count: verdict.models_count ?? null, error: verdict.error ?? null })
+    setProbe(slug, { ok: verdict.ok, status: verdict.status, models_count: verdict.models_count ?? null, error: verdict.error ?? null, refused: verdict.refused })
     if (verdict.status === 'valid') reloadOffer()
   } else {
     void recheck(slug)
@@ -477,8 +477,8 @@ export async function recheck(slug: string): Promise<void> {
   await run(`probe:${slug}`, async () => {
     const r = await source().fetchModels(slug, true)
     setProbe(slug, r.status === 'ok'
-      ? { ok: true, status: 'valid', models_count: (r.models || []).filter((m) => m.source === 'live').length }
-      : { ok: false, status: r.status, error: r.error ?? null })
+      ? { ok: true, status: 'valid', models_count: (r.models || []).filter((m) => m.source === 'live').length, refused: false }
+      : { ok: false, status: r.status, error: r.error ?? null, refused: r.refused ?? false })
     if (r.status === 'ok') reloadOffer()
   })
 }

@@ -814,7 +814,7 @@ async def model_fetch_models(params: dict) -> dict:
     A read throughout -- nothing is written until a row is added.
     """
     from raven.config.loader import load_config
-    from raven.config.update_providers import test_provider
+    from raven.config.update_providers import credential_refused, test_provider
     from raven.providers.catalog import describe
     from raven.providers.rates import resolve_context_window
     from raven.providers.registry import find_by_name
@@ -898,6 +898,9 @@ async def model_fetch_models(params: dict) -> dict:
         "models": ordered,
         "status": "ok" if asked else str(probe.get("status") or "not_asked"),
         "error": None if asked else (str(probe.get("error") or "") or None),
+        # The vendor's own refusal, the one verdict a surface may call "rejected";
+        # `invalid_key` alone also covers a 403, which is not that.
+        "refused": False if asked else credential_refused(probe),
     }
 
 

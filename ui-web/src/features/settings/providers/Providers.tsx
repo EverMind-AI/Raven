@@ -169,13 +169,14 @@ function probeText(p: ConnectProbe): string {
 
 /* A row's chip. "Connected" -- unless the vendor itself refused the stored
    key, where "Connected" beside "the provider rejects the saved key" was two
-   answers to one question, and the chip now says which. Any other failed
-   test keeps "Connected" in the warning colour: the key may well be fine and
-   the vendor unreachable. */
+   answers to one question, and the chip now says which. Read off `refused`,
+   the backend's own verdict, not off `invalid_key`: a 403 maps to that status
+   too, and a 403 can mean a region, a plan or a proxy -- a key that may well
+   be fine. Any other failed test keeps "Connected" in the warning colour. */
 function rowChip(slug: string): { state: 'on' | 'warn'; text: string } {
   const probe = store.get().probes[slug]
   if (store.isBusy(`probe:${slug}`) || !probe) return { state: 'on', text: t('gui.settings.providers.connected') }
-  if (probe.status === 'invalid_key') return { state: 'warn', text: t('gui.settings.providers.key_rejected') }
+  if (probe.refused) return { state: 'warn', text: t('gui.settings.providers.key_rejected') }
   return { state: probeTone(probe) === 'warn' ? 'warn' : 'on', text: t('gui.settings.providers.connected') }
 }
 

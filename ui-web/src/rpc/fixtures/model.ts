@@ -200,6 +200,7 @@ export function createModel(_env: FixtureEnv): ModelFixture {
             added: !!row && row.models.includes(id),
           })),
           status: 'ok',
+          refused: false,
         }
       },
       'model.add_models': (p) => {

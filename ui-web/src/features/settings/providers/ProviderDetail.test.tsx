@@ -153,7 +153,7 @@ describe('the eye beside a connected provider\'s key', () => {
   })
 
   it('the head says the key is rejected once the vendor refused the stored one', async () => {
-    install(snap(), { fetchModels: async () => ({ models: [], status: 'invalid_key', error: 'HTTP 401' }) })
+    install(snap(), { fetchModels: async () => ({ models: [], status: 'invalid_key', error: 'HTTP 401', refused: true }) })
     await open('openrouter')
     expect(document.querySelector('.settings-tp-state')!.textContent).toBe('gui.settings.providers.connected')
     await act(async () => { await store.recheck('openrouter') })
