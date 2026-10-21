@@ -103,7 +103,7 @@ def _local_miss_hint(registry: "SkillRegistry | None", native: str, blocked: fro
         roots = ", ".join(str(root) for root, _ in registry.layer_roots())
         if roots:
             sentences.append(f"Local ids cover only the skills under {roots}.")
-    sentences.append("A SKILL.md outside Raven's skills is not readable by id: open it with read_file at its path.")
+    sentences.append("A SKILL.md you found outside Raven's skill directories has no id: read that file with read_file.")
     return " ".join(sentences)
 
 
