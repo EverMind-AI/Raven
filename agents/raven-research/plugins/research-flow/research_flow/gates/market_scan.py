@@ -76,9 +76,15 @@ logger = logging.getLogger(__name__)
 _SOURCE_COLUMN_PROMPT = """The comparison table in this report does not say where its
 facts came from, so none of it can be checked against what was actually read.
 
-Add a `Read from` column to that table: one URL per row, written out in full
-and starting with `https://`, naming the page you opened that the row's facts
-come from. A row whose facts came from two pages names both.
+Put the page behind each fact in the table, in one of two forms:
+
+- on the fact itself, as a markdown link: `[$15 per host per month](https://example.com/pricing)`
+- in a `Read from` column, as the URL of the page the row's facts came from:
+  `https://example.com/pricing` - one URL per row.
+
+A row whose facts came from two different pages needs the link on each fact:
+a cell that names two pages cannot be traced to one of them, and a row that
+names two pages cannot say which of them a fact came from.
 
 Keep everything else in the report as it is - the sections, the argument, the
 other tables, and the wording of the comparison table's own columns. The table

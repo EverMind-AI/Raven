@@ -385,3 +385,118 @@ def test_a_row_citing_a_page_the_run_never_opened_refuses_the_whole_scan():
     with pytest.raises(MarketScanError) as excinfo:
         entities_from_table(find_market_table(report), pages)
     assert "which the run did not open" in str(excinfo.value)
+
+
+# -- what the review found ----------------------------------------------------
+#
+# Two blocking findings on the source-ask path, both with a reproduction:
+#
+# 1. The prompt asked for a bare URL and for two pages per row, and the
+#    parser reads neither: a bare URL was not read as a link at all, and a
+#    row naming two pages attributed every fact to the first one.
+# 2. The shape-only finder matched English column headings only, so a report
+#    written in the question's language was recorded as "no table" and never
+#    reached the source ask.
+
+BARE_URL_SOURCE = f"""| Vendor | Price | Read from |
+|---|---|---|
+| Datadog | $15 per host | {ACME} |
+| Dynatrace | Contact Sales | {GLOBEX} |
+"""
+
+LINK_ON_THE_FACT = f"""| Vendor | Price |
+|---|---|
+| Datadog | [$15 per host]({ACME}) |
+| Dynatrace | [Contact Sales]({GLOBEX}) |
+"""
+
+TWO_PAGES_IN_A_ROW = f"""| Vendor | Price | Read from |
+|---|---|---|
+| Datadog | $15 per host | [product]({ACME}) [pricing]({GLOBEX}) |
+| Dynatrace | Contact Sales | [globex]({GLOBEX}) |
+"""
+
+
+def test_a_bare_url_in_a_source_column_is_a_source():
+    """The flow's report clause says a source column may hold the bare URL.
+
+    "In prose, put the URL in a markdown link on the words it supports ...
+    a source column in a table may hold the bare URL." So the reader has to
+    read the bare form too, or it refuses the report the clause produces.
+    """
+    from research_flow.market.table import carries_provenance, find_vendor_table
+
+    table = find_vendor_table(BARE_URL_SOURCE)
+    assert table is not None
+    assert carries_provenance(table) is True
+
+    pages = {
+        ACME: SimpleNamespace(url=ACME, retrieved_at=1_700_000_000.0, source="jina"),
+        GLOBEX: SimpleNamespace(url=GLOBEX, retrieved_at=1_700_000_000.0, source="jina"),
+    }
+    entities = entities_from_table(find_market_table(BARE_URL_SOURCE), pages)
+    assert [e.name for e in entities] == ["Datadog", "Dynatrace"]
+    assert entities[0].fields["price"] == "$15 per host"
+    assert entities[0].provenance[0].source_url == ACME
+
+
+def test_a_link_on_the_fact_is_the_facts_own_source():
+    """The form the flow's clause prefers for a fact, and the unambiguous one."""
+    from research_flow.market.table import carries_provenance, find_vendor_table
+
+    table = find_vendor_table(LINK_ON_THE_FACT)
+    assert table is not None
+    assert carries_provenance(table) is True
+
+    pages = {
+        ACME: SimpleNamespace(url=ACME, retrieved_at=1_700_000_000.0, source="jina"),
+        GLOBEX: SimpleNamespace(url=GLOBEX, retrieved_at=1_700_000_000.0, source="jina"),
+    }
+    entities = entities_from_table(find_market_table(LINK_ON_THE_FACT), pages)
+    assert entities[0].fields["price"] == "$15 per host"
+    assert entities[0].provenance[0].source_url == ACME
+
+
+def test_a_row_naming_two_pages_cannot_attribute_a_fact_to_one_of_them():
+    """The false provenance the review found, refused rather than guessed.
+
+    The row named two pages and the fact named none, so the fact could have
+    come from either. Attributing it to the page listed first is a
+    provenance nobody checked.
+    """
+    from research_flow.market.table import find_market_table
+
+    pages = {
+        ACME: SimpleNamespace(url=ACME, retrieved_at=1_700_000_000.0, source="jina"),
+        GLOBEX: SimpleNamespace(url=GLOBEX, retrieved_at=1_700_000_000.0, source="jina"),
+    }
+    with pytest.raises(MarketScanError) as excinfo:
+        entities_from_table(find_market_table(TWO_PAGES_IN_A_ROW), pages)
+    assert "cannot be traced to one of them" in str(excinfo.value)
+
+
+def test_a_localized_table_is_found_by_its_shape():
+    """The flow asks for the report in the question's language.
+
+    The column heading is then in that language, and a matcher that knows
+    only English records the report as "no table" - so it never reaches the
+    source ask, and a market report in the user's own language is never
+    checked.
+    """
+    from research_flow.market.table import find_vendor_table
+
+    localized = "| \u5382\u5546 | \u4ef7\u683c | \u6765\u6e90 |\n|---|---|---|\n| \u4e01\u53f8 | $15 | x |\n"
+    table = find_vendor_table(localized)
+    assert table is not None
+    assert table.header[table.name_index] == "\u5382\u5546"
+
+
+def test_the_prompt_asks_for_a_form_the_parser_reads():
+    """The prompt and the parser have to agree, or the ask cannot be answered."""
+    from research_flow.gates.market_scan import _SOURCE_COLUMN_PROMPT
+
+    # It asks for a markdown link or a bare URL - both are read.
+    assert "[$15 per host per month](https://example.com/pricing)" in _SOURCE_COLUMN_PROMPT
+    assert "https://example.com/pricing` - one URL per row" in _SOURCE_COLUMN_PROMPT
+    # And it does not offer the ambiguous form.
+    assert "names both" not in _SOURCE_COLUMN_PROMPT

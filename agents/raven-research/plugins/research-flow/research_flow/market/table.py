@@ -59,6 +59,7 @@ __all__ = [
 ]
 
 _INLINE_LINK_RE = re.compile(r"\[(?P<text>[^\]]*)\]\((?P<url>[^)\s]+)\)")
+_BARE_URL_RE = re.compile(r"https?://[^\s|)\]]+")
 _CELL_SPLIT_RE = re.compile(r"(?<!\\)\|")
 _DELIM_CELL_RE = re.compile(r"^:?-+:?$")
 _FENCE_RE = re.compile(r"^ {0,3}(?P<marker>`{3,}|~{3,})(?P<info>.*)$")
@@ -83,8 +84,15 @@ _NAME_HEADER_RE = re.compile(
 #: its shape rather than by its citations. "Typical vendors" names a list of
 #: vendors inside a cell, not the company a row is about, so the match has to
 #: be at the front of the header.
+#:
+#: The localized terms are here for the same reason they are in
+#: ``_NAME_HEADER_RE``: the flow asks for the report in the question's
+#: language, so a report written in Chinese has a Chinese column heading, and
+#: a matcher that knows only English refuses the flow's own output.
 _NAMED_HEADER_RE = re.compile(
-    r"^(company|vendor|provider|player|brand|competitor|supplier)", re.I
+    rf"^(company|vendor|provider|player|brand|competitor|supplier"
+    rf"|{_GONG_SI}|{_CHAN_SHANG}|{_CHAN_PIN})",
+    re.I,
 )
 
 
@@ -188,10 +196,52 @@ def _links(cell: str) -> list[str]:
     return [m.group("url") for m in _INLINE_LINK_RE.finditer(cell or "")]
 
 
+def _cell_urls(cell: str) -> list[str]:
+    """Every page a cell names: a markdown link, or a URL written out bare.
+
+    **Two forms, because the flow's report clause asks for two.** In prose it
+    says to put the URL in a markdown link on the words it supports; in a
+    table's source column it says the bare URL is fine. A reader that read
+    only the markdown form would refuse the report the clause produces, so
+    both are read here.
+
+    A cell that names **two** pages names two pages: it is not one fact with
+    a source, and the callers refuse it rather than pick one.
+    """
+    text = cell or ""
+    urls = [m.group("url") for m in _INLINE_LINK_RE.finditer(text)]
+    # The bare URLs are read from what is left once the markdown links are
+    # taken out, so a link's own target is not counted twice.
+    urls.extend(_BARE_URL_RE.findall(_INLINE_LINK_RE.sub("", text)))
+    return urls
+
+
+def _cell_text(cell: str) -> str:
+    """What the cell says, with the pages it names taken out.
+
+    A **markdown link keeps its words.** The flow's clause puts the URL in a
+    link *on the words it supports*, so in a cell that is nothing but a link
+    the link's text is what the cell says, and the link's target is the
+    page behind it. A cell that says something in its own words keeps its own
+    words and drops the links beside them: there the link is a label, and a
+    label is not part of the fact.
+
+    A bare URL leaves nothing behind: it was never anything but a page.
+    """
+    text = cell or ""
+    without_links = _INLINE_LINK_RE.sub("", text).strip()
+    if without_links:
+        return _BARE_URL_RE.sub("", without_links).strip()
+    return " ".join(m.group("text") for m in _INLINE_LINK_RE.finditer(text)).strip()
+
+
 def _only_links(cell: str) -> bool:
     """Whether the cell is nothing but links - a citation, not a fact."""
     text = _INLINE_LINK_RE.sub("", cell or "").strip()
-    return bool(_links(cell)) and not text
+    if _links(cell):
+        return not text
+    # A cell that is nothing but a URL written out is a citation too.
+    return bool(text) and bool(_BARE_URL_RE.fullmatch(text))
 
 
 def find_market_table(
@@ -233,7 +283,7 @@ def find_market_table(
         # A market table cites a page. A table with no citation anywhere is a
         # table of numbers and labels - a metrics table, a spec table - and
         # reading it as a market would invent companies out of row headers.
-        if require_sources and not any(_links(cell) for row in rows for cell in row):
+        if require_sources and not any(_cell_urls(cell) for row in rows for cell in row):
             continue
 
         link_cols = [
@@ -274,7 +324,13 @@ def find_market_table(
                 break
         if source_index is None and len(link_cols) == 1:
             only = link_cols[0]
-            if only != name_index:
+            # A table whose **only** other column is a column of links is not
+            # a table with a source column and no facts: it is a table whose
+            # facts carry their own links, and the flow's own clause prefers
+            # that form. Reading that column as the source would leave the
+            # table with no fact columns at all.
+            other_columns = [i for i in range(width) if i != name_index]
+            if only != name_index and len(other_columns) > 1:
                 source_index = only
 
         field_indices = [idx for idx in range(width) if idx != name_index and idx != source_index]
@@ -313,11 +369,11 @@ def carries_provenance(table: MarketTable) -> bool:
     """
     if table.source_index is not None:
         for row in table.rows:
-            if table.source_index < len(row) and _links(row[table.source_index]):
+            if table.source_index < len(row) and _cell_urls(row[table.source_index]):
                 return True
     for idx in table.field_indices:
         for row in table.rows:
-            if idx < len(row) and _links(row[idx]):
+            if idx < len(row) and _cell_urls(row[idx]):
                 return True
     return False
 
@@ -377,13 +433,13 @@ def entities_from_table(
     for row in table.rows:
         if table.name_index >= len(row):
             continue
-        name = _INLINE_LINK_RE.sub("", row[table.name_index]).strip()
+        name = _cell_text(row[table.name_index])
         if not name:
             continue
 
         row_sources: list[str] = []
         if table.source_index is not None and table.source_index < len(row):
-            row_sources = _links(row[table.source_index])
+            row_sources = _cell_urls(row[table.source_index])
 
         fields: dict[str, str] = {}
         pending: list[tuple[str, str]] = []
@@ -391,12 +447,12 @@ def entities_from_table(
             if idx >= len(row):
                 continue
             cell = row[idx].strip()
-            if not cell or _only_links(cell):
+            if not cell:
                 continue
             field = normalise_field(table.header[idx])
             if not field:
                 continue
-            cell_links = _links(cell)
+            cell_links = _cell_urls(cell)
             if len(cell_links) == 1:
                 url = cell_links[0]
             elif len(cell_links) > 1:
@@ -404,11 +460,20 @@ def entities_from_table(
                     f"{name}: the {field!r} cell cites {len(cell_links)} pages, so the fact "
                     "cannot be traced to one of them"
                 )
-            elif row_sources:
+            elif len(row_sources) == 1:
                 url = row_sources[0]
+            elif len(row_sources) > 1:
+                # The fact names no page and the row names two, so the fact
+                # could have come from either. Attributing it to the page
+                # that happened to be listed first is a provenance nobody
+                # checked, which is the one thing this module will not do.
+                raise MarketScanError(
+                    f"{name}: the {field!r} fact names no page and the row names "
+                    f"{len(row_sources)}, so it cannot be traced to one of them"
+                )
             else:
                 continue
-            text = _INLINE_LINK_RE.sub("", cell).strip()
+            text = _cell_text(cell)
             if not text:
                 continue
             fields[field] = text

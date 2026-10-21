@@ -200,3 +200,52 @@ def test_peeking_at_the_rows_leaves_them_for_the_appendix():
         assert turn_rows() == []
     finally:
         take_turn_rows()
+
+
+@pytest.mark.asyncio
+async def test_the_output_the_prompt_instructs_is_the_output_the_gate_accepts():
+    """The whole ask, end to end: the gate asks, the turn complies, the gate ships.
+
+    The prompt names two forms - a markdown link on the fact, and a bare URL
+    in a `Read from` column - and both have to be forms the reader can trace.
+    A prompt that asks for something the parser cannot read produces a turn
+    that was asked and still has no source, which is the state the ask
+    exists to end.
+    """
+    from research_flow.gates.market_scan import _SOURCE_COLUMN_PROMPT
+
+    for instructed in (
+        # The link on the fact, exactly as the prompt writes it.
+        f"""# Competitive landscape
+
+> The market is led by two vendors.
+
+| Vendor | Price |
+|---|---|
+| Acme | [$49 per seat per month]({ACME}) |
+| Globex | [Contact Sales]({GLOBEX}) |
+""",
+        # The bare URL in a `Read from` column, one per row.
+        f"""# Competitive landscape
+
+> The market is led by two vendors.
+
+| Vendor | Price | Read from |
+|---|---|---|
+| Acme | $49 per seat per month | {ACME} |
+| Globex | Contact Sales | {GLOBEX} |
+""",
+    ):
+        ctx = _ctx(instructed)
+        stash_turn_rows(ROWS)
+        try:
+            decision = await _gate().after_iteration(ctx)
+        finally:
+            take_turn_rows()
+        assert decision.rollback is False, "the instructed output must not be asked about again"
+        assert decision.short_circuit_result is not None, instructed
+        assert f"{ACME}" in decision.short_circuit_result
+
+    # And the prompt really does describe those two forms.
+    assert "[$15 per host per month](https://example.com/pricing)" in _SOURCE_COLUMN_PROMPT
+    assert "one URL per row" in _SOURCE_COLUMN_PROMPT
