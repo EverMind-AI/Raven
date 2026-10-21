@@ -608,7 +608,21 @@ def render_config(source: Path) -> Path:
     nothing naming the credential. The window recalibration runs after both
     branches because it is a fact about whichever model won, not about whose
     key is paying for it.
+
+    The image section's own file is written before the steps that can still
+    refuse the launch, and a refused launch never reaches the sweep: whatever
+    ends the render early removes it. It is named by this pid, so it is this
+    run's alone to remove.
     """
+    try:
+        return _render_config(source)
+    except BaseException:
+        if (rendered_part := getattr(render, "rendered_part", None)) is not None:
+            rendered_part(state_root(), "image").unlink(missing_ok=True)
+        raise
+
+
+def _render_config(source: Path) -> Path:
     config = json.loads(source.read_text(encoding="utf-8"))
     host = render.host_config()
 

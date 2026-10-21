@@ -1228,6 +1228,30 @@ def test_a_pinned_section_s_own_file_is_owner_only_and_goes_with_its_render(grou
     assert not own.exists(), "a render that pins nothing leaves no deck key behind"
 
 
+def test_a_refused_launch_leaves_no_pinned_section_s_own_file(grounded, tmp_path, monkeypatch):
+    """The part is written before the ACP home is placed, and a launch refused there
+    never reaches the sweep: it must not leave the deck's image key behind."""
+    _host_image(tmp_path, *_MINIMAX_HOST)
+    monkeypatch.setenv("PPT_IMAGE_API_KEY", "mm-deck")
+    (tmp_path / "home" / "subagent_sessions").write_text("not a directory")
+    with pytest.raises(SystemExit, match="cannot be created"):
+        grounded.render_config(RUN_PY.parent / "config.json")
+    assert not list((tmp_path / "state").glob(".config.rendered.*"))
+
+
+def test_a_render_that_fails_to_write_leaves_no_pinned_section_s_own_file(grounded, tmp_path, monkeypatch):
+    _host_image(tmp_path, *_MINIMAX_HOST)
+    monkeypatch.setenv("PPT_IMAGE_API_KEY", "mm-deck")
+
+    def refuse(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(grounded.render, "write_rendered", refuse)
+    with pytest.raises(OSError, match="disk full"):
+        grounded.render_config(RUN_PY.parent / "config.json")
+    assert not list((tmp_path / "state").glob(".config.rendered.*"))
+
+
 def test_the_launcher_still_renders_under_the_releases_it_can_outlive(grounded, tmp_path, monkeypatch):
     """A stamped home tree outranks a checkout's own agents/, so this file can run
     under any 0.2 raven. Those have no ``media_provider`` and read the image section
