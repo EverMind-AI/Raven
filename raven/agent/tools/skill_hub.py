@@ -95,8 +95,10 @@ def _local_miss_hint(registry: "SkillRegistry | None", native: str, blocked: fro
     """
     sentences = []
     if registry is not None:
-        names = [name for name in registry.names() if not is_blocked(blocked, name)]
+        names = registry.names()
         if len(names) <= _NEAR_ID_SEARCH_LIMIT:
+            if blocked:
+                names = [name for name in names if not is_blocked(blocked, name)]
             close = difflib.get_close_matches(native, names, n=_CLOSEST_IDS)
             if close:
                 sentences.append("Closest local ids: " + ", ".join(f"local/{name}" for name in close) + ".")
