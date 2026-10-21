@@ -219,8 +219,21 @@ class TestLocalMiss:
 
     async def test_it_does_not_send_the_model_to_the_skills_context(self, tool_cls, tmp_path: Path) -> None:
         out = await tool_cls(registry=_registry_with(tmp_path)).execute(skill_id="local/confirming-pr-review")
+        assert out.startswith("Error: no local skill 'confirming-pr-review' found")
         assert "# Skills" not in out
         assert "already in your context" not in out
+
+    async def test_it_offers_no_ids_when_none_is_close(self, tool_cls, tmp_path: Path) -> None:
+        registry = _registry_with(tmp_path, workspace=["raven-dev-conventions"])
+        out = await tool_cls(registry=registry).execute(skill_id="local/confirming-pr-review")
+        assert out.startswith("Error: no local skill 'confirming-pr-review' found")
+        assert "Closest local ids" not in out
+
+    async def test_a_tool_without_a_registry_still_answers_a_local_miss(self, tool_cls) -> None:
+        out = await tool_cls().execute(skill_id="local/confirming-pr-review")
+        assert out.startswith("Error: no local skill 'confirming-pr-review' found")
+        assert "read_file" in out
+        assert "Local ids cover" not in out
 
     async def test_it_offers_the_closest_local_ids(self, tool_cls, tmp_path: Path) -> None:
         registry = _registry_with(tmp_path, workspace=["raven-dev-conventions"], builtin=["weather"])
@@ -241,6 +254,13 @@ class TestLocalMiss:
         registry = _registry_with(tmp_path, builtin=[f"deck-{i:03d}" for i in range(300)])
         out = await tool_cls(registry=registry).execute(skill_id="local/deck-0000")
         assert len(re.findall(r"local/deck-\d{3}\b", out)) == 3
+
+    async def test_it_still_searches_a_library_at_the_limit(self, tool_cls) -> None:
+        from raven.agent.tools.skill_hub import _NEAR_ID_SEARCH_LIMIT
+
+        metas = {("builtin", f"deck-{i:05d}"): object() for i in range(_NEAR_ID_SEARCH_LIMIT)}
+        out = await tool_cls(registry=_FakeRegistry(metas)).execute(skill_id="local/deck-000000")
+        assert "Closest local ids: local/deck-" in out
 
     async def test_it_offers_no_ids_from_a_library_too_large_to_search_cheaply(self, tool_cls, tmp_path: Path) -> None:
         from raven.agent.tools.skill_hub import _NEAR_ID_SEARCH_LIMIT
