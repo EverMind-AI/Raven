@@ -104,9 +104,10 @@ All notable changes to Raven are documented here.
   stop policy reports **precision and calibration error apart from
   accuracy**, and a regression in either fails the gate even when accuracy
   holds: the cheap way to raise accuracy is to stop more often, and that
-  is a trade rather than an improvement. The scan replaces the answer only
-  when the gates pass; otherwise the turn's own answer stands and the note
-  says which gate said no. The shipped profile label moves with it, to
+  is a trade rather than an improvement. The scan replaces the comparison
+  table inside the answer only when the gates pass; otherwise the turn's own
+  answer stands and the record says which gate said no. The shipped profile
+  label moves with it, to
   `dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader-market`.
 
 - The Agent Hub has a **Machines** tab: the registered machines with the state
@@ -1654,6 +1655,40 @@ All notable changes to Raven are documented here.
   `prompt_template` win. The TUI's and the web UI's transcript views read `prompt_template`
   first and fall back to `task`, so a transcript recorded before this rename keeps labeling
   its delegation rows correctly.
+
+### Fixed
+
+- **The market rung now fires on the research flow's own output, and its check
+  reaches the report file.** Two separate causes, both found by replaying a
+  measured run's own artefacts rather than by reading the code.
+
+  The first: the gate was **reached**, and it declined at the table. The flow's
+  report contract asks for the URL of a page in the **prose** and says a
+  candidate's provenance "belongs under it as prose or in a second table, because
+  a row nobody can read across is a list with extra punctuation" -- so the
+  comparison table the flow writes carries no citation in any cell, and the
+  table reader, which only accepted a table whose cells cite a page, refused it
+  by design. A table is now found **by its shape** as well: the name column's
+  header has to say what it holds, at the front of the cell, because "Typical
+  vendors" names a list of vendors inside a cell and not the company a row is
+  about. A table that names companies but whose facts cannot be traced to a
+  page is **asked about once**, for a `Read from` column, on the same one-turn
+  budget the report shape gate uses for a report in three sections; a turn that
+  was asked and did not answer keeps its own answer, and the record says it was
+  asked.
+
+  The second, and independent: the rung replaced the **whole answer** with the
+  scan's own rendering, so the reply lost the report's shape and its length,
+  and the flow's file sync left the report file -- the file the task is graded
+  on -- untouched. The rung now ships by **swapping the verified table into the
+  report**: the reader keeps the argument, the sections and the other tables,
+  and every fact in the comparison table carries the page it came from. A row
+  whose facts could not be traced is not in the table that ships.
+
+  Every outcome is recorded -- `no_table`, `no_ledger`, `no_sources`,
+  `refused`, `gated`, `bounced`, `shipped` -- because a gate that declines in
+  silence is indistinguishable from a gate that was never wired, and that
+  ambiguity is what made the rung look inert for two batches of measurement.
 
 ## v0.1.0 - Public Preview - 2026-06-30
 

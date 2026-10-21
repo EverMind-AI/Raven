@@ -1777,6 +1777,38 @@ precision away -- so a regression in precision or in calibration error fails
 the gate even when accuracy holds. A policy that never stops has no
 precision to report, and saying so is not the same as reporting zero.
 
+**Market Table**:
+The comparison table a research report carries, read as one company per row
+and one fact per cell. It is found **by its shape** -- the name column's header
+says what it holds -- and not only by its citations, because the flow's report
+contract keeps a candidate's provenance *out* of the comparison table and under
+it as prose: a report written to that contract has a market table with no
+citation in any cell, and a reader that accepts only a cited table refuses the
+contract's own output. A market table whose facts cannot be traced to a page
+is a table the rung asks about, not one it scans.
+_Avoid_: a "comparison table" -- a comparison table is any table that compares
+things; a Market Table is one this reader can read as companies and facts.
+
+**Verified Table**:
+The market table the scan ships: the same columns and the same facts, and every
+fact carrying the page it came from. It replaces the market table **inside** the
+report, not the report -- the reader keeps the argument, the sections and the
+other tables -- and a row whose facts could not be traced is not in the table
+that ships.
+_Avoid_: a "market report" -- see Market Scan; a report is prose with a shape,
+and a verified table is prose with its facts tied to pages.
+
+**Source Ask**:
+The one request the rung makes of a turn whose market table carries no page
+behind its facts: a `Read from` column, one URL per row. It asks **once**, on
+the same one-turn budget the report shape gate uses for a report in three
+sections. A turn that was asked and did not answer keeps its own answer, and
+the record says it was asked -- "asked and still had no source" and "never
+asked" are different states, and only the first is evidence that the
+prompt-side fix has run out of road.
+_Avoid_: a "retry" -- a retry runs the same thing again; a source ask asks for
+something the first answer did not carry.
+
 ### Outbound
 
 **Outbound Guard** (`outbound/`):
