@@ -83,6 +83,15 @@ describe('the rail row CSS contract', () => {
     expect(sk).not.toContain('var(--raised)')
   })
 
+  it('keeps a name being renamed at the size it is shown at', () => {
+    /* The field and its width mirror both take the wrapper's font, so the
+       wrapper is the one place the size is set: sizing the field alone would
+       leave the mirror measuring the text at another size than it is drawn. */
+    const row = rule('.navi, .sess').match(/font-size: ([^;]+);/)[1]
+    expect(rule('.sess .rensize')).toContain(`font-size: ${row};`)
+    expect(rule('.sess .rensize::after,\n.sess .ren')).toContain('font: inherit')
+  })
+
   it('gives the boot placeholder rows a real row height, with the same hedge', () => {
     /* 28px was a rounded-down guess at the 32.27px a text row measures, so the
        list grew when the real sessions replaced these. The em declaration is

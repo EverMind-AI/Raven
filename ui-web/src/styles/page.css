@@ -689,7 +689,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    characters, never past the row, and a long name scrolls inside itself. */
 .sess .rensize {
   display: inline-grid; min-width: 6ch; max-width: 100%;
-  font-size: 13px; font-weight: 500;
+  font-size: var(--fs-rail); font-weight: 500;
 }
 .sess .rensize::after,
 .sess .ren {
@@ -2029,10 +2029,23 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
 
 
 /* prose */
+/* The sizes a markdown body's parts read at are its own, declared on every
+   .prose rather than inherited: the workspace, the knowledge base, a task's
+   answer and a skill's text in settings each keep them, and so does a
+   delegate's delivered text, which sits inside a reply's card and would
+   otherwise pick up the reply's. Only a reply and its narration step up to
+   the conversation surface's type (the --fs-* tokens). */
 /* break-word, not anywhere: an unbroken token longer than the line (a URL, a
    hash) wraps instead of pushing the column sideways, while normal words
    still break only at their own boundaries. */
-.prose { line-height: 1.8; overflow-wrap: break-word; }
+.prose {
+  line-height: 1.8; overflow-wrap: break-word;
+  --md-h2: 16px; --md-h3: 14px; --md-code: 12.5px; --md-dense: 13px; --md-cell-code: 12px;
+}
+.msg.ai .answer > .prose, .msg.ai .step > .say.prose {
+  --md-h2: var(--fs-head); --md-h3: var(--fs-body); --md-code: var(--fs-code);
+  --md-dense: var(--fs-dense); --md-cell-code: 13px;
+}
 .prose > :first-child { margin-top: 0; }
 .prose > :last-child { margin-bottom: 0; }
 /* A reply's own type (Figma: Raven / AssistantMessage, one step up -- see
@@ -2040,10 +2053,10 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
    heading in the same face. */
 .msg.ai .prose { color: var(--chat-ink); }
 .prose h2 {
-  font-family: var(--sans); font-size: var(--fs-head); line-height: 22px; font-weight: 600;
+  font-family: var(--sans); font-size: var(--md-h2); line-height: 22px; font-weight: 600;
   letter-spacing: 0; margin: 20px 0 12px; text-wrap: balance;
 }
-.prose h3 { font-size: var(--fs-body); line-height: 22px; font-weight: 600; margin: 16px 0 8px; color: inherit; }
+.prose h3 { font-size: var(--md-h3); line-height: 22px; font-weight: 600; margin: 16px 0 8px; color: inherit; }
 .prose p { margin: 8px 0; }
 .prose .brk { height: 14px; }
 .prose ul, .prose ol { margin: 8px 0; padding-left: 18px; }
@@ -2079,14 +2092,14 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
 }
 .prose strong { color: var(--text); font-weight: 650; }
 .prose code {
-  font-family: var(--mono); font-size: var(--fs-code); background: var(--raised);
+  font-family: var(--mono); font-size: var(--md-code); background: var(--raised);
   padding: 1px 5px; border-radius: 4px;
 }
 /* Code is content, not a caption: it reads at text weight in the design's
    listing box (Figma: Raven / AssistantMessage, the code variant) -- the table's
-   head ground, its half-pixel rule and radius, 14/1.8 mono (--fs-dense). */
+   head ground, its half-pixel rule and radius, 14/1.8 mono in a reply (--md-dense). */
 .prose pre {
-  font-family: var(--mono); font-size: var(--fs-dense); line-height: 1.8; margin: 16px 0;
+  font-family: var(--mono); font-size: var(--md-dense); line-height: 1.8; margin: 16px 0;
   background: var(--chat-head); border: .5px solid var(--chat-rule); border-radius: 12px;
   color: var(--chat-ink); padding: 10px 16px; overflow-x: auto; tab-size: 2;
 }
@@ -2131,7 +2144,7 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
   height: 40px; padding: 0 7px 0 16px; background: var(--chat-head);
 }
 .cblang {
-  font-family: var(--mono); font-size: var(--fs-dense); font-weight: 500; line-height: 26px;
+  font-family: var(--mono); font-size: var(--md-dense, 13px); font-weight: 500; line-height: 26px;
   color: var(--chat-file-ink); text-transform: uppercase;
 }
 .cblang::before { content: '< '; }
@@ -2215,12 +2228,12 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
 .prose a:hover { text-decoration-color: var(--link); }
 /* The design's table (Figma: Raven / AssistantMessage, the table variant): one
    half-pixel rule boxing it at a 12px radius and dividing every cell, a head
-   row on the page's grey, and 40px rows of 14/26 text (--fs-dense). The cells wrap --
+   row on the page's grey, and 40px rows of 14/26 text in a reply (--md-dense). The cells wrap --
    models routinely put a whole sentence in one, and nowrap turned a table that
    fitted into one that scrolls sideways; the head row does not, so a column
    is never narrower than its own name. */
 .tw { overflow-x: auto; margin: 16px 0; border: .5px solid var(--chat-rule); border-radius: 12px; }
-.prose table { border-collapse: collapse; width: 100%; font-size: var(--fs-dense); line-height: 26px; }
+.prose table { border-collapse: collapse; width: 100%; font-size: var(--md-dense); line-height: 26px; }
 .prose th, .prose td {
   padding: 7px 16px; text-align: left; vertical-align: top;
   border: 0; border-right: .5px solid var(--chat-rule);
@@ -2241,7 +2254,7 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
 /* In a data cell the chip is the only thing marking the value as code, so it
    stays -- just tight enough that a lone identifier sits on the same line as
    the plain text in the cell beside it. */
-.prose td code { font-size: 13px; padding: 0 4px; }
+.prose td code { font-size: var(--md-cell-code); padding: 0 4px; }
 
 .caret { display: inline-block; width: 7px; height: 14px; background: var(--amber);
   vertical-align: -2px; animation: bl 1.1s steps(2, end) infinite; }
