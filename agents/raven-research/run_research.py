@@ -41,19 +41,6 @@ HERE = Path(__file__).resolve().parent
 #: The launcher this drives. It is the agent's own entry point; nothing here
 #: reimplements it.
 LAUNCHER = HERE / "run.py"
-#: Where the agent's rendered config, workspace and flow state land.
-#:
-#: **Not inside the repository.** The launcher writes the rendered config,
-#: the workspace and the flow's own state under this root, and a run's
-#: state is not source. The launcher's own default is the product's slot
-#: under the host home; this keeps that, and lets ``RESEARCH_NG_STATE_ROOT``
-#: override it for an isolated run.
-DEFAULT_STATE_ROOT = Path(
-    os.environ.get("RESEARCH_NG_STATE_ROOT")
-    or (Path.home() / ".raven" / "workspace" / "subagent_sessions" / "raven-research-ng")
-)
-
-
 @functools.lru_cache(maxsize=1)
 def launcher() -> ModuleType:
     """The launcher, loaded as a module.
@@ -117,7 +104,7 @@ async def _drive(task: str, env: dict[str, str], traces: Path, mode: str | None)
         ready_timeout_ms=180_000,
         timeout=3600,
     )
-    workspace = DEFAULT_STATE_ROOT / "workspace"
+    workspace = launcher().state_root() / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
     try:
         return await backend.run(

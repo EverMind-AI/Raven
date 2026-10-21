@@ -126,3 +126,31 @@ def test_the_launcher_starts_on_the_key_the_driver_hands_it(driver, monkeypatch,
     assert config["plugins"]["config"]["research-flow"]["search"]["provider"] == "tavily"
     assert config["plugins"]["config"]["research-flow"]["search"]["apiKey"] == "tavily-key"
 
+
+
+def test_the_driver_workspace_follows_the_relocated_raven_home(driver, tmp_path, monkeypatch):
+    """The driver's workspace is the launcher's own state root, not a guess.
+
+    The driver used to build its workspace from ``Path.home() / ".raven"``,
+    which is the default and only the default: an installation that moves the
+    home because the default tree is unavailable had the driver writing
+    outside the configured home, and the write failed before ACP ever started.
+    Both sides now read the same resolution.
+    """
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "custom"))
+    monkeypatch.delenv("RESEARCH_NG_STATE_ROOT", raising=False)
+
+    root = driver.launcher().state_root()
+
+    assert str(root).startswith(str(tmp_path / "custom")), root
+    assert root == (tmp_path / "custom" / "workspace" / "subagent_sessions" / "raven-research-ng")
+
+
+def test_the_driver_workspace_follows_the_state_root_override(driver, tmp_path, monkeypatch):
+    """An explicit state root wins over the home, on both sides."""
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "custom"))
+    monkeypatch.setenv("RESEARCH_NG_STATE_ROOT", str(tmp_path / "state"))
+
+    root = driver.launcher().state_root()
+
+    assert root == tmp_path / "state", root
