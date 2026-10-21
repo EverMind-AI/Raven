@@ -189,3 +189,41 @@ def test_a_withdrawal_of_a_use_that_was_never_given_removes_nothing() -> None:
 
     assert delete_optin("linkedin", "store") is False
     assert "linkedin" in read_optins()
+
+
+def test_every_offered_search_vendor_has_a_policy_row():
+    """A vendor the tools offer may not be one the policy has never heard of.
+
+    The policy is what decides whether a source's terms permit a use, and it
+    decides by the registry. A vendor in the tool's own provider table with no
+    registry row is a vendor the guard refuses on every request - so the
+    offering and the registry have to agree, and this is where they are made
+    to agree.
+    """
+    from raven.agent.tools.web import SEARCH_PROVIDERS
+    from raven.sources.policy import SOURCE_POLICIES
+
+    missing = sorted(set(SEARCH_PROVIDERS) - set(SOURCE_POLICIES))
+    assert not missing, f"no policy row for: {', '.join(missing)}"
+
+
+def test_every_vendor_the_research_flow_offers_has_a_policy_row() -> None:
+    """The flow's own vendor tables have to agree with the registry too.
+
+    The flow offers its search and fetch vendors separately from the host's
+    tools, and a vendor in either table with no registry row is a vendor the
+    guard refuses on every request - which is how TinyFish ended up offered,
+    selectable, and unusable at the same time.
+    """
+    import sys
+    from pathlib import Path
+
+    flow_dir = Path(__file__).resolve().parents[1] / "agents" / "raven-research" / "plugins" / "research-flow"
+    sys.path.insert(0, str(flow_dir))
+    try:
+        from research_flow.tools.web import FETCH_PROVIDERS, SEARCH_PROVIDERS
+    finally:
+        sys.path.remove(str(flow_dir))
+
+    missing = sorted((set(SEARCH_PROVIDERS) | set(FETCH_PROVIDERS)) - set(SOURCE_POLICIES))
+    assert not missing, f"no policy row for: {', '.join(missing)}"

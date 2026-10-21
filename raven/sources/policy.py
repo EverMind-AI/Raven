@@ -132,6 +132,7 @@ SOURCE_POLICIES: dict[str, SourcePolicy] = {
     "exa": _licensed("exa", "Exa", "https://exa.ai/"),
     "brave": _licensed("brave", "Brave Search", "https://brave.com/search/api"),
     "serply": _licensed("serply", "Serply", "https://serply.io/"),
+    "tinyfish": _licensed("tinyfish", "TinyFish Search", "https://www.tinyfish.ai/terms"),
     "firecrawl": _licensed("firecrawl", "Firecrawl", "https://firecrawl.dev/"),
     "jina": SourcePolicy(
         source="jina",
