@@ -274,8 +274,9 @@ async def test_a_refused_upgrade_names_the_token_file_and_never_the_token_or_the
     chain = "".join(traceback.format_exception(raised.value))
     assert "wrong" not in chain and "token=" not in chain and "/ws" not in chain
     # The token is Raven's way in to the host, not the agent's sign-in: the roster must not send its reader
-    # to sign in to Claude Code over it.
-    assert not looks_like_auth(said)
+    # to sign in to Claude Code over it. Judged on the wording alone, with the port masked: the fake host's
+    # port is random, and `_AUTH_HINTS` matches the bare digits `401`, which a port such as 40123 contains.
+    assert not looks_like_auth(said.replace(str(fake.address.port), "<port>"))
 
 
 async def test_a_host_that_is_not_there_keeps_its_cause_which_names_no_url() -> None:
