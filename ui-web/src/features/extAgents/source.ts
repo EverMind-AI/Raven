@@ -414,9 +414,17 @@ export const extAgentsSource: ExtAgentsSource = {
       })
       return { name: got.name || `${choice.preset}@${machine}` }
     } catch (e) {
-      const err = e as { message?: string; data?: { detail?: string } } | null
-      return { refused: (err && ((err.data && err.data.detail) || err.message)) || String(e) }
+      const err = e as { message?: string; data?: { detail?: string; cancelled?: boolean } } | null
+      const refused = (err && ((err.data && err.data.detail) || err.message)) || String(e)
+      return err?.data?.cancelled ? { refused, cancelled: true } : { refused }
     }
+  },
+  /* The run server-side is the agent's one real prompt, held under the name
+     the way a test's is; stopping it ends the agent's process there and the
+     connect's own call answers with the refusal that says so. */
+  cancelRun: async (name) => {
+    const got = await gateway().call('subagents.test_cancel', { name })
+    return !!got.cancelled
   },
 }
 

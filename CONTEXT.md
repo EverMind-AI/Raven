@@ -425,7 +425,14 @@ preset is, with `machine` (and
 Hub, whose preset sheet picks the machine (*Runs on*) among those with this
 Raven's node — refused before anything is spent when
 the id is not usable or the preset is a built-in agent, and proved by the same
-readiness ping as a local add, run on that machine.
+readiness ping as a local add, run on that machine. That ping is one run held
+under the entry's name in `subagents._RUNNING`, the map a test's run is held in
+(`subagents._run_once`), so `subagents.test_cancel` stops it -- the hub's connect
+form counts the seconds, offers Cancel, and stops the run itself after five
+minutes with no answer -- and the add, switch or update then refuses with
+`cancelled` in its error data and writes nothing; one run per name at a time, a
+Test during it refused as a second test is, the row reporting `test_running`
+meanwhile.
 Registered-machine dispatch, file access and recovery are available without an
 environment switch. An entry without `machine` still runs here. Registration,
 SSH authentication, file permissions and concurrency limits govern remote work;

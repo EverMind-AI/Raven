@@ -141,6 +141,15 @@ export interface ExtAgentsState {
      offering a second add of it, which the server would ping and then refuse
      as a duplicate. */
   mconnectPending: string[]
+  /* When the write in flight was pressed, for the form to say how long it has
+     waited; null when none is. */
+  mconnectSince: number | null
+  /* How the form's last wait ended without an answer: the reader's Cancel,
+     or the ceiling (`awaitRun`). Neither is the agent's refusal, and the form
+     says so in its own words; cleared by the next press and the next opening. */
+  mconnectStopped: '' | 'cancelled' | 'timeout'
+  /* Cancel pressed, and the run not yet stopped: the button says so once. */
+  mconnectCancelling: boolean
 }
 
 const store = makeStore<ExtAgentsState>({
@@ -165,9 +174,32 @@ const store = makeStore<ExtAgentsState>({
   mconnectBusy: null,
   mconnectFailed: '',
   mconnectPending: [],
+  mconnectSince: null,
+  mconnectStopped: '',
+  mconnectCancelling: false,
 })
 
-export const { get, subscribe, _resetForTests } = store
+export const { get, subscribe } = store
+
+/* How long the machine form waits for a connect's answer before it stops the
+   run itself, and how long it then gives the answer to arrive. The ceiling is
+   the server's own worst case for the add -- the node launch, the preset's
+   start window and the answer, then the capability record -- so a connect
+   that is merely slow is never cut short, while a wait with no end (a
+   connection that dropped without the socket saying so, seen once on
+   2026-10-20) ends here instead of never. */
+const CONNECT_CEILING_MS = 5 * 60_000
+const STOP_GRACE_MS = 8_000
+let connectCeilingMs = CONNECT_CEILING_MS
+let stopGraceMs = STOP_GRACE_MS
+
+/* Test seam: the value back to its first, and the two waits above set short
+   for a case that cannot wait minutes. */
+export function _resetForTests(waits: { ceilingMs?: number; graceMs?: number } = {}): void {
+  store._resetForTests()
+  connectCeilingMs = waits.ceilingMs ?? CONNECT_CEILING_MS
+  stopGraceMs = waits.graceMs ?? STOP_GRACE_MS
+}
 
 /** A patch, merged into the page's state. */
 export function set(patch: Partial<ExtAgentsState>): void {
@@ -203,6 +235,11 @@ const failure = (e: unknown): string => {
 /* The same refusal's classification, carried beside its sentence under
    `data.remedy` when the server could name a fix. */
 const remedyFrom = (e: unknown): Remedy | null => remedyOf((e as { data?: { remedy?: unknown } } | null)?.data?.remedy)
+
+/* Whether the refusal is that the row's run was stopped before it answered
+   (`data.cancelled`): the server writes nothing then, as for any refusal, and
+   the row is left as it was rather than marked failed. */
+const cancelledFrom = (e: unknown): boolean => !!(e as { data?: { cancelled?: unknown } } | null)?.data?.cancelled
 
 /* `load(true)` re-measures availability. Opening the page is one caller --
    the section heading there is a fresh answer every time the reader arrives --
@@ -255,6 +292,13 @@ export function close(): void {
 let started = 0
 let landed = 0
 
+/* A write the server refused, as `run` reports it: the server's sentence,
+   the fix it named, and whether the refusal is that the run was stopped
+   (`cancelled`) -- the reader's Stop or the machine form's Cancel reaching
+   the one real prompt a connect proves the row with, which is no failure of
+   the row. */
+export type Refused = Pick<Failure, 'detail' | 'remedy'> & { cancelled?: boolean }
+
 /* Every write goes through here: one place that repaints from whatever the
    source answered, so no caller has to remember to. A failure is toasted
    unless the caller says it will show it itself; either way it is returned,
@@ -264,9 +308,9 @@ export async function run(
   row?: ExtAgentRow,
   args?: ExtAgentActArgs,
   opts: { quiet?: boolean } = {},
-): Promise<Pick<Failure, 'detail' | 'remedy'> | null> {
+): Promise<Refused | null> {
   let rows = get().rows
-  let failedWith: Pick<Failure, 'detail' | 'remedy'> | null = null
+  let failedWith: Refused | null = null
   /* A rename moves the open sheet, but only once the rows that carry the new
      name are here: the sheet is resolved by looking the name up in rows, so
      moving it any earlier resolves to nothing, and the shared drawer -- which
@@ -281,6 +325,7 @@ export async function run(
   } catch (e) {
     const remedy = remedyFrom(e)
     failedWith = remedy ? { detail: failure(e), remedy } : { detail: failure(e) }
+    if (cancelledFrom(e)) failedWith.cancelled = true
     /* A refusal repaints from the listing as it is now, never from the rows
        held when this write started: writes run side by side (five Connects
        pressed at once), and a slow one that fails would otherwise put back the
@@ -312,15 +357,27 @@ const without = <T>(map: Record<string, T>, name: string): Record<string, T> => 
 
 /* One row's write, held on `joining` for its length and remembered on `failed`
    when it does not land. Every verb -- the hub's and the wizard's -- comes
-   through here. */
-export async function act(row: ExtAgentRow, op: ExtAgentOp, args: ExtAgentActArgs = {}): Promise<void> {
+   through here. A run the reader stopped is returned but not remembered:
+   nothing was written and nothing failed, so the row goes back to what it
+   was, with no refusal to retry. */
+export async function attempt(row: ExtAgentRow, op: ExtAgentOp, args: ExtAgentActArgs = {}): Promise<Refused | null> {
   set({ joining: { ...get().joining, [row.name]: { op, args } }, failed: without(get().failed, row.name) })
   try {
     const refused = await run(op, row, args, { quiet: true })
-    if (refused !== null) set({ failed: { ...get().failed, [row.name]: { op, args, ...refused } } })
+    if (refused !== null && !refused.cancelled) {
+      const kept: Failure = { op, args, detail: refused.detail }
+      if (refused.remedy) kept.remedy = refused.remedy
+      set({ failed: { ...get().failed, [row.name]: kept } })
+    }
+    return refused
   } finally {
     set({ joining: without(get().joining, row.name) })
   }
+}
+
+/* The same write, for the callers that only start it and read the row after. */
+export async function act(row: ExtAgentRow, op: ExtAgentOp, args: ExtAgentActArgs = {}): Promise<void> {
+  await attempt(row, op, args)
 }
 
 /* The same write again, as it was asked for. */
@@ -525,6 +582,8 @@ export function machineConnectOpen(id: string): void {
     mconnectGen: get().mconnectGen + 1,
     mconnectBusy: null,
     mconnectFailed: '',
+    mconnectStopped: '',
+    mconnectCancelling: false,
     epoch: get().epoch + 1
   })
   void loadPresets()
@@ -554,6 +613,61 @@ async function loadPresets(): Promise<void> {
    drawer the caller may put the machine's sheet back into: closed or replaced
    meanwhile, the write's end changes nothing on screen. The busy mark is
    cleared only when it is still this write's. */
+type Stopped = 'cancelled' | 'timeout'
+type Outcome<T> = { got: T } | { stopped: Stopped }
+
+/* The end of a form's wait other than the answer, by generation: the form's
+   Cancel resolves it, and so does the ceiling's timer. */
+const stops = new Map<number, (why: Stopped) => void>()
+
+/* The form's wait on a connect's write, bounded two ways: by the reader's
+   Cancel and by the ceiling. Either way the run is stopped server-side -- the
+   call that stops a test, on the name the entry has or lands under -- and the
+   write is given a moment to answer, with the refusal that says it was
+   stopped or with an answer that was already on its way. Past that, the wait
+   is over whatever the write does later; the caller still reads a late
+   landing. Without this the form sat on one line for as long as the socket
+   stayed silent, with nothing to press. */
+async function awaitRun<T>(gen: number, name: string, write: Promise<T>): Promise<Outcome<T>> {
+  const answered = write.then((got): Outcome<T> => ({ got }))
+  const stopped = new Promise<Outcome<T>>((resolve) => {
+    stops.set(gen, (why) => resolve({ stopped: why }))
+  })
+  const ceiling = setTimeout(() => stops.get(gen)?.('timeout'), connectCeilingMs)
+  try {
+    const first = await Promise.race([answered, stopped])
+    if ('got' in first) return first
+    await source().cancelRun(name).catch(() => false)
+    const grace = new Promise<null>((resolve) => setTimeout(() => resolve(null), stopGraceMs))
+    return (await Promise.race([answered, grace])) ?? first
+  } finally {
+    clearTimeout(ceiling)
+    stops.delete(gen)
+  }
+}
+
+/* The form's Cancel: ends the wait of the write pressed in the form open now,
+   which stops its run (`awaitRun`). A write whose form was closed or replaced
+   is not reachable from here -- its generation is gone -- and the ceiling
+   ends it. */
+export function cancelConnect(): void {
+  const stop = stops.get(get().mconnectGen)
+  if (!stop) return
+  set({ mconnectCancelling: true })
+  stop('cancelled')
+}
+
+/* A write that landed after its form stopped waiting -- the Cancel came too
+   late, or the answer outlived the ceiling: said in a toast, and the roster
+   and the machines read again, as for a landing the form never saw. */
+function landedLate(name: string, machine: string): void {
+  toast(t('gui.machine.connected_said', { name }))
+  void load(true).then(() => {
+    if (get().mconnect === machine) void loadPresets()
+  })
+  void machines.load()
+}
+
 export async function connectOnMachine(
   choice: PresetChoice,
   machine: string,
@@ -566,15 +680,33 @@ export async function connectOnMachine(
   const current = (): boolean =>
     get().mconnect === machine && get().mconnectGen === gen && detail.get().open && detail.get().owner === 'extAgents'
   const pending = `${choice.preset}@${machine}`
-  set({ mconnectBusy: gen, mconnectFailed: '', mconnectPending: [...get().mconnectPending, pending] })
-  let got: { name: string } | { refused: string }
-  try {
-    got = await source().connectOnMachine(choice, machine, remoteCwd)
-  } catch (e) {
-    got = { refused: failure(e) }
-  }
-  if (get().mconnectBusy === gen) set({ mconnectBusy: null })
+  set({
+    mconnectBusy: gen,
+    mconnectFailed: '',
+    mconnectStopped: '',
+    mconnectCancelling: false,
+    mconnectSince: Date.now(),
+    mconnectPending: [...get().mconnectPending, pending]
+  })
+  type Answer = { name: string } | { refused: string; cancelled?: boolean }
+  const write: Promise<Answer> = source()
+    .connectOnMachine(choice, machine, remoteCwd)
+    .catch((e): Answer => (cancelledFrom(e) ? { refused: failure(e), cancelled: true } : { refused: failure(e) }))
+  const outcome = await awaitRun(gen, pending, write)
+  if (get().mconnectBusy === gen) set({ mconnectBusy: null, mconnectCancelling: false })
   const settled = (): void => set({ mconnectPending: get().mconnectPending.filter(name => name !== pending) })
+  if ('stopped' in outcome) {
+    /* No answer: the wait is over and the form is the reader's again, the
+       preset offered once more -- a second press while the first run still
+       goes is refused server-side, before anything is spent. */
+    settled()
+    if (current()) set({ mconnectStopped: outcome.stopped })
+    void write.then(got => {
+      if ('name' in got) landedLate(got.name, machine)
+    })
+    return { landed: false, current: current(), name: pending }
+  }
+  const got = outcome.got
   if ('name' in got) {
     await load(true)
     /* The preset just landed on the machine, so a form open on that machine
@@ -591,8 +723,8 @@ export async function connectOnMachine(
     return { landed: true, current: current(), name: got.name }
   }
   settled()
-  if (current()) set({ mconnectFailed: got.refused })
-  return { landed: false, current: current(), name: `${choice.preset}@${machine}` }
+  if (current()) set(got.cancelled ? { mconnectStopped: 'cancelled' } : { mconnectFailed: got.refused })
+  return { landed: false, current: current(), name: pending }
 }
 
 /* The other press the connect form has: an entry of the preset is already
@@ -608,7 +740,14 @@ export async function reconnectOnMachine(
   const gen = get().mconnectGen
   const current = (): boolean =>
     get().mconnect === machine && get().mconnectGen === gen && detail.get().open && detail.get().owner === 'extAgents'
-  set({ mconnectBusy: gen, mconnectFailed: '', mconnectPending: [...get().mconnectPending, name] })
+  set({
+    mconnectBusy: gen,
+    mconnectFailed: '',
+    mconnectStopped: '',
+    mconnectCancelling: false,
+    mconnectSince: Date.now(),
+    mconnectPending: [...get().mconnectPending, name]
+  })
   /* The roster row, so the write addresses it the way the agents page does;
      a roster that has not caught up yet still knows the name. Through `act`,
      not the source directly: that marks the row `joining` for the length of
@@ -617,17 +756,29 @@ export async function reconnectOnMachine(
      round), the refusal lands on the row as it would from there, and the
      roster is read again. */
   const row = get().rows.find(r => r.name === name) ?? ({ name, kind: 'acp', configured: true, enabled: false } as ExtAgentRow)
-  await act(row, 'toggle', { enabled: true })
-  const refused = get().failed[name]?.detail ?? null
-  if (get().mconnectBusy === gen) set({ mconnectBusy: null })
+  const write = attempt(row, 'toggle', { enabled: true })
+  const outcome = await awaitRun(gen, name, write)
+  if (get().mconnectBusy === gen) set({ mconnectBusy: null, mconnectCancelling: false })
   const settled = (): void => set({ mconnectPending: get().mconnectPending.filter(n => n !== name) })
+  if ('stopped' in outcome) {
+    settled()
+    /* The row's own pending mark goes with the wait: `act` takes it off when
+       the write answers, which a write with no answer never does. */
+    set({ joining: without(get().joining, name) })
+    if (current()) set({ mconnectStopped: outcome.stopped })
+    void write.then(refused => {
+      if (refused === null) landedLate(name, machine)
+    })
+    return { landed: false, current: current(), name }
+  }
+  const refused = outcome.got
   if (refused === null) {
     if (get().mconnect === machine) await loadPresets()
     settled()
     return { landed: true, current: current(), name }
   }
   settled()
-  if (current()) set({ mconnectFailed: refused })
+  if (current()) set(refused.cancelled ? { mconnectStopped: 'cancelled' } : { mconnectFailed: refused.detail })
   return { landed: false, current: current(), name }
 }
 
@@ -686,7 +837,7 @@ export function sheetDismissed(): void {
      longer the form's, whatever the fade still shows -- the drop below comes
      a fade later, and a write ending inside that window must not reopen the
      drawer the reader just closed, nor write to the fading form. */
-  if (get().mconnect) set({ mconnectGen: get().mconnectGen + 1, mconnectBusy: null })
+  if (get().mconnect) set({ mconnectGen: get().mconnectGen + 1, mconnectBusy: null, mconnectCancelling: false })
   if (!get().sheet && !get().msheet && !get().picking && !get().mconnect) return
   /* Which open this close belongs to. The name cannot answer that: closing a
      card and pressing the same row again inside the fade writes the same string

@@ -144,8 +144,18 @@ export interface ExtAgentsSource {
   /* Connect `choice` on `machine` under the server's default name,
      `<preset>@<machine>`, in the working directory there (`''` for the
      default); the server starts it there once as proof, and refuses a preset
-     the machine already has. The name it landed under, or the refusal. */
-  connectOnMachine(choice: PresetChoice, machine: string, remoteCwd: string): Promise<{ name: string } | { refused: string }>
+     the machine already has. The name it landed under, or the refusal --
+     `cancelled` when the refusal is that the run was stopped (`cancelRun`),
+     which the form says as a cancel rather than as the agent failing. */
+  connectOnMachine(
+    choice: PresetChoice,
+    machine: string,
+    remoteCwd: string
+  ): Promise<{ name: string } | { refused: string; cancelled?: boolean }>
+  /* Stop the run in flight under `name` -- the proof prompt of a connect
+     pressed from the machine form, by the name the entry has or lands under;
+     the same call that stops a test. True when there was one to stop. */
+  cancelRun(name: string): Promise<boolean>
 }
 
 /* What fixes a refusal, as the server classified it: which kind of fix, and
