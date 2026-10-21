@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -267,9 +268,29 @@ async def test_a_refused_upgrade_names_the_token_file_and_never_the_token_or_the
     )
     assert f"run/local-{fake.address.port}.token" in said and "Start Mirasim again" in said
     assert "wrong" not in said and "url=" not in said and "/ws" not in said
+    # Not in the chain either: the refused upgrade's own exception holds the request, URL and token
+    # included, and a formatted traceback prints a cause and a context.
+    assert raised.value.__cause__ is None and raised.value.__context__ is None
+    chain = "".join(traceback.format_exception(raised.value))
+    assert "wrong" not in chain and "token=" not in chain and "/ws" not in chain
     # The token is Raven's way in to the host, not the agent's sign-in: the roster must not send its reader
     # to sign in to Claude Code over it.
     assert not looks_like_auth(said)
+
+
+async def test_a_host_that_is_not_there_keeps_its_cause_which_names_no_url() -> None:
+    """Only a refused upgrade is cut off; a refused connection is kept for whoever reads the chain."""
+    import socket
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    conn = HostConnection(on_frame=lambda f: None, locate=lambda: HostAddress(port=port, token="s3cret"))
+    with pytest.raises(HostUnavailableError) as raised:
+        await conn.connect()
+    assert isinstance(raised.value.__cause__, OSError)
+    chain = "".join(traceback.format_exception(raised.value))
+    assert "s3cret" not in chain and "token=" not in chain
 
 
 async def test_another_refusal_of_the_upgrade_is_worded_from_its_status_without_the_token(fake: FakeHost) -> None:

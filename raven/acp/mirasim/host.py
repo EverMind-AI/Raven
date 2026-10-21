@@ -218,6 +218,7 @@ class HostConnection:
                 connector=connector, timeout=aiohttp.ClientTimeout(total=None, connect=CONNECT_TIMEOUT_S)
             )
             headers = {"x-mirasim-token": address.token} if address.token else {}
+            failed: BaseException | None = None
             try:
                 version = await _health(session, address, headers)
                 # The session's timeout bounds the connection, not the upgrade's answer: a host that
@@ -232,9 +233,16 @@ class HostConnection:
                 await session.close()
                 if not isinstance(exc, (aiohttp.ClientError, OSError, TimeoutError)):
                     raise
-                raise HostUnavailableError(
-                    f"cannot reach the Mirasim host at {address.describe()}: {_reason(exc, address)}"
-                ) from exc
+                failed = exc
+            if failed is not None:
+                # Raised outside the handler so nothing is chained by default: a refused
+                # upgrade's own exception holds the request, URL and token included
+                # (`request_info`), and a formatted traceback would print it. Any other
+                # failure names no URL and stays the cause.
+                unavailable = HostUnavailableError(
+                    f"cannot reach the Mirasim host at {address.describe()}: {_reason(failed, address)}"
+                )
+                raise unavailable from (None if isinstance(failed, aiohttp.ClientResponseError) else failed)
             self._session, self._ws, self.address, self.version = session, ws, address, version
             self.lost_at = None
             self.epoch += 1
@@ -367,7 +375,8 @@ def _reason(exc: BaseException, address: HostAddress) -> str:
     """Why the host could not be reached, in words that carry nothing of the token.
 
     A refused upgrade is a ``ClientResponseError`` whose ``str()`` quotes the
-    request's URL, token and all, so it is worded from its status instead -- and
+    request's URL, token and all, so it is worded from its status instead (and
+    not chained either, see :meth:`HostConnection.connect`) -- and
     a host that turns the token away is told apart from one that is not there,
     in words the roster does not read as the agent's own sign-in being wrong
     (``looks_like_auth``): the token is Raven's way in to the host, not the
