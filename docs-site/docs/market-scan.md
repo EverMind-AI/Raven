@@ -21,8 +21,12 @@ fact came from:
 ```
 | Company | What it does | Price | Read from |
 |---|---|---|---|
-| Acme | Observability sold per seat | $49 per seat per month | [acme.example](https://acme.example/pricing) |
+| Acme | Observability sold per seat | $49 per seat per month | acme.example/pricing |
 ```
+
+The `Read from` cell holds the page the fact came from -- the page the run
+opened. In a report it is a link to that page; this site keeps its own links
+internal, so the example shows the address as plain text.
 
 The field names are normalised (`What it does` becomes `what_it_does`) so
 the same table reads the same way to the scan's own criteria, which name

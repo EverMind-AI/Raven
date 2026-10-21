@@ -103,7 +103,9 @@ def test_the_index_is_in_sync_with_the_documents(generator) -> None:
         "count": len(documents),
         "documents": [doc.to_dict() for doc in sorted(documents, key=lambda item: item.id)],
     }
-    expected = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+    # The committed index is ASCII: the non-ASCII text is escaped, so the
+    # file stays inside the repository's source-language rule.
+    expected = json.dumps(payload, indent=2, ensure_ascii=True) + "\n"
     assert INDEX_JSON.read_text(encoding="utf-8") == expected, (
         "the design index is out of date. Run: python scripts/build_design_index.py"
     )
@@ -118,8 +120,8 @@ def test_the_index_is_deterministic(generator) -> None:
     An index that changes every run cannot be diffed, and a diff that cannot
     be read is a diff nobody reads.
     """
-    first = json.dumps([doc.to_dict() for doc in generator.build()], indent=2, ensure_ascii=False)
-    second = json.dumps([doc.to_dict() for doc in generator.build()], indent=2, ensure_ascii=False)
+    first = json.dumps([doc.to_dict() for doc in generator.build()], indent=2, ensure_ascii=True)
+    second = json.dumps([doc.to_dict() for doc in generator.build()], indent=2, ensure_ascii=True)
     assert first == second
 
 

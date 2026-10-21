@@ -51,17 +51,53 @@ HEAD_CHARS = 4000
 #: Chinese design that has no English rendering.
 CJK_SHARE = 0.2
 
+#: The Chinese words and punctuation the documents' headers are written in,
+#: held as escapes so this file carries no non-English source (AGENTS.md
+#: section 1.3). Each is named for what it means.
+_STATUS_ZH = "\u72b6\u6001"  # "status"
+_BASELINE_ZH = "\u57fa\u7ebf"  # "baseline"
+_RESEARCH_BASELINE_ZH = "\u8c03\u7814\u57fa\u7ebf"  # "research baseline"
+_SUPERSEDES_ZH = "\u53d6\u4ee3"  # "supersedes"
+_EXTENDED_ZH = "\u5df2\u88ab\u6269\u5c55"  # "has been extended"
+_SUPERSEDED_ZH = "\u5df2\u88ab\u53d6\u4ee3"  # "has been superseded"
+_REFUSED_ZH = "\u62d2\u7edd"  # "refuse"
+_NOT_DOING_ZH = "\u4e0d\u505a"  # "not to do"
+_DESIGN_DRAFT_ZH = "\u8bbe\u8ba1\u7a3f"  # "design draft"
+_IMPLEMENTED_ZH = "\u5df2\u5b9e\u73b0"  # "implemented"
+_LANDED_ZH = "\u843d\u5730"  # "landed"
+_FINAL_ZH = "\u5df2\u5b9a\u7a3f"  # "finalized"
+_FULLWIDTH_COLON = "\uff1a"  # ":"
+_FULLWIDTH_OPEN = "\uff08"  # "("
+_FULLWIDTH_CLOSE = "\uff09"  # ")"
+
+#: The punctuation the markdown view is written in, held as escapes for the
+#: same reason.
+_EM_DASH = "\u2014"  # an em dash
+_MIDDLE_DOT = "\u00b7"  # a middle dot
+
 _SHA = re.compile(r"\b[0-9a-f]{7,40}\b")
 _DATE = re.compile(r"^(\d{4}-\d{2}-\d{2})")
-_STATUS = re.compile(r"^\s*(?:>\s*)?(?:\*\*)?(?:Status|状态)(?:\*\*)?\s*[:：]\s*(.+?)\s*$", re.M)
-_BASE = re.compile(r"^\s*(?:>\s*)?(?:\*\*)?(?:Base|基线|调研基线)(?:\*\*)?\s*[:：]\s*(.+?)\s*$", re.M)
-_SUPERSEDES = re.compile(r"(?:\*\*取代\*\*|Supersedes?|取代)\s*[:：]?\s*`?([0-9A-Za-z._/-]+\.md)`?")
-_EXTENDED = re.compile(r"已被扩展[（(]\s*(\d{4}-\d{2}-\d{2})\s*[）)]")
+_STATUS = re.compile(
+    rf"^\s*(?:>\s*)?(?:\*\*)?(?:Status|{_STATUS_ZH})(?:\*\*)?\s*[:{_FULLWIDTH_COLON}]\s*(.+?)\s*$",
+    re.M,
+)
+_BASE = re.compile(
+    rf"^\s*(?:>\s*)?(?:\*\*)?(?:Base|{_BASELINE_ZH}|{_RESEARCH_BASELINE_ZH})(?:\*\*)?\s*"
+    rf"[:{_FULLWIDTH_COLON}]\s*(.+?)\s*$",
+    re.M,
+)
+_SUPERSEDES = re.compile(
+    rf"(?:\*\*{_SUPERSEDES_ZH}\*\*|Supersedes?|{_SUPERSEDES_ZH})\s*[:{_FULLWIDTH_COLON}]?"
+    rf"\s*`?([0-9A-Za-z._/-]+\.md)`?"
+)
+_EXTENDED = re.compile(
+    rf"{_EXTENDED_ZH}[{_FULLWIDTH_OPEN}(]\s*(\d{{4}}-\d{{2}}-\d{{2}})\s*[{_FULLWIDTH_CLOSE})]"
+)
 _LINK_MD = re.compile(r"\]\(([0-9A-Za-z._/-]+\.md)\)")
 _IN_PROGRESS = re.compile(r"\*\*\s*(?=\w)")
 #: A line that opens a *new* field. A status that continues onto the next
 #: line must stop there, or it swallows the fields that follow it.
-_NEW_FIELD = re.compile(r"^\s*(?:\*\*)?[^*]{1,40}(?:\*\*)?\s*[:：]")
+_NEW_FIELD = re.compile(rf"^\s*(?:\*\*)?[^*]{{1,40}}(?:\*\*)?\s*[:{_FULLWIDTH_COLON}]")
 _CJK = re.compile(r"[\u4e00-\u9fff]")
 
 #: The decision buckets. A status line's text decides which bucket a document
@@ -69,12 +105,13 @@ _CJK = re.compile(r"[\u4e00-\u9fff]")
 #: beside it so the bucketing can be checked by a human.
 #: The order matters, and it is the order of specificity rather than of
 #: importance. "approved, not yet implemented" is a design, so the needles for
-#: a design are read before the needles for an implementation; "已实现（P1+P2+P3），
-#: 未评审" is an implementation, so a review state is not a design state.
+#: a design are read before the needles for an implementation; a Chinese status
+#: that reports the implementation as done and not yet reviewed is an
+#: implementation, so a review state is not a design state.
 _BUCKETS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("declined", ("declin", "not to act", "拒绝", "不做", "not as a plan", "inventory, not")),
-    ("extended", ("已被扩展", "extended")),
-    ("superseded", ("已被取代", "superseded")),
+    ("declined", ("declin", "not to act", _REFUSED_ZH, _NOT_DOING_ZH, "not as a plan", "inventory, not")),
+    ("extended", (_EXTENDED_ZH, "extended")),
+    ("superseded", (_SUPERSEDED_ZH, "superseded")),
     (
         "design",
         (
@@ -82,7 +119,7 @@ _BUCKETS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "not implemented",
             "not started",
             "sign-off",
-            "设计稿",
+            _DESIGN_DRAFT_ZH,
             "draft",
             "proposed",
             "proposal",
@@ -91,7 +128,17 @@ _BUCKETS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
     (
         "implemented",
-        ("implement", "已实现", "落地", "executed", "complete", "passed", "已定稿", "built", "accepted"),
+        (
+            "implement",
+            _IMPLEMENTED_ZH,
+            _LANDED_ZH,
+            "executed",
+            "complete",
+            "passed",
+            _FINAL_ZH,
+            "built",
+            "accepted",
+        ),
     ),
     ("plan", ("implementation plan", "plan")),
 )
@@ -252,8 +299,9 @@ def _read(path: Path, author_date: str = "") -> Document:
     if found:
         supersedes.append(found.group(1))
     if _EXTENDED.search(head):
-        # "已被扩展" means *this* document was extended *by* the one it links
-        # to. The relation runs the other way from 取代.
+        # The Chinese marker for *extended* means *this* document was extended
+        # *by* the one it links to. The relation runs the other way from the
+        # marker for *supersedes*.
         for name in _LINK_MD.findall(head):
             extended_by.append(name)
             break
@@ -264,7 +312,9 @@ def _read(path: Path, author_date: str = "") -> Document:
     if date_match:
         doc_date = date_match.group(1)
     else:
-        inline = re.search(r"^\s*Date\s*[:：]\s*(\d{4}-\d{2}-\d{2})", head, re.M)
+        inline = re.search(
+            rf"^\s*Date\s*[:{_FULLWIDTH_COLON}]\s*(\d{{4}}-\d{{2}}-\d{{2}})", head, re.M
+        )
         doc_date = inline.group(1) if inline else ""
 
     return Document(
@@ -323,9 +373,9 @@ def render_markdown(documents: list[Document]) -> str:
         "regenerates it and fails when it is out of date, so a new design document",
         "cannot join the backlog without an index entry.",
         "",
-        f"**{len(documents)} documents** — "
+        f"**{len(documents)} documents** {_EM_DASH} "
         + ", ".join(f"{count} {name}" for name, count in sorted(counts.items()))
-        + " · "
+        + f" {_MIDDLE_DOT} "
         + ", ".join(f"{count} {name}" for name, count in sorted(languages.items())),
         "",
         "| Date | Document | Decision | Status | Baseline | Supersedes |",
@@ -335,10 +385,10 @@ def render_markdown(documents: list[Document]) -> str:
         status = doc.status.replace("|", "\\|")
         if len(status) > 90:
             status = status[:87] + "..."
-        supersedes = ", ".join(Path(name).stem for name in doc.supersedes) or "—"
+        supersedes = ", ".join(Path(name).stem for name in doc.supersedes) or _EM_DASH
         lines.append(
-            f"| {doc.date or '—'} | [{doc.title or doc.id}]({doc.path}) | {doc.decision} | {status} | "
-            f"{doc.baseline or '—'} | {supersedes} |"
+            f"| {doc.date or _EM_DASH} | [{doc.title or doc.id}]({doc.path}) | {doc.decision} | {status} | "
+            f"{doc.baseline or _EM_DASH} | {supersedes} |"
         )
     lines.append("")
     return "\n".join(lines)
@@ -352,7 +402,9 @@ def main() -> int:
         "count": len(documents),
         "documents": [doc.to_dict() for doc in sorted(documents, key=lambda item: item.id)],
     }
-    INDEX_JSON.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    # The index is read by machines as well as by people, and it is committed
+    # to the repo, so it is written as ASCII with the non-ASCII text escaped.
+    INDEX_JSON.write_text(json.dumps(payload, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
     INDEX_MD.write_text(render_markdown(documents), encoding="utf-8")
     print(f"indexed {len(documents)} design documents -> {INDEX_JSON.relative_to(ROOT)}")
     return 0
