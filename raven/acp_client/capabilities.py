@@ -396,31 +396,42 @@ class SnapshotStore:
         except OSError as exc:  # a snapshot is a cache, never a dependency
             logger.warning("acp capability snapshot write failed (not remembered): {}", exc)
 
-    def revise(self, snapshot: CapabilitySnapshot, **changes: Any) -> CapabilitySnapshot | None:
-        """Apply ``changes`` to the stored record ``snapshot`` was read from, and return the result.
+    def revise(self, snapshot: CapabilitySnapshot, **changes: Any) -> tuple[CapabilitySnapshot, bool] | None:
+        """Apply ``changes`` to the stored record ``snapshot`` was read from.
 
         For a write that re-measured some fields of a record, so only those are
         written, onto the row as it stands inside the lock: another holder of
         the same record may have revised a different field since ``snapshot``
         was read, and writing the caller's whole copy back would undo it.
 
-        ``None`` -- nothing written -- when the stored row carries another
-        measurement stamp than ``snapshot``. A Test or the boot backfill that
-        recorded in the meantime is newer evidence about everything, the same
-        "newest measurement wins" rule the boot backfill applies to its own
-        late verdicts. With no stored row, ``snapshot`` itself is the base.
+        Nothing is written when the stored row carries another measurement
+        stamp than ``snapshot``. A Test or the boot backfill that recorded in
+        the meantime is newer evidence about everything, the same "newest
+        measurement wins" rule the boot backfill applies to its own late
+        verdicts. With no stored row, ``snapshot`` itself is the base.
+
+        Returns the record now stored and whether this call wrote it, so a
+        caller that stood down holds the newer record and builds its next
+        revision on that stamp rather than being refused again for as long as
+        it lives. Flagged stale when it was measured under another launch
+        config than ``snapshot``, or when ``snapshot`` already was: for the
+        caller's launch it proves no more than that. ``None`` when the store
+        could not be written, or holds only a row that cannot be read back.
         """
 
-        def merge(current: str | None) -> tuple[str | None, CapabilitySnapshot | None]:
+        def merge(current: str | None) -> tuple[str | None, tuple[CapabilitySnapshot, bool] | None]:
             rows = self._parse(current)
             stored = next((r for r in rows if r.get("agent") == snapshot.agent), None)
             if stored is not None and int(stored.get("measuredAtMs") or 0) != snapshot.measured_at_ms:
-                return None, None
+                newer = CapabilitySnapshot.from_row(stored)
+                if newer is None:
+                    return None, None
+                return None, (replace(newer, stale=snapshot.stale or newer.fingerprint != snapshot.fingerprint), False)
             base = (CapabilitySnapshot.from_row(stored) if stored is not None else None) or snapshot
             updated = replace(base, stale=snapshot.stale, **changes)
             rows = [r for r in rows if r.get("agent") != snapshot.agent]
             rows.append(updated.to_row())
-            return self._dump(rows), updated
+            return self._dump(rows), (updated, True)
 
         try:
             return atomic_update(self._path, merge)
@@ -729,7 +740,9 @@ def relearn_session_menus(
     clear a staleness flag the rest of the snapshot has not earned. Only the
     menus this response reported are written, and none when a newer
     measurement has replaced the record ``snapshot`` was read from
-    (``SnapshotStore.revise``).
+    (``SnapshotStore.revise``). That newer record is returned instead, unrevised:
+    this response may predate it, so its menus are not taken over it, but the
+    caller's next response is then judged against the stamp actually stored.
 
     ``None`` when there was nothing to learn, which includes a response carrying
     neither menu. Each menu is judged on its own, and an absent or empty one is
@@ -751,13 +764,16 @@ def relearn_session_menus(
         changes["model_menu_measured"] = True
     if not changes:
         return None
-    updated = (store or SnapshotStore()).revise(snapshot, **changes)
-    if updated is None:
+    revised = (store or SnapshotStore()).revise(snapshot, **changes)
+    if revised is None:
+        return None
+    updated, written = revised
+    if not written:
         logger.info(
-            "acp agent {!r}: session menus not re-recorded; a newer measurement stands or the store is unwritable",
+            "acp agent {!r}: session menus not re-recorded over a newer measurement; building on that one next",
             snapshot.agent,
         )
-        return None
+        return updated
     logger.info(
         "acp agent {!r}: re-recorded {} mode(s) and {} model(s) from a session response",
         snapshot.agent,

@@ -1192,9 +1192,21 @@ def test_a_relearn_from_an_older_record_does_not_overwrite_a_newer_measurement(t
     a backend built from the record before it. That backend's relearn holds the
     older record whole, and writing it back would undo the newer verdict,
     fingerprint included -- so it stands down when the stamp it was built from
-    is no longer the one stored. The newer measurement brought its own menus."""
+    is no longer the one stored. The newer measurement brought its own menus,
+    and what comes back is that record, unrevised, for the caller to build on."""
     cfg = stub_config("a")
     store = SnapshotStore(path=tmp_path / "caps.json")
+    older, newer = _older_and_newer(cfg, store)
+    stored_bytes = (tmp_path / "caps.json").read_bytes()
+
+    assert relearn_session_menus(older, _menu_reply(models=_GROUPED_MODELS), store=store) == newer
+    assert relearn_session_menus(older, _session_result({"id": "deep"}), store=store) == newer
+    assert store.load([cfg])["a"] == newer
+    assert (tmp_path / "caps.json").read_bytes() == stored_bytes, "standing down writes nothing at all"
+
+
+def _older_and_newer(cfg: Any, store: SnapshotStore) -> tuple[CapabilitySnapshot, CapabilitySnapshot]:
+    """A record a backend was built from, and the newer measurement stored over it."""
     older = _with_model_choices(cfg, AcpModelChoice(value="old/retired"))
     store.record(older)
     newer = replace(
@@ -1205,10 +1217,69 @@ def test_a_relearn_from_an_older_record_does_not_overwrite_a_newer_measurement(t
         model_choices=(AcpModelChoice(value="test/fresh"),),
     )
     store.record(newer)
+    return older, newer
 
-    assert relearn_session_menus(older, _menu_reply(models=_GROUPED_MODELS), store=store) is None
-    assert relearn_session_menus(older, _session_result({"id": "deep"}), store=store) is None
-    assert store.load([cfg])["a"] == newer
+
+def test_a_relearn_that_stood_down_builds_on_the_newer_record_next_time(tmp_path: Path) -> None:
+    """Standing down must not become standing down forever.
+
+    The record handed back is the newer one, so the next reply is judged
+    against the stamp actually stored and lands -- onto that record, keeping
+    its verdict, and writing only the menu the reply reported. Without it, a
+    backend no rebuild reached (a failed hot-apply, another process sharing the
+    store) refused every reply until it was replaced.
+    """
+    cfg = stub_config("a")
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    older, newer = _older_and_newer(cfg, store)
+
+    base = relearn_session_menus(older, _menu_reply(models=_GROUPED_MODELS), store=store)
+    assert base == newer
+    again = relearn_session_menus(base, _menu_reply(models=_GROUPED_MODELS), store=store)
+
+    assert again is not None and again.model_choices == _GROUPED_CHOICES
+    stored = store.load([cfg])["a"]
+    assert stored == replace(newer, model_choices=_GROUPED_CHOICES)
+    assert (stored.status, stored.detail, stored.measured_at_ms) == ("attention", newer.detail, newer.measured_at_ms)
+
+
+def test_a_newer_record_from_another_launch_config_is_handed_back_stale(tmp_path: Path) -> None:
+    """The newer measurement may be of a config the caller was not launched
+    with -- a Test after an edit. Handed to a caller holding the older record,
+    it is not proof about that caller's launch, so it comes back flagged."""
+    cfg = stub_config("a")
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    older, newer = _older_and_newer(cfg, store)
+    edited = replace(newer, fingerprint="after-an-edit", measured_at_ms=newer.measured_at_ms + 1)
+    store.record(edited)
+
+    handed = relearn_session_menus(older, _menu_reply(models=_GROUPED_MODELS), store=store)
+
+    assert handed is not None and handed.stale is True
+    assert replace(handed, stale=False) == edited
+    assert store.load([cfg], allow_stale=True)["a"] == replace(edited, stale=True)
+
+
+def test_a_backend_that_stood_down_refreshes_on_its_next_reply(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """End to end through the backend's own hook and the real store: the first
+    reply after a newer measurement is refused and the backend takes that
+    record on; the second refreshes the stored menu under the newer stamp."""
+    path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: path)
+    cfg = stub_config("a")
+    older, newer = _older_and_newer(cfg, SnapshotStore(path=path))
+    backend = AcpAgentBackend(name="a", command="true", snapshot=older)
+    rebuilds: list[int] = []
+    backend.bind_caps_listener(lambda: rebuilds.append(1))
+
+    backend._relearn_menus(_menu_reply(models=_GROUPED_MODELS))
+    assert backend._snapshot == newer
+    assert SnapshotStore(path=path).load([cfg])["a"] == newer
+
+    backend._relearn_menus(_menu_reply(models=_GROUPED_MODELS))
+    assert SnapshotStore(path=path).load([cfg])["a"] == replace(newer, model_choices=_GROUPED_CHOICES)
+    assert backend._snapshot.model_choices == _GROUPED_CHOICES
+    assert rebuilds == [1, 1]
 
 
 def test_a_relearn_writes_only_the_menu_its_reply_reported(tmp_path: Path) -> None:

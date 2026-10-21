@@ -1260,6 +1260,9 @@ class AcpAgentBackend:
     def _relearn_menus(self, result: Any) -> None:
         """Take the modes and models a session response advertises over the cached ones.
 
+        Or, when a newer measurement has been stored since this backend was
+        built, take that record instead, so the next response builds on it.
+
         Best-effort at every step. The menus are what the NEXT dispatch and the
         row's picker read, never something this turn depends on, so neither the
         write nor the table rebuild may cost the turn that happened to carry the
