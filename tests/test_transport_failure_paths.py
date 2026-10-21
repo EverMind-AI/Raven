@@ -202,6 +202,30 @@ def test_without_sentinels_folds_only_a_reply_that_is_nothing_else(content: str 
     assert without_sentinels(content) == folded
 
 
+def test_the_fold_reads_the_reply_after_the_orphan_think_is_split_off() -> None:
+    """A self-hosted backend that leaves `</think>` in the content: the split
+    takes the thought, and what is left is only the sentinel. The fold has to
+    read that remainder, not the raw content -- folded first, the thought
+    beside the sentinel reads as an answer and `<|im_end|>` reaches the loop.
+    """
+    thought_then_sentinel = _Response(
+        choices=[
+            _Choice(
+                message=_Msg(content="plan the reply</think>\n<|im_end|>"),
+                provider_specific_fields={"native_finish_reason": "stop"},
+            )
+        ],
+        usage=_Usage(prompt_tokens=367412, completion_tokens=27, total_tokens=367439),
+    )
+
+    with patch.object(LiteLLMProvider, "emits_unparsed_reasoning", return_value=True):
+        response = _provider()._parse_response(thought_then_sentinel, sent_chars=SENT)
+
+    assert response.finish_reason == "stop"
+    assert response.reasoning_content == "plan the reply"
+    assert response.content == ""
+
+
 def test_a_sentinel_beside_a_real_answer_is_still_an_answer() -> None:
     """Stripping is for deciding whether anything was said, not for editing the
     reply: the content delivered is untouched."""
@@ -362,6 +386,38 @@ async def test_a_stream_that_is_only_a_sentinel_ends_as_empty_on_this_path_too()
     )
 
     assert response.finish_reason == "stop"
+    assert response.content == ""
+
+
+class _ThoughtThenSentinelStream:
+    """A self-hosted backend's stream: an unmarked thought, its closing tag,
+    then only the upstream's end marker."""
+
+    generation = GenerationSettings()
+
+    def emits_unparsed_reasoning(self) -> bool:
+        return True
+
+    async def chat_stream(self, *a: Any, **kw: Any):
+        yield ChatDelta(content="plan the reply</think>\n")
+        yield ChatDelta(content="<|im_end|>")
+        yield ChatDelta(content=None, finish_reason="stop", usage={"prompt_tokens": 2900, "total_tokens": 2901})
+
+
+async def test_the_streamed_fold_also_reads_the_reply_after_the_split() -> None:
+    """The streamed exit splits the orphan thought off first too; folded before
+    the split, the thought would keep the sentinel from folding."""
+    from raven.providers.streaming import stream_llm_call
+
+    response = await stream_llm_call(
+        _ThoughtThenSentinelStream(),
+        messages=[{"role": "user", "content": "hi" * 6000}],
+        tools=None,
+        model="stub",
+    )
+
+    assert response.finish_reason == "stop"
+    assert response.reasoning_content == "plan the reply"
     assert response.content == ""
 
 
@@ -724,6 +780,26 @@ def test_the_upstreams_own_stop_is_a_normal_end() -> None:
     assert response.finish_reason == "stop"
     assert response.error_classification is None
     assert "failed call" not in (response.content or "")
+
+
+def test_a_native_stop_still_faces_the_accounting_check() -> None:
+    """Admitting `stop` to the allow list says the upstream ended normally; it
+    does not say the request was processed. A prompt of thousands of
+    characters billed as one token with nothing delivered is the incident's
+    dead-request shape whatever the finish reason reads, so the verdict is
+    still asked -- a native `stop` must not return early past it.
+    """
+    evidence = flag_transport_failure(
+        finish_reason="stop",
+        content="",
+        reasoning=None,
+        tool_calls=[],
+        native_finish_reason="stop",
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        sent_chars=SENT,
+    )
+
+    assert evidence and "billed as 1 tokens" in evidence
 
 
 def test_openrouter_names_its_backends_reason_on_every_choice() -> None:
