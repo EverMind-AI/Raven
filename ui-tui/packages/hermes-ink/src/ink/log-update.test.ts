@@ -223,9 +223,10 @@ describe('wide graphemes the terminal may size differently from the layout', () 
   })
 
   it('writes a CJK character plainly', () => {
-    const out = renderRow('中')
+    // U+4E2D: one code point, two columns everywhere.
+    const out = renderRow('\u4e2d')
 
-    expect(out).toContain('ab中c')
+    expect(out).toContain('ab\u4e2dc')
     expect(out).not.toContain(AUTO_WRAP_OFF)
     expect(out).not.toMatch(cha)
   })
