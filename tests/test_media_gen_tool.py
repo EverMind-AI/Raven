@@ -2051,3 +2051,11 @@ def test_a_plain_section_an_embedder_hands_in_for_video_is_a_video_section() -> 
     media = MediaGenConfig(video=MediaToolConfig(api_key="k", model="kwaivgi/kling-v3.0-std"))
     assert isinstance(media.video, VideoToolConfig)
     assert (media.video.api_key, media.video.model, media.video.provider) == ("k", "kwaivgi/kling-v3.0-std", "")
+
+
+def test_the_providers_offered_for_video_are_the_ones_the_video_tool_has_a_path_for() -> None:
+    """The registry's ``video_api`` decides what the roles card offers, and the tool's
+    dispatch decides what runs; nothing else ties the two together."""
+    from raven.providers.registry import PROVIDERS
+
+    assert {spec.name for spec in PROVIDERS if spec.video_api} == media_gen._MINIMAX_PROVIDERS | {"openrouter"}
