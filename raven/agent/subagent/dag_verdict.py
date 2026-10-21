@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -311,6 +311,25 @@ _OUTPUT_LIMIT_RULE = (
     "unfinished."
 )
 
+# Appended, like the rule above, only when there are follow-ups to weigh. A follow-up is
+# how the agent that assigned a task changes it once the node has started -- the user
+# picking another deliverable after an attempt fell short -- and a judge that held
+# every later attempt to the task as first given would fail each one that did what
+# the change asked.
+_FOLLOW_UP_RULE = (
+    " The sub-agent was also sent follow-ups: each time an earlier attempt fell short, the agent that "
+    "assigned the task sent it one, shown after the task, oldest first, and what you are shown came "
+    "after the last of them. The follow-ups are part of the task. One that only helps the next attempt "
+    "along -- a credential, a hint -- leaves the task as it was; where one changes what the task asks for, "
+    "the task is the one as changed, and where two disagree the later one stands."
+)
+
+
+def _follow_ups_block(follow_ups: Sequence[str]) -> str:
+    """The follow-ups, each in its own fence, under a heading written here and never from their text."""
+    fenced = "\n\n".join(wrap_untrusted(text, source="follow-up") for text in follow_ups)
+    return "Follow-ups sent by the agent that assigned the task, oldest first:\n" + fenced
+
 
 def _route_rule(select: str) -> str:
     """The instruction clause of a decision node, appended as the output-limit rule is.
@@ -389,12 +408,15 @@ def _messages(
     evidence: str,
     evidence_complete: bool,
     output_limited: bool = False,
+    follow_ups: Sequence[str] = (),
 ):
     blocks = [
         "The task the sub-agent was given:\n" + wrap_untrusted(prompt, source="subagent"),
         f"{body_label}:\n" + wrap_untrusted(body, source="subagent"),
         _evidence_block(evidence, evidence_complete),
     ]
+    if follow_ups:
+        blocks.insert(1, _follow_ups_block(follow_ups))
     if output_limited:
         blocks.insert(0, _OUTPUT_LIMIT_NOTE)
     return [
@@ -515,6 +537,7 @@ async def judge(
     output_limited: bool = False,
     routes: Mapping[str, str] | None = None,
     select: str = "one",
+    follow_ups: Sequence[str] = (),
 ) -> Verdict:
     """Whether a node that returned actually accomplished its task.
 
@@ -524,6 +547,11 @@ async def judge(
     that cannot report it, so ``False`` means "not known to have been cut",
     never "ran to completion".
 
+    ``follow_ups`` is what a continued node was sent after its earlier attempts,
+    oldest first: part of its task, beside the ``prompt`` it was first given.
+    With none, the request is exactly what it was before a node could be
+    continued.
+
     ``routes`` makes the node a decision: route name -> the condition under which its
     answer selects that route. The same call then also reports which one route the
     answer selects (``select="one"``) or which routes (``select="many"``, possibly
@@ -531,7 +559,9 @@ async def judge(
     node. A decision node does not fail open: when no route can be settled this raises
     `RouteUndeterminedError`, which a caller must not read as "accomplished".
     """
-    instruction = _JUDGE_INSTRUCTION + (_OUTPUT_LIMIT_RULE if output_limited else "")
+    instruction = (
+        _JUDGE_INSTRUCTION + (_OUTPUT_LIMIT_RULE if output_limited else "") + (_FOLLOW_UP_RULE if follow_ups else "")
+    )
     if routes:
         instruction += _route_rule(select)
     messages = _messages(
@@ -542,6 +572,7 @@ async def judge(
         evidence=evidence,
         evidence_complete=evidence_complete,
         output_limited=output_limited,
+        follow_ups=follow_ups,
     )
     if routes:
         messages[-1]["content"] += "\n\n" + _routes_block(routes)
@@ -581,11 +612,14 @@ async def describe_failure(
     model: str | None = None,
     timeout_s: float = 180.0,
     output_limited: bool = False,
+    follow_ups: Sequence[str] = (),
 ) -> Verdict:
     """A crashed node's traceback as the same structured report.
 
     Takes ``output_limited`` for the same reason ``judge`` does: a run can crash
-    *because* it was cut, and naming why is this call's whole job.
+    *because* it was cut, and naming why is this call's whole job. Takes
+    ``follow_ups`` for ``judge``'s reason too: what is missing is measured
+    against the task as it stood when the node crashed.
     """
     raw = Verdict(
         accomplished=False,
@@ -595,13 +629,18 @@ async def describe_failure(
         evidence_complete=evidence_complete,
     )
     messages = _messages(
-        instruction=_DESCRIBE_INSTRUCTION + (_OUTPUT_LIMIT_RULE if output_limited else ""),
+        instruction=(
+            _DESCRIBE_INSTRUCTION
+            + (_OUTPUT_LIMIT_RULE if output_limited else "")
+            + (_FOLLOW_UP_RULE if follow_ups else "")
+        ),
         prompt=prompt,
         body_label="The error it died with",
         body=error,
         evidence=evidence,
         evidence_complete=evidence_complete,
         output_limited=output_limited,
+        follow_ups=follow_ups,
     )
     try:
         response = await _call(provider, messages, model, timeout_s)

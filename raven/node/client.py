@@ -452,6 +452,8 @@ class NodePool:
         self._reconnects: dict[str, asyncio.Task[None]] = {}
         self._parked: dict[str, list[ChannelEndpoint]] = {}
         """The endpoints waiting for a machine's link to come back, by machine."""
+        self._ending: set[asyncio.Task[None]] = set()
+        """The ends of agents whose launch's caller was cancelled before the answer, held until they are done."""
         self._idle_close_s = idle_close_s
         self._heartbeat_s = heartbeat_s
         self._lost_after_s = lost_after_s
@@ -585,7 +587,6 @@ class NodePool:
         ``name`` when the caller has none.
         """
         node = await self._acquire(machine_id)
-        label = node.target.label
         channel = node.next_channel
         node.next_channel += 1
         task = task or task_id(name)
@@ -593,8 +594,36 @@ class NodePool:
         # Registered before the launch, so a frame the agent writes at once has somewhere to go.
         node.channels[channel] = endpoint
         params = {"channel": channel, "task": task, "command": command, "cwd": cwd, "env": dict(env)}
+        launch = asyncio.ensure_future(self._launch_agent(machine_id, node, channel, name, params))
         try:
-            started = await node.client.request(protocol.AGENT_LAUNCH, params, timeout=_LAUNCH_TIMEOUT_S)
+            started = await asyncio.shield(launch)
+        except asyncio.CancelledError:
+            # The Raven node starts the agent before it answers, and a caller
+            # cancelled in between never holds the endpoint that ends it: the
+            # pool reads the answer and ends the agent it started, and the
+            # caller returns at once, out of reach of a second cancel.
+            ending = asyncio.create_task(self._end_once_launched(launch, endpoint), name=f"node-end-{task}")
+            self._ending.add(ending)
+            ending.add_done_callback(self._ending.discard)
+            raise
+        if isinstance(started, dict) and isinstance(started.get("pid"), int):
+            endpoint.pid = started["pid"]
+        node.used = time.monotonic()
+        logger.info("acp agent {!r}: started on {}", name, endpoint.describe())
+        return endpoint
+
+    @staticmethod
+    async def _end_once_launched(launch: asyncio.Future[Any], endpoint: ChannelEndpoint) -> None:
+        """End the agent ``launch`` started once the node has answered it; nothing for a launch it refused."""
+        with contextlib.suppress(NodeError):
+            await launch
+            await endpoint.end()
+
+    async def _launch_agent(self, machine_id: str, node: _Node, channel: int, name: str, params: dict[str, Any]) -> Any:
+        """The Raven node's answer to ``agent/launch`` on ``channel``, or :class:`NodeError` saying why there is none."""
+        label = node.target.label
+        try:
+            return await node.client.request(protocol.AGENT_LAUNCH, params, timeout=_LAUNCH_TIMEOUT_S)
         except AcpRemoteError as exc:
             node.channels.pop(channel, None)
             raise NodeError(self._refused_launch(node, name, exc)) from None
@@ -608,11 +637,6 @@ class NodePool:
             said = self._ended(node.target, node.log, exc)
             await self._lost(machine_id, node, said)
             raise NodeError(said) from None
-        if isinstance(started, dict) and isinstance(started.get("pid"), int):
-            endpoint.pid = started["pid"]
-        node.used = time.monotonic()
-        logger.info("acp agent {!r}: started on {}", name, endpoint.describe())
-        return endpoint
 
     async def attach(
         self, machine_id: str, task: str, *, name: str, after: int = 0, stderr_after: int = 0

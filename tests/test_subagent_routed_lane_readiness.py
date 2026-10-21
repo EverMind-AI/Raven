@@ -310,3 +310,144 @@ class TestTheKeyThatPaysForTheWordsPaysForThePictures:
 
         assert _bare_host()._routed_target_ready(LANE, ("image_generation",)) is False
         assert _serper_host()._routed_target_ready(LANE, ("image_generation",)) is True
+
+
+def _host_on_file(path: Path, *, image: dict | None = None, providers: dict | None = None) -> AgentLoop:
+    """A loop whose live config is a host file holding ``image`` and ``providers``:
+    a provider the lane pins is paid from that file's providers, as the launcher's is."""
+    host: dict = {"providers": providers or {}}
+    if image is not None:
+        host["tools"] = {"media": {"image": image}}
+    path.write_text(json.dumps(host), encoding="utf-8")
+    loop = _host()
+    from raven.config.live import LiveConfig
+
+    loop._live_config = LiveConfig(path)
+    return loop
+
+
+_OPENROUTER_IMAGES = {
+    "image": {"model": "openai/gpt-image-2.5-sunburst"},
+    "providers": {"openrouter": {"apiKey": "sk-or"}},
+}
+_MINIMAX_IMAGES = {
+    "image": {"provider": "minimax", "model": "image-01"},
+    "providers": {"minimax": {"apiKey": "mm-host"}, "openrouter": {"apiKey": "sk-or"}},
+}
+
+PINNED_CASES = [
+    pytest.param(
+        {"providers": {"minimax": {"apiKey": "mm-host"}}},
+        {"IMAGE_PROVIDER": "minimax", "IMAGE_MODEL": "image-01"},
+        True,
+        id="host-key-for-the-pinned-provider",
+    ),
+    pytest.param(
+        {},
+        {"API_KEY": "sk-own-chat", "IMAGE_PROVIDER": "minimax", "IMAGE_MODEL": "image-01"},
+        False,
+        id="chat-key-is-not-lent-to-another-provider",
+    ),
+    pytest.param(
+        _OPENROUTER_IMAGES,
+        {"IMAGE_API_KEY": "sk-lane-image", "IMAGE_PROVIDER": "nope", "IMAGE_MODEL": "m"},
+        False,
+        id="a-provider-the-image-tool-cannot-run-on",
+    ),
+    pytest.param(
+        _OPENROUTER_IMAGES,
+        {"IMAGE_API_KEY": "sk-lane-image", "IMAGE_PROVIDER": "minimax"},
+        False,
+        id="a-switch-without-a-model",
+    ),
+    pytest.param(
+        _OPENROUTER_IMAGES,
+        {"IMAGE_PROVIDER": "minimax", "IMAGE_MODEL": "image-01"},
+        False,
+        id="no-host-key-for-the-pinned-provider",
+    ),
+    pytest.param(
+        {},
+        {"API_KEY": "sk-own-chat", "IMAGE_PROVIDER": "minimax", "IMAGE_MODEL": "image-01", "IMAGE_API_KEY": "mm-lane"},
+        True,
+        id="own-key-for-the-pinned-provider",
+    ),
+    pytest.param(
+        _MINIMAX_IMAGES,
+        {"IMAGE_PROVIDER": "MiniMax"},
+        True,
+        id="the-host-s-own-provider-needs-no-model",
+    ),
+    pytest.param(
+        _MINIMAX_IMAGES,
+        {"IMAGE_PROVIDER": "openrouter", "IMAGE_MODEL": "openai/gpt-image-2.5-sunburst"},
+        True,
+        id="to-openrouter-on-the-host-s-key",
+    ),
+    pytest.param(
+        _MINIMAX_IMAGES,
+        {
+            "API_KEY": "sk-own-chat",
+            "API_BASE": "https://gateway.example/v1",
+            "IMAGE_PROVIDER": "openrouter",
+            "IMAGE_MODEL": "openai/gpt-image-2.5-sunburst",
+        },
+        False,
+        id="to-openrouter-on-a-chat-key-bought-elsewhere",
+    ),
+]
+"""Host file, lane settings, and whether the lane draws. Shared with the launcher's
+own test, which renders each row and asserts a picture request goes out exactly
+where this says True."""
+
+
+class TestAPinnedImageProviderIsReadTheWayTheLauncherReadsIt:
+    """``<PREFIX>_IMAGE_PROVIDER`` moves the lane's pictures to another provider, which
+    the launcher pays from that provider's host key or the lane's own image key only,
+    and refuses outright for a provider the image tool cannot run on or a switch with
+    no model. The host's image role answers for its own provider, not for this one."""
+
+    @pytest.mark.parametrize(("host", "settings", "expected"), PINNED_CASES)
+    def test_the_gate_matches_the_launcher(self, lane, tmp_path: Path, host, settings, expected) -> None:
+        lane(**settings)
+
+        assert (
+            _host_on_file(tmp_path / "host.json", **host)._routed_target_ready(LANE, ("image_generation",)) is expected
+        )
+
+    @pytest.mark.parametrize("spelled", ["MiniMax", "MINIMAX"])
+    def test_the_provider_is_read_in_any_spelling_the_registry_folds(self, lane, tmp_path: Path, spelled) -> None:
+        lane(IMAGE_PROVIDER=spelled, IMAGE_MODEL="image-01")
+        host = _host_on_file(tmp_path / "host.json", providers={"minimax": {"apiKey": "mm-host"}})
+
+        assert host._routed_target_ready(LANE, ("image_generation",)) is True
+
+    def test_the_process_environment_outranks_the_folder_env(
+        self, lane, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        lane(IMAGE_PROVIDER="nope", IMAGE_MODEL="image-01")
+        host = _host_on_file(tmp_path / "host.json", providers={"minimax": {"apiKey": "mm-host"}})
+        assert host._routed_target_ready(LANE, ("image_generation",)) is False
+
+        monkeypatch.setenv(f"{va.env_prefix(FOLDER)}_IMAGE_PROVIDER", "minimax")
+        assert host._routed_target_ready(LANE, ("image_generation",)) is True
+
+    def test_a_host_that_drops_the_pinned_provider_s_key_closes_the_route_live(self, lane, tmp_path: Path) -> None:
+        lane(IMAGE_PROVIDER="minimax", IMAGE_MODEL="image-01")
+        path = tmp_path / "host.json"
+        host = _host_on_file(path, providers={"minimax": {"apiKey": "mm-host"}})
+        assert host._routed_target_ready(LANE, ("image_generation",)) is True
+
+        path.write_text(json.dumps({"providers": {"minimax": {"apiKey": ""}}}), encoding="utf-8")
+        assert host._routed_target_ready(LANE, ("image_generation",)) is False
+
+    def test_a_pinned_base_with_no_key_of_its_own_draws_nothing(self, lane, tmp_path: Path) -> None:
+        """The host resolved its keys for its own addresses, so none goes to the lane's."""
+        lane(IMAGE_PROVIDER="minimax", IMAGE_MODEL="image-01", IMAGE_API_BASE="https://mm-relay.test/v1")
+        host = _host_on_file(
+            tmp_path / "host.json",
+            image=_OPENROUTER_IMAGES["image"],
+            providers={**_OPENROUTER_IMAGES["providers"], "minimax": {"apiKey": "mm-host"}},
+        )
+
+        assert host._routed_target_ready(LANE, ("image_generation",)) is False

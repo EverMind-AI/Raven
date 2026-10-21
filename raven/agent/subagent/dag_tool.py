@@ -2396,10 +2396,12 @@ class SubAgentDagTool(Tool):
                 return Verdict(accomplished=True)
             evidence, complete = await self._node_evidence(store, node.id, cfg.evidence_budget_chars)
             prompt = await self._node_prompt(store, node.id)
+            follow_ups = await self._node_follow_ups(store, node.id)
             if crashed:
                 return await describe_failure(
                     provider,
                     prompt=prompt,
+                    follow_ups=follow_ups,
                     error=error,
                     evidence=evidence,
                     evidence_complete=complete,
@@ -2410,6 +2412,7 @@ class SubAgentDagTool(Tool):
             return await judge(
                 provider,
                 prompt=prompt,
+                follow_ups=follow_ups,
                 output=output,
                 evidence=evidence,
                 evidence_complete=complete,
@@ -2427,6 +2430,12 @@ class SubAgentDagTool(Tool):
             return await store.read_text(store.prompt_path(node_id))
         except Exception:  # noqa: BLE001 - the judge can work from output alone
             return ""
+
+    async def _node_follow_ups(self, store: Any, node_id: str) -> tuple[str, ...]:
+        try:
+            return tuple(await store.read_follow_ups(node_id))
+        except Exception:  # noqa: BLE001 - the judge can work from the prompt alone
+            return ()
 
     async def _node_evidence(self, store: Any, node_id: str, budget: int) -> tuple[str, bool]:
         """The transcript tail and whether there was a transcript at all.

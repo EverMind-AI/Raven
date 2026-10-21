@@ -66,6 +66,7 @@ __all__ = [
     "merge_product_seeds",
     "product_folder",
     "product_image_key",
+    "product_image_pin",
     "product_llm_key",
     "product_secret",
     "product_state",
@@ -302,7 +303,8 @@ def product_image_key(row_name: str, root: Path | None = None) -> str:
     the generator speaks. Lending a chat credential to an address its owner
     never nominated for pictures is the one thing that backfill must not do,
     so the endpoint is read on both sides: the product's own image base pin,
-    and the gateway its provider blocks actually address.
+    and the gateway its provider blocks actually address. A folder pinning its
+    pictures to another provider (:func:`product_image_pin`) lends nothing either.
 
     ``""`` is "only the host can supply one", which is a different answer from
     "cannot draw": the launcher inherits the host's image section where the
@@ -313,6 +315,11 @@ def product_image_key(row_name: str, root: Path | None = None) -> str:
         return ""
     if explicit := _folder_setting(folder, "IMAGE_API_KEY"):
         return explicit
+    from raven.providers.registry import canonical_provider_name
+
+    pinned_provider = _folder_setting(folder, "IMAGE_PROVIDER")
+    if pinned_provider and canonical_provider_name(pinned_provider) != "openrouter":
+        return ""
     # The inherit branch has no key of its own to lend: a folder naming none
     # takes the host's, and the host's image section is the caller's other half.
     key = _folder_setting(folder, "API_KEY")
@@ -325,6 +332,20 @@ def product_image_key(row_name: str, root: Path | None = None) -> str:
     if base:
         return key if _IMAGE_GATEWAY in base else ""
     return key if _folder_addresses_openrouter(folder) else ""
+
+
+def product_image_pin(row_name: str, root: Path | None = None) -> tuple[str, str]:
+    """The provider and model one agent's folder pins its pictures to, each ``""`` when unset.
+
+    ``<PREFIX>_IMAGE_PROVIDER`` and ``<PREFIX>_IMAGE_MODEL``, read the way the
+    launcher reads them. A provider named here moves the pictures off the host's
+    image role, so the gate asking whether the lane can draw has to ask about
+    that provider instead.
+    """
+    folder = product_folder(row_name, root)
+    if folder is None:
+        return "", ""
+    return _folder_setting(folder, "IMAGE_PROVIDER"), _folder_setting(folder, "IMAGE_MODEL")
 
 
 def product_picture_vendor(row_name: str, root: Path | None = None) -> str:

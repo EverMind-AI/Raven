@@ -274,10 +274,12 @@ has no route to fall back to, so it fails instead (see
 [Conditional branches](#conditional-branches)).
 
 For an exception, `resolve_dag_node` can continue with corrective instructions,
-abandon the node, or replan. Replanning finalizes the old run and starts a new
-one; reuse completed outputs by reference and assign fresh ids to replacement
-nodes. Failed prerequisites eventually skip their dependents; independent
-branches need not be discarded.
+abandon the node, or replan. A continue message becomes part of the node's task:
+the next attempt is judged against the prompt as that message changed it, so a
+deliverable the user swaps after an attempt falls short is the one judged.
+Replanning finalizes the old run and starts a new one; reuse completed outputs by
+reference and assign fresh ids to replacement nodes. Failed prerequisites
+eventually skip their dependents; independent branches need not be discarded.
 
 The `subagentDag` settings default to a 180-second judge timeout, a 600-second
 background adjudication window, and two continuations per node. These bound

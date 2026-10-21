@@ -82,6 +82,12 @@ class Capability:
     #: Stated before the deployer switches it on rather than after: these cost
     #: money per call, and one cannot run at all without prepaid credit.
     cost_note: str = ""
+    #: :attr:`cost_note` for a section on a named provider, which bills it
+    #: instead of OpenRouter; empty where the note holds either way.
+    named_provider_cost_note: str = ""
+    #: The credential's path where it is not the section's own: a section on a
+    #: named provider runs on that provider's key (see :func:`resolve`).
+    key_field: str = ""
 
     @property
     def key_path(self) -> str:
@@ -91,6 +97,8 @@ class Capability:
         model field: naming a model path as where a key came from sends the
         deployer to edit a line that holds no credential.
         """
+        if self.key_field:
+            return self.key_field
         return f"tools.media.{self.media_attr}.apiKey" if self.media_attr else self.config_path
 
 
@@ -132,6 +140,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         media_attr="video",
         env_var="OPENROUTER_API_KEY",
         cost_note="Billed per call; needs prepaid OpenRouter credit to run at all.",
+        named_provider_cost_note="Billed per call.",
     ),
     Capability(
         tool="web_search",
@@ -178,6 +187,19 @@ def resolve(cap: Capability, config: "Config") -> Capability:
 
         spec = FETCH_PROVIDERS[config.tools.web.fetch.provider]
         return replace(cap, config_path=spec.config_path, env_var=spec.env_var, obtain_from=spec.signup)
+    if cap.media_attr:
+        from raven.config.schema import media_provider
+
+        runs_on = media_provider(getattr(config.tools.media, cap.media_attr))
+        if runs_on and runs_on != "openrouter":
+            # That provider's key is the only one the section takes, and the
+            # provider bills it: OpenRouter's variable and credit do not reach it.
+            return replace(
+                cap,
+                key_field=f"providers.{runs_on}.apiKey",
+                env_var="",
+                cost_note=cap.named_provider_cost_note or cap.cost_note,
+            )
     return cap
 
 

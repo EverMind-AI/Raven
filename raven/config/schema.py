@@ -5,7 +5,16 @@ from typing import Annotated, Any, Literal
 from urllib.parse import urlparse
 
 from loguru import logger
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -1166,19 +1175,30 @@ class MediaToolConfig(Base):
     quality: Literal["", "low", "medium", "high"] = ""
     # Sent with every request, beside the key; secret like a provider's own.
     extra_headers: dict[str, str] = Field(default_factory=dict, json_schema_extra={"secret": True})
-    selection_config: str = Field(default="", description="Host config path for live model and quality inheritance")
+    selection_config: str = Field(
+        default="",
+        description="Config file this section is read from, live, against that file's providers: "
+        "the host's, or a pinned deck's own",
+    )
 
 
 class ImageToolConfig(MediaToolConfig):
-    """The image tool's section, the one media section that can name a provider.
+    """The image tool's section, one of the two media sections that can name a provider.
 
     ``provider`` names another configured provider to run on instead, whose
     address, key and headers replace this section's -- see
-    :func:`borrow_media_credentials`. Only the image tool has a request path for
-    such a provider (OpenAI's Images API); speech and video keep to OpenRouter's
-    request shapes, so their sections have no such field, and a ``provider``
-    written there is ignored like any key their class does not declare.
+    :func:`borrow_media_credentials`. The image and video tools have request
+    paths for such a provider (OpenAI's Images API, MiniMax's image and video
+    APIs); speech keeps to OpenRouter's request shapes, so its section has no
+    such field, and a ``provider`` written there is ignored like any key its
+    class does not declare.
     """
+
+    provider: str = ""  # empty (or "openrouter") is the OpenRouter default
+
+
+class VideoToolConfig(MediaToolConfig):
+    """The video tool's section; ``provider`` works as on :class:`ImageToolConfig`."""
 
     provider: str = ""  # empty (or "openrouter") is the OpenRouter default
 
@@ -1188,22 +1208,23 @@ class MediaGenConfig(Base):
 
     OpenRouter is the default backend: image + speech via chat-completions output
     modalities, and video via the async ``/videos`` endpoint (Kling). The image
-    tool also runs on a provider serving OpenAI's Images API, named by
-    ``image.provider``; speech and video keep to OpenRouter's request shapes.
+    tool also runs on a provider serving OpenAI's Images API or on MiniMax, named
+    by ``image.provider``, and the video tool on MiniMax, named by
+    ``video.provider``; speech keeps to OpenRouter's request shapes.
     """
 
     image: ImageToolConfig = Field(default_factory=ImageToolConfig)
     speech: MediaToolConfig = Field(default_factory=MediaToolConfig)
-    video: MediaToolConfig = Field(default_factory=MediaToolConfig)
+    video: VideoToolConfig = Field(default_factory=VideoToolConfig)
     proxy: str | None = None  # HTTP/SOCKS proxy for media API calls
     output_subdir: str = "generated"  # where generated files are written under workspace
 
-    @field_validator("image", mode="before")
+    @field_validator("image", "video", mode="before")
     @classmethod
-    def _plain_section_is_an_image_section(cls, value: Any) -> Any:
-        """A plain ``MediaToolConfig`` is still an image section, one naming no
-        provider: an embedder handing ``AgentLoop`` one keeps working."""
-        if isinstance(value, MediaToolConfig) and not isinstance(value, ImageToolConfig):
+    def _plain_section_takes_its_kind(cls, value: Any, info: ValidationInfo) -> Any:
+        """A plain ``MediaToolConfig`` is still an image or video section, one naming
+        no provider: an embedder handing ``AgentLoop`` one keeps working."""
+        if isinstance(value, MediaToolConfig) and not isinstance(value, cls.model_fields[info.field_name].annotation):
             return value.model_dump(exclude_unset=True)
         return value
 
@@ -2833,7 +2854,7 @@ def borrow_media_credentials(tool: MediaToolConfig, providers: Any) -> None:
 
 def media_section_class(kind: str) -> type[MediaToolConfig]:
     """The class ``MediaGenConfig`` declares for ``kind``'s section, for a reader
-    validating a raw one: only the image section has a provider."""
+    validating a raw one: the image and video sections have a provider."""
     return MediaGenConfig.model_fields[kind].annotation
 
 

@@ -97,7 +97,7 @@ def _account(ctx: AgentHookContext) -> dict[str, Any]:
     return ctx.metadata.setdefault(_ACCOUNT_KEY, {})
 
 
-def _hold_after_turn(session_key: str) -> dict[str, Any] | None:
+def _hold_after_turn(session_key: str, *, wake_turn: bool = False) -> dict[str, Any] | None:
     """Whether this window's campaign has a wake pending once this turn ends.
 
     The fork ended the turn on ``ops_check_later`` and let the wake run a later
@@ -107,6 +107,11 @@ def _hold_after_turn(session_key: str) -> dict[str, Any] | None:
     on: the campaign this window claimed, not concluded, with one pending wake
     -- read the same way the owner's answer pulls that wake forward. None when
     there is nothing to wait for, or nothing can be read.
+
+    ``wake_turn`` says this turn is the one a wake started. Only that turn
+    leaves the executing wake out: it is the wake's own run ending. Any other
+    turn -- a steer that ends while a claimed wake's turn waits behind it on
+    the session lane -- still counts that wake as to come.
     """
     if not session_key:
         return None
@@ -115,7 +120,7 @@ def _hold_after_turn(session_key: str) -> dict[str, Any] | None:
         campaign = campaign_for_window(home, session_key)
         if not campaign or is_concluded(home / campaign):
             return None
-        job = wakes.pending_look(tools_base.granted_scheduler(), campaign)
+        job = wakes.pending_look(tools_base.granted_scheduler(), campaign, include_running=not wake_turn)
         if job is None:
             return None
         state = getattr(job, "state", None)
@@ -231,13 +236,13 @@ class TurnContextHook(AgentHook):
         chat_id = str(getattr(source, "chat_id", "") or "")
         text = ctx.inbound_content if ctx.inbound_content is not None else str(getattr(request, "text", "") or "")
         task = task_fingerprint(text)
-        ctx.metadata[_CONTEXT_KEY] = {"channel": channel, "chat_id": chat_id, "task": task}
-        faces = tools_base.set_turn_context(channel, chat_id, ctx.session_key or "", task)
-        acct = _account(ctx)
-        acct["faces"] = faces
         # Compared as the string the StrEnum is, so the axis needs no import
         # from the spine: raven.spine.turn.Origin.USER == "user".
         origin = str(getattr(request, "origin", "") or "")
+        ctx.metadata[_CONTEXT_KEY] = {"channel": channel, "chat_id": chat_id, "task": task, "origin": origin}
+        faces = tools_base.set_turn_context(channel, chat_id, ctx.session_key or "", task)
+        acct = _account(ctx)
+        acct["faces"] = faces
         acct.update(_capture_owner_instruction(ctx.session_key or "", text, origin))
         return HookDecision()
 
@@ -291,11 +296,11 @@ class TurnAccountingHook(AgentHook):
         return HookDecision()
 
     async def after_send(self, ctx: AgentHookContext) -> HookDecision:
-        ctx.metadata.pop(_CONTEXT_KEY, None)
+        turn = ctx.metadata.pop(_CONTEXT_KEY, None) or {}
         acct = ctx.metadata.pop(_ACCOUNT_KEY, None)
         if acct:
             ctx.metadata.setdefault("observers", {})["oncall_flow"] = dict(acct)
-        hold = _hold_after_turn(ctx.session_key or "")
+        hold = _hold_after_turn(ctx.session_key or "", wake_turn=turn.get("origin") == "cron")
         if hold is not None:
             observers = ctx.metadata.setdefault("observers", {})
             observers.setdefault(_ACP_META_OBSERVER, {})[_HOLD_TURN_META] = hold

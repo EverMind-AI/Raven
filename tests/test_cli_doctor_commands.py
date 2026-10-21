@@ -855,6 +855,28 @@ def test_doctor_flags_a_capability_registered_without_a_key(tmp_config: Path, tm
     assert image["configured"] is True and image["has_credential"] is False
 
 
+def test_doctor_names_the_key_of_the_provider_a_section_runs_on(tmp_config: Path, tmp_path: Path) -> None:
+    """A video section on MiniMax with no MiniMax key: the row names the key the
+    section runs on, and no OpenRouter variable, which would never reach it."""
+    cfg = Config()
+    cfg.agents.defaults.model = "anthropic/claude-sonnet-4-5"
+    cfg.agents.defaults.workspace = str(tmp_path / "workspace")
+    cfg.providers.anthropic.api_key = "sk-fake"
+    cfg.tools.media.video.model = "MiniMax-Hailuo-2.3"
+    cfg.tools.media.video.provider = "minimax"
+    save_config(cfg)
+
+    lines = [" ".join(line.split()) for line in runner.invoke(app, ["doctor"]).stdout.splitlines()]
+    start = next(i for i, line in enumerate(lines) if line.startswith("video_generate:"))
+    row = lines[start : start + 4]
+    assert "set: providers.minimax.apiKey" in row
+    assert not any(line.startswith("or env:") for line in row)
+
+    payload = json.loads(runner.invoke(app, ["doctor", "--json"]).stdout)
+    video = next(c for c in payload["tools"]["capabilities"] if c["tool"] == "video_generate")
+    assert (video["key_path"], video["env_var"], video["has_credential"]) == ("providers.minimax.apiKey", "", False)
+
+
 def test_an_unconfigured_capability_is_not_a_failure(healthy_config: Path) -> None:
     """An install without image generation is a choice, not a fault."""
     result = runner.invoke(app, ["doctor"])

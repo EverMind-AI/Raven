@@ -35,7 +35,13 @@ from raven.config.schema import (
 )
 from raven.config.update_subagents import reject_unsupported_openai_fields
 from raven.spine.message import Media
-from tests.test_subagent_acp_remote import HOST, PORT, Machine, box  # noqa: F401 - the fixture, by name
+from tests.test_subagent_acp_remote import (  # noqa: F401 - the fixture, by name
+    HOST,
+    PORT,
+    Machine,
+    _hold_launch_answers,
+    box,
+)
 
 # Every dispatch, test and ping here starts a real node over the stand-in ssh,
 # and the command through it: real processes, real seconds.
@@ -338,6 +344,63 @@ async def test_a_cancel_ends_the_agent_s_whole_process_tree_on_the_machine(box, 
         await turn
 
     await _until(lambda: _gone(pid))
+
+
+async def test_a_cancel_while_the_launch_answer_waits_ends_the_agent_too(box, tmp_path, monkeypatch):
+    """The turn is cancelled after the daemon started its agent but before ``agent/launch``'s answer
+    reaches :meth:`NodePool.open_channel`: the agent is ended and the channel dropped all the same."""
+    answered = asyncio.Event()
+    _hold_launch_answers(monkeypatch, answered)
+    cfg = cli_config("sh -c 'echo $$ > pid.txt; exec sleep 30'")
+    pid_file = box.home / "raven-work" / "held" / "pid.txt"
+    turn = asyncio.ensure_future(_run(cfg, "hi", tmp_path, instance="held"))
+    await _until(pid_file.exists)
+    await asyncio.wait_for(answered.wait(), 10)
+    pid = int(pid_file.read_text(encoding="utf-8"))
+    assert not _gone(pid)
+
+    turn.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await turn
+
+    await _until(lambda: _gone(pid))
+    await _until(lambda: box.nodes._nodes["box"].channels == {})
+
+
+async def test_a_cancel_while_the_daemon_still_prepares_the_launch_ends_the_agent_too(box, tmp_path, monkeypatch):
+    """The daemon registers the channel only once it has the login environment and the agent: a cancel
+    sent before that is answered ``no agent on channel``, and the agent starts all the same."""
+    from raven.acp_client.client import AcpClient
+    from raven.node import protocol
+    from tests.test_subagent_acp_remote import _FAKE_SSH
+
+    if not Path("/bin/bash").exists():
+        pytest.skip("the daemon captures a login environment from bash or zsh only")
+    # A login shell that takes a second, which the daemon runs before its first agent starts.
+    stand_in = _FAKE_SSH.format(python=sys.executable, host=HOST, port=PORT)
+    assert stand_in.count('"SHELL": "/bin/sh"') == 1
+    (box.bin / "ssh").write_text(stand_in.replace('"SHELL": "/bin/sh"', '"SHELL": "/bin/bash"'), encoding="utf-8")
+    (box.home / ".bash_profile").write_text("sleep 1\n", encoding="utf-8")
+    request = AcpClient.request
+    sent = asyncio.Event()
+
+    async def watched(self: AcpClient, method: str, *args: Any, **kwargs: Any) -> Any:
+        if method == protocol.AGENT_LAUNCH:
+            sent.set()
+        return await request(self, method, *args, **kwargs)
+
+    monkeypatch.setattr(AcpClient, "request", watched)
+    turn = asyncio.ensure_future(_run(cli_config("sh -c 'exec sleep 30'"), "hi", tmp_path, instance="early"))
+    await asyncio.wait_for(sent.wait(), 15)
+    await asyncio.sleep(0.3)  # the launch is on the daemon, inside that login shell
+
+    turn.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await turn
+
+    tasks = box.home / ".raven-node" / "tasks"
+    await _until(lambda: any(tasks.glob("*/task.json")))
+    await _until(lambda: not box.agents_left(), timeout=5)
 
 
 async def test_a_stateful_cli_agent_resumes_its_session_on_the_machine(box, tmp_path):
@@ -815,6 +878,7 @@ async def test_a_cli_run_left_on_the_machine_when_this_computer_stops_is_picked_
     )
     pid_file = box.home / "raven-work" / "left" / "pid.txt"
     await _until(pid_file.exists)
+    await _until(lambda: remote_runs.pending() != [])
     pid = int(pid_file.read_text(encoding="utf-8"))
     (run,) = remote_runs.pending()
     assert (run.kind, run.machine, run.agent, run.session_key, run.handle, run.task_id) == (
@@ -879,6 +943,7 @@ async def test_a_cancel_while_this_computer_goes_on_ends_the_command_and_keeps_n
     )
     pid_file = box.home / "raven-work" / "gone" / "pid.txt"
     await _until(pid_file.exists)
+    await _until(lambda: remote_runs.pending() != [])
     pid = int(pid_file.read_text(encoding="utf-8"))
     assert [run.kind for run in remote_runs.pending()] == ["cli"], "recorded while it runs"
 

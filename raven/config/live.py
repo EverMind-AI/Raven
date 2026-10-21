@@ -402,13 +402,14 @@ def media_tool_config(live: LiveConfig, kind: str):
     The resolution itself -- validation and the borrowing rule -- lives in
     ``config.schema`` next to ``effective_media_config``, so the rule is stated
     once and this module never handles a credential field. Only the per-tool
-    section (key / base / model / headers, and the image section's provider) and
-    the provider it borrows from are live preferences; the surrounding wiring
-    (proxy, output directory, workspace restriction) is generation state and
-    changes with a swap. None means the file has no ``tools.media`` section at
-    all -- the constructor-fallback lane. A candidate that fails validation
-    mid-rewrite dispenses no new answer and the last admitted slice keeps
-    serving, the slice-level form of the rule ``raw`` applies to the file.
+    section (key / base / model / headers, and the image and video sections'
+    provider) and the provider it borrows from are live preferences; the
+    surrounding wiring (proxy, output directory, workspace restriction) is
+    generation state and changes with a swap. None means the file has no
+    ``tools.media`` section at all -- the constructor-fallback lane. A candidate
+    that fails validation mid-rewrite dispenses no new answer and the last
+    admitted slice keeps serving, the slice-level form of the rule ``raw``
+    applies to the file.
     """
     from raven.config.schema import live_media_tool_config
 

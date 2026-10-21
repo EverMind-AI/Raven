@@ -1941,11 +1941,16 @@ async def _run_node(
             prompt_path = store.prompt_path(node.id)
             output_path = store.output_path(node.id)
             if attempt == 1:
-                # `prompt_path` is the task the judge and dag_status/read_node show
-                # for this node, so it must stay fixed at the original render even
-                # once a later attempt substitutes a follow-up into `prompt`.
+                # `prompt_path` is the prompt as first rendered -- what
+                # dag_status/read_node show, and what the judge reads ahead of the
+                # follow-ups recorded below -- so it must stay fixed at the original
+                # render even once a later attempt substitutes a follow-up into `prompt`.
                 await store.write_text(prompt_path, rendered_prompt)
             await store.write_text(store.attempt_prompt_path(node.id, attempt), prompt)
+            if follow_up is not None:
+                # The message itself, not `prompt`: the judge reads the task from
+                # `prompt_path`, and a stateless node's prompt would repeat it.
+                await store.record_follow_up(node.id, follow_up)
             prompt_written.add(node.id)
             # The instance's message list, on the same terms as `spawn` and a
             # direct chat. A node that names an `instance` is asking to continue
