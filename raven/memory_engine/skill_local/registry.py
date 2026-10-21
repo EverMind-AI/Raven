@@ -192,7 +192,8 @@ class SkillRegistry:
 
     def layer_roots(self) -> list[tuple[Path, str]]:
         """Each root the scan walks, with its layer label, in scan order:
-        workspace, then each ``skillForge.localDirs`` entry, then builtin."""
+        ``workspace``, then each ``skillForge.localDirs`` entry under its own
+        label, then ``builtin``."""
         return [(root, label) for root, label, _ in self._layers()]
 
     def _layers(self) -> list[tuple[Path, str, bool]]:
