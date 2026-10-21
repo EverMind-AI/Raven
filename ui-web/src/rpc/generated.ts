@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 249 methods, 138 component schemas.
+// 250 methods, 138 component schemas.
 
 /* eslint-disable */
 /**
@@ -3258,6 +3258,25 @@ export interface ModelRevealKeyResult {
    * The key saved in the provider's own section -- the one `model.save_key` writes -- or null when none is saved there, or when an endpoints list or key list replaces it and requests do not carry it. A key the provider takes from the environment is not read back.
    */
   api_key?: string | null;
+}
+export interface ModelCheckKeyParams {
+  slug: string;
+  api_key?: string;
+  api_base?: string;
+}
+export interface ModelCheckKeyResult {
+  ok: boolean;
+  /**
+   * The probe's word: `valid`, `invalid_key`, `key_unchecked`, `no_credits`, `rate_limited`, `network_error`, `proxy_unreachable`, `certificate_untrusted`, `no_probe_endpoint`, `not_configured`, `http_NNN`.
+   */
+  status: string;
+  http_status?: number;
+  models_count?: number;
+  error?: string;
+  /**
+   * The vendor itself refused this key -- answered it with 401, or named it invalid -- so storing it would store a key that cannot work. Every other answer leaves the key worth storing.
+   */
+  refused: boolean;
 }
 export interface ModelFetchModelsParams {
   slug: string;
@@ -6639,6 +6658,7 @@ export interface RpcMethods {
   'model.save_key': { params: ModelSaveKeyParams; result: ModelSaveKeyResult };
   'model.disconnect': { params: ModelDisconnectParams; result: ModelDisconnectResult };
   'model.reveal_key': { params: ModelRevealKeyParams; result: ModelRevealKeyResult };
+  'model.check_key': { params: ModelCheckKeyParams; result: ModelCheckKeyResult };
   'model.fetch_models': { params: ModelFetchModelsParams; result: ModelFetchModelsResult };
   'model.add_model': { params: ModelAddModelParams; result: ModelAddModelResult };
   'model.add_models': { params: ModelAddModelsParams; result: ModelAddModelsResult };
@@ -6976,6 +6996,7 @@ export const RPC_METHODS = [
   "model.add_endpoint",
   "model.add_model",
   "model.add_models",
+  "model.check_key",
   "model.disconnect",
   "model.endpoints",
   "model.fetch_models",

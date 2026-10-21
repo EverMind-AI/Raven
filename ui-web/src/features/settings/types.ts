@@ -142,6 +142,8 @@ export type ArchivedSession = ResultOf<'session.list'>['sessions'][number]
 /* The EverOS Cloud card's data: settings.everosCloud's own shape. */
 export type EverosCloudInfo = ResultOf<'settings.everosCloud'>
 export type OauthStart = ResultOf<'model.oauth_login'>
+/* What the vendor said about a key before it was stored (`model.check_key`). */
+export type KeyCheck = ResultOf<'model.check_key'>
 
 /* Everything the dialog draws from, in one read. `raw` is the config
    settings.get returned, as the file writes it (one level per dot; a
@@ -246,6 +248,9 @@ export interface SettingsSource {
   /* Ask the provider what it serves right now. A read: nothing is written
      until a row is added. */
   fetchModels(slug: string, verify?: boolean): Promise<ModelCatalogue>
+  /* The vendor's answer to a credential a form holds, before anything is
+     stored: a read, with `refused` for a key the vendor itself turned away. */
+  checkKey(slug: string, params: { api_key?: string; api_base?: string }): Promise<KeyCheck>
   /* The key a connected provider saved, for the eye beside its empty key
      field; null when it keeps none in its own section. Asked for one provider
      on a press, never part of the snapshot. */

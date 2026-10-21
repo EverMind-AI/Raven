@@ -4043,6 +4043,33 @@ export interface ModelRevealKeyResult {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ModelCheckKeyParams".
+ */
+export interface ModelCheckKeyParams {
+  slug: string;
+  api_key?: string;
+  api_base?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ModelCheckKeyResult".
+ */
+export interface ModelCheckKeyResult {
+  ok: boolean;
+  /**
+   * The probe's word: `valid`, `invalid_key`, `key_unchecked`, `no_credits`, `rate_limited`, `network_error`, `proxy_unreachable`, `certificate_untrusted`, `no_probe_endpoint`, `not_configured`, `http_NNN`.
+   */
+  status: string;
+  http_status?: number;
+  models_count?: number;
+  error?: string;
+  /**
+   * The vendor itself refused this key -- answered it with 401, or named it invalid -- so storing it would store a key that cannot work. Every other answer leaves the key worth storing.
+   */
+  refused: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "ModelFetchModelsParams".
  */
 export interface ModelFetchModelsParams {
