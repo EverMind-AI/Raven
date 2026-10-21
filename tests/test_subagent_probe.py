@@ -1811,7 +1811,7 @@ async def test_a_mirasim_row_is_read_by_whether_mirasim_is_here_not_by_an_execut
     home = tmp_path / "mirasim"
     (tmp_path / "bin").mkdir()
     monkeypatch.setattr(probe_mod, "login_shell_env", lambda: {"RAVEN_MIRASIM_HOST": "", "MIRASIM_HOME": "/elsewhere"})
-    monkeypatch.setattr(mp, "remote_socket", lambda: tmp_path / "none" / "server.sock")
+    monkeypatch.setattr(mp, "remote_root", lambda: tmp_path / "no-remote")
     monkeypatch.setattr(mp, "_listening", lambda port: False)
     monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: None)
     cfg = ThirdPartyAcpSubagentConfig(
@@ -1824,16 +1824,19 @@ async def test_a_mirasim_row_is_read_by_whether_mirasim_is_here_not_by_an_execut
     res = await probe_one(cfg, source="preset", path=str(tmp_path / "bin"))
     assert res.status == "missing"
     assert res.absent == "mirasim" and res.target == "mirasim", "what the page offers to install is read from this"
-    assert "Mirasim is not installed on this computer" in res.detail and "mirasim.ai/download" in res.detail
+    assert res.detail == (
+        "Mirasim is not installed on this computer; install the Mirasim app from https://mirasim.ai/download "
+        "and open it, or let the Mirasim app on another computer reach this one over ssh"
+    )
 
     launcher = home.joinpath(*mp.LAUNCHER)
     launcher.parent.mkdir(parents=True)
     launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     res = await probe_one(cfg, source="preset", path=str(tmp_path / "bin"))
     assert res.status == "attention" and res.absent is None
-    assert (
-        res.detail
-        == f"Mirasim is installed ({launcher}) but its host is not running: open the Mirasim app, then check again"
+    assert res.detail == (
+        f"Mirasim is installed ({launcher}) but no host of it is running: open the Mirasim app, or let the "
+        "Mirasim app on another computer reach this one again, then check again"
     )
     assert res.target == str(launcher)
 
@@ -1842,6 +1845,32 @@ async def test_a_mirasim_row_is_read_by_whether_mirasim_is_here_not_by_an_execut
     monkeypatch.setattr(mp, "_listening", lambda port: True)
     res = await probe_one(cfg, source="preset", path=str(tmp_path / "bin"))
     assert res.status == "attention" and "have not been recorded yet" in res.detail
+
+
+async def test_a_mirasim_row_is_judged_in_the_login_shells_environment_when_its_own_names_no_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`MIRASIM_HOME` exported in the shell rc alone is where the adapter would look, so the probe looks there."""
+    from raven.agent.subagent import mirasim_presets as mp
+
+    home = tmp_path / "mirasim"
+    launcher = home.joinpath(*mp.LAUNCHER)
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (tmp_path / "bin").mkdir()
+    monkeypatch.setattr(probe_mod, "login_shell_env", lambda: {"MIRASIM_HOME": str(home)})
+    monkeypatch.setattr(mp, "remote_root", lambda: tmp_path / "no-remote")
+    monkeypatch.setattr(mp, "_listening", lambda port: False)
+    monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: None)
+    cfg = ThirdPartyAcpSubagentConfig(
+        name="Claude Code-Mirasim",
+        preset="mirasim_claude",
+        command=f"{sys.executable} -P -m raven.acp.mirasim --agent claude",
+    )
+
+    res = await probe_one(cfg, source="preset", path=str(tmp_path / "bin"))
+
+    assert res.status == "attention" and res.target == str(launcher)
 
 
 async def test_a_hand_written_npx_row_is_not_held_to_a_shims_requirement(

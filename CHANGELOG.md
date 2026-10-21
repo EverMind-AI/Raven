@@ -373,12 +373,15 @@ All notable changes to Raven are documented here.
   executable on the login shell's PATH, which Mirasim's installer never puts
   there (its CLI lives under `~/.mirasim/bin`), and the adapter runs no such
   executable anyway. The rows now ask after Mirasim itself: a host to reach --
-  the desktop app's port with its token file written and something listening,
-  a host named in `RAVEN_MIRASIM_HOST`, or one Mirasim runs over ssh -- counts
-  as running; the launcher under Mirasim's home or `mirasim` on the PATH counts
-  as installed, and such a row says to open the Mirasim app; neither is still
+  the desktop app's port with its token written and something listening, a
+  host named in `RAVEN_MIRASIM_HOST`, or a server Mirasim runs on this computer
+  over ssh whose socket answers -- counts as running; the launcher under
+  Mirasim's home, `mirasim` on the PATH or a server Mirasim installed here
+  over ssh counts as installed, and such a row says to open the Mirasim app or
+  to let the app on another computer reach this one again; neither is still
   *Not installed*, with the download link. A killed host leaves its token file
-  behind, so the file alone no longer counts as a running host.
+  or its socket behind, so neither alone counts as a running host, and a blank
+  token file is no token, as the adapter reads it.
 
 - What an agent on a registered machine writes on stderr reaches Raven even
   when no link held the agent at the time. The node kept those lines but, when
