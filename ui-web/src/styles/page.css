@@ -425,15 +425,17 @@ body {
    width is the drag's value capped so a strip of the page stays visible,
    and the grip has nothing to resize. */
 @media (max-width: 639px) {
-  .app { grid-template-columns: 1fr; }
+  /* `:root` for the weight, here and on `.page` below: the grid's own rule
+     and the pages' `inset` come further down the sheet at the same weight,
+     and a standing rail here is fixed -- out of the grid's flow -- so a
+     two-track grid would put the main pane in the second track beside an
+     empty first one, which is the squeeze this block is for. */
+  :root .app { grid-template-columns: 1fr; }
   .app .rail {
     position: fixed; top: 0; bottom: 0; left: 0; width: min(var(--rail), 86vw);
     z-index: var(--z-rail-handle); box-shadow: var(--shadow);
   }
   .app .rail #railGrip { display: none; }
-  /* `:root` for the weight: the module pages' own rule sets `inset` with the
-     rail's width further down the sheet, and a standing rail here is an
-     overlay, not a column the page should leave room for. */
   :root .page { left: 0; }
 }
 button, input, select, textarea { font: inherit; color: inherit; }
