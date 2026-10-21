@@ -324,6 +324,39 @@ def test_the_reply_rules_do_not_choose_the_reply_language(workspace, monkeypatch
     assert "not which language you write in" in section
 
 
+def test_the_reply_rules_close_every_reply_with_the_decisions_still_open(workspace) -> None:
+    """The role keeps a decision open until the user settles it; this is what puts it
+    at the end of a reply about something else. Replayed on synthetic conversations
+    (glm-5.3-flash), a one-line answer to an unrelated question carried the open
+    decisions in 0 of 6 runs with the role alone -- the simple-answer and
+    stop-when-the-content-stops rules above read the reminder as a closing recap --
+    and in 7 of 12 with this line. Its last sentence keeps a deferral: a wording
+    without it asked again about what the user had just put off."""
+    plain = render.identity_text(workspace)
+    section = plain.split("## How you reply", 1)[1].split("\n\nReply directly", 1)[0]
+
+    assert "Decisions you put to the user that are still open close every reply" in section
+    assert "a reply that only passes a question on" in section
+    assert "not a recap or a sign-off" in section
+    assert "One the user dropped or put off for later is no longer open." in section
+
+
+def test_the_reply_rules_head_each_task_in_a_report_on_several(workspace) -> None:
+    """A report on several tasks keeps each task's result apart, under a heading that
+    names it. Replayed on synthetic conversations (glm-5.3-flash), the replies that
+    reported three tasks headed every task in 11 of 11 with this line and 3 of 34
+    without it, and a single task's result was given no heading in 6 of 6. The
+    heading syntax is spelled out because the model kept the task name inline
+    otherwise: asked only for "a short heading on a line of its own", it wrote
+    "**Pricing** -- the report ..." on one line in 4 of 7."""
+    plain = render.identity_text(workspace)
+    section = plain.split("## How you reply", 1)[1].split("\n\nReply directly", 1)[0]
+
+    assert "When one reply reports the results of several tasks" in section
+    assert "a markdown heading naming the task on a line of its own (`### <task>`)" in section
+    assert "never merge two tasks' results into one paragraph" in section
+
+
 def test_both_sub_agent_paths_withhold_the_same_tools(workspace, monkeypatch: pytest.MonkeyPatch) -> None:
     """The drift lock between the in-process backend and an acp child.
 

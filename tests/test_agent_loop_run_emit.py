@@ -64,6 +64,25 @@ class _FakeTool(Tool):
         return "tool-ran"
 
 
+class _SpawnReceiptTool(Tool):
+    """Stands in for `spawn`, which the loop recognises by name."""
+
+    @property
+    def name(self) -> str:
+        return "spawn"
+
+    @property
+    def description(self) -> str:
+        return "spawn stand-in"
+
+    @property
+    def parameters(self) -> dict:
+        return {"type": "object", "properties": {}, "required": []}
+
+    async def execute(self, **kwargs) -> str:
+        return "Subagent [Pricing] started (id: a1c3e5f7). I'll notify you when it completes."
+
+
 class _SplitTool(Tool):
     """Returns ToolResult so the loop's unwrap branch is actually exercised."""
 
@@ -442,6 +461,57 @@ async def test_tool_result_splits_model_text_from_display_preview(tmp_path):
     # display_call rides tool.start so the row can label itself.
     start = next(e for e in sink.events if isinstance(e, EvToolEvent) and e.phase is ToolPhase.START)
     assert start.display == "Which base?"
+
+
+async def test_a_spawn_result_carries_the_open_decision_note_after_its_fence(tmp_path):
+    # The note rides on trusted_note, which add_tool_result places after the
+    # untrusted fence: inside it the fence's own contract would make it data.
+    provider = _FakeStreamToolProvider(
+        [
+            [
+                ChatDelta(
+                    content=None,
+                    tool_call_delta={
+                        "tool_calls": [{"index": 0, "id": "s1", "function": {"name": "spawn", "arguments": "{}"}}]
+                    },
+                )
+            ],
+            [
+                ChatDelta(
+                    content=None,
+                    tool_call_delta={
+                        "tool_calls": [{"index": 0, "id": "f1", "function": {"name": "faketool", "arguments": "{}"}}]
+                    },
+                )
+            ],
+            [ChatDelta(content="done")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_SpawnReceiptTool())
+    loop.tools.register(_FakeTool())
+
+    notes: dict[str, str] = {}
+    contents: dict[str, str] = {}
+    original_add = loop.context.add_tool_result
+
+    def _record(messages, tool_call_id, tool_name, result, blocks=None, *, trusted_note="", agent_output=False):
+        notes[tool_name] = trusted_note
+        out = original_add(
+            messages, tool_call_id, tool_name, result, blocks, trusted_note=trusted_note, agent_output=agent_output
+        )
+        contents[tool_name] = out[-1]["content"]
+        return out
+
+    loop.context.add_tool_result = _record  # type: ignore[method-assign]
+
+    await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
+
+    rule = "decisions you put to the user that are still open close this reply too"
+    assert rule in notes["spawn"]
+    assert contents["spawn"].index("[END UNTRUSTED spawn") < contents["spawn"].index(rule)
+    assert notes["faketool"] == ""
 
 
 async def test_run_emits_one_episode_start_per_model_call(tmp_path):

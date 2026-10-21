@@ -294,6 +294,10 @@ def _reply_style() -> str:
 
     English in both reply languages. ``_language_directive`` names the language,
     and the section says it does not decide one, so a zh reader still gets zh.
+
+    The open-decisions line is the role's rule said again where the reply is shaped:
+    with the role alone, the simple-answer and stop rules here read the reminder as a
+    closing recap and dropped it from a reply about something else.
     """
     from raven.agent.subagent.role import is_subagent_process
 
@@ -304,9 +308,11 @@ Whoever reads your reply may not have seen your tool results or your reasoning, 
 - The intent you state before tool calls is one sentence, said once before you start; do not narrate each routine tool call after it.
 - Lead with the answer. If something could not be verified, say so first.
 - Answer a simple question in plain prose: no headers, no bullet list, no closing recap. Use structure only when the content is list-shaped.
+- When one reply reports the results of several tasks, give each task its own section that opens with a markdown heading naming the task on a line of its own (`### <task>`); never merge two tasks' results into one paragraph.
 - Keep it short by leaving things out, not by compressing what is left into fragments, arrows or abbreviations of your own.
 - In any language, never open with "Great question", "Got it", "Done —" or "You're absolutely right", and never close with "In summary", "Hope this helps" or an offer of more help. Stop when the content stops.
 - Be specific: name what is wrong instead of saying there may be issues.
+- Decisions you put to the user that are still open close every reply, a line each, even a one-line answer or a reply that only passes a question on. They are content, not a recap or a sign-off. One the user dropped or put off for later is no longer open.
 - Errors, failing test output, security warnings and any caveat the user must act on keep their full content.
 These rules override formatting habits implied elsewhere in this prompt; a format the user asks for overrides them.
 
@@ -373,6 +379,21 @@ def worker_table_note(dispatch: Sequence[str]) -> str:
     )
 
 
+def open_decisions_note() -> str:
+    """The line a ``spawn`` result earns: the reply rules' open-decision line, said again.
+
+    Handing a question on to an instance is a dispatch, and the host writes its closing
+    text right after it reads the receipt. The resident rule is far above by then, and it
+    was not enough: replayed on synthetic conversations (glm-5.3-flash) with every tool
+    result fenced as production fences it, a reply that passed a question on to its
+    task's instance closed with the decisions still open in 3 of 6 runs without this
+    note and 5 of 6 with it, and asked nothing again once the user had answered or put
+    everything off. It travels as this system's note after the result's fence, where
+    the fence's own contract does not make it data, and it stays on the stored result.
+    """
+    return "\n\nNote: decisions you put to the user that are still open close this reply too, a line each."
+
+
 def _host_role(dispatch: Sequence[str], worker_table: bool = False) -> tuple[str, str]:
     """The identity sentence and the ``## Your role`` section that follows it.
 
@@ -391,6 +412,14 @@ def _host_role(dispatch: Sequence[str], worker_table: bool = False) -> tuple[str
     6 with it. The fallback ranks the fitting agent first: named bare, as where
     unowned work goes, the generic agent took a small script in 4 of 6 runs on an
     install whose coding agents declare no ownership, against 0 of 6 this way.
+
+    The open-decision bullet was measured on synthetic conversations, same model.
+    Results arrive one turn each, so the decisions they raise are often asked in one
+    reply and answered piecemeal: when a reply had asked three and the user settled
+    one, the next reply asked again about the other two in 6 of 6 runs, against 0 of
+    6 without the bullet; asked over three replies, 5 of 6 against 3 of 6. A
+    passed-over offer is named as declined so the bullet does not turn a closing
+    "shall I ...?" into a question asked on every reply.
 
     On a turn that dispatches through a Worker Table only the paragraph saying where
     work goes changes. ``subagent`` takes the table's labels alone there, and a
@@ -430,6 +459,7 @@ def _host_role(dispatch: Sequence[str], worker_table: bool = False) -> tuple[str
 - Keep track of every task until the user accepts its result: which agent and instance has it and what it reported. A report does not close its task.
 - Send every later message about a task's work to that task's instance, in the user's words -- a question about how or why it was done, a doubt, a suggestion, a correction, more work -- even when you answered an earlier one yourself. Its agent knows the work and you know only the report, so do not answer for it.
 - Gather what the agents report into one answer: what was done, what is left, what the user must decide.
+- A decision you put to the user about a task stays open until they make it. When their message settles only some of the open ones, act on those, then end your reply by asking about each one still open, a line each: the task and what it needs from them. Ask on every reply until the user decides it, drops it, or says to leave it for later; do not decide it for them. An offer of yours that they pass over is declined, not open.
 
 Your own tools serve this: reading what a brief or a check needs, and looking up where things stand. {production}
 

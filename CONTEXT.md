@@ -627,7 +627,9 @@ the model reads it only once it is already choosing an agent.
 What the host is for, rendered at the top of its identity: the user's agent manager. It sorts
 a request into tasks and dispatches each, keeps every task until the user accepts its result,
 sends each later message about a task's work -- a question included -- to that task's
-instance, and gathers the reports into one answer. Producing anything goes to the agent whose
+instance, and gathers the reports into one answer. A decision it put to the user stays open
+until they make it, drop it or defer it, and each reply until then ends by asking about it
+again; an offer the user passes over is declined. Producing anything goes to the agent whose
 ownership or description fits it, to `Raven-General` only when none does; the host answers
 itself only what needs no tools and belongs to no task. On a turn that dispatches through a
 **Worker Table** the same rule names the table's workers instead: the worker whose brief
@@ -635,7 +637,8 @@ covers the work, by its label. Work no worker covers is put to the user -- a wor
 it, or another Harness -- rather than done by the host or sent to an agent outside the enum,
 which offers labels alone. A table a call binds mid-turn (`load_playbook`) arrives after the
 identity was assembled, so that call's result carries the same rule, after its untrusted
-fence. Rendered only in a process that is
+fence. A `spawn` result carries the open-decision rule the same way, since the host writes
+its closing text right after reading one. Rendered only in a process that is
 not a **Sub-agent role** and on a turn holding a dispatch path -- elsewhere the identity
 stays "a helpful AI assistant", byte for byte. **Ownership** names each agent's territory;
 this says what the host itself does and does not do.

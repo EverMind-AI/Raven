@@ -11,7 +11,11 @@ covers using them, not installing their transports.
 
 Raven itself works as your agent manager. It sorts a request into tasks, hands
 each to the sub-agent that fits it, keeps track of every task until you accept
-the result, and gathers what the agents report into one answer. A later message
+the result, and gathers what the agents report into one answer, where each task's
+result gets its own section under a heading that names the task. When it asks you
+to decide several things and your reply settles only some of them, it acts on
+those and asks about the rest again at the end of every reply, until you decide
+each one, drop it or tell it to leave it for later. A later message
 about a task's work -- a correction, more work, or a question about why it was
 done that way -- goes back to the instance that did the work, which still has
 its context. Raven answers conversation, what it already knows and where your
