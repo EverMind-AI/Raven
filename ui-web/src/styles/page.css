@@ -671,7 +671,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    and `WWWW` is four times the width of `iiii`. The input is laid into the same
    cell and stretches to it. The trailing space in `content` is the caret's room.
    Bounds live here rather than in the component: never narrower than a few
-   characters, never past the row, and a long name scrolls inside itself. */
+   characters, never past the row, and a long name scrolls inside the field. */
 .sess .rensize {
   display: inline-grid; min-width: 6ch; max-width: 100%;
   font-size: 13px; font-weight: 500;
@@ -681,9 +681,20 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   grid-area: 1 / 1; font: inherit; padding: 3px 6px;
   border: 1px solid transparent; border-radius: 5px;
 }
+/* The mirror sets how wide the column WANTS to be, never how wide it MUST be.
+   Unwrappable text makes its min-content its whole length, and an `auto` column
+   never shrinks below its items' minimums: `max-width` held the wrapper at the
+   row while the column, and the field stretched across it, ran on past it, to
+   be clipped by the title slot. The field was then never narrower than its own
+   text, so it had nothing to scroll and could not keep the caret in view; the
+   wrapper (a `.t span`, so clipping) scrolled instead, under no caret logic.
+   With no minimum the column stops at the row and a long name scrolls inside
+   the field, which follows its own caret. Clipped, so the text running past the
+   column adds no overflow the wrapper could scroll. */
 .sess .rensize::after {
   content: attr(data-value) ' ';
   visibility: hidden; white-space: pre; pointer-events: none;
+  min-width: 0; overflow: hidden;
 }
 .sess .ren {
   min-width: 0; width: 100%; background: var(--ink);

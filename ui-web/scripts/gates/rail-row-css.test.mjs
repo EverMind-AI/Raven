@@ -95,4 +95,29 @@ describe('the rail row CSS contract', () => {
     expect(boot).toContain('min-height: calc(1lh + 10px)')
     expect(boot.indexOf('calc(1.65em')).toBeLessThan(boot.indexOf('calc(1lh'))
   })
+
+  it('stops the rename column at the row and scrolls a long name in the field', () => {
+    /* The mirror is unwrappable text, so its automatic minimum is its whole
+       length, and an `auto` column never shrinks below that: the wrapper's
+       max-width held its own box at the row while the column, and the field
+       stretched across it, ran on past it -- a 526px field in a 223px title
+       slot, its edge clipped and its caret drawn outside the rail. Waiving the
+       mirror's minimum is what lets the column stop; clipping it keeps the text
+       that runs on from giving the wrapper something to scroll. */
+    const mirror = rule('.sess .rensize::after')
+    expect(mirror).toContain('min-width: 0')
+    expect(mirror).toContain('overflow: hidden')
+    expect(mirror).toContain('white-space: pre')
+    /* The bounds the column now stops at, and the floor a short name keeps. */
+    const box = rule('.sess .rensize')
+    expect(box).toContain('min-width: 6ch')
+    expect(box).toContain('max-width: 100%')
+    /* The field is the scroller now; clipping it would take its caret-follow.
+       Its own rule, not the one it shares with the mirror. */
+    const at = css.indexOf('}\n.sess .ren {')
+    expect(at).toBeGreaterThan(0)
+    const field = css.slice(at + 1, css.indexOf('}', at + 1))
+    expect(field).toContain('min-width: 0')
+    expect(field).not.toContain('overflow')
+  })
 })
