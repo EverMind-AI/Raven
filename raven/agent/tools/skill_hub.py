@@ -30,6 +30,7 @@ plus the ``scripts_dir`` line and the SKILL.md body when present.
 
 from __future__ import annotations
 
+import difflib
 import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
@@ -75,6 +76,34 @@ def lookup_on_disk(registry: "SkillRegistry | None", source: str, native: str):
     if source == "local":
         return registry.get(native)
     return registry.get(native, source=source)
+
+
+_CLOSEST_IDS = 3
+# difflib scores a name in about 3 microseconds, and the search runs on the
+# event loop; past this many names a miss skips it rather than stall the loop.
+_NEAR_ID_SEARCH_LIMIT = 1000
+
+
+def _local_miss_hint(registry: "SkillRegistry | None", native: str) -> str:
+    """What follows a ``local/<native>`` miss.
+
+    ``# Skills`` and ``# Active Skills`` render from this same registry, so a
+    local id it lacks has no body in context to point at. What helps is a near
+    id, for a typo, and the directories local ids come from, for a skill file
+    the model saw outside them.
+    """
+    sentences = []
+    if registry is not None:
+        names = registry.names()
+        if len(names) <= _NEAR_ID_SEARCH_LIMIT:
+            close = difflib.get_close_matches(native, names, n=_CLOSEST_IDS)
+            if close:
+                sentences.append("Closest local ids: " + ", ".join(f"local/{name}" for name in close) + ".")
+        roots = ", ".join(str(root) for root, _ in registry.layer_roots())
+        if roots:
+            sentences.append(f"Local ids cover only the skills under {roots}.")
+    sentences.append("A SKILL.md outside Raven's skills is not readable by id: open it with read_file at its path.")
+    return " ".join(sentences)
 
 
 class ReadSkillTool(Tool):
@@ -146,6 +175,8 @@ class ReadSkillTool(Tool):
         if source != "hub":
             meta = lookup_on_disk(self._registry, source, native)
             if meta is None:
+                if source == "local":
+                    return f"Error: no local skill {native!r} found. {_local_miss_hint(self._registry, native)}"
                 return (
                     f"Error: no {source} skill {native!r} found. Its body may "
                     f"already be present in the '# Skills' context."
@@ -270,6 +301,8 @@ class UseSkillTool(Tool):
         """Resolve an already-materialized on-disk skill dir."""
         meta = lookup_on_disk(self._registry, source, native)
         if meta is None:
+            if source == "local":
+                return f"Error: no local skill {native!r} found on disk. {_local_miss_hint(self._registry, native)}"
             return (
                 f"Error: no {source} skill {native!r} found on disk. If it is a "
                 f"pure-instruction skill its body is already in your context."

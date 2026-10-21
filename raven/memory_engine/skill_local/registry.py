@@ -173,13 +173,7 @@ class SkillRegistry:
             resolved_path = path.resolve(strict=False)
         except OSError:
             resolved_path = path
-        layers: list[tuple[Path | None, str]] = [
-            (self.workspace_skills, "workspace"),
-        ]
-        for ed_path, ed_label, _ in self._extra_dirs:
-            layers.append((ed_path, ed_label))
-        layers.append((self.builtin_skills, "builtin"))
-        for root, default in layers:
+        for root, default in self.layer_roots():
             if root is None:
                 continue
             try:
@@ -195,6 +189,18 @@ class SkillRegistry:
                 return None  # SKILL.md directly at root — iterator skips it
             return default if len(parts) == 1 else parts[0]
         return None
+
+    def layer_roots(self) -> list[tuple[Path, str]]:
+        """Each root the scan walks, with its layer label, in scan order:
+        workspace, then each ``skillForge.localDirs`` entry, then builtin."""
+        return [(root, label) for root, label, _ in self._layers()]
+
+    def _layers(self) -> list[tuple[Path, str, bool]]:
+        return [
+            (self.workspace_skills, "workspace", True),
+            *self._extra_dirs,
+            (self.builtin_skills, "builtin", True),
+        ]
 
     def list_all(self) -> list[SkillMeta]:
         """All visible skills (compound (source, name) identity). Cached.
@@ -246,14 +252,7 @@ class SkillRegistry:
 
         # Walk layers: workspace → extra_dirs (list order) → builtin.
         # R1: later extra_dirs override earlier on name collision.
-        layers: list[tuple[Path, str, bool]] = [
-            (self.workspace_skills, "workspace", True),
-        ]
-        for path, name, always_enabled in self._extra_dirs:
-            layers.append((path, name, always_enabled))
-        layers.append((self.builtin_skills, "builtin", True))
-
-        for root, layer_label, layer_always_enabled in layers:
+        for root, layer_label, layer_always_enabled in self._layers():
             if root is None or not root.exists():
                 continue
             for skill_dir, source in self._iter_skill_dirs(
@@ -333,6 +332,16 @@ class SkillRegistry:
         if source is not None:
             return (self._by_full_key or {}).get((source, name))
         return self._by_name.get(name) if self._by_name else None
+
+    def names(self) -> list[str]:
+        """Every name a source-less :meth:`get` resolves, as of the last scan.
+
+        Reads the index :meth:`get` reads, so a source marked dirty since is
+        not rescanned here.
+        """
+        if self._by_name is None:
+            self.list_all()
+        return list(self._by_name or ())
 
     def get_body(self, name: str, source: str | None = None) -> str | None:
         """Full SKILL.md content. Resolves through ``list_all`` to handle
