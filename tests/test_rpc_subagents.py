@@ -3198,6 +3198,65 @@ async def test_list_marks_a_config_row_whose_handshake_named_raven_as_ravens_own
     assert rows["Other-Quiet"]["own"] is False and rows["Other-Quiet"]["model_source"] == "agent"
 
 
+async def test_list_shows_the_model_menu_a_dispatch_relearned(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The row's picker follows the agent without anyone pressing Test.
+
+    The listing reads the stored snapshot, and the snapshot never expires by
+    age, so before a dispatch could refresh it the card went on offering the
+    ids the agent held at its last Test. One dispatch now carries the agent's
+    current menu to the card, under the same ``agent`` rule as before.
+    """
+    from raven.acp_client.capabilities import AcpModelChoice, CapabilitySnapshot, SnapshotStore, snapshot_fingerprint
+    from raven.acp_client.pool import close_pool
+    from raven.agent.subagent.backends import build_third_party_backend
+    from raven.config.schema import SubagentsConfig
+
+    stub = Path(__file__).with_name("acp_stub_server.py")
+    raw = json.loads(config_path.read_text())
+    raw["subagents"]["agents"].append(
+        {
+            "name": "Stubby",
+            "kind": "acp",
+            "command": f"{sys.executable} {stub}",
+            "env": {"ACP_STUB_MODE": "ok"},
+            "description": "d",
+            "enabled": True,
+        }
+    )
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    store_path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: store_path)
+    cfg = next(c for c in SubagentsConfig(agents=raw["subagents"]["agents"]).agents if c.name == "Stubby")
+    SnapshotStore(path=store_path).record(
+        CapabilitySnapshot(
+            agent="Stubby",
+            fingerprint=snapshot_fingerprint(cfg),
+            status="ready",
+            detail="",
+            measured_at_ms=1,
+            agent_name="stub-agent",
+            model_choices=(AcpModelChoice(value="stub:retired", name="retired", group="Stub"),),
+        )
+    )
+    before = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}["Stubby"]
+    assert before["model_choices"] == [{"value": "stub:retired", "name": "retired", "group": "Stub"}]
+
+    try:
+        reply = await build_third_party_backend(cfg).run("ping", task_id="t1", workspace=tmp_path, executor=None)
+    finally:
+        await close_pool()
+    assert reply == "pong"
+
+    after = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}["Stubby"]
+    assert after["model_choices"] == [
+        {"value": "stub:model-a", "name": "model-a", "group": "Stub"},
+        {"value": "stub:model-b", "name": "model-b", "group": "Stub"},
+    ]
+    assert after["model_source"] == before["model_source"] == "agent"
+
+
 async def test_test_can_target_a_discovered_product(
     config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

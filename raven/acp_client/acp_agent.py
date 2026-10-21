@@ -42,7 +42,7 @@ from raven.acp_client.ask_user import AskUserResponder, clarify_responder
 from raven.acp_client.capabilities import (
     CapabilitySnapshot,
     read_session_current_model,
-    relearn_session_modes,
+    relearn_session_menus,
     steer_offered,
 )
 from raven.acp_client.elicitor import Elicitor
@@ -1257,17 +1257,18 @@ class AcpAgentBackend:
         if current:
             self._model_baseline[session_id] = current
 
-    def _relearn_modes(self, result: Any) -> None:
-        """Take the modes a session response advertises over the cached ones.
+    def _relearn_menus(self, result: Any) -> None:
+        """Take the modes and models a session response advertises over the cached ones.
 
-        Best-effort at every step. The menu is a description the NEXT dispatch
-        reads, never something this turn depends on, so neither the write nor
-        the table rebuild may cost the turn that happened to carry the evidence.
+        Best-effort at every step. The menus are what the NEXT dispatch and the
+        row's picker read, never something this turn depends on, so neither the
+        write nor the table rebuild may cost the turn that happened to carry the
+        evidence.
         """
         try:
-            updated = relearn_session_modes(self._snapshot, result)
+            updated = relearn_session_menus(self._snapshot, result)
         except Exception as exc:  # noqa: BLE001 - a cache refresh must not sink a turn
-            logger.warning("acp agent {!r}: refreshing modes from the session failed: {}", self.name, exc)
+            logger.warning("acp agent {!r}: refreshing menus from the session failed: {}", self.name, exc)
             return
         if updated is None:
             return
@@ -2198,7 +2199,7 @@ class AcpAgentBackend:
                             raise
                         loaded = None
                     if loaded is not None:
-                        self._relearn_modes(loaded)
+                        self._relearn_menus(loaded)
                         self._note_session_model(known, loaded)
                     await self._set_mode(client, known, mode, budget=budget)
                     await self._set_model(client, known, session_model, budget=budget)
@@ -2223,7 +2224,7 @@ class AcpAgentBackend:
                     raise
 
         result = await request_or_busy("session/new", {"cwd": cwd, "mcpServers": mcp_servers})
-        self._relearn_modes(result)
+        self._relearn_menus(result)
         session_id = (result or {}).get("sessionId") if isinstance(result, dict) else None
         if not isinstance(session_id, str) or not session_id:
             raise AcpEmptyTurnError(f"acp agent {self.name!r}: session/new returned no sessionId")

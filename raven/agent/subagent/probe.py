@@ -1349,7 +1349,7 @@ def _measured_at(snapshot: Any) -> int | None:
     """When the record's verdict was measured; ``None`` for no record.
 
     Every measurement stamps its own time (``_test_record`` carries it over), and
-    a modes relearn keeps the stamp it found, so a changed stamp means a newer
+    a menu relearn keeps the stamp it found, so a changed stamp means a newer
     verdict and nothing else does.
     """
     return None if snapshot is None else getattr(snapshot, "measured_at_ms", 0)
@@ -1545,9 +1545,9 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured
             # Read again with nothing awaited between here and the write: the
             # handshake held the row for up to the ready timeout. A measurement
             # recorded meanwhile -- a manual Test, a connect -- is newer evidence
-            # than this one and stands. A dispatch relearning the agent's modes
+            # than this one and stands. A dispatch relearning the agent's menus
             # measures nothing and keeps the stamp, so it does not stop this
-            # write, and a failure below is kept over the re-read record, modes
+            # write, and a failure below is kept over the re-read record, menus
             # included.
             current = acp_snapshot_for(cfg)
             if _measured_at(current) != _measured_at(snapshot):

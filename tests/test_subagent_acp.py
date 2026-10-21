@@ -33,7 +33,7 @@ from raven.acp_client.capabilities import (
     AcpModelChoice,
     CapabilitySnapshot,
     SnapshotStore,
-    relearn_session_modes,
+    relearn_session_menus,
     snapshot_fingerprint,
     verify_agent,
 )
@@ -908,7 +908,7 @@ async def test_a_row_recorded_before_the_menu_reads_attention_until_it_is_measur
     assert (await probe_one(cfg, source="config")).status == "ready"
 
 
-# ---- relearning the mode menu from a live session --------------------------
+# ---- relearning the session menus from a live session ----------------------
 
 
 def _with_modes(cfg: Any, *modes: AcpMode) -> CapabilitySnapshot:
@@ -950,7 +950,7 @@ def test_a_session_response_rewrites_a_mode_description_the_probe_missed(tmp_pat
     stored = _with_modes(cfg, AcpMode(id="fast", name="Fast", description="old wording"))
     store.record(stored)
 
-    updated = relearn_session_modes(
+    updated = relearn_session_menus(
         stored, _session_result({"id": "fast", "name": "Fast", "description": "new"}), store=store
     )
 
@@ -973,7 +973,7 @@ def test_relearning_keeps_the_fingerprint_it_was_measured_under(tmp_path: Path) 
         available_modes=(AcpMode(id="fast", description="old"),),
     )
 
-    updated = relearn_session_modes(stored, _session_result({"id": "fast", "description": "new"}), store=store)
+    updated = relearn_session_menus(stored, _session_result({"id": "fast", "description": "new"}), store=store)
 
     assert updated is not None and updated.fingerprint == "measured-under-this"
     assert store.load([cfg]) == {}
@@ -989,8 +989,8 @@ def test_a_response_without_modes_leaves_the_menu_alone(tmp_path: Path) -> None:
     stored = _with_modes(cfg, AcpMode(id="fast", description="kept"))
     store.record(stored)
 
-    assert relearn_session_modes(stored, {"sessionId": "s1"}, store=store) is None
-    assert relearn_session_modes(stored, _session_result(), store=store) is None
+    assert relearn_session_menus(stored, {"sessionId": "s1"}, store=store) is None
+    assert relearn_session_menus(stored, _session_result(), store=store) is None
     assert [m.description for m in store.load([cfg])["a"].available_modes] == ["kept"]
 
 
@@ -1002,7 +1002,7 @@ def test_an_unchanged_menu_is_not_rewritten(tmp_path: Path) -> None:
     stored = _with_modes(cfg, AcpMode(id="fast", name="Fast", description="same"))
 
     assert (
-        relearn_session_modes(
+        relearn_session_menus(
             stored, _session_result({"id": "fast", "name": "Fast", "description": "same"}), store=store
         )
         is None
@@ -1014,8 +1014,186 @@ def test_nothing_is_invented_for_an_agent_never_measured(tmp_path: Path) -> None
     """A snapshot carries a fingerprint and a status this response cannot supply,
     so there is nothing to update -- the probe is what creates one."""
     store = SnapshotStore(path=tmp_path / "caps.json")
-    assert relearn_session_modes(None, _session_result({"id": "fast"}), store=store) is None
+    assert relearn_session_menus(None, _session_result({"id": "fast"}), store=store) is None
     assert not (tmp_path / "caps.json").exists()
+
+
+def _menu_reply(
+    *, models: list[dict[str, Any]] | None = None, modes: list[dict[str, str]] | None = None, unread: bool = False
+) -> dict[str, Any]:
+    """A session response carrying whichever menus are given, in the wire shapes."""
+    from raven.acp_client.protocol import MENU_UNREAD_META
+
+    reply: dict[str, Any] = {"sessionId": "s1"}
+    if models is not None:
+        reply["configOptions"] = [
+            {"id": "mode", "category": "mode", "type": "select", "options": [{"value": "not-a-model"}]},
+            {"id": "model", "category": "model", "type": "select", "currentValue": "x", "options": models},
+        ]
+    if modes is not None:
+        reply["modes"] = {"currentModeId": "fast", "availableModes": modes}
+    if unread:
+        reply["_meta"] = {"raven": {MENU_UNREAD_META: True}}
+    return reply
+
+
+_GROUPED_MODELS: list[dict[str, Any]] = [
+    {"group": "vendor-a", "name": "Vendor A", "options": [{"value": "a/new-1", "name": "new-1"}]},
+    {"group": "vendor-b", "name": "Vendor B", "options": [{"value": "b/new-2", "name": "new-2"}, {"name": "no-value"}]},
+]
+_GROUPED_CHOICES = (
+    AcpModelChoice(value="a/new-1", name="new-1", group="Vendor A"),
+    AcpModelChoice(value="b/new-2", name="new-2", group="Vendor B"),
+)
+
+
+def test_a_session_response_rewrites_a_model_menu_the_probe_captured_long_ago(tmp_path: Path) -> None:
+    """The model menu has the gap the mode menu had.
+
+    Nothing expires a snapshot by age, and an agent that renamed its models
+    launches identically, so the row's picker went on offering the ids it held
+    at the last Test. The dispatch already holds the agent's current list; it
+    is read with the probe's own parser, groups included, and kept under the
+    measurement stamp and fingerprint the rest of the record was taken with.
+    """
+    cfg = stub_config("a")
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    stored = _with_model_choices(cfg, AcpModelChoice(value="old/retired", name="retired", group="Old"))
+    store.record(stored)
+
+    updated = relearn_session_menus(stored, _menu_reply(models=_GROUPED_MODELS), store=store)
+
+    assert updated is not None and updated.model_choices == _GROUPED_CHOICES
+    assert (updated.fingerprint, updated.measured_at_ms) == (stored.fingerprint, stored.measured_at_ms)
+    assert store.load([cfg])["a"].model_choices == _GROUPED_CHOICES
+
+
+def test_a_response_without_a_model_menu_keeps_the_one_recorded(tmp_path: Path) -> None:
+    """Silence is "this route did not report it", never "the agent has none".
+
+    Four silences, each one a shape a live route returns: no ``configOptions``
+    at all, options with no ``model`` entry, a ``model`` entry whose list is
+    empty (a resumed session's answer), and raven's own adapter saying its
+    catalog read failed. Erasing the menu on any of them takes the picker off
+    the row until someone presses Test.
+    """
+    cfg = stub_config("a")
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    kept = (AcpModelChoice(value="v/kept", name="kept", group="V"),)
+    stored = _with_model_choices(cfg, *kept)
+    store.record(stored)
+
+    no_model_entry = {"sessionId": "s1", "configOptions": [{"id": "mode", "category": "mode", "options": []}]}
+    for reply in (
+        {"sessionId": "s1"},
+        no_model_entry,
+        _menu_reply(models=[]),
+        _menu_reply(models=[{"name": "no-value-anywhere"}]),
+        _menu_reply(models=[], unread=True),
+    ):
+        assert relearn_session_menus(stored, reply, store=store) is None, reply
+    assert store.load([cfg])["a"].model_choices == kept
+
+
+def test_a_menu_the_catalog_failed_to_read_is_not_taken(tmp_path: Path) -> None:
+    """Raven's adapter flags a reply whose catalog read failed. Whatever it
+    carries beside that flag is not a measurement of the agent's models."""
+    cfg = stub_config("a")
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    kept = (AcpModelChoice(value="v/kept"),)
+    stored = _with_model_choices(cfg, *kept)
+    store.record(stored)
+
+    assert relearn_session_menus(stored, _menu_reply(models=_GROUPED_MODELS, unread=True), store=store) is None
+    assert store.load([cfg])["a"].model_choices == kept
+
+
+def test_the_model_and_mode_menus_are_relearned_independently(tmp_path: Path) -> None:
+    """One reply may carry either menu, both, or neither, and each is judged on
+    its own: a reply naming models only must not cost the modes, and one naming
+    modes only must not cost the models."""
+    cfg = stub_config("a")
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    stored = replace(
+        _with_modes(cfg, AcpMode(id="fast", description="old")),
+        model_choices=(AcpModelChoice(value="old/model"),),
+    )
+    store.record(stored)
+
+    models_only = relearn_session_menus(stored, _menu_reply(models=_GROUPED_MODELS), store=store)
+    assert models_only is not None
+    assert models_only.model_choices == _GROUPED_CHOICES
+    assert models_only.available_modes == stored.available_modes
+
+    modes_only = relearn_session_menus(models_only, _session_result({"id": "deep", "description": "new"}), store=store)
+    assert modes_only is not None
+    assert [m.id for m in modes_only.available_modes] == ["deep"]
+    assert modes_only.model_choices == _GROUPED_CHOICES
+
+    flat = [{"value": "flat/one", "name": "one"}]
+    both = relearn_session_menus(
+        modes_only, _menu_reply(models=flat, modes=[{"id": "fast", "description": "back"}]), store=store
+    )
+    assert both is not None
+    assert both.model_choices == (AcpModelChoice(value="flat/one", name="one", group=""),)
+    assert [m.id for m in both.available_modes] == ["fast"]
+
+    reread = store.load([cfg])["a"]
+    assert (reread.model_choices, reread.available_modes) == (both.model_choices, both.available_modes)
+
+
+def test_an_unchanged_model_menu_is_not_rewritten(tmp_path: Path) -> None:
+    """Every route into a session carries the menu; a write per dispatch is the
+    cost the mode relearn already refuses."""
+    cfg = stub_config("a")
+    stored = _with_model_choices(cfg, *_GROUPED_CHOICES)
+
+    assert (
+        relearn_session_menus(stored, _menu_reply(models=_GROUPED_MODELS), store=SnapshotStore(tmp_path / "c")) is None
+    )
+    assert not (tmp_path / "c").exists()
+
+
+def test_a_menu_never_measured_becomes_measured_once_a_reply_carries_it(tmp_path: Path) -> None:
+    """A row recorded before the menu existed reads back with an empty one. The
+    same menu read off a reply is a measurement, and the row must say so, or the
+    boot backfill goes on re-measuring a menu that is already known."""
+    cfg = stub_config("a")
+    path = tmp_path / "caps.json"
+    stored = replace(_with_model_choices(cfg), model_menu_measured=False)
+    store = SnapshotStore(path=path)
+    store.record(stored)
+    assert store.has_model_menu("a") is False
+
+    updated = relearn_session_menus(stored, _menu_reply(models=_GROUPED_MODELS), store=store)
+
+    assert updated is not None and updated.model_menu_measured is True
+    assert store.has_model_menu("a") is True
+    assert store.load([cfg])["a"].model_choices == _GROUPED_CHOICES
+
+
+def test_a_relearn_from_an_older_record_does_not_overwrite_a_newer_measurement(tmp_path: Path) -> None:
+    """A Test, or the boot backfill, may record while a dispatch is in flight on
+    a backend built from the record before it. That backend's relearn holds the
+    older record whole, and writing it back would undo the newer verdict,
+    fingerprint included -- so it stands down when the stamp it was built from
+    is no longer the one stored. The newer measurement brought its own menus."""
+    cfg = stub_config("a")
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    older = _with_model_choices(cfg, AcpModelChoice(value="old/retired"))
+    store.record(older)
+    newer = replace(
+        older,
+        status="attention",
+        detail="measured after the dispatch began",
+        measured_at_ms=older.measured_at_ms + 1,
+        model_choices=(AcpModelChoice(value="test/fresh"),),
+    )
+    store.record(newer)
+
+    assert relearn_session_menus(older, _menu_reply(models=_GROUPED_MODELS), store=store) is None
+    assert relearn_session_menus(older, _session_result({"id": "deep"}), store=store) is None
+    assert store.load([cfg])["a"] == newer
 
 
 def test_has_model_menu_is_false_for_a_row_recorded_before_the_key_existed(tmp_path: Path) -> None:
@@ -1084,9 +1262,9 @@ def test_the_backend_rebuilds_the_agent_table_when_the_menu_moved(tmp_path: Path
     rebuilds: list[int] = []
     backend.bind_caps_listener(lambda: rebuilds.append(1))
 
-    with patch("raven.acp_client.acp_agent.relearn_session_modes") as fake:
+    with patch("raven.acp_client.acp_agent.relearn_session_menus") as fake:
         fake.return_value = _with_modes(cfg, AcpMode(id="fast", description="new"))
-        backend._relearn_modes(_session_result({"id": "fast", "description": "new"}))
+        backend._relearn_menus(_session_result({"id": "fast", "description": "new"}))
 
     assert rebuilds == [1]
     assert [m.description for m in backend._snapshot.available_modes] == ["new"]
@@ -1100,13 +1278,13 @@ def test_a_failed_rebuild_does_not_reach_the_turn() -> None:
     backend = AcpAgentBackend(name="a", command="true", snapshot=stored)
     backend.bind_caps_listener(lambda: (_ for _ in ()).throw(RuntimeError("boom")))
 
-    with patch("raven.acp_client.acp_agent.relearn_session_modes") as fake:
+    with patch("raven.acp_client.acp_agent.relearn_session_menus") as fake:
         fake.side_effect = RuntimeError("store is unwritable")
-        backend._relearn_modes(_session_result({"id": "fast", "description": "new"}))
+        backend._relearn_menus(_session_result({"id": "fast", "description": "new"}))
 
-    with patch("raven.acp_client.acp_agent.relearn_session_modes") as fake:
+    with patch("raven.acp_client.acp_agent.relearn_session_menus") as fake:
         fake.return_value = _with_modes(cfg, AcpMode(id="fast", description="new"))
-        backend._relearn_modes(_session_result({"id": "fast", "description": "new"}))
+        backend._relearn_menus(_session_result({"id": "fast", "description": "new"}))
 
     assert [m.description for m in backend._snapshot.available_modes] == ["new"]
 
@@ -1161,7 +1339,7 @@ def test_the_relearned_menu_reaches_the_roster_the_clamp_and_picker_read(
     mgr = SubagentManager(provider=_StubProvider(), workspace=tmp_path, max_concurrent=1, agents=[cfg])
     assert "what it used to say" in [m.description for m in mgr.agent_modes("a")]
 
-    updated = relearn_session_modes(
+    updated = relearn_session_menus(
         stored,
         _session_result({"id": "fast", "name": "Fast", "description": "what it says now"}),
         store=SnapshotStore(path=path),
@@ -1934,6 +2112,57 @@ async def test_a_dispatch_relearns_the_menu_the_agent_now_serves(
         ("fast", "converges early"),
         ("deep", "searches longer"),
     ]
+
+
+async def test_a_dispatch_relearns_the_model_menu_from_its_own_session_and_nothing_else(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The model menu rides the same reply, and costs nothing to read off it.
+
+    Pinned both ways: the stored menu moves to what the agent serves now, and
+    the dispatch sends the one ``session/new`` it was always going to send --
+    no verify, no probe, no second launch. A refresh that bought its evidence
+    with a handshake would spend a process start on every dispatch.
+    """
+    from raven.acp_client.client import AcpClient
+
+    path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: path)
+    cfg = stub_config("a")
+    SnapshotStore(path=path).record(
+        _with_model_choices(cfg, AcpModelChoice(value="stub:retired", name="retired", group="Stub"))
+    )
+
+    async def no_handshake(*_a: Any, **_kw: Any) -> Any:
+        raise AssertionError("a dispatch must not measure the agent to refresh its menu")
+
+    monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", no_handshake)
+    monkeypatch.setattr("raven.agent.subagent.probe.record_capabilities", no_handshake)
+    monkeypatch.setattr("raven.agent.subagent.probe.ping_agent", no_handshake)
+    sent: list[str] = []
+    launches: list[str] = []
+    real_request, real_launch = AcpClient.request, AcpClient.launch.__func__
+
+    async def counting_request(self: Any, method: str, *args: Any, **kwargs: Any) -> Any:
+        sent.append(method)
+        return await real_request(self, method, *args, **kwargs)
+
+    async def counting_launch(cls: Any, **kwargs: Any) -> Any:
+        launches.append(kwargs.get("name", ""))
+        return await real_launch(cls, **kwargs)
+
+    monkeypatch.setattr(AcpClient, "request", counting_request)
+    monkeypatch.setattr(AcpClient, "launch", classmethod(counting_launch))
+
+    backend = build_third_party_backend(cfg)
+    assert await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None) == "pong"
+
+    assert SnapshotStore(path=path).load([cfg])["a"].model_choices == (
+        AcpModelChoice(value="stub:model-a", name="model-a", group="Stub"),
+        AcpModelChoice(value="stub:model-b", name="model-b", group="Stub"),
+    )
+    assert launches == ["a"], "one process, the dispatch's own"
+    assert sent.count("initialize") == 1 and sent.count("session/new") == 1, sent
 
 
 async def test_dispatch_records_the_runs_own_transcript(tmp_path: Path) -> None:
