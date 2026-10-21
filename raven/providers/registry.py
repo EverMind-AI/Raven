@@ -171,12 +171,19 @@ class ProviderSpec:
     accepts_optional_api_key: bool = False
 
     # The image tool can run on this provider's address and key: OpenRouter, its
-    # default backend, or a vendor serving OpenAI's Images API
+    # default backend, a vendor serving OpenAI's Images API
     # (`/images/generations`, `/images/edits`) or Volces Ark's dialect of it,
-    # which has the generations route alone. Declared here for the same reason
-    # as the field above: the roles card offering the image role and the save
-    # refusing a provider must read one answer.
+    # which has the generations route alone, or MiniMax, whose own image route
+    # the tool also speaks. Declared here for the same reason as the field above:
+    # the roles card offering the image role and the save refusing a provider
+    # must read one answer.
     image_api: bool = False
+
+    # The video tool can run on this provider's address and key: OpenRouter, its
+    # default backend (`/videos`), or MiniMax, whose own video API the tool also
+    # speaks. Read by the roles card and the save for the same reason as
+    # `image_api`.
+    video_api: bool = False
 
     @property
     def label(self) -> str:
@@ -332,6 +339,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         supports_prompt_caching=True,
         default_model="openrouter/anthropic/claude-sonnet-5",
         image_api=True,
+        video_api=True,
     ),
     # AiHubMix: global gateway, OpenAI-compatible interface.
     # strip_model_prefix=True: it doesn't understand "anthropic/claude-3",
@@ -961,6 +969,8 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         # Needed by `provider test` and the wizard preflight, which probe
         # /v1/models before any LiteLLM call resolves an endpoint.
         default_api_base="https://api.minimax.io/v1",
+        image_api=True,
+        video_api=True,
     ),
     ProviderSpec(
         name="minimax_cn_api",
@@ -977,6 +987,8 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         strip_api_base_trailing_slash=True,
         requires_api_base=True,
         default_model="minimax-cn-api/MiniMax-M3",
+        image_api=True,
+        video_api=True,
     ),
     ProviderSpec(
         name="minimax_global",

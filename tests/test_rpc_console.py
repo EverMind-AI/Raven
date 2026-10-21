@@ -65,6 +65,9 @@ def test_the_settings_whitelist_is_exactly_this_set() -> None:
         # configured for that provider, and the name is checked against the ones
         # whose image API the tool can call. It names no address and carries no key.
         "tools.media.image.provider",
+        # The video tool's, on the same terms, checked against the providers whose
+        # video API the tool can call.
+        "tools.media.video.provider",
         "channels.sendProgress",
         "channels.sendToolHints",
         "memory.memoryTopK",
@@ -2184,6 +2187,49 @@ async def test_the_image_role_may_run_on_volcengine(settings_cfg):
     assert (image["model"], image["provider"]) == ("doubao-seedream-5-0-pro", "volcengine")
 
 
+@pytest.mark.parametrize("provider", ["minimax", "minimax_cn_api"])
+async def test_the_image_role_may_run_on_minimax(settings_cfg, provider):
+    """MiniMax's image route is one the image tool speaks, so either of its API-key
+    sections is a provider the roles card may save for the image role."""
+    import json
+
+    selection = {"model": "image-01", "quality": "", "provider": provider}
+    await console_module.settings_set({"key": "tools.media.image", "value": selection})
+    image = json.loads(settings_cfg.read_text())["tools"]["media"]["image"]
+    assert (image["model"], image["provider"]) == ("image-01", provider)
+
+
+async def test_the_video_role_may_run_on_minimax(settings_cfg):
+    """MiniMax's video API is one the video tool speaks, so the roles card's pick of
+    it is saved with the selection; an OpenRouter pick names no provider."""
+    import json
+
+    selection = {"model": "MiniMax-Hailuo-2.3", "quality": "", "provider": "minimax"}
+    await console_module.settings_set({"key": "tools.media.video", "value": selection})
+    video = json.loads(settings_cfg.read_text())["tools"]["media"]["video"]
+    assert (video["model"], video["provider"]) == ("MiniMax-Hailuo-2.3", "minimax")
+
+    back = {"model": "kwaivgi/kling-v3.0-std", "quality": "", "provider": ""}
+    await console_module.settings_set({"key": "tools.media.video", "value": back})
+    assert json.loads(settings_cfg.read_text())["tools"]["media"]["video"]["provider"] == ""
+
+
+@pytest.mark.parametrize(
+    ("value", "saved"), [("minimax", True), ("minimax_cn_api", True), ("openai", False), ("anthropic", False)]
+)
+async def test_the_video_provider_takes_only_a_provider_the_video_tool_runs_on(settings_cfg, value, saved):
+    import json
+
+    before = settings_cfg.read_bytes()
+    if saved:
+        await console_module.settings_set({"key": "tools.media.video.provider", "value": value})
+        assert json.loads(settings_cfg.read_text())["tools"]["media"]["video"]["provider"] == value
+        return
+    with pytest.raises(console_module.ConfigValidationError):
+        await console_module.settings_set({"key": "tools.media.video.provider", "value": value})
+    assert settings_cfg.read_bytes() == before
+
+
 @pytest.mark.parametrize(
     "key,value",
     [
@@ -2199,7 +2245,7 @@ async def test_the_image_role_may_run_on_volcengine(settings_cfg):
         ("tools.media.image", {"model": "new", "quality": "", "provider": "no-such-vendor"}),
         ("tools.media.image.provider", "anthropic"),
         ("tools.media.image.provider", 7),
-        # Speech and video keep to OpenRouter: their request shapes are its own.
+        # Speech keeps to OpenRouter, video to the providers it has a request path for.
         ("tools.media.speech", {"model": "new", "quality": "", "provider": "openai"}),
         ("tools.media.video", {"model": "new", "quality": "", "provider": "openai"}),
     ],

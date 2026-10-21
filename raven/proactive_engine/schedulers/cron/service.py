@@ -147,6 +147,10 @@ class CronService:
         # Job ids whose claim-skip was already logged (one INFO line per job,
         # not one per tick). Cleared per job on successful claim.
         self._skip_logged: set[str] = set()
+        # Job id -> the schedule.at_ms of the run executing it, from before its
+        # callback until its writeback ends. A wake re-armed during its own run
+        # carries a different at_ms, the same test the writeback applies.
+        self._in_flight: dict[str, int | None] = {}
         self._running = False
         # Optional fake-clock injection for benchmark harnesses (longrun).
         # When provided, all internal time reads route through this callable
@@ -503,10 +507,18 @@ class CronService:
                 self._save_store()
 
         for job in my_jobs:
+            await self._run_claimed(job, my_pid)
+
+    async def _run_claimed(self, job: CronJob, my_pid: int) -> None:
+        """Execute a claimed job and write its run back, the one path for both entrances."""
+        self._in_flight[job.id] = job.schedule.at_ms
+        try:
             await self._execute_job(job)
             # Shielded so a stop() mid-writeback cannot skip the post-run
             # flush (claim would leak and one-shots could re-fire).
             await asyncio.shield(self._writeback_after_run(job, my_pid))
+        finally:
+            self._in_flight.pop(job.id, None)
 
     async def _writeback_after_run(self, job: CronJob, my_pid: int) -> None:
         """Post-run flush + clear claim, under lock so a concurrent reader
@@ -1082,10 +1094,20 @@ class CronService:
         self._signal_wake()
         return True
 
-    def pending_wakes(self, prefix: str = "") -> list[CronJob]:
-        """Every pending keyed wake, optionally narrowed to a key prefix."""
+    def pending_wakes(self, prefix: str = "", *, include_running: bool = True) -> list[CronJob]:
+        """Every pending keyed wake, optionally narrowed to a key prefix.
+
+        A one-shot stays in the store until its run's writeback, so a turn the
+        wake itself started still finds it here. ``include_running=False``
+        leaves out the wake this process is executing right now, unless the
+        run re-armed it: a re-arm moves ``schedule.at_ms``, and that later
+        wake is still pending. Another process's runs are not known here.
+        """
         want = self._WAKE_PREFIX + prefix
-        return [j for j in self.list_jobs() if j.id.startswith(want)]
+        return [j for j in self.list_jobs() if j.id.startswith(want) and (include_running or not self._is_this_run(j))]
+
+    def _is_this_run(self, job: CronJob) -> bool:
+        return job.id in self._in_flight and job.schedule.kind == "at" and job.schedule.at_ms == self._in_flight[job.id]
 
     def cancel_wake(self, key: str) -> bool:
         """Remove the pending wake for ``key``; False when none existed."""
@@ -1129,8 +1151,7 @@ class CronService:
             target.state.claimed_at_ms = self._now_ms()
             self._save_store()
 
-        await self._execute_job(target)
-        await asyncio.shield(self._writeback_after_run(target, my_pid))
+        await self._run_claimed(target, my_pid)
         self._signal_wake()
         return True
 

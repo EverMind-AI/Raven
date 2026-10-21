@@ -14159,6 +14159,10 @@
             "type": "boolean",
             "description": "The registry's image_api: the image tool can run on this provider's address and key. The roles card offers the image role these providers; absent means false."
           },
+          "video_api": {
+            "type": "boolean",
+            "description": "The registry's video_api: the video tool can run on this provider's address and key. The roles card offers the video role these providers; absent means false."
+          },
           "route_names": {
             "type": "array",
             "items": {

@@ -34,6 +34,8 @@ export interface Provider {
   /* The image tool can run on this provider's address and key (the registry's
      `image_api`). The roles card offers the image role exactly these. */
   imageApi?: boolean
+  /* The same for the video tool (the registry's `video_api`). */
+  videoApi?: boolean
   /* Every model-id prefix that names this provider, which is what one spelling
      of a model has to be stripped of before it can be compared with another
      (`ModelHost` below). Absent on a wire that does not carry the set, and on

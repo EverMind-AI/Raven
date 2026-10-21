@@ -974,38 +974,50 @@ def _chk_pin_pair(parent: str, model_field: str, provider_field: str):
     return chk
 
 
-def _chk_image_selection(value: Any) -> dict:
-    """The image role's selection: model and quality, and the provider it runs on."""
-    if not isinstance(value, dict) or not {"model", "quality"} <= set(value) <= {"model", "quality", "provider"}:
-        raise ConfigValidationError("image selection must contain model and quality, and may name a provider")
-    return {k: _SETTINGS_SIMPLE_KEYS[f"tools.media.image.{k}"](v) for k, v in value.items()}
+def _chk_routed_selection(kind: str):
+    """The image or video role's selection: model and quality, and the provider it runs on."""
+
+    def chk(value: Any) -> dict:
+        if not isinstance(value, dict) or not {"model", "quality"} <= set(value) <= {"model", "quality", "provider"}:
+            raise ConfigValidationError(f"{kind} selection must contain model and quality, and may name a provider")
+        return {
+            k: _SETTINGS_SIMPLE_KEYS[f"tools.media.{kind if k == 'provider' else 'image'}.{k}"](v)
+            for k, v in value.items()
+        }
+
+    return chk
 
 
 def _chk_media_selection(value: Any) -> dict:
-    """Speech and video name no provider: their request shapes are OpenRouter's own."""
+    """Speech names no provider: its request shapes are OpenRouter's own."""
     if not isinstance(value, dict) or set(value) != {"model", "quality"}:
         raise ConfigValidationError("media selection must contain exactly model and quality")
     return {k: _SETTINGS_SIMPLE_KEYS[f"tools.media.image.{k}"](v) for k, v in value.items()}
 
 
-def _chk_image_provider(v: Any) -> str:
-    """The provider the image tool runs on, or empty for OpenRouter.
+def _chk_media_provider(kind: str):
+    """The provider the ``kind`` tool runs on, or empty for OpenRouter.
 
-    Only one the registry marks ``image_api``: any other connected provider would
-    save cleanly and then answer every picture with an error, which is the
-    failure the roles card exists to keep out of reach.
+    Only one the registry marks ``<kind>_api``: any other connected provider would
+    save cleanly and then answer every call with an error, which is the failure
+    the roles card exists to keep out of reach.
     """
-    text = _chk_str("tools.media.image.provider", 100)(v).strip()
-    if not text:
-        return ""
-    from raven.providers.registry import PROVIDERS, canonical_provider_name, find_by_name
+    key = f"tools.media.{kind}.provider"
 
-    slug = canonical_provider_name(text)
-    spec = find_by_name(slug)
-    if spec is None or not spec.image_api:
-        serving = ", ".join(s.label for s in PROVIDERS if s.image_api)
-        raise ConfigValidationError(f"tools.media.image.provider: the image tool runs on {serving}, not {text!r}")
-    return slug
+    def chk(v: Any) -> str:
+        text = _chk_str(key, 100)(v).strip()
+        if not text:
+            return ""
+        from raven.providers.registry import PROVIDERS, canonical_provider_name, find_by_name
+
+        slug = canonical_provider_name(text)
+        spec = find_by_name(slug)
+        if spec is None or not getattr(spec, f"{kind}_api"):
+            serving = ", ".join(s.label for s in PROVIDERS if getattr(s, f"{kind}_api"))
+            raise ConfigValidationError(f"{key}: the {kind} tool runs on {serving}, not {text!r}")
+        return slug
+
+    return chk
 
 
 # Low-risk hot-writable keys a settings surface may offer. Each entry is a
@@ -1045,8 +1057,9 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "tools.media.image.apiKey": _chk_str("tools.media.image.apiKey", 200),
     "tools.media.image.model": _chk_str("tools.media.image.model"),
     "tools.media.image.quality": _chk_enum("tools.media.image.quality", "", "low", "medium", "high"),
-    "tools.media.image": _chk_image_selection,
-    "tools.media.image.provider": _chk_image_provider,
+    "tools.media.image": _chk_routed_selection("image"),
+    "tools.media.image.provider": _chk_media_provider("image"),
+    "tools.media.video.provider": _chk_media_provider("video"),
     "channels.sendProgress": _chk_bool("channels.sendProgress"),
     "channels.sendToolHints": _chk_bool("channels.sendToolHints"),
     "memory.memoryTopK": _chk_int("memory.memoryTopK", 1, 50),
@@ -1082,10 +1095,10 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     # written a key at a time can be left half-changed by a dropped connection.
     "context": _chk_pin_pair("context", "curatorModel", "curatorProvider"),
     "skillForge": _chk_pin_pair("skillForge", "llmGateModel", "llmGateProvider"),
-    # The image tool's selection object without its provider: the three media
-    # tools share one config shape, and only the image tool runs elsewhere.
+    # The three media tools share one config shape; speech's has no provider,
+    # because only the image and video tools run elsewhere.
     "tools.media.speech": _chk_media_selection,
-    "tools.media.video": _chk_media_selection,
+    "tools.media.video": _chk_routed_selection("video"),
     "sessions.autoArchiveAfterDays": _chk_int_or_null("sessions.autoArchiveAfterDays", 1, 3650),
 }
 

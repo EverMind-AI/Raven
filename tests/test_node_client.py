@@ -607,6 +607,83 @@ async def test_a_machine_full_of_agents_refuses_the_next_in_one_sentence(tmp_pat
     assert pool.live() == ["box"] and pool._nodes["box"].channels == {}
 
 
+async def test_a_cancel_while_the_launch_is_answered_still_ends_what_it_started(tmp_path):
+    pool = NodePool()
+    client = _live(pool, tmp_path, client=_HeldLaunch(result={"pid": 4242}))
+    opening = asyncio.ensure_future(pool.open_channel("box", name="a@box", command="agent", cwd="~", env={}))
+    await asyncio.wait_for(client.launching.wait(), 2)
+
+    opening.cancel()
+    client.answer.set()
+    with pytest.raises(asyncio.CancelledError):
+        await opening
+
+    await _until(lambda: not pool._ending, timeout=2)
+    (launch, params, _), (cancel, ended, _) = client.asked
+    assert (launch, cancel) == (protocol.AGENT_LAUNCH, protocol.AGENT_CANCEL)
+    assert ended == {"channel": params["channel"]}
+
+
+async def test_a_cancel_while_a_refused_launch_is_answered_leaves_no_channel(tmp_path):
+    pool = NodePool()
+    busy = AcpRemoteError(protocol.AGENT_LAUNCH, protocol.BUSY, "8 agents are already running on this machine")
+    client = _live(pool, tmp_path, client=_HeldLaunch(raises=busy))
+    pool._ending = ending = _Recorded()
+    opening = asyncio.ensure_future(pool.open_channel("box", name="b@box", command="agent", cwd="~", env={}))
+    await asyncio.wait_for(client.launching.wait(), 2)
+
+    opening.cancel()
+    client.answer.set()
+    with pytest.raises(asyncio.CancelledError):
+        await opening
+
+    await _until(lambda: not pool._ending, timeout=2)
+    (end,) = ending.ever
+    assert end.exception() is None, "a refused launch leaves the pool nothing to end, and no error"
+    assert [method for method, _, _ in client.asked] == [protocol.AGENT_LAUNCH]
+    assert pool.live() == ["box"] and pool._nodes["box"].channels == {}
+
+
+async def test_a_cancel_while_the_launch_is_unanswered_returns_at_once_and_the_agent_is_ended_on_the_answer(tmp_path):
+    pool = NodePool()
+    client = _live(pool, tmp_path, client=_HeldLaunch(result={"pid": 4242}))
+    opening = asyncio.ensure_future(pool.open_channel("box", name="a@box", command="agent", cwd="~", env={}))
+    await asyncio.wait_for(client.launching.wait(), 2)
+
+    opening.cancel()
+    await asyncio.wait({opening}, timeout=1)
+    assert opening.done(), "the cancelled caller does not wait for the node's answer"
+    assert [method for method, _, _ in client.asked] == [] and len(pool._ending) == 1
+
+    client.answer.set()
+    await _until(lambda: not pool._ending, timeout=2)
+    (launch, params, _), (cancel, ended, _) = client.asked
+    assert (launch, cancel) == (protocol.AGENT_LAUNCH, protocol.AGENT_CANCEL)
+    assert ended == {"channel": params["channel"]}
+    with pytest.raises(asyncio.CancelledError):
+        await opening
+
+
+async def test_a_second_cancel_while_the_launch_is_unanswered_still_ends_the_agent(tmp_path):
+    pool = NodePool()
+    client = _live(pool, tmp_path, client=_HeldLaunch(result={"pid": 4242}))
+    opening = asyncio.ensure_future(pool.open_channel("box", name="a@box", command="agent", cwd="~", env={}))
+    await asyncio.wait_for(client.launching.wait(), 2)
+
+    opening.cancel()
+    await asyncio.sleep(0.05)
+    opening.cancel()
+    await asyncio.sleep(0.05)
+    client.answer.set()
+    with pytest.raises(asyncio.CancelledError):
+        await opening
+
+    await _until(lambda: len(client.asked) == 2, timeout=2)
+    (launch, params, _), (cancel, ended, _) = client.asked
+    assert (launch, cancel) == (protocol.AGENT_LAUNCH, protocol.AGENT_CANCEL)
+    assert ended == {"channel": params["channel"]}
+
+
 @pytest.mark.slow
 async def test_a_link_that_goes_leaves_the_agent_running_and_the_turn_goes_on_once_it_is_back(box, pool):
     """The ssh is the way to the machine, not the agent's life: a request made while it is down is answered after."""
@@ -763,6 +840,33 @@ class _Client:
 
     async def close(self) -> None:
         self.alive = False
+
+
+class _HeldLaunch(_Client):
+    """A connection whose answer to ``agent/launch`` is held until the test lets it go."""
+
+    def __init__(self, **kw: Any) -> None:
+        super().__init__(**kw)
+        self.launching = asyncio.Event()
+        self.answer = asyncio.Event()
+
+    async def request(self, method: str, params: dict[str, Any], *, timeout: float) -> Any:
+        if method == protocol.AGENT_LAUNCH:
+            self.launching.set()
+            await self.answer.wait()
+        return await super().request(method, params, timeout=timeout)
+
+
+class _Recorded(set):
+    """A set that also keeps every task ever put in it, for a test to read how each ended."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.ever: list[Any] = []
+
+    def add(self, item: Any) -> None:
+        self.ever.append(item)
+        super().add(item)
 
 
 def _box(machine_id: str = "box") -> remote.Machine:

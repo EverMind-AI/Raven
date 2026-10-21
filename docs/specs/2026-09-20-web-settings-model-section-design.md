@@ -109,7 +109,8 @@ Shapes rejected in the discussion round:
 - Media roles beyond OpenRouter (prior C14 holds). The kind filter narrows
   OpenRouter's list to the slot's kind; it does not widen the provider set.
   (C14's 2026-10-06 amendment later widened the image role to the providers
-  marked `image_api`.)
+  marked `image_api`, and its 2026-10-19 one the video role to those marked
+  `video_api`.)
 - Restyling anything outside the two pages and the picker; the composer chip's
   label; the sub-agent instance model chip (`features/subagents/InstanceModel.tsx`),
   which lists the agent's own menu and is not a picker over our catalogue.
@@ -207,7 +208,7 @@ number.
 
 - A22. A role pill opens the shared picker -- the same `.mpick` element the composer opens -- under the pill; its left column lists every connected provider the role may use (prior A21 / A22 rules) with the count of its models of the slot's kind, and its right column lists only that kind; a provider with none shows the empty-kind text and the typed-id row. Fails if an allowed connected provider is missing or a model of another kind appears.
 - A23. The embedding slot lists embedding models only and the rerank slot reranker models only: a chat model configured on the same provider does not appear in either. (*)
-- A24. Speech and video slots offer OpenRouter only and the image slot the connected providers marked `image_api` (prior A22, amended 2026-10-06); within them, `image`, `audio` and `video` models respectively.
+- A24. The speech slot offers OpenRouter only, the image slot the connected providers marked `image_api` and the video slot those marked `video_api` (prior A22, amended 2026-10-06 and 2026-10-19); within them, `image`, `audio` and `video` models respectively.
 - A25. Chat, curator, session naming, EverOS llm, gate and multimodal list `text` models only; an embedding model configured on a connected provider does not appear.
 - A26. Picking writes exactly what prior A19-A22 describe, through the roles card's own write path: chat updates `agents.defaults` and the composer chip repaints; curator, skill gate and session naming write model then provider; EverOS roles call `settings.everosSet`; media roles write `tools.media.<kind>` then the tool switch.
 - A27. A typed id in a slot's picker shows "use `<id>` · add to `<provider>`" with a kind chip that starts on the slot's kind, not on the name guess; choosing it adds the model to the provider first, with that kind's stated tags as A17 describes, then assigns it.
@@ -547,9 +548,9 @@ Non-goals).
 - **The OAuth pane keeps the browser device flow in the prototype's layout.**
   The prototype regressed to a CLI instruction; the prior design built the
   flow from the page on the owner's decision. Rejected: the CLI text.
-- **Speech and video slots stay OpenRouter-only and the image slot keeps to the
-  providers marked `image_api`, each narrowed by kind.** Prior C14, amended
-  2026-10-06.
+- **The speech slot stays OpenRouter-only, and the image and video slots keep
+  to the providers marked `image_api` and `video_api`, each narrowed by kind.**
+  Prior C14, amended 2026-10-06 and 2026-10-19.
 - **No two-column abstraction for pages that do not exist yet.** The class
   family is named `settings-tp*` after the prototype's `tp-*` so channels and
   memory can lift it; it is one page's CSS until a second page needs it.

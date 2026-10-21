@@ -146,6 +146,17 @@ All notable changes to Raven are documented here.
   guessing. Playbooks carry the same three fields, and the TUI's DAG panel and
   the web tasks list show what each node's branch did.
 
+- The image and video roles run on MiniMax. Settings > Model offers MiniMax's
+  two API-key providers (`minimax`, `minimax_cn_api`) for both roles, and a
+  section naming one takes that provider's address and key and calls
+  MiniMax's own APIs: `/v1/image_generation`, where an input image is the
+  character to keep, and the video APIs, text-to-video or from a
+  `first_frame_image`. The video section takes a `provider` as the image
+  section does; one written there by hand was ignored before and is honoured
+  now. Raven-PPT's pinned image settings keep the provider they run on, and
+  `PPT_IMAGE_PROVIDER` puts a deck's pictures on a provider of its own. See
+  `docs/minimax-media.md`.
+
 ### Changed
 
 - Memory runs on EverOS 1.4.2, which fixes what a memory server that stays up
@@ -347,6 +358,16 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- A continued DAG node is judged against what it was told after an attempt
+  fell short, not only against its first prompt. The judge read the task as
+  first given and nothing else, so when the user answered a stuck node by
+  choosing another deliverable through `resolve_dag_node` -- a replacement
+  pull request instead of a push to the original, say -- every attempt that
+  delivered it was judged not accomplished until the node ran out of
+  continuations and failed. Each continue message is now recorded beside the
+  node's prompt, oldest first (`<node>.follow_ups.json`), and the judge reads
+  them as part of the task, the later one standing where two disagree. A node
+  that was never continued is judged exactly as before.
 - The `<agent>-Mirasim` presets reach the Mirasim host again. The adapter sent
   the host's access token in a header, which a Mirasim host from 0.0.571 on
   answers with 401 (measured against 0.0.571, 0.0.576 and 0.0.585; the hosts

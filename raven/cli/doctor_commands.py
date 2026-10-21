@@ -784,7 +784,8 @@ def _render_tool_capabilities(tools: ToolsInfo) -> None:
             if not cap.has_credential:
                 console.print(f"{indent}[yellow]no key resolves; calls will fail[/yellow]")
                 console.print(f"{indent}[dim]set:[/dim] {cap.key_path}")
-                console.print(f"{indent}[dim]or env:[/dim] {cap.env_var}")
+                if cap.env_var:
+                    console.print(f"{indent}[dim]or env:[/dim] {cap.env_var}")
             continue
         glyph = "x" if cap.disabled else "-"
         console.print(f"{label}[dim]{glyph}  {cap.summary}[/dim]")
@@ -804,7 +805,8 @@ def _render_tool_capabilities(tools: ToolsInfo) -> None:
                 # Claiming the borrow with nothing to borrow sends the deployer
                 # to set a model and land in the case flagged above.
                 console.print(f"{indent}[dim]also set:[/dim] {cap.key_path}")
-                console.print(f"{indent}[dim]or env:[/dim] {cap.env_var}")
+                if cap.env_var:
+                    console.print(f"{indent}[dim]or env:[/dim] {cap.env_var}")
         elif cap.need == "new_account":
             console.print(f"{indent}[dim]set:[/dim] {cap.config_path}")
             if cap.env_var:

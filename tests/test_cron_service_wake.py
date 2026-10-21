@@ -265,3 +265,78 @@ async def test_a_wake_that_did_not_re_arm_is_still_deleted_after_its_run(tmp_pat
     await svc._process_due()
 
     assert fired == ["wake:ops:c2"] and svc.pending_wakes("ops:c2") == []
+
+
+async def test_the_wake_running_now_is_left_out_only_on_request(tmp_path: Path) -> None:
+    """A one-shot stays in the store until the writeback after its run, so the
+    turn it started finds it among the pending wakes. ``include_running=False``
+    is the reading of a caller asking whether anything is still to come."""
+    svc = CronService(tmp_path / "jobs.json")
+    svc.schedule_wake("ops:c3", _now_ms() + 1_000, "look", channel="acp", to="w1")
+    svc._store.jobs[0].state.next_run_at_ms = 1
+    svc._save_store()
+    seen: dict[str, list[str]] = {}
+
+    async def on_job(job) -> None:
+        seen["default"] = [j.id for j in svc.pending_wakes("ops:c3")]
+        seen["after_this_run"] = [j.id for j in svc.pending_wakes("ops:c3", include_running=False)]
+        peer = CronService(tmp_path / "jobs.json")
+        seen["peer"] = [j.id for j in peer.pending_wakes("ops:c3", include_running=False)]
+
+    svc.on_job = on_job
+    await svc._process_due()
+
+    assert seen["default"] == ["wake:ops:c3"]
+    assert seen["after_this_run"] == []
+    assert seen["peer"] == ["wake:ops:c3"], "another process does not know this one's runs"
+    assert svc._in_flight == {}
+
+
+async def test_a_wake_re_armed_during_its_run_is_still_to_come(tmp_path: Path) -> None:
+    svc = CronService(tmp_path / "jobs.json")
+    svc.schedule_wake("ops:c4", _now_ms() + 1_000, "look", channel="acp", to="w1")
+    seen: list[list[str]] = []
+
+    async def on_job(job) -> None:
+        svc.schedule_wake("ops:c4", _now_ms() + 60_000, "look again", channel="acp", to="w1")
+        seen.append([j.id for j in svc.pending_wakes("ops:c4", include_running=False)])
+        assert svc.advance_wake_to_now("ops:c4") is True
+        seen.append([j.id for j in svc.pending_wakes("ops:c4", include_running=False)])
+
+    svc.on_job = on_job
+    assert await svc.run_job("wake:ops:c4") is True
+
+    assert seen == [["wake:ops:c4"], ["wake:ops:c4"]]
+
+
+async def test_the_run_record_is_cleared_when_the_turn_fails(tmp_path: Path) -> None:
+    svc = CronService(tmp_path / "jobs.json")
+    svc.schedule_wake("ops:c5", _now_ms() + 1_000, "look", channel="acp", to="w1")
+
+    async def on_job(job) -> None:
+        assert svc.pending_wakes("ops:c5", include_running=False) == []
+        raise RuntimeError("the turn failed")
+
+    svc.on_job = on_job
+    assert await svc.run_job("wake:ops:c5") is True
+
+    assert svc._in_flight == {}
+    assert svc.pending_wakes("ops:c5") == [], "the writeback removes a failed one-shot too"
+
+
+async def test_the_run_record_is_cleared_when_the_writeback_fails(tmp_path: Path, monkeypatch) -> None:
+    svc = CronService(tmp_path / "jobs.json")
+    svc.schedule_wake("ops:c6", _now_ms() + 1_000, "look", channel="acp", to="w1")
+
+    def broken_writeback(job, my_pid) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(svc, "_writeback_locked", broken_writeback)
+    try:
+        await svc.run_job("wake:ops:c6")
+    except OSError:
+        pass
+    else:
+        raise AssertionError("the writeback failure propagates")
+
+    assert svc._in_flight == {}

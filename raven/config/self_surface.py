@@ -357,13 +357,16 @@ SECTIONS: tuple[Section, ...] = (
                 writer="settings",
                 choices=("", "low", "medium", "high"),
             ),
-            Setting(
-                "tools.media.image.provider",
-                "Provider the image tool runs on, its address and key together; empty is OpenRouter",
-                "enum",
-                _E.NEXT_TURN,
-                writer="settings",
-                choices=("", *(spec.name for spec in PROVIDERS if spec.image_api)),
+            *(
+                Setting(
+                    f"tools.media.{medium}.provider",
+                    f"Provider the {medium} tool runs on, its address and key together; empty is OpenRouter",
+                    "enum",
+                    _E.NEXT_TURN,
+                    writer="settings",
+                    choices=("", *(spec.name for spec in PROVIDERS if getattr(spec, f"{medium}_api"))),
+                )
+                for medium in ("image", "video")
             ),
             *(
                 Setting(

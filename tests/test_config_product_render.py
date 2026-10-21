@@ -1084,6 +1084,23 @@ def test_write_rendered_narrows_existing_permissions(tmp_path):
     assert json.loads(rendered.read_text(encoding="utf-8")) == {"a": 1}
 
 
+def test_a_part_of_the_render_is_owner_only_and_swept_with_it(tmp_path):
+    """A file a launcher keeps beside its render -- a pinned image section, holding a
+    key -- is named by the render's pid, so the sweep that removes a dead server's
+    render removes it too."""
+    part = render.write_rendered_part({"a": 1}, tmp_path, "image")
+    assert part == render.rendered_part(tmp_path, "image")
+    assert part.name == f".config.rendered.{os.getpid()}.image.json"
+    if os.name != "nt":
+        assert stat.S_IMODE(part.stat().st_mode) == 0o600
+    assert json.loads(part.read_text(encoding="utf-8")) == {"a": 1}
+
+    dead = tmp_path / ".config.rendered.999999.image.json"
+    dead.write_text("{}", encoding="utf-8")
+    render.sweep_stale_renders(tmp_path)
+    assert part.exists() and not dead.exists()
+
+
 # --- product_acp_home: the engine home never inside the host's (w109) ---------
 
 

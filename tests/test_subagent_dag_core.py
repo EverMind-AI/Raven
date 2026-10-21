@@ -3890,6 +3890,37 @@ async def test_a_crashed_decision_node_keeps_its_own_failure_when_no_provider_is
     assert verdict == Verdict(accomplished=True), "no route is read from a node that crashed, so nothing is raised"
 
 
+@pytest.mark.parametrize("crashed", [False, True], ids=["returned", "crashed"])
+async def test_the_judge_reads_the_follow_ups_a_continued_node_was_sent(tmp_path, crashed) -> None:
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+
+    nodes = tmp_path / "nodes"
+    nodes.mkdir()
+    (nodes / "n.prompt.md").write_text("push the fix to PR 918", encoding="utf-8")
+    (nodes / "n.follow_ups.json").write_text(json.dumps(["open a replacement PR instead"]), encoding="utf-8")
+    store = DagRunStore(
+        backend=LocalFileBackend(),
+        root=str(tmp_path / "runs"),
+        run_id="r1",
+        nodes_root=str(nodes),
+        registry_root=str(tmp_path),
+    )
+    provider = _Canned(outcome="not_accomplished" if crashed else "accomplished")
+    tool = SubAgentDagTool(workspace=tmp_path, provider_for=lambda: provider)
+
+    await tool._judge_node()(
+        node=SimpleNamespace(id="n"),
+        store=store,
+        output="opened PR 1022",
+        error="boom" if crashed else "",
+        crashed=crashed,
+    )
+
+    user = provider.calls[0]["messages"][-1]["content"]
+    fenced = re.findall(r"\[BEGIN UNTRUSTED \S+ #(\w+) [^\n]*\n(.*?)\n\[END UNTRUSTED \S+ #\1\]", user, re.DOTALL)
+    assert [body for _, body in fenced][:2] == ["push the fix to PR 918", "open a replacement PR instead"]
+
+
 # --- branches: a missing upstream reads as a fixed sentence ------------------------
 
 _FENCE = re.compile(r"\[BEGIN UNTRUSTED \S+ #(\w+) [^\n]*\n.*?\n\[END UNTRUSTED \S+ #\1\]", re.DOTALL)

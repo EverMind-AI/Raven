@@ -1030,6 +1030,10 @@ export interface ModelOptionProvider {
    */
   image_api?: boolean;
   /**
+   * The registry's video_api: the video tool can run on this provider's address and key. The roles card offers the video role these providers; absent means false.
+   */
+  video_api?: boolean;
+  /**
    * Every model-id prefix that names this provider: its own name plus the ones it used to answer to (ProviderSpec.route_names). A client comparing two spellings of one model strips any of them, the way providers/wire.py's merge_key does. Absent means the provider's own name alone.
    */
   route_names?: string[];

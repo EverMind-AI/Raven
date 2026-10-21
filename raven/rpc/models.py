@@ -2088,6 +2088,8 @@ class ModelOptionProvider(_Strict):
     #: The registry's ``image_api``: the image tool can run on this provider's
     #: address and key. The roles card offers the image role these providers.
     image_api: bool = False
+    #: The registry's ``video_api``, the same answer for the video tool.
+    video_api: bool = False
     #: Every model-id prefix that names this provider: its own name plus the
     #: ones it used to answer to (``ProviderSpec.route_names``). A client
     #: comparing two spellings of one model has to strip any of them, the way
