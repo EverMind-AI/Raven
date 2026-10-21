@@ -348,7 +348,10 @@
 .extAgents-probe-bad { color: var(--clay); }
 
 /* The action bar: right-aligned, primary rightmost, the destructive one left of it. */
-.extAgents-act { flex: none; display: flex; align-items: center; justify-content: flex-end; gap: 9px; padding: 14px 20px 18px; border-top: 1px solid var(--line-soft); }
+/* `flex-wrap`: the bar holds up to four presses, and under the fold the sheet
+   is the window less a gutter; wrapped, the primary keeps the last row's right
+   end. */
+.extAgents-act { flex: none; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 9px; padding: 14px 20px 18px; border-top: 1px solid var(--line-soft); }
 
 /* ── the model pill ─────────────────────────────────────────────── */
 

@@ -35,7 +35,7 @@ import { bootError } from '../state/failureBar'
 import { load as loadLang } from '../state/lang/pick'
 import { load as lookLoad } from '../state/look'
 import { draw as drawPerm } from '../state/perm'
-import { set as setRail } from '../state/rail'
+import { set as setRail, stands as railStands } from '../state/rail'
 import { replayPendingApprovals, replayPendingCredentials } from '../state/session/pipeline'
 import { switchTo, switchToDraft } from '../state/session/registry'
 import { landing, watch as watchSessionNote } from '../state/session/resume'
@@ -207,7 +207,10 @@ export function bootPage(): void {
   ;([
     ['lookLoad', (): void => lookLoad()],
     ['paneLoad', (): void => paneLoad()],
-    ['setRail', (): void => setRail(true)],
+    /* Standing, unless the window is too narrow to hold it beside the content
+       (state/rail.ts, `stands`): a page opened on a phone starts with the
+       conversation, and the rail is one press away. */
+    ['setRail', (): void => setRail(railStands())],
     ['sessionDraw', (): void => sessionDraw()],
     /* A live boot deliberately starts with an empty source and chooses a draft
        after the real list lands; an offline page has a fixture row to open. */

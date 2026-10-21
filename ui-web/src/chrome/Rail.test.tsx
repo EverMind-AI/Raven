@@ -17,6 +17,7 @@ import * as imported from '../features/imported/store'
 import * as settings from '../features/settings/store'
 import * as hub from '../state/hub'
 import * as lang from '../state/lang'
+import * as railState from '../state/rail'
 import { mountPageRoot } from '../test/pageRoot'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -195,6 +196,55 @@ describe('the rail', () => {
    against the props it rendered last, so a value it never changes is a value it
    never writes again, and only a remount asks the component what the text
    is. */
+/* The window's width, as `matchMedia` answers it (happy-dom does no layout):
+   an EventTarget carrying `matches`, which is all state/rail.ts reads of it. */
+describe('the rail on a window under the fold', () => {
+  const real = window.matchMedia
+  let narrow = true
+  const click = async (id: string): Promise<void> => {
+    await act(async () => {
+      el(id).click()
+    })
+  }
+
+  beforeEach(() => {
+    narrow = true
+    window.matchMedia = ((q: string) =>
+      Object.assign(new EventTarget(), { matches: narrow, media: q }) as MediaQueryList) as typeof window.matchMedia
+  })
+
+  afterEach(() => {
+    window.matchMedia = real
+    railState.set(true)
+  })
+
+  /* The rail lies over the page there (styles/page.css), so a press that goes
+     somewhere folds it, the way a drawer closes on the choice made in it. */
+  it('folds when a row in it is pressed, and stays for its own controls', async () => {
+    render()
+    railState.set(true)
+    await click('findBtn')
+    expect(railState.get()).toBe(true)
+    await click('agentsBtn')
+    expect(opened.list).toEqual(['hub'])
+    expect(railState.get()).toBe(false)
+    expect(el('railShow').hidden).toBe(false)
+    railState.set(true)
+    await click('meBtn')
+    expect(opened.list).toEqual(['hub', 'settings'])
+    expect(railState.get()).toBe(false)
+  })
+
+  it('keeps standing beside the page on a window that holds both', async () => {
+    narrow = false
+    render()
+    railState.set(true)
+    await click('agentsBtn')
+    expect(opened.list).toEqual(['hub'])
+    expect(railState.get()).toBe(true)
+  })
+})
+
 describe('the rail once a language is applied', () => {
   it('renders the applied words when the column is mounted again', () => {
     const KEYED = ['#newBtn span', '#agentsBtn span', '#upnote .t', '#upnote .rl', '.me .who .n']

@@ -409,6 +409,33 @@ body {
   -webkit-font-smoothing: antialiased; overflow: hidden;
   min-width: 780px;
 }
+/* ── narrow windows ───────────────────────────────────────────────── */
+/* Under the floor the shell folds instead of scrolling sideways. The floor
+   was the width the two columns need; below it a phone was shown the 780px
+   page in a 390px window -- the rail on the left half, every module squeezed
+   into what was left (the hub's three tabs stacked, 200px cards, a drawer
+   wider than the window) and a horizontal scroll to reach any of it. */
+@media (max-width: 779px) {
+  body { min-width: 0; }
+}
+/* Below the fold (state/rail.ts, `FOLDS`: the same 640) the window holds one
+   column. The rail, when it stands, lies over the content instead of beside
+   it -- opened by its twin, closed by its own toggle -- so the conversation
+   and the pages keep the whole width; the boot starts it folded there. Its
+   width is the drag's value capped so a strip of the page stays visible,
+   and the grip has nothing to resize. */
+@media (max-width: 639px) {
+  .app { grid-template-columns: 1fr; }
+  .app .rail {
+    position: fixed; top: 0; bottom: 0; left: 0; width: min(var(--rail), 86vw);
+    z-index: var(--z-rail-handle); box-shadow: var(--shadow);
+  }
+  .app .rail #railGrip { display: none; }
+  /* `:root` for the weight: the module pages' own rule sets `inset` with the
+     rail's width further down the sheet, and a standing rail here is an
+     overlay, not a column the page should leave room for. */
+  :root .page { left: 0; }
+}
 button, input, select, textarea { font: inherit; color: inherit; }
 /* Controls are furniture, not copy: a double-click that selects a row label
    leaves a selection behind, and the next right-click anywhere near it summons
@@ -3509,6 +3536,7 @@ details[open] summary { margin-bottom: 8px; }
    Both tabs keep one weight so the row does not shift when the pick moves;
    the colour and the rule under the current one are the whole difference. */
 .hub-head { display: flex; gap: 28px; margin: 10px 0 16px; border-bottom: 1px solid var(--line-soft); }
+@media (max-width: 639px) { .hub-head { gap: 18px; } }
 .hub-head-tab {
   position: relative; padding: 0 0 11px; border: 0; background: none; cursor: pointer;
   font: inherit; font-size: 16px; font-weight: 600; color: var(--muted);
@@ -3980,9 +4008,9 @@ details[open] summary { margin-bottom: 8px; }
 .detail[data-open="true"] .dpanel { transform: none; }
 /* The agent and channel sheets are fixed boxes the domain fills to its edges:
    the panel takes its size from the owner, and the body's padding is the
-   sheet's to spend. */
+   sheet's to spend. Capped to the window less a gutter, for a phone. */
 .detail[data-owner="extAgents"] .dpanel,
-.detail[data-owner="connections"] .dpanel { width: 520px; height: min(500px, 78vh); }
+.detail[data-owner="connections"] .dpanel { width: min(520px, calc(100vw - 32px)); height: min(500px, 78vh); }
 .detail[data-owner="extAgents"] .body,
 .detail[data-owner="connections"] .body { padding: 0; display: flex; flex-direction: column; flex: 1; min-height: 0; }
 /* A card whose body is fetched when it opens gets a settled box instead of one
