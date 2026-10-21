@@ -347,7 +347,7 @@ def configure_image_generation(config: dict, host: dict) -> None:
         # name, which would be resolved against this config's providers -- not
         # the host's -- nor the provider's own prefix, which that address does
         # not take.
-        del image["provider"]
+        image.pop("provider", None)
         if "PPT_IMAGE_MODEL" not in pinned and image.get("model"):
             image["model"] = wire_model(image["model"], client_provider=named)
     if named and not (key_pinned or base_pinned):

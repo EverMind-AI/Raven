@@ -1275,6 +1275,34 @@ def test_a_raven_without_render_parts_keeps_a_pinned_section_inline(grounded, tm
     assert "provider" not in image and "selectionConfig" not in image
 
 
+@pytest.mark.parametrize(
+    ("own_key", "paid_by"), [(None, "sk-host-openai"), ("sk-deck", "sk-deck")], ids=["host-key", "deck-key"]
+)
+def test_a_raven_without_render_parts_renders_a_provider_switch_inline(
+    grounded, tmp_path, monkeypatch, own_key, paid_by
+):
+    """The switch already took the host's provider name off the section, so the inline
+    branch has no name left to drop; it must render the target's endpoint, not raise."""
+    monkeypatch.delattr(grounded.render, "rendered_part")
+    monkeypatch.delattr(grounded.render, "write_rendered_part")
+    _host_image(
+        tmp_path,
+        {"model": "openai/gpt-image-2.5-sunburst"},
+        {"openrouter": {"apiKey": "sk-or-host"}, "openai": {"apiKey": "sk-host-openai"}},
+    )
+    monkeypatch.setenv("PPT_IMAGE_PROVIDER", "openai")
+    monkeypatch.setenv("PPT_IMAGE_MODEL", "gpt-image-2-mini")
+    if own_key:
+        monkeypatch.setenv("PPT_IMAGE_API_KEY", own_key)
+    image = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())["tools"]["media"]["image"]
+    assert (image["model"], image["apiBase"], image["apiKey"]) == (
+        "gpt-image-2-mini",
+        "https://api.openai.com/v1",
+        paid_by,
+    )
+    assert "provider" not in image and "selectionConfig" not in image
+
+
 def test_the_serper_key_reaches_both_search_consumers(grounded, tmp_path, monkeypatch):
     """One key, two readers, ONE source of truth: the slice key is copied from
     the tools.web slot after the secret merge, so every admission source --
