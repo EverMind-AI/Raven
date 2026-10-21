@@ -98,6 +98,61 @@ def test_a_field_with_no_source_is_visible_as_one(store: RecordStore) -> None:
     assert [record.dedupe_key for record in missing_provenance(store)] == ["acme"]
 
 
+def _sourced(key: str, field: str, value: object, url: str) -> Record:
+    return Record(
+        type=RecordType.COMPANY,
+        dedupe_key=key,
+        fields={field: value},
+        provenance=[Provenance(field=field, source_url=url, source="opencorporates")],
+    )
+
+
+def test_a_value_written_without_a_source_does_not_keep_the_old_one(store: RecordStore) -> None:
+    """The evidence for a value says nothing about the value that replaced it."""
+    store.put(_sourced("acme", "employees", 10, "https://example.test/registry"))
+
+    stored = store.put(
+        Record(
+            type=RecordType.COMPANY,
+            dedupe_key="acme",
+            fields={"employees": 999},
+        )
+    )
+
+    assert stored.fields["employees"] == 999
+    assert stored.sources_for("employees") == []
+    assert stored.unsourced_fields() == ["employees"]
+    assert [record.dedupe_key for record in missing_provenance(store)] == ["acme"]
+
+
+def test_a_value_written_without_a_source_leaves_the_other_evidence_alone(store: RecordStore) -> None:
+    store.put(_sourced("acme", "name", "Acme", "https://example.test/edgar"))
+
+    stored = store.put(
+        Record(
+            type=RecordType.COMPANY,
+            dedupe_key="acme",
+            fields={"employees": 999},
+        )
+    )
+
+    assert [entry.source_url for entry in stored.sources_for("name")] == ["https://example.test/edgar"]
+    assert stored.unsourced_fields() == ["employees"]
+
+
+def test_a_value_written_with_a_source_keeps_the_evidence_of_both_readings(store: RecordStore) -> None:
+    store.put(_sourced("acme", "employees", 10, "https://example.test/registry"))
+
+    stored = store.put(_sourced("acme", "employees", 999, "https://example.test/filings"))
+
+    assert stored.fields["employees"] == 999
+    assert {entry.source_url for entry in stored.sources_for("employees")} == {
+        "https://example.test/registry",
+        "https://example.test/filings",
+    }
+    assert stored.unsourced_fields() == []
+
+
 def test_records_can_be_filtered_by_state_and_ranked(store: RecordStore) -> None:
     store.put(_company("acme", score=3))
     store.put(_company("beta", score=9))

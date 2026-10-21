@@ -25,10 +25,16 @@ The record store's own interaction chain already says what this needs:
 ``unsubscribed`` reachable only from ``sent``. A message is delivered only
 once it was sent. The guard writes that chain rather than inventing a
 parallel one.
+
+The claim on a subject is kept in the store, not in the process. The check
+and the claim are one transaction under the store's writer lock, and the
+subject is unique in the claim table, so several processes racing on one
+subject produce one send and several refusals rather than several sends.
 """
 
 from __future__ import annotations
 
+import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterator
@@ -64,6 +70,21 @@ SENT = "sent"
 SENT_VERDICT = "sent"
 NOT_SENT = "not_sent"
 UNKNOWN = "unknown"
+
+#: The claims the guard keeps: one row per prepared send, and the subject
+#: is unique in the table, so a subject is claimed by one send at a time.
+#: The claim is what makes "one outbound send cannot be sent twice" a
+#: property of the database rather than a property of one process's timing.
+_CLAIMS_TABLE = """
+CREATE TABLE IF NOT EXISTS prepared_sends (
+    subject_key  TEXT PRIMARY KEY,
+    subject      TEXT NOT NULL,
+    subject_type TEXT NOT NULL,
+    token        TEXT NOT NULL,
+    record_id    TEXT NOT NULL,
+    created_at   TEXT NOT NULL
+)
+"""
 
 
 class UnresolvedSendError(RuntimeError):
@@ -196,34 +217,50 @@ def prepare_send(
     somebody whose first attempt is still in doubt is the double-send this
     package exists to prevent, and the refusal says which attempt is
     unresolved so the operator can reconcile it first.
+
+    The check and the claim are one write. They happen in a single
+    transaction under the store's writer lock, and the claim table holds one
+    row per subject, so two processes racing on the same subject produce one
+    send and one refusal rather than two sends.
     """
     if not subject:
         raise ValueError("an outbound message needs a subject")
     if not channel:
         raise ValueError("an outbound message needs a channel")
 
-    pending = unresolved(store, subject=subject, subject_type=subject_type)
-    if pending:
-        tokens = ", ".join(
-            str(interaction.fields.get("correlation_token") or interaction.id)
-            for interaction in pending
-        )
-        raise UnresolvedSendError(
-            f"there is already a send to {subject!r} whose outcome is unknown ({tokens}). "
-            f"Reconcile it before sending again."
-        )
+    subject_key = _subject_key(subject, subject_type)
+    with store.writing() as conn:
+        _ensure_claims_table(conn)
+        _release_dead_claims(conn, subject_key)
+        pending = unresolved(store, subject=subject, subject_type=subject_type)
+        if pending:
+            raise UnresolvedSendError(_refusal(subject, _pending_tokens(pending)))
 
-    token = new_token()
-    record = store.put(
-        _build_interaction(
-            subject=subject,
-            subject_type=subject_type,
-            channel=channel,
-            body=body,
-            token=token,
-            extra=extra,
+        token = new_token()
+        record = store.put(
+            _build_interaction(
+                subject=subject,
+                subject_type=subject_type,
+                channel=channel,
+                body=body,
+                token=token,
+                extra=extra,
+            )
         )
-    )
+        try:
+            conn.execute(
+                "INSERT INTO prepared_sends "
+                "(subject_key, subject, subject_type, token, record_id, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (subject_key, subject, subject_type, token, record.id, record.created_at),
+            )
+        except sqlite3.IntegrityError as exc:
+            claimed = conn.execute(
+                "SELECT token FROM prepared_sends WHERE subject_key = ?",
+                (subject_key,),
+            ).fetchone()
+            raise UnresolvedSendError(_refusal(subject, claimed[0] if claimed else "another process")) from exc
+
     return PreparedSend(
         record_id=record.id,
         token=token,
@@ -232,6 +269,58 @@ def prepare_send(
         channel=channel,
         body=body,
         fields=dict(record.fields),
+    )
+
+
+def _subject_key(subject: str, subject_type: str) -> str:
+    """The key a subject is claimed under.
+
+    The subject and its kind together, because the check the guard makes is
+    made against both: a claim on a company does not claim a person who
+    happens to carry the same name.
+    """
+    return f"{subject_type}\x00{subject}"
+
+
+def _ensure_claims_table(conn: sqlite3.Connection) -> None:
+    """The claims table, made the first time a claim is asked for."""
+    conn.execute(_CLAIMS_TABLE)
+
+
+def _release_dead_claims(conn: sqlite3.Connection, subject_key: str) -> None:
+    """Drop the claim on a subject whose send is no longer prepared.
+
+    A send that was resolved, or removed, left its claim behind. The claim
+    is about a send whose outcome nobody knows, and a resolved send is not
+    that, so the claim goes with it.
+    """
+    conn.execute(
+        "DELETE FROM prepared_sends WHERE subject_key = ? AND NOT EXISTS ("
+        "SELECT 1 FROM records WHERE records.id = prepared_sends.record_id AND records.state = ?)",
+        (subject_key, PREPARED),
+    )
+
+
+def _release_claim(store: RecordStore, token: str) -> None:
+    """Let the subject be claimed again, now that the outcome is known."""
+    with store.writing() as conn:
+        _ensure_claims_table(conn)
+        conn.execute("DELETE FROM prepared_sends WHERE token = ?", (token,))
+
+
+def _pending_tokens(pending: list[Record]) -> str:
+    """The tokens of the sends that are still unresolved."""
+    return ", ".join(
+        str(interaction.fields.get("correlation_token") or interaction.id)
+        for interaction in pending
+    )
+
+
+def _refusal(subject: str, tokens: str) -> str:
+    """Why a second attempt at this subject is refused."""
+    return (
+        f"there is already a send to {subject!r} whose outcome is unknown ({tokens}). "
+        f"Reconcile it before sending again."
     )
 
 
@@ -285,6 +374,7 @@ def complete_send(
     store.put(
         _rebuild(record, fields=fields, state=SENT if outcome == SENT else outcome)
     )
+    _release_claim(store, prepared.token)
     return find_by_token(store, prepared.token) or record
 
 
@@ -339,9 +429,11 @@ def reconcile(
             fields = dict(interaction.fields)
             fields["sent_at"] = now_stamp()
             store.put(_rebuild(interaction, fields=fields, state=SENT))
+            _release_claim(store, interaction.dedupe_key)
             sent.append(interaction)
         elif verdict == NOT_SENT:
             store.delete(interaction.id)
+            _release_claim(store, interaction.dedupe_key)
             not_sent.append(interaction)
         else:
             ambiguous.append(interaction)

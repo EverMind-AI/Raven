@@ -10,6 +10,11 @@ killed outright -- no cleanup, no exception handler, no chance to tidy up.
 The parent then opens the same store and has to cope with what is left: a
 prepared interaction, an outcome nobody knows, and a second attempt that
 must be refused.
+
+The same hazard has a second shape: two runs that are alive at the same
+time, both finding the same person with no send to them yet. The guard has
+to refuse one of them there too, so the test runs several processes against
+one database and lets them race.
 """
 
 from __future__ import annotations
@@ -17,6 +22,7 @@ from __future__ import annotations
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
@@ -173,3 +179,94 @@ def test_a_send_that_completed_is_not_left_behind_as_unresolved(tmp_path: Path) 
         assert interaction is not None
         assert interaction.state == SENT
         assert interaction.fields["message_id"] == "<sent@example>"
+
+
+# ---------------------------------------------------------------------------
+# Two live processes, one subject, one send
+# ---------------------------------------------------------------------------
+
+_RACING_CHILD = textwrap.dedent(
+    """
+    import sys, time
+    from pathlib import Path
+    from raven.records import RecordStore
+    from raven.outbound import UnresolvedSendError, prepare_send
+
+    db_path, ready_path, go_path = sys.argv[1], sys.argv[2], sys.argv[3]
+    with RecordStore(db_path) as store:
+        Path(ready_path).write_text("ready", encoding="utf-8")
+        while not Path(go_path).exists():
+            time.sleep(0.0002)
+        try:
+            prepared = prepare_send(
+                store,
+                subject="acme-co",
+                subject_type="company",
+                channel="email",
+                body="Hello there",
+            )
+        except UnresolvedSendError:
+            print("REFUSED", flush=True)
+        else:
+            print("PREPARED " + prepared.token, flush=True)
+    """
+)
+
+
+def _wait_for(paths: list[Path], timeout: float = 120.0) -> None:
+    """Wait until every one of the paths is there."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if all(path.exists() for path in paths):
+            return
+        time.sleep(0.005)
+    raise AssertionError("the children did not all get ready in time")
+
+
+def test_eight_processes_racing_on_one_subject_leave_one_send(tmp_path: Path) -> None:
+    """One send, seven refusals: the double-send this package exists to prevent."""
+    db_path = tmp_path / "records.db"
+    ready_dir = tmp_path / "ready"
+    ready_dir.mkdir()
+    go_path = tmp_path / "go"
+
+    with RecordStore(db_path):
+        pass
+
+    children = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                _RACING_CHILD,
+                str(db_path),
+                str(ready_dir / f"ready-{index}"),
+                str(go_path),
+            ],
+            cwd=str(Path(__file__).resolve().parent.parent.parent),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for index in range(8)
+    ]
+    _wait_for([ready_dir / f"ready-{index}" for index in range(8)])
+    go_path.write_text("go", encoding="utf-8")
+
+    outcomes: list[str] = []
+    for child in children:
+        stdout, stderr = child.communicate(timeout=120)
+        assert child.returncode == 0, stderr
+        outcomes.append(stdout.strip())
+
+    prepared = [line for line in outcomes if line.startswith("PREPARED")]
+    refused = [line for line in outcomes if line == "REFUSED"]
+    assert len(prepared) == 1, outcomes
+    assert len(refused) == 7, outcomes
+
+    token = prepared[0].split(" ", 1)[1]
+    with RecordStore(db_path) as store:
+        assert len(unresolved(store, subject="acme-co")) == 1
+        interaction = find_by_token(store, token)
+        assert interaction is not None
+        assert interaction.state == "prepared"

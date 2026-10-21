@@ -18,6 +18,10 @@ processes, and a lock inside this one for other threads. The lock file is the
 repository's own portable advisory lock rather than ``fcntl`` directly,
 because ``fcntl`` degrades to unlocked on Windows and a concurrent write there
 would be lost rather than serialized.
+
+Opening the file is under that lock as well. The journal mode and the schema
+are set once, and two processes setting them at the same time is a race the
+store does not need to have.
 """
 
 from __future__ import annotations
@@ -64,10 +68,19 @@ class RecordStore:
             check_same_thread=False,
             isolation_level=None,
         )
-        self._conn.execute("PRAGMA journal_mode = WAL")
-        self._conn.execute("PRAGMA synchronous = NORMAL")
+        # The busy timeout comes first, because every statement after it can
+        # meet another process's write, and waiting is the right answer to
+        # that where refusing is not.
         self._conn.execute("PRAGMA busy_timeout = 5000")
-        migrate(self._conn)
+        # Opening a database is a write: the journal mode and the schema
+        # both change the file. So they happen under the lock the rest of
+        # the store uses. Two processes opening one fresh file would
+        # otherwise race for the same migration, and the loser would be
+        # told the database is locked.
+        with self.locked():
+            self._conn.execute("PRAGMA journal_mode = WAL")
+            self._conn.execute("PRAGMA synchronous = NORMAL")
+            migrate(self._conn)
 
     # -- locking ---------------------------------------------------------
 
@@ -95,6 +108,35 @@ class RecordStore:
                     yield
                 finally:
                     self._depth.value = 0
+
+    @contextmanager
+    def writing(self) -> Iterator[sqlite3.Connection]:
+        """The connection, inside the writer lock and inside one transaction.
+
+        For a caller that needs several statements to land as one write.
+        The lock is held for the whole block, so another process cannot
+        have a writer in between, and the statements are one transaction,
+        so another process sees either all of them or none of them.
+        """
+        with self.locked():
+            started = not self._conn.in_transaction
+            if started:
+                self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                yield self._conn
+            except BaseException:
+                if started:
+                    self._rollback()
+                raise
+            if started:
+                self._conn.execute("COMMIT")
+
+    def _rollback(self) -> None:
+        """Undo the open transaction, where the database still has one."""
+        try:
+            self._conn.execute("ROLLBACK")
+        except sqlite3.Error:
+            pass
 
     # -- reading ---------------------------------------------------------
 
@@ -274,7 +316,7 @@ class RecordStore:
             type=existing.type,
             dedupe_key=existing.dedupe_key,
             fields={**existing.fields, **record.fields},
-            provenance=merge_provenance(existing.provenance, record.provenance),
+            provenance=merge_provenance(_evidence_that_still_stands(existing.provenance, record), record.provenance),
             state=state,
             id=existing.id,
             created_at=existing.created_at,
@@ -328,6 +370,20 @@ class RecordStore:
                 record.updated_at,
             ),
         )
+
+
+def _evidence_that_still_stands(existing: list[Provenance], incoming: Record) -> list[Provenance]:
+    """The old evidence that still speaks for the values the store holds.
+
+    A value that arrives without a source is a guess, and the evidence
+    behind the value it replaced says nothing about that guess: that
+    evidence read a different value. So the old evidence for such a field
+    goes with the value it was read for, and the field is left showing as
+    unsourced rather than wearing a source that never supported it.
+    """
+    sourced = {entry.field for entry in incoming.provenance}
+    unsourced = {name for name in incoming.fields if name not in sourced}
+    return [entry for entry in existing if entry.field not in unsourced]
 
 
 def _row_to_record(row: tuple[Any, ...]) -> Record:

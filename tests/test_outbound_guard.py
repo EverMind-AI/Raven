@@ -138,6 +138,16 @@ def test_a_second_attempt_is_allowed_once_the_first_is_resolved(store):
     assert second.token != first.token
 
 
+def test_a_send_whose_record_is_gone_frees_the_subject(store):
+    """A claim on a send that is no longer there does not hold the subject."""
+    first = _prepare(store)
+    store.delete(first.record_id)
+
+    second = _prepare(store)
+
+    assert second.token != first.token
+
+
 # ---------------------------------------------------------------------------
 # The correlation token
 # ---------------------------------------------------------------------------
