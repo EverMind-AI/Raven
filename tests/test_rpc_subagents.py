@@ -25,6 +25,7 @@ from raven.rpc.methods.subagents import (
     subagents_test,
     subagents_test_cancel,
 )
+from raven.utils.commands import command_quote
 
 
 @pytest.fixture
@@ -3207,19 +3208,21 @@ async def test_list_shows_the_model_menu_a_dispatch_relearned(
     age, so before a dispatch could refresh it the card went on offering the
     ids the agent held at its last Test. One dispatch now carries the agent's
     current menu to the card, under the same ``agent`` rule as before.
+    A spaced stub path exercises launch quoting on every test host.
     """
     from raven.acp_client.capabilities import AcpModelChoice, CapabilitySnapshot, SnapshotStore, snapshot_fingerprint
     from raven.acp_client.pool import close_pool
     from raven.agent.subagent.backends import build_third_party_backend
     from raven.config.schema import SubagentsConfig
 
-    stub = Path(__file__).with_name("acp_stub_server.py")
+    stub = tmp_path / "acp stub server.py"
+    stub.write_bytes(Path(__file__).with_name("acp_stub_server.py").read_bytes())
     raw = json.loads(config_path.read_text())
     raw["subagents"]["agents"].append(
         {
             "name": "Stubby",
             "kind": "acp",
-            "command": f"{sys.executable} {stub}",
+            "command": f"{command_quote(sys.executable)} {command_quote(str(stub))}",
             "env": {"ACP_STUB_MODE": "ok"},
             "description": "d",
             "enabled": True,

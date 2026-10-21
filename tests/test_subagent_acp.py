@@ -47,6 +47,7 @@ from raven.agent.subagent.probe_state import fingerprint
 from raven.agent.subagent.registry import _row_for
 from raven.config.schema import SubagentsConfig, ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
 from raven.config.update_subagents import reject_unsupported_acp_fields
+from raven.utils.commands import command_quote
 from tests._windows_dirs import scratch_root, windows_removal
 
 _STUB = Path(__file__).with_name("acp_stub_server.py")
@@ -55,7 +56,7 @@ _STUB = Path(__file__).with_name("acp_stub_server.py")
 def stub_config(name: str = "stub", *, mode: str = "ok", **kw: Any) -> ThirdPartyAcpSubagentConfig:
     return ThirdPartyAcpSubagentConfig(
         name=name,
-        command=f"{sys.executable} {_STUB}",
+        command=f"{command_quote(sys.executable)} {command_quote(str(_STUB))}",
         env={"ACP_STUB_MODE": mode},
         ready_timeout_ms=kw.pop("ready_timeout_ms", 15000),
         **kw,
