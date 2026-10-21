@@ -266,6 +266,17 @@ def statement_for(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _file_stem(session_id: str) -> str:
+    """The name an entry's file carries, on every filesystem.
+
+    A session id is an ACP session name and may carry a colon, and a colon is
+    not a legal character in a file name on Windows - so a corpus written on
+    Linux cannot be checked out on a Windows machine. The id inside the entry
+    and the manifest is untouched; only the file's name is made portable.
+    """
+    return session_id.replace(":", "-")
+
+
 def sign(statement: dict[str, Any], private_key: Ed25519PrivateKey, key_id: str) -> dict[str, Any]:
     """The statement in a DSSE envelope, signed over its pre-authentication encoding."""
     payload = canonical(statement)
@@ -320,7 +331,7 @@ def build(runs_dir: Path, out_dir: Path, key_path: Path) -> int:
     for record in records:
         statement = statement_for(record)
         envelope = sign(statement, private_key, key_id)
-        name = f"{record['session_id']}.envelope.json"
+        name = f"{_file_stem(record['session_id'])}.envelope.json"
         (entries_dir / name).write_text(json.dumps(envelope, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         kinds[record["kind"]] = kinds.get(record["kind"], 0) + 1
         entries.append(

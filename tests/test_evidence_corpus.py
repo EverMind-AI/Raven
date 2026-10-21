@@ -239,3 +239,28 @@ def test_the_private_key_is_not_in_the_corpus(tmp_path: Path) -> None:
     names = {path.name for path in corpus.rglob("*") if path.is_file()}
     assert "key.bin" not in names
     assert not any(name.endswith(".pem") for name in names)
+
+
+def test_the_committed_corpus_can_be_checked_out_on_windows(tmp_path: Path) -> None:
+    """No file in the corpus carries a character Windows will not take.
+
+    A colon is legal in a name on Linux and illegal on Windows, so a corpus
+    written on one cannot be checked out on the other - and the branch that
+    introduces such a path cannot be checked out intact on a Windows machine.
+    The session id inside the entry and the manifest is untouched; only the
+    file's name is made portable.
+    """
+    corpus = REPO / "evidence" / "agent-run-corpus"
+    entries = sorted((corpus / "entries").glob("*.json"))
+    assert entries, "the corpus is empty"
+
+    illegal = set('<>:"/\\|?*')
+    for path in entries:
+        assert not (illegal & set(path.name)), path.name
+        assert path.name == path.name.rstrip(". "), path.name
+
+    # And the manifest points at files that exist, all of them portable.
+    manifest = json.loads((corpus / "manifest.json").read_text(encoding="utf-8"))
+    for entry in manifest["entries"]:
+        assert ":" not in entry["entry"], entry["entry"]
+        assert (corpus / entry["entry"]).exists(), entry["entry"]

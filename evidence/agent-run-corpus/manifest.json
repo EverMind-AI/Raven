@@ -98,7 +98,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170222_e64716.envelope.json",
+      "entry": "entries/acp-20261020_170222_e64716.envelope.json",
       "session_id": "acp:20261020_170222_e64716",
       "source": "raven-self-0-210221142333.jsonl",
       "subject": {
@@ -110,7 +110,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170229_db14cb.envelope.json",
+      "entry": "entries/acp-20261020_170229_db14cb.envelope.json",
       "session_id": "acp:20261020_170229_db14cb",
       "source": "raven-self-1-210228398375.jsonl",
       "subject": {
@@ -122,7 +122,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170326_26fdf6.envelope.json",
+      "entry": "entries/acp-20261020_170326_26fdf6.envelope.json",
       "session_id": "acp:20261020_170326_26fdf6",
       "source": "raven-self-10-210325965458.jsonl",
       "subject": {
@@ -134,7 +134,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170331_7faf09.envelope.json",
+      "entry": "entries/acp-20261020_170331_7faf09.envelope.json",
       "session_id": "acp:20261020_170331_7faf09",
       "source": "raven-self-11-210330831333.jsonl",
       "subject": {
@@ -146,7 +146,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170337_55306a.envelope.json",
+      "entry": "entries/acp-20261020_170337_55306a.envelope.json",
       "session_id": "acp:20261020_170337_55306a",
       "source": "raven-self-12-210336784333.jsonl",
       "subject": {
@@ -158,7 +158,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170342_38100f.envelope.json",
+      "entry": "entries/acp-20261020_170342_38100f.envelope.json",
       "session_id": "acp:20261020_170342_38100f",
       "source": "raven-self-13-210341565208.jsonl",
       "subject": {
@@ -170,7 +170,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170348_9e3447.envelope.json",
+      "entry": "entries/acp-20261020_170348_9e3447.envelope.json",
       "session_id": "acp:20261020_170348_9e3447",
       "source": "raven-self-14-210347815666.jsonl",
       "subject": {
@@ -182,7 +182,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170355_197079.envelope.json",
+      "entry": "entries/acp-20261020_170355_197079.envelope.json",
       "session_id": "acp:20261020_170355_197079",
       "source": "raven-self-15-210354611458.jsonl",
       "subject": {
@@ -194,7 +194,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170359_db9cd5.envelope.json",
+      "entry": "entries/acp-20261020_170359_db9cd5.envelope.json",
       "session_id": "acp:20261020_170359_db9cd5",
       "source": "raven-self-16-210358089041.jsonl",
       "subject": {
@@ -206,7 +206,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170405_ea7aff.envelope.json",
+      "entry": "entries/acp-20261020_170405_ea7aff.envelope.json",
       "session_id": "acp:20261020_170405_ea7aff",
       "source": "raven-self-17-210404676000.jsonl",
       "subject": {
@@ -218,7 +218,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170409_70210a.envelope.json",
+      "entry": "entries/acp-20261020_170409_70210a.envelope.json",
       "session_id": "acp:20261020_170409_70210a",
       "source": "raven-self-18-210408840666.jsonl",
       "subject": {
@@ -230,7 +230,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170427_7d4ddc.envelope.json",
+      "entry": "entries/acp-20261020_170427_7d4ddc.envelope.json",
       "session_id": "acp:20261020_170427_7d4ddc",
       "source": "raven-self-19-210426546333.jsonl",
       "subject": {
@@ -242,7 +242,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170234_198a84.envelope.json",
+      "entry": "entries/acp-20261020_170234_198a84.envelope.json",
       "session_id": "acp:20261020_170234_198a84",
       "source": "raven-self-2-210233694916.jsonl",
       "subject": {
@@ -254,7 +254,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170432_4dfab5.envelope.json",
+      "entry": "entries/acp-20261020_170432_4dfab5.envelope.json",
       "session_id": "acp:20261020_170432_4dfab5",
       "source": "raven-self-20-210431966458.jsonl",
       "subject": {
@@ -266,7 +266,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170438_d19559.envelope.json",
+      "entry": "entries/acp-20261020_170438_d19559.envelope.json",
       "session_id": "acp:20261020_170438_d19559",
       "source": "raven-self-21-210437354791.jsonl",
       "subject": {
@@ -278,7 +278,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170445_29433a.envelope.json",
+      "entry": "entries/acp-20261020_170445_29433a.envelope.json",
       "session_id": "acp:20261020_170445_29433a",
       "source": "raven-self-22-210444093958.jsonl",
       "subject": {
@@ -290,7 +290,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170511_690059.envelope.json",
+      "entry": "entries/acp-20261020_170511_690059.envelope.json",
       "session_id": "acp:20261020_170511_690059",
       "source": "raven-self-23-210510871041.jsonl",
       "subject": {
@@ -302,7 +302,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170519_db6846.envelope.json",
+      "entry": "entries/acp-20261020_170519_db6846.envelope.json",
       "session_id": "acp:20261020_170519_db6846",
       "source": "raven-self-24-210518004375.jsonl",
       "subject": {
@@ -314,7 +314,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170526_cca924.envelope.json",
+      "entry": "entries/acp-20261020_170526_cca924.envelope.json",
       "session_id": "acp:20261020_170526_cca924",
       "source": "raven-self-25-210525170000.jsonl",
       "subject": {
@@ -326,7 +326,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170535_f21940.envelope.json",
+      "entry": "entries/acp-20261020_170535_f21940.envelope.json",
       "session_id": "acp:20261020_170535_f21940",
       "source": "raven-self-26-210534727833.jsonl",
       "subject": {
@@ -338,7 +338,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170540_639e4f.envelope.json",
+      "entry": "entries/acp-20261020_170540_639e4f.envelope.json",
       "session_id": "acp:20261020_170540_639e4f",
       "source": "raven-self-27-210539580875.jsonl",
       "subject": {
@@ -350,7 +350,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170544_1f7f7b.envelope.json",
+      "entry": "entries/acp-20261020_170544_1f7f7b.envelope.json",
       "session_id": "acp:20261020_170544_1f7f7b",
       "source": "raven-self-28-210543151125.jsonl",
       "subject": {
@@ -362,7 +362,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170549_ba4fb7.envelope.json",
+      "entry": "entries/acp-20261020_170549_ba4fb7.envelope.json",
       "session_id": "acp:20261020_170549_ba4fb7",
       "source": "raven-self-29-210548395833.jsonl",
       "subject": {
@@ -374,7 +374,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170244_c322dc.envelope.json",
+      "entry": "entries/acp-20261020_170244_c322dc.envelope.json",
       "session_id": "acp:20261020_170244_c322dc",
       "source": "raven-self-3-210243762750.jsonl",
       "subject": {
@@ -386,7 +386,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170554_13e92e.envelope.json",
+      "entry": "entries/acp-20261020_170554_13e92e.envelope.json",
       "session_id": "acp:20261020_170554_13e92e",
       "source": "raven-self-30-210553613708.jsonl",
       "subject": {
@@ -398,7 +398,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170559_a1d9cb.envelope.json",
+      "entry": "entries/acp-20261020_170559_a1d9cb.envelope.json",
       "session_id": "acp:20261020_170559_a1d9cb",
       "source": "raven-self-31-210558516875.jsonl",
       "subject": {
@@ -410,7 +410,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170605_99a2ed.envelope.json",
+      "entry": "entries/acp-20261020_170605_99a2ed.envelope.json",
       "session_id": "acp:20261020_170605_99a2ed",
       "source": "raven-self-32-210604349208.jsonl",
       "subject": {
@@ -422,7 +422,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170617_f38b97.envelope.json",
+      "entry": "entries/acp-20261020_170617_f38b97.envelope.json",
       "session_id": "acp:20261020_170617_f38b97",
       "source": "raven-self-33-210616691166.jsonl",
       "subject": {
@@ -434,7 +434,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170624_82a7d2.envelope.json",
+      "entry": "entries/acp-20261020_170624_82a7d2.envelope.json",
       "session_id": "acp:20261020_170624_82a7d2",
       "source": "raven-self-34-210623298875.jsonl",
       "subject": {
@@ -446,7 +446,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170632_4b99cd.envelope.json",
+      "entry": "entries/acp-20261020_170632_4b99cd.envelope.json",
       "session_id": "acp:20261020_170632_4b99cd",
       "source": "raven-self-35-210631222208.jsonl",
       "subject": {
@@ -458,7 +458,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170644_c28f44.envelope.json",
+      "entry": "entries/acp-20261020_170644_c28f44.envelope.json",
       "session_id": "acp:20261020_170644_c28f44",
       "source": "raven-self-36-210643655833.jsonl",
       "subject": {
@@ -470,7 +470,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170650_db6f95.envelope.json",
+      "entry": "entries/acp-20261020_170650_db6f95.envelope.json",
       "session_id": "acp:20261020_170650_db6f95",
       "source": "raven-self-37-210649247083.jsonl",
       "subject": {
@@ -482,7 +482,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170657_fc3247.envelope.json",
+      "entry": "entries/acp-20261020_170657_fc3247.envelope.json",
       "session_id": "acp:20261020_170657_fc3247",
       "source": "raven-self-38-210656652750.jsonl",
       "subject": {
@@ -494,7 +494,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170702_b0e57b.envelope.json",
+      "entry": "entries/acp-20261020_170702_b0e57b.envelope.json",
       "session_id": "acp:20261020_170702_b0e57b",
       "source": "raven-self-39-210701975250.jsonl",
       "subject": {
@@ -506,7 +506,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170251_c25d2b.envelope.json",
+      "entry": "entries/acp-20261020_170251_c25d2b.envelope.json",
       "session_id": "acp:20261020_170251_c25d2b",
       "source": "raven-self-4-210250523333.jsonl",
       "subject": {
@@ -518,7 +518,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170709_59fa6c.envelope.json",
+      "entry": "entries/acp-20261020_170709_59fa6c.envelope.json",
       "session_id": "acp:20261020_170709_59fa6c",
       "source": "raven-self-40-210708769791.jsonl",
       "subject": {
@@ -530,7 +530,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170722_72bb0a.envelope.json",
+      "entry": "entries/acp-20261020_170722_72bb0a.envelope.json",
       "session_id": "acp:20261020_170722_72bb0a",
       "source": "raven-self-41-210721315125.jsonl",
       "subject": {
@@ -542,7 +542,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170727_b02ad5.envelope.json",
+      "entry": "entries/acp-20261020_170727_b02ad5.envelope.json",
       "session_id": "acp:20261020_170727_b02ad5",
       "source": "raven-self-42-210726104625.jsonl",
       "subject": {
@@ -554,7 +554,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170733_9697a7.envelope.json",
+      "entry": "entries/acp-20261020_170733_9697a7.envelope.json",
       "session_id": "acp:20261020_170733_9697a7",
       "source": "raven-self-43-210732496125.jsonl",
       "subject": {
@@ -566,7 +566,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170738_3faa63.envelope.json",
+      "entry": "entries/acp-20261020_170738_3faa63.envelope.json",
       "session_id": "acp:20261020_170738_3faa63",
       "source": "raven-self-44-210737291458.jsonl",
       "subject": {
@@ -578,7 +578,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170744_82b363.envelope.json",
+      "entry": "entries/acp-20261020_170744_82b363.envelope.json",
       "session_id": "acp:20261020_170744_82b363",
       "source": "raven-self-45-210743510000.jsonl",
       "subject": {
@@ -590,7 +590,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170748_4a95a1.envelope.json",
+      "entry": "entries/acp-20261020_170748_4a95a1.envelope.json",
       "session_id": "acp:20261020_170748_4a95a1",
       "source": "raven-self-46-210748868916.jsonl",
       "subject": {
@@ -602,7 +602,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170753_1c7aed.envelope.json",
+      "entry": "entries/acp-20261020_170753_1c7aed.envelope.json",
       "session_id": "acp:20261020_170753_1c7aed",
       "source": "raven-self-47-210752218833.jsonl",
       "subject": {
@@ -614,7 +614,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170757_d94f8a.envelope.json",
+      "entry": "entries/acp-20261020_170757_d94f8a.envelope.json",
       "session_id": "acp:20261020_170757_d94f8a",
       "source": "raven-self-48-210756741125.jsonl",
       "subject": {
@@ -626,7 +626,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170802_112fad.envelope.json",
+      "entry": "entries/acp-20261020_170802_112fad.envelope.json",
       "session_id": "acp:20261020_170802_112fad",
       "source": "raven-self-49-210801183500.jsonl",
       "subject": {
@@ -638,7 +638,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170256_033457.envelope.json",
+      "entry": "entries/acp-20261020_170256_033457.envelope.json",
       "session_id": "acp:20261020_170256_033457",
       "source": "raven-self-5-210256316125.jsonl",
       "subject": {
@@ -650,7 +650,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170808_f23c44.envelope.json",
+      "entry": "entries/acp-20261020_170808_f23c44.envelope.json",
       "session_id": "acp:20261020_170808_f23c44",
       "source": "raven-self-50-210807101375.jsonl",
       "subject": {
@@ -662,7 +662,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170815_9fe463.envelope.json",
+      "entry": "entries/acp-20261020_170815_9fe463.envelope.json",
       "session_id": "acp:20261020_170815_9fe463",
       "source": "raven-self-51-210814925291.jsonl",
       "subject": {
@@ -674,7 +674,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170820_bc594f.envelope.json",
+      "entry": "entries/acp-20261020_170820_bc594f.envelope.json",
       "session_id": "acp:20261020_170820_bc594f",
       "source": "raven-self-52-210819776833.jsonl",
       "subject": {
@@ -686,7 +686,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170827_8af9d6.envelope.json",
+      "entry": "entries/acp-20261020_170827_8af9d6.envelope.json",
       "session_id": "acp:20261020_170827_8af9d6",
       "source": "raven-self-53-210826869916.jsonl",
       "subject": {
@@ -698,7 +698,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170831_4ffcb8.envelope.json",
+      "entry": "entries/acp-20261020_170831_4ffcb8.envelope.json",
       "session_id": "acp:20261020_170831_4ffcb8",
       "source": "raven-self-54-210830088416.jsonl",
       "subject": {
@@ -710,7 +710,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170837_9d483a.envelope.json",
+      "entry": "entries/acp-20261020_170837_9d483a.envelope.json",
       "session_id": "acp:20261020_170837_9d483a",
       "source": "raven-self-55-210836244583.jsonl",
       "subject": {
@@ -722,7 +722,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170842_9c4b0b.envelope.json",
+      "entry": "entries/acp-20261020_170842_9c4b0b.envelope.json",
       "session_id": "acp:20261020_170842_9c4b0b",
       "source": "raven-self-56-210841967875.jsonl",
       "subject": {
@@ -734,7 +734,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170904_aa5356.envelope.json",
+      "entry": "entries/acp-20261020_170904_aa5356.envelope.json",
       "session_id": "acp:20261020_170904_aa5356",
       "source": "raven-self-57-210902749833.jsonl",
       "subject": {
@@ -746,7 +746,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170909_89ad59.envelope.json",
+      "entry": "entries/acp-20261020_170909_89ad59.envelope.json",
       "session_id": "acp:20261020_170909_89ad59",
       "source": "raven-self-58-210908770125.jsonl",
       "subject": {
@@ -758,7 +758,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170915_8bafdc.envelope.json",
+      "entry": "entries/acp-20261020_170915_8bafdc.envelope.json",
       "session_id": "acp:20261020_170915_8bafdc",
       "source": "raven-self-59-210913939000.jsonl",
       "subject": {
@@ -770,7 +770,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170303_8f06a1.envelope.json",
+      "entry": "entries/acp-20261020_170303_8f06a1.envelope.json",
       "session_id": "acp:20261020_170303_8f06a1",
       "source": "raven-self-6-210302316250.jsonl",
       "subject": {
@@ -782,7 +782,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170919_d0ecc1.envelope.json",
+      "entry": "entries/acp-20261020_170919_d0ecc1.envelope.json",
       "session_id": "acp:20261020_170919_d0ecc1",
       "source": "raven-self-60-210918183833.jsonl",
       "subject": {
@@ -794,7 +794,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170931_c5f470.envelope.json",
+      "entry": "entries/acp-20261020_170931_c5f470.envelope.json",
       "session_id": "acp:20261020_170931_c5f470",
       "source": "raven-self-61-210930599916.jsonl",
       "subject": {
@@ -806,7 +806,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170935_8cf6a1.envelope.json",
+      "entry": "entries/acp-20261020_170935_8cf6a1.envelope.json",
       "session_id": "acp:20261020_170935_8cf6a1",
       "source": "raven-self-62-210934536916.jsonl",
       "subject": {
@@ -818,7 +818,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170941_17c196.envelope.json",
+      "entry": "entries/acp-20261020_170941_17c196.envelope.json",
       "session_id": "acp:20261020_170941_17c196",
       "source": "raven-self-63-210940531666.jsonl",
       "subject": {
@@ -830,7 +830,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170957_c3c743.envelope.json",
+      "entry": "entries/acp-20261020_170957_c3c743.envelope.json",
       "session_id": "acp:20261020_170957_c3c743",
       "source": "raven-self-64-210951177041.jsonl",
       "subject": {
@@ -842,7 +842,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171008_ada9e8.envelope.json",
+      "entry": "entries/acp-20261020_171008_ada9e8.envelope.json",
       "session_id": "acp:20261020_171008_ada9e8",
       "source": "raven-self-65-211005322250.jsonl",
       "subject": {
@@ -854,7 +854,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171014_292863.envelope.json",
+      "entry": "entries/acp-20261020_171014_292863.envelope.json",
       "session_id": "acp:20261020_171014_292863",
       "source": "raven-self-66-211013838666.jsonl",
       "subject": {
@@ -866,7 +866,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171022_02fe7d.envelope.json",
+      "entry": "entries/acp-20261020_171022_02fe7d.envelope.json",
       "session_id": "acp:20261020_171022_02fe7d",
       "source": "raven-self-67-211020438083.jsonl",
       "subject": {
@@ -878,7 +878,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171032_660a28.envelope.json",
+      "entry": "entries/acp-20261020_171032_660a28.envelope.json",
       "session_id": "acp:20261020_171032_660a28",
       "source": "raven-self-68-211028247875.jsonl",
       "subject": {
@@ -890,7 +890,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171039_54bcf9.envelope.json",
+      "entry": "entries/acp-20261020_171039_54bcf9.envelope.json",
       "session_id": "acp:20261020_171039_54bcf9",
       "source": "raven-self-69-211037339125.jsonl",
       "subject": {
@@ -902,7 +902,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170309_e8c63b.envelope.json",
+      "entry": "entries/acp-20261020_170309_e8c63b.envelope.json",
       "session_id": "acp:20261020_170309_e8c63b",
       "source": "raven-self-7-210308710750.jsonl",
       "subject": {
@@ -914,7 +914,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171044_2453f3.envelope.json",
+      "entry": "entries/acp-20261020_171044_2453f3.envelope.json",
       "session_id": "acp:20261020_171044_2453f3",
       "source": "raven-self-70-211043943916.jsonl",
       "subject": {
@@ -926,7 +926,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171052_f2c8e3.envelope.json",
+      "entry": "entries/acp-20261020_171052_f2c8e3.envelope.json",
       "session_id": "acp:20261020_171052_f2c8e3",
       "source": "raven-self-71-211050815875.jsonl",
       "subject": {
@@ -938,7 +938,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171056_1b2a5a.envelope.json",
+      "entry": "entries/acp-20261020_171056_1b2a5a.envelope.json",
       "session_id": "acp:20261020_171056_1b2a5a",
       "source": "raven-self-72-211055471916.jsonl",
       "subject": {
@@ -950,7 +950,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171101_72f38f.envelope.json",
+      "entry": "entries/acp-20261020_171101_72f38f.envelope.json",
       "session_id": "acp:20261020_171101_72f38f",
       "source": "raven-self-73-211100095750.jsonl",
       "subject": {
@@ -962,7 +962,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171108_4eadbc.envelope.json",
+      "entry": "entries/acp-20261020_171108_4eadbc.envelope.json",
       "session_id": "acp:20261020_171108_4eadbc",
       "source": "raven-self-74-211107860541.jsonl",
       "subject": {
@@ -974,7 +974,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171114_fe1cf2.envelope.json",
+      "entry": "entries/acp-20261020_171114_fe1cf2.envelope.json",
       "session_id": "acp:20261020_171114_fe1cf2",
       "source": "raven-self-75-211113302958.jsonl",
       "subject": {
@@ -986,7 +986,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171119_2eb0e6.envelope.json",
+      "entry": "entries/acp-20261020_171119_2eb0e6.envelope.json",
       "session_id": "acp:20261020_171119_2eb0e6",
       "source": "raven-self-76-211118068166.jsonl",
       "subject": {
@@ -998,7 +998,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171125_d81637.envelope.json",
+      "entry": "entries/acp-20261020_171125_d81637.envelope.json",
       "session_id": "acp:20261020_171125_d81637",
       "source": "raven-self-77-211124555791.jsonl",
       "subject": {
@@ -1010,7 +1010,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171130_8495bc.envelope.json",
+      "entry": "entries/acp-20261020_171130_8495bc.envelope.json",
       "session_id": "acp:20261020_171130_8495bc",
       "source": "raven-self-78-211129162958.jsonl",
       "subject": {
@@ -1022,7 +1022,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171136_08cc27.envelope.json",
+      "entry": "entries/acp-20261020_171136_08cc27.envelope.json",
       "session_id": "acp:20261020_171136_08cc27",
       "source": "raven-self-79-211135719250.jsonl",
       "subject": {
@@ -1034,7 +1034,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170315_a47edd.envelope.json",
+      "entry": "entries/acp-20261020_170315_a47edd.envelope.json",
       "session_id": "acp:20261020_170315_a47edd",
       "source": "raven-self-8-210314191416.jsonl",
       "subject": {
@@ -1046,7 +1046,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171141_29c15a.envelope.json",
+      "entry": "entries/acp-20261020_171141_29c15a.envelope.json",
       "session_id": "acp:20261020_171141_29c15a",
       "source": "raven-self-80-211140702916.jsonl",
       "subject": {
@@ -1058,7 +1058,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171147_57a0f5.envelope.json",
+      "entry": "entries/acp-20261020_171147_57a0f5.envelope.json",
       "session_id": "acp:20261020_171147_57a0f5",
       "source": "raven-self-81-211146493125.jsonl",
       "subject": {
@@ -1070,7 +1070,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171152_0a9238.envelope.json",
+      "entry": "entries/acp-20261020_171152_0a9238.envelope.json",
       "session_id": "acp:20261020_171152_0a9238",
       "source": "raven-self-82-211151166291.jsonl",
       "subject": {
@@ -1082,7 +1082,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171201_e9ca55.envelope.json",
+      "entry": "entries/acp-20261020_171201_e9ca55.envelope.json",
       "session_id": "acp:20261020_171201_e9ca55",
       "source": "raven-self-83-211159611583.jsonl",
       "subject": {
@@ -1094,7 +1094,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171205_310f19.envelope.json",
+      "entry": "entries/acp-20261020_171205_310f19.envelope.json",
       "session_id": "acp:20261020_171205_310f19",
       "source": "raven-self-84-211204838250.jsonl",
       "subject": {
@@ -1106,7 +1106,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171209_61dc8b.envelope.json",
+      "entry": "entries/acp-20261020_171209_61dc8b.envelope.json",
       "session_id": "acp:20261020_171209_61dc8b",
       "source": "raven-self-85-211208937125.jsonl",
       "subject": {
@@ -1118,7 +1118,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171215_0d6928.envelope.json",
+      "entry": "entries/acp-20261020_171215_0d6928.envelope.json",
       "session_id": "acp:20261020_171215_0d6928",
       "source": "raven-self-86-211214003875.jsonl",
       "subject": {
@@ -1130,7 +1130,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171219_61fdf2.envelope.json",
+      "entry": "entries/acp-20261020_171219_61fdf2.envelope.json",
       "session_id": "acp:20261020_171219_61fdf2",
       "source": "raven-self-87-211218544000.jsonl",
       "subject": {
@@ -1142,7 +1142,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171224_e8b9a1.envelope.json",
+      "entry": "entries/acp-20261020_171224_e8b9a1.envelope.json",
       "session_id": "acp:20261020_171224_e8b9a1",
       "source": "raven-self-88-211223414958.jsonl",
       "subject": {
@@ -1154,7 +1154,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171230_221a8d.envelope.json",
+      "entry": "entries/acp-20261020_171230_221a8d.envelope.json",
       "session_id": "acp:20261020_171230_221a8d",
       "source": "raven-self-89-211229637000.jsonl",
       "subject": {
@@ -1166,7 +1166,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_170321_8dc9c4.envelope.json",
+      "entry": "entries/acp-20261020_170321_8dc9c4.envelope.json",
       "session_id": "acp:20261020_170321_8dc9c4",
       "source": "raven-self-9-210320934583.jsonl",
       "subject": {
@@ -1178,7 +1178,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171235_fd7de3.envelope.json",
+      "entry": "entries/acp-20261020_171235_fd7de3.envelope.json",
       "session_id": "acp:20261020_171235_fd7de3",
       "source": "raven-self-90-211234640875.jsonl",
       "subject": {
@@ -1190,7 +1190,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171241_8c1654.envelope.json",
+      "entry": "entries/acp-20261020_171241_8c1654.envelope.json",
       "session_id": "acp:20261020_171241_8c1654",
       "source": "raven-self-91-211240258666.jsonl",
       "subject": {
@@ -1202,7 +1202,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171247_236132.envelope.json",
+      "entry": "entries/acp-20261020_171247_236132.envelope.json",
       "session_id": "acp:20261020_171247_236132",
       "source": "raven-self-92-211246935583.jsonl",
       "subject": {
@@ -1214,7 +1214,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171252_06411a.envelope.json",
+      "entry": "entries/acp-20261020_171252_06411a.envelope.json",
       "session_id": "acp:20261020_171252_06411a",
       "source": "raven-self-93-211251683041.jsonl",
       "subject": {
@@ -1226,7 +1226,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171258_b9b9d9.envelope.json",
+      "entry": "entries/acp-20261020_171258_b9b9d9.envelope.json",
       "session_id": "acp:20261020_171258_b9b9d9",
       "source": "raven-self-94-211257501958.jsonl",
       "subject": {
@@ -1238,7 +1238,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171305_4a5a38.envelope.json",
+      "entry": "entries/acp-20261020_171305_4a5a38.envelope.json",
       "session_id": "acp:20261020_171305_4a5a38",
       "source": "raven-self-95-211304809083.jsonl",
       "subject": {
@@ -1250,7 +1250,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171310_eaaaa1.envelope.json",
+      "entry": "entries/acp-20261020_171310_eaaaa1.envelope.json",
       "session_id": "acp:20261020_171310_eaaaa1",
       "source": "raven-self-96-211309227625.jsonl",
       "subject": {
@@ -1262,7 +1262,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171315_f68b4a.envelope.json",
+      "entry": "entries/acp-20261020_171315_f68b4a.envelope.json",
       "session_id": "acp:20261020_171315_f68b4a",
       "source": "raven-self-97-211314134333.jsonl",
       "subject": {
@@ -1274,7 +1274,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171319_e1dd92.envelope.json",
+      "entry": "entries/acp-20261020_171319_e1dd92.envelope.json",
       "session_id": "acp:20261020_171319_e1dd92",
       "source": "raven-self-98-211318469833.jsonl",
       "subject": {
@@ -1286,7 +1286,7 @@
       "predicate_type": "https://evermind.ai/attestation/agent-run/v1"
     },
     {
-      "entry": "entries/acp:20261020_171324_7b3267.envelope.json",
+      "entry": "entries/acp-20261020_171324_7b3267.envelope.json",
       "session_id": "acp:20261020_171324_7b3267",
       "source": "raven-self-99-211323985416.jsonl",
       "subject": {
