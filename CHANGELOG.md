@@ -358,6 +358,21 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- The TUI no longer loses or scrambles the rest of a line after an emoji
+  made of several code points, such as the black bird (U+1F426 U+200D
+  U+2B1B) the assistant signs with, a skin-tone modifier or a flag. The
+  layout gives such a glyph two columns, but Terminal.app walks its code
+  points and advances five for the bird (eight for a three-person family),
+  xterm.js and pyte four, so every cell the renderer wrote after it on that
+  row landed that far to the right: a Chinese reply showed whole spans
+  missing or replaced by stale thinking text, while a reply without the
+  emoji was fine. The renderer now pins the cursor to the column after any
+  multi-code-point glyph, the way it already did for new emoji and VS16
+  sequences, and writes the glyph with auto-wrap off so a terminal that
+  overruns near the right margin clamps on the same row instead of wrapping
+  the rest of the frame one row down. Terminals that size the glyph
+  correctly see no change.
+
 - A continued DAG node is judged against what it was told after an attempt
   fell short, not only against its first prompt. The judge read the task as
   first given and nothing else, so when the user answered a stuck node by
