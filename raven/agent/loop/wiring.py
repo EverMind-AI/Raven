@@ -342,13 +342,57 @@ class WiringMixin:
         folder supplying nothing is configured from the host's
         ``tools.media.image`` -- so the two readers cannot disagree about a lane
         that was going to inherit anyway.
+
+        A folder pinning its pictures to a provider is answered for that provider
+        (:meth:`_pinned_lane_generates_images`).
         """
-        from raven.agent.subagent.vendored_agents import product_image_key
+        from raven.agent.subagent.vendored_agents import product_image_key, product_image_pin
         from raven.agent.tools.media_gen import _OpenRouterMediaTool
 
+        host = self._live_media_config("image", self.media_config.image)
+        provider, model = product_image_pin(target)
+        if provider:
+            return self._pinned_lane_generates_images(target, provider, model, host)
         if product_image_key(target):
             return True
-        return _OpenRouterMediaTool.has_key(self._live_media_config("image", self.media_config.image))
+        return _OpenRouterMediaTool.has_key(host)
+
+    def _pinned_lane_generates_images(self, target: str, provider: str, model: str, host) -> bool:
+        """Whether a lane pinned to ``provider`` draws, by the launcher's rule for the pin.
+
+        A mirror of ``configure_image_generation`` in the product launchers, not a
+        call into it: a launcher can run on an older raven, so the rule is stated
+        twice and a test renders each case through both. The launcher refuses a
+        provider the image tool cannot run on, and a switch off the host's image
+        provider without a model of the lane's own. A switch leaves the host's
+        image key behind with the rest of its endpoint: the lane pays with its own
+        image key or the host's key for the provider it switched to, and with no
+        key at a base of its own. Only OpenRouter takes the key that pays for the
+        lane's words, which on the lane's own key is the only OpenRouter key its
+        render holds. Read-only, like every readiness question.
+        """
+        from raven.agent.subagent.vendored_agents import product_image_key, product_llm_key, product_secret
+        from raven.agent.tools.media_gen import _OpenRouterMediaTool
+        from raven.config.schema import live_media_tool_config, media_provider
+        from raven.providers.registry import canonical_provider_name, find_by_name
+
+        wanted = canonical_provider_name(provider)
+        spec = find_by_name(wanted)
+        if spec is None or not getattr(spec, "image_api", False):
+            return False
+        runs_on = media_provider(host) if host is not None else ""
+        if wanted != runs_on and not model:
+            return False
+        if product_image_key(target):
+            return True
+        if product_secret(target, "IMAGE_API_BASE"):
+            return False
+        if wanted == runs_on:
+            return _OpenRouterMediaTool.has_key(host)
+        if wanted == "openrouter" and product_llm_key(target):
+            return False
+        found = live_media_tool_config({"provider": wanted, "model": model}, self._live_config.get("providers"))
+        return _OpenRouterMediaTool.has_key(found)
 
     def _lane_searches_images(self, target: str) -> bool:
         """Whether ``target`` can search for pictures: its vendor's key, its own or the host's.

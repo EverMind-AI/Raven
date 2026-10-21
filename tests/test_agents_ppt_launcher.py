@@ -1208,6 +1208,56 @@ def test_a_deck_provider_it_cannot_draw_on_draws_nothing_and_says_what_to_set(
     assert _deck_draws(rendered, tmp_path, monkeypatch) == []
 
 
+def _routing_gate_draws(tmp_path: Path, monkeypatch) -> bool:
+    """What the host's routing gate answers for this lane's ``image_generation``,
+    reading the same host file and the same settings the launcher just read."""
+    from raven.agent.loop import AgentLoop
+    from raven.agent.subagent import vendored_agents
+    from raven.config.live import LiveConfig
+    from raven.providers.base import LLMProvider, LLMResponse
+
+    class _Stub(LLMProvider):
+        async def chat(self, messages, **kwargs):  # noqa: ANN001, ANN003, ANN201
+            return LLMResponse(content="stub", finish_reason="stop")
+
+        def get_default_model(self) -> str:
+            return "stub"
+
+    monkeypatch.setattr(vendored_agents, "agents_root", lambda: REPO / "agents")
+    loop = AgentLoop(provider=_Stub(api_key="test"), workspace=tmp_path / "loop", model="stub")
+    loop._live_config = LiveConfig(tmp_path / "home" / "config.json")
+    return loop._routed_target_ready("Raven-PPT", ("image_generation",))
+
+
+def _pinned_cases():
+    from tests.test_subagent_routed_lane_readiness import PINNED_CASES
+
+    return PINNED_CASES
+
+
+@pytest.mark.parametrize(("host", "settings", "expected"), _pinned_cases())
+def test_the_routing_gate_opens_exactly_where_the_deck_draws(grounded, tmp_path, monkeypatch, host, settings, expected):
+    """The gate mirrors this launcher's pinned-provider rule rather than calling it,
+    since this file can run on an older raven; this holds the two copies equal."""
+    monkeypatch.delenv("PPT_API_KEY")
+    for name, value in settings.items():
+        monkeypatch.setenv(f"PPT_{name}", value)
+    providers = host.get("providers") or {}
+    image = host.get("image")
+    config: dict = {"providers": providers}
+    if image is not None:
+        config["tools"] = {"media": {"image": image}}
+    if providers and "API_KEY" not in settings:
+        config["agents"] = {"defaults": {"provider": next(iter(providers)), "model": "vendor/model"}}
+    (tmp_path / "home").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "home" / "config.json").write_text(json.dumps(config))
+
+    rendered = grounded.render_config(RUN_PY.parent / "config.json")
+    drew = bool(_deck_draws(rendered, tmp_path, monkeypatch))
+    assert drew is expected
+    assert _routing_gate_draws(tmp_path, monkeypatch) is drew
+
+
 def test_a_pinned_section_s_own_file_is_owner_only_and_goes_with_its_render(grounded, tmp_path, monkeypatch):
     """The file holds the deck's image key, so it is written the way the render is and
     swept when the render is: named by the pid that reads it."""

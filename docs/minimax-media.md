@@ -78,6 +78,11 @@ provider, and then `PPT_IMAGE_MODEL` is too. On a host already on MiniMax,
 without `PPT_IMAGE_PROVIDER` is called as an OpenAI-compatible endpoint, which
 MiniMax's address is not.
 
+A route that hands a deck to Raven-PPT opens only when the deck can draw, and it reads
+these settings the way the launcher does: a deck on a provider of its own is ready with
+`PPT_IMAGE_API_KEY` or the host's key for that provider, never with the host's image
+key for another one.
+
 ## References
 
 - [Image generation](https://platform.minimax.io/docs/api-reference/image-generation-t2i)
