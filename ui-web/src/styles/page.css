@@ -156,6 +156,21 @@
   --step-2:  22px;
   --step-3:  30px;
 
+  /* The conversation surface's type, in one place: the rail's rows, the
+     conversation's name, a reply and the lines folded into it, its headings,
+     a table or a listing, inline code, and the controls under the composer.
+     The body a reply is read at sets the scale -- the rail and a table sit one
+     step under it, the name one over, a heading two over -- so moving the
+     surface is moving these, not hunting its rules. The rest of the page still
+     spells its sizes per rule. */
+  --fs-rail:  14px;
+  --fs-title: 16px;
+  --fs-body:  15px;
+  --fs-head:  17px;
+  --fs-dense: 14px;
+  --fs-code:  13.5px;
+  --fs-ctl:   13px;
+
   /* Both panel widths are draggable, so they are variables the grip writes to.
      The bounds live in PANE next to the drag code, where they can also be
      clamped against the window. */
@@ -760,7 +775,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 }
 .rail-foot .me .av.anon svg { width: 16px; height: 16px; }
 .rail-foot .me .who { flex: 1; min-width: 0; display: grid; }
-.rail-foot .me .who .n { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-foot .me .who .n { font-size: var(--fs-rail); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rail-foot .me .who .s {
   font-family: var(--mono); font-size: 10.5px; color: var(--faint);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -833,7 +848,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .navi, .sess {
   position: relative; display: flex; align-items: center; gap: 8px; width: 100%;
   height: 32px; padding: 0 8px; border-radius: 8px; text-align: left; cursor: pointer;
-  font-size: 13px; color: var(--rail-ink);
+  font-size: var(--fs-rail); color: var(--rail-ink);
 }
 /* A row's label is the page's own text colour, and the glyph beside it is the
    quiet one: the list reads as a list of names, with the icons as marks against
@@ -901,7 +916,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    The frame is padding pulled back by a negative margin, so the text sits
    where it did and the tag beside it stays close. */
 .top h1 {
-  font-size: 15px; font-weight: 500; margin: 0 0 0 -6px; padding: 2px 6px; min-width: 0; max-width: 52%;
+  font-size: var(--fs-title); font-weight: 500; margin: 0 0 0 -6px; padding: 2px 6px; min-width: 0; max-width: 52%;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: text; border-radius: 6px;
   transition: background .12s;
 }
@@ -922,7 +937,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .top .titin {
   max-width: min(420px, 52%); background: var(--ink);
   border: 1px solid var(--faint); border-radius: 6px; margin: 0 0 0 -6px; padding: 1px 5px; outline: 0;
-  font-size: 15px; font-weight: 500; color: var(--text); font-family: inherit;
+  font-size: var(--fs-title); font-weight: 500; color: var(--text); font-family: inherit;
 }
 .top .spacer { flex: 1; min-width: 0; }
 /* The workspace toggle is the rail toggle mirrored -- same icon, divider on the
@@ -1219,10 +1234,11 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .turn.ai { align-self: stretch; width: 100%; max-width: 760px; margin-right: auto; gap: 6px; }
 /* The design's bubble (Figma: Raven / UserMessage): #333 at a 12px radius, and
    the reply's 1.8 line so a long question reads at the same measure as its
-   answer. The inset is what keeps a one-liner at the design's 40px. */
+   answer. The inset is what keeps a one-liner at the design's 40px: it is
+   (40px - 1.8 lines of the body) / 2, so it moves when --fs-body does. */
 .msg.me {
   background: var(--bubble-me); color: var(--bubble-me-fg);
-  border-radius: 12px; padding: 7.4px 12px; font-size: 14px; line-height: 1.8;
+  border-radius: 12px; padding: 6.5px 12px; font-size: var(--fs-body); line-height: 1.8;
   white-space: pre-wrap; overflow-wrap: break-word;
 }
 /* A white card on the wash, flat the way the design lays it (Figma: Raven /
@@ -1233,7 +1249,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .msg.ai {
   display: flex; flex-direction: column; gap: 12px; min-width: 0;
   background: var(--ink); border-radius: 12px; padding: 16px;
-  font-size: 14px; line-height: 26px;
+  font-size: var(--fs-body); line-height: 26px;
   box-shadow: 0 0 0 1px var(--ring); color: var(--chat-ink);
 }
 .msg.ai > .tfold, .msg.ai > .step, .msg.ai > .answer, .msg.ai > .sdlv { margin: 0; }
@@ -1732,7 +1748,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    underneath, so the gap stays small enough to read as one block. */
 .tfh {
   display: flex; align-items: center; gap: 4px; width: fit-content; max-width: 100%;
-  text-align: left; color: var(--chat-quiet); font-size: 14px; line-height: 22px;
+  text-align: left; color: var(--chat-quiet); font-size: var(--fs-body); line-height: 22px;
   padding: 0; margin: 0;
   border: 0; border-radius: 0; background: none; cursor: pointer;
 }
@@ -1747,8 +1763,8 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    different greys, which made three lines of the same kind read as three kinds
    of thing. Declared together so they cannot drift again: change the size here
    and every line of the kind moves with it. */
-.think, .tfh, .wrow.sum { font-size: 14px; color: var(--chat-quiet); }
-.tfh .tm { color: var(--chat-quiet); font-size: 14px; font-variant-numeric: tabular-nums; }
+.think, .tfh, .wrow.sum { font-size: var(--fs-body); color: var(--chat-quiet); }
+.tfh .tm { color: var(--chat-quiet); font-size: var(--fs-body); font-variant-numeric: tabular-nums; }
 /* An empty clock still spends its flex gap, which pushed the caret one whole
    gap further from the label on every line whose time happened to be blank --
    two folds side by side then looked like two different components. */
@@ -2019,14 +2035,15 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
 .prose { line-height: 1.8; overflow-wrap: break-word; }
 .prose > :first-child { margin-top: 0; }
 .prose > :last-child { margin-bottom: 0; }
-/* A reply's own type (Figma: Raven / AssistantMessage): 14/1.8 prose with 8px
-   between paragraphs, and a 16/22 semibold heading in the same face. */
+/* A reply's own type (Figma: Raven / AssistantMessage, one step up -- see
+   --fs-body): 15/1.8 prose with 8px between paragraphs, and a 17/22 semibold
+   heading in the same face. */
 .msg.ai .prose { color: var(--chat-ink); }
 .prose h2 {
-  font-family: var(--sans); font-size: 16px; line-height: 22px; font-weight: 600;
+  font-family: var(--sans); font-size: var(--fs-head); line-height: 22px; font-weight: 600;
   letter-spacing: 0; margin: 20px 0 12px; text-wrap: balance;
 }
-.prose h3 { font-size: 14px; line-height: 22px; font-weight: 600; margin: 16px 0 8px; color: inherit; }
+.prose h3 { font-size: var(--fs-body); line-height: 22px; font-weight: 600; margin: 16px 0 8px; color: inherit; }
 .prose p { margin: 8px 0; }
 .prose .brk { height: 14px; }
 .prose ul, .prose ol { margin: 8px 0; padding-left: 18px; }
@@ -2062,14 +2079,14 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
 }
 .prose strong { color: var(--text); font-weight: 650; }
 .prose code {
-  font-family: var(--mono); font-size: 12.5px; background: var(--raised);
+  font-family: var(--mono); font-size: var(--fs-code); background: var(--raised);
   padding: 1px 5px; border-radius: 4px;
 }
 /* Code is content, not a caption: it reads at text weight in the design's
    listing box (Figma: Raven / AssistantMessage, the code variant) -- the table's
-   head ground, its half-pixel rule and radius, 13/1.8 mono. */
+   head ground, its half-pixel rule and radius, 14/1.8 mono (--fs-dense). */
 .prose pre {
-  font-family: var(--mono); font-size: 13px; line-height: 1.8; margin: 16px 0;
+  font-family: var(--mono); font-size: var(--fs-dense); line-height: 1.8; margin: 16px 0;
   background: var(--chat-head); border: .5px solid var(--chat-rule); border-radius: 12px;
   color: var(--chat-ink); padding: 10px 16px; overflow-x: auto; tab-size: 2;
 }
@@ -2114,7 +2131,7 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
   height: 40px; padding: 0 7px 0 16px; background: var(--chat-head);
 }
 .cblang {
-  font-family: var(--mono); font-size: 13px; font-weight: 500; line-height: 26px;
+  font-family: var(--mono); font-size: var(--fs-dense); font-weight: 500; line-height: 26px;
   color: var(--chat-file-ink); text-transform: uppercase;
 }
 .cblang::before { content: '< '; }
@@ -2198,12 +2215,12 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
 .prose a:hover { text-decoration-color: var(--link); }
 /* The design's table (Figma: Raven / AssistantMessage, the table variant): one
    half-pixel rule boxing it at a 12px radius and dividing every cell, a head
-   row on the page's grey, and 40px rows of 13/26 text. The cells wrap --
+   row on the page's grey, and 40px rows of 14/26 text (--fs-dense). The cells wrap --
    models routinely put a whole sentence in one, and nowrap turned a table that
    fitted into one that scrolls sideways; the head row does not, so a column
    is never narrower than its own name. */
 .tw { overflow-x: auto; margin: 16px 0; border: .5px solid var(--chat-rule); border-radius: 12px; }
-.prose table { border-collapse: collapse; width: 100%; font-size: 13px; line-height: 26px; }
+.prose table { border-collapse: collapse; width: 100%; font-size: var(--fs-dense); line-height: 26px; }
 .prose th, .prose td {
   padding: 7px 16px; text-align: left; vertical-align: top;
   border: 0; border-right: .5px solid var(--chat-rule);
@@ -2218,13 +2235,13 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
 .prose th code {
   background: none; padding: 0; font-size: inherit; color: inherit;
 }
-/* Same reasoning inside a heading: a 12.5px filled box under a 16px heading
+/* Same reasoning inside a heading: a 13.5px filled box under a 17px heading
    sits below its cap line and reads as debris. */
 .prose h2 code, .prose h3 code { background: none; padding: 0; font-size: inherit; }
 /* In a data cell the chip is the only thing marking the value as code, so it
    stays -- just tight enough that a lone identifier sits on the same line as
    the plain text in the cell beside it. */
-.prose td code { font-size: 12px; padding: 0 4px; }
+.prose td code { font-size: 13px; padding: 0 4px; }
 
 .caret { display: inline-block; width: 7px; height: 14px; background: var(--amber);
   vertical-align: -2px; animation: bl 1.1s steps(2, end) infinite; }
@@ -2384,11 +2401,11 @@ textarea {
   min-height: 46px; max-height: min(200px, 24vh); padding: 2px 0; line-height: 1.6;
 }
 textarea::placeholder { color: var(--faint); }
-/* The composer's own field: the design's 14/26 body, two lines at rest and
+/* The composer's own field: the reply's 15/26 body (--fs-body), two lines at rest and
    about eleven before it scrolls -- still viewport-bounded, so a short window
    keeps the transcript it is writing about. */
 .dock-in textarea {
-  font-size: 14px; line-height: 26px; padding: 0; color: var(--composer-ink);
+  font-size: var(--fs-body); line-height: 26px; padding: 0; color: var(--composer-ink);
   min-height: 52px; max-height: min(286px, 36vh);
 }
 .dock-in textarea::placeholder { color: var(--composer-ph); }
@@ -2493,7 +2510,7 @@ textarea:focus, textarea:focus-visible,
 /* Each is a 30px row that turns into a pill under the pointer (Figma: Raven /
    attachment-01): quiet grey words at rest, the secondary ink on hover. */
 .under .chip {
-  font-family: var(--sans); font-size: 12px; height: 30px; padding: 0 12px; gap: 6px;
+  font-family: var(--sans); font-size: var(--fs-ctl); height: 30px; padding: 0 12px; gap: 6px;
   border-radius: 12px; color: var(--rail-quiet);
 }
 .under .chip:hover, .under .chip[aria-expanded="true"] {
