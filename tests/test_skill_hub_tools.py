@@ -49,7 +49,7 @@ class _FakeRegistry:
         return [name for _, name in self._metas]
 
     def layer_roots(self) -> list[tuple[Path, str]]:
-        return []
+        return [(Path("/fake/home/skills"), "workspace")]
 
 
 class _FakeClient:

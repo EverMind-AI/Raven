@@ -101,8 +101,7 @@ def _local_miss_hint(registry: "SkillRegistry | None", native: str, blocked: fro
             if close:
                 sentences.append("Closest local ids: " + ", ".join(f"local/{name}" for name in close) + ".")
         roots = ", ".join(str(root) for root, _ in registry.layer_roots())
-        if roots:
-            sentences.append(f"Local ids cover only the skills under {roots}.")
+        sentences.append(f"Local ids cover only the skills under {roots}.")
     sentences.append("A SKILL.md you found outside Raven's skill directories has no id: read that file with read_file.")
     return " ".join(sentences)
 
