@@ -347,6 +347,18 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- The `<agent>-Mirasim` presets reach the Mirasim host again. The adapter sent
+  the host's access token in a header, which a Mirasim host from 0.0.571 on
+  answers with 401 (measured against 0.0.571, 0.0.576 and 0.0.585; the hosts
+  the adapter was written against, 0.0.537 to 0.0.558, read the header), so
+  every row's Test ended in a refusal the roster read as the agent needing a
+  sign-in. The token now travels in the upgrade request's query, where the
+  host reads it and where Mirasim's own clients send it, and in the header as
+  well; the one URL that carries it is never logged or quoted, a refused
+  upgrade is worded from its status, and a host that turns the token away is
+  told apart from one that is not running, in words the roster does not read
+  as a sign-in.
+
 - What an agent on a registered machine writes on stderr reaches Raven even
   when no link held the agent at the time. The node kept those lines but, when
   a link attached, replayed only the agent's output: a run picked up after a

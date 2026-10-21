@@ -124,10 +124,16 @@ class FakeHost:
         self,
         *,
         token: str | None = None,
+        token_in: str = "query",
         version: str = "0.0.537",
         respond: Callable[[dict[str, Any], FakeSession], list[Step]] = echo,
     ) -> None:
         self.token = token
+        self.token_in = token_in
+        """Where the upgrade's token is read: ``query`` as hosts from 0.0.571 on read it (a token in the
+        header alone is refused, as they refuse it), or ``header`` as the hosts before them read it."""
+        self.upgrades: list[dict[str, str | None]] = []
+        """What each upgrade request carried: the ``header`` token and the ``query`` token, ``None`` when absent."""
         self.version = version
         self.respond = respond
         self.rows: list[dict[str, Any]] = [dict(row) for row in ROWS]
@@ -230,7 +236,9 @@ class FakeHost:
         return web.json_response({"ok": True, "name": "mirasim", "version": self.version, "pid": 1})
 
     async def _ws(self, request: web.Request) -> web.StreamResponse:
-        if self.token is not None and request.headers.get("x-mirasim-token") != self.token:
+        self.upgrades.append({"header": request.headers.get("x-mirasim-token"), "query": request.query.get("token")})
+        given = request.query.get("token") if self.token_in == "query" else request.headers.get("x-mirasim-token")
+        if self.token is not None and given != self.token:
             return web.Response(status=401, text="unauthorized")
         ws = web.WebSocketResponse(max_msg_size=64 * 1024 * 1024)
         await ws.prepare(request)
