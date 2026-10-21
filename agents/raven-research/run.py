@@ -141,6 +141,13 @@ REQUIRED_SECRETS = ("RESEARCH_API_KEY",)
 PROXY_ENV = "RESEARCH_WEB_PROXY"
 PROXY_SLOT = ("tools", "web", "proxy")
 
+# Where this product's own state lands: the workspace, the rendered config and
+# the flow's store under the first, the ACP engine's Agent home under the
+# second. Named here so a caller that launches this launcher hands its own
+# values through by name.
+STATE_ROOT_ENV = "RESEARCH_NG_STATE_ROOT"
+ACP_HOME_ENV = "RESEARCH_NG_ACP_HOME"
+
 # The research-flow plugin REPLACES web_search and web_fetch, and a plugin
 # factory is handed its own config slice and nothing else -- it never sees
 # tools.web. So every value resolved above has to reach that slice too, under
@@ -160,6 +167,19 @@ PLUGIN_WEB_MIRROR = {
 # vendor; pinned against raven/agent/tools/web.py by
 # tests/test_agents_research_launcher.py.
 SEARCH_ENV_VAR = WEB_VENDOR_ENV_VARS[DEFAULT_SEARCH_VENDOR]
+
+# Every environment variable this launcher reads, so a caller that launches it
+# can hand the caller's own values through instead of naming them one by one.
+# The secret slots carry one name per web vendor, so the SELECTED vendor's key
+# is among them whichever vendor is selected.
+LAUNCH_ENV_VARS = (
+    *SECRET_SLOTS,
+    SEARCH_PROVIDER_ENV,
+    FETCH_PROVIDER_ENV,
+    PROXY_ENV,
+    STATE_ROOT_ENV,
+    ACP_HOME_ENV,
+)
 
 
 def vendor_key(config: dict, vendor: str) -> str:
@@ -201,7 +221,7 @@ def env_value(name: str) -> str | None:
 
 def state_root() -> Path:
     """Everything this product persists lands here, never in this folder."""
-    return render.product_state_root(PRODUCT, override=env_value("RESEARCH_NG_STATE_ROOT"))
+    return render.product_state_root(PRODUCT, override=env_value(STATE_ROOT_ENV))
 
 
 def log(message: str) -> None:
@@ -394,7 +414,7 @@ def render_config(source: Path) -> Path:
     # overrides (the NG spelling matches this product's own state variable).
     # The state root keeps the work (research_flow store, rendered configs).
     if not defaults.get("workspace"):
-        defaults["workspace"] = str(render.product_acp_home(PRODUCT, override=env_value("RESEARCH_NG_ACP_HOME")))
+        defaults["workspace"] = str(render.product_acp_home(PRODUCT, override=env_value(ACP_HOME_ENV)))
 
     plugins = config.setdefault("plugins", {})
     plugins["dirs"] = [str(PLUGINS_DIR)]

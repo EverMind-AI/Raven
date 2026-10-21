@@ -15,9 +15,8 @@ what comes back is what a person would have got.
 
 The search vendor is whatever the agent's own configuration names, and the
 launcher refuses to start without a key for it. ``RESEARCH_WEB_SEARCH_PROVIDER``
-picks it; the key comes from ``RESEARCH_<VENDOR>_API_KEY``. This branch
-adds TinyFish to the vendor table, so ``RESEARCH_WEB_SEARCH_PROVIDER=tinyfish``
-with ``RESEARCH_TINYFISH_API_KEY`` is a working, free pair.
+picks it; the key comes from ``RESEARCH_<VENDOR>_API_KEY``, for whichever
+vendor is picked - TinyFish among them.
 
 The frames are journalled, so a run leaves the same trace a person-driven
 turn leaves, and the corpus builder can attest to it like any other.
@@ -27,10 +26,16 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import functools
+import importlib.util
 import json
 import os
 import sys
 from pathlib import Path
+from types import ModuleType
+
+from raven.contracts.path_policy import HOME_ENV_VAR
+from raven.home import raven_home
 
 HERE = Path(__file__).resolve().parent
 #: The launcher this drives. It is the agent's own entry point; nothing here
@@ -49,19 +54,41 @@ DEFAULT_STATE_ROOT = Path(
 )
 
 
+@functools.lru_cache(maxsize=1)
+def launcher() -> ModuleType:
+    """The launcher, loaded as a module.
+
+    The launcher is a script beside this one, and the driver reads the names
+    of the settings it honours from it rather than keeping a list of its own:
+    a vendor added to the launcher's table then reaches the agent without an
+    edit here.
+    """
+    spec = importlib.util.spec_from_file_location("raven_research_launcher", LAUNCHER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def agent_env(extra: dict[str, str] | None = None) -> dict[str, str]:
     """The environment the agent process is given.
 
-    The search and fetch vendors are the agent's own settings, so they are
-    passed through rather than chosen here. The OAuth token directory is
-    passed because the host's model is reached by OAuth and a scratch state
-    root would otherwise not find the token.
+    The launch starts from the login shell's environment, which holds what
+    the user's profile exports and nothing a caller exported in the process
+    that started the driver. So the driver hands over the settings the
+    launcher reads, and the launcher's own tables say which ones those are:
+    the secret slots (one name per web vendor, so the SELECTED vendor's key
+    arrives with the selection), the provider and proxy names, and this
+    product's own state names. No vendor is named here, so no vendor is
+    special.
+
+    The host's home travels too, because the launcher inherits the host's
+    model from it, and the OAuth token directory follows it: a relocated
+    home finds the token the host signed in with.
     """
-    env = {
-        "MINIMAX_OAUTH_TOKEN_DIR": str(Path.home() / ".raven" / "oauth"),
-    }
-    if os.environ.get("RESEARCH_NG_STATE_ROOT"):
-        env["RESEARCH_NG_STATE_ROOT"] = str(DEFAULT_STATE_ROOT)
+    env = {name: os.environ[name] for name in launcher().LAUNCH_ENV_VARS if os.environ.get(name)}
+    if home := os.environ.get(HOME_ENV_VAR, "").strip():
+        env[HOME_ENV_VAR] = home
+    env["MINIMAX_OAUTH_TOKEN_DIR"] = str(raven_home() / "oauth")
     env.update(extra or {})
     return env
 
@@ -116,13 +143,7 @@ def main() -> int:
     traces.mkdir(parents=True, exist_ok=True)
     os.environ["RAVEN_TRACING_DIR"] = str(traces)
 
-    env = agent_env(
-        {
-            "RESEARCH_WEB_SEARCH_PROVIDER": os.environ.get("RESEARCH_WEB_SEARCH_PROVIDER", ""),
-            "RESEARCH_TINYFISH_API_KEY": os.environ.get("RESEARCH_TINYFISH_API_KEY", ""),
-            "RAVEN_TRACING_DIR": str(traces),
-        }
-    )
+    env = agent_env({"RAVEN_TRACING_DIR": str(traces)})
     env = {k: v for k, v in env.items() if v}
 
     print(asyncio.run(_drive(args.task, env, traces, args.mode)))
