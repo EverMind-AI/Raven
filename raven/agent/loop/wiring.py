@@ -360,7 +360,7 @@ class WiringMixin:
     def _pinned_lane_generates_images(self, target: str, provider: str, model: str, host) -> bool:
         """Whether a lane pinned to ``provider`` draws, by the launcher's rule for the pin.
 
-        A mirror of ``configure_image_generation`` in the product launchers, not a
+        A mirror of ``configure_image_generation`` in the agent launchers, not a
         call into it: a launcher can run on an older raven, so the rule is stated
         twice and a test renders each case through both. The launcher refuses a
         provider the image tool cannot run on, and a switch off the host's image

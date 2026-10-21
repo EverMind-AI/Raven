@@ -335,7 +335,7 @@ def product_image_key(row_name: str, root: Path | None = None) -> str:
 
 
 def product_image_pin(row_name: str, root: Path | None = None) -> tuple[str, str]:
-    """The provider and model one product's folder pins its pictures to, each ``""`` when unset.
+    """The provider and model one agent's folder pins its pictures to, each ``""`` when unset.
 
     ``<PREFIX>_IMAGE_PROVIDER`` and ``<PREFIX>_IMAGE_MODEL``, read the way the
     launcher reads them. A provider named here moves the pictures off the host's
