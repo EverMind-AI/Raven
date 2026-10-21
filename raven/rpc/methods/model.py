@@ -67,6 +67,7 @@ from raven.rpc.models import (
     ModelAddEndpointParams,
     ModelAddModelParams,
     ModelAddModelsParams,
+    ModelCheckKeyParams,
     ModelDisconnectParams,
     ModelEndpointsParams,
     ModelFetchModelsParams,
@@ -741,6 +742,53 @@ def _stated_overlay(parsed: "ModelAddModelParams") -> dict[str, object]:
     return stated
 
 
+#: How long a credential check may take before the form gives up on a verdict.
+#: Shorter than a catalogue fetch: the person is holding a button, and a vendor
+#: that takes this long to answer has answered "cannot be reached" already.
+_CHECK_TIMEOUT_S = 10
+
+
+async def model_check_key(params: dict) -> dict:
+    """What the vendor says about a credential before it is stored.
+
+    The same probe `model_fetch_models` runs with ``verify`` on a saved key,
+    run on the key a form holds: the stored section with these fields laid
+    over it, so a relay's headers and a stored address still apply. A read --
+    nothing is written, whatever the answer.
+
+    ``refused`` is the vendor's own refusal (`credential_refused`), and it is
+    the only answer the page holds a key back on. Everything else -- a
+    catalogue that answers anyone, a vendor that is down, a code nobody mapped
+    -- is reported beside the key, which is stored: those are things that can
+    be wrong about the check, not about the key.
+    """
+    from raven.config.update_providers import credential_refused, test_provider
+
+    parsed = _parse(ModelCheckKeyParams, params)
+    slug = canonical_provider_name(parsed.slug)
+    override: dict[str, Any] = {}
+    if parsed.api_key:
+        override["api_key"] = parsed.api_key
+    if parsed.api_base:
+        override["api_base"] = parsed.api_base
+    # Off-thread, like the fetch: a round trip to the vendor while the loop
+    # may be carrying a token stream.
+    probe = await asyncio.to_thread(
+        test_provider, slug, timeout_s=_CHECK_TIMEOUT_S, check_credential=True, section_override=override
+    )
+    http_status = probe.get("http_status")
+    models_count = probe.get("models_count")
+    error = probe.get("error")
+    return {
+        "ok": bool(probe.get("ok")),
+        "status": str(probe.get("status") or "unknown"),
+        "http_status": http_status if isinstance(http_status, int) else None,
+        "models_count": models_count if isinstance(models_count, int) else None,
+        "error": str(error) if error else None,
+        "refused": credential_refused(probe),
+    }
+
+
 async def model_fetch_models(params: dict) -> dict:
     """What this provider can serve: the bundled catalogue, plus whatever it says.
 
@@ -766,7 +814,7 @@ async def model_fetch_models(params: dict) -> dict:
     A read throughout -- nothing is written until a row is added.
     """
     from raven.config.loader import load_config
-    from raven.config.update_providers import test_provider
+    from raven.config.update_providers import credential_refused, test_provider
     from raven.providers.catalog import describe
     from raven.providers.rates import resolve_context_window
     from raven.providers.registry import find_by_name
@@ -850,6 +898,9 @@ async def model_fetch_models(params: dict) -> dict:
         "models": ordered,
         "status": "ok" if asked else str(probe.get("status") or "not_asked"),
         "error": None if asked else (str(probe.get("error") or "") or None),
+        # The vendor's own refusal, the one verdict a surface may call "rejected";
+        # `invalid_key` alone also covers a 403, which is not that.
+        "refused": False if asked else credential_refused(probe),
     }
 
 
@@ -1031,6 +1082,7 @@ def register_model_methods(dispatcher: "Dispatcher", *, agent_loop_factory: "Age
     dispatcher.register("model.save_key", partial(model_save_key, agent_loop_factory=agent_loop_factory))
     dispatcher.register("model.disconnect", partial(model_disconnect, agent_loop_factory=agent_loop_factory))
     dispatcher.register("model.reveal_key", model_reveal_key)
+    dispatcher.register("model.check_key", model_check_key)
     dispatcher.register("model.fetch_models", model_fetch_models)
     dispatcher.register("model.add_model", model_add_model)
     dispatcher.register("model.add_models", model_add_models)
@@ -1044,6 +1096,7 @@ def register_model_methods(dispatcher: "Dispatcher", *, agent_loop_factory: "Age
 
 __all__ = [
     "model_options",
+    "model_check_key",
     "model_set_protocol",
     "model_save_key",
     "model_disconnect",

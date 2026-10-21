@@ -207,8 +207,11 @@ describe('ModelStepBody', () => {
     expect(calls.filter(([m]) => m === 'provider')).toEqual([['provider', { op: 'save_key', slug: 'ollama', api_base: 'http://localhost:11434' }]])
   })
 
-  it('connect saves at once, closes the form, and the row tests the key on the side', async () => {
-    let answer: (v: unknown) => void = () => {}
+  it('connect asks the vendor first; a key it did not refuse is saved, the form closes, and the row carries the verdict', async () => {
+    /* A 403 is reported but not refused -- vendors answer it for a region or a
+       plan as well -- so the key is stored, the row keeps "Connected" in the
+       warning colour with the note beside it, and a retry is offered. No
+       second test on the side: the check already was the test. */
     const data = snap()
     const { calls } = install(data, {
       provider: async (op, params) => {
@@ -216,9 +219,9 @@ describe('ModelStepBody', () => {
         data.providers = data.providers.map((p) => (p.id === params.slug ? { ...p, on: true } : p))
         return { ...data }
       },
-      fetchModels: (slug, verify) => {
-        calls.push([verify ? 'fetchModels:verify' : 'fetchModels', slug])
-        return new Promise((r) => { answer = r as (v: unknown) => void })
+      checkKey: async (slug, params) => {
+        calls.push(['checkKey', { slug, ...params }])
+        return { ok: false, status: 'invalid_key', http_status: 403, error: 'HTTP 403', refused: false }
       },
     })
     await openBody(ModelStepBody)
@@ -227,15 +230,73 @@ describe('ModelStepBody', () => {
     await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.connect')) })
     const saved = calls.find(([m]) => m === 'provider')![1] as { op: string; slug: string }
     expect(saved.op).toBe('save_key')
+    expect(calls.map(([m]) => m)).toEqual(['checkKey', 'provider'])
+    expect(calls[0]![1]).toEqual({ slug: saved.slug, api_key: '111' })
     expect(document.querySelector('.settings-padd')).toBeNull()
-    expect(calls).toContainEqual(['fetchModels:verify', saved.slug])
     const row = (): Element => [...document.querySelectorAll('.settings-prow2')].find((r) => r.querySelector('.settings-pnote'))!
-    expect(row().querySelector('.settings-pnote')!.textContent).toBe('gui.settings.providers.probe_checking')
-    expect(row().querySelector('.settings-chip')!.className).toContain('settings-on')
-    await act(async () => { answer({ models: [], status: 'invalid_key', error: 'HTTP 401' }) })
     expect(row().querySelector('.settings-pnote')!.textContent).toContain('gui.settings.providers.probe_invalid_saved')
     expect(row().querySelector('.settings-chip')!.className).toContain('settings-warn')
+    expect(row().querySelector('.settings-chip')!.textContent).toBe('gui.settings.providers.connected')
     expect(screen.getByText('gui.settings.providers.probe_recheck')).toBeTruthy()
+  })
+
+  it('a stored key the vendor refuses on a re-check reads Key rejected; a 403 does not', async () => {
+    /* `refused` is the backend's own verdict (a 401, or the key named invalid).
+       `invalid_key` alone also covers a 403, which can mean a region, a plan or
+       a proxy, so that row keeps "Connected". */
+    const data = snap()
+    let answer: { status: string; refused?: boolean } = { status: 'invalid_key', refused: true }
+    install(data, { fetchModels: async () => ({ ...answer, models: [], error: 'HTTP 401' }) })
+    await openBody(ModelStepBody)
+    const chip = (): Element => [...document.querySelectorAll('.settings-prow2')].find((r) => r.textContent!.includes('OpenRouter'))!.querySelector('.settings-chip')!
+    await act(async () => { await store.recheck('openrouter') })
+    expect(chip().textContent).toBe('gui.settings.providers.key_rejected')
+    expect(chip().className).toContain('settings-warn')
+    answer = { status: 'invalid_key' }
+    await act(async () => { await store.recheck('openrouter') })
+    expect(chip().textContent).toBe('gui.settings.providers.connected')
+    expect(chip().className).toContain('settings-warn')
+  })
+
+  it('a key the vendor refuses is not saved, and the form says so', async () => {
+    const data = snap()
+    const { calls } = install(data, {
+      checkKey: async (slug, params) => {
+        calls.push(['checkKey', { slug, ...params }])
+        return { ok: false, status: 'invalid_key', http_status: 401, error: 'HTTP 401', refused: true }
+      },
+    })
+    await openBody(ModelStepBody)
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.add')) })
+    await act(async () => { fireEvent.change(screen.getByLabelText('gui.settings.providers.api_key'), { target: { value: 'sk-never-issued' } }) })
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.connect')) })
+    expect(calls.map(([m]) => m)).toEqual(['checkKey'])
+    expect(document.querySelector('.settings-padd')).not.toBeNull()
+    const { slug } = calls[0]![1] as { slug: string }
+    const vendor = data.providers.find((p) => p.id === slug)!.name
+    expect(screen.getByRole('alert').textContent).toBe(`gui.settings.providers.key_refused {"vendor":"${vendor}"}`)
+    expect(document.querySelectorAll('.settings-prow2')).toHaveLength(data.providers.filter((p) => p.on).length)
+  })
+
+  it('a check that cannot run does not hold the key back: saved, then tested on the side', async () => {
+    const data = snap()
+    const { calls } = install(data, {
+      provider: async (op, params) => {
+        calls.push(['provider', { op, ...params }])
+        data.providers = data.providers.map((p) => (p.id === params.slug ? { ...p, on: true } : p))
+        return { ...data }
+      },
+      checkKey: async () => { throw new Error('gateway gone') },
+      fetchModels: async (slug, verify) => { calls.push([verify ? 'fetchModels:verify' : 'fetchModels', slug]); return { models: [], status: 'ok' } },
+    })
+    await openBody(ModelStepBody)
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.add')) })
+    await act(async () => { fireEvent.change(screen.getByLabelText('gui.settings.providers.api_key'), { target: { value: '111' } }) })
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.connect')) })
+    const saved = calls.find(([m]) => m === 'provider')![1] as { slug: string }
+    expect(calls.map(([m]) => m)).toEqual(['provider', 'fetchModels:verify'])
+    expect(calls[1]![1]).toBe(saved.slug)
+    expect(document.querySelector('.settings-padd')).toBeNull()
   })
 
   it('a verified key says how many models the vendor named', async () => {
@@ -245,14 +306,7 @@ describe('ModelStepBody', () => {
         data.providers = data.providers.map((p) => (p.id === params.slug ? { ...p, on: true } : p))
         return { ...data }
       },
-      fetchModels: async () => ({
-        status: 'ok',
-        models: [
-          { id: 'a', label: 'a', kind: 'text', added: false, source: 'live' },
-          { id: 'b', label: 'b', kind: 'text', added: false, source: 'live' },
-          { id: 'c', label: 'c', kind: 'text', added: false, source: 'registry' },
-        ],
-      }),
+      checkKey: async () => ({ ok: true, status: 'valid', http_status: 200, models_count: 2, refused: false }),
     })
     await openBody(ModelStepBody)
     await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.add')) })
@@ -324,7 +378,7 @@ describe('ModelStepBody', () => {
         data.providers = data.providers.map((p) => (p.id === params.slug ? { ...p, on: true } : p))
         return { ...data }
       },
-      fetchModels: async () => ({ status: 'key_unchecked', models: [] }),
+      checkKey: async () => ({ ok: false, status: 'key_unchecked', refused: false }),
     })
     await openBody(ModelStepBody)
     await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.add')) })
@@ -338,20 +392,19 @@ describe('ModelStepBody', () => {
 
   it('a failed test checks again on request', async () => {
     const data = snap()
-    let status = 'network_error'
     install(data, {
       provider: async (_op, params) => {
         data.providers = data.providers.map((p) => (p.id === params.slug ? { ...p, on: true } : p))
         return { ...data }
       },
-      fetchModels: async () => ({ status, models: [] }),
+      checkKey: async () => ({ ok: false, status: 'network_error', refused: false }),
+      fetchModels: async () => ({ status: 'ok', models: [] }),
     })
     await openBody(ModelStepBody)
     await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.add')) })
     await act(async () => { fireEvent.change(screen.getByLabelText('gui.settings.providers.api_key'), { target: { value: 'sk-1' } }) })
     await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.connect')) })
     expect(document.querySelector('.settings-pnote')!.textContent).toContain('gui.settings.providers.probe_unreachable')
-    status = 'ok'
     await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.probe_recheck')) })
     expect(document.querySelector('.settings-pnote')!.getAttribute('data-tone')).toBe('ok')
   })
@@ -363,7 +416,7 @@ describe('ModelStepBody', () => {
         data.providers = data.providers.map((p) => (p.id === params.slug ? { ...p, on: true } : p))
         return { ...data }
       },
-      fetchModels: async () => ({ status: 'certificate_untrusted', models: [] }),
+      checkKey: async () => ({ ok: false, status: 'certificate_untrusted', refused: false }),
     })
     await openBody(ModelStepBody)
     await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.add')) })

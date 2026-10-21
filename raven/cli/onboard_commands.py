@@ -701,9 +701,15 @@ def _run_oauth_login(provider: str) -> bool:
 def _verify_provider(provider: str, *, skip_test: bool = False) -> tuple[bool, str, Optional[list[str]]]:
     """Hit ``GET /v1/models`` to verify the credentials we just stored.
 
+    With the key itself confirmed where the catalogue says nothing about it
+    (``check_credential``): OpenRouter's list answers anyone, and reading that
+    200 as "connected" told a person with a mistyped key that it worked, with
+    468 models to choose from, until the test message failed a step later.
+
     Returns ``(ok, status, model_ids)``. ``status`` is one of the ops-library
     failure codes (``invalid_key`` / ``no_credits`` / ``rate_limited`` /
-    ``network_error`` / …) and drives the failure submenu's wording.
+    ``network_error`` / …) and drives the failure submenu's wording; ``valid``,
+    ``skipped`` and ``unchecked`` are the three ways through.
     """
     from raven.config.update_providers import test_provider as probe
 
@@ -714,7 +720,7 @@ def _verify_provider(provider: str, *, skip_test: bool = False) -> tuple[bool, s
         console.print(t("  [dim]⏳ Reaching the server…[/dim]"))
     else:
         console.print(t("  [dim]⏳ Verifying your API key…[/dim]"))
-    result = probe(provider)
+    result = probe(provider, check_credential=True)
     if result["ok"]:
         models = result.get("models_count")
         suffix = t(" ({models} models available)", models=models) if models else ""
@@ -747,6 +753,24 @@ def _verify_provider(provider: str, *, skip_test: bool = False) -> tuple[bool, s
                 )
             )
         return True, "skipped", None
+    if status == "key_unchecked":
+        # The catalogue answered without looking at the key, and this vendor
+        # has no path that would. Not a failure -- the list it returned is
+        # real -- and not a confirmation either: the test message is the
+        # check that remains, and the line says so rather than "Connected!".
+        if skip_test:
+            console.print(
+                t(
+                    "  [dim]Reached the provider; its model list answers without checking the key, so the key is not confirmed; connectivity is not tested (--skip-test).[/dim]"
+                )
+            )
+        else:
+            console.print(
+                t(
+                    "  [dim]Reached the provider; its model list answers without checking the key, so the test message below is what confirms it.[/dim]"
+                )
+            )
+        return True, "unchecked", result.get("model_ids")
     hint_map = {
         "invalid_key": t("Auth failed: the API key is invalid — check for typos / stray spaces."),
         "no_credits": t("Account out of credits or not provisioned — top up and retry."),
@@ -863,7 +887,7 @@ def _pick_model(
             # had failed.
             console.print(
                 t("  [dim]This provider has no model list to fetch - offering the ones we know.[/dim]")
-                if probe_status == "skipped"
+                if probe_status in ("skipped", "unchecked")
                 else t("  [dim]Couldn't reach the provider for its model list - offering the ones we know.[/dim]")
             )
             model_ids = known

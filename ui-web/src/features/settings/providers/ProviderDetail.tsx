@@ -408,7 +408,7 @@ function Advanced({ p }: { p: ProviderRow }): JSX.Element {
    it -- on a two-column page there is nothing to go back to. */
 function Head({ p }: { p: ProviderRow }): JSX.Element {
   const state = p.on
-    ? t('gui.settings.providers.connected')
+    ? t(store.get().probes[p.id]?.refused ? 'gui.settings.providers.key_rejected' : 'gui.settings.providers.connected')
     : t(kindOf(p) === 'oauth' ? 'gui.settings.providers.needs_auth' : kindOf(p) === 'local' ? 'gui.settings.providers.needs_base' : 'gui.settings.providers.needs_key')
   /* One way out of the page, not two. The name's arrow was `keyUrl ||
      homepage`, so on any provider with a key page it opened the same page as

@@ -293,6 +293,9 @@ export const settingsSource: SettingsSource = {
      state. What it taught the server's cache reaches the offer through
      `reloadProviders`, which the store runs once the read succeeds. */
   fetchModels: (slug, verify) => gateway().call('model.fetch_models', verify ? { slug, verify: true } : { slug }),
+  /* A read as well: the verdict is the form's to act on, and a key the vendor
+     refused is refused where the wording lives, not toasted. */
+  checkKey: (slug, params) => gateway().call('model.check_key', { slug, ...params }),
   revealKey: (slug) => run(gateway().call('model.reveal_key', { slug }).then((r) => r.api_key ?? null)),
   reloadProviders: afterProviders,
   addModels: (slug, models) => run(gateway().call('model.add_models', { slug, models }).then(afterProviders)),

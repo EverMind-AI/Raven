@@ -20,6 +20,7 @@ from raven.rpc.methods import model as model_module
 from raven.rpc.methods.model import (
     model_add_endpoint,
     model_add_model,
+    model_check_key,
     model_disconnect,
     model_endpoints,
     model_fetch_models,
@@ -366,6 +367,106 @@ async def test_save_key_oauth_rejected(fake_home: Path) -> None:
 async def test_save_key_missing_params_rejected(fake_home: Path) -> None:
     with pytest.raises(ConfigValidationError):
         await model_save_key({"slug": "anthropic"})
+
+
+# ----------------------------------------------------------------------------
+# model.check_key
+# ----------------------------------------------------------------------------
+
+
+def _probe_answering(answer: dict, seen: dict) -> object:
+    def fake_probe(name: str, **kwargs: object) -> dict:
+        seen.update(name=name, **kwargs)
+        return {"elapsed_ms": 3, "models_count": None, "model_ids": None, "error": None, "http_status": None, **answer}
+
+    return fake_probe
+
+
+async def test_check_key_asks_the_vendor_about_the_unsaved_key_and_writes_nothing(
+    fake_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: dict = {}
+    monkeypatch.setattr(
+        "raven.config.update_providers.test_provider",
+        _probe_answering({"ok": False, "status": "invalid_key", "http_status": 401, "error": "HTTP 401"}, seen),
+    )
+
+    result = await model_check_key({"slug": "openrouter", "api_key": "sk-or-never-issued"})
+
+    assert result == {
+        "ok": False,
+        "status": "invalid_key",
+        "http_status": 401,
+        "models_count": None,
+        "error": "HTTP 401",
+        "refused": True,
+    }
+    # The same probe the saved key gets, on the key the form holds.
+    assert seen["name"] == "openrouter"
+    assert seen["check_credential"] is True
+    assert seen["section_override"] == {"api_key": "sk-or-never-issued"}
+    config = fake_home / ".raven" / "config.json"
+    assert not config.exists() or "sk-or-never-issued" not in config.read_text()
+
+
+@pytest.mark.parametrize(
+    ("answer", "status"),
+    [
+        ({"ok": True, "status": "valid", "http_status": 200, "models_count": 12}, "valid"),
+        ({"ok": False, "status": "key_unchecked", "error": "answers without checking the key"}, "key_unchecked"),
+        ({"ok": False, "status": "network_error", "error": "connection refused"}, "network_error"),
+        # Forbidden is not the vendor's word for a wrong key alone.
+        ({"ok": False, "status": "invalid_key", "http_status": 403, "error": "HTTP 403"}, "invalid_key"),
+    ],
+)
+async def test_check_key_reports_what_is_not_the_keys_fault_without_refusing(
+    fake_home: Path, monkeypatch: pytest.MonkeyPatch, answer: dict, status: str
+) -> None:
+    monkeypatch.setattr("raven.config.update_providers.test_provider", _probe_answering(answer, {}))
+
+    result = await model_check_key({"slug": "openrouter", "api_key": "sk-or-1"})
+
+    assert result["status"] == status
+    assert result["refused"] is False
+    assert result["models_count"] == answer.get("models_count")
+
+
+async def test_check_key_sends_only_the_fields_the_form_holds(fake_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A local deployment is reached by address: no key is laid over the section."""
+    seen: dict = {}
+    monkeypatch.setattr(
+        "raven.config.update_providers.test_provider",
+        _probe_answering({"ok": True, "status": "valid", "http_status": 200, "models_count": 3}, seen),
+    )
+
+    result = await model_check_key({"slug": "ollama", "api_base": "http://localhost:11434"})
+
+    assert result["refused"] is False
+    assert seen["section_override"] == {"api_base": "http://localhost:11434"}
+
+
+@pytest.mark.parametrize(
+    ("answer", "status", "refused"),
+    [
+        ({"ok": False, "status": "invalid_key", "http_status": 401, "error": "HTTP 401"}, "invalid_key", True),
+        # A 403 is `invalid_key` to the status table and not a refusal: a region,
+        # a plan or a proxy answers it as well.
+        ({"ok": False, "status": "invalid_key", "http_status": 403, "error": "HTTP 403"}, "invalid_key", False),
+        ({"ok": False, "status": "network_error", "error": "refused"}, "network_error", False),
+        ({"ok": True, "status": "valid", "http_status": 200, "model_ids": ["m1"]}, "ok", False),
+    ],
+)
+async def test_fetch_models_says_whether_the_vendor_itself_refused_the_key(
+    fake_home: Path, monkeypatch: pytest.MonkeyPatch, answer: dict, status: str, refused: bool
+) -> None:
+    """The verdict a row may call "rejected", kept apart from the broader status."""
+    _write_config(fake_home, {"providers": {"openrouter": {"apiKey": "sk-or"}}})
+    monkeypatch.setattr("raven.config.update_providers.test_provider", _probe_answering(answer, {}))
+
+    out = await model_fetch_models({"slug": "openrouter", "verify": True})
+
+    assert out["status"] == status
+    assert out["refused"] is refused
 
 
 # ----------------------------------------------------------------------------

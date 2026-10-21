@@ -2745,3 +2745,86 @@ def test_a_differently_cased_tenant_header_still_reaches_the_relay(cfg_path: Pat
     result = probe_provider("custom", config_path=cfg_path, transport=_tenant_relay(seen))
     assert result["status"] == "valid"
     assert seen == ["test-tenant"]
+
+
+# ---------------------------------------------------------------------------
+# A credential judged before it is stored
+# ---------------------------------------------------------------------------
+
+
+def test_an_unsaved_key_is_judged_as_the_stored_one_would_be(cfg_path: Path) -> None:
+    """``section_override`` lays the form's fields over the section; nothing is written.
+
+    The stored key is the good one and the tried one is not, then the other way
+    round: the verdict follows the key being tried, and the section on disk is
+    the same bytes afterwards either way.
+    """
+    _seed_key(cfg_path, key="sk-real")
+    before = cfg_path.read_text()
+
+    tried = probe_provider(
+        "openrouter",
+        config_path=cfg_path,
+        transport=_public_catalogue("sk-real"),
+        check_credential=True,
+        section_override={"api_key": "111"},
+    )
+    assert tried["status"] == "invalid_key"
+    assert tried["http_status"] == 401
+    assert cfg_path.read_text() == before
+
+    _seed_key(cfg_path, key="111")
+    before = cfg_path.read_text()
+    tried = probe_provider(
+        "openrouter",
+        config_path=cfg_path,
+        transport=_public_catalogue("sk-real"),
+        check_credential=True,
+        section_override={"api_key": "sk-real"},
+    )
+    assert tried["status"] == "valid"
+    assert cfg_path.read_text() == before
+
+
+def test_the_tried_field_replaces_the_stored_spelling_too() -> None:
+    """The section model reads ``apiKey`` over ``api_key`` when both are present.
+
+    So laying the schema spelling over a section that keeps the serialized one
+    would have judged the stored key. The stored spelling goes; a ``None`` leaves
+    the field alone, the way a form that draws no field for it does.
+    """
+    from raven.config.schema import ProviderConfig
+    from raven.config.update_providers import _with_override
+
+    merged = _with_override(
+        {"apiKey": "stored", "apiBase": "https://relay.test/v1"},
+        {"api_key": "tried", "api_base": None},
+    )
+
+    assert merged == {"apiBase": "https://relay.test/v1", "api_key": "tried"}
+    section = ProviderConfig.model_validate(merged)
+    assert section.api_key == "tried"
+    assert section.api_base == "https://relay.test/v1"
+
+
+@pytest.mark.parametrize(
+    ("status", "http_status", "refused"),
+    [
+        ("invalid_key", 401, True),
+        # Google names a key it does not know in a 400.
+        ("invalid_key", 400, True),
+        # Forbidden is what vendors say for a region, a plan or a permission as
+        # well, and what a proxy says for anything: reported, not refused.
+        ("invalid_key", 403, False),
+        # A key that could not be sent at all was never shown to the vendor.
+        ("invalid_key", None, False),
+        ("key_unchecked", None, False),
+        ("network_error", None, False),
+        ("no_probe_endpoint", None, False),
+        ("valid", 200, False),
+    ],
+)
+def test_only_the_vendors_own_refusal_refuses_a_key(status: str, http_status: int | None, refused: bool) -> None:
+    from raven.config.update_providers import credential_refused
+
+    assert credential_refused({"status": status, "http_status": http_status}) is refused

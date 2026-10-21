@@ -358,6 +358,17 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- A key the vendor refuses is no longer called connected. The settings page
+  and the first-run wizard ask the vendor about a key before storing it
+  (`model.check_key`): a key answered with 401, or named invalid, is refused
+  with the reason in the form and nothing is written, where before it was
+  stored, marked **Connected** and reported as rejected on the same row. A
+  stored key the vendor later refuses reads **Key rejected** on its row.
+  `raven onboard` and `raven provider test` confirm the key itself at the
+  vendor's key endpoint where the model list answers anyone (OpenRouter),
+  instead of reporting "Connected! (468 models available)" for a key the
+  vendor has never issued; a list that cannot confirm a key says so instead
+  of claiming it valid.
 - A continued DAG node is judged against what it was told after an attempt
   fell short, not only against its first prompt. The judge read the task as
   first given and nothing else, so when the user answered a stuck node by

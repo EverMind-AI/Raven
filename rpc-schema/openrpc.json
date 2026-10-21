@@ -1270,6 +1270,69 @@
       "errors": []
     },
     {
+      "name": "model.check_key",
+      "summary": "What the vendor says about a credential before it is stored: the stored section with these fields laid over it is probed the way `model.fetch_models` with `verify` probes a saved key. A read -- nothing is written, whatever the answer.",
+      "params": [
+        {
+          "name": "slug",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "api_key",
+          "description": "The key to try; empty for a local deployment, which is reached by address and has no key.",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "api_base",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "ModelCheckKeyResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok",
+            "status",
+            "refused"
+          ],
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "status": {
+              "type": "string",
+              "description": "The probe's word: `valid`, `invalid_key`, `key_unchecked`, `no_credits`, `rate_limited`, `network_error`, `proxy_unreachable`, `certificate_untrusted`, `no_probe_endpoint`, `not_configured`, `http_NNN`."
+            },
+            "http_status": {
+              "type": "integer"
+            },
+            "models_count": {
+              "type": "integer"
+            },
+            "error": {
+              "type": "string"
+            },
+            "refused": {
+              "type": "boolean",
+              "description": "The vendor itself refused this key -- answered it with 401, or named it invalid -- so storing it would store a key that cannot work. Every other answer leaves the key worth storing."
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
       "name": "model.fetch_models",
       "summary": "What a provider can serve: the bundled catalogue unioned with whatever the vendor names when it can be reached. Each row carries the registry's name and tags, its window, the bucket it filters into, whether this provider's list already has it, and which source it came from. A read -- nothing is written until a row is added.",
       "params": [
@@ -1311,6 +1374,10 @@
             },
             "error": {
               "type": "string"
+            },
+            "refused": {
+              "type": "boolean",
+              "description": "With `verify`: the vendor itself refused the stored key -- answered it with 401, or named it invalid. `invalid_key` alone is broader (a 403 maps to it too, and a 403 can mean a region, a plan or a proxy), so a surface that says a key was rejected reads this, not the status."
             }
           }
         }

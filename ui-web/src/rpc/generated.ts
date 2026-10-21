@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 248 methods, 138 component schemas.
+// 249 methods, 138 component schemas.
 
 /* eslint-disable */
 /**
@@ -3112,6 +3112,25 @@ export interface ModelRevealKeyResult {
    */
   api_key?: string | null;
 }
+export interface ModelCheckKeyParams {
+  slug: string;
+  api_key?: string;
+  api_base?: string;
+}
+export interface ModelCheckKeyResult {
+  ok: boolean;
+  /**
+   * The probe's word: `valid`, `invalid_key`, `key_unchecked`, `no_credits`, `rate_limited`, `network_error`, `proxy_unreachable`, `certificate_untrusted`, `no_probe_endpoint`, `not_configured`, `http_NNN`.
+   */
+  status: string;
+  http_status?: number;
+  models_count?: number;
+  error?: string;
+  /**
+   * The vendor itself refused this key -- answered it with 401, or named it invalid -- so storing it would store a key that cannot work. Every other answer leaves the key worth storing.
+   */
+  refused: boolean;
+}
 export interface ModelFetchModelsParams {
   slug: string;
   verify?: boolean;
@@ -3123,6 +3142,10 @@ export interface ModelFetchModelsResult {
    */
   status: string;
   error?: string;
+  /**
+   * With `verify`: the vendor itself refused the stored key -- answered it with 401, or named it invalid. `invalid_key` alone is broader (a 403 maps to it too, and a 403 can mean a region, a plan or a proxy), so a surface that says a key was rejected reads this, not the status.
+   */
+  refused?: boolean;
 }
 export interface ModelAddModelParams {
   slug: string;
@@ -6419,6 +6442,7 @@ export interface RpcMethods {
   'model.save_key': { params: ModelSaveKeyParams; result: ModelSaveKeyResult };
   'model.disconnect': { params: ModelDisconnectParams; result: ModelDisconnectResult };
   'model.reveal_key': { params: ModelRevealKeyParams; result: ModelRevealKeyResult };
+  'model.check_key': { params: ModelCheckKeyParams; result: ModelCheckKeyResult };
   'model.fetch_models': { params: ModelFetchModelsParams; result: ModelFetchModelsResult };
   'model.add_model': { params: ModelAddModelParams; result: ModelAddModelResult };
   'model.add_models': { params: ModelAddModelsParams; result: ModelAddModelsResult };
@@ -6755,6 +6779,7 @@ export const RPC_METHODS = [
   "model.add_endpoint",
   "model.add_model",
   "model.add_models",
+  "model.check_key",
   "model.disconnect",
   "model.endpoints",
   "model.fetch_models",
