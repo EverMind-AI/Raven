@@ -84,17 +84,18 @@ _CLOSEST_IDS = 3
 _NEAR_ID_SEARCH_LIMIT = 1000
 
 
-def _local_miss_hint(registry: "SkillRegistry | None", native: str) -> str:
+def _local_miss_hint(registry: "SkillRegistry | None", native: str, blocked: frozenset[str]) -> str:
     """What follows a ``local/<native>`` miss.
 
     ``# Skills`` and ``# Active Skills`` render from this same registry, so a
     local id it lacks has no body in context to point at. What helps is a near
     id, for a typo, and the directories local ids come from, for a skill file
-    the model saw outside them.
+    the model saw outside them. A near id is never one the calling tool's
+    blocklist would refuse.
     """
     sentences = []
     if registry is not None:
-        names = registry.names()
+        names = [name for name in registry.names() if not is_blocked(blocked, name)]
         if len(names) <= _NEAR_ID_SEARCH_LIMIT:
             close = difflib.get_close_matches(native, names, n=_CLOSEST_IDS)
             if close:
@@ -176,7 +177,8 @@ class ReadSkillTool(Tool):
             meta = lookup_on_disk(self._registry, source, native)
             if meta is None:
                 if source == "local":
-                    return f"Error: no local skill {native!r} found. {_local_miss_hint(self._registry, native)}"
+                    hint = _local_miss_hint(self._registry, native, self._policy.blocked_now())
+                    return f"Error: no local skill {native!r} found. {hint}"
                 return (
                     f"Error: no {source} skill {native!r} found. Its body may "
                     f"already be present in the '# Skills' context."
@@ -302,7 +304,8 @@ class UseSkillTool(Tool):
         meta = lookup_on_disk(self._registry, source, native)
         if meta is None:
             if source == "local":
-                return f"Error: no local skill {native!r} found on disk. {_local_miss_hint(self._registry, native)}"
+                hint = _local_miss_hint(self._registry, native, self._policy.blocked_now())
+                return f"Error: no local skill {native!r} found on disk. {hint}"
             return (
                 f"Error: no {source} skill {native!r} found on disk. If it is a "
                 f"pure-instruction skill its body is already in your context."

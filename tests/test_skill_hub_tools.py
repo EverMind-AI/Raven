@@ -228,6 +228,15 @@ class TestLocalMiss:
         assert "local/raven-dev-conventions" in out
         assert "local/weather" not in out
 
+    async def test_it_offers_no_id_the_operator_blocked(self, tool_cls, tmp_path: Path) -> None:
+        """The same tool refuses a blocklisted id, so offering one sends the
+        model from one error straight into the next."""
+        registry = _registry_with(tmp_path, workspace=["raven-dev-conventions"], builtin=["raven-dev-guide"])
+        tool = tool_cls(registry=registry, blocklist=["Raven-Dev-Conventions"])
+        out = await tool.execute(skill_id="local/raven-dev-convention")
+        assert "local/raven-dev-guide" in out
+        assert "local/raven-dev-conventions" not in out
+
     async def test_it_offers_at_most_three_ids(self, tool_cls, tmp_path: Path) -> None:
         registry = _registry_with(tmp_path, builtin=[f"deck-{i:03d}" for i in range(300)])
         out = await tool_cls(registry=registry).execute(skill_id="local/deck-0000")
