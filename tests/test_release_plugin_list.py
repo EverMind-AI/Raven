@@ -78,6 +78,17 @@ def test_the_local_clone_mode_installs_the_same_distributions() -> None:
         assert named == set(PLUGIN_DISTRIBUTIONS), named
 
 
+def test_the_release_notes_template_matches_the_roster_it_describes() -> None:
+    """The workflow copies this template into every draft release, so a roster
+    change that leaves it behind advertises the opposite of what the release
+    does. It once promised that the plugin list installs every wheel but the
+    cloud one, which stopped being true the moment that wheel joined the list."""
+    template = (ROOT / ".github" / "release-notes-template.md").read_text(encoding="utf-8")
+    for name in PLUGIN_DISTRIBUTIONS:
+        assert f"`{name.replace('-', '_')}`" in template, name
+    assert "installs every plugin wheel the release carries" in template
+
+
 def test_the_release_installs_itself_before_it_is_published() -> None:
     """The one check that can say a release is whole: its own installer, piped
     like a user runs it, against the wheels and list this job built, with the
