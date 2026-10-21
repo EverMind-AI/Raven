@@ -364,7 +364,10 @@ All notable changes to Raven are documented here.
   delivered as the answer. OpenRouter names its backend's reason
   (`native_finish_reason`) on every choice, `stop` included, and the verdict
   now reads that plain `stop` as the normal end it is, so the turn goes to
-  the loop's empty-response recovery (prefill, nudge, retry) instead.
+  the loop's empty-response recovery (prefill, nudge, retry) instead. A reply
+  that is nothing but an upstream sentinel (`<|im_end|>`) reaches the loop
+  empty on both response paths and takes the same recovery, rather than being
+  delivered as the answer.
 - A continued DAG node is judged against what it was told after an attempt
   fell short, not only against its first prompt. The judge read the task as
   first given and nothing else, so when the user answered a stuck node by

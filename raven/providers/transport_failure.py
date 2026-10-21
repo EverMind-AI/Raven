@@ -153,6 +153,22 @@ def _stripped(text: str | None) -> str:
     return out.strip()
 
 
+def without_sentinels(content: str | None) -> str | None:
+    """``content`` with a reply that is nothing but sentinels folded to nothing.
+
+    The loop's own emptiness test reads visible text, and a bare ``<|im_end|>``
+    is visible text to it: with the verdict rightly stepping aside for a native
+    ``stop``, such a reply was delivered to the user as the answer, where the
+    same reply with a space in it took the empty-response recovery. Folded at
+    both response exits, so the loop is handed an empty reply either way and
+    runs the recovery it has for one. A sentinel beside a real answer is left
+    exactly as it came: that is an answer, and this is not editing.
+    """
+    if content is None:
+        return None
+    return content if _stripped(content) else ""
+
+
 def said_nothing(content: str | None, tool_calls: list["ToolCallRequest"]) -> bool:
     """Whether this response carries no reply for anyone.
 
@@ -292,4 +308,4 @@ def transport_failure_message(evidence: str) -> str:
     )
 
 
-__all__ = ["flag_transport_failure", "prompt_chars", "said_nothing", "transport_failure_message"]
+__all__ = ["flag_transport_failure", "prompt_chars", "said_nothing", "transport_failure_message", "without_sentinels"]

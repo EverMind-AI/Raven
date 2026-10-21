@@ -34,7 +34,7 @@ from raven.providers.base import (
 )
 from raven.providers.reasoning import split_orphan_think
 from raven.providers.tool_names import normalized_tool_name
-from raven.providers.transport_failure import flag_transport_failure, prompt_chars
+from raven.providers.transport_failure import flag_transport_failure, prompt_chars, without_sentinels
 from raven.providers.truncation import flag_truncation
 from raven.providers.usage import merge_usage
 
@@ -478,6 +478,9 @@ async def stream_llm_call(
     if reasoning_content is None and emits_unparsed is not None and emits_unparsed():
         split_reasoning, content = split_orphan_think(content)
         reasoning_content = split_reasoning
+    # The same fold as the non-streaming exit: a reply that is only a sentinel
+    # reaches the loop empty on both paths.
+    content = without_sentinels(content)
 
     # No verdict here: it was asked inside the attempt loop, where a reconnect
     # is still possible. Once the reconnects are spent the response is returned

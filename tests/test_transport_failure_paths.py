@@ -26,6 +26,8 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
+import pytest
+
 from raven.contracts.llm_provider import ChatDelta, GenerationSettings, LLMResponse
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.providers.transport_failure import flag_transport_failure
@@ -153,6 +155,51 @@ def test_content_that_is_only_a_sentinel_counts_as_nothing_delivered() -> None:
     )
 
     assert _provider()._parse_response(leaked, sent_chars=SENT).finish_reason == "error"
+
+
+def test_a_reply_that_is_only_a_sentinel_is_handed_to_the_loop_empty() -> None:
+    """The shape the review measured on this branch: OpenRouter, native `stop`,
+    real usage, and a reply of nothing but `<|im_end|>`.
+
+    With `stop` on the allow list the verdict rightly steps aside -- and the
+    loop's emptiness test reads the sentinel as visible text, so the user was
+    handed `<|im_end|>` as the answer. The exit folds such a reply to empty, and
+    the loop runs the recovery it has for one; the finish reason stays the
+    upstream's, because nothing failed.
+    """
+    bare = _Response(
+        choices=[
+            _Choice(
+                message=_Msg(content="<|im_end|>"),
+                provider_specific_fields={"native_finish_reason": "stop"},
+            )
+        ],
+        usage=_Usage(prompt_tokens=367412, completion_tokens=27, total_tokens=367439),
+    )
+
+    response = _provider()._parse_response(bare, sent_chars=SENT)
+
+    assert response.finish_reason == "stop"
+    assert response.content == ""
+    assert response.error_classification is None
+
+
+@pytest.mark.parametrize(
+    ("content", "folded"),
+    [
+        (None, None),
+        ("", ""),
+        ("<|im_end|>", ""),
+        (" <|eot_id|> ", ""),
+        ("<|endoftext|><|im_end|>", ""),
+        ("the answer<|endoftext|>", "the answer<|endoftext|>"),
+        ("hi", "hi"),
+    ],
+)
+def test_without_sentinels_folds_only_a_reply_that_is_nothing_else(content: str | None, folded: str | None) -> None:
+    from raven.providers.transport_failure import without_sentinels
+
+    assert without_sentinels(content) == folded
 
 
 def test_a_sentinel_beside_a_real_answer_is_still_an_answer() -> None:
@@ -290,6 +337,32 @@ async def test_the_streaming_path_reconnects_instead_of_ending_the_turn() -> Non
     assert stream.attempts == 2, "the blip was returned instead of reconnected"
     assert response.finish_reason == "stop"
     assert response.content == "the answer"
+
+
+class _SentinelStream:
+    """A stream whose only token is the upstream's own end marker."""
+
+    generation = GenerationSettings()
+
+    async def chat_stream(self, *a: Any, **kw: Any):
+        yield ChatDelta(content="<|im_end|>")
+        yield ChatDelta(content=None, finish_reason="stop", usage={"prompt_tokens": 2900, "total_tokens": 2901})
+
+
+async def test_a_stream_that_is_only_a_sentinel_ends_as_empty_on_this_path_too() -> None:
+    """The same fold as the non-streaming exit, so the fault reads the same
+    inside the TUI as outside it."""
+    from raven.providers.streaming import stream_llm_call
+
+    response = await stream_llm_call(
+        _SentinelStream(),
+        messages=[{"role": "user", "content": "hi" * 6000}],
+        tools=None,
+        model="stub",
+    )
+
+    assert response.finish_reason == "stop"
+    assert response.content == ""
 
 
 async def test_a_stream_that_stays_empty_ends_as_empty_not_as_an_error() -> None:
