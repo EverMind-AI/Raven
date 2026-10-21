@@ -1510,8 +1510,9 @@ describe('resizing by the corner grab', () => {
       composerAt(700)
       besideTheReserve()
       await shelf()
-      /* Settled the way a page the reader has been sitting on is: the window's
-         resize re-measures against the card the reserve has already moved. */
+      /* Settled the way a conversation the reader has been sitting on is: the
+         window's resize re-measures against the card the reserve has already
+         moved. */
       await act(async () => { window.dispatchEvent(new Event('resize')) })
       await pull(1000)
       const level = `${700 - (42 + DESK_ANCHOR_GAP)}px`
