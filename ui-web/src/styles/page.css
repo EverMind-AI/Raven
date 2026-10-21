@@ -161,8 +161,8 @@
      a table or a listing, inline code, and the controls under the composer.
      The body a reply is read at sets the scale -- the rail and a table sit one
      step under it, the name one over, a heading two over -- so moving the
-     surface is moving these, not hunting its rules. The rest of the page still
-     spells its sizes per rule. */
+     surface is moving these, not hunting its rules. Every other rule in this
+     file still spells its own size. */
   --fs-rail:  14px;
   --fs-title: 16px;
   --fs-body:  15px;
@@ -1352,14 +1352,14 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    fit-content rows (.think, .tfh) sit in block parents, where 100% is already
    the column, which is why only this one needed it. */
 /* The design's process line (Figma: Raven / Thinking): the one quiet grey, a
-   glyph the size of the type, 4px between the parts and 8px between the lines.
-   It reads at the answer's own 14px: a reader who opens the fold is reading the
+   14px glyph, 4px between the parts and 8px between the lines. It reads at
+   the answer's own size (--fs-body): a reader who opens the fold is reading the
    trail, not glancing past it, and type below the copy it sits in made them
    lean in for the one thing they had asked to see. */
 .wrow {
   display: flex; align-items: center; gap: 4px; color: var(--chat-quiet);
   width: fit-content; max-width: 100%; min-width: 0;
-  font-size: 14px; line-height: 22px; padding: 0; margin: 0;
+  font-size: var(--fs-body); line-height: 22px; padding: 0; margin: 0;
   border-radius: 0; text-align: left;
 }
 .wrow.tog:hover .vb, .wrow.tog:hover .ar { color: var(--text); }
@@ -1614,10 +1614,10 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* How long a step in flight has been going. Monospace so the digits do not
    shuffle the row as they tick, and `flex: none` so a long verb clips before
    this does -- the number is the part that says the step is alive. */
-.wrow .runms { flex: none; font-variant-numeric: tabular-nums; font-size: 14px; color: var(--chat-quiet); }
+.wrow .runms { flex: none; font-variant-numeric: tabular-nums; font-size: var(--fs-body); color: var(--chat-quiet); }
 .wrow .chip { flex: none; font-size: 12px; padding: 0 7px; border-radius: 9px; line-height: 18px; }
 /* diff counts read as plain numbers next to the path, not as a pill */
-.wrow .diffn { flex: none; font-variant-numeric: tabular-nums; font-size: 14px; }
+.wrow .diffn { flex: none; font-variant-numeric: tabular-nums; font-size: var(--fs-body); }
 .wrow .diffn .a { color: var(--moss); }
 .wrow .diffn .d { color: var(--clay); }
 .chip.bad { color: var(--clay); background: color-mix(in oklab, var(--clay) 12%, transparent); }
@@ -1771,7 +1771,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .tfh .tm:empty { display: none; }
 .think:hover, .tfh:hover, .wrow.sum:hover { color: var(--text); }
 /* the phrase is a summary of the rows underneath, not a target of its own */
-.wrow.sum .ar { color: inherit; font-size: 14px; }
+.wrow.sum .ar { color: inherit; font-size: var(--fs-body); }
 .wrow.sum:hover .ar { color: var(--text); }
 
 /* the turn is never silent: a breathing dot fills the gap before events */
