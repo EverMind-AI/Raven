@@ -149,9 +149,9 @@ def test_an_english_design_records_itself_as_the_rendering(index: dict) -> None:
 def test_the_supersede_relation_points_the_right_way(index: dict) -> None:
     """A document that extended another is recorded as the one doing it.
 
-    The Chinese documents say "已被扩展" -- has been extended -- and link to
-    the document that extended them. Reading that as the other way round
-    would tell a reader the newer document is the stale one.
+    The Chinese documents mark the extended document with a link to the
+    document that extended them. Reading that as the other way round would
+    tell a reader the newer document is the stale one.
     """
     by_id = {doc["id"]: doc for doc in index["documents"]}
     for doc in index["documents"]:

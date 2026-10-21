@@ -102,10 +102,6 @@ cannot join the backlog without an index entry.
 | 2026-09-21 | [EverOS role configuration - implementation plan](docs/plans/2026-09-21-everos-role-config.md) | plan |  | — | — |
 | 2026-09-21 | [EverOS role configuration - acceptance cases](docs/specs/2026-09-21-everos-role-config-acceptance.md) | unknown |  | — | — |
 | 2026-09-21 | [EverOS role configuration moves to raven, and takes effect when it is saved](docs/specs/2026-09-21-everos-role-config-design.md) | implemented | built; G1, G2 and G3 passed 2026-09-21, G4 self-review 2026-09-22 | — | — |
-| 2026-09-28 | [Adding a benchmark: the evolution plugin contract](docs/specs/evolve-bench-contract.md) | unknown |  | — | — |
-| 2026-09-28 | [Playbook file format](docs/specs/playbook-spec.md) | unknown |  | — | — |
-| 2026-09-28 | [Self-evolution SOP <-> Raven implementation map](docs/specs/self-evolution-loop-raven-mapping.md) | unknown |  | — | — |
-| 2026-09-28 | [Self-Evolution Main Loop — Standard Operating Procedure (SOP)](docs/specs/self-evolution-loop-sop.md) | unknown |  | — | — |
 | 2026-10-08 | [EverOS Cloud memory plugin -- implementation plan](docs/plans/2026-10-08-everos-cloud-memory.md) | implemented | plan; G3 passed 2026-10-08 | 3632e6040 | — |
 | 2026-10-08 | [EverOS Cloud memory plugin -- acceptance cases](docs/specs/2026-10-08-everos-cloud-memory-acceptance.md) | implemented | cases; G2 passed 2026-10-08 | — | — |
 | 2026-10-08 | [EverOS Cloud as a memory backend plugin](docs/specs/2026-10-08-everos-cloud-memory-design.md) | design | design; G1 passed 2026-10-08 | 3632e6040 | — |
@@ -113,5 +109,9 @@ cannot join the backlog without an index entry.
 | 2026-10-12 | [Episodic log writer: a periodic annotator after the turn](docs/specs/2026-10-12-episodic-log-writer-design.md) | unknown |  | 829eb28e1 | — |
 | 2026-10-15 | [Full Failure Text Implementation Plan](docs/plans/2026-10-15-full-failure-text.md) | plan |  | — | — |
 | 2026-10-15 | [Turn Continuation: resuming a failed turn from its recorded model request](docs/specs/2026-10-15-turn-continuation-design.md) | unknown |  | — | — |
+| 2026-10-15 | [Adding a benchmark: the evolution plugin contract](docs/specs/evolve-bench-contract.md) | unknown |  | — | — |
+| 2026-10-15 | [Playbook file format](docs/specs/playbook-spec.md) | unknown |  | — | — |
+| 2026-10-15 | [Self-evolution SOP <-> Raven implementation map](docs/specs/self-evolution-loop-raven-mapping.md) | unknown |  | — | — |
+| 2026-10-15 | [Self-Evolution Main Loop — Standard Operating Procedure (SOP)](docs/specs/self-evolution-loop-sop.md) | unknown |  | — | — |
 | 2026-10-20 | [A draft `agent-decision` predicate for in-toto](docs/specs/2026-10-20-agent-decision-predicate-proposal.md) | design | ** a proposal draft, prepared for the proposer to put in front of the in-toto | — | — |
 | 2026-10-20 | [Evidence Bundle: one artefact a buyer can hand an auditor](docs/specs/2026-10-20-evidence-bundle-design.md) | unknown |  | — | — |
