@@ -6,6 +6,11 @@ sees -- the rendered result list, the fetch envelope -- is one code path, so
 each provider is normalised to the Serper (search) or Jina (fetch) shape before
 anything reads it. The Serper and Jina branches are byte-identical to what
 these tools always sent; do not tidy them into the others.
+
+Every vendor request goes out through the sources policy: the vendor's name
+is the registry key, the registry is asked before the request, and a source
+nobody has looked at is refused rather than called. The request itself is
+unchanged - the policy sits in front of it, not inside it.
 """
 
 import asyncio
@@ -24,6 +29,9 @@ from lxml import etree, html
 from raven.config.schema import WEB_VENDOR_ENV_VARS
 from raven.contracts.tool import Tool
 from raven.security.network import guarded_fetch, validate_url_target
+from raven.sources.policy import SourceRefusedError
+from raven.sources.transport import PolicyClient, check
+from raven.sources.transport import refusal_text as policy_refusal_text
 
 
 @dataclass(frozen=True)
@@ -386,6 +394,12 @@ class WebSearchTool(Tool):
         except httpx.ProxyError as e:
             logger.error("WebSearch proxy error: {}", e)
             return f"Proxy error: {e}"
+        except SourceRefusedError as e:
+            # The registry said no before the request went out, so this is not
+            # a vendor that failed: it is a vendor that was never asked.
+            error, detail = policy_refusal_text(e)
+            logger.error("WebSearch refused: {} ({})", vendor, error)
+            return f"Error: {error}. {detail}"
         except Exception as e:
             logger.error("WebSearch error: {}", e)
             return f"Error: {e}"
@@ -416,6 +430,9 @@ class WebSearchTool(Tool):
             return False, f"{spec.label} answered HTTP {e.response.status_code}"
         except httpx.HTTPError as e:
             return False, f"{spec.label} could not be reached ({type(e).__name__})"
+        except SourceRefusedError as e:
+            error, detail = policy_refusal_text(e)
+            return False, f"{error}. {detail}"
         except ValueError as e:
             return False, f"{spec.label} answered without results: {e}"
         return True, f"{hits} result(s)"
@@ -423,9 +440,14 @@ class WebSearchTool(Tool):
     async def _provider_request(
         self, client: httpx.AsyncClient, query: str, n: int, vendor: str, key: str
     ) -> httpx.Response:
-        """One search request, built the way ``vendor`` expects, carrying ``key``."""
+        """One search request, built the way ``vendor`` expects, carrying ``key``.
+
+        The request goes out through the sources policy, which is asked about
+        ``vendor`` before the socket is opened.
+        """
+        policy = PolicyClient(client, source=vendor)
         if vendor == "serper":
-            return await client.post(
+            return await policy.post(
                 "https://google.serper.dev/search",
                 json={"q": query, "num": n},
                 headers={
@@ -436,14 +458,14 @@ class WebSearchTool(Tool):
                 timeout=10.0,
             )
         if vendor == "serpapi":
-            return await client.get(
+            return await policy.get(
                 "https://serpapi.com/search",
                 params={"engine": "google", "q": query, "num": n, "api_key": key},
                 headers={"Accept": "application/json"},
                 timeout=10.0,
             )
         if vendor == "tavily":
-            return await client.post(
+            return await policy.post(
                 "https://api.tavily.com/search",
                 json={"query": query, "max_results": n},
                 headers={
@@ -457,7 +479,7 @@ class WebSearchTool(Tool):
             # Highlights, not ``text``: text is the whole page and the render
             # path shows whatever lands in the snippet slot. ``maxCharacters``
             # is the bound that holds on the live endpoint.
-            return await client.post(
+            return await policy.post(
                 "https://api.exa.ai/search",
                 json={"query": query, "numResults": n, "contents": {"highlights": {"maxCharacters": 300}}},
                 headers={
@@ -468,14 +490,14 @@ class WebSearchTool(Tool):
                 timeout=10.0,
             )
         if vendor == "brave":
-            return await client.get(
+            return await policy.get(
                 "https://api.search.brave.com/res/v1/web/search",
                 params={"q": query, "count": n},
                 headers={"Accept": "application/json", "X-Subscription-Token": key},
                 timeout=10.0,
             )
         if vendor == "firecrawl":
-            return await client.post(
+            return await policy.post(
                 "https://api.firecrawl.dev/v1/search",
                 json={"query": query, "limit": n},
                 headers={
@@ -486,7 +508,7 @@ class WebSearchTool(Tool):
                 timeout=10.0,
             )
         if vendor == "serply":
-            return await client.get(
+            return await policy.get(
                 "https://api.serply.io/v1/search",
                 params={"q": query, "num": n},
                 headers={"Accept": "application/json", "X-Api-Key": key},
@@ -497,13 +519,13 @@ class WebSearchTool(Tool):
             # There is no result-count parameter: the page size is the
             # service's, and the caller slices the normalised rows to the
             # count it asked for.
-            return await client.get(
+            return await policy.get(
                 "https://api.search.tinyfish.ai",
                 params={"query": query},
                 headers={"Accept": "application/json", "X-API-Key": key},
                 timeout=10.0,
             )
-        return await client.post(
+        return await policy.post(
             "https://api.anysearch.com/v1/search",
             json={"query": query, "max_results": n},
             headers={
@@ -748,6 +770,9 @@ class ImageSearchTool(Tool):
                     return f"Image results for: {said}\n\n{error}. {detail}"
                 try:
                     return await self._search_images(said, per_query, floor, vendor, key)
+                except SourceRefusedError as exc:
+                    error, detail = policy_refusal_text(exc)
+                    return f"Image results for: {said}\n\n{error}. {detail}"
                 except httpx.HTTPStatusError as exc:
                     # Status only: httpx puts the request in the message, and SerpApi
                     # carries its key as a query parameter.
@@ -805,37 +830,42 @@ class ImageSearchTool(Tool):
     async def _provider_request(
         self, client: httpx.AsyncClient, query: str, n: int, vendor: str, key: str
     ) -> httpx.Response:
-        """One image search, built the way ``vendor``'s image surface expects, carrying ``key``."""
+        """One image search, built the way ``vendor``'s image surface expects, carrying ``key``.
+
+        The request goes out through the sources policy, which is asked about
+        ``vendor`` before the socket is opened.
+        """
+        policy = PolicyClient(client, source=vendor)
         auth_json = {"Accept": "application/json", "Content-Type": "application/json"}
         if vendor == "serper":
-            return await client.post(
+            return await policy.post(
                 "https://google.serper.dev/images",
                 json={"q": query, "num": n},
                 headers={**auth_json, "X-API-KEY": key},
                 timeout=15.0,
             )
         if vendor == "serpapi":
-            return await client.get(
+            return await policy.get(
                 "https://serpapi.com/search.json",
                 params={"engine": "google_images", "q": query, "api_key": key},
                 headers={"Accept": "application/json"},
                 timeout=15.0,
             )
         if vendor == "brave":
-            return await client.get(
+            return await policy.get(
                 "https://api.search.brave.com/res/v1/images/search",
                 params={"q": query, "count": n},
                 headers={"Accept": "application/json", "X-Subscription-Token": key},
                 timeout=15.0,
             )
         if vendor == "tavily":
-            return await client.post(
+            return await policy.post(
                 "https://api.tavily.com/search",
                 json={"query": query, "max_results": n, "include_images": True, "include_image_descriptions": True},
                 headers={**auth_json, "Authorization": f"Bearer {key}"},
                 timeout=15.0,
             )
-        return await client.post(
+        return await policy.post(
             "https://api.firecrawl.dev/v2/search",
             json={"query": query, "limit": n, "sources": [{"type": "images"}]},
             headers={**auth_json, "Authorization": f"Bearer {key}"},
@@ -1046,6 +1076,24 @@ class WebFetchTool(Tool):
             # The same rule as the handlers below: most of these reasons name the
             # hostname, and a reader whose every target is refused is one cause.
             return json.dumps({"error": "URL validation failed", "detail": error_msg, "url": url}, ensure_ascii=False)
+        # The vendor is resolved, and the registry asked about it, before the
+        # first request: the page is read on the vendor's behalf, so a vendor
+        # whose terms do not permit the use must not see it - and neither must
+        # the direct read that stands in for it.
+        vendor, key = self._resolve()
+        spec = FETCH_PROVIDERS[vendor]
+        try:
+            check(vendor)
+        except SourceRefusedError as exc:
+            error, detail = policy_refusal_text(exc)
+            logger.error("WebFetch refused: {} ({})", vendor, error)
+            return json.dumps({"error": error, "detail": detail, "url": url}, ensure_ascii=False)
+        except Exception as exc:
+            # The registry could not be read at all, which is an operator's
+            # problem and not a rule: the call stops here rather than going
+            # out unchecked.
+            logger.error("WebFetch could not read the sources policy: {}", exc)
+            return json.dumps({"error": type(exc).__name__, "detail": str(exc), "url": url}, ensure_ascii=False)
         direct = None
         direct_error = ""
         try:
@@ -1059,8 +1107,6 @@ class WebFetchTool(Tool):
         if direct is not None and self._is_raw_content(direct):
             return self._direct_result(url, direct, max_chars)
 
-        vendor, key = self._resolve()
-        spec = FETCH_PROVIDERS[vendor]
         if (refused := self._refusal.active(vendor, key)) is not None:
             if direct is not None:
                 return self._direct_result(url, direct, max_chars)
@@ -1124,6 +1170,13 @@ class WebFetchTool(Tool):
             if direct is not None:
                 return self._direct_result(url, direct, max_chars)
             return json.dumps({"error": str(e), "url": url}, ensure_ascii=False)
+        except SourceRefusedError as e:
+            # The registry said no, so the page was never read: no fallback to
+            # the direct read, which would be reading it on the vendor's behalf
+            # after the vendor was refused.
+            error, detail = policy_refusal_text(e)
+            logger.error("WebFetch refused: {} ({})", vendor, error)
+            return json.dumps({"error": error, "detail": detail, "url": url}, ensure_ascii=False)
         except Exception as e:
             # The type, not the text: an SSL or connection failure spells the host in
             # its message, and two hosts behind one broken reader are one cause.
@@ -1182,20 +1235,23 @@ class WebFetchTool(Tool):
 
         Returns the page text, the status to report, and any extra envelope
         fields the backend can fill in. Raises when the answer was not a page.
+
+        The request goes out through the sources policy, which is asked about
+        ``vendor`` before the socket is opened.
         """
         if vendor == "jina":
             headers = {"Accept": "text/plain"}
             if key:
                 headers["Authorization"] = f"Bearer {key}"
             async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
-                r = await client.get(f"https://r.jina.ai/{url}", headers=headers)
+                r = await PolicyClient(client, source=vendor).get(f"https://r.jina.ai/{url}", headers=headers)
                 r.raise_for_status()
             return r.text, r.status_code, {}
 
         json_headers = {"Accept": "application/json", "Content-Type": "application/json"}
         if vendor == "tavily":
             async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
-                r = await client.post(
+                r = await PolicyClient(client, source=vendor).post(
                     "https://api.tavily.com/extract",
                     json={"urls": [url]},
                     headers={**json_headers, "Authorization": f"Bearer {key}"},
@@ -1219,7 +1275,7 @@ class WebFetchTool(Tool):
 
         if vendor == "exa":
             async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
-                r = await client.post(
+                r = await PolicyClient(client, source=vendor).post(
                     "https://api.exa.ai/contents",
                     json={"urls": [url], "text": True},
                     headers={**json_headers, "x-api-key": key},
@@ -1235,7 +1291,7 @@ class WebFetchTool(Tool):
 
         if vendor == "firecrawl":
             async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
-                r = await client.post(
+                r = await PolicyClient(client, source=vendor).post(
                     "https://api.firecrawl.dev/v1/scrape",
                     json={"url": url, "formats": ["markdown"]},
                     headers={**json_headers, "Authorization": f"Bearer {key}"},
@@ -1258,7 +1314,9 @@ class WebFetchTool(Tool):
         if key:
             headers["Authorization"] = f"Bearer {key}"
         async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
-            r = await client.post("https://api.anysearch.com/v1/extract", json={"url": url}, headers=headers)
+            r = await PolicyClient(client, source=vendor).post(
+                "https://api.anysearch.com/v1/extract", json={"url": url}, headers=headers
+            )
             r.raise_for_status()
         data = r.json()
         if not isinstance(data, dict):

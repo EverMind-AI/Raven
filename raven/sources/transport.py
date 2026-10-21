@@ -23,7 +23,9 @@ from raven.sources.policy import SourceRefusedError, consult
 if TYPE_CHECKING:
     import httpx
 
-__all__ = ["PolicyClient", "refusal_text", "send"]
+    from raven.sources.policy import SourcePolicy
+
+__all__ = ["PolicyClient", "check", "refusal_text", "send"]
 
 
 def refusal_text(refused: SourceRefusedError) -> tuple[str, str]:
@@ -50,6 +52,17 @@ def _citation_for(source: str) -> str:
     return policy.citation if policy else "the source's own terms"
 
 
+def check(source: str, *, use: str = "call") -> "SourcePolicy":
+    """The policy for one source, or a refusal, before anything is sent.
+
+    The same question :func:`send` asks, asked by a caller that has to know the
+    answer before it builds a request: a tool that reads a page itself as well
+    as through a vendor has to be refused before the first of the two, not
+    between them.
+    """
+    return consult(source, use=use, has_opt_in=has_opt_in(source, use))
+
+
 async def send(
     client: "httpx.AsyncClient",
     method: str,
@@ -64,7 +77,7 @@ async def send(
     Raises :class:`~raven.sources.policy.SourceRefusedError` before the
     request is made, so a refused source never sees the request.
     """
-    consult(source, use=use, has_opt_in=has_opt_in(source, use))
+    check(source, use=use)
     if method.upper() == "GET":
         return await client.get(url, **kwargs)
     return await client.post(url, **kwargs)

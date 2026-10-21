@@ -53,6 +53,8 @@ from loguru import logger
 
 from raven.contracts.tool import Tool
 from raven.security.network import validate_url_target
+from raven.sources.policy import SourceRefusedError
+from raven.sources.transport import PolicyClient, refusal_text
 from research_flow.support.evidence_round import EvidenceRound
 from research_flow.support.harness_text import search_closed_notice
 from research_flow.support.ledger import ledger_append as _ledger_append
@@ -1149,6 +1151,12 @@ class WebSearchTool(Tool):
         except httpx.ProxyError as e:
             logger.error("WebSearch proxy error: {}", e)
             return f"Proxy error: {e}", [], _error_shaping(e)
+        except SourceRefusedError as e:
+            # The registry said no before the request went out, so this is not
+            # a vendor that failed: it is a vendor that was never asked.
+            error, detail = refusal_text(e)
+            logger.error("WebSearch refused: {} ({})", self.spec.label, error)
+            return f"Error: {error}. {detail}", [], _error_shaping(e)
         except Exception as e:
             logger.error("WebSearch error: {}", e)
             return f"Error: {e}", [], _error_shaping(e)
@@ -1161,9 +1169,13 @@ class WebSearchTool(Tool):
         others. A vendor whose ``spec.paginates`` is False takes no ``page``
         here, and the saturation rule was told so when the session's slot was
         built, so the rung is unreachable rather than silently inert.
+
+        The request goes out through the sources policy, which is asked about
+        the vendor before the socket is opened.
         """
+        policy = PolicyClient(client, source=self.spec.vendor)
         if self.provider == "serper":
-            return await client.post(
+            return await policy.post(
                 "https://google.serper.dev/search",
                 json=({"q": query, "num": n} if page <= 1 else {"q": query, "num": n, "page": page}),
                 headers={
@@ -1180,14 +1192,14 @@ class WebSearchTool(Tool):
             params: dict[str, Any] = {"engine": "google", "q": query, "num": n, "api_key": self.api_key}
             if page > 1:
                 params["start"] = (page - 1) * n
-            return await client.get(
+            return await policy.get(
                 "https://serpapi.com/search",
                 params=params,
                 headers={"Accept": "application/json"},
                 timeout=10.0,
             )
         if self.provider == "tavily":
-            return await client.post(
+            return await policy.post(
                 "https://api.tavily.com/search",
                 json={"query": query, "max_results": n},
                 headers={
@@ -1208,7 +1220,7 @@ class WebSearchTool(Tool):
             body: dict[str, Any] = {"query": query, "numResults": n}
             if self.include_snippets:
                 body["contents"] = {"highlights": {"maxCharacters": 300}}
-            return await client.post(
+            return await policy.post(
                 "https://api.exa.ai/search",
                 json=body,
                 headers={
@@ -1224,14 +1236,14 @@ class WebSearchTool(Tool):
             params = {"q": query, "count": n}
             if page > 1:
                 params["offset"] = page - 1
-            return await client.get(
+            return await policy.get(
                 "https://api.search.brave.com/res/v1/web/search",
                 params=params,
                 headers={"Accept": "application/json", "X-Subscription-Token": self.api_key},
                 timeout=10.0,
             )
         if self.provider == "firecrawl":
-            return await client.post(
+            return await policy.post(
                 "https://api.firecrawl.dev/v1/search",
                 json={"query": query, "limit": n},
                 headers={
@@ -1246,7 +1258,7 @@ class WebSearchTool(Tool):
             params = {"q": query, "num": n}
             if page > 1:
                 params["start"] = (page - 1) * n
-            return await client.get(
+            return await policy.get(
                 "https://api.serply.io/v1/search",
                 params=params,
                 headers={"Accept": "application/json", "X-Api-Key": self.api_key},
@@ -1261,14 +1273,14 @@ class WebSearchTool(Tool):
             params: dict[str, Any] = {"query": query}
             if page > 1:
                 params["page"] = page - 1
-            return await client.get(
+            return await policy.get(
                 "https://api.search.tinyfish.ai",
                 params=params,
                 headers={"Accept": "application/json", "X-API-Key": self.api_key},
                 timeout=10.0,
             )
         # AnySearch.
-        return await client.post(
+        return await policy.post(
             "https://api.anysearch.com/v1/search",
             json={"query": query, "max_results": n},
             headers={
@@ -1825,6 +1837,9 @@ class WebFetchTool(Tool):
         response" inside a 51-minute window, while its three sibling arms, which ran
         outside that window, recorded none. The abandonment was not inevitable - the
         model itself re-fetched 163 of those URLs later and 124 of them came back.
+
+        The request goes out through the sources policy, which is asked about the
+        reader before the socket is opened.
         """
 
         async def _send() -> httpx.Response:
@@ -1833,7 +1848,9 @@ class WebFetchTool(Tool):
                 # everything after ``#`` a fragment of the OUTER r.jina.ai URL,
                 # so an SPA route fetched the site root while ``finalUrl``
                 # reported the requested value.
-                return await client.get(f"https://r.jina.ai/{url.replace('#', '%23')}", headers=headers)
+                return await PolicyClient(client, source=self.spec.vendor).get(
+                    f"https://r.jina.ai/{url.replace('#', '%23')}", headers=headers
+                )
 
         return await _send_with_retry(_send, op="fetch_retry", key=url, budget=self._state().retry_budget)
 
@@ -1905,6 +1922,12 @@ class WebFetchTool(Tool):
             # every vendor's refusal one class.
             logger.error("WebFetch error for {}: {}", url, e)
             return json.dumps({"error": str(e), "url": url}, ensure_ascii=False)
+        except SourceRefusedError as e:
+            # The registry said no before the request went out, so this is not a
+            # reader that failed: it is a reader that was never asked.
+            error, detail = refusal_text(e)
+            logger.error("WebFetch refused: {} ({})", self.spec.label, error)
+            return json.dumps({"error": error, "detail": detail, "url": url}, ensure_ascii=False)
         except Exception as e:
             # The type, not the text: an SSL or connection failure spells the host in
             # its message, and two hosts behind one broken reader are one cause.
@@ -2058,7 +2081,11 @@ class WebFetchTool(Tool):
         this payload has never carried one, and Jina embeds its own header block
         in the text, so synthesising a partial imitation of that block would
         misreport an undated page.
+
+        Every request goes out through the sources policy, which is asked about
+        the backend before the socket is opened.
         """
+        policy_source = self.spec.vendor
         if self.provider == "jina":
             headers = {"Accept": "text/plain"}
             if key := self.api_key:
@@ -2080,7 +2107,9 @@ class WebFetchTool(Tool):
 
             async def _send_tavily() -> httpx.Response:
                 async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
-                    return await client.post("https://api.tavily.com/extract", json={"urls": [url]}, headers=headers)
+                    return await PolicyClient(client, source=policy_source).post(
+                        "https://api.tavily.com/extract", json={"urls": [url]}, headers=headers
+                    )
 
             r = await _send_with_retry(_send_tavily, op="fetch_retry", key=url, budget=budget)
             data = r.json()
@@ -2105,7 +2134,7 @@ class WebFetchTool(Tool):
 
             async def _send_exa() -> httpx.Response:
                 async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
-                    return await client.post(
+                    return await PolicyClient(client, source=policy_source).post(
                         "https://api.exa.ai/contents", json={"urls": [url], "text": True}, headers=headers
                     )
 
@@ -2122,7 +2151,7 @@ class WebFetchTool(Tool):
 
             async def _send_fc() -> httpx.Response:
                 async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
-                    return await client.post(
+                    return await PolicyClient(client, source=policy_source).post(
                         "https://api.firecrawl.dev/v1/scrape",
                         json={"url": url, "formats": ["markdown"]},
                         headers=headers,
@@ -2147,7 +2176,9 @@ class WebFetchTool(Tool):
 
         async def _send_any() -> httpx.Response:
             async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
-                return await client.post("https://api.anysearch.com/v1/extract", json={"url": url}, headers=headers)
+                return await PolicyClient(client, source=policy_source).post(
+                    "https://api.anysearch.com/v1/extract", json={"url": url}, headers=headers
+                )
 
         r = await _send_with_retry(_send_any, op="fetch_retry", key=url, budget=budget)
         data = r.json()

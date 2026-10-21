@@ -42,6 +42,7 @@ from raven.config.schema import (
     WebProvidersConfig,
     WebSearchProvider,
 )
+from raven.sources import SOURCE_POLICIES, SourcePolicy, SourceTier
 
 pytestmark = pytest.mark.asyncio
 
@@ -89,6 +90,30 @@ def _patched(monkeypatch: pytest.MonkeyPatch, payload: Any, **kw: Any):
 def _no_ambient_vendor_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     for var in WEB_VENDOR_ENV_VARS.values():
         monkeypatch.delenv(var, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _every_vendor_these_tests_call_is_registered(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A row in the sources registry for each vendor the tool table offers.
+
+    The registry decides whether a vendor may be called at all, and a vendor
+    with no row is refused before the request is made. These tests are about
+    the request each vendor receives, so the row they need is supplied here;
+    where a vendor's terms really live is ``raven/sources/policy.py``, and a
+    vendor with no row there is refused in production until one is added.
+    """
+    for vendor, spec in {**SEARCH_PROVIDERS, **FETCH_PROVIDERS}.items():
+        if vendor not in SOURCE_POLICIES:
+            monkeypatch.setitem(
+                SOURCE_POLICIES,
+                vendor,
+                SourcePolicy(
+                    source=vendor,
+                    label=spec.label,
+                    tier=SourceTier.LICENSED,
+                    citation=spec.signup,
+                ),
+            )
 
 
 # --------------------------------------------------------------------------- #
@@ -226,6 +251,26 @@ async def test_a_status_error_never_echoes_the_key(vendor: str, monkeypatch: pyt
 
     assert "SECRET-KEY-123" not in rendered
     assert rendered == f"Error: {SEARCH_PROVIDERS[vendor].label} answered HTTP 500"
+
+
+async def test_a_vendor_the_registry_does_not_know_is_refused_before_the_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The sources policy is asked about the vendor before the request is made,
+    so a source nobody has looked at never sees one. The name is not a real
+    vendor: what is refused here is the shape of the refusal."""
+    vendor = "a_vendor_nobody_looked_at"
+    monkeypatch.setitem(
+        web_mod.SEARCH_PROVIDERS,
+        vendor,
+        web_mod.SearchProviderSpec(vendor, "A Vendor Nobody Looked At", "A_VENDOR_API_KEY", "https://example.test"),
+    )
+    with _patched(monkeypatch, {}) as client:
+        answer = await WebSearchTool(api_key="k", provider=vendor).execute("q1")
+
+    assert client.calls == []
+    assert "refused by source policy" in answer
+    assert "not in the registry" in answer
 
 
 @pytest.mark.parametrize("vendor", sorted(_SEARCH_REQUESTS))

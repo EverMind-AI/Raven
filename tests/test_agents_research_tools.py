@@ -45,6 +45,7 @@ from raven.agent.loop.failure_streak import failure_class, is_hard_tool_failure 
 from raven.agent.tools.params import cast_params, validate_params  # noqa: E402
 from raven.plugins.context import PluginContext, ServiceLocator  # noqa: E402
 from raven.security.network import validate_url_target  # noqa: E402
+from raven.sources import SOURCE_POLICIES, SourcePolicy, SourceTier  # noqa: E402
 
 # The gates that need a model. Off, so a context with no provider still installs
 # the flow and these tests measure the key rather than the provider.
@@ -62,6 +63,30 @@ def _public_dns(monkeypatch):
         return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("8.8.8.8", port or 0))]
 
     monkeypatch.setattr(socket, "getaddrinfo", resolve)
+
+
+@pytest.fixture(autouse=True)
+def _every_vendor_these_tests_call_is_registered(monkeypatch):
+    """A row in the sources registry for each vendor the tool table offers.
+
+    The registry decides whether a vendor may be called at all, and a vendor
+    with no row is refused before the request is made. These tests are about
+    the request each vendor receives, so the row they need is supplied here;
+    where a vendor's terms really live is ``raven/sources/policy.py``, and a
+    vendor with no row there is refused in production until one is added.
+    """
+    for vendor, spec in {**SEARCH_PROVIDERS, **FETCH_PROVIDERS}.items():
+        if vendor not in SOURCE_POLICIES:
+            monkeypatch.setitem(
+                SOURCE_POLICIES,
+                vendor,
+                SourcePolicy(
+                    source=vendor,
+                    label=spec.label,
+                    tier=SourceTier.LICENSED,
+                    citation=f"https://{vendor}.example.test/",
+                ),
+            )
 
 
 def _ctx(tmp_path: Path, slice_: dict, *, provider: object | None = None) -> PluginContext:
