@@ -711,8 +711,9 @@ def relearn_session_menus(
     """Re-record an agent's modes and model menu from a live session response, if they moved.
 
     Both menus are measured once at probe time and cached, but the agent
-    re-advertises them on every route into a session (``_with_modes`` in the
-    fork's ACP methods), so the response a dispatch already holds is newer
+    re-advertises them on its way into a session -- the modes on every route
+    (``_with_modes`` in the fork's ACP methods), the models at least on
+    ``session/new`` -- so the response a dispatch already holds is newer
     evidence than the snapshot. Without this the cache only ever moves when
     someone presses Test: ``snapshot_fingerprint`` covers how the agent is
     LAUNCHED, and an agent that reworded its own modes or renamed its models
