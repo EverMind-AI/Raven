@@ -101,6 +101,12 @@ describe('the chat makes room for the anchored desk', () => {
     const body = rule(':root[data-desk-resize] .chat:not([data-fresh]) .scroll > *, :root[data-desk-resize] .chat:not([data-fresh]) .dock')
     expect(body).not.toBeNull()
     expect(body).toMatch(/transition:\s*none/)
+    /* The pill takes the same half of the reserve as the column, so the same
+       restart would hold it while the column ran left; it keeps only its rise. */
+    const pill = rule(':root[data-desk-resize] .backpill')
+    expect(pill).not.toBeNull()
+    expect(pill).toMatch(/transition:\s*bottom [^;]*;?\s*$/)
+    expect(pill).not.toMatch(/left/)
   })
 
   it('does not animate the inset for a reader who asked for no motion', () => {

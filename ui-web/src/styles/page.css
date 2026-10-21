@@ -5408,6 +5408,9 @@ body:has(#onb:not([hidden])) .mpick { z-index: calc(var(--z-onboarding) + 1); }
    palette's edge ran over it; the hand is the motion there. */
 :root[data-desk-resize] .chat:not([data-fresh]) .scroll > *, :root[data-desk-resize] .chat:not([data-fresh]) .dock {
   transition: none; }
+/* The pill takes half the reserve too; as under reduced motion, it keeps only
+   its rise. */
+:root[data-desk-resize] .backpill { transition: bottom .18s ease; }
 /* The two centred columns: capped and slid. `.col` holds the scroller's own
    22px of side air, so neither carries a right padding to add this to.
 
