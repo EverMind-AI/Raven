@@ -347,6 +347,18 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- The `<agent>-Mirasim` presets no longer read as *Not installed on this
+  computer* on a computer that has Mirasim. The probe asked after a `mirasim`
+  executable on the login shell's PATH, which Mirasim's installer never puts
+  there (its CLI lives under `~/.mirasim/bin`), and the adapter runs no such
+  executable anyway. The rows now ask after Mirasim itself: a host to reach --
+  the desktop app's port with its token file written and something listening,
+  a host named in `RAVEN_MIRASIM_HOST`, or one Mirasim runs over ssh -- counts
+  as running; the launcher under Mirasim's home or `mirasim` on the PATH counts
+  as installed, and such a row says to open the Mirasim app; neither is still
+  *Not installed*, with the download link. A killed host leaves its token file
+  behind, so the file alone no longer counts as a running host.
+
 - What an agent on a registered machine writes on stderr reaches Raven even
   when no link held the agent at the time. The node kept those lines but, when
   a link attached, replayed only the agent's output: a run picked up after a

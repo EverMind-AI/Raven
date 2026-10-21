@@ -29,7 +29,12 @@ from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_ba
 from raven.agent.subagent.backends.base import optional_keyword
 from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.instances import InstanceRegistry
-from raven.agent.subagent.mirasim_presets import MIRASIM_AGENTS
+from raven.agent.subagent.mirasim_presets import (
+    MIRASIM_AGENTS,
+    MIRASIM_EXECUTABLE,
+    MIRASIM_INSTALL_HINT,
+    MIRASIM_SHIM_PRESETS,
+)
 from raven.agent.subagent.node_runtime import NodeTooOld, node_too_old
 from raven.agent.subagent.presets import (
     SHIM_REQUIRED_EXECUTABLES,
@@ -539,6 +544,15 @@ def _stale_node(cfg: Any) -> NodeTooOld | None:
     return node_too_old(argv[0], path)
 
 
+def _mirasim_env(cfg: Any) -> dict[str, str]:
+    """The environment a Mirasim row's adapter would find its host in: the login shell's, the row's own over it.
+
+    The spawn path's order (``{**login_shell_env(), **cfg.env}``), so the host the
+    probe looks for is the one the adapter would reach.
+    """
+    return {**login_shell_env(), **(getattr(cfg, "env", None) or {})}
+
+
 def _missing_detail(exe: str, hint: str | None) -> str:
     detail = f"{exe} is not on the login shell PATH"
     return f"{detail}; install with {hint}" if hint else detail
@@ -621,6 +635,27 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
                 off,
             )
         return replace(done("missing", _missing_exe_detail(cfg, exe), exe), absent=exe)
+    if getattr(cfg, "preset", None) in MIRASIM_SHIM_PRESETS:
+        # The adapter runs no executable of Mirasim's; it reaches the host. So the
+        # row is read by whether a host is there to reach, then by whether
+        # Mirasim is installed at all -- told apart, because the reader's next
+        # move differs: open the app, or install it.
+        state, where = mirasim_presets.presence(_mirasim_env(cfg), path=cfg_path or path)
+        if state == "absent":
+            return replace(
+                done(
+                    "missing",
+                    f"Mirasim is not installed on this computer; install {MIRASIM_INSTALL_HINT} and open it",
+                    MIRASIM_EXECUTABLE,
+                ),
+                absent=MIRASIM_EXECUTABLE,
+            )
+        if state == "installed":
+            return done(
+                "attention",
+                f"Mirasim is installed ({where}) but its host is not running: open the Mirasim app, then check again",
+                where,
+            )
     requirement = shim_requirement_for(cfg)
     if requirement is not None:
         agent_exe, install = requirement
@@ -1389,11 +1424,12 @@ def _unconfigured_acp_preset_rows(configured: set[str], *, path: str | None) -> 
     half's already. A non-acp preset has no handshake to record -- an openai
     row's credential is settled by the free ``/models`` probe and a cli row is
     never handshaken at all. And a command that does not resolve -- or a shim
-    whose agent does not (``SHIM_REQUIRED_EXECUTABLES``), which ``_probe_acp``
-    reads as missing just the same -- is one whose verdict the free probe
-    already reached for nothing: launching it to learn the same thing is the
-    cost this filter exists to refuse. The shim half matters most where the
-    command is Raven's own interpreter, which resolves on every machine.
+    whose agent does not (``SHIM_REQUIRED_EXECUTABLES``), or a Mirasim row with
+    no host to reach (``mirasim_presets.presence``), which ``_probe_acp`` reads
+    as missing or as waiting on the app just the same -- is one whose verdict
+    the free probe already reached for nothing: launching it to learn the same
+    thing is the cost this filter exists to refuse. The shim half matters most
+    where the command is Raven's own interpreter, which resolves on every machine.
 
     ``path`` is the login shell's, captured once by the caller -- the same PATH
     ``_probe_acp`` resolves against. Reading this process's instead would answer
@@ -1408,6 +1444,7 @@ def _unconfigured_acp_preset_rows(configured: set[str], *, path: str | None) -> 
         if preset.get("kind") == "acp" and preset.get("name") not in configured
     ]
     here = []
+    mirasim: tuple[str, str] | None = None
     for preset in wanted:
         try:
             argv = command_argv((preset.get("command") or "").strip())
@@ -1415,9 +1452,17 @@ def _unconfigured_acp_preset_rows(configured: set[str], *, path: str | None) -> 
             continue
         if not argv or shutil.which(argv[0], path=path or None) is None:
             continue
-        requirement = SHIM_REQUIRED_EXECUTABLES.get(str(preset.get("preset") or ""))
+        key = str(preset.get("preset") or "")
+        requirement = SHIM_REQUIRED_EXECUTABLES.get(key)
         if requirement is not None and shutil.which(requirement[0], path=path or None) is None:
             continue
+        if key in MIRASIM_SHIM_PRESETS:
+            # Asked once for all of Mirasim's rows: what their handshake needs is a
+            # host to reach, and `_probe_acp` reads a row without one as not here.
+            if mirasim is None:
+                mirasim = mirasim_presets.presence(login_shell_env(), path=path or None)
+            if mirasim[0] != "running":
+                continue
         here.append(preset)
     if not here:
         return []

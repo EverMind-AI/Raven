@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import socket
+import sys
 from contextlib import closing
 from pathlib import Path
 
@@ -1781,11 +1782,66 @@ def test_a_shim_preset_whose_agent_is_absent_is_not_offered_for_verification(
     present = {"/venv/bin/python", "npx", "pi"}
     monkeypatch.setattr(probe_mod, "third_party_subagent_presets", lambda: presets)
     monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: f"/bin/{exe}" if exe in present else None)
+    monkeypatch.setattr(probe_mod, "login_shell_env", lambda: {"MIRASIM_HOME": "/mirasim"})
+    asked: list[tuple[dict[str, str], str | None]] = []
+    state = "installed"
 
-    assert [row.name for row in probe_mod._unconfigured_acp_preset_rows(set(), path=None)] == ["Pi"]
-    present.add("mirasim")
-    rows = probe_mod._unconfigured_acp_preset_rows(set(), path=None)
+    def fake_presence(env: dict[str, str], *, path: str | None) -> tuple[str, str]:
+        asked.append((env, path))
+        return state, "/mirasim/bin/mirasim"
+
+    monkeypatch.setattr(probe_mod.mirasim_presets, "presence", fake_presence)
+
+    # Installed but no host to reach: its handshake would fail on that, and `_probe_acp` already says so.
+    assert [row.name for row in probe_mod._unconfigured_acp_preset_rows(set(), path="/login/bin")] == ["Pi"]
+    state = "running"
+    rows = probe_mod._unconfigured_acp_preset_rows(set(), path="/login/bin")
     assert [row.name for row in rows] == ["Claude Code-Mirasim", "Pi"]
+    # Asked in the login shell's environment, against its PATH, once per boot however many Mirasim rows.
+    assert asked == [({"MIRASIM_HOME": "/mirasim"}, "/login/bin")] * 2
+
+
+async def test_a_mirasim_row_is_read_by_whether_mirasim_is_here_not_by_an_executable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mirasim puts its CLI on no PATH, and the adapter runs none: the row read as *Not installed* on every
+    computer that had Mirasim. Three states now, each with the reader's next move."""
+    from raven.agent.subagent import mirasim_presets as mp
+
+    home = tmp_path / "mirasim"
+    (tmp_path / "bin").mkdir()
+    monkeypatch.setattr(probe_mod, "login_shell_env", lambda: {"RAVEN_MIRASIM_HOST": "", "MIRASIM_HOME": "/elsewhere"})
+    monkeypatch.setattr(mp, "remote_socket", lambda: tmp_path / "none" / "server.sock")
+    monkeypatch.setattr(mp, "_listening", lambda port: False)
+    monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: None)
+    cfg = ThirdPartyAcpSubagentConfig(
+        name="Claude Code-Mirasim",
+        preset="mirasim_claude",
+        command=f"{sys.executable} -P -m raven.acp.mirasim --agent claude",
+        env={"MIRASIM_HOME": str(home)},  # the row's own wins over the login shell's, as at launch
+    )
+
+    res = await probe_one(cfg, source="preset", path=str(tmp_path / "bin"))
+    assert res.status == "missing"
+    assert res.absent == "mirasim" and res.target == "mirasim", "what the page offers to install is read from this"
+    assert "Mirasim is not installed on this computer" in res.detail and "mirasim.ai/download" in res.detail
+
+    launcher = home.joinpath(*mp.LAUNCHER)
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    res = await probe_one(cfg, source="preset", path=str(tmp_path / "bin"))
+    assert res.status == "attention" and res.absent is None
+    assert (
+        res.detail
+        == f"Mirasim is installed ({launcher}) but its host is not running: open the Mirasim app, then check again"
+    )
+    assert res.target == str(launcher)
+
+    mp.token_file(cfg.env).parent.mkdir(parents=True)
+    mp.token_file(cfg.env).write_text("desk\n", encoding="utf-8")
+    monkeypatch.setattr(mp, "_listening", lambda port: True)
+    res = await probe_one(cfg, source="preset", path=str(tmp_path / "bin"))
+    assert res.status == "attention" and "have not been recorded yet" in res.detail
 
 
 async def test_a_hand_written_npx_row_is_not_held_to_a_shims_requirement(

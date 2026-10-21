@@ -26,8 +26,13 @@ on its own -- so a row reads the way the agent does in Mirasim.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
-from typing import Any
+import shutil
+import socket
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any, Literal
 
 from loguru import logger
 
@@ -50,7 +55,8 @@ MIRASIM_AGENTS: dict[str, tuple[str, str, str]] = {
 MIRASIM_SHIM_PRESETS = frozenset(MIRASIM_AGENTS)
 
 MIRASIM_EXECUTABLE = "mirasim"
-MIRASIM_INSTALL_HINT = "the Mirasim CLI from https://mirasim.ai/download"
+"""Mirasim's CLI, as it is named on a PATH the owner put it on; the adapter never runs it (see :func:`presence`)."""
+MIRASIM_INSTALL_HINT = "the Mirasim app from https://mirasim.ai/download"
 
 
 def _row(key: str, agent: str, label: str, what: str) -> dict[str, Any]:
@@ -87,7 +93,8 @@ INSTALLED_QUERY = "{PYTHON} -P -m raven.acp.mirasim --installed"
 INSTALLED_NO_HOST_EXIT = 3
 """The exit status of ``--installed`` when no Mirasim host could be reached to ask."""
 
-HOST_ENV_KEYS = ("RAVEN_MIRASIM_HOST", "MIRASIM_HOME")
+HOST_ENV = "RAVEN_MIRASIM_HOST"
+HOST_ENV_KEYS = (HOST_ENV, "MIRASIM_HOME")
 """The variables the adapter finds its host by (``raven.acp.mirasim.host``).
 
 A row whose ``env`` sets one looks for a host of its own, which a question asked
@@ -96,6 +103,83 @@ in the login shell's environment says nothing about."""
 INSTALLED_TIMEOUT_S = 60.0
 """How long the question may take: the host listing its agents, under the
 presets' own ``readyTimeoutMs`` for the same work."""
+
+DESKTOP_PORT = 4970
+"""The loopback port the installed desktop app's host listens on, and the adapter's third place to look.
+
+Spelled here as well as in ``raven.acp.mirasim.host`` (pinned equal by a test): this package may not import
+the adapter, a served surface, and the probe that reads these presets has to find the host without it."""
+
+LAUNCHER = ("bin", "mirasim")
+"""Where Mirasim writes its CLI under its state directory, at every start of its host.
+
+It puts that directory on no PATH (measured on macOS against 0.0.571 to 0.0.585: nothing in the shell rc
+files, nothing under ``/etc/paths.d``, no command of its own that would), so the launcher is the sign that
+Mirasim is installed when no host is up, and ``mirasim`` on the login shell's PATH is one the owner made."""
+
+Presence = Literal["running", "installed", "absent"]
+
+
+def mirasim_home(env: Mapping[str, str]) -> Path:
+    """Mirasim's state directory as the adapter reads it: ``MIRASIM_HOME``, else ``~/.mirasim``."""
+    named = env.get("MIRASIM_HOME", "").strip()
+    return Path(named).expanduser() if named else Path.home() / ".mirasim"
+
+
+def remote_socket() -> Path:
+    """Where the host Mirasim runs on a machine it reaches over ssh listens, as the adapter looks for it."""
+    return Path.home() / ".mirasim-remote" / "run" / "server.sock"
+
+
+def token_file(env: Mapping[str, str]) -> Path:
+    """The access token the desktop app's host writes for its local clients, where the adapter reads it."""
+    return mirasim_home(env) / "run" / f"local-{DESKTOP_PORT}.token"
+
+
+def _listening(port: int) -> bool:
+    """Whether something answers on this computer's loopback ``port``.
+
+    The token file alone cannot say: the host removes it when it leaves and
+    leaves it behind when it is killed (measured against 0.0.571: a SIGTERM
+    empties ``run/``, a SIGKILL does not), so the file is evidence of an
+    install, and only an open port of a host.
+    """
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.3):
+            return True
+    except OSError:
+        return False
+
+
+def presence(env: Mapping[str, str], *, path: str | None) -> tuple[Presence, str]:
+    """Whether Mirasim is on this computer, as the adapter would find its host, and where.
+
+    ``running`` when there is a host to reach, in the order the adapter looks: one named in
+    ``RAVEN_MIRASIM_HOST``, the socket of a host Mirasim runs over ssh, or the desktop app's port with its
+    token file written and something listening. ``installed`` when Mirasim is here but no host is up: the
+    launcher under its home, ``mirasim`` on ``path`` (the login shell's PATH), or a token file nothing
+    answers behind. ``absent`` otherwise. The adapter itself runs no executable, so none is asked after:
+    what a row needs is the host, and what its reader needs to hear is which of the three this is.
+    ``env`` is the environment the row's adapter would be launched in.
+    """
+    if env.get(HOST_ENV, "").strip():
+        return "running", f"the host named in {HOST_ENV}"
+    sock = remote_socket()
+    with contextlib.suppress(OSError):
+        if sock.is_socket():
+            return "running", str(sock)
+    home = mirasim_home(env)
+    has_token = token_file(env).is_file()
+    if has_token and _listening(DESKTOP_PORT):
+        return "running", f"127.0.0.1:{DESKTOP_PORT}"
+    launcher = home.joinpath(*LAUNCHER)
+    if launcher.is_file():
+        return "installed", str(launcher)
+    if on_path := shutil.which(MIRASIM_EXECUTABLE, path=path or None):
+        return "installed", on_path
+    if has_token:
+        return "installed", str(home)
+    return "absent", ""
 
 
 async def installed_agents(*, path: str | None) -> frozenset[str] | None:
@@ -153,11 +237,19 @@ async def installed_agents(*, path: str | None) -> frozenset[str] | None:
 
 
 __all__ = [
+    "DESKTOP_PORT",
+    "HOST_ENV",
+    "HOST_ENV_KEYS",
     "INSTALLED_QUERY",
+    "LAUNCHER",
     "MIRASIM_AGENTS",
     "MIRASIM_EXECUTABLE",
     "MIRASIM_INSTALL_HINT",
     "MIRASIM_PRESETS",
     "MIRASIM_SHIM_PRESETS",
     "installed_agents",
+    "mirasim_home",
+    "presence",
+    "remote_socket",
+    "token_file",
 ]

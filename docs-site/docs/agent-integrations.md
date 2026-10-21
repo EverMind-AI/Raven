@@ -180,7 +180,7 @@ your local installation has passed a live task.
 | `hermes` | `hermes acp --accept-hooks` | Native authentication; the flag accepts previously unseen shell hooks |
 | `openclaw` | `openclaw acp` | Its gateway and authentication; startup has a longer handshake allowance |
 | `mirothinker` | OpenAI-compatible HTTP | Endpoint/model/key; preset opts out of stateful replay |
-| `mirasim_<agent>` | Raven's own ACP adapter over the Mirasim host's protocol | Mirasim running on this machine, the agent installed inside it, and the `mirasim` CLI on the login shell's PATH (the check that offers the rows); session MCP withheld via `sessionMcp: false` |
+| `mirasim_<agent>` | Raven's own ACP adapter over the Mirasim host's protocol | Mirasim installed on this computer and running, and the agent installed inside it. The rows are offered when Raven finds Mirasim: a host to reach, else the launcher Mirasim writes under its home (`~/.mirasim/bin/mirasim`, which it puts on no PATH) or `mirasim` on the login shell's PATH; a row whose Mirasim is installed but not open says to open the app. Session MCP withheld via `sessionMcp: false` |
 
 GitHub Copilot, Qwen Code, CodeBuddy, Qoder, Grok Build, Kimi Code, and Pi also
 have preset entries. Adapter versions and exact commands are maintained in
