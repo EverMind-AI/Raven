@@ -50,12 +50,12 @@ if TYPE_CHECKING:
 
 #: Finish reasons that are the upstream's whole verdict on a call. The ``stop``
 #: that closes a stream after one only says the stream is over.
-_DECLINED = frozenset({"refusal", "content_filter"})
+DECLINED_FINISH_REASONS = frozenset({"refusal", "content_filter"})
 
 
 def _finish_after(held: str | None, incoming: str) -> str:
     """The finish reason a stream stands on once ``incoming`` has arrived."""
-    return held if held in _DECLINED else incoming
+    return held if held in DECLINED_FINISH_REASONS else incoming
 
 
 def _transport_failed(
