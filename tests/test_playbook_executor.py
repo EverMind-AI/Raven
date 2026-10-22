@@ -914,6 +914,20 @@ def test_the_prompts_allow_a_branch_and_still_refuse_a_loop():
     assert "design no run-time loops (a conditional branch is expressible)" in compose
 
 
+def test_the_dag_mode_section_gives_a_branch_its_fields_and_the_one_rule_about_them():
+    """A generated dag playbook is written from this section, not from the prompt-mode
+    paragraph that says a branch can be expressed, so it is read here on its own."""
+    section = SYSTEM_PROMPT.split("# nodes (dag mode)\n", 1)[1].split("\n# ", 1)[0]
+    flat = " ".join(section.split())
+
+    assert "the whole graph language" not in flat
+    for field in ("`routes`", "`select`", "`when`"):
+        assert field in flat
+    assert "A node that depends on a decision node must name it in its `when`" in flat
+    assert "<id>.<route>" in flat and "<id>.done" in flat
+    assert "{{ <id>.output }}" in flat
+
+
 def test_the_compose_prompt_gives_a_branch_its_fields_and_the_one_rule_about_them():
     """A prompt that says a branch is expressible has to hand over the fields to write one
     with, and the one rule a branch breaks when it is forgotten: a node that depends on

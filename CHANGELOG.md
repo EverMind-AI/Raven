@@ -502,6 +502,12 @@ All notable changes to Raven are documented here.
   from the library; every key in the spec block is now read as the text it is
   written as. Values keep their YAML types.
 
+- Generating a dag playbook can produce a branch. The generator's instructions
+  for dag mode called `dependsOn` the whole graph language and never named
+  `routes`, `select` or `when`, though the schema it fills offers them; they
+  now describe a decision node and the rule that a node depending on one names
+  it in its `when`.
+
 - In the web UI, the **What came back** fold of a DAG node that stopped on
   a decision no longer opens onto the brief written for the model -- the
   `resolve_dag_node` calls it may make and that tool's whole schema, all in
