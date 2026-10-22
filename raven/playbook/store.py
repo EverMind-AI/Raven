@@ -23,12 +23,13 @@ file wins, and the load path says so once per shadowed name.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import os
 import re
 import tempfile
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 from loguru import logger
@@ -227,11 +228,15 @@ class PlaybookStore:
         fm_match = _FRONTMATTER_RE.match(text)
         if fm_match is None:
             raise ValueError(f"playbook {name!r}: no frontmatter in playbook.md")
-        front = yaml.load(fm_match.group(1), Loader=_KeyAsStringLoader) or {}  # noqa: S506 - SafeLoader subclass; only scalar key nodes are retagged
+        front = _load_yaml(fm_match.group(1))
+        if not isinstance(front, dict):
+            raise ValueError(f"playbook {name!r}: the frontmatter is not a mapping")
         block_match = _BLOCK_RE.search(text)
         if block_match is None:
             raise ValueError(f"playbook {name!r}: no '```yaml playbook-spec' block in playbook.md")
-        data = yaml.load(block_match.group(1), Loader=_KeyAsStringLoader) or {}  # noqa: S506 - SafeLoader subclass; only scalar key nodes are retagged
+        data = _load_yaml(block_match.group(1))
+        if not isinstance(data, dict):
+            raise ValueError(f"playbook {name!r}: the spec block is not a mapping")
         data["name"] = front.get("name")
         data["description"] = front.get("description")
         if data["name"] != name:
@@ -248,26 +253,39 @@ class PlaybookStore:
 class _KeyAsStringLoader(yaml.SafeLoader):
     """Mapping keys read as the text they were written as.
 
-    YAML 1.1 resolves ``yes``, ``no``, ``on``, ``off``, ``true``, ``false`` and
-    bare digits to booleans and numbers, and a route named ``yes`` then arrives
-    as a non-string key the spec refuses -- the runtime answers a load error by
-    dropping the playbook out of the library. Scalar key nodes of those tags are
-    retagged to strings here (after flattening, so a key arriving through a
-    ``<<:`` merge is retagged too), and the mapping itself is still constructed
-    by PyYAML's own loop -- which keeps its answer for an unhashable key, the
-    yaml.YAMLError playbooks_validate catches to answer with a finding. Values
-    are untouched, so ``confirm: yes`` still means true.
+    YAML 1.1 resolves ``yes``, ``no``, ``on``, ``off``, ``true``, ``false``,
+    bare digits and bare dates into booleans, numbers and timestamps, and a
+    route named ``yes`` then arrives as a non-string key the spec refuses --
+    the runtime answers a load error by dropping the playbook out of the
+    library. Every scalar key node of a non-string tag is replaced with a copy
+    retagged to a string (a copy, because anchors can share one scalar between
+    a key here and a value elsewhere, and the value must keep its type), after
+    flattening so a key arriving through a ``<<:`` merge is retagged too. The
+    mapping itself is still built by PyYAML's own loop, which keeps its answer
+    for an unhashable key -- the yaml.YAMLError playbooks_validate catches to
+    answer with a finding. Values are untouched, so ``confirm: yes`` still
+    means true.
     """
 
-    _SCALAR_KEY_TAGS = frozenset(["tag:yaml.org,2002:bool", "tag:yaml.org,2002:int", "tag:yaml.org,2002:float"])
+    _STR = "tag:yaml.org,2002:str"
 
     def construct_mapping(self, node, deep=False):
         if isinstance(node, yaml.MappingNode):
             self.flatten_mapping(node)
-            for key_node, _value_node in node.value:
-                if key_node.tag in self._SCALAR_KEY_TAGS:
-                    key_node.tag = "tag:yaml.org,2002:str"
+            pairs = []
+            for key_node, value_node in node.value:
+                if isinstance(key_node, yaml.ScalarNode) and key_node.tag != self._STR:
+                    retagged = copy.copy(key_node)
+                    retagged.tag = self._STR
+                    key_node = retagged
+                pairs.append((key_node, value_node))
+            node.value = pairs
         return super().construct_mapping(node, deep=deep)
+
+
+def _load_yaml(text: str) -> Any:
+    """The store's one YAML read: keys as written, values as YAML resolves them."""
+    return yaml.load(text, Loader=_KeyAsStringLoader)  # noqa: S506 - SafeLoader subclass; only scalar key nodes are retagged
 
 
 def _drop_unusable_mcp_servers(spec: StoredPlaybook) -> StoredPlaybook:
@@ -391,7 +409,7 @@ def _migrate_legacy_nodes(data: dict, *, name: str) -> dict:
 
 def _render(spec: StoredPlaybook, notes: list[str]) -> str:
     # Serialized, not interpolated: ``load`` parses this region with
-    # ``yaml.safe_load``, and ``description`` is model-written prose where a
+    # the key-preserving loader, and ``description`` is model-written prose where a
     # colon or a leading ``#`` is ordinary. Interpolating produced files that
     # could not be read back -- ``description: due diligence: scan first`` is
     # a YAML mapping error, and a leading ``#`` silently became a comment. The
