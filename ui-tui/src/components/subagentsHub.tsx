@@ -34,8 +34,7 @@ const STATUS_GLYPH: Record<SubagentRow['probe_status'], string> = {
  * switched like any other agent: `subagents.toggle` writes a switch-only row for
  * "off" and drops it for "on". Nor is the built-in loop one.
  */
-export const isUnaddedPreset = (row: SubagentRow): boolean =>
-  !row.configured && !row.vendored && row.kind !== 'builtin'
+export const isUnaddedPreset = (row: SubagentRow): boolean => !row.configured && !row.vendored && row.kind !== 'builtin'
 
 /**
  * Row-flattening and offset computation, pulled out as a pure function so the

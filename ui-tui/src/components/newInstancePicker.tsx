@@ -167,7 +167,12 @@ export function NewInstancePicker({ gw, onCancel, onCreated, sessionKey, t }: Ne
                 default `<preset>@<machine>` is one -- would otherwise be squeezed
                 by the description and wrap onto a second screen line. */}
             <Box flexShrink={0} width={26}>
-              <Text bold={selected} color={selected ? t.color.accent : t.color.muted} inverse={selected} wrap="truncate-end">
+              <Text
+                bold={selected}
+                color={selected ? t.color.accent : t.color.muted}
+                inverse={selected}
+                wrap="truncate-end"
+              >
                 {String(i + 1).padStart(2)}. {row.name}
               </Text>
             </Box>
