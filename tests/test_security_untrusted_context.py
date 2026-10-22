@@ -954,12 +954,28 @@ def test_ravens_own_oauth_tokens_are_redacted_like_another_programs() -> None:
     ):
         shown = scrub_tool_output(arguments, tokens)
         assert access not in shown and refresh not in shown, (arguments, shown)
+        # Positive, so an implementation that drops the whole result cannot pass:
+        # each value is replaced where it stood, keeping the key, the indent and
+        # every other field of the file. A bare `not in` holds for "".
+        assert '"access": "[redacted]"' in shown, (arguments, shown)
+        assert '"refresh": "[redacted]"' in shown, (arguments, shown)
+        assert shown == tokens.replace(access, "[redacted]").replace(refresh, "[redacted]"), (arguments, shown)
+        kept = json.loads(shown)
+        assert list(kept) == ["access", "refresh", "expires", "resource_url"], (arguments, shown)
+        assert kept["expires"] == 1_760_000_000_000, (arguments, shown)
+        assert kept["resource_url"] == "https://api.minimax.io/anthropic/v1", (arguments, shown)
     # ``access`` and ``refresh`` are ordinary English words. The pass is fenced
     # on the read reaching the OAuth store, so prose keeps its words even when
     # the gate is open, and everywhere else it never runs at all.
     prose = "Refresh the page, then access the network again after signing in.\n"
     assert scrub_tool_output({"path": str(own / "oauth" / "minimax_global.json")}, prose) == prose
     assert scrub_tool_output({"path": str(own / "workspace" / "notes.md")}, prose) == prose
+    # ``save_token``'s ``json.dump`` writes no trailing newline, and a read that
+    # carries one keeps it: the pass rewrites values, it does not re-serialise.
+    with_newline = tokens + "\n"
+    shown = scrub_tool_output({"path": str(own / "oauth" / "minimax_global.json")}, with_newline)
+    assert shown.endswith('"resource_url": "https://api.minimax.io/anthropic/v1"\n}\n'), shown
+    assert shown.count("\n") == with_newline.count("\n"), shown
     # A bare listing of the home itself stays out of the pass, and a read whose
     # arguments never reach into it was never a candidate.
     source = "token = self.get_token(request)\n"
@@ -998,6 +1014,9 @@ def test_ravens_own_plugin_and_agent_source_is_not_redacted_while_its_tokens_sti
     tokens = '{"access": "mmx_FAKEACCESS0123456789abcdef", "refresh": "mmx_FAKEREFRESH0123456789abcdef"}'
     shown = scrub_tool_output({"path": str(own / "oauth" / "minimax_global.json")}, tokens)
     assert "mmx_FAKEACCESS0123456789abcdef" not in shown and "mmx_FAKEREFRESH0123456789abcdef" not in shown, shown
+    # The single-line spelling of the same file keeps its one line: two values
+    # replaced in place, keys, spacing and the absence of a trailing newline kept.
+    assert shown == '{"access": "[redacted]", "refresh": "[redacted]"}', shown
     # A plugin directory outside Raven's home is not Raven's home, and was never
     # in scope for this pass either way.
     assert scrub_tool_output({"path": "plugins/example.py"}, source) == source
