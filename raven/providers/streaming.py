@@ -154,13 +154,16 @@ async def stream_llm_call(
     loop's own ladder, seconds to minutes, for a gateway that serves error pages
     for a while -- asking again after each wait. Once both are spent the exception
     propagates: a mid-turn provider error is the turn's failure (the lane emits
-    TurnFailed), not a text reply about one. Two outcomes come back as an error
+    TurnFailed), not a text reply about one. Three outcomes come back as an error
     response (``finish_reason="error"`` with its classification) instead of
     raising, because their recovery belongs to the caller: a stream the upstream
     closed before its terminal chunk with nothing deliverable in it, classified
     as a network failure for the loop to wait out its own ladder on -- retryable
-    unless a thought had already reached the watcher -- and ``strip_images``,
-    whose recovery is a change to the messages that only the loop can make.
+    unless a thought had already reached the watcher; a stream whose normal end
+    carries the evidence of a request the upstream never processed, once the
+    reconnects are spent (``upstream_transport_failure``, retryable); and
+    ``strip_images``, whose recovery is a change to the messages that only the
+    loop can make.
 
     ``stream_kwargs`` reaches ``chat_stream`` unchanged. It exists because that
     signature carries *literal* generation defaults rather than the provider's
@@ -354,10 +357,11 @@ async def stream_llm_call(
             # Asked inside the attempt loop so the answer can be acted on. The
             # verdict requires that nothing was emitted, so a second attempt
             # duplicates no rendered output -- the same condition the reconnect
-            # below already tests before retrying a mid-stream error. Returning
-            # `finish_reason="error"` here instead would end the turn: this path
-            # has no ladder of its own, and the loop breaks on an error response
-            # before `classify_empty_response` can recover it.
+            # below already tests before retrying a mid-stream error. A
+            # reconnect is the cheap answer and is tried while attempts remain;
+            # once they are spent the verdict is handed back as a retryable
+            # error response, which the loop waits out on its own ladder, or
+            # answers with a fallback model, before it gives the turn up.
             transport_evidence = _transport_failed(
                 upstream_finish_reason, content_buf, reasoning_buf, tool_call_slots, final_usage, messages
             )

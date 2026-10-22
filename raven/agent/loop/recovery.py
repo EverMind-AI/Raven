@@ -1,41 +1,50 @@
 """Empty-response recovery for the agent loop.
 
-Pure decision logic, no I/O — the loop owns the side effects (appending
-messages, incrementing counters, ``continue``). Kept separate from the loop so
-the branching can be unit-tested in isolation, mirroring the repo's other small
-policy units (nudge_policy, decision_router).
+Pure decision logic, no I/O -- the loop owns the side effects (appending
+messages, counting, ``continue``). Kept separate from the loop so the branching
+can be unit-tested in isolation, mirroring the repo's other small policy units
+(nudge_policy, decision_router).
 
-A turn that ends with no visible text would otherwise surface a canned
-"no response to give" dud — a zero-score turn on weaker models. This recovers
-the turn before giving up, in three bounded modes:
+A model reply that carries no tool call is read as one :class:`ReplyKind`, and
+:func:`decide` maps that kind and what the turn has already spent
+(:class:`RecoveryState`) to the next :class:`RecoveryAction`. The first row that
+matches wins:
 
-  PREFILL  thinking-only — the model emitted only reasoning (a structured field
-           or an inline <think> block) and no body. Re-feed its own reasoning so
-           it continues into the answer.
-  NUDGE    post-tool empty — the model ran a tool then returned nothing. Inject a
-           short user nudge so it processes the tool result.
-  RETRY    plain empty — re-request with less reasoning asked for than the
-           call that came back empty (:func:`lower_reasoning_effort`), and less
-           on the wire rather than only in the label. Re-sent as-is it was the
-           same bytes, so three retries were three guaranteed repeats of one
-           failure.
+  text                 a reply to deliver                      COMPLETE
+  silence marker       the model chose to say nothing          SILENT
+  refusal              the upstream declined                   FALLBACK once, then FAIL
+  stream cut           text, and no finish on a stream         CONTINUE, then COMPLETE with the partial
+  thinking only        reasoning and no answer                 PREFILL, STEP_DOWN, FALLBACK, FAIL
+  cut, nothing in it   stopped at the ceiling, empty           CONTINUE with more room, then FAIL
+  empty after a tool   nothing right after tool results        NUDGE once, then as an empty reply
+  empty                nothing at all                          RETRY, FALLBACK, FAIL
 
-A provider that refuses a trailing assistant message (its
+A refusal is never resent, and outranks the text that came with it: that text is
+the model's explanation. A cut stream is asked to go on from what it sent, up to
+``MAX_CONTINUATIONS`` times; a cut at the output ceiling is asked again with more
+room for the answer, and the effort is left alone because nothing in it names the
+reasoning as the cause.
+
+PREFILL re-feeds the model its own reasoning so it continues into the answer. A
+provider that refuses a trailing assistant message (its
 ``supports_assistant_prefill`` answers False: Anthropic with thinking on) never
-gets PREFILL. The same thinking-only turn takes NUDGE after a tool, else RETRY,
-so the request handed back never ends on an assistant message.
+gets it, and goes straight to STEP_DOWN, so the request handed back never ends on
+an assistant message. STEP_DOWN asks the same step again at ``high`` and then at
+``low``, once each a turn -- never ``minimal``, which Codex refuses with a 400.
+RETRY resends the request unchanged after a jittered backoff, because nothing in a
+plain empty reply says what to change; two zero-output replies of one model, or a
+reply whose reported cost is dear, cut the resends short. A fallback model gets
+one try: on one nothing is repeated.
 
-Spending every budget without a word coming back is FAIL, and the loop ends the
-turn as an error the caller fails the turn on -- unless one of the turn's tools
-has already put an answer in front of the reader. It is not a fourth mode --
-there is nothing left to try -- it is the answer to the question the caller asks
-next, which is whether this turn produced anything.
+Spending every move without an answer is FAIL, and the loop ends the turn as an
+error the caller fails the turn on -- unless one of the turn's tools has already
+put an answer in front of the reader. It is not another move -- there is nothing
+left to try -- it is the answer to the question the caller asks next, which is
+whether this turn produced anything.
 
-:func:`reply_kind` names what a reply with no tool call is -- text, a silence marker, a refusal, a
-stream cut mid-answer, thinking with no answer, a reply cut at the output ceiling, or nothing -- and
-:func:`decide` maps that kind and what the turn has already spent (:class:`RecoveryState`) to the
-next :class:`RecoveryAction`. Both are pure: the loop supplies the facts they cannot see (the
-provider's prefill support, the rung to step down to, the fallback models left) and does the acting.
+Both functions are pure: the loop supplies the facts they cannot see (the
+provider's prefill support, the rung to step down to, the fallback models left,
+the resends the cost allows) and does the acting.
 
 This is distinct from Sentinel's NudgeInjector / NudgePolicy, which inject
 *proactive suggestions* onto an outbound reply; this module instead recovers an
@@ -126,27 +135,6 @@ def _next_rung(current: str | None) -> str | None:
         return None
     return REASONING_EFFORT_LADDER[index + 1]
 
-
-# A turn that ended empty at the output ceiling: no visible text, no tool call,
-# nothing kept. The effort descent above changes what the next request asks
-# *for*; this is the only thing that tells the model what happened, and the only
-# place a payload too large to finish is named -- no rung of the ladder can
-# shrink a write. `Tool.truncation_hint` says the same thing better but rides a
-# refused tool call, and a turn cut before any call produced none.
-#
-# Every sentence here is held to what the trigger proves, which is only that an
-# empty turn hit the ceiling. It does not say the reasoning spent the budget:
-# true for a reasoning model and false for one whose answer simply ran long, and
-# the trigger cannot tell them apart. It does not name a tool call as the owed
-# reply either -- a plain question arrives here too. Both were review findings,
-# in that order; a third would be the same mistake again.
-OUTPUT_LIMIT_NUDGE = (
-    "Your previous turn was cut off at the output token limit before it produced "
-    "any reply or tool call, so nothing from it was kept. Keep this turn short: "
-    "answer briefly, or make the tool call the task needs. If a payload you were "
-    "writing is too large to finish in one call, send it across several smaller "
-    "calls instead of one."
-)
 
 MAX_CONTINUATIONS = 3
 REASONING_EXCERPT_MAX = 500
@@ -539,78 +527,6 @@ def _thinking_text(response: LLMResponse) -> str:
         return blocks
     inline = (match.group(2).strip() for match in _THINK_BLOCK_RE.finditer(response.content or ""))
     return "\n\n".join(part for part in inline if part)
-
-
-def classify_empty_response(
-    response: LLMResponse,
-    visible: str | None,
-    *,
-    prev_had_tool_calls: bool,
-    nudges_done: int,
-    prefill_retries: int,
-    empty_retries: int,
-    limits: RecoveryLimits,
-    prefill_supported: bool = True,
-) -> RecoveryAction:
-    """Decide how to handle a no-tool-call assistant response.
-
-    ``visible`` is ``response.content`` after stripping <think> blocks — i.e. the
-    user-facing text. Non-empty ``visible`` (or recovery disabled) means the turn
-    is done.
-
-    Ordering puts PREFILL before NUDGE so a thinking-only response is continued
-    via prefill rather than spending the post-tool nudge on it; the
-    ``not thinking`` guard on NUDGE keeps them mutually exclusive.
-
-    Spending the budgets without ever getting a word back returns FAIL, not
-    COMPLETE. The two used to be the same answer, which is how a measured deck
-    run reported ``end_turn`` for a turn that never produced a token: five calls
-    of about 16.8 MB each came back HTTP 200 with empty content and usage all
-    zeros, the ladder ran itself out, and the turn was filed as a completion
-    holding a canned line. Nothing downstream could then tell "the model
-    finished" from "the model never answered". COMPLETE keeps the two cases that
-    really are ends: a response with text in it, and a turn whose recovery is
-    switched off -- where no budget was spent and there is nothing to have
-    exhausted. The second of those still leaves the turn with no answer, and the
-    loop's caller fails it on that; this function is only asked which repair to
-    try, and for a turn nobody asked to repair the answer is none.
-    """
-    if visible or not limits.enabled:
-        return RecoveryAction.COMPLETE
-
-    thinking = has_thinking(response)
-
-    # The provider refuses a trailing assistant message (Anthropic with
-    # thinking on): PREFILL would build a request the vendor rejects, and behind
-    # a gateway that rejection can arrive as a stream that never yields a byte,
-    # so the turn hangs to the wall-clock cap instead of failing. Decided before
-    # PREFILL, with only the actions that leave a user or tool message last:
-    # the post-tool nudge (its synthetic assistant sits before the nudge), then
-    # the plain retry budget, then give up.
-    if thinking and not prefill_supported:
-        if prev_had_tool_calls and nudges_done < limits.post_tool_empty_max_nudges:
-            return RecoveryAction.NUDGE
-        if empty_retries < limits.empty_content_max_retries:
-            return RecoveryAction.RETRY
-        return RecoveryAction.FAIL
-
-    # thinking-only prefill — the model reasoned but produced no body.
-    if thinking and prefill_retries < limits.thinking_prefill_max_retries:
-        return RecoveryAction.PREFILL
-
-    # post-tool empty nudge — exclude thinking-only (handled above).
-    if prev_had_tool_calls and not thinking and nudges_done < limits.post_tool_empty_max_nudges:
-        return RecoveryAction.NUDGE
-
-    # Fallback plain retry. The ``prefill_exhausted`` clause is load-bearing:
-    # some models (e.g. mimo-v2-pro via OpenRouter) always populate a reasoning
-    # field, so gating retry on ``not thinking`` alone would permanently block
-    # retries for every reasoning model once prefill is spent.
-    prefill_exhausted = thinking and prefill_retries >= limits.thinking_prefill_max_retries
-    if empty_retries < limits.empty_content_max_retries and (not thinking or prefill_exhausted):
-        return RecoveryAction.RETRY
-
-    return RecoveryAction.FAIL
 
 
 # A continuation after reasoning cut at the output ceiling picks up mid-thought:

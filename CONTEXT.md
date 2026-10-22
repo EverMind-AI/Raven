@@ -826,31 +826,41 @@ _Avoid_: "empty reply" for silence — an empty reply is a failure; a Silence Ma
 model chose to write.
 
 **Empty-Response Recovery** (`agent/loop/recovery.py`):
-The opt-in policy for when the model returns no text: re-feed its reasoning (PREFILL),
-inject a nudge after a tool call (NUDGE), or plain RETRY — each bounded by
-`RecoveryLimits`. A response with text in it, or recovery switched off, COMPLETEs;
-spending every budget with nothing ever returned is FAIL, and the Agent Loop ends the turn
-with status `error` and a sentence saying how many attempts went into it. Either way a turn
-that reaches its end with no text raises `AnswerlessTurnError` rather than replying -- unless
-one of its tools already put an answer in front of the reader (the message tool's
-`sent_in_turn`, or an inline research answer the turn itself streamed).
-PREFILL is asked of the provider first
-(`LLMProvider.supports_assistant_prefill`): the Anthropic family rejects a trailing
-assistant message while thinking is on, and through a gateway that rejection can arrive as
-a stream that never yields a byte, so a provider that answers no never gets PREFILL -- the
-same thinking-only turn takes NUDGE after a tool, else RETRY, and no request handed to it
-ends on an assistant message. RETRY descends the effort ladder by what a rung *sends*, not by
-its label: the provider is asked (`LLMProvider.reasoning_wire_keys`) and a rung whose request
-this wire cannot tell apart from the one that failed is skipped -- when none is left, the
-turn has nothing to change and FAILs rather than paying for the same call twice. A retry
-after a turn cut at the output ceiling also carries `OUTPUT_LIMIT_NUDGE`, once per turn. The
-descent changes what the request asks *for*; the nudge is the only thing that tells the model
-its last turn was cut and that a payload too large to finish has to be split -- which no
-effort rung can do, and which `Tool.truncation_hint` cannot reach because a turn cut before
-any call produced no tool result to carry it.
-_Avoid_: calling the whole mechanism a "nudge" — nudge is one of its modes; and reading
-FAIL as a fourth mode — it is the answer given when there is nothing left to try;
-`OUTPUT_LIMIT_NUDGE` rides RETRY rather than being the NUDGE mode.
+The policy for a model reply that carries no tool call. `reply_kind` reads the reply as one
+kind -- text, a Silence Marker, a refusal, a stream cut mid-answer, thinking with no answer, a
+reply cut at the output ceiling with nothing in it, nothing right after tools, or nothing --
+and `decide` names the move from that kind and what the turn has already spent
+(`RecoveryState`), under `RecoveryLimits`. Text completes; a refusal (a `refusal` or
+`content_filter` finish) outranks the text that came with it, which is the model's explanation,
+and is never resent: one switch to a fallback model, then the turn fails. A stream that sent text
+and no finish reason is CONTINUEd -- the model is asked to go on, and the parts are joined --
+up to `MAX_CONTINUATIONS` times, after which the partial is delivered with `PARTIAL_STREAM_NOTE`
+as an `interrupted` turn; a continuation that comes back empty leaves what streamed as the
+answer. A reply with only thinking is PREFILLed twice, re-feeding the model its own reasoning,
+then STEP_DOWNed: asked again at `high` and at `low`, once each a turn and never at `minimal`
+(Codex refuses it), the rungs skipped that the wire cannot tell apart
+(`LLMProvider.reasoning_wire_keys`). A reply cut at the ceiling with nothing in it is CONTINUEd
+with `OUTPUT_LIMIT_CONTINUATION` and a doubling `max_tokens` (clamped by `send_max_tokens`), the
+effort untouched, then fails. Nothing right after tools is NUDGEd once, then treated as nothing.
+An empty reply is RETRYed: the same request resent unchanged, up to `empty_content_max_retries`
+times, after a jittered backoff -- cut short by two zero-output replies of one model and finish
+(`deterministic_empty`), or by a reply whose reported cost reaches
+`empty_retry_cost_threshold_usd` (`resend_budget`, one resend). Once those are spent, a fallback
+model is tried -- each once, with nothing repeated on it, and the switch held for the rest of the
+turn -- and then FAIL: status `error`, worded after Hermes per kind, with `no_output` set when the
+model gave nothing back. Resends, step-downs and switches ask the same step again and bill no
+iteration; prefills, nudges and continuations are steps. Recovery switched off completes any reply
+with text and fails a refusal; an empty reply then ends the turn with no text.
+Either way a turn that reaches its end with no text raises `AnswerlessTurnError` rather than
+replying -- unless one of its tools already put an answer in front of the reader (the message
+tool's `sent_in_turn`, or an inline research answer the turn itself streamed).
+PREFILL is asked of the provider first (`LLMProvider.supports_assistant_prefill`): the Anthropic
+family rejects a trailing assistant message while thinking is on, and through a gateway that
+rejection can arrive as a stream that never yields a byte, so a provider that answers no never
+gets PREFILL and no request handed to it ends on an assistant message.
+_Avoid_: calling the whole mechanism a "nudge" -- nudge is one of its moves; reading FAIL as a
+move of its own -- it is the answer given when there is nothing left to try; "retry" for a
+step-down or a continuation -- RETRY resends the request untouched, and those change it.
 
 **Model-Error Ladder** (`agent/loop/turn_path.py`, `RecoveryLimits.llm_error_retry_delays`):
 The waits the Agent Loop spends on a model call that came back an *error* before it gives the
@@ -859,8 +869,10 @@ serving error pages outlasts them, so a retryable verdict buys one rung of this 
 same ask goes out again — the messages are untouched, so nothing is appended for the failed
 call. The wait is announced as a `NoticeKind.LLM_RETRY` notice carrying the error *category*,
 which is how a surface can say the runtime is still working rather than showing nothing for
-minutes. A non-retryable verdict, or a spent ladder, ends the turn.
-_Avoid_: "retry" unqualified — Empty-Response Recovery's RETRY is a different mechanism, for a
+minutes. A streamed call whose verdict is fallback-worthy goes to the next fallback model before
+it waits, because only the plain path walks a model chain inside the provider. A non-retryable
+verdict, or a spent ladder, ends the turn.
+_Avoid_: "retry" unqualified — Empty-Response Recovery's RETRY resends the same request after a
 call that *succeeded* and returned no text; this one answers a call that failed.
 
 **Call Record** (`contracts/llm_provider.py`, `providers/call_record.py`):
@@ -962,8 +974,9 @@ those are emitted by the Spine worker, not a runner.
 **AnswerlessTurnError**:
 The exception a runner raises to say the turn it ran ended with no answer and that its message is
 already the report a reader should see — the model call the loop gave up on, in the provider's words,
-or the loop's when the provider gave none; or an empty-response recovery that spent its budgets, in the
-loop's one-sentence account of the attempts.
+or the loop's when the provider gave none; or a reply that Empty-Response Recovery could not mend
+(nothing, only thinking, a cut that stayed cut, a refusal), in Hermes's wording for that kind.
+`no_output` marks the turn whose model gave nothing back at all.
 `describe_failure` passes its text through unchanged (it arrives bounded from the layer that built
 it), and the `turn_ended` marker that says so is filed before the failure leaves the loop. The marker
 is worded twice, for its two readers: `turn_ended.reason` keeps the provider's account for whoever is

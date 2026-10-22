@@ -31,11 +31,9 @@ from raven.agent.loop.failure_streak import (
 )
 from raven.agent.loop.no_progress import NoProgressAction, NoProgressGuard
 from raven.agent.loop.recovery import (
-    OUTPUT_LIMIT_NUDGE,
     POST_TOOL_NUDGE,
     RecoveryAction,
     RecoveryLimits,
-    classify_empty_response,
     is_only_think_debris,
     strip_think_blocks,
 )

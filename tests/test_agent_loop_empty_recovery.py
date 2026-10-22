@@ -45,7 +45,6 @@ from raven.agent.loop.recovery import (
     RecoveryLimits,
     RecoveryState,
     ReplyKind,
-    classify_empty_response,
     decide,
     deterministic_empty,
     empty_retry_delay,
@@ -112,29 +111,6 @@ def _make_agent(
     )
 
 
-def _classify(
-    response,
-    visible,
-    *,
-    prev_had_tool_calls=False,
-    nudges_done=0,
-    prefill_retries=0,
-    empty_retries=0,
-    limits=None,
-    prefill_supported=True,
-):
-    return classify_empty_response(
-        response,
-        visible,
-        prev_had_tool_calls=prev_had_tool_calls,
-        nudges_done=nudges_done,
-        prefill_retries=prefill_retries,
-        empty_retries=empty_retries,
-        limits=limits or RecoveryLimits(),
-        prefill_supported=prefill_supported,
-    )
-
-
 # --------------------------------------------------------------------------- #
 # unit: thinking detection                                                     #
 # --------------------------------------------------------------------------- #
@@ -154,62 +130,6 @@ def test_has_thinking():
     assert has_thinking(LLMResponse(content="<think>...</think>")) is True
     assert has_thinking(LLMResponse(content="real answer")) is False
     assert has_thinking(LLMResponse(content=None)) is False
-
-
-# --------------------------------------------------------------------------- #
-# unit: classify_empty_response                                                #
-# --------------------------------------------------------------------------- #
-
-
-def test_classify_visible_text_completes():
-    assert _classify(LLMResponse(content="answer"), "answer") is RecoveryAction.COMPLETE
-
-
-def test_classify_disabled_completes():
-    """Recovery switched off is not an exhausted ladder.
-
-    No budget was spent, so there is nothing to have run out of, and the turn
-    ends the way it always has. FAIL is reserved for a ladder that was climbed.
-    """
-    limits = RecoveryLimits(enabled=False)
-    assert _classify(LLMResponse(content=None), "", limits=limits) is RecoveryAction.COMPLETE
-
-
-def test_classify_thinking_only_prefills_until_budget():
-    resp = LLMResponse(content=None, reasoning_content="hmm")
-    assert _classify(resp, "", prefill_retries=0) is RecoveryAction.PREFILL
-    assert _classify(resp, "", prefill_retries=1) is RecoveryAction.PREFILL
-    # budget spent → falls through to plain retry (prefill_exhausted clause)
-    assert _classify(resp, "", prefill_retries=2) is RecoveryAction.RETRY
-
-
-def test_classify_post_tool_empty_nudges():
-    resp = LLMResponse(content=None)  # no thinking
-    assert _classify(resp, "", prev_had_tool_calls=True, nudges_done=0) is RecoveryAction.NUDGE
-    # nudge budget (default 1) spent → plain retry
-    assert _classify(resp, "", prev_had_tool_calls=True, nudges_done=1) is RecoveryAction.RETRY
-
-
-def test_classify_thinking_takes_priority_over_nudge():
-    # thinking + post-tool → PREFILL, not NUDGE (they are mutually exclusive)
-    resp = LLMResponse(content=None, reasoning_content="hmm")
-    assert _classify(resp, "", prev_had_tool_calls=True) is RecoveryAction.PREFILL
-
-
-def test_classify_plain_empty_retries_until_budget():
-    resp = LLMResponse(content=None)
-    assert _classify(resp, "", empty_retries=2) is RecoveryAction.RETRY
-    # Budget spent with nothing ever returned: FAIL, not COMPLETE. A turn that
-    # never produced a token must not be reported as one that finished.
-    assert _classify(resp, "", empty_retries=3) is RecoveryAction.FAIL
-
-
-def test_classify_always_reasoning_model_still_retries_after_prefill():
-    # Models that always populate a reasoning field must not be permanently
-    # blocked from plain retry once prefill is exhausted (load-bearing clause).
-    resp = LLMResponse(content=None, reasoning_content="hmm")
-    assert _classify(resp, "", prefill_retries=2, empty_retries=0) is RecoveryAction.RETRY
-    assert _classify(resp, "", prefill_retries=2, empty_retries=3) is RecoveryAction.FAIL
 
 
 def test_limits_from_defaults_maps_fields():
@@ -839,6 +759,41 @@ async def test_a_thinking_only_failure_without_reasoning_text_ends_on_its_first_
 
 
 @pytest.mark.asyncio
+async def test_a_step_down_answer_is_not_cut_like_a_continuation_of_the_thought_it_dropped(workspace, monkeypatch):
+    """A prefill after reasoning cut at the ceiling makes the answer that follows it open on the rest
+    of that thought, so its head is cut. The step-down drops the prefills, and an answer to the
+    original question has no such head."""
+    cut_thought = _reply("", reasoning="deciding how to lay out the file", finish="length")
+    calls = _served(monkeypatch, [cut_thought] * 3 + [_reply(" lowercase start. Then the rest.")])
+
+    out = await _litellm_agent(workspace)._process_message(_turn(), session_key="s1")
+
+    assert out is not None and out[0] == "lowercase start. Then the rest."
+    assert _efforts(calls) == [None, None, None, "high"]
+
+
+@pytest.mark.asyncio
+async def test_the_rungs_a_turn_has_used_are_kept_in_the_set_it_is_given(workspace, monkeypatch):
+    """The set is the turn's record of what thinking-only replies have been stepped down to: filled
+    by a run, honoured by the next run it is handed to, and never shared by runs that were given none."""
+    thinking = _reply("", reasoning="hmm, let me think")
+    calls = _served(monkeypatch, [thinking] * 5 + [thinking] * 3 + [thinking] * 5)
+    agent = _litellm_agent(workspace)
+    used: set[str] = set()
+
+    await agent._run_agent_loop(_seed(), rungs_used=used)
+    assert used == {"high", "low"} and _efforts(calls) == [None, None, None, "high", "low"]
+
+    # The same turn run again: both rungs are spent, so after its prefills there is nothing to step down to.
+    await agent._run_agent_loop(_seed(), rungs_used=used)
+    assert _efforts(calls[5:]) == [None, None, None]
+
+    # A run given no set keeps its own, so nothing leaks from the one before.
+    await agent._run_agent_loop(_seed())
+    assert _efforts(calls[8:]) == [None, None, None, "high", "low"]
+
+
+@pytest.mark.asyncio
 async def test_a_step_down_that_comes_back_plain_empty_is_resent_at_that_effort(workspace, monkeypatch):
     """An unchanged resend repeats the request the empty call carried, effort included."""
     thinking = _reply("", reasoning="hmm, let me think")
@@ -913,6 +868,156 @@ async def test_with_recovery_off_an_empty_reply_fails_at_once(workspace, monkeyp
     assert len(calls) == 1
     assert str(failed) == turn_path._NO_CONTENT_UNRECOVERED
     assert failed.no_output is True
+
+
+@pytest.mark.asyncio
+async def test_an_empty_reply_on_a_model_reached_by_a_refusal_is_not_resent(workspace, monkeypatch):
+    """A fallback model gets one try, however it was reached: the resends are the first model's."""
+    calls = _served(monkeypatch, [_reply("no", finish="content_filter")] + [_reply("")] * 3)
+    agent = _litellm_agent(workspace)
+
+    _final, _used, _messages, outcome = await agent._run_agent_loop(_seed(), fallback_models=["fb"])
+
+    assert _models(calls) == [_MODEL, "fb"]
+    assert outcome.error == EMPTY_REPLY_FAILURE
+
+
+@pytest.mark.asyncio
+async def test_a_switch_to_a_fallback_is_not_billed_an_iteration(workspace, monkeypatch):
+    calls = _served(monkeypatch, [_reply("")] * 4 + [_reply("fb's answer")])
+    agent = _litellm_agent(workspace, max_iterations=1)
+
+    final, _used, _messages, outcome = await agent._run_agent_loop(_seed(), fallback_models=["fb"])
+
+    assert final == "fb's answer"
+    assert outcome.status == "completed"
+    assert _models(calls) == [_MODEL] * 4 + ["fb"]
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_after_prefills_is_not_asked_on_an_assistant_row(workspace, monkeypatch):
+    """Two prefills, then replies with nothing in them until the resends are spent. The model the
+    turn switches to is asked the original question, not the thought the first one left."""
+    thinking = _reply("", reasoning="hmm, let me think")
+    calls = _served(monkeypatch, [thinking, thinking] + [_reply("")] * 4 + [_reply("fb's answer")])
+    agent = _litellm_agent(workspace)
+
+    final, _used, _messages, _outcome = await agent._run_agent_loop(_seed(), fallback_models=["fb"])
+
+    assert final == "fb's answer"
+    assert _models(calls) == [_MODEL] * 6 + ["fb"]
+    assert calls[5]["messages"][-1]["role"] == "assistant", "the resends before it did end on the prefill"
+    assert calls[6]["messages"] == calls[0]["messages"]
+
+
+@pytest.mark.asyncio
+async def test_the_nudge_is_spent_once_a_turn(workspace, monkeypatch):
+    """A second step that ends empty after tools is past the one nudge: it is resent as it stood."""
+    calls = _served(monkeypatch, [_tool_reply(), _reply(""), _tool_reply(), _reply(""), _reply("done")])
+
+    final, _used, _messages, _outcome = await _litellm_agent(workspace)._run_agent_loop(_seed())
+
+    assert final == "done"
+    assert len(calls) == 5
+    assert calls[4] == calls[3]
+
+
+@pytest.mark.asyncio
+async def test_a_reply_that_thought_ends_the_run_of_zero_output_empties(workspace, monkeypatch):
+    """Zero output twice running is the guard; a reply with thinking in it between the two is not zero output."""
+    calls = _served(
+        monkeypatch,
+        [
+            _reply("", completion=0),
+            _reply("", reasoning="hmm, let me think"),
+            _reply("", completion=0),
+            _reply("the answer"),
+        ],
+    )
+
+    final, _used, _messages, _outcome = await _litellm_agent(workspace)._run_agent_loop(_seed())
+
+    assert final == "the answer"
+    assert len(calls) == 4
+
+
+@pytest.mark.asyncio
+async def test_with_recovery_off_the_loop_says_the_model_gave_nothing_back(workspace, monkeypatch):
+    _served(monkeypatch, [_reply("")])
+
+    final, _used, _messages, outcome = await _litellm_agent(
+        workspace, limits=RecoveryLimits(enabled=False)
+    )._run_agent_loop(_seed())
+
+    assert final is None
+    assert outcome.no_output is True and outcome.error is None
+
+
+@pytest.mark.asyncio
+async def test_a_rung_the_wire_cannot_tell_apart_is_not_asked_for(workspace):
+    """On a wire where an unstated effort is already ``high``, asking for ``high`` is the same request again."""
+
+    class _Collapsed(LLMProvider):
+        def __init__(self):
+            super().__init__(api_key="test")
+            self.efforts: list[str | None] = []
+
+        def reasoning_wire_keys(self, model, effort):
+            return {"effort": "high" if effort in (None, "high") else effort}
+
+        async def chat(self, messages, tools=None, model=None, reasoning_effort=None, **_kw):
+            self.efforts.append(reasoning_effort)
+            return LLMResponse(content="", reasoning_content="hmm", finish_reason="stop")
+
+        def get_default_model(self) -> str:
+            return "stub"
+
+    provider = _Collapsed()
+
+    await _make_agent(workspace, provider)._run_agent_loop(_seed())
+
+    assert provider.efforts == [None, None, None, "low"]
+
+
+@pytest.mark.asyncio
+async def test_the_wrap_up_after_a_switch_goes_to_the_model_the_turn_is_on(workspace, monkeypatch):
+    calls = _served(monkeypatch, [_reply("")] * 4 + [_tool_reply(), _tool_reply(), _reply("where it got to")])
+    agent = _litellm_agent(workspace, max_iterations=2)
+
+    final, _used, _messages, outcome = await agent._run_agent_loop(_seed(), fallback_models=["fb"])
+
+    assert outcome.status == "interrupted" and final == "where it got to"
+    assert _models(calls) == [_MODEL] * 4 + ["fb"] * 3
+
+
+@pytest.mark.asyncio
+async def test_a_failure_on_the_last_iteration_is_not_wrapped_up(workspace, monkeypatch):
+    """Two prefills and two step-downs take the three iterations there are. The turn that
+    fails on the third has nothing to wrap up: a wrap-up would answer for a model that never did."""
+    calls = _served(monkeypatch, [_reply("", reasoning="hmm, let me think")] * 6)
+    agent = _litellm_agent(workspace, max_iterations=3)
+
+    final, _used, _messages, outcome = await agent._run_agent_loop([{"role": "user", "content": "hi"}])
+
+    assert len(calls) == 5
+    assert outcome.status == "error"
+    assert final == outcome.error and final.startswith("The model produced only internal reasoning")
+
+
+@pytest.mark.asyncio
+async def test_a_tool_call_ends_the_run_of_zero_output_empties(workspace, monkeypatch):
+    """The guard reads consecutive replies. One that did something in between is a different
+    run, and the empty reply after it is the first of its own."""
+    calls = _served(
+        monkeypatch,
+        [_reply("", completion=0), _tool_reply(), _reply("", completion=0), _reply("the answer")],
+    )
+    agent = _litellm_agent(workspace, limits=RecoveryLimits(post_tool_empty_max_nudges=0))
+
+    final, _used, _messages, _outcome = await agent._run_agent_loop(_seed())
+
+    assert final == "the answer"
+    assert len(calls) == 4
 
 
 @pytest.mark.asyncio
@@ -1154,6 +1259,20 @@ async def test_an_upstream_error_on_a_stream_tries_the_fallback_first(workspace,
     assert outcome.status == "completed"
     assert _models(calls) == [_MODEL, "fb"]
     assert sink.notices == [], "no wait was announced: the fallback went first"
+
+
+@pytest.mark.asyncio
+async def test_a_switch_after_a_streamed_error_is_not_billed_an_iteration(workspace, monkeypatch):
+    """The failed call did no work, so the fallback gets the iteration the turn had."""
+    _served(monkeypatch, [_Stream([_chunk(finish_reason="stop")]), _finished_stream("fb's answer")])
+    agent = _litellm_agent(workspace, max_iterations=1)
+
+    final, _used, _messages, outcome = await agent._run_agent_loop(
+        _seed(), fallback_models=["fb"], on_token_delta=_Sink().delta
+    )
+
+    assert final == "fb's answer"
+    assert outcome.status == "completed"
 
 
 @pytest.mark.asyncio
@@ -1855,7 +1974,7 @@ def test_one_end_namespaced_is_still_one_block() -> None:
 # --------------------------------------------------------------------------- #
 #
 # The loop breaks the turn on `finish_reason == "error"` *before*
-# `classify_empty_response` runs, so anything that reports an empty response as
+# `reply_kind` runs, so anything that reports an empty response as
 # an error takes every mode in this file out of service. The tests above stub
 # `chat` directly and so never reach the provider's response exit, which is
 # where such a verdict is reached -- these go through it on purpose.
@@ -1932,75 +2051,6 @@ async def test_a_silent_model_after_a_tool_still_reaches_the_nudge(workspace):
     assert out is not None
     assert provider.nudged is True, "the nudge never happened; the empty turn was taken as an error"
     assert out[0] == "here are the files"
-
-
-# --------------------------------------------------------------------------- #
-# unit: providers that reject a trailing assistant message (Anthropic family)  #
-# --------------------------------------------------------------------------- #
-
-
-def test_thinking_only_is_retried_instead_of_prefilled_when_prefill_is_refused():
-    """Anthropic rejects an assistant prefill while thinking is on.
-
-    Live incident (2026-09-01, a dispatched raven-code run, claude via
-    OpenRouter): the thinking-only prefill produced a request the vendor
-    considers invalid; routed through a gateway it neither errored nor
-    answered, so the turn hung until the wall-clock cap. With prefill refused
-    the recovery must pick an action that leaves the transcript ending on a
-    user or tool message -- here, before any tool ran, the plain re-request.
-    """
-    r = LLMResponse(content="", reasoning_content="let me think", finish_reason="stop")
-    assert _classify(r, "", prefill_supported=False) is RecoveryAction.RETRY
-
-
-def test_thinking_only_after_a_tool_is_nudged_when_prefill_is_refused():
-    """After a tool the nudge is the cheaper repair and it too ends on a user
-    message: the synthetic assistant it inserts sits before the nudge."""
-    r = LLMResponse(content="", reasoning_content="let me think", finish_reason="stop")
-    assert _classify(r, "", prefill_supported=False, prev_had_tool_calls=True) is RecoveryAction.NUDGE
-
-
-def test_prefill_refused_retries_once_the_nudge_budget_is_spent():
-    limits = RecoveryLimits()
-    r = LLMResponse(content="", reasoning_content="let me think", finish_reason="stop")
-    action = _classify(
-        r, "", prefill_supported=False, prev_had_tool_calls=True, nudges_done=limits.post_tool_empty_max_nudges
-    )
-    assert action is RecoveryAction.RETRY
-
-
-def test_prefill_refused_fails_once_every_budget_is_spent():
-    limits = RecoveryLimits()
-    r = LLMResponse(content="", reasoning_content="let me think", finish_reason="stop")
-    action = _classify(
-        r,
-        "",
-        prefill_supported=False,
-        prev_had_tool_calls=True,
-        nudges_done=limits.post_tool_empty_max_nudges,
-        empty_retries=limits.empty_content_max_retries,
-    )
-    assert action is RecoveryAction.FAIL
-
-
-def test_prefill_refused_never_consumes_the_prefill_budget():
-    """The refusal is decided before the prefill budget is consulted, so a
-    fresh budget changes nothing: PREFILL is never the answer."""
-    r = LLMResponse(content="", reasoning_content="let me think", finish_reason="stop")
-    for retries in range(RecoveryLimits().thinking_prefill_max_retries + 1):
-        assert _classify(r, "", prefill_supported=False, prefill_retries=retries) is not RecoveryAction.PREFILL
-
-
-def test_prefill_refused_never_reaches_a_non_thinking_response():
-    """The guard is scoped to the prefill path; a plain empty turn still retries."""
-    r = LLMResponse(content="", finish_reason="stop")
-    assert _classify(r, "", prefill_supported=False) is RecoveryAction.RETRY
-
-
-def test_prefill_supported_is_the_default_so_other_providers_are_untouched():
-    r = LLMResponse(content="", reasoning_content="let me think", finish_reason="stop")
-    assert _classify(r, "") is RecoveryAction.PREFILL
-    assert _classify(r, "", prefill_supported=True) is RecoveryAction.PREFILL
 
 
 # --------------------------------------------------------------------------- #
