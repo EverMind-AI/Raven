@@ -146,7 +146,8 @@ branching language; inspect the submitted graph's options, including approval.
 
 Declare inputs in `params`. Supported declarations are `string`, `integer`,
 `number`, `boolean`, `enum`, `path`, and `secret`. Ordinary parameter references
-belong directly in `promptTemplate` or `prompts`, not in node `inputs`.
+belong directly in `promptTemplate`, `prompts`, or a route condition, not in
+node `inputs`.
 Both `{{ params.brief }}` and the dollar-brace parameter form are supported.
 
 The current resolver substitutes text and detects missing required values; it

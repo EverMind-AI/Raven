@@ -161,14 +161,20 @@ async def test_a_route_condition_is_filled_before_it_reaches_the_judge():
     tool = FakeDagTool()
     ex = PlaybookExecutor(dag_tool=tool)
     spec = _dag_spec(
-        params={"floor": ParamSpec(type="string", required=True, description="the deal floor")},
+        params={
+            "floor": ParamSpec(type="string", required=True, description="the deal floor"),
+            "DEAL_TOKEN": ParamSpec(type="secret", description="the signing token"),
+        },
         nodes=[
             NodeSpec(
                 id="triage",
                 subagent="data-raven",
-                node_summary="judge the deal",
+                node_summary="judge the the deal",
                 prompt_template="look at the deal",
-                routes={"approve": "the deal is above ${params.floor}", "reject": "otherwise"},
+                routes={
+                    "approve": "the deal is above ${params.floor} and signed with ${params.DEAL_TOKEN}",
+                    "reject": "otherwise",
+                },
             ),
             NodeSpec(
                 id="act",
@@ -181,12 +187,18 @@ async def test_a_route_condition_is_filled_before_it_reaches_the_judge():
         ],
     )
 
-    plan = await ex.execute(spec, params={"floor": "100"}, confirmed=True)
+    plan = await ex.execute(spec, params={"floor": "100", "DEAL_TOKEN": "s3cr3t-token"}, confirmed=True)
 
     assert plan.kind != "gaps", plan.reply
     triage = next(n for n in tool.calls[0]["nodes"] if n["id"].endswith("-triage"))
-    assert triage["routes"]["approve"] == "the deal is above 100"
+    assert triage["routes"]["approve"] == "the deal is above 100 and signed with [secret DEAL_TOKEN withheld]"
     assert triage["routes"]["reject"] == "otherwise"
+    # The route text reaches the judge, so the secret must be withheld from it
+    # exactly as from a prompt: a later fill that substitutes it would send the
+    # credential to a model, and this is the pin that turns red.
+    import json as _json
+
+    assert "s3cr3t-token" not in _json.dumps(tool.calls[0]["nodes"])
 
 
 async def test_a_secret_never_reaches_a_dispatched_work_order():
