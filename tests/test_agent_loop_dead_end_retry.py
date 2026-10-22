@@ -80,7 +80,8 @@ class _Scripted(LLMProvider):
     One plan is consumed per attempt and the next begins where the last ended, so
     ``attempts_used`` counts how many times the turn actually ran rather than how
     many calls it made. The seed each plan opened on is recorded, which is how the
-    "starts from the question" test reads what the rerun re-ran.
+    "starts from the question" test reads what the rerun re-ran, and so is the
+    reasoning effort each call asked for.
     """
 
     def __init__(self, *attempts: list[LLMResponse]) -> None:
@@ -90,6 +91,7 @@ class _Scripted(LLMProvider):
         self._step = 0
         self.calls = 0
         self.seeds: list[list[dict]] = []
+        self.efforts: list[str | None] = []
 
     @property
     def attempts_used(self) -> int:
@@ -97,6 +99,7 @@ class _Scripted(LLMProvider):
 
     async def chat(self, messages, tools=None, model=None, max_tokens=4096, temperature=0.7, **_kw):
         self.calls += 1
+        self.efforts.append(_kw.get("reasoning_effort"))
         plan = self._attempts[min(self._plan, len(self._attempts) - 1)]
         if self._step == 0:
             self.seeds.append([dict(m) for m in messages])
@@ -691,6 +694,23 @@ async def test_the_dead_end_reading_drops_the_recovery_scaffolding_first(tmp_pat
 
     assert provider.attempts_used == 2, "the scaffolding was read as where the turn ended"
     assert out[0] == "Alice Smith won it."
+
+
+@pytest.mark.asyncio
+async def test_each_rung_is_used_once_across_a_research_rerun(tmp_path):
+    """A thinking-only reply is asked again at ``high`` and then at ``low``, once each a turn.
+
+    The rerun is the same turn, so the first attempt spending both leaves the second none: after its
+    prefills there is nothing to step down to, and it ends where it stands. A rung per attempt would
+    pay for each of them twice.
+    """
+    provider = _Scripted(_thinks_and_says_nothing(), _thinks_and_says_nothing())
+    agent = _loop(tmp_path, provider, [_Budgeted(dead_end_retries=1)])
+
+    await _run_answerless(agent)
+
+    assert provider.attempts_used == 2, "the rerun ran, so the second attempt had its chance at the rungs"
+    assert provider.efforts == [None, None, None, "high", "low", None, None, None]
 
 
 @pytest.mark.asyncio

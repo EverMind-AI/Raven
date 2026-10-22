@@ -57,6 +57,8 @@ from raven.agent.loop.recovery import (
     resend_budget,
     strip_think_blocks,
 )
+from raven.agent.window import shrink
+from raven.config.schema import CompactionConfig
 from raven.contracts.llm_provider import REASONING_EFFORT_LADDER
 from raven.providers import rates
 from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, ToolCallRequest, send_max_tokens
@@ -815,6 +817,59 @@ async def test_a_step_down_that_comes_back_plain_empty_is_resent_at_that_effort(
 
     assert out is not None and out[0] == "the answer"
     assert _efforts(calls) == [None, None, None, "high", "high"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "script,turn_effort",
+    [
+        pytest.param(lambda: [_reply("")] * 4, None, id="empty_spent"),
+        pytest.param(lambda: [_reply("", reasoning="hmm, let me think")] * 5, None, id="thinking_only_unstated"),
+        pytest.param(lambda: [_reply("", reasoning="hmm, let me think")] * 3, "low", id="thinking_only_low"),
+        pytest.param(lambda: [_reply("", reasoning="hmm, let me think")] * 5, "max", id="thinking_only_max"),
+        pytest.param(lambda: [_reply("", finish="length")] * 4, None, id="cut_spent"),
+    ],
+)
+async def test_no_request_asks_minimal(workspace, monkeypatch, script, turn_effort):
+    """Codex refuses ``minimal`` with an HTTP 400, so no move recovery makes may ask for it.
+
+    Each script runs a turn to the end of what recovery has to try, and every request it made is read.
+    A session that pins ``minimal`` itself still sends it -- that is the user's choice, and none of
+    these does.
+    """
+    replies = script()
+    calls = _served(monkeypatch, replies)
+    agent = _litellm_agent(workspace)
+    if turn_effort:
+        agent.set_session_policy("s1", reasoning_effort=turn_effort)
+
+    await _fail(agent)
+
+    assert len(calls) == len(replies), "the turn went through every move recovery had"
+    assert "minimal" not in _efforts(calls)
+
+
+@pytest.mark.asyncio
+async def test_no_request_asks_minimal_when_a_head_is_summarized(monkeypatch):
+    """The other request whose effort the runtime picks rather than the session: the head summary."""
+    calls = _served(monkeypatch, [_reply("Compacted handoff brief. " * 60)])
+    head = [{"role": "system", "content": "sys prompt"}, {"role": "user", "content": "the task statement"}]
+    for i in range(6):
+        call = {"id": f"s{i}", "type": "function", "function": {"name": "no_such_tool", "arguments": "{}"}}
+        head.append({"role": "assistant", "content": "", "tool_calls": [call]})
+        head.append({"role": "tool", "tool_call_id": f"s{i}", "content": f"seed evidence {i} " * 40})
+
+    _messages, verdict = await shrink.summarize_head(
+        head,
+        provider=LiteLLMProvider(api_key=None, default_model=_MODEL),
+        model=_MODEL,
+        window=16_000,
+        ceiling=4096,
+        cfg=CompactionConfig(enabled=True, reserved_tokens=15_100, preserve_recent_tokens=300),
+    )
+
+    assert verdict == "changed" and len(calls) == 1, "a summary was asked for"
+    assert "minimal" not in _efforts(calls)
 
 
 @pytest.mark.asyncio
@@ -2261,12 +2316,14 @@ def test_delegating_providers_answer_for_the_provider_they_wrap():
 
 
 class _PrefillRefusingThinkingProvider(LLMProvider):
-    """Thinking-only once, then an answer; refuses assistant prefills."""
+    """Thinking-only for its first ``thinking_calls`` calls, then an answer; refuses assistant prefills."""
 
-    def __init__(self):
+    def __init__(self, thinking_calls: int = 1):
         super().__init__(api_key="test")
         self.calls = 0
+        self.thinking_calls = thinking_calls
         self.last_roles: list[str] = []
+        self.efforts: list[str | None] = []
 
     def supports_assistant_prefill(self, model: str | None = None) -> bool:
         return False
@@ -2283,7 +2340,8 @@ class _PrefillRefusingThinkingProvider(LLMProvider):
     ):
         self.calls += 1
         self.last_roles.append(str(messages[-1].get("role")))
-        if self.calls == 1:
+        self.efforts.append(reasoning_effort)
+        if self.calls <= self.thinking_calls:
             return LLMResponse(content="", reasoning_content="let me think", finish_reason="stop")
         return LLMResponse(content="real answer", finish_reason="stop")
 
@@ -2312,6 +2370,20 @@ async def test_no_request_ends_on_an_assistant_message_when_prefill_is_refused(w
     assert out[0] == "real answer"
     assert provider.calls == 2
     assert "assistant" not in provider.last_roles, f"a prefill went to the provider: {provider.last_roles}"
+
+
+@pytest.mark.asyncio
+async def test_a_prefill_refusing_provider_goes_straight_to_the_step_down(workspace):
+    """It is never prefilled, so its thinking-only replies are stepped down at once -- ``high`` and
+    then ``low`` -- and every request it is sent ends on a user message."""
+    provider = _PrefillRefusingThinkingProvider(thinking_calls=2)
+    agent = _make_agent(workspace, provider)
+
+    out = await agent._process_message(_turn(), session_key="s1")
+
+    assert out is not None and out[0] == "real answer"
+    assert provider.efforts == [None, "high", "low"]
+    assert provider.last_roles == ["user"] * 3, f"a prefill went to the provider: {provider.last_roles}"
 
 
 class _AlwaysCutProvider(LLMProvider):
