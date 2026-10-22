@@ -133,24 +133,24 @@ async def test_an_ordinary_outcome_is_not_silent():
     assert ended.silent is False
 
 
-async def test_a_no_reply_failure_reaches_turn_failed():
-    exc = AnswerlessTurnError("No reply: the model sent nothing.", no_reply=True)
+async def test_a_no_output_failure_reaches_turn_failed():
+    exc = AnswerlessTurnError("No reply: the model sent nothing.", no_output=True)
     events = await _lifecycle_of(RaisingRunner(exc))
     failed = next(e for e in events if isinstance(e, TurnFailed))
-    assert failed.no_reply is True and failed.reported is True
+    assert failed.no_output is True and failed.reported is True
 
 
-async def test_an_answerless_failure_is_no_reply_only_when_the_runner_says_so():
+async def test_an_answerless_failure_is_no_output_only_when_the_runner_says_so():
     exc = AnswerlessTurnError("Error calling LLM (rate_limit@openrouter): busy")
     events = await _lifecycle_of(RaisingRunner(exc))
     failed = next(e for e in events if isinstance(e, TurnFailed))
-    assert failed.no_reply is False and failed.reported is True
+    assert failed.no_output is False and failed.reported is True
 
 
-async def test_a_crash_is_never_a_no_reply():
+async def test_a_crash_is_never_a_no_output():
     events = await _lifecycle_of(RaisingRunner(RuntimeError("boom")))
     failed = next(e for e in events if isinstance(e, TurnFailed))
-    assert failed.no_reply is False
+    assert failed.no_output is False
 
 
 # --- off-loop fail-fast (must compare self._loop, not just get_running_loop) ---

@@ -576,7 +576,7 @@ class Lane:
                 # hosts and paths.
                 reported=isinstance(exc, AnswerlessTurnError),
                 full_detail=full_detail_of(exc),
-                no_reply=isinstance(exc, AnswerlessTurnError) and exc.no_reply,
+                no_output=isinstance(exc, AnswerlessTurnError) and exc.no_output,
             )
             await self._sink(failed)
             self._payload_reported = True

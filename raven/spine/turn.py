@@ -31,11 +31,11 @@ class AnswerlessTurnError(Exception):
     that with -- and the lane copies it onto ``TurnFailed.full_detail``.
     """
 
-    def __init__(self, *args: object, full_detail: str | None = None, no_reply: bool = False) -> None:
+    def __init__(self, *args: object, full_detail: str | None = None, no_output: bool = False) -> None:
         super().__init__(*args)
         self.full_detail = full_detail
-        # The model gave nothing after every retry: cron delivers nothing and does not wake the heartbeat.
-        self.no_reply = no_reply
+        # The model produced no output at all (no text, no reasoning, no tool call) on every attempt.
+        self.no_output = no_output
 
 
 class BusyPolicy(StrEnum):

@@ -131,8 +131,8 @@ class TurnFailed:
     turn_id: str = ""
     reported: bool = False
     full_detail: str | None = None
-    # The model gave nothing after every retry: cron delivers nothing and does not wake the heartbeat.
-    no_reply: bool = False
+    # The model produced no output at all (no text, no reasoning, no tool call) on every attempt.
+    no_output: bool = False
 
 
 @dataclass(frozen=True)

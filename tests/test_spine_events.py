@@ -100,12 +100,12 @@ def test_turn_failed_has_no_usage():
     # No usage; ``reported`` is the in-process flag saying the runner worded
     # ``error`` itself rather than it being whatever a crash carried, and
     # ``full_detail`` is the runner's long account of the failure, which the
-    # lane copies off the exception it let out, and ``no_reply`` says the model
-    # gave nothing after every retry.
-    assert fields == {"error", "cancelled", "conversation_id", "turn_id", "reported", "full_detail", "no_reply"}
+    # lane copies off the exception it let out, and ``no_output`` says the model
+    # produced nothing at all on every attempt.
+    assert fields == {"error", "cancelled", "conversation_id", "turn_id", "reported", "full_detail", "no_output"}
     assert TurnFailed(error="boom", cancelled=False).reported is False
     assert TurnFailed(error="boom", cancelled=False).full_detail is None
-    assert TurnFailed(error="boom", cancelled=False).no_reply is False
+    assert TurnFailed(error="boom", cancelled=False).no_output is False
 
 
 def test_a_failure_text_is_bounded_and_says_it_was_cut():
