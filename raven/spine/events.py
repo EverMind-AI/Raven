@@ -34,6 +34,8 @@ class NoticeKind(StrEnum):
     # again. The turn is still running: the detail is the error category, never
     # the vendor's own body.
     LLM_RETRY = "llm_retry"
+    # The turn ended on a silence marker: an outlet draws one faint line, a channel sends nothing.
+    SILENT_TURN = "silent_turn"
 
 
 # Which notices pass with the turn and which stand in for its answer. An outlet
@@ -129,6 +131,8 @@ class TurnFailed:
     turn_id: str = ""
     reported: bool = False
     full_detail: str | None = None
+    # The model gave nothing after every retry: cron delivers nothing and does not wake the heartbeat.
+    no_reply: bool = False
 
 
 @dataclass(frozen=True)
@@ -138,6 +142,8 @@ class TurnEnded:
     explicit_reply: bool
     conversation_id: str | None = None
     turn_id: str = ""
+    # The turn ended on a silence marker, not on an answer.
+    silent: bool = False
 
 
 # Deliverable events — emitted by the runner, routed to outlets.

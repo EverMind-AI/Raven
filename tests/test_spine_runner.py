@@ -29,7 +29,8 @@ def test_turn_outcome_is_frozen_with_usage_and_explicit_reply():
     assert o.usage == Usage(1, 2, 3)
     assert o.explicit_reply is True
     fields = {f.name for f in dataclasses.fields(TurnOutcome)}
-    assert fields == {"usage", "explicit_reply"}
+    assert fields == {"usage", "explicit_reply", "silent"}
+    assert o.silent is False
     with pytest.raises(dataclasses.FrozenInstanceError):
         o.explicit_reply = False
 

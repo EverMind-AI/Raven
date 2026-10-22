@@ -8,12 +8,14 @@ import pytest
 from loguru import logger
 
 from raven.spine import (
+    AnswerlessTurnError,
     BusyPolicy,
     ChatType,
     Origin,
     OriginPools,
     Scheduler,
     Source,
+    TurnEnded,
     TurnFailed,
     TurnOutcome,
     TurnRequest,
@@ -62,6 +64,14 @@ class FailingRunner:
         raise ValueError("boom")
 
 
+class RaisingRunner:
+    def __init__(self, exc: Exception):
+        self.exc = exc
+
+    async def run(self, req, emit, drain) -> TurnOutcome:
+        raise self.exc
+
+
 class ConcurrentProbe:
     def __init__(self, target: int):
         self.running = 0
@@ -78,6 +88,16 @@ class ConcurrentProbe:
 
 def _scheduler(runner) -> Scheduler:
     return Scheduler(runner, OriginPools(user=1, system=1), _sink)
+
+
+async def _lifecycle_of(runner) -> list:
+    events: list = []
+
+    async def sink(event) -> None:
+        events.append(event)
+
+    await Scheduler(runner, OriginPools(user=1, system=1), sink).submit(_req()).result()
+    return events
 
 
 # --- submit / result / outcome channel ---
@@ -98,6 +118,39 @@ async def test_failed_turn_result_is_the_report_the_lane_filed():
     result = await sched.submit(_req()).result()
     assert isinstance(result, TurnFailed)
     assert (result.error, result.cancelled) == ("ValueError: boom", False)
+
+
+async def test_a_silent_outcome_reaches_turn_ended():
+    outcome = TurnOutcome(usage=Usage(1, 2, 3), explicit_reply=False, silent=True)
+    events = await _lifecycle_of(SuccessRunner(outcome))
+    ended = next(e for e in events if isinstance(e, TurnEnded))
+    assert ended.silent is True and ended.explicit_reply is False
+
+
+async def test_an_ordinary_outcome_is_not_silent():
+    events = await _lifecycle_of(SuccessRunner())
+    ended = next(e for e in events if isinstance(e, TurnEnded))
+    assert ended.silent is False
+
+
+async def test_a_no_reply_failure_reaches_turn_failed():
+    exc = AnswerlessTurnError("No reply: the model sent nothing.", no_reply=True)
+    events = await _lifecycle_of(RaisingRunner(exc))
+    failed = next(e for e in events if isinstance(e, TurnFailed))
+    assert failed.no_reply is True and failed.reported is True
+
+
+async def test_an_answerless_failure_is_no_reply_only_when_the_runner_says_so():
+    exc = AnswerlessTurnError("Error calling LLM (rate_limit@openrouter): busy")
+    events = await _lifecycle_of(RaisingRunner(exc))
+    failed = next(e for e in events if isinstance(e, TurnFailed))
+    assert failed.no_reply is False and failed.reported is True
+
+
+async def test_a_crash_is_never_a_no_reply():
+    events = await _lifecycle_of(RaisingRunner(RuntimeError("boom")))
+    failed = next(e for e in events if isinstance(e, TurnFailed))
+    assert failed.no_reply is False
 
 
 # --- off-loop fail-fast (must compare self._loop, not just get_running_loop) ---
