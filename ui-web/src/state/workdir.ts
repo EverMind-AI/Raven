@@ -344,22 +344,28 @@ function dirs(): Dirs | null {
    browser once it stands somewhere -- and replaces nothing. Answers that land
    after the popover closed, or after a later ask, are dropped. */
 
-export async function browse(path?: string): Promise<void> {
+async function read(path?: string): Promise<boolean> {
   const fn = dirs()
   if (!fn) {
     set({ ...get(), err: t('gui.wd.not_live') })
-    return
+    return false
   }
   const ticket = ++asking
   set({ ...get(), loading: true, err: null, asked: get().asked + 1 })
   try {
     const listing = await fn(path)
-    if (ticket !== asking || !get().open) return
+    if (ticket !== asking || !get().open) return false
     set({ ...get(), view: 'browse', listing, loading: false, err: null })
+    return true
   } catch (e) {
-    if (ticket !== asking || !get().open) return
+    if (ticket !== asking || !get().open) return false
     set({ ...get(), loading: false, err: t('gui.wd.failed', { detail: detailOf(e) }) })
+    return false
   }
+}
+
+export function browse(path?: string): Promise<void> {
+  return read(path).then(() => undefined)
 }
 
 /** Back from the browser to the menu, rebuilt: a pick may have been made. */
@@ -388,11 +394,26 @@ export function go(path: string): Promise<void> {
   return browse(at)
 }
 
-/** The browser's "use this folder", offered only where the engine would take it. */
-export function useHere(): void {
+/** The browser's "use this folder", offered only where the engine would take
+ *  it. A path typed into the bar is read first, like Enter; only a successful
+ *  read is staged. */
+export async function useHere(path?: string): Promise<void> {
   const here = get().listing
   if (!here || !here.ok) return
-  pick(here.path)
+  const at = path?.trim() ?? ''
+  if (!at || at === here.path) {
+    pick(here.path)
+    return
+  }
+  if (!(await read(at))) return
+  /* A typed path is judged as a row is: walking into a folder the engine would
+     refuse stays allowed, the pick alone is withheld. */
+  const landed = get().listing
+  if (!landed || !landed.ok) {
+    set({ ...get(), err: t('gui.wd.blocked') })
+    return
+  }
+  pick(landed.path)
 }
 
 /* Test seam only: the pick, the ticket and the popover are the module's. */

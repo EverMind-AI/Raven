@@ -452,6 +452,15 @@ describe('the workspace a draft picks', () => {
     const field = (): HTMLInputElement => pop().querySelector<HTMLInputElement>('.chrome-wd-typed')!
     expect(field().value).toBe('/home/me')
     act(() => {
+      field().value = '/home/me/undone'
+      field().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, isComposing: true }))
+    })
+    await settle()
+    /* An IME's Enter commits its candidate. It must not read the half-composed
+       path or remount the field out from under the composition. */
+    expect(asked).toEqual([undefined])
+    expect(field().value).toBe('/home/me/undone')
+    act(() => {
       field().value = '/srv/elsewhere'
       field().dispatchEvent(new Event('input', { bubbles: true }))
     })
@@ -475,10 +484,67 @@ describe('the workspace a draft picks', () => {
     await settle()
     expect(pop().querySelector('.chrome-wd-err')?.textContent).toBe('gui.wd.failed {"detail":"not a directory"}')
     expect(wd.get().view).toBe('browse')
-    /* The browser stayed where it stood, and the bar says so: a field left
-       holding a path nothing listed would read as the folder the "Use this
-       folder" button picks, which is not the one it picks. */
+    /* The refused path stays in the bar so it can be corrected, while the
+       browser stays where it stood. */
     expect(pop().querySelector('.chrome-wd-p')?.getAttribute('title')).toBe('/srv/elsewhere')
     expect(field().value).toBe('/srv/elsewhere')
+  })
+
+  it('uses a path typed into the bar when Use this folder is pressed before Enter', async () => {
+    const asked: Array<string | undefined> = []
+    workspace(async (p) => {
+      asked.push(p)
+      return { path: p ?? '/home/me', parent: '/home', home: '/home/me', ok: true, entries: [] }
+    })
+    openFolders()
+    act(() => byName('gui.wd.open_remote').click())
+    await settle()
+
+    const field = pop().querySelector<HTMLInputElement>('.chrome-wd-typed')!
+    act(() => {
+      field.value = '/srv/typed'
+      field.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      pop().querySelector<HTMLButtonElement>('.chrome-wd-use')!.click()
+      await Promise.resolve()
+    })
+    await settle()
+
+    expect(asked.at(-1)).toBe('/srv/typed')
+    expect(wd.staged()).toBe('/srv/typed')
+    expect(pop().dataset.open).toBe('false')
+  })
+
+  it('withholds the pick when the typed path is a folder the engine would refuse', async () => {
+    /* Standing in a folder the engine takes, a drive root it would refuse is
+       named in the bar and Use is pressed: the drive is walked into and the
+       pick is withheld, as a refused row's is. */
+    const listings: Record<string, DirListing> = {
+      'D:\\projects': { path: 'D:\\projects', parent: 'D:\\', home: 'C:\\Users\\me', ok: true, roots: [], entries: [] },
+      'C:\\': { path: 'C:\\', parent: null, home: 'C:\\Users\\me', ok: false, roots: [], entries: [] },
+    }
+    workspace(async (p) => listings[p ?? 'D:\\projects']!)
+    openFolders()
+    act(() => byName('gui.wd.open_remote').click())
+    await settle()
+
+    const field = (): HTMLInputElement => pop().querySelector<HTMLInputElement>('.chrome-wd-typed')!
+    expect(field().value).toBe('D:\\projects')
+    expect(pop().querySelector<HTMLButtonElement>('.chrome-wd-use')!.disabled).toBe(false)
+    act(() => {
+      field().value = 'C:\\'
+      field().dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      pop().querySelector<HTMLButtonElement>('.chrome-wd-use')!.click()
+      await Promise.resolve()
+    })
+    await settle()
+
+    expect(wd.staged()).toBeNull()
+    expect(pop().dataset.open).toBe('true')
+    expect(pop().querySelector('.chrome-wd-err')?.textContent).toBe('gui.wd.blocked')
+    expect(pop().querySelector<HTMLButtonElement>('.chrome-wd-use')!.disabled).toBe(true)
   })
 })

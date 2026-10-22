@@ -17,8 +17,9 @@
  * would refuse is greyed and explained, and still a way in.
  */
 
-import { useSyncExternalStore } from 'react'
+import { useRef, useSyncExternalStore } from 'react'
 
+import { composing } from '../features/composer/store'
 import { t } from '../i18n/t'
 import * as lang from '../state/lang'
 import * as wd from '../state/workdir'
@@ -100,6 +101,7 @@ function Menu({ rows, err, picking }: { rows: readonly wd.WdRow[]; err: string |
    field, so a folder can be named rather than walked to. */
 function Browser({ at, loading, err, asked }: { at: DirListing; loading: boolean; err: string | null; asked: number }): JSX.Element {
   const roots = at.roots || []
+  const field = useRef<HTMLInputElement>(null)
   return (
     <>
       <div className="chrome-wd-path">
@@ -126,7 +128,10 @@ function Browser({ at, loading, err, asked }: { at: DirListing; loading: boolean
             browser actually stands. */}
         <input
           key={`${at.path}#${asked}`}
-          ref={showEnd}
+          ref={(el) => {
+            field.current = el
+            showEnd(el)
+          }}
           className="chrome-wd-p chrome-wd-typed"
           type="text"
           defaultValue={at.path}
@@ -135,7 +140,7 @@ function Browser({ at, loading, err, asked }: { at: DirListing; loading: boolean
           placeholder={t('gui.wd.typed')}
           spellCheck={false}
           onKeyDown={(e) => {
-            if (e.key !== 'Enter') return
+            if (e.key !== 'Enter' || composing(e.nativeEvent)) return
             e.preventDefault()
             void wd.go(e.currentTarget.value)
           }}
@@ -164,7 +169,7 @@ function Browser({ at, loading, err, asked }: { at: DirListing; loading: boolean
           className="chrome-wd-btn chrome-wd-use"
           disabled={!at.ok}
           title={at.ok ? at.path : t('gui.wd.blocked')}
-          onClick={() => wd.useHere()}
+          onClick={() => void wd.useHere(field.current?.value)}
         >
           {t('gui.wd.use')}
         </button>
