@@ -737,15 +737,20 @@
   -webkit-box-orient: vertical;
 }
 /* The agent line (`.l2`, proto.css:1507-1518): the agent's own name, its
-   `@instance` handle when it has one, and the tool-count chip when the lane
-   reported one. */
+   `@instance` handle when it has one, the tool-count chip when the lane
+   reported one, and a decision node's selection. When they do not fit, the
+   handle and the routes after a selection's first give way first: each starts
+   from nothing and grows into the room the others leave, up to its own width.
+   The agent's name gives way next. The chip and the first route never do. */
 .tkrunl2 { display: flex; align-items: center; gap: 6px; overflow: hidden; white-space: nowrap; }
-.tkrunag { font-size: 12px; color: var(--text-3); }
+.tkrunag { font-size: 12px; color: var(--text-3); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .tkrunhandle {
+  flex: 1 1 0;
+  max-width: max-content;
   font-family: var(--mono);
   font-size: 10.5px;
   color: var(--sky);
-  /* A minted handle can be long; it gives way before the tool-count chip does. */
+  /* A minted handle can be long. */
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -759,17 +764,21 @@
   border-radius: 5px;
   padding: 0 5px;
 }
-/* What a decision node selected, at the end of the agent line. It clips rather than pushing the
-   card's edge out, and its title holds the whole selection. */
-.tkrunsel {
-  flex: 0 1 auto;
-  min-width: 0;
+/* What a decision node selected, at the end of the agent line, each part titled with the whole
+   selection. The arrow and the first route keep their width, so the line can no longer cut them
+   down to the arrow; only a route longer than the line itself ends in an ellipsis. The routes
+   after it shrink to a letter and an ellipsis: narrower, a line's first letter is clipped
+   rather than replaced by one, so they would end in a cut letter that says nothing follows. */
+.tkrunsel,
+.tkrunselrest {
   overflow: hidden;
   text-overflow: ellipsis;
   font-family: var(--mono);
   font-size: 10.5px;
   color: var(--moss);
 }
+.tkrunsel { flex: none; max-width: 100%; }
+.tkrunselrest { flex: 1 1 0; max-width: max-content; min-width: 2ch; }
 
 /* The top-right status cluster (`.rt`, proto.css:1083-1091): icon-or-word
    plus duration, coloured per status. */

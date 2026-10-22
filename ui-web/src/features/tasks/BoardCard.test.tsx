@@ -169,8 +169,25 @@ describe('the board card', () => {
 
     it('lists a many-selection in the order it was given, and titles the chip with all of it', () => {
       render(<BoardCard node={node({ status: 'completed', selected_routes: ['bug', 'docs', 'question'] })} now={1000} />)
-      expect(document.querySelector('.tkrunsel')?.textContent).toBe('\u2192 bug, docs, question')
-      expect(document.querySelector('.tkrunsel')?.getAttribute('title')).toBe('\u2192 bug, docs, question')
+      expect(document.querySelector('.tkrunl2')?.textContent).toContain('\u2192 bug, docs, question')
+      for (const part of document.querySelectorAll('.tkrunsel, .tkrunselrest')) {
+        expect(part.getAttribute('title')).toBe('\u2192 bug, docs, question')
+      }
+    })
+
+    /* The card is narrow, and the line it shares with the agent's name, handle and tool count was
+       cut from the end: the selection went first, down to its arrow. Its first route is held apart
+       from the rest so the stylesheet can keep it whole (scripts/gates/task-card-selection-css.test.mjs). */
+    it('holds its first route apart from the routes after it, which are all that may be cut', () => {
+      render(<BoardCard node={node({ status: 'completed', selected_routes: ['bug', 'docs', 'question'] })} now={1000} />)
+      const line = document.querySelector('.tkrunl2')
+      expect(line?.querySelector('.tkrunsel')?.textContent).toBe('\u2192 bug,')
+      expect(line?.querySelector('.tkrunselrest')?.textContent).toBe(' docs, question')
+      expect(line?.lastElementChild?.className).toBe('tkrunselrest')
+
+      cleanup()
+      render(<BoardCard node={node({ status: 'completed', selected_routes: ['question'] })} now={1000} />)
+      expect(document.querySelector('.tkrunselrest')).toBeNull()
     })
 
     it('shows an empty selection as none: it chose nothing, which is a decision and not a blank', () => {
