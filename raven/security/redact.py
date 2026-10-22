@@ -193,16 +193,59 @@ def redact(text: str, *, truncated: bool = False) -> str:
     return text
 
 
+#: The subdirectories of Raven's home a coding turn reads its own source from.
+#: Exempt from the home-config pass, and the list is deliberately exhaustive: the
+#: OAuth store is a sibling of these, not one of them.
+_OWN_SOURCE_DIRS = ("workspace", "tmp")
+
+# Raven's own token files name their credentials with words that mean nothing on
+# their own: ``save_token`` writes ``asdict(MiniMaxOAuthToken)``, whose fields are
+# ``access`` and ``refresh``. Adding those two names to ``_PATTERNS`` would be the
+# cheap fix and the wrong one -- it rewrites "refresh the page" and "access the
+# network" in every tool result, a coding turn's included. So this pair is fenced
+# twice over: the call must have reached Raven's OAuth directory (below), and the
+# value must look like a token rather than a word -- sixteen characters or more,
+# no whitespace, no quote. Both conditions together are what the label patterns
+# cannot express for a name this ordinary.
+_OAUTH_TOKEN_FIELD = re.compile(r'("(?:access|refresh)"\s*:\s*")([^\s"\\]{16,})')
+
+
+def _own_oauth_store() -> re.Pattern[str]:
+    """A path into Raven's OAuth token directory, in any spelling a call may use.
+
+    Built from ``raven_home()`` rather than ``get_oauth_dir()`` on purpose: that
+    helper creates and chmods the directory, and a redaction pass must not have
+    side effects on the filesystem it is reading about.
+    """
+    from raven.home import raven_home
+
+    home_dir = os.path.expanduser("~").rstrip("/")
+    own = raven_home()
+    roots = [re.escape(str(own))]
+    if str(own.parent) == home_dir:
+        # The same directory as a shell would spell it.
+        roots += [re.escape(prefix) + "/" + re.escape(own.name) for prefix in ("~", "$HOME", "${HOME}")]
+    return re.compile(r"(?:" + "|".join(dict.fromkeys(roots)) + r")[/\\]oauth(?:[/\\]|$|[\"'\s])")
+
+
+def _redact_oauth_store(text: str) -> str:
+    """Redact the credential fields of Raven's own token store file.
+
+    Only the value is replaced, so the file's shape still says what was read --
+    the same trade the pattern table makes for another program's settings.
+    """
+    return _OAUTH_TOKEN_FIELD.sub(lambda m: m.group(1) + REPLACEMENT, text)
+
+
 def _home_config() -> re.Pattern[str]:
     """A path into a dot-directory of the home, Raven's own source directories excepted.
 
     Raven's home holds the default workspace and the channels' scratch
     directories, where a coding turn reads its own source; rewriting that
     source's ``token = ...`` lines breaks every edit built from them, so those
-    two stay exempt. They are the only parts that are: the rest of Raven's home
-    holds no source to edit, and its OAuth token store (``oauth/<provider>/...``)
-    is a credential file like another program's settings -- a read of it loses
-    its tokens to this pass.
+    two stay exempt. The OAuth token store (``oauth/<provider>/...``) is not one
+    of them: it holds no source to edit, and a read of it is a credential file
+    like another program's settings, so it loses its tokens to this pass.
     """
     from raven.home import raven_home
 
@@ -213,7 +256,7 @@ def _home_config() -> re.Pattern[str]:
     if str(own.parent) == home_dir and own.name.startswith("."):
         name = re.escape(own.name[1:])
         boundary = r"(?:/|\\|$|[\"'\s])"
-        source = r"(?:/(?:workspace|tmp)|\\(?:workspace|tmp))" + boundary
+        source = r"(?:[/\\](?:" + "|".join(_OWN_SOURCE_DIRS) + r"))" + boundary
         skip = r"(?!" + name + r"(?:" + source + r"|(?:$|[\"'\s])))"
     return re.compile(r"(?:~|\$HOME|\$\{HOME\}|" + home + r")/\." + skip + r"[A-Za-z0-9_-]")
 
@@ -227,6 +270,11 @@ def redact_home_config_read(arguments: Any, text: str) -> str:
     connect an agent ran ``read_file`` on its settings and read its key back.
     Only those calls: the patterns here would also rewrite placeholders in a
     project's source and tests, which a coding turn then fails to edit.
+
+    Raven's own OAuth store is the one place a second pass runs, for the token
+    fields whose names (``access``, ``refresh``) are ordinary words -- see
+    :data:`_OAUTH_TOKEN_FIELD`. It is gated on the read reaching that directory,
+    so it costs nothing anywhere else and cannot touch prose.
     """
     if not text:
         return text
@@ -234,6 +282,8 @@ def redact_home_config_read(arguments: Any, text: str) -> str:
         blob = arguments if isinstance(arguments, str) else json.dumps(arguments, ensure_ascii=False)
     except (TypeError, ValueError):
         blob = str(arguments)
+    if _own_oauth_store().search(blob):
+        text = _redact_oauth_store(text)
     return redact(text) if _home_config().search(blob) else text
 
 

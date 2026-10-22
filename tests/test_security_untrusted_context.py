@@ -919,22 +919,47 @@ async def test_the_a2a_tools_own_transport_error_is_scrubbed(tmp_path, monkeypat
 
 def test_ravens_own_oauth_tokens_are_redacted_like_another_programs() -> None:
     """The OAuth token store sits in Raven's home but holds no source: a read of
-    it is another program's settings read (#842). Only the workspace and the
-    scratch directories are exempt, so a turn reading an auth file there loses
-    the tokens before they reach the model."""
+    it is another program's settings read (#842). Only the source directories are
+    exempt, so a turn reading a token file there loses the tokens before they
+    reach the model -- MiniMax's included, whose saved shape is ``asdict``'s
+    ``access`` / ``refresh`` and matches no label pattern."""
+    import json
+    from dataclasses import asdict
+
     from raven.config.held_secrets import scrub_tool_output
     from raven.home import raven_home
+    from raven.providers.minimax_oauth import MiniMaxOAuthToken
 
-    tokens = '{"access_token": "eyJhbGciOiJSUzI1NiJ9.FAKEPAYLOAD.sig", "refresh_token": "rt_FAKE0123456789abcdef"}'
+    access, refresh = "mmx_FAKEACCESS0123456789abcdef", "mmx_FAKEREFRESH0123456789abcdef"
+    # Exactly what ``save_token`` writes: ``asdict(MiniMaxOAuthToken)``, whose two
+    # credential fields are ``access`` and ``refresh``. Neither name says secret,
+    # so the label patterns cannot be what catches them.
+    tokens = json.dumps(
+        asdict(
+            MiniMaxOAuthToken(
+                access=access,
+                refresh=refresh,
+                expires=1_760_000_000_000,
+                resource_url="https://api.minimax.io/anthropic/v1",
+            )
+        ),
+        indent=2,
+    )
     own = raven_home()
     for arguments in (
         {"path": str(own / "oauth" / "chatgpt" / "auth.json")},
         {"path": str(own / "oauth" / "github_copilot" / "access-token")},
         {"path": str(own / "oauth" / "minimax_global.json")},
-        {"command": f"cat {own}/oauth/chatgpt/auth.json"},
+        {"command": f"cat {own}/oauth/minimax_global.json"},
     ):
         shown = scrub_tool_output(arguments, tokens)
-        assert "FAKEPAYLOAD" not in shown and "rt_FAKE0123456789abcdef" not in shown, (arguments, shown)
+        assert access not in shown and refresh not in shown, (arguments, shown)
+    # ``access`` and ``refresh`` are ordinary English words. The pass is fenced
+    # on the read reaching the OAuth store, so prose keeps its words even when
+    # the gate is open, and everywhere else it never runs at all.
+    prose = "Refresh the page, then access the network again after signing in.\n"
+    assert scrub_tool_output({"path": str(own / "oauth" / "minimax_global.json")}, prose) == prose
+    assert scrub_tool_output({"path": str(own / "workspace" / "notes.md")}, prose) == prose
     # A bare listing of the home itself stays out of the pass, and a read whose
     # arguments never reach into it was never a candidate.
     source = "token = self.get_token(request)\n"
