@@ -167,6 +167,43 @@ def test_hand_written_directory_loads(tmp_path):
     assert spec.mode == "prompt" and spec.description == "written by hand"
 
 
+def test_hand_written_yaml_11_route_names_load_as_written(tmp_path):
+    """``yes``/``no``/``on``/``off``/``true``/``false`` and bare digits are
+    booleans and numbers to YAML 1.1, so an unquoted route name became a
+    non-string key and the runtime dropped the whole playbook as unloadable.
+    The store reads mapping keys as the strings they were written as -- the
+    shape its own writer emits by quoting them."""
+    target = tmp_path / "hand-made-routes"
+    target.mkdir()
+    (target / "playbook.md").write_text(
+        "---\nname: hand-made-routes\ndescription: routes yaml 1.1 turns into keys of other types\n---\n\n"
+        "```yaml playbook-spec\n"
+        "version: 1\nmode: dag\nconfirm: false\n"
+        "triggers:\n  keywords: [handmade routes]\n"
+        "nodes:\n"
+        "  - id: triage\n"
+        "    subagent: raven\n"
+        "    nodeSummary: classify the issue\n"
+        "    promptTemplate: say yes or no about it\n"
+        "    routes:\n"
+        "      yes: it is a defect\n"
+        "      no: anything else\n"
+        "  - id: handle\n"
+        "    subagent: raven\n"
+        "    nodeSummary: handle the defect\n"
+        "    promptTemplate: fix it\n"
+        "    dependsOn: [triage]\n"
+        "    when: triage.yes\n"
+        "```\n",
+        encoding="utf-8",
+    )
+
+    loaded = _store(tmp_path).load("hand-made-routes")
+
+    assert loaded.nodes[0].routes == {"yes": "it is a defect", "no": "anything else"}
+    assert loaded.nodes[1].when == "triage.yes"
+
+
 def test_hand_written_invalid_graph_is_rejected_on_load(tmp_path):
     target = tmp_path / "broken-graph"
     target.mkdir()
