@@ -416,18 +416,6 @@ All notable changes to Raven are documented here.
   the rest of the frame one row down. Terminals that size the glyph
   correctly see no change.
 
-- A password machine at the name of a key machine whose ssh alias names that
-  same address (key machine `gpu1` at `gpu1`, password machine `gpu1-shared`
-  at `gpu1`) registers and logs in. The check that keeps a `Host` alias Raven
-  wrote from taking another machine's password refused every such pair by
-  name; it now refuses only an alias that would send ssh elsewhere (another
-  `HostName`, a keyword Raven does not write, a block cut short), and its
-  refusal suggests the machine's IP address or full domain name rather than
-  the address it already had. The Oncall event watcher builds a password
-  machine's backend off the event loop as the ops tools do, so the `ssh -G`
-  that build runs no longer holds up the rest of Raven, for up to 10 seconds
-  on each pass.
-
 - A continued DAG node is judged against what it was told after an attempt
   fell short, not only against its first prompt. The judge read the task as
   first given and nothing else, so when the user answered a stuck node by
@@ -477,6 +465,18 @@ All notable changes to Raven are documented here.
   asks the replay from the line its record kept as the prompt went out, not
   from the agent's first line; a CLI pick-up, whose task is the command's
   own, reads from the first line.
+
+- A password machine at the name of a key machine whose ssh alias names that
+  same address (key machine `gpu1` at `gpu1`, password machine `gpu1-shared`
+  at `gpu1`) registers and logs in. The check that keeps a `Host` alias Raven
+  wrote from taking another machine's password refused every such pair by
+  name; it now refuses only an alias that would send ssh elsewhere (another
+  `HostName`, a keyword Raven does not write, a block cut short), and its
+  refusal suggests the machine's IP address or full domain name rather than
+  the address it already had. The Oncall event watcher builds a password
+  machine's backend off the event loop as the ops tools do, so the `ssh -G`
+  that build runs no longer holds up the rest of Raven, for up to 10 seconds
+  on each pass.
 
 - The research, code, oncall and ppt agents follow an upgrade or a config
   change into the prompt files they keep in their workspace (`soul.md`,
