@@ -132,6 +132,7 @@ export const STAGES: readonly Stage[] = [
         isDag,
         status: d.status,
         body: d.content || '',
+        output: d.output,
         open: () => {
           if (isDag) { ds('transcript').openDagRun!(d.run_id || d.label || ''); return }
           ds('transcript').openSpawn!(d.node_id || '')

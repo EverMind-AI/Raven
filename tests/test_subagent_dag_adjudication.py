@@ -22,7 +22,15 @@ class _Announced:
         self.verdicts: list[bool] = []
         self.finals: list[object] = []
 
-    async def report(self, node_id: str, text: str, *, awaiting_decision: bool, informational: bool = False) -> None:
+    async def report(
+        self,
+        node_id: str,
+        text: str,
+        *,
+        awaiting_decision: bool,
+        informational: bool = False,
+        output: str | None = None,
+    ) -> None:
         self.reports.append((node_id, text))
         self.verdicts.append(awaiting_decision)
 
@@ -96,6 +104,25 @@ async def test_release_with_flush_re_sends_the_buffer_and_switches_to_announcing
 
     await box.put_report("c", "report c", awaiting_decision=True)
     assert announced.reports[-1] == ("c", "report c"), "a released outbox announces directly"
+
+
+async def test_a_released_outbox_carries_what_the_node_returned_on_both_of_its_routes() -> None:
+    """Released, a report announces straight away or out of the tray it waited in;
+    either way the node's own output goes with it."""
+    announced: list[str | None] = []
+
+    async def report(node_id: str, text: str, *, awaiting_decision: bool, informational: bool = False, output=None):
+        announced.append(output)
+
+    async def final(result: object) -> None:
+        pass
+
+    box = Outbox(conversation="c1", announce_report=report, announce_final=final)
+    await box.put_report("a", "report a", awaiting_decision=True, output="what a said")
+    await box.release(flush=True)
+    await box.put_report("b", "report b", awaiting_decision=False, output="what b said")
+
+    assert announced == ["what a said", "what b said"]
 
 
 async def test_release_re_sends_a_report_that_was_taken_and_never_answered() -> None:
@@ -269,7 +296,7 @@ def _failing_once() -> tuple[list[str], list[tuple[str, str]], object]:
     calls: list[str] = []
     landed: list[tuple[str, str]] = []
 
-    async def _announce(node_id: str, text: str, *, awaiting_decision: bool) -> None:
+    async def _announce(node_id: str, text: str, *, awaiting_decision: bool, output: str | None = None) -> None:
         calls.append(node_id)
         if len(calls) == 1:
             raise RuntimeError("the submit queue was busy")
@@ -313,7 +340,7 @@ async def test_the_release_drain_is_bounded_and_still_moves_on(monkeypatch) -> N
     monkeypatch.setattr(mod, "REPORT_DELIVERY_BACKOFF_S", 0.0)
     calls: list[str] = []
 
-    async def _announce(node_id: str, _text: str, *, awaiting_decision: bool) -> None:
+    async def _announce(node_id: str, _text: str, *, awaiting_decision: bool, output: str | None = None) -> None:
         calls.append(node_id)
         if node_id == "a":
             raise RuntimeError("delivery channel is down")
@@ -344,7 +371,7 @@ async def test_a_post_release_final_does_not_escape_its_task(monkeypatch) -> Non
     monkeypatch.setattr(mod, "REPORT_DELIVERY_BACKOFF_S", 0.0)
     calls: list[object] = []
 
-    async def _report(_node_id: str, _text: str, *, awaiting_decision: bool) -> None: ...
+    async def _report(_node_id: str, _text: str, *, awaiting_decision: bool, output: str | None = None) -> None: ...
 
     async def _final(result: object) -> None:
         calls.append(result)
@@ -366,7 +393,7 @@ async def test_a_post_release_final_survives_a_transient(monkeypatch) -> None:
     calls: list[object] = []
     landed: list[object] = []
 
-    async def _report(_node_id: str, _text: str, *, awaiting_decision: bool) -> None: ...
+    async def _report(_node_id: str, _text: str, *, awaiting_decision: bool, output: str | None = None) -> None: ...
 
     async def _final(result: object) -> None:
         calls.append(result)
@@ -395,7 +422,7 @@ async def test_a_stopped_post_release_final_is_still_never_announced(monkeypatch
     monkeypatch.setattr(mod, "REPORT_DELIVERY_BACKOFF_S", 0.0)
     calls: list[object] = []
 
-    async def _report(_node_id: str, _text: str, *, awaiting_decision: bool) -> None: ...
+    async def _report(_node_id: str, _text: str, *, awaiting_decision: bool, output: str | None = None) -> None: ...
 
     async def _final(result: object) -> None:
         calls.append(result)
@@ -477,7 +504,7 @@ async def test_release_survives_an_announcer_that_raises() -> None:
     lets the later ones through."""
     announced = _Announced()
 
-    async def _raising_report(node_id: str, text: str, *, awaiting_decision: bool) -> None:
+    async def _raising_report(node_id: str, text: str, *, awaiting_decision: bool, output: str | None = None) -> None:
         if node_id == "a":
             raise RuntimeError("boom")
         await announced.report(node_id, text, awaiting_decision=awaiting_decision)
@@ -498,7 +525,7 @@ async def test_stop_from_inside_an_announcer_halts_the_remaining_announces() -> 
     the drain push out further events that are no longer worth announcing."""
     announced = _Announced()
 
-    async def _stopping_report(node_id: str, text: str, *, awaiting_decision: bool) -> None:
+    async def _stopping_report(node_id: str, text: str, *, awaiting_decision: bool, output: str | None = None) -> None:
         await announced.report(node_id, text, awaiting_decision=awaiting_decision)
         box.stop()
 
@@ -682,7 +709,9 @@ async def test_a_released_outbox_carries_the_informational_state_to_the_announce
     or it heads the injected turn with "has failed" about a live node."""
     seen: list[tuple[str, bool, bool]] = []
 
-    async def announce(node_id: str, text: str, *, awaiting_decision: bool, informational: bool = False) -> None:
+    async def announce(
+        node_id: str, text: str, *, awaiting_decision: bool, informational: bool = False, output: str | None = None
+    ) -> None:
         seen.append((node_id, awaiting_decision, informational))
 
     async def final(result) -> None:

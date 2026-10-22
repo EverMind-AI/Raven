@@ -99,6 +99,11 @@ class ExceptionAnnouncer(Protocol):
     pending" -- an announcer that reads ``awaiting_decision=False`` alone as
     "the node has failed" would wake the model with a false state, which is
     what the stall notice did before this keyword existed.
+
+    ``output`` is what the node itself returned on the attempt the report is
+    about -- its error, when it raised -- for a reader of the conversation, who
+    is shown that rather than the brief. ``None`` for a report about no attempt
+    (a stall notice). The report stays the model's whole text.
     """
 
     async def __call__(
@@ -110,6 +115,7 @@ class ExceptionAnnouncer(Protocol):
         *,
         awaiting_decision: bool,
         informational: bool = False,
+        output: str | None = None,
     ) -> None: ...
 
 
@@ -1257,6 +1263,9 @@ async def _apply_verdict(
                 if verdict.route_evidence:
                     branch.evidence[node.id] = verdict.route_evidence
         return
+    # Read before `errors` is overwritten with the judge's reason: a node that raised
+    # returned nothing but its error, and that error is its whole account.
+    said = errors.get(node.id, "") if crashed else (node_output or "")
     reason = verdict.what_is_missing or "The node did not accomplish its task."
     errors[node.id] = reason
     # A node that did not accomplish its task must not be readable as anyone's
@@ -1320,7 +1329,9 @@ async def _apply_verdict(
         # The node's fate must not depend on delivery, so the retries are inside and
         # what comes back is the failure that outlived them.
         failure = await deliver_report(
-            partial(announce_exception, store.run_id, node.id, report, origin, awaiting_decision=suspending),
+            partial(
+                announce_exception, store.run_id, node.id, report, origin, awaiting_decision=suspending, output=said
+            ),
             what=f"node {node.id}",
         )
         if failure is not None and suspending:

@@ -308,6 +308,23 @@ describe('turn.started', () => {
     /* A runtime turn is NOT cancellable. */
     expect(h.did('dispatch')).toEqual([['dispatch', 'stream', false]])
   })
+
+  it('hands the row what a node returned, beside the report the model was given', async () => {
+    const h = await harness({ rows: [{ id: 's1' }] })
+
+    h.dispatch({
+      type: 'turn.started',
+      payload: {
+        delegated: {
+          kind: 'dag', label: 'r1', status: 'exception', run_id: 'r1', node_id: 'push',
+          content: 'the brief', output: 'the fork is read-only',
+        },
+      },
+    })
+
+    const delivered = h.did('delivered') as Array<[string, Record<string, unknown>]>
+    expect(delivered[0]![1]).toMatchObject({ body: 'the brief', output: 'the fork is read-only' })
+  })
 })
 
 describe('episode.start', () => {

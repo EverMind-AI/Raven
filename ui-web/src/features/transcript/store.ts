@@ -445,7 +445,9 @@ export function qa(lane: Lane, question: string, answer: string, opts?: { skippe
 }
 
 /* What a delegated result looks like to a reader: the text from INSIDE the
-   untrusted fence, and nothing else.
+   untrusted fence, and nothing else -- unless the delivery also carries what a
+   dag node returned (`delivered`, below), since that report's fence holds a
+   brief written for the model.
 
    One rule, and it is the fence's own contract rather than a guess about the
    prose around it. A spawn's injection wraps the result in framing the model
@@ -462,16 +464,21 @@ export function qa(lane: Lane, question: string, answer: string, opts?: { skippe
 /* `status` is loosely typed and normalised here rather than by the caller,
    because one caller is the live path's plain-JS turn handler, which has no
    import statements and only ever hands this function a raw wire string. */
+const DELIVERED_STATUSES: ReadonlySet<string> = new Set(['error', 'exception', 'notice', 'cancelled'])
 const deliveredStatus = (v: unknown): DeliveredData['status'] =>
-  v === 'error' ? 'error' : v === 'exception' ? 'exception' : 'ok'
+  typeof v === 'string' && DELIVERED_STATUSES.has(v) ? v as DeliveredData['status'] : 'ok'
 
+/* `output` is a dag node's own words, sent beside its report. A string, even an
+   empty one, wins over the fenced brief: empty is a node that said nothing, and
+   then there is nothing to fold open. Absent is a server that never sent it. */
 export function delivered(lane: Lane, p: {
-  label: string; isDag: boolean; status?: string; open: () => void; body?: string
+  label: string; isDag: boolean; status?: string; open: () => void; body?: string; output?: string
 }): void {
+  const said = typeof p.output === 'string'
   push(lane, {
     v: 0, id: nextId(), kind: 'sdlv',
     label: p.label, isDag: p.isDag, status: deliveredStatus(p.status), open: p.open,
-    body: defence(p.body || ''), shown: false,
+    body: said ? (p.output as string).trim() : defence(p.body || ''), said, shown: false,
   } satisfies DeliveredData)
 }
 
@@ -1675,6 +1682,7 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
           isDag,
           status: d.status,
           body: m.text || '',
+          output: d.output,
           open: () => {
             const src = source()
             if (isDag) src.openDagRun?.(String(d.run_id || d.label || ''))

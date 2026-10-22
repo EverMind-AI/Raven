@@ -5805,6 +5805,83 @@ async def test_a_node_judged_not_accomplished_suspends_and_reports(tmp_path):
     assert "missing_credential" in reports[0][1]
 
 
+async def test_a_node_report_carries_what_the_node_itself_returned(tmp_path):
+    """The report is the runner's brief to the main agent; the output is the node's own words.
+
+    A reader shown only the brief sees the call it is told to make and the schema of
+    that call -- none of which the node said. So the attempt's output travels beside
+    the report, not inside it: the model's text stays the brief.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    seen: list[dict] = []
+
+    async def _announce(run_id, node_id, report, origin, **kwargs):
+        seen.append({"node": node_id, "report": report, **kwargs})
+        desk.resolve(node_id, "abandon", None)
+
+    async def _judge(**_):
+        return Verdict(accomplished=False, category="missing_credential", what_is_missing="a token")
+
+    await _run_two_node_dag(
+        tmp_path,
+        desk=desk,
+        judge_node=_judge,
+        announce_exception=_announce,
+        exec_backend=_FakeExec(reply="I could not push: the fork is read-only"),
+    )
+
+    assert seen[0]["output"] == "I could not push: the fork is read-only"
+    assert "the fork is read-only" not in seen[0]["report"], "the model's text is unchanged"
+
+
+async def test_a_crashed_node_report_carries_its_error_as_what_came_back(tmp_path):
+    """No output exists for a node that raised; its error is its whole account."""
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    seen: list[dict] = []
+
+    async def _announce(run_id, node_id, report, origin, **kwargs):
+        seen.append(kwargs)
+        desk.resolve(node_id, "abandon", None)
+
+    async def _judge(**_):
+        return Verdict(accomplished=False, what_is_missing="it crashed")
+
+    await _run_two_node_dag(
+        tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce, exec_backend=_FakeExec({"a"})
+    )
+
+    assert seen[0]["output"] == "boom a"
+
+
+async def test_a_continued_nodes_second_report_carries_the_second_attempts_output(tmp_path):
+    """A continued node writes its live output file again, so only the attempt's own
+    text says what that attempt returned -- the second report must not repeat the first."""
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+    outputs: list[str] = []
+
+    async def _announce(run_id, node_id, report, origin, **kwargs):
+        outputs.append(kwargs["output"])
+        desk.resolve(node_id, "continue" if len(outputs) == 1 else "abandon", "use the staging token")
+
+    async def _judge(*, node, **_):
+        return Verdict(accomplished=False, what_is_missing="a token") if node.id == "a" else Verdict(accomplished=True)
+
+    await _run_two_node_dag(tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce)
+
+    assert len(outputs) == 2
+    assert "use the staging token" not in outputs[0]
+    assert "use the staging token" in outputs[1]
+
+
 async def test_a_judge_that_knows_what_to_say_retries_the_node_itself(tmp_path):
     """No desk, no announcer, nobody reachable -- and the node still runs again.
 
@@ -7948,7 +8025,7 @@ async def test_the_announcer_is_told_whether_a_decision_is_pending(tmp_path, kwa
 
     seen: list[bool] = []
 
-    async def _announce(run_id, node_id, report, origin, *, awaiting_decision):
+    async def _announce(run_id, node_id, report, origin, *, awaiting_decision, output=None):
         seen.append(awaiting_decision)
 
     async def _judge(**_kw):
@@ -8234,6 +8311,60 @@ async def test_release_re_sends_the_unanswered_report_and_clocks_the_run(tmp_pat
         )
 
 
+async def test_a_re_sent_report_still_carries_what_the_node_returned(tmp_path: Path) -> None:
+    """The outbox holds a report across the turn; the node's output is held with it.
+
+    Re-sent without it, a released foreground run's row would fold open onto the
+    brief again -- the same report, read the wrong way only because it waited.
+    """
+    from raven.config.raven import SubagentDagConfig
+
+    re_sent: list[dict] = []
+
+    async def _announce_exception(run_id: str, node_id: str, report: str, origin: dict, **kwargs: Any) -> None:
+        re_sent.append(kwargs)
+
+    async def _announce(run_id: str, summary: str, origin: dict) -> None:
+        return None
+
+    async with draining_dag_runs():
+        tool = _foreground_tool(
+            tmp_path,
+            [_falls_short("token a")],
+            announce=_announce,
+            announce_exception=_announce_exception,
+            verdict_config=SubagentDagConfig(adjudication_timeout_seconds=0.3),
+        )
+        await tool.execute(task_summary="fg", nodes=_SOLO, background=False)
+        (run_id,) = list(tool._runs)
+        run_task = tool._runs[run_id]
+
+        await tool.release_turn("web:fg", flush=True)
+
+        assert re_sent and "do a" in re_sent[0]["output"], "cat echoes the prompt, so that is what came back"
+        await asyncio.wait_for(run_task, timeout=5)
+
+
+async def test_a_stint_driver_passes_a_notification_on_with_its_output(tmp_path: Path) -> None:
+    """The driver takes over only the decision; what it hands on is handed on whole."""
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+
+    passed: list[dict] = []
+
+    async def _host(run_id: str, node_id: str, report: str, origin: dict, **kwargs: Any) -> None:
+        passed.append(kwargs)
+
+    async def _adjudicate(node_id: str, report: str) -> tuple[str, str]:
+        raise AssertionError("a notification is not the driver's to decide")
+
+    tool = _foreground_tool(tmp_path, [])
+    announce = tool._answered_by(AdjudicationDesk(), _adjudicate, _host)
+
+    await announce("r", "a", "report", {}, awaiting_decision=False, output="what a said")
+
+    assert passed == [{"awaiting_decision": False, "informational": False, "output": "what a said"}]
+
+
 async def test_release_re_sends_a_report_the_turn_took_but_never_answered(tmp_path: Path) -> None:
     """A take is not an answer.
 
@@ -8356,6 +8487,7 @@ async def test_a_released_run_announces_a_terminal_report_as_a_notification(tmp_
         *,
         awaiting_decision: bool = True,
         informational: bool = False,
+        output: str | None = None,
     ) -> None:
         seen.append((node_id, awaiting_decision))
 
@@ -8693,7 +8825,7 @@ async def _run_replanned_dag(
     async def _judge(*, node, store, output, error, crashed, **_):
         return Verdict(accomplished=node.id != "a", what_is_missing="the wrong tool was used")
 
-    async def _announce(run_id, node_id, text, origin, *, awaiting_decision):
+    async def _announce(run_id, node_id, text, origin, *, awaiting_decision, output=None):
         if slow:
             await started.wait()
         if crash:
@@ -9186,7 +9318,14 @@ async def test_a_silent_node_is_announced_once_per_stretch() -> None:
     announced: list[tuple[str, str]] = []
 
     async def announce(
-        run_id: str, node_id: str, report: str, origin: dict, *, awaiting_decision: bool, informational: bool = False
+        run_id: str,
+        node_id: str,
+        report: str,
+        origin: dict,
+        *,
+        awaiting_decision: bool,
+        informational: bool = False,
+        output: str | None = None,
     ) -> None:
         assert awaiting_decision is False, "a stall is information, not a suspension"
         announced.append((node_id, report))
@@ -9230,7 +9369,14 @@ async def test_a_moving_node_is_never_announced() -> None:
     announced: list[str] = []
 
     async def announce(
-        run_id: str, node_id: str, report: str, origin: dict, *, awaiting_decision: bool, informational: bool = False
+        run_id: str,
+        node_id: str,
+        report: str,
+        origin: dict,
+        *,
+        awaiting_decision: bool,
+        informational: bool = False,
+        output: str | None = None,
     ) -> None:
         announced.append(node_id)
 
@@ -9278,6 +9424,7 @@ async def test_the_stall_notice_reaches_a_production_shaped_announcer() -> None:
             *,
             awaiting_decision: bool,
             informational: bool = False,
+            output: str | None = None,
         ) -> None:
             heard.append((node_id, awaiting_decision, informational))
 
@@ -9347,7 +9494,14 @@ async def test_a_streaming_acp_node_is_never_announced_as_stalled() -> None:
     announced: list[str] = []
 
     async def announce(
-        run_id: str, node_id: str, report: str, origin: dict, *, awaiting_decision: bool, informational: bool = False
+        run_id: str,
+        node_id: str,
+        report: str,
+        origin: dict,
+        *,
+        awaiting_decision: bool,
+        informational: bool = False,
+        output: str | None = None,
     ) -> None:
         announced.append(node_id)
 

@@ -369,6 +369,19 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- In the web UI, the **What came back** fold of a DAG node that stopped on
+  a decision no longer opens onto the brief written for the model -- the
+  `resolve_dag_node` calls it may make and that tool's whole schema, all in
+  one paragraph. It shows what the node itself returned on that attempt (its
+  error, when it crashed), under the caption *What the node returned*. The
+  model's text is unchanged: the node's output travels beside it as `output`
+  on the delivery mark (`subagent.delivered`, `turn.started`, and a stored
+  entry's `delegated`), cut at 20,000 characters. A node that has already
+  failed is marked `error` and reads **Failed** instead of **Waiting on a
+  decision**; a stall notice about a node still running reads **Still
+  running**, and a cancelled run **Stopped**, where both used to read
+  **Finished**. Conversations stored before this keep the fold they had.
+
 - An empty reply from a model behind OpenRouter (`content: " "`,
   `finish_reason: stop`) is no longer reported as an upstream transport
   failure and retried for minutes before the verdict's own sentence is

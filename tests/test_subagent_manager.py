@@ -4430,7 +4430,120 @@ async def test_an_informational_node_notice_is_headed_as_a_notice_not_a_failure(
 
     submitted.clear()
     await mgr.announce_dag_exception("r1", "n", "gave up", origin, awaiting_decision=False)
-    assert "has failed" in submitted[0].text and submitted[0].delegated["status"] == "exception"
+    assert "has failed" in submitted[0].text and submitted[0].delegated["status"] == "error", (
+        "a failed node waits on nothing, so its row must not read as waiting on a decision"
+    )
+
+
+async def test_a_node_report_marks_what_the_node_returned_for_the_reader() -> None:
+    """The fold under the row is the node's own words, so the mark carries them.
+
+    Both readings: the live event and the stored entry the replay draws from. The
+    model's text stays the brief -- the output is not injected a second time.
+    """
+    from raven.rpc.models import SubagentDeliveredPayload, TranscriptDelegated, TurnStartedDelegated
+
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list = []
+    mgr.set_submit(submitted.append)
+    delivered: list[dict] = []
+    mgr._emit_delivered = lambda _origin, mark: delivered.append(mark)
+    said = "I could not push: the fork is read-only"
+
+    await mgr.announce_dag_exception(
+        "20260101T000000Z-abcd1234",
+        "survey",
+        "node 'survey' did not accomplish its task",
+        {"channel": "web", "chat_id": "default", "session_key": "web:sess1"},
+        awaiting_decision=True,
+        output=said,
+    )
+
+    assert delivered[0]["output"] == said
+    assert submitted[0].delegated["output"] == said
+    assert said not in submitted[0].text
+    stored = dict(submitted[0].delegated)
+    assert TranscriptDelegated(**stored).output == said
+    assert TurnStartedDelegated(**stored, content=submitted[0].text).output == said
+    assert SubagentDeliveredPayload(**delivered[0]).output == said
+
+
+async def test_a_node_report_marks_an_empty_return_as_empty_not_absent() -> None:
+    """A node that returned nothing has nothing to fold open, and says so.
+
+    Absent means a server that never sent the output; empty means the node said
+    nothing. A client can only tell the two apart if the key is there.
+    """
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list = []
+    mgr.set_submit(submitted.append)
+    mgr._emit_delivered = lambda _origin, _mark: None
+
+    await mgr.announce_dag_exception(
+        "r1",
+        "n",
+        "did not accomplish",
+        {"channel": "web", "chat_id": "d", "session_key": "web:s"},
+        awaiting_decision=True,
+        output="",
+    )
+
+    assert submitted[0].delegated["output"] == ""
+
+
+async def test_a_node_report_bounds_the_output_it_marks() -> None:
+    """The mark is stored with the conversation and sent on every replay; the run
+    dir keeps the whole text, and the row opens the run."""
+    from raven.agent.subagent.manager import _MARKED_OUTPUT_CHARS
+
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list = []
+    mgr.set_submit(submitted.append)
+    mgr._emit_delivered = lambda _origin, _mark: None
+
+    await mgr.announce_dag_exception(
+        "r1",
+        "n",
+        "did not accomplish",
+        {"channel": "web", "chat_id": "d", "session_key": "web:s"},
+        awaiting_decision=True,
+        output="x" * (_MARKED_OUTPUT_CHARS * 2),
+    )
+
+    marked = submitted[0].delegated["output"]
+    assert marked.startswith("x" * _MARKED_OUTPUT_CHARS)
+    assert len(marked) < _MARKED_OUTPUT_CHARS + 100
+    assert marked.endswith("(output truncated)")
+
+    submitted.clear()
+    await mgr.announce_dag_exception(
+        "r1",
+        "n",
+        "did not accomplish",
+        {"channel": "web", "chat_id": "d", "session_key": "web:s"},
+        awaiting_decision=True,
+        output="y" * _MARKED_OUTPUT_CHARS,
+    )
+    assert submitted[0].delegated["output"] == "y" * _MARKED_OUTPUT_CHARS, "an output that fits is marked whole"
+
+
+async def test_a_stall_notice_marks_no_output() -> None:
+    """Nothing came back from a node that is still running; the notice is the account."""
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list = []
+    mgr.set_submit(submitted.append)
+    mgr._emit_delivered = lambda _origin, _mark: None
+
+    await mgr.announce_dag_exception(
+        "r1",
+        "n",
+        "no sign of life",
+        {"channel": "web", "chat_id": "d", "session_key": "web:s"},
+        awaiting_decision=False,
+        informational=True,
+    )
+
+    assert "output" not in submitted[0].delegated
 
 
 # --- unprompted-turn wakes ----------------------------------------------------

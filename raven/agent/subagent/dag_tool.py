@@ -914,7 +914,14 @@ class SubAgentDagTool(Tool):
         return ("\n\n" + "\n".join(rendered)) if rendered else ""
 
     def _report_announcer(self, run_id: str, origin: _DagOrigin):
-        async def _announce(node_id: str, text: str, *, awaiting_decision: bool, informational: bool = False) -> None:
+        async def _announce(
+            node_id: str,
+            text: str,
+            *,
+            awaiting_decision: bool,
+            informational: bool = False,
+            output: str | None = None,
+        ) -> None:
             if self._announce_exception is None:
                 logger.info("DAG run {} node {} reported after release with no announcer wired", run_id, node_id)
                 return
@@ -925,6 +932,7 @@ class SubAgentDagTool(Tool):
                 origin.as_dict(),
                 awaiting_decision=awaiting_decision,
                 informational=informational,
+                output=output,
             )
 
         return _announce
@@ -957,6 +965,7 @@ class SubAgentDagTool(Tool):
             *,
             awaiting_decision: bool,
             informational: bool = False,
+            output: str | None = None,
         ) -> None:
             if not awaiting_decision or informational:
                 if announce is not None:
@@ -967,6 +976,7 @@ class SubAgentDagTool(Tool):
                         origin,
                         awaiting_decision=awaiting_decision,
                         informational=informational,
+                        output=output,
                     )
                 return
             try:
@@ -2487,11 +2497,12 @@ class SubAgentDagTool(Tool):
                 *,
                 awaiting_decision: bool,
                 informational: bool = False,
+                output: str | None = None,
             ) -> None:
                 # Whether a notification is dropped depends on whether a blocking call is
                 # still there to be handed the summary, which is the outbox's own state.
                 await outbox.put_report(
-                    node_id, report, awaiting_decision=awaiting_decision, informational=informational
+                    node_id, report, awaiting_decision=awaiting_decision, informational=informational, output=output
                 )
 
             announce_exception = _to_outbox

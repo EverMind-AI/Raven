@@ -341,6 +341,10 @@ export interface TranscriptDelegated {
    * Set for a dag node's own message, so a client can place it against that row.
    */
   node_id?: string;
+  /**
+   * What a dag node itself returned on the attempt its report is about -- its error, when it raised -- carried for the reader beside the report the model was given. Set only on a node's own report, and present even when empty: an empty string is a node that said nothing, an absent one a report about no attempt (a stall notice) or a server that never sent it.
+   */
+  output?: string;
 }
 export interface ExtPluginRow {
   id: string;
@@ -1280,14 +1284,18 @@ export interface TurnStartedEvent {
       label: string;
       status: 'ok' | 'error' | 'exception' | 'notice' | 'cancelled';
       /**
-       * Which node of the run this is about. Present only on `kind: dag` with `status: exception`, where the report concerns one node rather than the whole run.
+       * Which node of the run this is about. Present only on a `kind: dag` node's own report, which concerns one node rather than the whole run.
        */
       node_id?: string;
       run_id?: string;
       /**
-       * The text that re-entered the conversation, verbatim; a client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence.
+       * The text that re-entered the conversation, verbatim; a client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence, or `output` instead where a node's report carries it.
        */
       content?: string;
+      /**
+       * What a dag node itself returned on the attempt its report is about -- its error, when it raised -- carried for the reader beside the report the model was given. Set only on a node's own report, and present even when empty: an empty string is a node that said nothing, an absent one a report about no attempt (a stall notice) or a server that never sent it.
+       */
+      output?: string;
     };
     target?: DirectTarget;
   };
@@ -1545,13 +1553,17 @@ export interface SubagentDeliveredEvent {
      */
     run_id?: string;
     /**
-     * The text that re-entered the conversation, verbatim. A client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence -- and a client replaying this turn later reads the same string from the stored entry's `text`, so one rule over one input keeps the live view and the reloaded one from disagreeing about what was delivered.
+     * The text that re-entered the conversation, verbatim. A client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence, or `output` instead where a node's report carries it -- and a client replaying this turn later reads the same string from the stored entry's `text`, so one rule over one input keeps the live view and the reloaded one from disagreeing about what was delivered.
      */
     content?: string;
     /**
      * Set for a dag node's own message, so a client can place it against that row.
      */
     node_id?: string;
+    /**
+     * What a dag node itself returned on the attempt its report is about -- its error, when it raised -- carried for the reader beside the report the model was given. Set only on a node's own report, and present even when empty: an empty string is a node that said nothing, an absent one a report about no attempt (a stall notice) or a server that never sent it.
+     */
+    output?: string;
   };
 }
 /**

@@ -511,6 +511,10 @@
       "en": "What entered this turn",
       "zh": "注入本轮对话的内容"
     },
+    "gui.deleg.body_cap_node": {
+      "en": "What the node returned",
+      "zh": "节点返回的内容"
+    },
     "gui.deleg.body_hide": {
       "en": "Collapse",
       "zh": "收起"
@@ -538,6 +542,10 @@
     "gui.deleg.dlv_stopped": {
       "en": "Stopped",
       "zh": "已停止"
+    },
+    "gui.deleg.dlv_notice": {
+      "en": "Still running",
+      "zh": "仍在运行"
     },
     "gui.deleg.body_aria": {
       "en": "Show what the delegated run delivered",

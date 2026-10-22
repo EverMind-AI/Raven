@@ -1779,8 +1779,9 @@ describe('a delegated result coming back', () => {
       .toEqual(['twelve files, none of them stale', 'the brief is in reports/brief.md'])
   })
 
-  /* The other thing a graph delivers: one suspended node's report, in its own
-     words. Same `kind: dag`, and nothing about it is a machine block. */
+  /* The other thing a graph delivers: one suspended node's report. Same `kind:
+     dag`, and nothing about it is a machine block. Stored by a server that did not
+     send what the node returned, so the fence's own text is all there is to show. */
   it('leaves a suspended node report as prose', () => {
     wireDelivery()
     act(() => {
@@ -1796,6 +1797,143 @@ describe('a delegated result coming back', () => {
     expect($('.sdlv')?.className).toContain('warn')
     expect($('.sdlv .sdbd .raw')).toBeNull()
     expect($('.sdlv .sdbd .prose')?.textContent).toContain('live credential')
+  })
+
+  /* The bug: a suspended node's fold opened onto the runner's brief to the model --
+     how to call resolve_dag_node, and that call's whole schema -- which the node
+     never said. A server that sends what the node returned is shown that. */
+  it('opens a node report onto what the node returned, not the brief the model was given', () => {
+    wireDelivery()
+    const brief = 'node did not accomplish its task.\n'
+      + 'Answer by calling tool_call with name "resolve_dag_node" and arguments {"message": "<what next>"}'
+    act(() => {
+      mount.history([
+        {
+          role: 'user', text: fenced(brief), timestamp: iso(Date.now() - 20000),
+          delegated: {
+            kind: 'dag', label: 'run-7', status: 'exception', run_id: 'run-7', node_id: 'push',
+            output: 'I could not push: **the fork is read-only**',
+          },
+        },
+      ])
+    })
+    act(() => { (($('.sdlv .sdcv')) as HTMLElement).click() })
+    const body = $('.sdlv .sdbd') as HTMLElement
+    expect(body.querySelector('.cap')?.textContent).toBe('en:gui.deleg.body_cap_node')
+    /* The node's own words, read as the markdown an agent writes. */
+    expect(body.querySelector('.prose strong')?.textContent).toBe('the fork is read-only')
+    expect(body.textContent).not.toContain('resolve_dag_node')
+    expect($('.sdlv .st')?.textContent).toBe('en:gui.deleg.delivered_exception')
+  })
+
+  it('gives a node that returned nothing no fold to open', () => {
+    act(() => {
+      mount.history([
+        {
+          role: 'user', text: fenced('node did not accomplish its task.'), timestamp: iso(Date.now() - 9000),
+          delegated: { kind: 'dag', label: 'run-7', status: 'exception', run_id: 'run-7', node_id: 'push', output: '' },
+        },
+        {
+          role: 'user', text: fenced('node did not accomplish its task.'), timestamp: iso(Date.now() - 5000),
+          delegated: { kind: 'dag', label: 'run-8', status: 'exception', run_id: 'run-8', node_id: 'push', output: ' \n\t' },
+        },
+      ])
+    })
+    expect($$('.sdlv')).toHaveLength(2)
+    expect($('.sdlv .sdcv')).toBeNull()
+  })
+
+  /* The counts line is a graph's own result's, and only that delivery's: a node's
+     report is about the node, so its status is its word whatever its text quotes --
+     a node that ran a graph of its own returns that graph's tally as its answer. */
+  it('words a node report by its status, even when its text quotes a run tally', () => {
+    const tally = 'the inner graph finished: 3 completed, 1 failed, 0 cancelled, 0 skipped (of 4).'
+    act(() => {
+      mount.history([
+        {
+          role: 'user', text: fenced('node did not accomplish its task.'), timestamp: iso(Date.now() - 9000),
+          delegated: { kind: 'dag', label: 'run-7', status: 'exception', run_id: 'run-7', node_id: 'push', output: tally },
+        },
+        {
+          role: 'user', text: fenced(`node did not accomplish its task.\nevidence: ${tally}`), timestamp: iso(Date.now() - 5000),
+          delegated: { kind: 'dag', label: 'run-8', status: 'exception', run_id: 'run-8', node_id: 'push' },
+        },
+      ])
+    })
+    for (const row of $$('.sdlv')) {
+      expect(row.querySelector('.st')?.textContent).toBe('en:gui.deleg.delivered_exception')
+      act(() => { (row.querySelector('.sdcv') as HTMLElement).click() })
+      expect(row.querySelector('.sdbd .raw')).toBeNull()
+      expect(row.querySelector('.sdbd .prose')?.textContent).toContain('3 completed, 1 failed')
+    }
+  })
+
+  it('draws a node report the same live and after a reload', () => {
+    wireDelivery()
+    const injected = fenced('node did not accomplish its task.')
+    const said = 'the fork is read-only'
+    const shape = (): string =>
+      `${$('.sdlv .st')?.textContent}|${$('.sdlv .sdbd .cap')?.textContent}|${$('.sdlv .sdbd .prose')?.textContent}`
+
+    act(() => {
+      mount.delivered({
+        label: 'run-7', isDag: true, status: 'exception', body: injected, output: said,
+        open: () => sources.transcript?.openDagRun?.('run-7'),
+      })
+    })
+    act(() => { (($('.sdlv .sdcv')) as HTMLElement).click() })
+    const live = shape()
+
+    store._resetForTests()
+    wireDelivery()
+    act(() => {
+      mount.history([
+        {
+          role: 'user', text: injected, timestamp: iso(Date.now() - 9000),
+          delegated: { kind: 'dag', label: 'run-7', status: 'exception', run_id: 'run-7', node_id: 'push', output: said },
+        },
+      ])
+    })
+    act(() => { (($('.sdlv .sdcv')) as HTMLElement).click() })
+
+    expect(shape()).toBe(live)
+    expect(live).toBe(`en:gui.deleg.delivered_exception|en:gui.deleg.body_cap_node|${said}`)
+  })
+
+  /* A node that has already failed waits on nothing; the server marks it `error`. */
+  it('shows a failed node report as failed', () => {
+    act(() => {
+      mount.history([
+        {
+          role: 'user', text: fenced('node has failed'), timestamp: iso(Date.now() - 5000),
+          delegated: { kind: 'dag', label: 'run-7', status: 'error', run_id: 'run-7', node_id: 'push', output: 'gave up' },
+        },
+      ])
+    })
+    expect($('.sdlv')?.classList.contains('bad')).toBe(true)
+    expect($('.sdlv .st')?.textContent).toBe('en:gui.deleg.delivered_err')
+  })
+
+  /* Both used to fall through to `ok` and read "Finished": a stall notice is about a
+     node still running, and a cancelled run did not finish. */
+  it('shows a stall notice as still running and a cancelled run as stopped', () => {
+    act(() => {
+      mount.history([
+        {
+          role: 'user', text: fenced('no sign of life for 10 minutes'), timestamp: iso(Date.now() - 9000),
+          delegated: { kind: 'dag', label: 'run-7', status: 'notice', run_id: 'run-7', node_id: 'push' },
+        },
+        {
+          role: 'user', text: fenced('Cancelled: the user stopped it'), timestamp: iso(Date.now() - 5000),
+          delegated: { kind: 'spawn', label: 'lookup', status: 'cancelled' },
+        },
+      ])
+    })
+    const [notice, cancelled] = $$('.sdlv')
+    expect(notice?.querySelector('.st')?.textContent).toBe('en:gui.deleg.dlv_notice')
+    expect(notice?.classList.contains('good')).toBe(false)
+    expect(cancelled?.querySelector('.st')?.textContent).toBe('en:gui.deleg.dlv_stopped')
+    expect(cancelled?.classList.contains('dim')).toBe(true)
   })
 
   it('replays a spawn delivery with its own label and the framing left out', () => {

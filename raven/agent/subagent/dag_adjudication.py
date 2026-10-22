@@ -176,10 +176,11 @@ class AdjudicationDesk:
 
 @dataclass(frozen=True)
 class Report:
-    """One node's exception report, exactly as the runner built it."""
+    """One node's exception report, exactly as the runner built it, and what the node returned."""
 
     node_id: str
     text: str
+    output: str | None = None
 
 
 @dataclass(frozen=True)
@@ -207,7 +208,13 @@ class AnnounceReport(Protocol):
     """
 
     async def __call__(
-        self, node_id: str, text: str, *, awaiting_decision: bool, informational: bool = False
+        self,
+        node_id: str,
+        text: str,
+        *,
+        awaiting_decision: bool,
+        informational: bool = False,
+        output: str | None = None,
     ) -> None: ...
 
 
@@ -309,7 +316,13 @@ class Outbox:
         return False
 
     async def put_report(
-        self, node_id: str, text: str, *, awaiting_decision: bool, informational: bool = False
+        self,
+        node_id: str,
+        text: str,
+        *,
+        awaiting_decision: bool,
+        informational: bool = False,
+        output: str | None = None,
     ) -> None:
         """Take one report. Where it goes depends on the lane, which only this object knows.
 
@@ -329,11 +342,13 @@ class Outbox:
         if self._stopped:
             return
         if self.released.is_set():
-            await self._announce_report(node_id, text, awaiting_decision=awaiting_decision, informational=informational)
+            await self._announce_report(
+                node_id, text, awaiting_decision=awaiting_decision, informational=informational, output=output
+            )
             return
         if not awaiting_decision:
             return
-        event = Report(node_id, text)
+        event = Report(node_id, text, output)
         if not self._hand(event):
             self._buffer.append(event)
 
@@ -403,7 +418,9 @@ class Outbox:
         the drain moves on: one undeliverable event must not strand the rest.
         """
         if isinstance(event, Report):
-            send = partial(self._announce_report, event.node_id, event.text, awaiting_decision=True)
+            send = partial(
+                self._announce_report, event.node_id, event.text, awaiting_decision=True, output=event.output
+            )
         elif event.stopped:
             return
         else:

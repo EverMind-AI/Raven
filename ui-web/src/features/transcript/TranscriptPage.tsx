@@ -1240,13 +1240,16 @@ const StatusView = memo(function StatusView({ lane, seg }: { lane: Lane; seg: St
 /* One row per wire status: `error` is a failure the reader must notice,
    `exception` is neither success nor failure -- the node suspended waiting on
    a verdict -- so it wears its own class and text rather than folding into
-   either. A Record over the union rather than a lookup with a fallback, so a
-   status added to the wire without an entry here is a type error, not a row
-   that silently reads as `ok`. */
+   either. `notice` is about a node still running, and `cancelled` is a run that
+   did not finish; neither is "finished". A Record over the union rather than a
+   lookup with a fallback, so a status added to the wire without an entry here
+   is a type error, not a row that silently reads as `ok`. */
 const DELIVERED: Record<DeliveredData['status'], { cls: string; key: string }> = {
   ok: { cls: ' good', key: 'gui.deleg.delivered' },
   error: { cls: ' bad', key: 'gui.deleg.delivered_err' },
   exception: { cls: ' warn', key: 'gui.deleg.delivered_exception' },
+  notice: { cls: ' dim', key: 'gui.deleg.dlv_notice' },
+  cancelled: { cls: ' dim', key: 'gui.deleg.dlv_stopped' },
 }
 
 /* The counts a graph's own receipt ends with. A graph's `status` is always ok
@@ -1255,11 +1258,18 @@ const DELIVERED: Record<DeliveredData['status'], { cls: string; key: string }> =
    would read as "finished". */
 const DAG_COUNTS = /(\d+) completed, (\d+) failed, (\d+) cancelled, (\d+) skipped/
 
-/* What the row says came back. The status for a spawn; for a graph, whichever
-   of the four counts is the honest word: stopped, failed, partly done, done. */
+/* Whether the row is a graph's own result, the one delivery whose `ok` says
+   nothing and whose text ends with the counts. A node's report carries its own
+   status, and that is its word whatever its text quotes: a node that ran a graph
+   of its own returns that graph's tally as its answer. */
+const graphResult = (seg: DeliveredData): boolean => seg.isDag && seg.status === 'ok'
+
+/* What the row says came back. The status for a spawn and for a node's report;
+   for a graph's result, whichever of the four counts is the honest word:
+   stopped, failed, partly done, done. */
 function deliveredVerdict(seg: DeliveredData): { cls: string; key: string } {
   const plain = DELIVERED[seg.status]
-  if (!seg.isDag) return plain
+  if (!graphResult(seg)) return plain
   const m = DAG_COUNTS.exec(seg.body)
   if (!m) return plain
   const [done, failed, cancelled] = [Number(m[1]), Number(m[2]), Number(m[3])]
@@ -1278,13 +1288,15 @@ function deliveredVerdict(seg: DeliveredData): { cls: string; key: string } {
  * than run through the markdown reader, which folds the `- node [status]`
  * lines into a bullet list and loses the alignment that makes them scannable.
  *
- * Keyed on the summary's own opening rather than on `isDag`, because the other
- * thing a graph delivers is a suspended node's report (`announce_dag_exception`)
- * -- one paragraph in the node's own words, and setting that in the mono face
- * would dress a sentence as machine output. */
+ * Keyed on the summary's own opening and on the row being a graph's result rather
+ * than on `isDag`, because the other thing a graph delivers is one node's report
+ * (`announce_dag_exception`). Its fenced text is the runner's brief to the model
+ * -- the verdict, the call that answers it and that call's schema -- so the fold
+ * shows what the node itself returned instead, when the server sent it,
+ * captioned as the node's. */
 function DeliveredBody({ seg }: { seg: DeliveredData }): ReactElement {
-  const caption = <div className="cap">{t('gui.deleg.body_cap')}</div>
-  if (!seg.isDag || !DAG_COUNTS.test(seg.body)) {
+  const caption = <div className="cap">{t(seg.said ? 'gui.deleg.body_cap_node' : 'gui.deleg.body_cap')}</div>
+  if (!graphResult(seg) || !DAG_COUNTS.test(seg.body)) {
     return (
       <>
         {caption}

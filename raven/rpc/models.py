@@ -498,9 +498,8 @@ class TurnStartedDelegated(_Strict):
     node_id: str | None = Field(
         None,
         description=(
-            "Which node of the run this is about. Present only on `kind: dag` "
-            "with `status: exception`, where the report concerns one node rather "
-            "than the whole run."
+            "Which node of the run this is about. Present only on a `kind: dag` "
+            "node's own report, which concerns one node rather than the whole run."
         ),
     )
     content: str | None = Field(
@@ -508,7 +507,17 @@ class TurnStartedDelegated(_Strict):
         description=(
             "The text that re-entered the conversation, verbatim; a client shows "
             "the reader-facing part of it by keeping only what sits INSIDE the "
-            "untrusted fence."
+            "untrusted fence, or `output` instead where a node's report carries it."
+        ),
+    )
+    output: str | None = Field(
+        None,
+        description=(
+            "What a dag node itself returned on the attempt its report is about -- its error, "
+            "when it raised -- carried for the reader beside the report the model was given. "
+            "Set only on a node's own report, and present even when empty: an empty string is "
+            "a node that said nothing, an absent one a report about no attempt (a stall notice) "
+            "or a server that never sent it."
         ),
     )
 
@@ -856,9 +865,20 @@ class SubagentDeliveredPayload(_Strict):
         description=(
             "The text that re-entered the conversation, verbatim. A client shows the "
             "reader-facing part of it by keeping only what sits INSIDE the untrusted "
-            "fence -- and a client replaying this turn later reads the same string from "
+            "fence, or `output` instead where a node's report carries it -- and a client "
+            "replaying this turn later reads the same string from "
             "the stored entry's `text`, so one rule over one input keeps the live view "
             "and the reloaded one from disagreeing about what was delivered."
+        ),
+    )
+    output: str | None = Field(
+        default=None,
+        description=(
+            "What a dag node itself returned on the attempt its report is about -- its error, "
+            "when it raised -- carried for the reader beside the report the model was given. "
+            "Set only on a node's own report, and present even when empty: an empty string is "
+            "a node that said nothing, an absent one a report about no attempt (a stall notice) "
+            "or a server that never sent it."
         ),
     )
 
@@ -3793,6 +3813,16 @@ class TranscriptDelegated(_Strict):
         default=None,
         description="Set for a dag node's own message, so a client can place it against that row.",
     )
+    output: str | None = Field(
+        default=None,
+        description=(
+            "What a dag node itself returned on the attempt its report is about -- its error, "
+            "when it raised -- carried for the reader beside the report the model was given. "
+            "Set only on a node's own report, and present even when empty: an empty string is "
+            "a node that said nothing, an absent one a report about no attempt (a stall notice) "
+            "or a server that never sent it."
+        ),
+    )
 
 
 class TranscriptFileRemoval(_Strict):
@@ -3896,7 +3926,8 @@ class TranscriptMessage(_Strict):
             "re-entering the conversation. Same rule as `notice` and for the same "
             "reason -- the model reads `text`, a reader must not. Render the delivery "
             "row a live client draws from `subagent.delivered`, and take the readable "
-            "body from inside the untrusted fence in `text`; drawing `text` as prose "
+            "body from inside the untrusted fence in `text`, or from `delegated.output` "
+            "where a node's report carries it; drawing `text` as prose "
             "attributes to the user a question they never asked, fence markers "
             "included. `origin` names who opened the turn; this says which run came back."
         ),

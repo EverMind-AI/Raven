@@ -185,7 +185,10 @@ out of scope.
 A new `announce_dag_exception(run_id, node_id, report, origin)` carries a mark with
 `"status": "exception"` and the `node_id`, so TUI and web clients can tell it apart
 from a run's closing announce. The existing mark's own contract permits this: its
-comment states that `status` is for placement, not verdict.
+comment states that `status` is for placement, not verdict. A report about a node that
+has already failed is marked `error` and a stall notice `notice`; a report about an
+attempt also carries `output`, what the node returned on it, which is what a client
+shows a reader, since the report itself is written for the model.
 
 **The report carries** the judge's structured fields plus facts the runner supplies:
 
