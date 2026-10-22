@@ -1,14 +1,19 @@
 """Tests for CronService.add_job dedup layers.
 
-Three layers, applied in order at add time:
+Three layers, applied in order at add time, first match wins:
   1. L7 topic_tag dedup — strictest, runs first when caller supplies tag.
-  2. Message-equal dedup — byte-identical payload.message + same channel/to.
-  3. Schedule dedup — same recurring schedule + same channel/to.
+  2. Message-equal dedup — byte-identical payload.message + same channel/to
+     + a fire still ahead.
+  3. Schedule dedup — same recurring schedule + same channel/to + the same
+     reminder (byte-identical message or shared topic_tag).
 
 Dedup keys on explicit identity only. Nearby fire times are not identity:
 a former 15-minute time-window layer silently dropped a distinct reminder
 whose fire was close to an existing job's (issue #161) and was removed --
 see the tests at the bottom pinning that distinct nearby reminders are kept.
+An identical schedule slot is not identity either: two adds on one slot are
+the same reminder only when the message or topic_tag says so, otherwise the
+second is stored beside the first instead of overwriting it.
 
 L7 is the load-bearing one for the caregiver-style failure: the LLM
 re-asks for the same daily med reminder across the month with slightly
@@ -186,9 +191,12 @@ def test_schedule_dedup_updates_in_place_once_the_job_has_fired(svc):
     A plain re-add of the same recurring schedule/channel/to carries no
     topic_tag, so it lands on ``_find_duplicate_schedule`` rather than the
     topic_tag branch. Reaching it needs the existing job's ``next_run_at_ms``
-    cleared: with a fire still scheduled the layer keeps the job's scheduled
-    fire instead of re-enabling or recomputing -- that is the state this
-    layer is written for -- see its "already fired or was disabled" comment.
+    cleared: with a fire still scheduled the message-equal layer returns the
+    job as it stands, and this layer keeps its scheduled fire instead of
+    re-enabling or recomputing -- that is the state this layer is written
+    for -- see its "already fired or was disabled" comment. The re-add
+    repeats the message, because a same-slot add with different content is
+    a distinct reminder and now gets a job of its own.
 
     Kept when the flag it was originally written for was retired, because its
     setup is the only thing in the suite that reaches this branch at all --
@@ -203,13 +211,13 @@ def test_schedule_dedup_updates_in_place_once_the_job_has_fired(svc):
     first.state.next_run_at_ms = None
     svc._save_store()
 
-    again = _add(svc, "drink water", sched)
+    again = _add(svc, "water", sched)
 
     assert again.id == first.id, "should have updated in place via schedule dedup"
-    assert again.payload.message == "drink water", "the in-place update has to carry the new message"
+    assert again.payload.message == "water", "the in-place update keeps the reminder text"
     assert again.enabled is True, "a job that had fired is re-enabled by the update"
     assert again.state.next_run_at_ms is not None, "the recompute has to give it a next fire"
-    assert svc.list_jobs()[0].payload.message == "drink water"
+    assert svc.list_jobs()[0].payload.message == "water"
 
 
 def test_distinct_nearby_oneshots_are_kept(svc):
@@ -259,3 +267,106 @@ def test_identical_message_oneshot_still_dedups_when_close(svc):
 
     assert j1.id == j2.id
     assert len(svc.list_jobs()) == 1
+
+
+# ── Distance zero: same schedule slot, content decides identity ──────
+# Two adds that land on the *same* schedule are still two reminders when
+# their content differs. The schedule layer is the identity check's last
+# line, so a same-slot add has to keep both jobs; only an identical
+# message (or a shared topic_tag) is the same reminder at that distance.
+# These read the store back through a second CronService so the assertion
+# is on what was persisted, not on the returned object.
+
+
+def _stored(svc: CronService) -> list:
+    return CronService(svc.store_path).list_jobs()
+
+
+def test_same_cron_expr_distinct_messages_are_kept(svc):
+    first = _add(svc, "send the weekly report", CronSchedule(kind="cron", expr="0 9 * * 1"))
+    second = _add(svc, "water the office plants", CronSchedule(kind="cron", expr="0 9 * * 1"))
+
+    assert first.id != second.id, "different messages on one slot are two reminders"
+    stored = _stored(svc)
+    assert len(stored) == 2
+    assert {j.payload.message for j in stored} == {
+        "send the weekly report",
+        "water the office plants",
+    }
+    assert {j.id for j in stored} == {first.id, second.id}
+
+
+def test_same_at_instant_distinct_messages_are_kept(svc):
+    instant = 2_000_000_000_000
+    first = _add(svc, "call the dentist", CronSchedule(kind="at", at_ms=instant))
+    second = _add(svc, "pay the electricity bill", CronSchedule(kind="at", at_ms=instant))
+
+    assert first.id != second.id, "two one-shots on the same instant are two reminders"
+    stored = _stored(svc)
+    assert len(stored) == 2
+    assert {j.payload.message for j in stored} == {
+        "call the dentist",
+        "pay the electricity bill",
+    }
+
+
+def test_same_every_seconds_distinct_messages_are_kept(svc):
+    every = CronSchedule(kind="every", every_ms=600_000)
+    first = _add(svc, "check the deploy", every)
+    second = _add(svc, "check the queue depth", every)
+
+    assert first.id != second.id, "one cadence can carry two different reminders"
+    stored = _stored(svc)
+    assert len(stored) == 2
+    assert {j.payload.message for j in stored} == {"check the deploy", "check the queue depth"}
+
+
+def test_same_slot_identical_message_updates_in_place(svc):
+    every = CronSchedule(kind="every", every_ms=600_000)
+    first = _add(svc, "drink water", every)
+    second = _add(svc, "drink water", every)
+
+    assert first.id == second.id, "the same reminder on the same slot stays one job"
+    stored = _stored(svc)
+    assert len(stored) == 1
+    assert stored[0].payload.message == "drink water"
+
+
+def test_same_slot_shared_topic_tag_updates_in_place(svc):
+    instant = 2_000_000_000_000
+    first = _add(
+        svc,
+        "take the noon meds",
+        CronSchedule(kind="at", at_ms=instant),
+        topic_tag="medication_noon",
+    )
+    second = _add(
+        svc,
+        "take the noon meds (double dose)",
+        CronSchedule(kind="at", at_ms=instant),
+        topic_tag="medication_noon",
+    )
+
+    assert first.id == second.id, "a shared topic_tag is identity, even at distance zero"
+    stored = _stored(svc)
+    assert len(stored) == 1
+    assert stored[0].payload.message == "take the noon meds (double dose)"
+
+
+@pytest.mark.parametrize("gap_minutes", [5, 10])
+def test_same_kind_distinct_messages_minutes_apart_are_kept(svc, gap_minutes):
+    base = 2_000_000_000_000
+    first = _add(svc, "prepare the daily brief", CronSchedule(kind="at", at_ms=base))
+    second = _add(
+        svc,
+        "review the presentation",
+        CronSchedule(kind="at", at_ms=base + gap_minutes * 60 * 1000),
+    )
+
+    assert first.id != second.id
+    stored = _stored(svc)
+    assert len(stored) == 2
+    assert {j.payload.message for j in stored} == {
+        "prepare the daily brief",
+        "review the presentation",
+    }
