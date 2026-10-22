@@ -196,7 +196,7 @@ def redact(text: str, *, truncated: bool = False) -> str:
 #: The subdirectories of Raven's home a coding turn reads its own source from.
 #: Exempt from the home-config pass, and the list is deliberately exhaustive: the
 #: OAuth store is a sibling of these, not one of them.
-_OWN_SOURCE_DIRS = ("workspace", "tmp")
+_OWN_SOURCE_DIRS = ("workspace", "tmp", "plugins", "agents")
 
 # Raven's own token files name their credentials with words that mean nothing on
 # their own: ``save_token`` writes ``asdict(MiniMaxOAuthToken)``, whose fields are
@@ -240,12 +240,18 @@ def _redact_oauth_store(text: str) -> str:
 def _home_config() -> re.Pattern[str]:
     """A path into a dot-directory of the home, Raven's own source directories excepted.
 
-    Raven's home holds the default workspace and the channels' scratch
-    directories, where a coding turn reads its own source; rewriting that
-    source's ``token = ...`` lines breaks every edit built from them, so those
-    two stay exempt. The OAuth token store (``oauth/<provider>/...``) is not one
-    of them: it holds no source to edit, and a read of it is a credential file
-    like another program's settings, so it loses its tokens to this pass.
+    Raven's home holds four directories a coding turn reads its own source from:
+    the default workspace and the channels' scratch directories, the user plugin
+    directory (``plugins``, ``raven/core/plugin_stack.py``) and the installed
+    vendored agents (``agents``,
+    ``raven/agent/subagent/vendored_agents.py``). Rewriting ``token = ...`` lines
+    in that source breaks every edit built from them, so those four stay exempt.
+    The OAuth token store (``oauth/<provider>/...``) is deliberately not among
+    them: it holds no source to edit, and a read of it is a credential file like
+    another program's settings, so it loses its tokens to this pass —
+    :func:`redact_home_config_read` additionally applies
+    :data:`_OAUTH_TOKEN_FIELD` there, for the token fields whose names are
+    ordinary words.
     """
     from raven.home import raven_home
 

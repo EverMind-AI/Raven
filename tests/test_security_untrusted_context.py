@@ -965,3 +965,39 @@ def test_ravens_own_oauth_tokens_are_redacted_like_another_programs() -> None:
     source = "token = self.get_token(request)\n"
     assert scrub_tool_output({"command": f"ls {own}"}, source) == source
     assert scrub_tool_output({"path": "tests/test_keys.py"}, source) == source
+
+
+def test_ravens_own_plugin_and_agent_source_is_not_redacted_while_its_tokens_still_are() -> None:
+    """The plugin and vendored-agent directories hold source, not credentials.
+
+    ``~/.raven/plugins`` is the user plugin directory
+    (``raven/core/plugin_stack.py``) and ``~/.raven/agents`` the installed
+    vendored agents (``raven/agent/subagent/vendored_agents.py``). A coding turn
+    reading a file there is editing code: rewriting its ``token = ...`` line to
+    ``token = [redacted])`` is #833 again and leaves unparseable source behind.
+    Widening the exemption must not reach the OAuth store beside them, so both
+    halves are asserted together.
+    """
+    from raven.config.held_secrets import scrub_tool_output
+    from raven.home import raven_home
+
+    source = "token = self.get_token(request)\napi_key = config.api_key_value\n"
+    own = raven_home()
+    for arguments in (
+        {"path": str(own / "plugins" / "example.py")},
+        {"path": str(own / "plugins" / "vendor" / "client.py")},
+        {"path": str(own / "agents" / "example.py")},
+        {"command": f"cat {own}/plugins/example.py"},
+        {"command": f"cat {own}/agents/reviewer/main.py"},
+    ):
+        assert scrub_tool_output(arguments, source) == source, arguments
+    # The sibling that does hold credentials is untouched by the widening: the
+    # same shape of source line there is still rewritten, and a token file still
+    # loses its values.
+    assert scrub_tool_output({"path": str(own / "oauth" / "x.py")}, source) != source
+    tokens = '{"access": "mmx_FAKEACCESS0123456789abcdef", "refresh": "mmx_FAKEREFRESH0123456789abcdef"}'
+    shown = scrub_tool_output({"path": str(own / "oauth" / "minimax_global.json")}, tokens)
+    assert "mmx_FAKEACCESS0123456789abcdef" not in shown and "mmx_FAKEREFRESH0123456789abcdef" not in shown, shown
+    # A plugin directory outside Raven's home is not Raven's home, and was never
+    # in scope for this pass either way.
+    assert scrub_tool_output({"path": "plugins/example.py"}, source) == source
