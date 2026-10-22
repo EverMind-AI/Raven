@@ -89,18 +89,21 @@ def _spent(
     provider: "LLMProvider | Any",
     content: str | None,
 ) -> ErrorClassification | None:
-    """The same verdict with its retryability used up.
+    """The same verdict with its asking-again used up: not retryable, and not worth a fallback model.
 
-    Kept as a verdict rather than raised so the recoveries reading its other
-    flags -- shrink the window, take the pictures out -- still run. A response
-    that carries none is classified here first: the caller classifies the error
-    text itself when the verdict is missing, and would read a retryable failure
-    straight back out of it.
+    Both put the same step to a model a second time, and a verdict is spent
+    because something of the first attempt has already reached a watcher -- an
+    attempt on this model or on another draws it twice. Kept as a verdict rather
+    than raised so the recoveries reading its other flags, which repair the
+    request itself -- shrink the window, take the pictures out -- still run. A
+    response that carries none is classified here first: the caller classifies
+    the error text itself when the verdict is missing, and would read a retryable
+    failure straight back out of it.
     """
     if verdict is None:
         classify = getattr(provider, "classify_error", None)
         verdict = classify(content=content or None) if classify is not None else None
-    return replace(verdict, retryable=False) if verdict is not None else None
+    return replace(verdict, retryable=False, should_fallback=False) if verdict is not None else None
 
 
 def _split_unparsed_thought(

@@ -295,6 +295,7 @@ class _StreamsThenReportsFailure(LLMProvider):
     def __init__(self):
         super().__init__(api_key="test")
         self.calls = 0
+        self.models: list[str | None] = []
 
     def get_default_model(self) -> str:
         return "stub"
@@ -306,6 +307,7 @@ class _StreamsThenReportsFailure(LLMProvider):
         from raven.providers.base import ChatDelta
 
         self.calls += 1
+        self.models.append(kwargs.get("model"))
         if self.calls == 1:
             yield ChatDelta(content="partial")
             yield ChatDelta(
@@ -342,6 +344,43 @@ async def test_a_failure_delta_after_streamed_output_is_not_retried_unless_asked
 
     assert out is not None and out[0] == "answer"
     assert provider.calls == 2
+    assert seen == ["partial", "answer"]
+
+
+class _OneFallbackBehind:
+    """A router with no model of its own to name and one fallback behind whatever the turn runs on."""
+
+    async def select_model_chain(self, prompt: str) -> tuple[str | None, list[str]]:
+        return None, ["fb"]
+
+
+@pytest.mark.asyncio
+async def test_a_failure_delta_after_streamed_output_does_not_fall_back_either(workspace):
+    """A fallback model is another ask of the same step. The reader had already seen the first answer
+    begin, so it would see a second, whole one drawn under it: the same duplicate the ladder is kept
+    from, by another door. Off, the turn fails on the first attempt as it always has; on, the caller
+    accepted seeing the output twice and the fallback goes first, as it does for any other streamed error."""
+    provider = _StreamsThenReportsFailure()
+    agent = _streaming_agent(workspace, provider, retry_after_output=False)
+    agent.router = _OneFallbackBehind()
+    seen: list[str] = []
+
+    with pytest.raises(AnswerlessTurnError) as failed:
+        await _streamed_turn(agent, seen)
+
+    assert provider.calls == 1
+    assert provider.models == ["stub"], "the fallback model was never asked"
+    assert seen == ["partial"], "nothing of a second answer reached the reader"
+    assert "503 upstream connect error" in str(failed.value)
+
+    provider = _StreamsThenReportsFailure()
+    agent = _streaming_agent(workspace, provider, retry_after_output=True)
+    agent.router = _OneFallbackBehind()
+    seen = []
+    out = await _streamed_turn(agent, seen)
+
+    assert out is not None and out[0] == "answer"
+    assert provider.models == ["stub", "fb"]
     assert seen == ["partial", "answer"]
 
 

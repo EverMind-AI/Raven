@@ -346,8 +346,10 @@ async def test_an_error_delta_after_rendered_output_has_its_retry_spent() -> Non
     happened mid-stream and reports it as a terminal error delta instead of
     raising, so the words already on the reader's screen never reach the rule the
     raise path holds. Left retryable, the caller's own ladder asked again and the
-    same answer was drawn from the top up to four times. The other flags survive:
-    the verdict is spent of one thing, not replaced."""
+    same answer was drawn from the top up to four times; left fallback-worthy, the
+    loop switched models and drew a whole second answer under the first. Both are
+    ways of asking again, so both are spent. The flags that repair the request
+    itself survive: the verdict is spent of asking again, not replaced."""
     verdict = ErrorClassification("server", retryable=True, should_fallback=True, should_compress=True)
     provider = _FakeProvider(_half_then_error(verdict))
     seen: list[str] = []
@@ -362,7 +364,7 @@ async def test_an_error_delta_after_rendered_output_has_its_retry_spent() -> Non
     assert response.error_classification is not None
     assert response.error_classification.retryable is False
     assert response.error_classification.category == "server"
-    assert response.error_classification.should_fallback is True
+    assert response.error_classification.should_fallback is False
     assert response.error_classification.should_compress is True
 
 
@@ -700,7 +702,8 @@ async def test_a_cut_stream_that_showed_its_reasoning_is_not_asked_again() -> No
     """The same rule the raising exits hold, on the exit that hands the failure
     back instead. A watcher whose client renders reasoning has already read the
     thought; left retryable, the loop's ladder asks again and the thinking is
-    drawn a second time from the top."""
+    drawn a second time from the top, and left fallback-worthy, a fallback model
+    draws it once more."""
     provider = _FakeProvider(
         [
             ChatDelta(content=None, reasoning_content="working out the deck"),
@@ -719,7 +722,7 @@ async def test_a_cut_stream_that_showed_its_reasoning_is_not_asked_again() -> No
     assert response.error_classification is not None
     assert response.error_classification.category == "network"
     assert response.error_classification.retryable is False
-    assert response.error_classification.should_fallback is True
+    assert response.error_classification.should_fallback is False
 
 
 async def test_a_cut_stream_stays_retryable_for_a_caller_that_asked_for_it() -> None:
