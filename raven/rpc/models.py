@@ -4490,8 +4490,9 @@ class FsDirsResult(_Strict):
     roots: list[FsDirEntry] = Field(
         default_factory=list,
         description=(
-            "The other filesystem roots, listed only while the directory listed is one: a root has no parent, "
-            "so on a host with several (Windows drives) they are reachable no other way."
+            "The filesystem roots, listed only while the directory listed is one: a root has no parent, "
+            "so on a host with several (Windows drives) they are reachable no other way. Every drive is "
+            "listed, the one the browser stands on included, each judged as a folder row is."
         ),
     )
     entries: list[FsDirEntry] = Field(
