@@ -722,11 +722,12 @@ async def turn_unsubscribe(
 
 
 def _cancel_payload(turn_id: str) -> dict[str, Any]:
-    """The cancelled-turn error's payload, carrying its turn when one is bound.
+    """The cancelled-turn error's payload, carrying the cancelled turn's id when there is one.
 
-    The lane's bound turn is the right source here and only here: the client
-    cancels its own session, so the turn ``turn.send`` bound to this lane is the
-    turn being cancelled. The key is omitted rather than sent empty, so that
+    The id is whatever identified the turn being cancelled: the one a named
+    cancel gave, a pending inject's own, or the turn ``turn.send`` bound to
+    this lane -- never the lane's slot read for a turn it does not hold. The
+    key is omitted rather than sent empty, so that
     "absent" has one representation on the wire -- a consumer that correlates a
     request to a turn treats both the same way, as not its own.
     """
