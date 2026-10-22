@@ -335,7 +335,11 @@ class _EmptyStream:
 
     generation = GenerationSettings()
 
+    def __init__(self) -> None:
+        self.attempts = 0
+
     async def chat_stream(self, *a: Any, **kw: Any):
+        self.attempts += 1
         yield ChatDelta(content=None, finish_reason="stop", usage={"prompt_tokens": 1, "total_tokens": 2})
 
 
@@ -421,20 +425,27 @@ async def test_the_streamed_fold_also_reads_the_reply_after_the_split() -> None:
     assert response.content == ""
 
 
-async def test_a_stream_that_stays_empty_ends_as_empty_not_as_an_error() -> None:
-    """Once the reconnects are spent, the response is what it is. An error
-    here would pre-empt the loop's own empty-response recovery."""
+async def test_a_stream_that_stays_empty_is_reported_as_the_failure_it_is() -> None:
+    """Once the reconnects are spent the verdict still stands. Handed back as an
+    empty reply, evidence that the request was never processed read as a reply
+    that happened to be empty."""
     from raven.providers.streaming import stream_llm_call
 
+    stream = _EmptyStream()
     response = await stream_llm_call(
-        _EmptyStream(),
+        stream,
         messages=[{"role": "user", "content": "hi" * 6000}],
         tools=None,
         model="stub",
     )
 
-    assert response.finish_reason == "stop"
-    assert response.content == ""
+    assert stream.attempts == 2, "the failure was reported before the reconnect was spent"
+    assert response.finish_reason == "error"
+    assert response.error_classification is not None
+    assert response.error_classification.category == "upstream_transport_failure"
+    assert response.error_classification.retryable is True
+    assert response.error_classification.should_fallback is True
+    assert "upstream" in (response.content or "").lower()
 
 
 # ---------- what the watcher sees while it streams ----------------------------

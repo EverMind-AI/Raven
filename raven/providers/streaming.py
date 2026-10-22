@@ -38,6 +38,7 @@ from raven.providers.transport_failure import (
     flag_transport_failure,
     may_fold_to_nothing,
     prompt_chars,
+    transport_failure_message,
     without_sentinels,
 )
 from raven.providers.truncation import flag_truncation
@@ -90,6 +91,22 @@ def _spent(
         classify = getattr(provider, "classify_error", None)
         verdict = classify(content=content or None) if classify is not None else None
     return replace(verdict, retryable=False) if verdict is not None else None
+
+
+def _split_unparsed_thought(
+    provider: "LLMProvider | Any", content: str, reasoning_content: str | None
+) -> tuple[str, str | None]:
+    """The reply and the thought, for a backend that leaves its thinking unmarked.
+
+    Kept out of ``stream_llm_call``, which sits at the complexity ceiling. The
+    ``getattr`` is because the loop accepts duck-typed providers (test stubs and
+    thin adapters implement just chat/chat_stream); absent means the
+    LLMProvider default, False.
+    """
+    emits_unparsed = getattr(provider, "emits_unparsed_reasoning", None)
+    if reasoning_content is None and emits_unparsed is not None and emits_unparsed():
+        reasoning_content, content = split_orphan_think(content)
+    return content, reasoning_content
 
 
 async def stream_llm_call(
@@ -210,6 +227,7 @@ async def stream_llm_call(
     error_content: str | None = None
     error_classification: ErrorClassification | None = None
     upstream_finish_reason: str | None = None
+    transport_evidence: str | None = None
 
     for attempt in range(max_reconnects + len(retry_delays) + 1):
         attempt_t0 = time.monotonic()
@@ -331,9 +349,10 @@ async def stream_llm_call(
             # `finish_reason="error"` here instead would end the turn: this path
             # has no ladder of its own, and the loop breaks on an error response
             # before `classify_empty_response` can recover it.
-            if attempt < max_reconnects and _transport_failed(
+            transport_evidence = _transport_failed(
                 upstream_finish_reason, content_buf, reasoning_buf, tool_call_slots, final_usage, messages
-            ):
+            )
+            if attempt < max_reconnects and transport_evidence:
                 logger.warning(
                     "upstream reported a failed call as a normal end (attempt {}/{}), reconnecting",
                     attempt + 1,
@@ -462,6 +481,24 @@ async def stream_llm_call(
             call_record=record,
         )
 
+    if transport_evidence:
+        # The reconnects are spent and the verdict still stands. Reported the way
+        # the non-streaming exit reports it: handed back as an empty reply it
+        # would read as the model's own, when the evidence says the request was
+        # never processed.
+        logger.warning("upstream reported a failed call as a normal end: {}", transport_evidence)
+        return LLMResponse(
+            content=transport_failure_message(transport_evidence),
+            finish_reason="error",
+            usage=final_usage or {},
+            error_classification=ErrorClassification(
+                category="upstream_transport_failure",
+                retryable=True,
+                should_fallback=True,
+            ),
+            call_record=record,
+        )
+
     tool_calls = _finalize_tool_calls(tool_call_slots)
 
     # Asked of the same owner the request body asks, rather than passed in: the
@@ -493,22 +530,15 @@ async def stream_llm_call(
     # all -- a reply of `<`, say -- is an answer, and goes out as one.
     if on_token_delta is not None and not content_released and without_sentinels(content):
         await on_token_delta(content)
-    reasoning_content = "".join(reasoning_buf) or None
-    # getattr because the loop accepts duck-typed providers (test stubs and
-    # thin adapters implement just chat/chat_stream); absent means the
-    # LLMProvider default, False.
-    emits_unparsed = getattr(provider, "emits_unparsed_reasoning", None)
-    if reasoning_content is None and emits_unparsed is not None and emits_unparsed():
-        split_reasoning, content = split_orphan_think(content)
-        reasoning_content = split_reasoning
+    content, reasoning_content = _split_unparsed_thought(provider, content, "".join(reasoning_buf) or None)
     # The same fold as the non-streaming exit: a reply that is only a sentinel
     # reaches the loop empty on both paths.
     content = without_sentinels(content)
 
-    # No verdict here: it was asked inside the attempt loop, where a reconnect
-    # is still possible. Once the reconnects are spent the response is returned
-    # as what it is -- an empty one -- so the loop's own empty-response
-    # recovery still owns it rather than being pre-empted by an error.
+    # The verdict was asked inside the attempt loop, where a reconnect was still
+    # possible, and a standing one was returned above. What reaches here has no
+    # transport evidence, so an empty response is the model's own and the loop's
+    # empty-response recovery owns it rather than being pre-empted by an error.
     return LLMResponse(
         content=content,
         tool_calls=tool_calls,
