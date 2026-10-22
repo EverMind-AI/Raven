@@ -806,6 +806,25 @@ judged without a tree, so a file the checkpoint would not store has no diff and 
 it goes out `withheld`, which nothing else may fill in.
 _Avoid_: "shadow git" as the term — Checkpoint is the per-turn snapshot it produces.
 
+**Silence Marker** (`spine/silence.py`):
+What a model answers with to say a turn has nothing to report: `[SILENT]`, `SILENT`, `NO_REPLY`
+or `NO REPLY` (`SILENCE_MARKERS`); `SILENCE_INSTRUCTION` is the sentence that teaches the
+bracketed form. Two rules read the set and the turn's `Origin` picks one (`is_silence`). A
+`USER` turn takes the strict rule (`is_exact_silence`): the whole reply must be a marker, with
+case, edge whitespace and stray edge punctuation forgiven up to `SILENCE_MAX_CHARS`, so prose
+that merely mentions a marker is delivered. A turn the runtime itself started -- the proactive
+origins `SENTINEL`, `CRON`, `HEARTBEAT` and `SUBAGENT` -- takes the loose rule
+(`is_loose_silence`): nobody is waiting on it and models wrap the marker in a note on why they
+stayed quiet, so a marker that is the whole reply, sits alone on the first or last line, or is
+a bracketed `[SILENT]` opening the reply is silence, whatever the length. `may_become_silence`
+is the strict rule's streaming counterpart: it says whether the text so far could still turn
+into a marker, so a surface holds it back instead of showing it and retracting it.
+Only a turn that completed can be silent: a failed turn is a failure whatever its last text
+said, and a reply with no text at all is not silence but an empty response, which
+**Empty-Response Recovery** handles.
+_Avoid_: "empty reply" for silence — an empty reply is a failure; a Silence Marker is what the
+model chose to write.
+
 **Empty-Response Recovery** (`agent/loop/recovery.py`):
 The opt-in policy for when the model returns no text: re-feed its reasoning (PREFILL),
 inject a nudge after a tool call (NUDGE), or plain RETRY — each bounded by
