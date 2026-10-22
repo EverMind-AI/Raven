@@ -162,8 +162,15 @@ What lands on the machine:
 
 Nothing else changes: no system package, no shell rc file, no environment
 variable, no service, no open port. The node's packages come from the index
-pip is configured with on the machine, else from PyPI. Space needed, as the
-installer checks it:
+pip is configured with on the machine, else from PyPI. That index is timed
+from the machine first, with its `curl`, for a few seconds at most: when it
+cannot be reached there, or serves slower than 256 KB/s, the installer times
+two PyPI mirrors in mainland China (Tsinghua's TUNA and Alibaba Cloud's) and
+installs from the faster, with the machine's own index tried after it. The
+printed plan names the mirror and why. An index that answers with an error,
+asks for a sign-in, or shows a certificate the machine does not trust is
+kept, and `RAVEN_NO_MIRROR=1` on this computer keeps every install on the
+machine's own index. Space needed, as the installer checks it:
 
 | Part | About |
 | --- | --- |
@@ -180,9 +187,9 @@ has the node before any link to it is up.
 ### Installing from the Agent Hub
 
 **Install node** on a machine's card, or in its sheet, runs the same install
-in the background: the card says *Installing the node* until it ends, and the
-sheet keeps how it ended. The sheet's *Install into* field is the command's
-`--dir`. A machine whose node is another Raven's shows *needs updating* and
+in the background: the card says *Installing the node* until it ends, however
+long that takes, and the sheet keeps how it ended. The sheet's *Install into*
+field is the command's `--dir`. A machine whose node is another Raven's shows *needs updating* and
 offers **Update node**.
 
 Once the node is up, the card lists the agent entries on the machine,
@@ -506,6 +513,7 @@ to an owner-only log under the Raven home (`logs/ssh/`).
 | *runs different code from this Raven; update it with …* | The node is from another Raven version | Run `install-node` again |
 | *has no uv, and no curl or wget to fetch one with* | The installer needs `uv`, and the machine has neither it nor a way to fetch it; a Python there does not change this | Install `uv` on the machine (the sentence names its installer), or `curl` or `wget`, then retry |
 | *has uv 0.4.22, and only uv 0.4.23 or later installs from the package index pip is configured with there; with no curl or wget to fetch uv 0.13.0, upgrade uv there* | pip on the machine is configured with an index, its `uv` is too old to read one (or does not say its version), and the installer has no way to fetch a newer one | Upgrade `uv` on the machine, or install `curl` or `wget` so the installer fetches one under `node_dir`, then retry |
+| *failed at the packages step: it did not finish within 15 minutes, installing packages from …* | Downloads from that index crawl on the machine, and no mirror did better (or `RAVEN_NO_MIRROR` is set, or the machine has no `curl` to time it with) | Point pip there at a nearer index (`index-url` in pip's configuration, or `PIP_INDEX_URL`), then retry |
 | *the agent's command was not found on machine …* | The agent is not installed there for that user | Install and sign in on the machine |
 | *already runs 8 agents; wait for one to finish* | The machine is at its limit | Wait, or use another machine |
 | *did not answer a heartbeat within 15s* | The link dropped | Nothing; Raven reconnects. The agent keeps running |

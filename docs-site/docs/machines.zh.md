@@ -119,8 +119,11 @@ The node answers: Python 3.12.3, code <摘要>.
 | Python 3.12（机器上原本没有时） | 节点旁边，由 `uv` 管理 |
 
 别的都不变：不装系统包，不改 shell 的 rc 文件，不改环境变量，不注册服务，不开端口。
-节点的依赖包从机器上 pip 配置的索引安装，没有配置就从 PyPI 安装。安装程序按下面的
-数字检查空间：
+节点的依赖包从机器上 pip 配置的索引安装，没有配置就从 PyPI 安装。安装前先在机器上用它的
+`curl` 给这个索引测速，最多几秒：在那里连不上，或者速度低于 256 KB/s 时，再测两个国内的
+PyPI 镜像（清华 TUNA 和阿里云），改从快的那个安装，机器自己的索引留在它后面作后备。打印出来的
+计划会写明用了哪个镜像、为什么。索引回了错误状态、要求登录，或者证书不被机器信任时，照旧用它；
+在本机设置 `RAVEN_NO_MIRROR=1`，每次安装都只用机器自己的索引。安装程序按下面的数字检查空间：
 
 | 部分 | 大约 |
 | --- | --- |
@@ -134,7 +137,7 @@ The node answers: Python 3.12.3, code <摘要>.
 
 ### 在 Agent Hub 里安装 { #installing-from-the-agent-hub }
 
-机器卡片或抽屉里的**安装节点**在后台做同样的安装：卡片上显示*正在安装节点*直到结束，
+机器卡片或抽屉里的**安装节点**在后台做同样的安装：卡片上显示*正在安装节点*直到结束，不管要多久，
 抽屉里保留结束时的结果。抽屉里的*安装到*就是命令的 `--dir`。节点是另一个版本的 Raven 装的，
 会显示*需要更新*并提供**更新节点**。
 
@@ -386,6 +389,7 @@ Windows 保留的字符，落地时该字符写成百分号编码。
 | *runs different code from this Raven; update it with …* | 节点来自另一个 Raven 版本 | 再跑一次 `install-node` |
 | *has no uv, and no curl or wget to fetch one with* | 安装程序需要 `uv`，机器上既没有它也没有取它的办法；有 Python 也不改变这一点 | 在机器上装 `uv`（提示里给了它的安装程序），或者装 `curl` 或 `wget`，再试 |
 | *has uv 0.4.22, and only uv 0.4.23 or later installs from the package index pip is configured with there; with no curl or wget to fetch uv 0.13.0, upgrade uv there* | 机器上的 pip 配了索引，它的 `uv` 太旧、读不了索引（或者说不出自己的版本），安装程序又没办法取一个新的 | 在机器上升级 `uv`，或者装 `curl` 或 `wget` 让安装程序把 `uv` 取到 `node_dir` 下，再试 |
+| *failed at the packages step: it did not finish within 15 minutes, installing packages from …* | 机器上从那个索引下载太慢，也没有更快的镜像（或者设了 `RAVEN_NO_MIRROR`，或者机器上没有 `curl` 可以测速） | 把机器上 pip 的索引换成近一点的（pip 配置里的 `index-url`，或者 `PIP_INDEX_URL`），再试 |
 | *the agent's command was not found on machine …* | 那个用户在机器上没装这个 Agent | 在机器上安装并登录 |
 | *already runs 8 agents; wait for one to finish* | 机器已到上限 | 等一等，或换一台机器 |
 | *did not answer a heartbeat within 15s* | 链路断了 | 不用做什么，Raven 会重连；Agent 还在跑 |
