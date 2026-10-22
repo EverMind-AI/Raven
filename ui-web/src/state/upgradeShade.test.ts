@@ -48,10 +48,10 @@ describe('the upgrade shade writer', () => {
     const shade = open()
     shade.fail('Failed', 'disk full')
     expect(document.querySelector('.upcard')!.innerHTML).toBe(
-      '<div class="upbar" hidden=""><i></i></div><div class="t">Failed</div>'
-      + '<div class="sub">disk full\ngui.upg.manual</div>'
-      + '<div class="cmd"><code>raven upgrade</code><button>gui.dtl.copy</button></div>'
-      + '<div class="foot"><button class="btn">gui.upg.close</button></div>'
+      '<div class="upbar" hidden=""><i></i></div><div class="t">Failed</div>' +
+        '<div class="sub">disk full\ngui.upg.manual</div>' +
+        '<div class="cmd"><code>raven upgrade</code><button>gui.dtl.copy</button></div>' +
+        '<div class="foot"><button class="btn">gui.upg.close</button></div>'
     )
     ;(document.querySelector('.cmd button') as HTMLButtonElement).click()
     expect(writeText).toHaveBeenCalledWith('raven upgrade')
@@ -62,6 +62,10 @@ describe('the upgrade shade writer', () => {
     expect(document.querySelector('.cmd code')!.innerHTML).toBe('git pull<br>./install.sh')
     ;(document.querySelector('.cmd button') as HTMLButtonElement).click()
     expect(writeText).toHaveBeenCalledWith('git pull\n./install.sh')
+    /* A refusal that proved no command can work: the row is gone rather than
+       offering the default the refusal just ruled out. */
+    shade.fail('Failed', 'malformed install metadata', null)
+    expect(document.querySelector('.cmd')).toBeNull()
     ;(document.querySelector('.foot button') as HTMLButtonElement).click()
     expect(document.querySelector('.upshade')).toBeNull()
   })

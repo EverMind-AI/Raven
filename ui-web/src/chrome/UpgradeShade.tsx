@@ -30,16 +30,23 @@ export function UpgradeShade(): JSX.Element | null {
         {failure ? (
           <>
             <div className="sub">{failure.sub}</div>
-            <div className="cmd">
-              <code>
-                {(failure.command ?? upgrade.COMMAND).split('\n').map((line, i) => (
-                  <Fragment key={i}>{i > 0 && <br />}{line}</Fragment>
-                ))}
-              </code>
-              <button onClick={() => upgrade.copyCommand(failure.command)}>{failure.copy}</button>
-            </div>
+            {failure.command === null ? null : (
+              <div className="cmd">
+                <code>
+                  {(failure.command ?? upgrade.COMMAND).split('\n').map((line, i) => (
+                    <Fragment key={i}>
+                      {i > 0 && <br />}
+                      {line}
+                    </Fragment>
+                  ))}
+                </code>
+                <button onClick={() => upgrade.copyCommand(failure.command)}>{failure.copy}</button>
+              </div>
+            )}
             <div className="foot">
-              <button className="btn" onClick={() => upgrade.dismiss(card.id)}>{failure.close}</button>
+              <button className="btn" onClick={() => upgrade.dismiss(card.id)}>
+                {failure.close}
+              </button>
             </div>
           </>
         ) : null}

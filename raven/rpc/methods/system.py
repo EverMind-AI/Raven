@@ -285,7 +285,9 @@ async def system_upgrade(params: dict) -> dict:
     # refused from, so it answers in progress rather than escaping as an
     # internal error whose card falls back to that withheld default.
     try:
-        editable_install = _is_editable_install()
+        # A filesystem read (importlib.metadata walks candidate directories),
+        # off the event loop for the same reason the release lookup below is.
+        editable_install = await asyncio.to_thread(_is_editable_install)
     except _md.PackageNotFoundError as exc:
         raise _refuse("in_progress", _IN_PROGRESS_DETAIL) from exc
     except UpgradeError as exc:
