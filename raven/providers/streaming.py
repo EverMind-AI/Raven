@@ -108,8 +108,7 @@ def _split_unparsed_thought(
 ) -> tuple[str, str | None]:
     """The reply and the thought, for a backend that leaves its thinking unmarked.
 
-    Kept out of ``stream_llm_call``, which sits at the complexity ceiling. The
-    ``getattr`` is because the loop accepts duck-typed providers (test stubs and
+    ``getattr`` because the loop accepts duck-typed providers (test stubs and
     thin adapters implement just chat/chat_stream); absent means the
     LLMProvider default, False.
     """
