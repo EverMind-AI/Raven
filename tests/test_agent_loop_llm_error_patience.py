@@ -235,6 +235,7 @@ class _StallsThenAnswers(LLMProvider):
             yield ChatDelta(content="partial")
             raise TimeoutError
         yield ChatDelta(content="answer")
+        yield ChatDelta(content=None, finish_reason="stop")
 
 
 def _streaming_agent(workspace: Path, provider: LLMProvider, *, retry_after_output: bool) -> AgentLoop:
@@ -314,6 +315,7 @@ class _StreamsThenReportsFailure(LLMProvider):
             )
             return
         yield ChatDelta(content="answer")
+        yield ChatDelta(content=None, finish_reason="stop")
 
 
 @pytest.mark.asyncio
@@ -370,6 +372,7 @@ class _ThinksThenStalls(LLMProvider):
             )
             raise TimeoutError
         yield ChatDelta(content="answer")
+        yield ChatDelta(content=None, finish_reason="stop")
 
 
 @pytest.mark.asyncio

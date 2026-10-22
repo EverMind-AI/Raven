@@ -24,8 +24,9 @@ from unittest.mock import patch
 
 import pytest
 
+from raven.agent.hook import AgentHook
 from raven.agent.loop import AgentLoop, recovery, turn_path
-from raven.agent.loop.bundles import ToolWiring, TurnPolicy
+from raven.agent.loop.bundles import HostWiring, ToolWiring, TurnPolicy
 from raven.agent.loop.recovery import (
     EMPTY_REPLY_FAILURE,
     MAX_CONTINUATIONS,
@@ -94,13 +95,19 @@ async def _run_answerless(agent: AgentLoop, text: str = "hi", **kwargs) -> str:
 
 
 def _make_agent(
-    workspace: Path, provider: LLMProvider, limits: RecoveryLimits | None = None, *, max_iterations: int = 10
+    workspace: Path,
+    provider: LLMProvider,
+    limits: RecoveryLimits | None = None,
+    *,
+    max_iterations: int = 10,
+    hooks=(),
 ) -> AgentLoop:
     return AgentLoop(
         provider=provider,
         workspace=workspace,
         model="stub",
         policy=TurnPolicy(max_iterations=max_iterations, empty_recovery=limits),
+        host=HostWiring(hooks=list(hooks)),
         tools=ToolWiring(restrict_to_workspace=True),
     )
 
@@ -642,12 +649,17 @@ def _served(monkeypatch, replies) -> list[dict]:
 
 
 def _litellm_agent(
-    workspace: Path, *, limits: RecoveryLimits | None = None, max_tokens: int | None = None, max_iterations: int = 10
+    workspace: Path,
+    *,
+    limits: RecoveryLimits | None = None,
+    max_tokens: int | None = None,
+    max_iterations: int = 10,
+    hooks=(),
 ) -> AgentLoop:
     provider = LiteLLMProvider(api_key=None, default_model=_MODEL)
     if max_tokens is not None:
         provider.generation = dataclasses.replace(provider.generation, max_tokens=max_tokens)
-    return _make_agent(workspace, provider, limits, max_iterations=max_iterations)
+    return _make_agent(workspace, provider, limits, max_iterations=max_iterations, hooks=hooks)
 
 
 async def _fail(agent: AgentLoop, text: str = "hi", origin: Origin = Origin.USER) -> AnswerlessTurnError:
@@ -1193,6 +1205,144 @@ async def test_an_upstream_error_on_a_plain_call_is_left_to_the_providers_chain(
 
     assert final == "done"
     assert seen == [("primary", ["fb"]), ("primary", ["fb"])]
+
+
+def _cut_stream(text: str) -> _Stream:
+    """A stream that closed after ``text`` without the upstream's terminal chunk: it never said it was done."""
+    return _Stream([_chunk(text)], received_finish_reason=None)
+
+
+def _tool_stream(name: str = "list_dir", arguments: str = '{"path": "."}') -> _Stream:
+    call = SimpleNamespace(index=0, id="c1", function=SimpleNamespace(name=name, arguments=arguments))
+    delta = SimpleNamespace(content=None, tool_calls=[call], reasoning_content=None)
+    calling = SimpleNamespace(choices=[SimpleNamespace(delta=delta, finish_reason=None)], usage=None)
+    return _Stream([calling, _chunk(finish_reason="tool_calls")], received_finish_reason="tool_calls")
+
+
+class _Holds(AgentHook):
+    """A hook that can send a response back, which is what makes the loop hold a reply's deltas."""
+
+    rolls_back_iterations = True
+
+    @property
+    def name(self) -> str:
+        return "Holds"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "first,second",
+    [
+        pytest.param("The answer is ", "42.", id="space_at_the_cut"),
+        pytest.param("The answer is", " 42.", id="space_at_the_head_of_the_continuation"),
+    ],
+)
+async def test_a_stream_that_ended_without_finishing_is_continued_and_stitched(workspace, monkeypatch, first, second):
+    """The space between two words survives the join, whichever side of the cut it fell on."""
+    calls = _served(monkeypatch, [_cut_stream(first), _finished_stream(second)])
+    agent = _litellm_agent(workspace)
+    sink = _Sink()
+
+    out = await agent._process_message(_turn(), session_key="s1", on_token_delta=sink.delta)
+
+    assert out is not None and out[0] == "The answer is 42."
+    assert len(calls) == 2
+    partial, ask = calls[1]["messages"][-2:]
+    assert (partial["role"], partial["content"]) == ("assistant", first.strip())
+    assert (ask["role"], ask["content"]) == ("user", NETWORK_CUT_CONTINUATION)
+    # The reader saw each word once, and the session keeps the stitched answer and none of the scaffolding.
+    assert "".join(sink.text) == "The answer is 42."
+    stored = agent.sessions.get_or_create("s1").messages
+    assert [m["content"] for m in stored if m["role"] == "assistant"] == ["The answer is 42."]
+    assert not any(m.get("_recovery_synthetic") or m.get("content") == NETWORK_CUT_CONTINUATION for m in stored)
+
+
+@pytest.mark.asyncio
+async def test_a_continuation_that_comes_back_empty_delivers_what_streamed(workspace, monkeypatch):
+    """A backend that never sends a terminal chunk makes every streamed reply look cut. Its one
+    extra call comes back empty, and that is the model saying it was finished: what streamed is the answer."""
+    calls = _served(monkeypatch, [_cut_stream("The answer is 42."), _Stream([_chunk(finish_reason="stop")], "stop")])
+    agent = _litellm_agent(workspace)
+    sink = _Sink()
+
+    final, _used, _messages, outcome = await agent._run_agent_loop(_seed(), on_token_delta=sink.delta)
+
+    assert final == "The answer is 42."
+    assert outcome.status == "completed" and outcome.error is None
+    assert len(calls) == 2
+    assert "".join(sink.text) == "The answer is 42."
+
+
+@pytest.mark.asyncio
+async def test_three_cut_continuations_deliver_the_partial_with_the_note(workspace, monkeypatch):
+    calls = _served(monkeypatch, [_cut_stream(text) for text in ("The ", "answer ", "is ", "42")])
+    agent = _litellm_agent(workspace)
+    sink = _Sink()
+
+    final, _used, messages, outcome = await agent._run_agent_loop(_seed(), on_token_delta=sink.delta)
+
+    note = "\n\n" + PARTIAL_STREAM_NOTE
+    assert len(calls) == 4, "the call and the three continuations"
+    assert final == "The answer is 42" + note
+    assert outcome.status == "interrupted" and outcome.error is None
+    # Said on the stream too: the closing text is not sent again once anything has streamed.
+    assert "".join(sink.text) == final
+    assert (messages[-1]["role"], messages[-1]["content"]) == ("assistant", final)
+
+
+@pytest.mark.asyncio
+async def test_a_whole_body_that_lacks_a_finish_is_delivered_as_it_stands(workspace):
+    """Only a stream can be cut: a plain call hands back the whole body, finish or none."""
+
+    class _NoFinish(LLMProvider):
+        def __init__(self):
+            super().__init__(api_key="test")
+            self.calls = 0
+
+        async def chat(self, messages, tools=None, model=None, **_kw):
+            self.calls += 1
+            return LLMResponse(content="the whole thing", finish_reason="unknown")
+
+        def get_default_model(self) -> str:
+            return "stub"
+
+    provider = _NoFinish()
+
+    final, _used, _messages, outcome = await _make_agent(workspace, provider)._run_agent_loop(_seed())
+
+    assert final == "the whole thing" and outcome.status == "completed"
+    assert provider.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_a_cut_answer_that_goes_on_to_call_a_tool_leaves_its_partial_out_of_the_final_reply(
+    workspace, monkeypatch
+):
+    """The partial belongs to the step that was cut; once the model acts instead of finishing it, it is not the start of the answer."""
+    calls = _served(monkeypatch, [_cut_stream("Let me look. "), _tool_stream(), _finished_stream("There is one file.")])
+
+    final, _used, _messages, outcome = await _litellm_agent(workspace)._run_agent_loop(
+        _seed(), on_token_delta=_Sink().delta
+    )
+
+    assert len(calls) == 3
+    assert final == "There is one file."
+    assert outcome.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_a_held_reply_is_released_before_its_continuation_and_the_note_follows_it(workspace, monkeypatch):
+    """With a hook that can send a reply back, a reply's deltas are held until it is kept. The
+    partial is the answer so far, so it goes out before the call that continues it -- and the note
+    after everything, once."""
+    _served(monkeypatch, [_cut_stream(text) for text in ("The ", "answer ", "is ", "42")])
+    agent = _litellm_agent(workspace, hooks=[_Holds()])
+    sink = _Sink()
+
+    final, _used, _messages, outcome = await agent._run_agent_loop(_seed(), on_token_delta=sink.delta)
+
+    assert outcome.status == "interrupted"
+    assert "".join(sink.text) == "The answer is 42" + "\n\n" + PARTIAL_STREAM_NOTE == final
 
 
 # --------------------------------------------------------------------------- #

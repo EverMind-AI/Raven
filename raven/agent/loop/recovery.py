@@ -313,8 +313,12 @@ def _usage(response: LLMResponse) -> dict:
     return usage if isinstance(usage, dict) else {}
 
 
-def strip_think_blocks(text: str) -> str:
+def strip_think_blocks(text: str, *, trim: bool = True) -> str:
     """Remove paired think blocks. Debris is left in place for the check below.
+
+    ``trim`` is off for text that is about to be joined to more of the same
+    reply: the space at the end of a cut stream, or at the head of its
+    continuation, is the space between two words.
 
     Matched by the same shape as ``_THINK_TAG_RE``: any of the three tag names,
     with or without a vendor namespace prefix. A single spelling here would let
@@ -326,7 +330,8 @@ def strip_think_blocks(text: str) -> str:
     would take real content with it. The prefixes are not tied to each other:
     a backend that stamps one end and not the other still wrote one block.
     """
-    return _THINK_BLOCK_RE.sub("", text).strip()
+    stripped = _THINK_BLOCK_RE.sub("", text)
+    return stripped.strip() if trim else stripped
 
 
 def is_only_think_debris(text: str) -> bool:

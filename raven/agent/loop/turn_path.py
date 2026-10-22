@@ -87,7 +87,9 @@ from raven.agent.loop.first_call import FirstCallGuard
 from raven.agent.loop.recovery import (
     EMPTY_REPLY_FAILURE,
     MAX_CONTINUATIONS,
+    NETWORK_CUT_CONTINUATION,
     OUTPUT_LIMIT_CONTINUATION,
+    PARTIAL_STREAM_NOTE,
     REFUSAL_EXPLANATION,
     REFUSAL_FAILURE,
     REFUSAL_NO_EXPLANATION,
@@ -1476,8 +1478,11 @@ class TurnPathMixin:
                     continue
 
             if response.has_tool_calls:
-                # A reply that does something ends the run of empty ones.
+                # A reply that does something ends the run of empty ones, and a
+                # cut answer the model went on to act on is no longer the start of
+                # the one it gives after the tools.
                 recovery.empty_streak.clear()
+                recovery.parts.clear()
                 if hook_ctx is not None:
                     hook_ctx.messages = messages
                     hook_ctx.response = response
@@ -2128,6 +2133,27 @@ class TurnPathMixin:
                     cut_continuation = False
                     iteration -= 1
                     continue
+                if action is RecoveryAction.CONTINUE and kind is ReplyKind.NETWORK_CUT:
+                    # The stream broke mid-answer. What arrived is kept and the model
+                    # is asked to go on from it. Kept untrimmed: the space at the cut
+                    # is the one between two words, and the reply is trimmed once, whole.
+                    recovery.continuations += 1
+                    recovery.parts.append(strip_think_blocks(response.content or "", trim=False))
+                    logger.warning(
+                        "empty-recovery: stream cut mid-answer after {} chars; continuation {}/{}",
+                        len(clean or ""),
+                        recovery.continuations,
+                        MAX_CONTINUATIONS,
+                    )
+                    # What streamed is the answer so far, and a reader whose deltas
+                    # were held back for a hook is shown it before the rest follows.
+                    if draft is not None:
+                        await draft.release()
+                    messages = self.context.add_assistant_message(messages, clean)
+                    messages[-1]["_recovery_synthetic"] = True
+                    messages.append({"role": "user", "content": NETWORK_CUT_CONTINUATION, "_recovery_synthetic": True})
+                    prev_had_tool_calls = False
+                    continue
                 if action is RecoveryAction.CONTINUE and kind is ReplyKind.TRUNCATED:
                     # Cut at the ceiling with nothing in it: the model is told so
                     # and given more room. Effort is left alone -- there was no
@@ -2205,6 +2231,21 @@ class TurnPathMixin:
                         _stamp_context_used(messages, response)
                         break
 
+                if recovery.parts:
+                    # The answer is what streamed across every call, joined: a
+                    # continuation that came back empty leaves the partial as it was.
+                    tail = strip_think_blocks(response.content or "", trim=False) if clean else ""
+                    clean = ("".join(recovery.parts) + tail).strip()
+                if kind is ReplyKind.NETWORK_CUT and recovery.continuations >= MAX_CONTINUATIONS:
+                    # Still cut after the last continuation: the reader gets what
+                    # there is, and the note says it is not the whole of it. Pushed
+                    # after the hooks above, so a rolled-back reply never carries it.
+                    note = "\n\n" + PARTIAL_STREAM_NOTE
+                    clean += note
+                    status = "interrupted"
+                    sink = draft or on_token_delta
+                    if sink is not None:
+                        await sink(note)
                 messages = self.context.add_assistant_message(
                     messages,
                     clean,
