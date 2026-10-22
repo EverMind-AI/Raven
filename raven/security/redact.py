@@ -219,19 +219,40 @@ _OAUTH_TOKEN_FIELD = re.compile(r'("(?:access|refresh)"\s*:\s*")([^\s"\\]{16,})'
 def _own_oauth_store() -> re.Pattern[str]:
     """A path into Raven's OAuth token directory, in any spelling a call may use.
 
-    Built from ``raven_home()`` rather than ``get_oauth_dir()`` on purpose: that
-    helper creates and chmods the directory, and a redaction pass must not have
-    side effects on the filesystem it is reading about.
-    """
-    from raven.home import raven_home
+    The directory is asked of ``raven/config/paths.py``, which owns where
+    credentials live, rather than assembled here from ``raven_home()``: a store
+    that moves has to move this pattern with it, or the pass keeps pointing at a
+    directory no writer uses and every test built the same way stays green.
+    ``oauth_dir()`` and not ``get_oauth_dir()`` for the same reason that helper's
+    docstring gives: the latter creates and chmods the directory, and a
+    redaction pass must not have side effects on the filesystem it is reading
+    about.
 
+    One root covers every provider: the writers all derive from ``get_oauth_dir()``
+    (``minimax_oauth.token_path``, ``chatgpt_token.token_dir``,
+    ``litellm_setup._point_oauth_tokens_at_raven`` for Copilot), and each of those
+    overrides its own directory by environment variable when the driver owns it,
+    which is a read outside the home and was never this pass's to redact.
+    """
+    from raven.config.paths import oauth_dir
+
+    store = oauth_dir()
     home_dir = os.path.expanduser("~").rstrip("/")
-    own = raven_home()
-    roots = [re.escape(str(own))]
-    if str(own.parent) == home_dir:
-        # The same directory as a shell would spell it.
-        roots += [re.escape(prefix) + "/" + re.escape(own.name) for prefix in ("~", "$HOME", "${HOME}")]
-    return re.compile(r"(?:" + "|".join(dict.fromkeys(roots)) + r")[/\\]oauth(?:[/\\]|$|[\"'\s])")
+    roots = [re.escape(str(store))]
+    # The shell spellings, derived from the store's own path rather than spelled
+    # here. The old condition compared the store's *parent* with the home, which
+    # held while the root was ``~/.raven`` and stopped holding the moment the
+    # root became ``~/.raven/oauth`` -- the three abbreviations silently dropped
+    # out of the pattern. Relative to the home is what the question was the
+    # whole time.
+    try:
+        rel = store.relative_to(home_dir)
+    except ValueError:
+        rel = None
+    if rel is not None:
+        spelled = str(rel)
+        roots += [re.escape(prefix) + "/" + re.escape(spelled) for prefix in ("~", "$HOME", "${HOME}")]
+    return re.compile(r"(?:" + "|".join(dict.fromkeys(roots)) + r")(?:[/\\]|$|[\"'\s])")
 
 
 def _redact_oauth_store(text: str) -> str:

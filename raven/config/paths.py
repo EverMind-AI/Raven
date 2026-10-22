@@ -83,6 +83,18 @@ def get_bridge_install_dir() -> Path:
     return raven_home() / "bridge"
 
 
+def oauth_dir() -> Path:
+    """Where every OAuth provider's credentials live, without touching the disk.
+
+    The single definition of the location; :func:`get_oauth_dir` adds the
+    creating and tightening, and every caller that only needs to *name* the
+    directory -- a redaction pass matching a path, a test building an expected
+    one -- asks for it here. Deriving it a second time is what sent a token file
+    to one directory and the reader to another.
+    """
+    return raven_home() / "oauth"
+
+
 def get_oauth_dir() -> Path:
     """Return the directory every OAuth provider's credentials live in.
 
@@ -96,7 +108,7 @@ def get_oauth_dir() -> Path:
     tokens land world-readable -- and only some of the writers are ours to fix.
     The directory is what holds for the rest, including a writer added later.
     """
-    path = raven_home() / "oauth"
+    path = oauth_dir()
     path.mkdir(parents=True, exist_ok=True)
     if path.stat().st_mode & 0o077:
         path.chmod(0o700)

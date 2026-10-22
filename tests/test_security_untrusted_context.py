@@ -917,7 +917,7 @@ async def test_the_a2a_tools_own_transport_error_is_scrubbed(tmp_path, monkeypat
     assert _HELD not in str(content)
 
 
-def test_ravens_own_oauth_tokens_are_redacted_like_another_programs() -> None:
+def test_ravens_own_oauth_tokens_are_redacted_like_another_programs(monkeypatch: pytest.MonkeyPatch) -> None:
     """The OAuth token store sits in Raven's home but holds no source: a read of
     it is another program's settings read (#842). Only the source directories are
     exempt, so a turn reading a token file there loses the tokens before they
@@ -927,8 +927,11 @@ def test_ravens_own_oauth_tokens_are_redacted_like_another_programs() -> None:
     from dataclasses import asdict
 
     from raven.config.held_secrets import scrub_tool_output
+    from raven.config.paths import get_oauth_dir
+    from raven.config.update_providers import copilot_token_dir
     from raven.home import raven_home
-    from raven.providers.minimax_oauth import MiniMaxOAuthToken
+    from raven.providers.chatgpt_token import auth_file as chatgpt_auth_file
+    from raven.providers.minimax_oauth import MiniMaxOAuthToken, token_path
 
     access, refresh = "mmx_FAKEACCESS0123456789abcdef", "mmx_FAKEREFRESH0123456789abcdef"
     # Exactly what ``save_token`` writes: ``asdict(MiniMaxOAuthToken)``, whose two
@@ -946,11 +949,30 @@ def test_ravens_own_oauth_tokens_are_redacted_like_another_programs() -> None:
         indent=2,
     )
     own = raven_home()
+    # The boundary in ``_own_oauth_store``'s docstring, pinned: an override that
+    # points outside the store is not redacted. The fixture's override is still on.
+    assert access in scrub_tool_output({"path": str(chatgpt_auth_file())}, tokens)
+    # ``conftest`` points all three stores at ``tmp_path/oauth``, outside the home,
+    # so the suite never touches a real credential. This case is about the store's
+    # own location, so it takes the overrides back off first and lets each writer
+    # answer from ``config.paths`` -- otherwise every path below is the fixture's
+    # and the assertions would be measuring the fixture.
+    for name in ("CHATGPT_TOKEN_DIR", "GITHUB_COPILOT_TOKEN_DIR", "MINIMAX_OAUTH_TOKEN_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    # The paths are the writers' own answers, not spelled here: ``chatgpt_token``,
+    # ``copilot_token_dir`` and ``minimax_oauth`` all derive from ``config.paths``,
+    # and a test that built them by hand would keep passing after the store moved
+    # while the pattern in ``redact.py`` moved with it or not.
+    chatgpt = chatgpt_auth_file()
+    minimax = token_path("global")
+    copilot = copilot_token_dir() / "access-token"
+    for path in (chatgpt, copilot, minimax):
+        assert get_oauth_dir() in path.parents, (path, get_oauth_dir())
     for arguments in (
-        {"path": str(own / "oauth" / "chatgpt" / "auth.json")},
-        {"path": str(own / "oauth" / "github_copilot" / "access-token")},
-        {"path": str(own / "oauth" / "minimax_global.json")},
-        {"command": f"cat {own}/oauth/minimax_global.json"},
+        {"path": str(chatgpt)},
+        {"path": str(copilot)},
+        {"path": str(minimax)},
+        {"command": f"cat {minimax}"},
     ):
         shown = scrub_tool_output(arguments, tokens)
         assert access not in shown and refresh not in shown, (arguments, shown)
@@ -968,12 +990,12 @@ def test_ravens_own_oauth_tokens_are_redacted_like_another_programs() -> None:
     # on the read reaching the OAuth store, so prose keeps its words even when
     # the gate is open, and everywhere else it never runs at all.
     prose = "Refresh the page, then access the network again after signing in.\n"
-    assert scrub_tool_output({"path": str(own / "oauth" / "minimax_global.json")}, prose) == prose
+    assert scrub_tool_output({"path": str(minimax)}, prose) == prose
     assert scrub_tool_output({"path": str(own / "workspace" / "notes.md")}, prose) == prose
     # ``save_token``'s ``json.dump`` writes no trailing newline, and a read that
     # carries one keeps it: the pass rewrites values, it does not re-serialise.
     with_newline = tokens + "\n"
-    shown = scrub_tool_output({"path": str(own / "oauth" / "minimax_global.json")}, with_newline)
+    shown = scrub_tool_output({"path": str(minimax)}, with_newline)
     assert shown.endswith('"resource_url": "https://api.minimax.io/anthropic/v1"\n}\n'), shown
     assert shown.count("\n") == with_newline.count("\n"), shown
     # A bare listing of the home itself stays out of the pass, and a read whose
@@ -993,6 +1015,7 @@ def test_the_home_directories_outside_the_exemption_still_lose_their_tokens() ->
     going would hand back #842.
     """
     from raven.config.held_secrets import scrub_tool_output
+    from raven.config.paths import oauth_dir
     from raven.home import raven_home
 
     own = raven_home()
@@ -1017,7 +1040,7 @@ def test_the_home_directories_outside_the_exemption_still_lose_their_tokens() ->
         assert '"note": "kept"' in shown, (arguments, shown)
     # The contrast that must survive every widening: the store next to them.
     tokens = '{"access": "mmx_FAKEACCESS0123456789abcdef", "refresh": "mmx_FAKEREFRESH0123456789abcdef"}'
-    shown = scrub_tool_output({"path": str(own / "oauth" / "minimax_global.json")}, tokens)
+    shown = scrub_tool_output({"path": str(oauth_dir() / "minimax_global.json")}, tokens)
     assert "mmx_FAKEACCESS0123456789abcdef" not in shown and "mmx_FAKEREFRESH0123456789abcdef" not in shown, shown
     assert '"access": "[redacted]"' in shown and '"refresh": "[redacted]"' in shown, shown
 
@@ -1034,6 +1057,7 @@ def test_ravens_own_plugin_and_agent_source_is_not_redacted_while_its_tokens_sti
     halves are asserted together.
     """
     from raven.config.held_secrets import scrub_tool_output
+    from raven.config.paths import oauth_dir
     from raven.home import raven_home
 
     source = "token = self.get_token(request)\napi_key = config.api_key_value\n"
@@ -1049,9 +1073,9 @@ def test_ravens_own_plugin_and_agent_source_is_not_redacted_while_its_tokens_sti
     # The sibling that does hold credentials is untouched by the widening: the
     # same shape of source line there is still rewritten, and a token file still
     # loses its values.
-    assert scrub_tool_output({"path": str(own / "oauth" / "x.py")}, source) != source
+    assert scrub_tool_output({"path": str(oauth_dir() / "x.py")}, source) != source
     tokens = '{"access": "mmx_FAKEACCESS0123456789abcdef", "refresh": "mmx_FAKEREFRESH0123456789abcdef"}'
-    shown = scrub_tool_output({"path": str(own / "oauth" / "minimax_global.json")}, tokens)
+    shown = scrub_tool_output({"path": str(oauth_dir() / "minimax_global.json")}, tokens)
     assert "mmx_FAKEACCESS0123456789abcdef" not in shown and "mmx_FAKEREFRESH0123456789abcdef" not in shown, shown
     # The single-line spelling of the same file keeps its one line: two values
     # replaced in place, keys, spacing and the absence of a trailing newline kept.
