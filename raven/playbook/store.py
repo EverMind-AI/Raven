@@ -227,11 +227,11 @@ class PlaybookStore:
         fm_match = _FRONTMATTER_RE.match(text)
         if fm_match is None:
             raise ValueError(f"playbook {name!r}: no frontmatter in playbook.md")
-        front = yaml.load(fm_match.group(1), Loader=_KeyAsStringLoader) or {}  # noqa: S506 - SafeLoader subclass; only mapping keys change
+        front = yaml.load(fm_match.group(1), Loader=_KeyAsStringLoader) or {}  # noqa: S506 - SafeLoader subclass; only scalar key nodes are retagged
         block_match = _BLOCK_RE.search(text)
         if block_match is None:
             raise ValueError(f"playbook {name!r}: no '```yaml playbook-spec' block in playbook.md")
-        data = yaml.load(block_match.group(1), Loader=_KeyAsStringLoader) or {}  # noqa: S506 - SafeLoader subclass; only mapping keys change
+        data = yaml.load(block_match.group(1), Loader=_KeyAsStringLoader) or {}  # noqa: S506 - SafeLoader subclass; only scalar key nodes are retagged
         data["name"] = front.get("name")
         data["description"] = front.get("description")
         if data["name"] != name:
@@ -251,22 +251,23 @@ class _KeyAsStringLoader(yaml.SafeLoader):
     YAML 1.1 resolves ``yes``, ``no``, ``on``, ``off``, ``true``, ``false`` and
     bare digits to booleans and numbers, and a route named ``yes`` then arrives
     as a non-string key the spec refuses -- the runtime answers a load error by
-    dropping the playbook out of the library. Keys keep their written form here,
-    which is also what the store's own writer emits by quoting them; values are
-    untouched, so ``confirm: yes`` still means true.
+    dropping the playbook out of the library. Scalar key nodes of those tags are
+    retagged to strings here (after flattening, so a key arriving through a
+    ``<<:`` merge is retagged too), and the mapping itself is still constructed
+    by PyYAML's own loop -- which keeps its answer for an unhashable key, the
+    yaml.YAMLError playbooks_validate catches to answer with a finding. Values
+    are untouched, so ``confirm: yes`` still means true.
     """
 
     _SCALAR_KEY_TAGS = frozenset(["tag:yaml.org,2002:bool", "tag:yaml.org,2002:int", "tag:yaml.org,2002:float"])
 
     def construct_mapping(self, node, deep=False):
-        self.flatten_mapping(node)
-        mapping = {}
-        for key_node, value_node in node.value:
-            key = self.construct_object(key_node, deep=deep)
-            if key_node.tag in self._SCALAR_KEY_TAGS:
-                key = key_node.value
-            mapping[key] = self.construct_object(value_node, deep=deep)
-        return mapping
+        if isinstance(node, yaml.MappingNode):
+            self.flatten_mapping(node)
+            for key_node, _value_node in node.value:
+                if key_node.tag in self._SCALAR_KEY_TAGS:
+                    key_node.tag = "tag:yaml.org,2002:str"
+        return super().construct_mapping(node, deep=deep)
 
 
 def _drop_unusable_mcp_servers(spec: StoredPlaybook) -> StoredPlaybook:

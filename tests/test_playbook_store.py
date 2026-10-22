@@ -204,6 +204,66 @@ def test_hand_written_yaml_11_route_names_load_as_written(tmp_path):
     assert loaded.nodes[1].when == "triage.yes"
 
 
+def test_an_unquoted_placeholder_still_answers_yaml_not_a_type_error(tmp_path):
+    """The playbook's own placeholder, left unquoted, is YAML a mapping keyed
+    by a mapping -- unhashable. The loader must keep answering that with
+    yaml.YAMLError (the type playbooks_validate catches to answer with a
+    finding), not let a bare TypeError escape as an internal error."""
+    import yaml
+
+    target = tmp_path / "unquoted-placeholder"
+    target.mkdir()
+    (target / "playbook.md").write_text(
+        "---\nname: unquoted-placeholder\ndescription: placeholder as a key\n---\n\n"
+        "```yaml playbook-spec\n"
+        "version: 1\nmode: dag\nconfirm: false\n"
+        "triggers:\n  keywords: [unquoted placeholder]\n"
+        "nodes:\n"
+        "  - id: triage\n"
+        "    subagent: raven\n"
+        "    nodeSummary: classify\n"
+        "    promptTemplate: {{ params.topic }}\n"
+        "```\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(yaml.YAMLError):
+        _store(tmp_path).load("unquoted-placeholder")
+
+
+def test_bare_digit_route_names_load_as_written(tmp_path):
+    """The int and float arms of the same coercion: a route keyed by a bare
+    digit or decimal reads back as the text it was written as."""
+    target = tmp_path / "digit-routes"
+    target.mkdir()
+    (target / "playbook.md").write_text(
+        "---\nname: digit-routes\ndescription: digits as route names\n---\n\n"
+        "```yaml playbook-spec\n"
+        "version: 1\nmode: dag\nconfirm: false\n"
+        "triggers:\n  keywords: [digit routes]\n"
+        "nodes:\n"
+        "  - id: triage\n"
+        "    subagent: raven\n"
+        "    nodeSummary: classify\n"
+        "    promptTemplate: pick a lane\n"
+        "    routes:\n"
+        "      1: the first lane\n"
+        "      007: the leading-zero lane\n"
+        "  - id: handle\n"
+        "    subagent: raven\n"
+        "    nodeSummary: handle lane one\n"
+        "    promptTemplate: do it\n"
+        "    dependsOn: [triage]\n"
+        "    when: triage.1\n"
+        "```\n",
+        encoding="utf-8",
+    )
+
+    loaded = _store(tmp_path).load("digit-routes")
+
+    assert loaded.nodes[0].routes == {"1": "the first lane", "007": "the leading-zero lane"}
+
+
 def test_hand_written_invalid_graph_is_rejected_on_load(tmp_path):
     target = tmp_path / "broken-graph"
     target.mkdir()
