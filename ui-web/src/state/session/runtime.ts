@@ -396,8 +396,15 @@ export function stop(): void {
   const opened = viewRuntime().openedTurn
   turn.dispatch({ type: 'cancel' })
   gateway().call('turn.cancel', { session_key: owner as string, ...(opened ? { turn_id: opened } : {}) })
-    .then(() => {
-      get(owner)?.dispatch({ type: 'idle' })
+    .then((r) => {
+      const rt = get(owner)
+      /* Refused: the turn it named had already ended. A turn that opened since
+         took the phase off `cancelling` with its first frame -- `openedTurn`
+         cannot say so, the fold at the press cleared it and a turn a send
+         opened never sets it -- and that turn is the one running now: going
+         idle would take its stop button and release the queue into it. */
+      if (r.cancelled === false && rt && (isActiveRuntime(rt) ? turn.phase() : rt.phase.phase) !== 'cancelling') return
+      rt?.dispatch({ type: 'idle' })
       if (sessionCurrent() === owner) { drawMeter(); goState(); sessionDraw(); drain() }
     }, () => {
       get(owner)?.dispatch({ type: 'idle' })
