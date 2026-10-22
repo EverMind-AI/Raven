@@ -662,7 +662,12 @@ def _merge_usage(target: dict[str, Any], raw: Any) -> None:
 
 
 def _finish_reason(reason: Any) -> str:
-    return _FINISH_REASONS.get(str(reason or "end_turn"), str(reason or "stop"))
+    # Absent is not a normal end: a reply that never said how it ended must stay
+    # distinguishable from one that did. Anything unmapped (``refusal``) is the
+    # upstream's own word and goes through as it came.
+    if not reason:
+        return "unknown"
+    return _FINISH_REASONS.get(str(reason), str(reason))
 
 
 def parse_message(payload: dict[str, Any]) -> LLMResponse:
@@ -855,7 +860,7 @@ async def consume_message_stream(
             yield ChatDelta(
                 content=None,
                 usage=usage or None,
-                finish_reason="stop",
+                finish_reason="unknown",
                 thinking_blocks=list(thinking.values()) or None,
             )
 
@@ -1025,7 +1030,16 @@ class AnthropicMessagesProvider(LLMProvider):
                     break
             if response.status_code != 200:
                 raise ProviderHTTPError(response.status_code, _error_text(response))
-            return self._parse_response(response.json())
+            payload = response.json()
+            # An overloaded upstream can answer 200 with an error object in place
+            # of a message; raised here so the same classifier that reads the
+            # stream's error event reads this one.
+            if isinstance(payload, dict) and payload.get("type") == "error":
+                error = payload.get("error")
+                error = error if isinstance(error, dict) else {}
+                detail = ": ".join(str(part) for part in (error.get("type"), error.get("message")) if part)
+                raise RuntimeError(f"Anthropic Messages returned an error: {detail or payload}")
+            return self._parse_response(payload)
         except Exception as exc:
             return self._error_response(exc)
 

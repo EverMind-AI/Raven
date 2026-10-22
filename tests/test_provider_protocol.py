@@ -755,6 +755,94 @@ async def test_a_messages_stream_cut_after_its_first_delta_is_not_asked_again(mo
     assert "the first half" not in (response.content or "")
 
 
+async def test_a_200_error_body_is_an_upstream_error(monkeypatch) -> None:
+    """An overloaded endpoint can answer HTTP 200 with an error object where a
+    message belongs. Parsed as a reply it had no content and no stop reason, so it
+    read as a model that chose silence and the loop repaired a healthy request
+    instead of waiting the upstream out."""
+    from raven.providers import anthropic_messages_provider as mod
+
+    def handler(request):
+        return httpx.Response(
+            200, json={"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
+        )
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        mod.httpx, "AsyncClient", lambda *_a, **kw: real_client(transport=httpx.MockTransport(handler), **kw)
+    )
+    monkeypatch.setattr(mod, "send_max_tokens", lambda gen, model, pinned=None, allow_fetch=True: pinned or 64000)
+    provider = AnthropicMessagesProvider(
+        api_key="k", api_base="https://api.anthropic.com/v1", default_model="claude-sonnet-5-5"
+    )
+
+    response = await provider.chat([{"role": "user", "content": "hi"}], model="claude-sonnet-5-5")
+
+    assert response.finish_reason == "error"
+    assert response.error_classification is not None
+    assert response.error_classification.retryable is True
+    assert "overloaded_error" in (response.content or "")
+
+
+def test_a_missing_stop_reason_reads_unknown() -> None:
+    """A body that carries a reply and no stop_reason never said how it ended, and
+    saying ``stop`` for it is what made a cut reply indistinguishable from a
+    finished one."""
+    from raven.providers.anthropic_messages_provider import parse_message
+
+    response = parse_message(
+        {"content": [{"type": "text", "text": "partial"}], "usage": {"input_tokens": 3, "output_tokens": 1}}
+    )
+
+    assert response.content == "partial"
+    assert response.finish_reason == "unknown"
+
+
+async def test_message_stop_without_a_stop_reason_reads_unknown() -> None:
+    """``message_stop`` closes the stream, it does not say why the model stopped;
+    that is ``message_delta``'s ``stop_reason``. A stream that closes without one
+    was reported as a normal end."""
+    from raven.providers.anthropic_messages_provider import consume_message_stream
+
+    body = _anthropic_sse(
+        {"type": "message_start", "message": {"usage": {"input_tokens": 3}}},
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "half an answ"}},
+        {"type": "message_stop"},
+    )
+    deltas = [d async for d in consume_message_stream(httpx.Response(200, content=body), timeout=5.0)]
+
+    assert "".join(d.content or "" for d in deltas) == "half an answ"
+    assert deltas[-1].finish_reason == "unknown"
+
+
+async def test_a_refusal_stop_reason_passes_through() -> None:
+    """``refusal`` is the model's own decision not to answer. Mapped to ``stop`` it
+    would read as a reply that happened to be short."""
+    from raven.providers.anthropic_messages_provider import consume_message_stream, parse_message
+
+    whole = parse_message(
+        {
+            "content": [{"type": "text", "text": "I can't help with that."}],
+            "stop_reason": "refusal",
+            "usage": {"input_tokens": 3, "output_tokens": 6},
+        }
+    )
+    assert whole.finish_reason == "refusal"
+    assert whole.content == "I can't help with that."
+
+    body = _anthropic_sse(
+        {"type": "message_start", "message": {"usage": {"input_tokens": 3}}},
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "I can't help with that."}},
+        {"type": "message_delta", "delta": {"stop_reason": "refusal"}, "usage": {"output_tokens": 6}},
+        {"type": "message_stop"},
+    )
+    deltas = [d async for d in consume_message_stream(httpx.Response(200, content=body), timeout=5.0)]
+
+    assert deltas[-1].finish_reason == "refusal"
+
+
 @pytest.mark.parametrize("protocol", ["responses", "messages", "messages_stream"])
 @pytest.mark.parametrize(
     "name,endpoint",
