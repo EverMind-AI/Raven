@@ -212,8 +212,9 @@ class OpsEventWatcher:
 
         # Resolve through the same seam the tools use (the fork's
         # backend_from_meta): hardcoding one backend here made the watcher a
-        # silent no-op for every other kind of campaign.
-        probe = self._probe_from_meta(meta)
+        # silent no-op for every other kind of campaign. Off the loop: a
+        # password machine's backend runs `ssh -G` while it is built.
+        probe = await asyncio.to_thread(self._probe_from_meta, meta)
 
         unhealthy: list[str] = []
         for rec in pending:
