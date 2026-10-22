@@ -994,6 +994,12 @@ class TurnPathMixin:
         # Action role applies: that is the path with no fallback chain of its own
         # and the only one a reply can be cut mid-answer on.
         streamed_call = on_token_delta is not None or on_reasoning_delta is not None
+        # The model the turn is on and the fallbacks it has not tried. A switch is
+        # for the rest of the turn -- every later call asks the model that last
+        # answered -- and the chain handed to the provider is what is left, so it
+        # never walks back onto a model the loop has already given up.
+        active_model = effective_model
+        fallbacks_left = list(fallback_models or [])
         # The watch-work judgement's state, owned by this turn: the loop is a
         # singleton and turns from other sessions run concurrently, so anything
         # on `self` here would let one session's dispatch silence another's
@@ -1130,7 +1136,7 @@ class TurnPathMixin:
                 "Iteration {}/{} model={}",
                 iteration,
                 iteration_cap,
-                effective_model,
+                active_model,
             )
 
             # Mark the episode boundary (one per model call) so an outlet can
@@ -1188,11 +1194,11 @@ class TurnPathMixin:
             # Compaction rebinds ``messages``, which is why it sits above the
             # autofill publish: a snapshot published before the rebind would go
             # quietly stale.
-            ahead = await _shrink(WindowPressure.PROACTIVE, effective_model)
+            ahead = await _shrink(WindowPressure.PROACTIVE, active_model)
             messages = ahead.messages
             # The standing image window: the notes it writes are the transcript
             # from here on rather than a per-request rewrite.
-            standing = await _shrink(WindowPressure.STANDING, effective_model)
+            standing = await _shrink(WindowPressure.STANDING, active_model)
             messages = standing.messages
 
             # Same seam and the same reason as the drain above: only the loop's
@@ -1277,10 +1283,10 @@ class TurnPathMixin:
                 self.strategies.before_llm_call(
                     messages,
                     tool_defs,
-                    effective_model,
+                    active_model,
                 ),
                 iteration=iteration,
-                fallback=(messages, tool_defs, effective_model),
+                fallback=(messages, tool_defs, active_model),
             )
             # Last, and on the payload only: the strategies above decide against
             # the shape the messages arrived in, and the prompt-cache prefix
@@ -1328,7 +1334,7 @@ class TurnPathMixin:
                         messages=call_messages,
                         tools=call_tools,
                         model=call_model,
-                        fallback_models=fallback_models,
+                        fallback_models=list(fallbacks_left),
                         stream_call=self._llm_call_stream,
                         # Spliced here rather than inside the module: both gates are
                         # the shell's own, and which sink a delta reaches is not a
@@ -1445,7 +1451,7 @@ class TurnPathMixin:
             # a call that did no work.
             cls_ = response.error_classification
             refused = response.finish_reason == "error" and cls_ is not None
-            retry_model = call_model or effective_model
+            retry_model = call_model or active_model
             if refused and cls_.should_compress:
                 shrunk = await _shrink(WindowPressure.OVERFLOW, retry_model)
                 messages = shrunk.messages
@@ -1712,7 +1718,7 @@ class TurnPathMixin:
                         tool_call.arguments, getattr(result, "blocks", None), agent_output=agent_output
                     )
                     model_text, blocks, attach_blocks = self._route_result_images(
-                        model_text, result_blocks, call_model or effective_model
+                        model_text, result_blocks, call_model or active_model
                     )
                     # Provenance for the pictures, taken here where the tool, the
                     # round and the captions are all still in one place. The
@@ -1929,6 +1935,22 @@ class TurnPathMixin:
                     verdict = response.error_classification
                     if verdict is None and (classify := getattr(self.provider, "classify_error", None)) is not None:
                         verdict = classify(content=clean or None)
+                    # A model that has a fallback goes there before the turn waits. Only
+                    # a streamed call needs the loop to do it: a plain call walks
+                    # ``[model, *fallbacks]`` inside the provider's own retry layer,
+                    # and has already been through it by the time it comes back an error.
+                    if streamed_call and fallbacks_left and verdict is not None and verdict.should_fallback:
+                        previous, active_model = active_model, fallbacks_left.pop(0)
+                        recovery.fallbacks_used += 1
+                        logger.warning(
+                            "LLM error [{}] on {}; trying fallback model {}: {}",
+                            verdict.category,
+                            previous,
+                            active_model,
+                            (clean or "")[:160],
+                        )
+                        iteration -= 1  # the failed call did no work; don't bill it
+                        continue
                     ladder = self._recovery_limits.llm_error_retry_delays
                     if verdict is not None and verdict.retryable and error_waits < len(ladder):
                         delay = ladder[error_waits]
@@ -2006,7 +2028,7 @@ class TurnPathMixin:
                     limits,
                     prefill_supported=supports_prefill is None or supports_prefill(call_model),
                     next_rung=next_rung,
-                    fallback_left=False,
+                    fallback_left=bool(fallbacks_left),
                     resend_budget=resends_allowed,
                 )
                 if action is RecoveryAction.PREFILL:
@@ -2088,6 +2110,23 @@ class TurnPathMixin:
                     pending_gen_overrides = {"reasoning_effort": next_rung}
                     iteration -= 1
                     await asyncio.sleep(delay)
+                    continue
+                if action is RecoveryAction.FALLBACK:
+                    # The next model gets the step as the turn first asked it: the
+                    # prefills that belong to the model being left come off, so the
+                    # request does not end on an assistant message. It is the same
+                    # step asked again, so no iteration is billed.
+                    previous, active_model = active_model, fallbacks_left.pop(0)
+                    recovery.fallbacks_used += 1
+                    # A refusal is switched on once: the next model's own refusal is
+                    # the upstream's verdict again, and ends the turn.
+                    recovery.refusal_fell_back = recovery.refusal_fell_back or kind is ReplyKind.REFUSAL
+                    logger.warning(
+                        "empty-recovery: {} reply on {}; trying fallback model {}", kind.name, previous, active_model
+                    )
+                    _drop_trailing_prefills(messages)
+                    cut_continuation = False
+                    iteration -= 1
                     continue
                 if action is RecoveryAction.CONTINUE and kind is ReplyKind.TRUNCATED:
                     # Cut at the ceiling with nothing in it: the model is told so
@@ -2211,8 +2250,8 @@ class TurnPathMixin:
             status = "interrupted"
             final_content = await self._synthesize_final_on_exhaustion(
                 messages,
-                effective_model,
-                fallback_models,
+                active_model,
+                list(fallbacks_left),
                 on_token_delta=on_token_delta,
                 on_reasoning_delta=on_reasoning_delta,
                 reasoning_effort=policy.reasoning_effort,

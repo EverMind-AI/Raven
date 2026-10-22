@@ -60,7 +60,7 @@ from raven.agent.loop.recovery import (
 )
 from raven.contracts.llm_provider import REASONING_EFFORT_LADDER
 from raven.providers import rates
-from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest, send_max_tokens
+from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, ToolCallRequest, send_max_tokens
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import AnswerlessTurnError, Origin, TurnRequest
@@ -918,6 +918,281 @@ async def test_a_resend_on_the_last_iteration_is_not_wrapped_up(workspace, monke
     assert final == "ok"
     assert outcome.status == "completed"
     assert len(calls) == 2 and calls[1] == calls[0]
+
+
+def _seed(text: str = "hi") -> list[dict]:
+    return [{"role": "user", "content": text}]
+
+
+def _models(calls: list[dict]) -> list[str]:
+    return [call["model"] for call in calls]
+
+
+class _Stream:
+    """A stand-in for LiteLLM's stream wrapper over scripted chunks.
+
+    ``received_finish_reason`` is what the wrapper kept of the finish the upstream
+    sent: None for a stream that closed without one, which is how the provider
+    tells a ``stop`` the library made up from a real one.
+    """
+
+    def __init__(self, chunks, received_finish_reason=None):
+        self._chunks = iter(chunks)
+        self.received_finish_reason = received_finish_reason
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._chunks)
+        except StopIteration:
+            raise StopAsyncIteration from None
+
+    async def aclose(self):
+        return None
+
+
+def _chunk(content=None, finish_reason=None):
+    delta = SimpleNamespace(content=content, tool_calls=None, reasoning_content=None)
+    return SimpleNamespace(choices=[SimpleNamespace(delta=delta, finish_reason=finish_reason)], usage=None)
+
+
+def _finished_stream(*texts: str) -> _Stream:
+    """A stream that ends the way the upstream meant it to: the text, then its own ``stop``."""
+    return _Stream([*(_chunk(text) for text in texts), _chunk(finish_reason="stop")], received_finish_reason="stop")
+
+
+class _Sink:
+    """The turn's delta and notice outlets, collecting what reaches them."""
+
+    def __init__(self) -> None:
+        self.text: list[str] = []
+        self.notices: list[tuple[object, str]] = []
+
+    async def delta(self, text: str) -> None:
+        self.text.append(text)
+
+    async def notice(self, kind, detail: str) -> None:
+        self.notices.append((kind, detail))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reply",
+    [
+        pytest.param(lambda: _reply("I can't help with that", finish="content_filter"), id="content_filter"),
+        pytest.param(lambda: _reply(None, refusal="I can't help with that"), id="refusal_field"),
+    ],
+)
+async def test_a_refusal_is_not_retried_and_fails_with_the_explanation(workspace, monkeypatch, reply):
+    calls = _served(monkeypatch, [reply(), _reply("never asked")])
+
+    failed = await _fail(_litellm_agent(workspace))
+
+    assert len(calls) == 1
+    assert str(failed) == REFUSAL_FAILURE + " The model's explanation: I can't help with that"
+    assert failed.no_output is False
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_that_explains_nothing_says_so(workspace, monkeypatch):
+    _served(monkeypatch, [_reply("", finish="content_filter")])
+
+    failed = await _fail(_litellm_agent(workspace))
+
+    assert str(failed) == REFUSAL_FAILURE + REFUSAL_NO_EXPLANATION
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_switches_to_one_fallback_model(workspace, monkeypatch):
+    calls = _served(monkeypatch, [_reply("I can't help with that", finish="content_filter"), _reply("fb's answer")])
+    agent = _litellm_agent(workspace)
+
+    final, _used, _messages, outcome = await agent._run_agent_loop(_seed(), fallback_models=["fb"])
+
+    assert final == "fb's answer"
+    assert outcome.status == "completed"
+    assert _models(calls) == [_MODEL, "fb"]
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_falls_back_only_once(workspace, monkeypatch):
+    """The second refusal ends the turn with a model still unused: a refusal is the upstream's
+    verdict on the request, and asking every model in turn is shopping for a yes."""
+    calls = _served(
+        monkeypatch,
+        [_reply("no", finish="content_filter"), _reply("still no", finish="content_filter"), _reply("fb2's answer")],
+    )
+    agent = _litellm_agent(workspace)
+
+    _final, _used, _messages, outcome = await agent._run_agent_loop(_seed(), fallback_models=["fb1", "fb2"])
+
+    assert _models(calls) == [_MODEL, "fb1"]
+    assert outcome.status == "error"
+    assert outcome.error == REFUSAL_FAILURE + " The model's explanation: still no"
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_after_another_fallback_still_gets_its_one_switch(workspace, monkeypatch):
+    """The refusal's one switch is its own: a model reached because an empty reply spent the
+    resends has not used it."""
+    calls = _served(
+        monkeypatch,
+        [_reply("")] * 4 + [_reply("no", finish="content_filter"), _reply("fb2's answer")],
+    )
+    agent = _litellm_agent(workspace)
+
+    final, _used, _messages, _outcome = await agent._run_agent_loop(_seed(), fallback_models=["fb1", "fb2"])
+
+    assert final == "fb2's answer"
+    assert _models(calls) == [_MODEL] * 4 + ["fb1", "fb2"]
+
+
+@pytest.mark.asyncio
+async def test_an_empty_reply_walks_each_fallback_model_once(workspace, monkeypatch):
+    calls = _served(monkeypatch, [_reply("")] * 5 + [_reply("fb2's answer")])
+    agent = _litellm_agent(workspace)
+
+    final, _used, _messages, outcome = await agent._run_agent_loop(_seed(), fallback_models=["fb1", "fb2"])
+
+    assert final == "fb2's answer"
+    assert outcome.status == "completed"
+    assert _models(calls) == [_MODEL] * 4 + ["fb1", "fb2"]
+
+
+@pytest.mark.asyncio
+async def test_an_empty_fallback_model_ends_the_turn_when_none_is_left(workspace, monkeypatch):
+    calls = _served(monkeypatch, [_reply("")] * 5)
+    agent = _litellm_agent(workspace)
+
+    _final, _used, _messages, outcome = await agent._run_agent_loop(_seed(), fallback_models=["fb"])
+
+    assert _models(calls) == [_MODEL] * 4 + ["fb"]
+    assert outcome.error == EMPTY_REPLY_FAILURE
+    assert outcome.no_output is True
+
+
+@pytest.mark.asyncio
+async def test_a_thinking_only_reply_falls_back_after_the_step_downs(workspace, monkeypatch):
+    thinking = _reply("", reasoning="hmm, let me think")
+    calls = _served(monkeypatch, [thinking] * 5 + [_reply("fb's answer")])
+    agent = _litellm_agent(workspace)
+
+    final, _used, _messages, _outcome = await agent._run_agent_loop(_seed(), fallback_models=["fb"])
+
+    assert final == "fb's answer"
+    assert _models(calls) == [_MODEL] * 5 + ["fb"]
+    # The fallback is asked as the turn asked its first model: no prefill left on it, no stepped-down effort.
+    assert _efforts(calls) == [None, None, None, "high", "low", None]
+    assert calls[5]["messages"] == calls[0]["messages"]
+
+
+@pytest.mark.asyncio
+async def test_the_fallback_chain_handed_to_the_provider_shrinks_as_models_are_spent():
+    """Handed the whole list again after a switch, the provider would try the model the loop just left."""
+    seen: list[tuple[str, list[str]]] = []
+
+    class _Provider:
+        async def chat_with_retry(self, messages, tools=None, model=None, fallback_models=None, **_kw):
+            seen.append((model, list(fallback_models or [])))
+            return LLMResponse(content="" if len(seen) < 6 else "done", finish_reason="stop")
+
+        def get_default_model(self):
+            return "primary"
+
+    with tempfile.TemporaryDirectory() as td:
+        agent = AgentLoop(
+            provider=_Provider(),
+            workspace=Path(td),
+            model="primary",
+            policy=TurnPolicy(max_iterations=10),
+            tools=ToolWiring(restrict_to_workspace=True),
+        )
+        await agent._run_agent_loop(_seed(), fallback_models=["fb1", "fb2"])
+
+    assert seen == [("primary", ["fb1", "fb2"])] * 4 + [("fb1", ["fb2"]), ("fb2", [])]
+
+
+@pytest.mark.asyncio
+async def test_the_rest_of_the_turn_stays_on_the_fallback_model(workspace, monkeypatch):
+    """A switch is for the turn, not for the one call: the next step does not go back to the model that failed."""
+    calls = _served(monkeypatch, [_reply("")] * 4 + [_tool_reply(), _reply("done")])
+    agent = _litellm_agent(workspace)
+
+    final, _used, _messages, _outcome = await agent._run_agent_loop(_seed(), fallback_models=["fb"])
+
+    assert final == "done"
+    assert _models(calls) == [_MODEL] * 4 + ["fb", "fb"]
+
+
+@pytest.mark.asyncio
+async def test_an_upstream_error_on_a_stream_tries_the_fallback_first(workspace, monkeypatch):
+    """The stream path walks no chain of its own, so the loop switches: with a model left to try, the
+    wait ladder is for when there is none."""
+    calls = _served(monkeypatch, [_Stream([_chunk(finish_reason="stop")]), _finished_stream("fb's answer")])
+    agent = _litellm_agent(workspace)
+    sink = _Sink()
+
+    final, _used, _messages, outcome = await agent._run_agent_loop(
+        _seed(), fallback_models=["fb"], on_token_delta=sink.delta, on_notice=sink.notice
+    )
+
+    assert final == "fb's answer"
+    assert outcome.status == "completed"
+    assert _models(calls) == [_MODEL, "fb"]
+    assert sink.notices == [], "no wait was announced: the fallback went first"
+
+
+@pytest.mark.asyncio
+async def test_an_upstream_error_on_a_stream_waits_when_no_fallback_is_left(workspace, monkeypatch):
+    calls = _served(monkeypatch, [_Stream([_chunk(finish_reason="stop")]), _finished_stream("the answer")])
+    agent = _litellm_agent(workspace)
+    sink = _Sink()
+
+    final, _used, _messages, _outcome = await agent._run_agent_loop(
+        _seed(), on_token_delta=sink.delta, on_notice=sink.notice
+    )
+
+    assert final == "the answer"
+    assert _models(calls) == [_MODEL, _MODEL]
+    assert [detail for _kind, detail in sink.notices] == ["network"], "the ladder's one wait, announced"
+
+
+@pytest.mark.asyncio
+async def test_an_upstream_error_on_a_plain_call_is_left_to_the_providers_chain():
+    """A non-streamed call already walks ``[model, *fallbacks]`` inside the provider, so the loop
+    does not switch models for an error it has not seen the end of."""
+    seen: list[tuple[str, list[str]]] = []
+    answers = [
+        LLMResponse(
+            content="Error calling LLM (network): boom",
+            finish_reason="error",
+            error_classification=ErrorClassification("network", retryable=True, should_fallback=True),
+        ),
+        LLMResponse(content="done", finish_reason="stop"),
+    ]
+
+    class _Provider:
+        async def chat_with_retry(self, messages, tools=None, model=None, fallback_models=None, **_kw):
+            seen.append((model, list(fallback_models or [])))
+            return answers.pop(0)
+
+        def get_default_model(self):
+            return "primary"
+
+    with tempfile.TemporaryDirectory() as td:
+        agent = AgentLoop(
+            provider=_Provider(),
+            workspace=Path(td),
+            model="primary",
+            policy=TurnPolicy(max_iterations=10, empty_recovery=RecoveryLimits(llm_error_retry_delays=(0.0,))),
+            tools=ToolWiring(restrict_to_workspace=True),
+        )
+        final, _used, _messages, _outcome = await agent._run_agent_loop(_seed(), fallback_models=["fb"])
+
+    assert final == "done"
+    assert seen == [("primary", ["fb"]), ("primary", ["fb"])]
 
 
 # --------------------------------------------------------------------------- #
