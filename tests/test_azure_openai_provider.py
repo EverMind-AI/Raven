@@ -238,6 +238,58 @@ def test_arguments_that_needed_repair_are_reported_as_such() -> None:
     assert cut.tool_calls[0].arguments["content"] == "import ran"
 
 
+@pytest.mark.parametrize(
+    "choice",
+    [{"message": {"content": "hi"}}, {"message": {"content": "hi"}, "finish_reason": None}],
+    ids=["absent", "null"],
+)
+def test_a_missing_finish_reason_reads_unknown(choice: dict) -> None:
+    """A choice that names no finish_reason never said how it ended. ``stop`` was
+    filled in for it, so a reply cut by the connection read as a finished one."""
+    provider = AzureOpenAIProvider(api_key="k", api_base="https://x.openai.azure.com")
+
+    response = provider._parse_response({"choices": [choice]})
+
+    assert response.content == "hi"
+    assert response.finish_reason == "unknown"
+
+
+def test_reasoning_tokens_are_kept() -> None:
+    """The count says a turn that returned nothing still thought; the Chat
+    Completions usage block carries it under ``completion_tokens_details``."""
+    provider = AzureOpenAIProvider(api_key="k", api_base="https://x.openai.azure.com")
+
+    response = provider._parse_response(
+        {
+            "choices": [{"message": {"content": "hi"}, "finish_reason": "stop"}],
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 900,
+                "total_tokens": 1000,
+                "completion_tokens_details": {"reasoning_tokens": 812},
+            },
+        }
+    )
+
+    assert response.usage["reasoning_tokens"] == 812
+    assert response.usage["completion_tokens"] == 900
+
+
+def test_a_response_that_reports_no_reasoning_tokens_gets_no_count() -> None:
+    """Absent is not zero: a count that was never reported cannot be told apart
+    from a turn that did not think once it is written down as 0."""
+    provider = AzureOpenAIProvider(api_key="k", api_base="https://x.openai.azure.com")
+
+    def usage(**extra: object) -> dict:
+        body = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15, **extra}
+        choice = {"message": {"content": "hi"}, "finish_reason": "stop"}
+        return provider._parse_response({"choices": [choice], "usage": body}).usage
+
+    assert "reasoning_tokens" not in usage()
+    assert "reasoning_tokens" not in usage(completion_tokens_details={})
+    assert usage(completion_tokens_details={"reasoning_tokens": 0})["reasoning_tokens"] == 0
+
+
 def _gpt_payload(
     deployment: str,
     *,
