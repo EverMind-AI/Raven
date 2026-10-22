@@ -3585,10 +3585,11 @@ decision node whose route cannot be established fails ("The route could not be d
 ..."), its output withdrawn and its dependents skipped, with no fallback route and no
 adjudication. For the same reason a graph declaring routes is refused on a host with no
 provider to judge with.
-_Avoid_: "decision" alone, for the node or for what it chose -- a decision is the main agent's
-answer to an **exception** report, the `decision` that `resolve_dag_node` takes (continue,
-abandon or replan). Say decision node for the node, and its selection or selected routes for
-what its judge chose.
+_Avoid_: "decision" alone, for the node or for what it chose -- the word already has two
+senses: in a DAG run, the main agent's answer to an **exception** report, the `decision` that
+`resolve_dag_node` takes (continue, abandon or replan); and a choice the host puts to the user,
+which stays open until they make it (**Host role**). Say decision node for the node, and its
+selection or selected routes for what its judge chose.
 
 **Route (DAG branch)** (a key of `routes`; `raven/agent/subagent/dag_graph.py`):
 One branch a decision node chooses between, named by the graph's author. A guard names it
