@@ -522,6 +522,22 @@ describe('dag elapsed', () => {
     expect(dagNodeElapsed(timed({ status: 'completed' }), 9_000)).toBe('')
   })
 
+  it('says nothing for a node that never ran, whatever stamps the sweep invented for it', () => {
+    expect(dagNodeElapsed(timed({ endedAt: 9_000, startedAt: 9_000, status: 'skipped' }), 10_000)).toBe('')
+  })
+
+  it("leaves a skipped node's invented stamps out of the run window", () => {
+    const skippedLast = run({
+      done: true,
+      nodes: [
+        { ...timed({ endedAt: 4_000, startedAt: 1_000, status: 'failed' }), id: 'a' },
+        { ...timed({ endedAt: 9_000, startedAt: 9_000, status: 'skipped' }), id: 'b' }
+      ]
+    })
+
+    expect(dagRunElapsedMs(skippedLast, 100_000)).toBe(3_000)
+  })
+
   it('measures a run from its first start to its last end', () => {
     const finished = run({
       done: true,
