@@ -368,7 +368,7 @@ async def _install(conn_id: str, node_dir: str, rec: _Install) -> None:
             size = f" ({done.size_kb // 1024} MB)" if done.size_kb else ""
             rec.detail = f"Installed the Raven node {done.install_name} in {done.node_dir}{size}."
             if not done.rg:
-                rec.detail += " ripgrep-bin was not available there; grep on it runs Raven's own Python search."
+                rec.detail += " ripgrep-bin did not install there; grep on it runs Raven's own Python search."
         learned: dict[str, Any] = {NODE_FIELD: plan.install_name}
         if node_dir and node_dir != str(plan.target.field("node_dir") or "").strip().rstrip("/"):
             learned["node_dir"] = node_dir

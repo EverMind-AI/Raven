@@ -481,8 +481,9 @@ def install_node(
         console.print(f"Installed the Raven node {done.install_name} in {done.node_dir}{size}.")
         if not done.rg:
             console.print(
-                "[yellow]ripgrep-bin was not available from the machine's package index or PyPI; "
-                "grep there runs Raven's own Python search, as it does on a computer without rg.[/yellow]"
+                "[yellow]ripgrep-bin did not install there, from any package index it was tried on or in the "
+                "time a step has; grep there runs Raven's own Python search, as it does on a computer without "
+                "rg.[/yellow]"
             )
     if prune:
         try:

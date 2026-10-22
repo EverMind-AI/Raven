@@ -19,8 +19,18 @@ install``, from the index pip is configured with on the machine when it is
 not read on its own), else from PyPI. That index reaches uv on the step's
 stdin, as ``UV_DEFAULT_INDEX``, and never on a command line: pip takes a
 sign-in inside the URL, and a command line is readable by every account on
-the machine and, as this computer's ssh argv, by every account here. A
-machine without uv gets one under
+the machine and, as this computer's ssh argv, by every account here.
+
+That index is timed from the machine before an install: one fetch of
+pillow's project page, the largest of the Raven node's packages, so every
+index carries it. One that cannot be reached there, or that serves slower
+than :data:`_SLOW_BPS`, is passed over for the faster of PyPI's mirrors in
+mainland China (:data:`MIRRORS`), timed the same way, and tried again after
+it, so a mirror that lacks a pinned version costs a second try rather than
+the install; the plan says which index, and why. ``RAVEN_NO_MIRROR`` on this
+computer (:data:`NO_MIRROR_ENV`) keeps every install on the machine's own.
+
+A machine without uv gets one under
 ``node_dir/.uv`` first: uv's installer for one pinned version
 (:data:`UV_VERSION`), fetched with the machine's curl or wget and run as an
 unmanaged install, which writes no receipt under the home directory and
@@ -32,13 +42,17 @@ that names the mirror. A uv an earlier install fetched under ``node_dir/.uv``
 is used in its place when it is there, so the next install fetches nothing.
 
 Each step is one ssh call through :func:`raven.acp_client.remote.run`; a step
-that fails removes the half-made node directory, so the next attempt starts
-clean and :func:`plan` never mistakes a broken node for an installed one.
+that fails removes the half-made directory, so :func:`plan` never mistakes
+a broken Raven node for an installed one. A step that ran out of time can
+go on running on the machine and write into that directory again, so the
+next attempt's virtualenv step clears it before anything else.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
+import os
 import shlex
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -47,6 +61,7 @@ from urllib.parse import urlsplit, urlunsplit
 from raven.acp_client import remote
 from raven.node import bundle, protocol
 from raven.node.client import node_dir as registered_node_dir
+from raven.ops.transport import TIMED_OUT_RC
 
 #: Roughly what a node takes, for the free-space check: Raven's code with
 #: pillow, loguru and ripgrep-bin (measured 2026-10-10), a Python 3.12 when
@@ -72,6 +87,43 @@ UV_INDEX_SINCE = (0, 4, 23)
 _PROBE_TIMEOUT_S = 60.0
 _STEP_TIMEOUT_S = 900.0
 
+#: PyPI's mirrors in mainland China an install may take its packages from
+#: instead, Tsinghua University's (TUNA) and Alibaba Cloud's: timed from the
+#: machine when its own index is no place to install from, and the faster
+#: used. Measured 2026-10-23 from an Alibaba Cloud machine in Shanghai whose
+#: pip named PyPI: pypi.org served pillow's project page at 31 KB/s and its
+#: wheel at 21 KB/s, so the packages step ran out of its 15 minutes ten
+#: seconds before the wheel was in; TUNA served the page at 1.5 MB/s and
+#: Alibaba's mirror at 12 MB/s.
+MIRRORS = ("https://pypi.tuna.tsinghua.edu.cn/simple", "https://mirrors.aliyun.com/pypi/simple")
+#: Set on this computer to 1, true, yes or on to keep every install on the
+#: index the machine would use: nothing is timed, and no mirror is asked.
+NO_MIRROR_ENV = "RAVEN_NO_MIRROR"
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+#: How long the fetch that times an index may take, in seconds.
+_TIMED_S = 6
+#: Below this many bytes a second an index is slow: a Raven node's downloads
+#: come to about 10 MB, some 40 s at this rate...
+_SLOW_BPS = 256 * 1024
+#: ...unless the whole page came within this many seconds, whatever its size:
+#: a small page's rate is mostly the time it took to connect.
+_QUICK_S = 1.0
+#: curl's exit codes for an index the network did not let it reach: the
+#: proxy's or the index's name did not resolve (5, 6), no connection (7),
+#: out of time (28), a TLS handshake cut short (35), or the connection
+#: dropped (52, 55, 56). Any other failure is curl's own or the index's,
+#: and passes nothing over: for a certificate the machine does not trust
+#: (60), whatever re-signs the index's traffic there would re-sign a
+#: mirror's too, so the index is kept, to fail in its own words.
+_UNREACHED_RC = frozenset({5, 6, 7, 28, 35, 52, 55, 56})
+#: curl as both timings run it: the page thrown away, redirects followed, a
+#: sign-in from ~/.netrc used as uv would use it, and what came said as
+#: ``<HTTP status> <bytes> <seconds>`` (status 000 when nothing answered).
+_CURL_TIMED = (
+    f"-sL -o /dev/null --netrc-optional --connect-timeout 5 --max-time {_TIMED_S} "
+    "-w '%{http_code} %{size_download} %{time_total}'"
+)
+
 
 class InstallError(RuntimeError):
     """An install that could not go ahead or did not finish. Safe to show: no address."""
@@ -95,6 +147,11 @@ class Plan:
     never on a command line, and shown only without its sign-in (:func:`_shown_index`)."""
     uv_version: str = ""
     """What the machine's uv says it is (``uv --version``), or ``""`` when it says nothing readable."""
+    mirror: str = ""
+    """The mirror the packages come from first (one of :data:`MIRRORS`), or ``""`` for the machine's own index."""
+    passed_over: str = ""
+    """Why the machine's own index is no place to install from, as timed there (``"could not be reached"``,
+    ``"served 31 KB/s"``), or ``""`` when it serves; set whether or not a mirror did better."""
 
     @property
     def uv_too_old(self) -> bool:
@@ -151,8 +208,20 @@ class Plan:
                 ", shown without its sign-in" if shown != self.index else ""
             )
             index = f"{shown} ({how})"
+            own = f"{shown}, {how},"
         else:
             index = "PyPI (pip is configured with no other index there)"
+            own = "PyPI, which pip uses there,"
+        if self.mirror:
+            index = (
+                f"{self.mirror} (a PyPI mirror in mainland China, the fastest from the machine: {own} "
+                f"{self.passed_over}, and is tried after it)"
+            )
+        elif self.passed_over:
+            index = (
+                f"{index[:-1]}; it {self.passed_over} from the machine, and no PyPI mirror in mainland China did "
+                "better)"
+            )
         space = f"; {self.free_kb // (1024 * 1024)} GB free there" if self.free_kb is not None else ""
         return (
             f"Install the Raven node {self.install_name} on machine {self.target.label} into {where}:{uv} {python}, "
@@ -193,23 +262,36 @@ def _vars(node_dir: str, install_name: str) -> str:
 #: The steps that run ``uv pip install``: the ones that read the index, when there is one, off their stdin.
 _INDEX_STEPS = frozenset({"packages", "search"})
 
-#: The index pip would install from on the machine, read the way pip reads it
-#: and said as ``INDEX=<url>``: ``PIP_INDEX_URL`` first (the shell checks it),
-#: else ``index-url`` in pip's config files, the user's over the system's
-#: and ``[install]`` over ``[global]``. One line of Python for the machine's
-#: own interpreter, with no single quote in it, since the whole line travels
-#: inside single quotes on the ssh command.
+#: The index pip would install from on the machine, read the way pip reads it:
+#: ``PIP_INDEX_URL`` first (the shell checks it), else ``index-url`` in pip's
+#: config files, the user's over the system's and ``[install]`` over
+#: ``[global]``. One line of Python for the machine's own interpreter, with no
+#: single quote in it, since the whole line travels inside single quotes on
+#: the ssh command; it prints the URL alone, for the shell to keep and time.
 _PIP_INDEX = (
     "import configparser, os; c = configparser.ConfigParser(interpolation=None); "
     'h = os.path.expanduser("~"); x = os.environ.get("XDG_CONFIG_HOME") or os.path.join(h, ".config"); '
     'c.read(["/etc/pip.conf", "/etc/xdg/pip/pip.conf", os.path.join(h, ".pip", "pip.conf"), '
     'os.path.join(x, "pip", "pip.conf")]); '
     'v = next((c.get(s, "index-url") for s in ("install", "global") if c.has_option(s, "index-url")), ""); '
-    'print("INDEX=" + v.strip().splitlines()[0]) if v.strip() else None'
+    "print(v.strip().splitlines()[0]) if v.strip() else None"
+)
+
+#: The index an install would use (``$x``, else PyPI), timed on the machine
+#: when this Raven's node is not there and curl is (wget says nothing of time):
+#: ``SPEED=<curl's exit> <HTTP status> <bytes> <seconds>``. The URL reaches
+#: curl as a config line on its stdin, never its argv, for the sign-in pip
+#: takes inside it; one that a config line cannot carry (a ``"`` or ``\`` in
+#: it) is not timed, and so is kept.
+_TIME_OWN = (
+    f'if [ -z "$here" ] && command -v curl >/dev/null 2>&1; then u=${{x:-{protocol.PUBLIC_INDEX}}}; '
+    'case $u in *[\\"\\\\]*) ;; *) '
+    f's=$(printf \'url = "%s/pillow/"\\n\' "${{u%/}}" | curl -K - {_CURL_TIMED} 2>/dev/null); '
+    'echo "SPEED=$? $s";; esac; fi; '
 )
 
 
-def probe_script(node_dir: str, install_name: str, digest: str) -> str:
+def probe_script(node_dir: str, install_name: str, digest: str, *, timed: bool = True) -> str:
     """One look at the machine: is this node there, which Python, uv, fetcher and package index it has, how much room.
 
     uv is looked for on the PATH, in the two places its installer puts it
@@ -218,11 +300,12 @@ def probe_script(node_dir: str, install_name: str, digest: str) -> str:
     its own as well (``NODE_UV``), for :func:`plan` to use when the one
     found first would ignore the configured index. The index is read the way
     pip reads it (:data:`_PIP_INDEX`), by whichever Python the loop found,
-    since uv reads no pip configuration of its own accord.
+    since uv reads no pip configuration of its own accord, and with ``timed``
+    the look also times it (:data:`_TIME_OWN`), a few seconds at most.
     """
     return _vars(node_dir, install_name) + (
-        f'if [ -x "$node/bin/python" ] && "$node/bin/python" -I -m raven.node --version 2>/dev/null '
-        f"| grep -q {shlex.quote(f'"digest": "{digest}"')}; then echo PRESENT=1; fi; "
+        f'here=; if [ -x "$node/bin/python" ] && "$node/bin/python" -I -m raven.node --version 2>/dev/null '
+        f"| grep -q {shlex.quote(f'"digest": "{digest}"')}; then here=1; echo PRESENT=1; fi; "
         'for p in python3.13 python3.12 python3; do q=$(command -v "$p" 2>/dev/null) || continue; '
         "if \"$q\" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)' "
         '2>/dev/null; then echo "PYTHON=$q"; break; fi; done; '
@@ -232,10 +315,24 @@ def probe_script(node_dir: str, install_name: str, digest: str) -> str:
         'if [ -x "$dir/.uv/uv" ]; then echo "NODE_UV=$dir/.uv/uv"; '
         '"$dir/.uv/uv" --version 2>/dev/null | awk \'NR==1 && $2 {print "NODE_UV_VERSION=" $2}\'; fi; '
         'for f in curl wget; do c=$(command -v "$f" 2>/dev/null) || continue; echo "FETCH=$c"; break; done; '
-        f'if [ -n "$PIP_INDEX_URL" ]; then echo "INDEX=$PIP_INDEX_URL"; elif [ -n "$q" ]; then "$q" -c {shlex.quote(_PIP_INDEX)} '
-        "2>/dev/null; fi; "
-        'd="$dir"; while [ ! -d "$d" ]; do d=$(dirname "$d"); done; '
+        f'x=$PIP_INDEX_URL; if [ -z "$x" ] && [ -n "$q" ]; then x=$("$q" -c {shlex.quote(_PIP_INDEX)} 2>/dev/null); fi; '
+        'if [ -n "$x" ]; then printf "INDEX=%s\\n" "$x"; fi; '
+        + (_TIME_OWN if timed else "")
+        + 'd="$dir"; while [ ! -d "$d" ]; do d=$(dirname "$d"); done; '
         'echo "FREE_KB=$(df -Pk "$d" 2>/dev/null | awk \'NR==2 {print $4}\')"'
+    )
+
+
+def mirror_script(mirrors: tuple[str, ...] = MIRRORS) -> str:
+    """Time each mirror on the machine as :data:`_TIME_OWN` times its own index, all at once.
+
+    ``MIRROR=<curl's exit> <HTTP status> <bytes> <seconds> <mirror>``, one
+    line each, in the order they finish: the look takes no longer than the
+    slowest, :data:`_TIMED_S` at most.
+    """
+    each = " ".join(shlex.quote(m) for m in mirrors)
+    return (
+        f'for m in {each}; do ( s=$(curl {_CURL_TIMED} "$m/pillow/" 2>/dev/null); echo "MIRROR=$? $s $m" ) & done; wait'
     )
 
 
@@ -247,6 +344,8 @@ def plan(machine_id: str, *, node_dir: str | None = None, run: Runner = _run) ->
     A uv an earlier install fetched under ``node_dir/.uv`` stands in for the
     machine's own when that one would ignore the index pip is configured
     with (older than :data:`UV_INDEX_SINCE`, or silent about its version).
+    An install's own index, timed in the look, that is no place to install
+    from has the mirrors timed in a second look (:func:`_faster`).
     """
     try:
         target = remote.machine(machine_id)
@@ -254,7 +353,8 @@ def plan(machine_id: str, *, node_dir: str | None = None, run: Runner = _run) ->
         raise InstallError(str(exc)) from None
     where = (node_dir or "").strip().rstrip("/") or registered_node_dir(target)
     install_name = bundle.install_name()
-    rc, out = run(target, probe_script(where, install_name, bundle.digest()))
+    timed = os.environ.get(NO_MIRROR_ENV, "").strip().lower() not in _TRUTHY
+    rc, out = run(target, probe_script(where, install_name, bundle.digest(), timed=timed))
     if rc != 0:
         raise InstallError(remote.explain(target, rc, out) or f"could not look at machine {target.label}")
     seen: dict[str, str] = {}
@@ -270,6 +370,7 @@ def plan(machine_id: str, *, node_dir: str | None = None, run: Runner = _run) ->
             "FETCH",
             "FREE_KB",
             "INDEX",
+            "SPEED",
         }:
             seen[key] = value.strip()
     index = seen.get("INDEX", "")
@@ -281,7 +382,7 @@ def plan(machine_id: str, *, node_dir: str | None = None, run: Runner = _run) ->
         # and is used rather than fetched again.
         uv, uv_version = own, own_version
     free = seen.get("FREE_KB", "")
-    return Plan(
+    found = Plan(
         target=target,
         node_dir=where,
         install_name=install_name,
@@ -293,6 +394,86 @@ def plan(machine_id: str, *, node_dir: str | None = None, run: Runner = _run) ->
         index=index,
         uv_version=uv_version,
     )
+    if not timed or found.present or refusal(found) is not None:
+        return found
+    return _faster(found, _timing(seen.get("SPEED", "")), run)
+
+
+@dataclass(frozen=True)
+class _Timing:
+    """One fetch of an index's project page on the machine, as curl said it went."""
+
+    rc: int
+    """curl's exit code: 0 for the whole page, 28 when the time ran out first."""
+    status: int
+    """The HTTP status, 0 when nothing answered."""
+    size: int
+    seconds: float
+
+    @property
+    def rate(self) -> float:
+        return self.size / max(self.seconds, 0.001)
+
+
+def _timing(said: str) -> _Timing | None:
+    """``<curl's exit> <HTTP status> <bytes> <seconds>`` as the machine said it, or None when it said something else."""
+    parts = said.split()
+    if len(parts) != 4:
+        return None
+    try:
+        # A comma for the point: an older curl printed time_total through the locale.
+        return _Timing(int(parts[0]), int(parts[1]), int(parts[2]), float(parts[3].replace(",", ".")))
+    except ValueError:
+        return None
+
+
+def _passed_over(timed: _Timing | None) -> str:
+    """Why an install should not take its packages from the index ``timed`` measured, or ``""`` when it may.
+
+    Only an index the network kept curl from (:data:`_UNREACHED_RC`), or one
+    that answers slowly, is passed over. One that answers with an error
+    status spoke, and is the owner's to mend; so is one asking for a sign-in
+    curl did not have. One curl failed on for any other reason -- a
+    certificate the machine does not trust, a curl without TLS -- was not
+    timed at all, and is kept, as is one with no curl there to time it, or
+    under ``RAVEN_NO_MIRROR``. The rate is said rounded down, so an index
+    just below the threshold never reads as serving at it.
+    """
+    if timed is None:
+        return ""
+    if timed.status == 0:
+        return "could not be reached" if timed.rc in _UNREACHED_RC else ""
+    if timed.status != 200 or (timed.rc == 0 and timed.seconds <= _QUICK_S) or timed.rate >= _SLOW_BPS:
+        return ""
+    return f"served {int(timed.rate // 1024)} KB/s"
+
+
+def _faster(p: Plan, own: _Timing | None, run: Runner) -> Plan:
+    """``p`` with the fastest mirror first, when its own index is passed over and a mirror does better there.
+
+    The mirrors are timed in a look of their own (:func:`mirror_script`),
+    only when the machine's index has been passed over, so an install whose
+    index serves never asks one. A mirror that does no better than an index
+    that answered slowly is not taken: the owner's choice stands, and the plan
+    says how it was timed.
+    """
+    why = _passed_over(own)
+    if not why:
+        return p
+    rc, out = run(p.target, mirror_script())
+    timings: dict[str, _Timing] = {}
+    for line in out.splitlines() if rc == 0 else ():
+        key, sep, value = line.strip().partition("=")
+        fields = value.split()
+        if sep and key == "MIRROR" and fields and fields[-1] in MIRRORS:
+            timed = _timing(" ".join(fields[:-1]))
+            if timed is not None and timed.status == 200 and timed.size > 0:
+                timings[fields[-1]] = timed
+    floor = own.rate if own is not None and own.status == 200 else 0.0
+    best = max(timings, key=lambda m: timings[m].rate, default="")
+    if best and timings[best].rate > floor:
+        return dataclasses.replace(p, mirror=best, passed_over=why)
+    return dataclasses.replace(p, passed_over=why)
 
 
 def refusal(p: Plan) -> str | None:
@@ -357,23 +538,41 @@ def steps(p: Plan) -> list[tuple[str, str]]:
             )
         )
     python = shlex.quote(p.python) if p.how == "python" else "3.12"
-    venv = made + f'{env} "$uv" venv --quiet --python {python} "$node"'
+    # A plan whose look found no working Raven node here takes whatever is at
+    # its path for a half-made one. A step given up on goes on running
+    # there, and its uv wrote site-packages back after the cleanup had
+    # removed it (measured 2026-10-22, ten seconds after the packages step
+    # ran out of time); and uv venv refuses a directory that is there and is
+    # not a virtualenv. A Raven node the look found working is never removed.
+    clear = "" if p.present else 'rm -rf "$node" && '
+    venv = made + f'{clear}{env} "$uv" venv --quiet --python {python} "$node"'
     # The index pip is configured with on the machine, which uv would not
     # read for itself, comes on the step's stdin into UV_DEFAULT_INDEX, the
     # variable uv reads as --default-index: never a command line, which every
     # account on the machine can read. A step that finds no line there fails
     # rather than install from PyPI behind the owner's back. Without an
-    # index, uv's default, PyPI, and nothing is read.
-    take_index = "IFS= read -r UV_DEFAULT_INDEX && export UV_DEFAULT_INDEX && " if p.index else ""
+    # index, uv's default, PyPI, and nothing is read. A mirror chosen over
+    # the machine's index (:func:`plan`) is the first line, and the index it
+    # stands in for -- PyPI when pip names none -- the second, tried when the
+    # mirror fails the step, as one that lacks a pinned version still would.
+    if p.mirror:
+        take_index = "IFS= read -r UV_DEFAULT_INDEX && IFS= read -r own && export UV_DEFAULT_INDEX && "
+        again = 'UV_DEFAULT_INDEX="$own" '
+    else:
+        take_index = "IFS= read -r UV_DEFAULT_INDEX && export UV_DEFAULT_INDEX && " if p.index else ""
+        again = ""
     pip = f'{env} "$uv" pip install --quiet --python "$node/bin/python"'
     requirements = " ".join(shlex.quote(r) for r in bundle.pinned(protocol.REQUIREMENTS))
-    deps = f"{take_index}{pip} {requirements}"
+    if p.mirror:
+        deps = f"{take_index}{{ {pip} {requirements} || {again}{pip} {requirements}; }}"
+    else:
+        deps = f"{take_index}{pip} {requirements}"
     # Optional, and never fails the install: the machine's index first (its
     # owner's choice, often a nearby mirror); then the public index too, for
     # a mirror that does not carry it; else the node searches without rg.
     (rg,) = bundle.pinned((protocol.SEARCH_REQUIREMENT,))
     search = (
-        f"{take_index}{{ {pip} {shlex.quote(rg)} || {pip} --extra-index-url {protocol.PUBLIC_INDEX} "
+        f"{take_index}{{ {pip} {shlex.quote(rg)} || {again}{pip} --extra-index-url {protocol.PUBLIC_INDEX} "
         f"{shlex.quote(rg)}; }} >/dev/null 2>&1 && echo RG=1 || echo RG=0"
     )
     # The code goes on the virtualenv's path, and beside it a distribution
@@ -434,10 +633,14 @@ def install(p: Plan, *, run: Runner = _run, push: Pusher = _push) -> Installed:
         for name, command in steps(p):
             if name == "code":
                 rc, out = push(p.target, command, bundle.tarball())
-            elif name in _INDEX_STEPS and p.index:
-                rc, out = push(p.target, command, p.index.encode("utf-8") + b"\n")
+            elif name in _INDEX_STEPS and (p.index or p.mirror):
+                rc, out = push(p.target, command, "".join(f"{i}\n" for i in _indexes(p)).encode("utf-8"))
             else:
                 rc, out = run(p.target, command)
+            if rc == TIMED_OUT_RC and name == "search":
+                # Optional, so out of time is as good as not there: the Raven
+                # node searches without rg, as the step's own fallback says.
+                continue
             if rc != 0:
                 raise InstallError(_failed(p, name, rc, out))
             if name == "search":
@@ -491,8 +694,23 @@ def _version_of(install_name: str) -> str:
     return install_name.rpartition("-")[0] or install_name
 
 
+def _indexes(p: Plan) -> tuple[str, ...]:
+    """What the steps that run ``uv pip`` read off their stdin, a line each: a mirror first, then the index it stands in for."""
+    if p.mirror:
+        return (p.mirror, p.index or protocol.PUBLIC_INDEX)
+    return (p.index,) if p.index else ()
+
+
 def _failed(p: Plan, step: str, rc: int, out: str) -> str:
     """One sentence for a failed step: ssh's failure explained, else the machine's own last line."""
+    if rc == TIMED_OUT_RC:
+        # The step's own budget ran out, not the machine's answer: a packages
+        # step still downloading from a slow index read "did not answer in
+        # time" (measured 2026-10-22), which sends the reader to the network.
+        took = f"it did not finish within {int(_STEP_TIMEOUT_S) // 60} minutes"
+        if step in _INDEX_STEPS:
+            took += ", installing packages from " + ", then ".join(_shown_index(i) for i in _indexes(p) or ("PyPI",))
+        return f"installing the Raven node on machine {p.target.label} failed at the {step} step: {took}"
     if (said := remote.explain(p.target, rc, out)) is not None and rc != remote.NOT_FOUND_RC:
         return f"installing the Raven node: {said}"
     lines = [line.strip() for line in out.splitlines() if line.strip()]
@@ -517,6 +735,8 @@ def _confirm_digest(p: Plan, out: str) -> None:
 
 
 __all__ = [
+    "MIRRORS",
+    "NO_MIRROR_ENV",
     "UV_INDEX_SINCE",
     "UV_INSTALLER",
     "UV_PINNED_INSTALLER",
@@ -525,6 +745,7 @@ __all__ = [
     "Installed",
     "Plan",
     "install",
+    "mirror_script",
     "plan",
     "probe_script",
     "prune",

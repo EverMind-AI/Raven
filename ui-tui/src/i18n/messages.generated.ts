@@ -1578,7 +1578,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.machine.f_node_dir': 'Install into (optional)',
     'gui.machine.node_dir_hint': 'Where the node lives on the machine: ~/.raven-node unless its home disk has no room.',
     'gui.machine.install_bad_hint':
-      'Fix what the line says, then press Install node again. Nothing was left on the machine.',
+      'Fix what the line says, then press Install node again: the next try clears what this one left of the node first.',
     'gui.machine.remove_do': 'Remove machine',
     'gui.machine.remove_body':
       '{name} ({id}) is taken out of the registry and its ssh alias goes with it. Agent entries that run there have to be disconnected first. The node installed on the machine stays there.',
@@ -4958,7 +4958,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.machine.update': '更新节点',
     'gui.machine.f_node_dir': '安装到（可不填）',
     'gui.machine.node_dir_hint': '节点在机器上的存放目录：默认 ~/.raven-node，只有主目录所在磁盘放不下时才需要改。',
-    'gui.machine.install_bad_hint': '按这一行的提示处理后，再点一次「安装节点」。机器上没有留下东西。',
+    'gui.machine.install_bad_hint': '按这一行的提示处理后，再点一次「安装节点」：下一次会先清掉这次没装完的节点。',
     'gui.machine.remove_do': '移除机器',
     'gui.machine.remove_body':
       '{name}（{id}）会从登记表里去掉，ssh 别名一起去掉；在它上面跑的 Agent 条目要先断开。装在机器上的节点会留在那里。',
