@@ -288,6 +288,11 @@ async def system_upgrade(params: dict) -> dict:
         editable_install = _is_editable_install()
     except _md.PackageNotFoundError as exc:
         raise _refuse("in_progress", _IN_PROGRESS_DETAIL) from exc
+    except UpgradeError as exc:
+        # Malformed direct_url.json reads the same as it does from the release
+        # lookup below: the install is not upgradable from the page, and the
+        # message says which file is at fault.
+        raise _refuse("not_upgradable", str(exc)) from exc
     if editable_install:
         # A checkout tracks upstream `main`, so no release is ever "newer" for
         # it in the sense the button means; and both `raven upgrade` and the
