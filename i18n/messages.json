@@ -4593,7 +4593,7 @@
     },
     "gui.upg.why.editable": {
       "en": "This Raven is a source checkout, so released upgrades do not apply to it. Update it with git, then reinstall.",
-      "zh": "这个 Raven 是源码检出,发布的升级包对它不适用。请用 git 更新代码后重新安装。"
+      "zh": "这个 Raven 是源码检出，发布的升级包对它不适用。请用 git 更新代码后重新安装。"
     },
     "gui.upg.working": {
       "en": "Upgrading Raven...",

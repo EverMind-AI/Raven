@@ -348,6 +348,36 @@ class TestUpgradingFromAGatewayHostedPage:
         assert excinfo.value.data["reason"] == "editable", excinfo.value.data
         assert excinfo.value.data["command"].startswith("git pull")
 
+    async def test_an_install_replacement_window_answers_in_progress_not_an_error(self, monkeypatch, tmp_path):
+        """The editable probe reads install metadata, and an upgrade already
+        running has uv mid-replacement of the environment: the probe's
+        PackageNotFoundError is the same in-flight state the release lookup's
+        handler names. Letting it escape answers internal_error, whose card
+        falls back to the default command this branch exists to withhold."""
+        import asyncio
+        from importlib.metadata import PackageNotFoundError
+
+        from raven.cli.serve_commands import SERVE
+        from raven.rpc.methods.system import system_upgrade
+        from raven.updates import upgrade as upgrade_commands
+
+        def probing() -> bool:
+            raise PackageNotFoundError("raven")
+
+        def plan() -> None:
+            raise AssertionError("metadata is gone before the release lookup runs")
+
+        monkeypatch.setattr(upgrade_commands, "_is_editable_install", probing)
+        monkeypatch.setattr(upgrade_commands, "plan_upgrade", plan)
+        SERVE.arm(18792, "tok", "cookie", asyncio.Event())
+        try:
+            with pytest.raises(ConfigValidationError) as excinfo:
+                await system_upgrade({})
+        finally:
+            SERVE.disarm()
+
+        assert excinfo.value.data["reason"] == "in_progress", excinfo.value.data
+
     async def test_it_refuses_while_work_the_page_cannot_see_is_running(self, monkeypatch, tmp_path):
         """The page checks its own turn. An IM turn or a sub-agent on the same
         engine is invisible to it, and the restart would cut it off."""

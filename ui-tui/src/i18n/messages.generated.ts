@@ -4731,7 +4731,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.upg.why.not_serving': '这个页面当前没有正在运行的 Raven 在托管，这里没有可以升级的对象。',
     'gui.upg.why.unsupervised':
       '这个 Raven 是在终端里手动启动的，升级后没有守护进程能把它重新拉起来。请在那个终端里运行 raven upgrade，然后重新启动 Raven。',
-    'gui.upg.why.editable': '这个 Raven 是源码检出,发布的升级包对它不适用。请用 git 更新代码后重新安装。',
+    'gui.upg.why.editable': '这个 Raven 是源码检出，发布的升级包对它不适用。请用 git 更新代码后重新安装。',
     'gui.upg.working': '正在升级 Raven…',
     'gui.wd.back': '返回',
     'gui.wd.blocked': '这里不能作为工作区：Raven 自己的数据在此处或其下；里面的文件夹可以',

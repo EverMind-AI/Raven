@@ -239,6 +239,12 @@ async def system_version(params: dict, *, send_frame: Any = None) -> dict:
     return result
 
 
+#: The install is mid-replacement (uv swaps the environment before writing the
+#: new one), so a metadata read failing here is an upgrade in flight, not a
+#: broken install -- naming it as one invites a second upgrade into the gap.
+_IN_PROGRESS_DETAIL = "An upgrade is already running; wait for it to finish."
+
+
 async def system_upgrade(params: dict) -> dict:
     """`system.upgrade` — install the latest release and restart what serves the page.
 
@@ -275,7 +281,14 @@ async def system_upgrade(params: dict) -> dict:
     # applies to a checkout whatever supervises the process, and the
     # unsupervised recovery's first command (`raven upgrade`) refuses a
     # checkout, so offering it there hands the reader a step that cannot work.
-    if _is_editable_install():
+    # The probe is a metadata read in the same window the release lookup is
+    # refused from, so it answers in progress rather than escaping as an
+    # internal error whose card falls back to that withheld default.
+    try:
+        editable_install = _is_editable_install()
+    except _md.PackageNotFoundError as exc:
+        raise _refuse("in_progress", _IN_PROGRESS_DETAIL) from exc
+    if editable_install:
         # A checkout tracks upstream `main`, so no release is ever "newer" for
         # it in the sense the button means; and both `raven upgrade` and the
         # page's default fallback refuse it. Name the two steps that do work.
@@ -294,7 +307,9 @@ async def system_upgrade(params: dict) -> dict:
             raise _refuse(
                 "unsupervised",
                 "This Raven was started by hand, so nothing would bring it back after an upgrade. "
-                "Run `raven upgrade` in a terminal, then start Raven again.",
+                "Stop this Raven, run `raven upgrade` in a terminal, then start Raven again: "
+                "the upgrade does not stop it for you, and a new `raven web` would only "
+                "attach to the old one still running.",
                 "raven upgrade\nraven web",
             )
         busy = SERVE.busy()
@@ -317,7 +332,7 @@ async def system_upgrade(params: dict) -> dict:
         # that gap for minutes while it byte-compiles. Reporting the raw lookup
         # failure reads as a broken install and invites a second upgrade into
         # the same gap, so name what is actually happening.
-        raise _refuse("in_progress", "An upgrade is already running; wait for it to finish.") from exc
+        raise _refuse("in_progress", _IN_PROGRESS_DETAIL) from exc
     except Exception as exc:
         raise _refuse("check_failed", f"Could not check for a newer Raven release: {exc}") from exc
 
