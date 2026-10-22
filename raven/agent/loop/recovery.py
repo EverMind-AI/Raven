@@ -127,11 +127,6 @@ def _next_rung(current: str | None) -> str | None:
     return REASONING_EFFORT_LADDER[index + 1]
 
 
-POST_TOOL_NUDGE = (
-    "You executed tool calls but returned an empty response. Use the tool "
-    "results above to continue the task, or give your final answer now."
-)
-
 # A turn that ended empty at the output ceiling: no visible text, no tool call,
 # nothing kept. The effort descent above changes what the next request asks
 # *for*; this is the only thing that tells the model what happened, and the only
@@ -159,7 +154,7 @@ EMPTY_RETRY_BASE_DELAY_S = 5.0
 EMPTY_RETRY_MAX_DELAY_S = 60.0
 
 # Worded after Hermes, without the emoji Hermes puts on its failures.
-HERMES_POST_TOOL_NUDGE = "You just executed tool calls but returned an empty response. Please process the tool results above and continue with the task."
+POST_TOOL_NUDGE = "You just executed tool calls but returned an empty response. Please process the tool results above and continue with the task."
 OUTPUT_LIMIT_CONTINUATION = "[System: Your previous response was truncated by the output length limit. Continue exactly where you left off. Do not restart or repeat prior text. Finish the answer directly.]"
 NETWORK_CUT_CONTINUATION = "[System: The previous response was cut off by a network error mid-stream. Continue exactly where you left off. Do not restart or repeat prior text. Finish the answer directly.]"
 EMPTY_REPLY_FAILURE = "No reply: the model returned empty content after retries and any fallback models. Try `continue`, switch the model, or check the tool output above."

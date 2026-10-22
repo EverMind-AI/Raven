@@ -1,16 +1,22 @@
 """Empty / thinking-only response recovery.
 
 A turn that ends with no visible text is usually a weak-model dud, not a real
-"done". The loop recovers the turn (bounded per turn) before falling back to the
-canned reply, and the synthetic scaffolding never reaches persisted history.
+"done". The loop recovers the turn (bounded per turn) before it fails, and the
+synthetic scaffolding never reaches persisted history.
 
-Decision logic lives in ``raven.agent.loop.recovery`` as a pure function and
-is unit-tested in isolation; the loop tests cover the side effects (re-feeding
-reasoning, injecting nudges, stripping synthetic messages).
+The decision lives in ``raven.agent.loop.recovery`` as pure functions
+(``reply_kind``, ``decide``) and is unit-tested in isolation; the loop tests
+cover the side effects (what each request carries, which model and effort it
+asks for, what a failure says). Most of them run the real ``LiteLLMProvider``
+over a scripted ``acompletion``, so the facts the decision reads -- the finish,
+the usage, the reasoning -- are made by the adapter and not by the test.
 """
 
 from __future__ import annotations
 
+import asyncio
+import copy
+import dataclasses
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,15 +24,13 @@ from unittest.mock import patch
 
 import pytest
 
-from raven.agent.loop import AgentLoop, recovery
+from raven.agent.loop import AgentLoop, recovery, turn_path
 from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.agent.loop.recovery import (
     EMPTY_REPLY_FAILURE,
-    HERMES_POST_TOOL_NUDGE,
     MAX_CONTINUATIONS,
     NETWORK_CUT_CONTINUATION,
     OUTPUT_LIMIT_CONTINUATION,
-    OUTPUT_LIMIT_NUDGE,
     PARTIAL_STREAM_NOTE,
     POST_TOOL_NUDGE,
     REASONING_EXCERPT_MAX,
@@ -55,7 +59,8 @@ from raven.agent.loop.recovery import (
     strip_think_blocks,
 )
 from raven.contracts.llm_provider import REASONING_EFFORT_LADDER
-from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from raven.providers import rates
+from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest, send_max_tokens
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import AnswerlessTurnError, Origin, TurnRequest
@@ -67,9 +72,9 @@ def workspace():
         yield Path(td)
 
 
-def _turn(text: str = "hi") -> TurnRequest:
+def _turn(text: str = "hi", origin: Origin = Origin.USER) -> TurnRequest:
     return TurnRequest(
-        origin=Origin.USER,
+        origin=origin,
         source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
         text=text,
     )
@@ -88,12 +93,14 @@ async def _run_answerless(agent: AgentLoop, text: str = "hi", **kwargs) -> str:
     return str(failed.value)
 
 
-def _make_agent(workspace: Path, provider: LLMProvider, limits: RecoveryLimits | None = None) -> AgentLoop:
+def _make_agent(
+    workspace: Path, provider: LLMProvider, limits: RecoveryLimits | None = None, *, max_iterations: int = 10
+) -> AgentLoop:
     return AgentLoop(
         provider=provider,
         workspace=workspace,
         model="stub",
-        policy=TurnPolicy(max_iterations=10, empty_recovery=limits),
+        policy=TurnPolicy(max_iterations=max_iterations, empty_recovery=limits),
         tools=ToolWiring(restrict_to_workspace=True),
     )
 
@@ -528,7 +535,7 @@ def test_the_wording_is_copied_verbatim():
     assert MAX_CONTINUATIONS == 3
     assert REASONING_EXCERPT_MAX == 500
     assert (
-        HERMES_POST_TOOL_NUDGE
+        POST_TOOL_NUDGE
         == "You just executed tool calls but returned an empty response. Please process the tool results above and continue with the task."
     )
     assert (
@@ -563,6 +570,354 @@ def test_the_wording_is_copied_verbatim():
         PARTIAL_STREAM_NOTE
         == "No reply: streaming stopped early and only a partial response was recovered. Send `continue` to resume."
     )
+
+
+# --------------------------------------------------------------------------- #
+# loop: each reply kind, through the real adapter                              #
+# --------------------------------------------------------------------------- #
+
+_MODEL = "stub"
+
+
+def _reply(
+    content=None,
+    *,
+    finish="stop",
+    reasoning=None,
+    prompt=50_000,
+    completion=1,
+    reasoning_tokens=0,
+    cost=None,
+    tool_calls=None,
+    refusal=None,
+):
+    """A ``ModelResponse`` as the library builds one.
+
+    The prompt is billed at a size the request cannot be mistaken for a failed
+    call by: ``transport_failure`` reads an empty reply whose prompt was billed
+    as a handful of tokens as an upstream failure, and the loop would then never
+    see the reply this module is about.
+    """
+    from litellm.types.utils import Choices, CompletionTokensDetailsWrapper, Message, ModelResponse, Usage
+
+    details = CompletionTokensDetailsWrapper(reasoning_tokens=reasoning_tokens) if reasoning_tokens else None
+    usage = Usage(
+        prompt_tokens=prompt,
+        completion_tokens=completion,
+        total_tokens=prompt + completion,
+        completion_tokens_details=details,
+    )
+    if cost is not None:
+        usage.cost = cost
+    message = Message(content=content, role="assistant", reasoning_content=reasoning, tool_calls=tool_calls)
+    if refusal is not None:
+        message.refusal = refusal
+    return ModelResponse(choices=[Choices(finish_reason=finish, index=0, message=message)], usage=usage)
+
+
+def _tool_reply(name="list_dir", arguments='{"path": "."}'):
+    from litellm.types.utils import ChatCompletionMessageToolCall, Function
+
+    call = ChatCompletionMessageToolCall(id="c1", type="function", function=Function(name=name, arguments=arguments))
+    return _reply(finish="tool_calls", tool_calls=[call])
+
+
+def _served(monkeypatch, replies) -> list[dict]:
+    """Answer the adapter's calls from ``replies`` in order.
+
+    Returns the list that gains each call's keyword arguments as it is made, so
+    a test reads off what every request carried: the model, the effort, the
+    ceiling and the messages. A call past the script fails on the spot.
+    """
+    queue = list(replies)
+    calls: list[dict] = []
+
+    async def acompletion(**kwargs):
+        calls.append(copy.deepcopy(kwargs))
+        assert queue, f"call {len(calls)} had no scripted reply"
+        return queue.pop(0)
+
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", acompletion)
+    return calls
+
+
+def _litellm_agent(
+    workspace: Path, *, limits: RecoveryLimits | None = None, max_tokens: int | None = None, max_iterations: int = 10
+) -> AgentLoop:
+    provider = LiteLLMProvider(api_key=None, default_model=_MODEL)
+    if max_tokens is not None:
+        provider.generation = dataclasses.replace(provider.generation, max_tokens=max_tokens)
+    return _make_agent(workspace, provider, limits, max_iterations=max_iterations)
+
+
+async def _fail(agent: AgentLoop, text: str = "hi", origin: Origin = Origin.USER) -> AnswerlessTurnError:
+    """The failure a turn ends in, for a test that reads more than its text."""
+    with pytest.raises(AnswerlessTurnError) as failed:
+        await agent._process_message(_turn(text, origin), session_key="s1")
+    return failed.value
+
+
+def _efforts(calls: list[dict]) -> list[str | None]:
+    return [call.get("reasoning_effort") for call in calls]
+
+
+_ORIGINS = pytest.mark.parametrize("origin", [Origin.USER, Origin.CRON])
+
+
+@pytest.mark.asyncio
+@_ORIGINS
+async def test_a_plain_empty_reply_is_resent_unchanged_then_answers(workspace, monkeypatch, origin):
+    calls = _served(monkeypatch, [_reply(""), _reply(""), _reply("the answer")])
+    agent = _litellm_agent(workspace)
+
+    out = await agent._process_message(_turn(origin=origin), session_key="s1")
+
+    assert out is not None and out[0] == "the answer"
+    assert len(calls) == 3
+    # The whole request, not the parts a test thought to compare: messages, model, effort, ceiling.
+    assert calls[1] == calls[0] and calls[2] == calls[0]
+
+
+@pytest.mark.asyncio
+@_ORIGINS
+async def test_a_plain_empty_reply_fails_after_three_resends_with_hermes_wording(workspace, monkeypatch, origin):
+    calls = _served(monkeypatch, [_reply("")] * 4)
+    agent = _litellm_agent(workspace)
+
+    failed = await _fail(agent, origin=origin)
+
+    assert len(calls) == 4, "the call and the three resends the budget allows"
+    assert str(failed) == EMPTY_REPLY_FAILURE
+    assert failed.no_output is True
+    assert all(call == calls[0] for call in calls)
+
+
+@pytest.mark.asyncio
+async def test_two_zero_output_empties_stop_the_resends(workspace, monkeypatch):
+    """Hermes's guard: two replies that each prove nothing was generated say a third would be the same."""
+    calls = _served(monkeypatch, [_reply("", completion=0)] * 4)
+
+    failed = await _fail(_litellm_agent(workspace))
+
+    assert len(calls) == 2
+    assert str(failed) == EMPTY_REPLY_FAILURE
+
+
+@pytest.mark.asyncio
+async def test_one_zero_output_empty_does_not_stop_the_resends(workspace, monkeypatch):
+    calls = _served(monkeypatch, [_reply("", completion=0), _reply("", completion=1), _reply("", completion=0)] * 2)
+
+    await _fail(_litellm_agent(workspace))
+
+    assert len(calls) == 4
+
+
+@pytest.mark.asyncio
+async def test_an_expensive_empty_is_resent_once(workspace, monkeypatch):
+    calls = _served(monkeypatch, [_reply("", cost=0.30)] * 4)
+
+    failed = await _fail(_litellm_agent(workspace))
+
+    assert len(calls) == 2
+    assert str(failed) == EMPTY_REPLY_FAILURE
+
+
+@pytest.mark.asyncio
+async def test_resends_back_off_between_attempts(workspace, monkeypatch):
+    calls = _served(monkeypatch, [_reply("")] * 4)
+    monkeypatch.setattr(turn_path, "empty_retry_delay", lambda n, **_: float(n))
+    slept: list[float] = []
+
+    class _Asyncio:
+        """``asyncio`` as the loop module sees it, with only the sleep recorded."""
+
+        def __getattr__(self, name):
+            return getattr(asyncio, name)
+
+        async def sleep(self, delay, *_args, **_kwargs):
+            slept.append(delay)
+
+    monkeypatch.setattr(turn_path, "asyncio", _Asyncio())
+
+    await _fail(_litellm_agent(workspace))
+
+    assert len(calls) == 4
+    assert slept == [1.0, 2.0, 3.0]
+
+
+@pytest.mark.asyncio
+async def test_an_empty_reply_after_tools_is_nudged_once_with_hermes_words(workspace, monkeypatch):
+    calls = _served(monkeypatch, [_tool_reply(), _reply(""), _reply("done")])
+    agent = _litellm_agent(workspace)
+
+    out = await agent._process_message(_turn(), session_key="s1")
+
+    assert out is not None and out[0] == "done"
+    assert len(calls) == 3
+    placeholder, nudge = calls[2]["messages"][-2:]
+    assert (placeholder["role"], placeholder["content"]) == ("assistant", "(empty)")
+    assert (nudge["role"], nudge["content"]) == ("user", POST_TOOL_NUDGE)
+    assert nudge["content"].startswith("You just executed tool calls but returned an empty response.")
+    # Scaffolding: neither of the two reaches the stored session.
+    stored = agent.sessions.get_or_create("s1").messages
+    assert not any(m.get("content") in (POST_TOOL_NUDGE, "(empty)") or m.get("_recovery_synthetic") for m in stored)
+
+
+@pytest.mark.asyncio
+async def test_an_empty_reply_after_the_nudge_takes_the_resend_path(workspace, monkeypatch):
+    calls = _served(monkeypatch, [_tool_reply(), _reply(""), _reply(""), _reply("done")])
+
+    out = await _litellm_agent(workspace)._process_message(_turn(), session_key="s1")
+
+    assert out is not None and out[0] == "done"
+    assert len(calls) == 4
+    assert calls[3] == calls[2], "the nudge is spent: the next empty reply is resent as it stood"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "turn_effort,expected",
+    [
+        (None, [None, None, None, "high", "low"]),
+        ("max", ["max", "max", "max", "high", "low"]),
+        ("medium", ["medium", "medium", "medium", "low"]),
+    ],
+)
+async def test_a_thinking_only_reply_is_prefilled_twice_then_stepped_down(
+    workspace, monkeypatch, turn_effort, expected
+):
+    thought = "let me think about the whole design at length. " * 25
+    calls = _served(monkeypatch, [_reply("", reasoning=thought)] * 5)
+    agent = _litellm_agent(workspace)
+    if turn_effort:
+        agent.set_session_policy("s1", reasoning_effort=turn_effort)
+
+    failed = await _fail(agent)
+
+    assert _efforts(calls) == expected
+    assert len(calls) == len(expected)
+    assert failed.no_output is False
+    assert len(str(failed)) <= 200
+    assert str(failed).startswith(THINKING_ONLY_FAILURE.partition(" Its last")[0])
+    assert failed.full_detail is not None
+    assert failed.full_detail.startswith(THINKING_ONLY_FAILURE)
+    assert failed.full_detail.endswith(thought.strip()[:500] + "...")
+
+
+@pytest.mark.asyncio
+async def test_a_step_down_request_does_not_end_on_the_prefill(workspace, monkeypatch):
+    calls = _served(monkeypatch, [_reply("", reasoning="hmm, let me think")] * 5)
+
+    await _fail(_litellm_agent(workspace))
+
+    tails = [call["messages"][-1]["role"] for call in calls]
+    assert tails == ["user", "assistant", "assistant", "user", "user"]
+    assert calls[3]["messages"] == calls[0]["messages"], "the step-down asks the original question again"
+
+
+@pytest.mark.asyncio
+async def test_a_thinking_only_failure_without_reasoning_text_ends_on_its_first_sentence(workspace, monkeypatch):
+    """Usage that counts reasoning tokens and a reply that carries no text of it: nothing to quote."""
+    _served(monkeypatch, [_reply("", reasoning_tokens=800)] * 5)
+
+    failed = await _fail(_litellm_agent(workspace))
+
+    assert str(failed) == "The model produced only internal reasoning and no final answer, despite retries."
+    assert failed.full_detail is None
+
+
+@pytest.mark.asyncio
+async def test_a_step_down_that_comes_back_plain_empty_is_resent_at_that_effort(workspace, monkeypatch):
+    """An unchanged resend repeats the request the empty call carried, effort included."""
+    thinking = _reply("", reasoning="hmm, let me think")
+    calls = _served(monkeypatch, [thinking, thinking, thinking, _reply(""), _reply("the answer")])
+
+    out = await _litellm_agent(workspace)._process_message(_turn(), session_key="s1")
+
+    assert out is not None and out[0] == "the answer"
+    assert _efforts(calls) == [None, None, None, "high", "high"]
+
+
+@pytest.mark.asyncio
+async def test_a_cut_reply_with_nothing_in_it_is_continued_with_more_room(workspace, monkeypatch):
+    monkeypatch.setattr(rates, "resolve_max_output_tokens", lambda *_a, **_k: 32_768)
+    calls = _served(monkeypatch, [_reply("", finish="length")] * 4)
+    agent = _litellm_agent(workspace, max_tokens=4096)
+    agent.set_session_policy("s1", reasoning_effort="medium")
+
+    failed = await _fail(agent)
+
+    gen, wire = agent.provider.generation, agent.provider.wire_model_id(_MODEL)
+    assert [call["max_tokens"] for call in calls] == [4096] + [
+        send_max_tokens(gen, wire, pinned=4096 * 2**k) for k in (1, 2, 3)
+    ]
+    assert [call["max_tokens"] for call in calls] == [4096, 8192, 16384, 32768]
+    assert [call["messages"][-1]["content"] for call in calls[1:]] == [OUTPUT_LIMIT_CONTINUATION] * 3
+    assert _efforts(calls) == ["medium"] * 4, "there was no reasoning to blame, so the effort is left alone"
+    assert str(failed) == TRUNCATED_FAILURE.format(n=3)
+    assert failed.no_output is False
+
+
+@pytest.mark.asyncio
+async def test_a_cut_reply_that_thought_is_stepped_down_not_continued(workspace, monkeypatch):
+    """Reasoning behind a cut is the reason for it, so the thinking is what shrinks."""
+    calls = _served(monkeypatch, [_reply("", reasoning="thinking, thinking", finish="length")] * 5)
+
+    failed = await _fail(_litellm_agent(workspace))
+
+    assert not any(OUTPUT_LIMIT_CONTINUATION in str(call["messages"]) for call in calls)
+    assert _efforts(calls) == [None, None, None, "high", "low"]
+    assert str(failed).startswith("The model produced only internal reasoning")
+
+
+@pytest.mark.asyncio
+async def test_a_continuation_never_follows_a_tool_message(workspace, monkeypatch):
+    """A bare tool->user pair is a 400 on most APIs, which is why a synthetic assistant sits between them.
+
+    Reached after a tool call with the nudge switched off, so the cut reply is the first thing
+    after the tool result and nothing has been appended since.
+    """
+    calls = _served(monkeypatch, [_tool_reply()] + [_reply("", finish="length")] * 4)
+    agent = _litellm_agent(workspace, limits=RecoveryLimits(post_tool_empty_max_nudges=0))
+
+    await _fail(agent, "use the tool")
+
+    checked = 0
+    for call in calls:
+        roles = [m["role"] for m in call["messages"]]
+        for i, message in enumerate(call["messages"]):
+            if message.get("content") == OUTPUT_LIMIT_CONTINUATION:
+                assert roles[i - 1] == "assistant", roles[max(0, i - 3) : i + 1]
+                checked += 1
+    assert checked
+
+
+@pytest.mark.asyncio
+async def test_with_recovery_off_an_empty_reply_fails_at_once(workspace, monkeypatch):
+    calls = _served(monkeypatch, [_reply(""), _reply("never asked")])
+
+    failed = await _fail(_litellm_agent(workspace, limits=RecoveryLimits(enabled=False)))
+
+    assert len(calls) == 1
+    assert str(failed) == turn_path._NO_CONTENT_UNRECOVERED
+    assert failed.no_output is True
+
+
+@pytest.mark.asyncio
+async def test_a_resend_on_the_last_iteration_is_not_wrapped_up(workspace, monkeypatch):
+    """A resend is the same step asked again: it must not use up the iteration that would deliver its answer.
+
+    The wrap-up is told apart by what it is not: a turn that ends ``interrupted``, asking
+    with the tools withheld and one more instruction than the call it follows.
+    """
+    calls = _served(monkeypatch, [_reply(""), _reply("ok")])
+    agent = _litellm_agent(workspace, max_iterations=1)
+
+    final, _used, _messages, outcome = await agent._run_agent_loop([{"role": "user", "content": "hi"}])
+
+    assert final == "ok"
+    assert outcome.status == "completed"
+    assert len(calls) == 2 and calls[1] == calls[0]
 
 
 # --------------------------------------------------------------------------- #
@@ -822,213 +1177,6 @@ async def test_a_continuation_after_complete_reasoning_is_left_whole(workspace):
     assert out is not None and out[0] == "lowercase start. Then the rest."
 
 
-class _AlwaysCutThinkingProvider(LLMProvider):
-    """Every call spends the whole output budget inside the reasoning block.
-
-    The shape a reasoning model takes at its own ceiling: no visible text, no
-    tool call, ``finish_reason="length"``.
-    """
-
-    def __init__(self):
-        super().__init__(api_key="test")
-        self.calls = 0
-        self.seen: list[list[dict]] = []
-
-    async def chat(
-        self,
-        messages,
-        tools=None,
-        model=None,
-        max_tokens=4096,
-        temperature=0.7,
-        reasoning_effort=None,
-        tool_choice=None,
-    ):
-        self.calls += 1
-        self.seen.append([dict(m) for m in messages])
-        return LLMResponse(
-            content="",
-            reasoning_content="deciding how to lay out the file",
-            finish_reason="length",
-        )
-
-    def get_default_model(self) -> str:
-        return "stub"
-
-
-@pytest.mark.asyncio
-async def test_an_empty_turn_cut_at_the_output_limit_is_told_so(workspace):
-    """The ladder's retries carried no reason, so a model that had spent its
-    whole budget thinking was asked again under the conditions that had just
-    failed -- measured on one run as six generations and no tool call.
-
-    ``write_file``'s ``truncation_hint`` covers the other shape, a call present
-    and cut mid-arguments. A turn cut before any call has no tool result to
-    carry advice on, so the ladder has to say it itself.
-    """
-    provider = _AlwaysCutThinkingProvider()
-    agent = _make_agent(workspace, provider)
-
-    await _run_answerless(agent, "write eight files")
-
-    assert provider.calls > 1, "the ladder did not ask again at all"
-    assert any(any(m.get("content") == OUTPUT_LIMIT_NUDGE for m in seen) for seen in provider.seen), (
-        "no request in the ladder told the model it had been cut at the output limit"
-    )
-    # scaffolding, so it must not reach persisted history either
-    session = agent.sessions.get_or_create("s1")
-    for m in session.messages:
-        assert not m.get("_recovery_synthetic")
-        assert m.get("content") != OUTPUT_LIMIT_NUDGE
-
-
-@pytest.mark.asyncio
-async def test_the_output_limit_nudge_does_not_presume_a_tool_call_was_owed(workspace):
-    """The nudge fires on ``finish_reason`` "length" alone, and that carries no
-    evidence about what the cut turn owed -- a plain question whose reasoning ate
-    the budget reaches it too. Wording that tells such a turn to emit a call
-    points it at a tool the task never needed, which is a worse outcome than the
-    silence it replaces.
-    """
-    provider = _AlwaysCutThinkingProvider()
-    agent = _make_agent(workspace, provider)
-
-    await _run_answerless(agent, "which year did the timezone database begin")
-
-    delivered = [m for seen in provider.seen for m in seen if m.get("content") == OUTPUT_LIMIT_NUDGE]
-    assert delivered, "an answer-only turn never reached the nudge"
-    text = str(delivered[0]["content"])
-    assert "answer" in text, "the nudge offers the answer-only turn no valid recovery"
-    assert "tool call" in text, "the nudge no longer names the call recovery"
-
-
-@pytest.mark.asyncio
-async def test_an_empty_turn_that_was_not_cut_gets_no_output_limit_nudge(workspace):
-    """The trigger is the ceiling, not emptiness. An empty turn that stopped
-    honestly was not cut, so every sentence the nudge opens with would be false
-    about it -- and a message that says the wrong thing is worse than the silence
-    it replaces. The fix's other tests all enter through a cut turn, so without
-    this one the condition itself is unheld.
-    """
-
-    class _Recording(_AlwaysEmptyProvider):
-        def __init__(self):
-            super().__init__()
-            self.seen: list[list[dict]] = []
-
-        async def chat(
-            self,
-            messages,
-            tools=None,
-            model=None,
-            max_tokens=4096,
-            temperature=0.7,
-            reasoning_effort=None,
-            tool_choice=None,
-        ):
-            self.seen.append([dict(m) for m in messages])
-            return await super().chat(
-                messages,
-                tools=tools,
-                model=model,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                reasoning_effort=reasoning_effort,
-                tool_choice=tool_choice,
-            )
-
-    provider = _Recording()
-    agent = _make_agent(workspace, provider)
-
-    await _run_answerless(agent)
-
-    assert provider.calls > 1, "the ladder never asked again, so this guard proves nothing"
-    assert not any(m.get("content") == OUTPUT_LIMIT_NUDGE for seen in provider.seen for m in seen), (
-        "an empty turn that was never cut was told it had hit the output limit"
-    )
-
-
-class _ToolThenAlwaysCutProvider(LLMProvider):
-    """One tool call, then every later call ends empty on the ceiling.
-
-    Built so the retry is reached with a ``tool`` message last: the post-tool
-    nudge is switched off in the test's limits, so a post-tool empty turn falls
-    straight to RETRY and nothing has been appended after the tool result.
-    """
-
-    def __init__(self):
-        super().__init__(api_key="test")
-        self.calls = 0
-        self.seen: list[list[dict]] = []
-
-    async def chat(
-        self,
-        messages,
-        tools=None,
-        model=None,
-        max_tokens=4096,
-        temperature=0.7,
-        reasoning_effort=None,
-        tool_choice=None,
-    ):
-        self.calls += 1
-        self.seen.append([dict(m) for m in messages])
-        if self.calls == 1:
-            return LLMResponse(
-                content="",
-                tool_calls=[ToolCallRequest(id="c1", name="no_such_tool", arguments={})],
-                finish_reason="tool_calls",
-            )
-        return LLMResponse(content="", finish_reason="length")
-
-    def get_default_model(self) -> str:
-        return "stub"
-
-
-@pytest.mark.asyncio
-async def test_the_output_limit_nudge_never_follows_a_tool_message(workspace):
-    """A bare tool->user pair is a 400 on most APIs, which is why a synthetic
-    assistant sits between them. That failure is at the provider boundary, so
-    what a unit test can hold is the shape rather than the API.
-
-    The scenario is the point: reached through a turn with no tool call, the
-    message before the nudge is never a tool result, so the assertion passes
-    whether or not the placeholder is written. Driven this way -- tool result
-    last, post-tool nudge switched off so RETRY is reached directly -- removing
-    the placeholder puts a `tool` immediately before the nudge and this fails.
-    """
-    provider = _ToolThenAlwaysCutProvider()
-    agent = _make_agent(workspace, provider, limits=RecoveryLimits(post_tool_empty_max_nudges=0))
-
-    await _run_answerless(agent, "use the tool")
-
-    checked = 0
-    for seen in provider.seen:
-        for i, m in enumerate(seen):
-            if m.get("content") == OUTPUT_LIMIT_NUDGE:
-                assert i > 0, "the nudge opened the request with no turn before it"
-                assert seen[i - 1].get("role") != "tool", (
-                    f"a bare tool->user pair reached the provider: {[x.get('role') for x in seen[max(0, i - 3) : i + 1]]}"
-                )
-                checked += 1
-    assert checked, "the nudge was never delivered, so the shape was never checked"
-
-
-@pytest.mark.asyncio
-async def test_the_output_limit_nudge_is_said_once_not_once_per_retry(workspace):
-    """Three retries share one explanation. Appending it again per retry fills
-    the window the advice is asking the model to spend less of, and the
-    escalation for advice that did not land is ``loop_break_nudge``.
-    """
-    provider = _AlwaysCutThinkingProvider()
-    agent = _make_agent(workspace, provider)
-
-    await _run_answerless(agent, "write eight files")
-
-    per_request = [sum(1 for m in seen if m.get("content") == OUTPUT_LIMIT_NUDGE) for seen in provider.seen]
-    assert max(per_request) == 1, f"nudge accumulated across retries: {per_request}"
-
-
 # --------------------------------------------------------------------------- #
 # loop: persistently empty is bounded then falls back                          #
 # --------------------------------------------------------------------------- #
@@ -1059,28 +1207,6 @@ class _AlwaysEmptyProvider(LLMProvider):
 
 
 @pytest.mark.asyncio
-async def test_persistently_empty_is_bounded_then_reports_a_failed_turn(workspace):
-    limits = RecoveryLimits()
-    provider = _AlwaysEmptyProvider()
-    agent = _make_agent(workspace, provider, limits=limits)
-
-    failure = await _run_answerless(agent)
-
-    # plain-empty budget -> 1 initial call + a retry per rung the effort descent
-    # still has, then give up. From an unstated effort that is low and minimal,
-    # so the budget's third retry is never sent: it could only repeat the second.
-    assert provider.calls <= 1 + limits.empty_content_max_retries
-    assert provider.calls == 3
-    # Not the canned "no response to give" filler, which reads as an answer and
-    # let a measured DAG node file a dead turn as a finished one. The turn fails,
-    # and its failure says how many attempts went into it -- three, the calls
-    # actually sent, not the budget's full allowance.
-    assert "returned no content" in failure
-    assert f"{provider.calls} attempt" in failure
-    assert "plain retry 2" in failure, "the failure accounts for each budget by name"
-
-
-@pytest.mark.asyncio
 async def test_an_exhausted_recovery_ends_the_turn_with_error_status(workspace):
     """The status the caller reads, which used to say ``completed``.
 
@@ -1093,11 +1219,12 @@ async def test_an_exhausted_recovery_ends_the_turn_with_error_status(workspace):
 
     _final, _used, messages, outcome = await agent._run_agent_loop([{"role": "user", "content": "hi"}])
 
+    assert provider.calls == 4, "one call and the three resends the budget allows"
     assert outcome.status == "error"
     # And the words the caller fails the turn on, beside the status: without them
     # the caller reads an errored turn as one that simply had nothing to say.
-    assert outcome.error is not None
-    assert "returned no content on 3 attempt(s)" in outcome.error
+    assert outcome.error == EMPTY_REPLY_FAILURE
+    assert outcome.no_output is True
     # Like the provider-error exit beside it, the failure text is not persisted
     # into history: an error reply in the transcript poisons the next request.
     assert not any(m.get("role") == "assistant" for m in messages)
@@ -1175,31 +1302,20 @@ def test_a_provider_that_cannot_answer_leaves_the_descent_on_the_labels():
 
 
 @pytest.mark.asyncio
-async def test_the_plain_empty_retry_asks_for_less_reasoning_than_the_call_that_failed(workspace):
-    """A retry that resends the same bytes is not a retry.
+async def test_the_plain_empty_retry_leaves_the_effort_alone(workspace):
+    """A retry that changes the effort is a guess, and the guesses were the harm.
 
-    Measured: three ``plain empty retry`` steps, each behind a call truncated at
-    exactly the output ceiling, each re-sent unchanged -- so three identical
-    failures were guaranteed before the first one was sent. An empty body with
-    reasoning behind it is a call whose thinking spent the ceiling before the
-    answer began, so the request that has to change is the one saying how much
-    of the ceiling thinking may take.
-
-    The descent is sticky across the turn's retries: read afresh each time it
-    would hand back the value that just came up empty.
+    The ladder this replaced lowered the effort on every plain empty reply, one
+    rung per retry down to ``minimal``, which Codex refuses with an HTTP 400. A
+    plain empty reply carries no reasoning to blame, so nothing in it says the
+    effort is at fault: the request goes back as it was.
     """
-    limits = RecoveryLimits()
     provider = _AlwaysEmptyProvider()
-    agent = _make_agent(workspace, provider, limits=limits)
+    agent = _make_agent(workspace, provider, limits=RecoveryLimits())
 
     await _run_answerless(agent)
 
-    assert provider.efforts == [None, "low", "minimal"]
-    assert provider.calls == 3, "the fourth call had no rung left to change, so it was not paid for"
-    retried = provider.efforts[1:]
-    assert all(effort != provider.efforts[index] for index, effort in enumerate(retried)), (
-        "every retry differs from the call it is retrying"
-    )
+    assert provider.efforts == [None, None, None, None]
 
 
 @pytest.mark.asyncio

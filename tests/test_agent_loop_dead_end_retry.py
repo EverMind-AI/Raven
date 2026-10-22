@@ -29,6 +29,7 @@ from raven.agent.loop import (
     turn_path,
 )
 from raven.agent.loop.bundles import EngineWiring, HostWiring, ToolWiring, TurnPolicy
+from raven.agent.loop.recovery import EMPTY_REPLY_FAILURE
 from raven.config.raven import CheckpointConfig, RuntimeConfig
 from raven.contracts.loop_hooks import AgentHook, HookDecision
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
@@ -115,9 +116,10 @@ class _Scripted(LLMProvider):
 
 
 #: How many empty replies the loop's own empty-response recovery spends before it
-#: gives up. A turn that spends them ends with ``status="error"`` and no answer,
-#: which is the shape every dead-end test below needs.
-_RECOVERY_BUDGET = 3
+#: gives up: the call and the three resends it allows. A turn that spends them
+#: ends with ``status="error"`` and no answer, which is the shape every dead-end
+#: test below needs.
+_RECOVERY_BUDGET = 4
 
 
 def _dead() -> list[LLMResponse]:
@@ -130,7 +132,7 @@ def _thinks_and_says_nothing() -> list[LLMResponse]:
 
     A reply that is all reasoning and no body sends recovery down its prefill branch,
     which feeds the model back its own thinking as an assistant message of the loop's
-    own making. Six is more than the two prefills and three retries recovery will
+    own making. Six is more than the two prefills and two step-downs recovery will
     spend, so the attempt ends the way ``_dead`` does -- with one of those synthetic
     messages sitting at the end of the list.
     """
@@ -236,7 +238,7 @@ async def test_an_agent_that_asks_for_nothing_is_never_re_run(tmp_path):
     failure = await _run_answerless(agent)
 
     assert provider.attempts_used == 1
-    assert "returned no content" in failure, "the dead turn was reported as it was"
+    assert failure == EMPTY_REPLY_FAILURE, "the dead turn was reported as it was"
 
 
 @pytest.mark.asyncio
@@ -258,7 +260,7 @@ async def test_the_budget_is_a_ceiling_not_a_loop(tmp_path):
     failure = await _run_answerless(agent)
 
     assert provider.attempts_used == 2
-    assert "returned no content" in failure, "still dead after the one retry it was allowed"
+    assert failure == EMPTY_REPLY_FAILURE, "still dead after the one retry it was allowed"
 
 
 @pytest.mark.asyncio
@@ -339,8 +341,8 @@ async def test_the_rerun_continues_the_turn_s_episode_numbering(tmp_path):
 
 @pytest.mark.asyncio
 async def test_the_rerun_spends_the_turn_s_clock_not_a_fresh_copy(tmp_path, monkeypatch):
-    """Three-second model calls, a ten-second budget, and two dead attempts. Given a
-    clock per attempt the turn runs to eighteen seconds -- nearly two budgets -- because
+    """Three-second model calls, a thirteen-second budget, and two dead attempts. Given a
+    clock per attempt the turn runs to twenty-four seconds -- nearly two budgets -- because
     the first attempt stopped just under the limit and the rerun started a new one. The
     documented overrun is one budget plus at most one iteration, and it is the turn that
     is bounded, not the attempt.
@@ -350,17 +352,17 @@ async def test_the_rerun_spends_the_turn_s_clock_not_a_fresh_copy(tmp_path, monk
     """
     provider = _Scripted(_dead(), _dead())
     monkeypatch.setattr(turn_path, "monotonic", lambda: 3.0 * provider.calls)
-    agent = _loop(tmp_path, provider, [_Budgeted(dead_end_retries=1, wall_clock_seconds=10.0)])
+    agent = _loop(tmp_path, provider, [_Budgeted(dead_end_retries=1, wall_clock_seconds=13.0)])
 
     await agent._process_message(_req(), session_key="s1")
 
     assert provider.attempts_used == 2, "the rerun did start, so the clock was under test"
-    # Five calls: the first attempt's three, which reach nine seconds and die there; the
-    # one iteration the rerun was still entitled to begin at nine, which is the overrun
+    # Six calls: the first attempt's four, which reach twelve seconds and die there; the
+    # one iteration the rerun was still entitled to begin at twelve, which is the overrun
     # the budget documents; and the wrap-up that overrun produces. Given a clock per
-    # attempt the rerun instead receives ten fresh seconds, spends its own three calls,
-    # and the turn returns at eighteen.
-    assert provider.calls == 5, f"the rerun was handed a fresh budget: the turn ran to {3.0 * provider.calls}s"
+    # attempt the rerun instead receives thirteen fresh seconds, spends its own four
+    # calls, and the turn returns at twenty-four.
+    assert provider.calls == 6, f"the rerun was handed a fresh budget: the turn ran to {3.0 * provider.calls}s"
 
 
 @pytest.mark.asyncio
@@ -417,8 +419,11 @@ async def test_a_turn_with_no_budget_records_no_stop(tmp_path):
 async def test_the_iteration_cap_names_itself(tmp_path):
     """``stopped_by`` exists because ``status`` cannot answer this: the cap and a
     spent clock both land on ``interrupted`` and both produce a wrap-up that reads
-    like an ordinary answer."""
-    provider = _Scripted([LLMResponse(content="", finish_reason="stop")])
+    like an ordinary answer.
+
+    The turn thinks and never answers: each prefill is a step of its own, where a
+    resend of an empty reply is the same step asked again and never reaches the cap."""
+    provider = _Scripted([LLMResponse(content="", reasoning_content="thinking it over", finish_reason="stop")])
     agent = _loop(tmp_path, provider, [_Present()], max_iterations=2)
     meta: dict = {}
 
@@ -447,7 +452,7 @@ async def test_the_turn_end_record_says_which_attempt_it_counted(tmp_path, monke
 
     assert hook.turn_end["attempt"] == 2, "the record is the rerun's"
     assert hook.turn_end["iterations"] == 1, "which ran one iteration of its own"
-    assert hook.turn_end["turn_elapsed_s"] == 12, "after twelve seconds of turn, dead attempt included"
+    assert hook.turn_end["turn_elapsed_s"] == 3 * (_RECOVERY_BUDGET + 1), "the dead attempt's calls count"
 
 
 @pytest.mark.asyncio
@@ -652,13 +657,13 @@ async def test_the_last_attempt_keeps_the_salvage_the_clock_denies_it_a_rerun_fo
     be a yes to the seam: skipping both is the one outcome that leaves a dead turn
     with nothing at all.
 
-    Ten seconds a call against a twenty-five second turn, and the third call -- the
+    Ten seconds a call against a thirty-five second turn, and the fourth call -- the
     last one empty-response recovery has -- both ends the attempt with no answer and
     carries the clock past the budget, which is the only way the two conditions meet.
     """
     clock = {"now": 0.0}
     monkeypatch.setattr(turn_path, "monotonic", lambda: clock["now"])
-    hook = _Salvages(dead_end_retries=1, wall_clock_seconds=25.0)
+    hook = _Salvages(dead_end_retries=1, wall_clock_seconds=35.0)
     provider = _Timed(clock, 10.0, _dead(), _answers("Alice Smith won it."))
     agent = _loop(tmp_path, provider, [hook])
 

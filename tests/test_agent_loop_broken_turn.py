@@ -21,7 +21,7 @@ import pytest
 from raven.agent.hook import AgentHook, HookDecision
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import HostWiring, ToolWiring, TurnPolicy
-from raven.agent.loop.recovery import RecoveryLimits
+from raven.agent.loop.recovery import EMPTY_REPLY_FAILURE, RecoveryLimits
 from raven.contracts.llm_provider import CallRecord
 from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, ToolCallRequest
 from raven.spine.message import ChatType, Source
@@ -289,7 +289,7 @@ async def test_an_exhausted_empty_response_recovery_leaves_the_same_marker(works
         await agent._process_message(_make_msg("hello"))
 
     reason = str(failed.value)
-    assert reason == "The model returned no content on 3 attempt(s) (prefill 0, post-tool nudge 0, plain retry 2)."
+    assert reason == EMPTY_REPLY_FAILURE
     msgs = _persisted(workspace)
     assert [m["role"] for m in msgs] == ["user", "assistant"]
     assert msgs[-1]["turn_ended"] == {"status": "failed", "reason": reason}
