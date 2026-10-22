@@ -2413,6 +2413,33 @@ describe('the machines module', () => {
     expect(controlOf('Lab box')).toBe('')
   })
 
+  it('keeps polling an install the list says still runs past fifteen minutes, and shows how it ended', async () => {
+    /* Measured 2026-10-22: a fifteen-minute deadline of the store's own gave up two seconds before the gateway
+       recorded that a step had run out of its fifteen minutes, and the card spun from then on. */
+    const stored = mrow()
+    let listed: MachineRow = stored
+    install([row()], { machines: [stored], machinesOver: { list: async () => [{ ...listed }] } })
+    machines._resetForTests(0)
+    await mount()
+    await openMachines()
+    listed = { ...stored, install: { running: true, ok: null, detail: 'Install the Raven node' } }
+    await click(buttonOf('Lab box'))
+    await settle()
+    const later = Date.now() + 16 * 60 * 1000
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(later)
+    try {
+      await settle()
+      expect(controlOf('Lab box')).toBe(' gui.machine.installing')
+      const said = "installing the Raven node on machine 'Lab box' (box) failed at the packages step: it did not finish within 15 minutes"
+      listed = { ...stored, install: { running: false, ok: false, detail: said } }
+      await settle()
+      expect(footOf('Lab box')!.k).toBe(`gui.machine.install_bad_said ${JSON.stringify({ said })}`)
+      expect(buttonOf('Lab box')!.textContent).toBe('gui.machine.install')
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
   it('keeps a refused install on the card without polling', async () => {
     install([row()], { machines: [mrow()], machinesOver: { installNode: async () => ({ started: false, detail: 'an install is already running' }) } })
     await mount()
