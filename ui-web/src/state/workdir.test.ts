@@ -516,6 +516,136 @@ describe('the workspace a draft picks', () => {
     expect(pop().dataset.open).toBe('false')
   })
 
+  it('holds the first Use while its typed read is in flight, so a double press cannot name the folder it left', async () => {
+    /* The read sets loading and bumps asked, so the path bar comes back holding
+       the folder the browser stands in while the typed path is on its way. A
+       second press in that gap must not name that older folder and stage it. */
+    const asked: Array<string | undefined> = []
+    let release: (listing: DirListing) => void = () => {}
+    workspace(async (p) => {
+      asked.push(p)
+      if (p === '/srv/typed') return new Promise<DirListing>((resolve) => { release = resolve })
+      return { path: p ?? '/srv', parent: '/', home: '/home/me', ok: true, entries: [] }
+    })
+    openFolders()
+    act(() => byName('gui.wd.open_remote').click())
+    await settle()
+
+    const use = (): HTMLButtonElement => pop().querySelector<HTMLButtonElement>('.chrome-wd-use')!
+    act(() => {
+      const field = pop().querySelector<HTMLInputElement>('.chrome-wd-typed')!
+      field.value = '/srv/typed'
+      field.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    act(() => use().click())
+    expect(use().disabled).toBe(true)
+    expect(pop().querySelector<HTMLInputElement>('.chrome-wd-typed')!.value).toBe('/srv')
+    act(() => use().click())
+    /* The disabled press raises nothing; the guard covers a press that still
+       arrives before the remount paints. */
+    await act(async () => { await wd.useHere('/srv') })
+    expect(wd.staged()).toBeNull()
+
+    await act(async () => {
+      release({ path: '/srv/typed', parent: '/srv', home: '/home/me', ok: true, entries: [] })
+      await Promise.resolve()
+    })
+    await settle()
+
+    expect(asked).toEqual([undefined, '/srv/typed'])
+    expect(wd.staged()).toBe('/srv/typed')
+    expect(pop().dataset.open).toBe('false')
+  })
+
+  it('keeps a press guarded after an earlier press that lost the browser answers late', async () => {
+    /* A press whose read is still out when the reader goes back and walks in
+       again has lost the browser: its answer is dropped. It must not release
+       the guard the press now holding the browser owns. */
+    const pending: Array<(listing: DirListing) => void> = []
+    workspace((p) => {
+      if (p === '/srv/first' || p === '/srv/second') {
+        return new Promise<DirListing>((resolve) => { pending.push(resolve) })
+      }
+      return Promise.resolve({ path: p ?? '/srv', parent: '/', home: '/home/me', ok: true, entries: [] })
+    })
+    openFolders()
+    act(() => byName('gui.wd.open_remote').click())
+    await settle()
+
+    const use = (): HTMLButtonElement => pop().querySelector<HTMLButtonElement>('.chrome-wd-use')!
+    const type = (value: string): void => {
+      const field = pop().querySelector<HTMLInputElement>('.chrome-wd-typed')!
+      field.value = value
+      field.dispatchEvent(new Event('input', { bubbles: true }))
+    }
+    act(() => type('/srv/first'))
+    act(() => use().click())
+    expect(use().disabled).toBe(true)
+
+    act(() => wd.close())
+    openFolders()
+    act(() => byName('gui.wd.open_remote').click())
+    await settle()
+    act(() => type('/srv/second'))
+    act(() => use().click())
+    expect(use().disabled).toBe(true)
+
+    await act(async () => {
+      pending[0]!({ path: '/srv/first', parent: '/srv', home: '/home/me', ok: true, entries: [] })
+      await Promise.resolve()
+    })
+    await settle()
+    expect(wd.staged()).toBeNull()
+
+    /* The press still standing: a third press while its read is out is held.
+       Named through the store because the button is disabled while loading. */
+    await act(async () => { await wd.useHere('/srv') })
+    expect(wd.staged()).toBeNull()
+
+    await act(async () => {
+      pending[1]!({ path: '/srv/second', parent: '/srv', home: '/home/me', ok: true, entries: [] })
+      await Promise.resolve()
+    })
+    await settle()
+    expect(wd.staged()).toBe('/srv/second')
+  })
+
+  it('takes a real double click as one press of Use', async () => {
+    /* The browser delivers two clicks for a double click; the second lands while
+       the first read is out. A conversation cannot change its folder later, so
+       the folder staged has to be the typed one. */
+    const asked: Array<string | undefined> = []
+    let release: (listing: DirListing) => void = () => {}
+    workspace(async (p) => {
+      asked.push(p)
+      if (p === '/srv/typed') return new Promise<DirListing>((resolve) => { release = resolve })
+      return { path: p ?? '/srv', parent: '/', home: '/home/me', ok: true, entries: [] }
+    })
+    openFolders()
+    act(() => byName('gui.wd.open_remote').click())
+    await settle()
+
+    const field = pop().querySelector<HTMLInputElement>('.chrome-wd-typed')!
+    act(() => {
+      field.value = '/srv/typed'
+      field.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const use = (): HTMLButtonElement => pop().querySelector<HTMLButtonElement>('.chrome-wd-use')!
+    act(() => use().click())
+    /* The second click of a double click lands on the button the remount put
+       back, whose handler reads the folder now in the bar. */
+    act(() => use().click())
+    expect(wd.staged()).toBeNull()
+
+    await act(async () => {
+      release({ path: '/srv/typed', parent: '/srv', home: '/home/me', ok: true, entries: [] })
+      await Promise.resolve()
+    })
+    await settle()
+    expect(asked).toEqual([undefined, '/srv/typed'])
+    expect(wd.staged()).toBe('/srv/typed')
+  })
+
   it('withholds the pick when the typed path is a folder the engine would refuse', async () => {
     /* Standing in a folder the engine takes, a drive root it would refuse is
        named in the bar and Use is pressed: the drive is walked into and the

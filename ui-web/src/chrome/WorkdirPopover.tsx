@@ -167,7 +167,7 @@ function Browser({ at, loading, err, asked }: { at: DirListing; loading: boolean
         <button className="chrome-wd-btn" onClick={() => wd.back()}>{t('gui.wd.back')}</button>
         <button
           className="chrome-wd-btn chrome-wd-use"
-          disabled={!at.ok}
+          disabled={!at.ok || loading}
           title={at.ok ? at.path : t('gui.wd.blocked')}
           onClick={() => void wd.useHere(field.current?.value)}
         >

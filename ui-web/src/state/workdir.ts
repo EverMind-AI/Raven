@@ -220,10 +220,12 @@ const menuRows = (): readonly WdRow[] => {
    the draft. */
 export function open(): void {
   if (get().paint?.locked) return
+  using = null
   set({ ...get(), open: true, view: 'menu', listed: menuRows(), err: null, opened: get().opened + 1 })
 }
 
 export function close(): void {
+  using = null
   set({ ...get(), open: false })
 }
 
@@ -259,6 +261,14 @@ const detailOf = (e: unknown): string => {
 /* One ticket for the dialog and the walk alike: an answer from either that
    lands after a later ask, a close or a switch is dropped. */
 let asking = 0
+
+/* One press of Use at a time: the read remounts the path bar with the folder
+   the browser is leaving, so the second click of a double press would name
+   that stale folder and stage it before the typed read lands. The ticket says
+   whose press holds it, so a press that lost the browser cannot release the
+   one that owns it. */
+let using: number | null = null
+let presses = 0
 
 /* Whether the menu's last row opens the host's own folder dialog (Finder, or
    zenity/kdialog on a Linux desktop) rather than the in-page walk below: the
@@ -371,6 +381,7 @@ export function browse(path?: string): Promise<void> {
 /** Back from the browser to the menu, rebuilt: a pick may have been made. */
 export function back(): void {
   asking += 1
+  using = null
   set({ ...get(), view: 'menu', listed: menuRows(), loading: false, err: null })
 }
 
@@ -400,25 +411,33 @@ export function go(path: string): Promise<void> {
 export async function useHere(path?: string): Promise<void> {
   const here = get().listing
   if (!here || !here.ok) return
+  if (using !== null) return
   const at = path?.trim() ?? ''
   if (!at || at === here.path) {
     pick(here.path)
     return
   }
-  if (!(await read(at))) return
-  /* A typed path is judged as a row is: walking into a folder the engine would
-     refuse stays allowed, the pick alone is withheld. */
-  const landed = get().listing
-  if (!landed || !landed.ok) {
-    set({ ...get(), err: t('gui.wd.blocked') })
-    return
+  const press = ++presses
+  using = press
+  try {
+    if (!(await read(at))) return
+    /* A typed path is judged as a row is: walking into a folder the engine would
+       refuse stays allowed, the pick alone is withheld. */
+    const landed = get().listing
+    if (!landed || !landed.ok) {
+      set({ ...get(), err: t('gui.wd.blocked') })
+      return
+    }
+    pick(landed.path)
+  } finally {
+    if (using === press) using = null
   }
-  pick(landed.path)
 }
 
 /* Test seam only: the pick, the ticket and the popover are the module's. */
 export function _resetForTests(): void {
   picked = null
+  using = null
   asking = 0
   set(shut)
 }
