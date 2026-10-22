@@ -61,7 +61,7 @@ export function dismiss(id: number): void {
   if (card && card.id === id) set(null)
 }
 
-export function copyCommand(command?: string): void {
+export function copyCommand(command?: string | null): void {
   if (navigator.clipboard) navigator.clipboard.writeText(command ?? COMMAND)
 }
 

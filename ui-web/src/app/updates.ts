@@ -215,7 +215,8 @@ export async function runUpgrade(): Promise<void> {
       return
     }
     upMarkClear()
-    const command = err.data && NO_COMMAND.has(err.data.reason) ? null : err.data && err.data.command
+    const reason = err.data?.reason
+    const command = reason !== undefined && NO_COMMAND.has(reason) ? null : err.data?.command
     shade.fail(t('gui.upg.failed'), refusalText(err), command)
     return
   }

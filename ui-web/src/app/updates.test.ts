@@ -188,7 +188,7 @@ describe('an upgrade the server refused', () => {
     /* null, not undefined: the card must drop the command row rather than
        fall back to `raven upgrade`, which this very refusal proved fails. */
     expect(calls.length).toBe(1)
-    expect(calls[0][2]).toBe(null)
+    expect(calls[0]?.[2]).toBe(null)
   })
 
   it('answers busy work it cannot see with a notice to wait, not the terminal command', async () => {
