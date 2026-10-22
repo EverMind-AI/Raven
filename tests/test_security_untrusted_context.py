@@ -983,6 +983,45 @@ def test_ravens_own_oauth_tokens_are_redacted_like_another_programs() -> None:
     assert scrub_tool_output({"path": "tests/test_keys.py"}, source) == source
 
 
+def test_the_home_directories_outside_the_exemption_still_lose_their_tokens() -> None:
+    """The exemption is four directories, not "whatever is beside the token store".
+
+    Measured when the exemption was narrowed, the home holds five other
+    directories with source-shaped or credential-shaped text. None of them is a
+    tree a turn edits, so none is exempt, and the OAuth store beside them must
+    keep losing its values -- a widening that reached ``bridge`` and then kept
+    going would hand back #842.
+    """
+    from raven.config.held_secrets import scrub_tool_output
+    from raven.home import raven_home
+
+    own = raven_home()
+    # The build output of the WhatsApp bridge. ``src/server.ts`` declares
+    # ``private token: string``; ``string`` is a type, not a credential, and is
+    # rewritten anyway. That cost is recorded in ``_home_config`` and taken
+    # because the tree is a compiled install, replaced by the next build.
+    bridge_source = "class Bridge {\n  constructor(private token: string) {}\n}\n"
+    shown = scrub_tool_output({"path": str(own / "bridge" / "src" / "server.ts")}, bridge_source)
+    assert "private token: [redacted]" in shown, shown
+    assert "string" not in shown, shown
+    # Runtime state: written by the tracing, usage and product-render code.
+    recorded = '{"token": "sk-live-0123456789abcdef", "note": "kept"}\n'
+    for arguments in (
+        {"path": str(own / "traces" / "bundles" / "trace-1" / "spans.jsonl")},
+        {"path": str(own / "telemetry" / "usage-2026-10-22.jsonl")},
+        {"path": str(own / "subagent_sessions" / "raven-code" / "TOOLS.md")},
+        {"command": f"cat {own}/traces/logs/viewer.log"},
+    ):
+        shown = scrub_tool_output(arguments, recorded)
+        assert "sk-live-0123456789abcdef" not in shown, (arguments, shown)
+        assert '"note": "kept"' in shown, (arguments, shown)
+    # The contrast that must survive every widening: the store next to them.
+    tokens = '{"access": "mmx_FAKEACCESS0123456789abcdef", "refresh": "mmx_FAKEREFRESH0123456789abcdef"}'
+    shown = scrub_tool_output({"path": str(own / "oauth" / "minimax_global.json")}, tokens)
+    assert "mmx_FAKEACCESS0123456789abcdef" not in shown and "mmx_FAKEREFRESH0123456789abcdef" not in shown, shown
+    assert '"access": "[redacted]"' in shown and '"refresh": "[redacted]"' in shown, shown
+
+
 def test_ravens_own_plugin_and_agent_source_is_not_redacted_while_its_tokens_still_are() -> None:
     """The plugin and vendored-agent directories hold source, not credentials.
 

@@ -194,8 +194,14 @@ def redact(text: str, *, truncated: bool = False) -> str:
 
 
 #: The subdirectories of Raven's home a coding turn reads its own source from.
-#: Exempt from the home-config pass, and the list is deliberately exhaustive: the
-#: OAuth store is a sibling of these, not one of them.
+#: Exempt from the home-config pass. Not a claim that the rest of the home holds
+#: no source-shaped text: it is the set known to hold source a turn edits, and a
+#: new directory of that kind has to be added here when one appears. The
+#: neighbours that are left out are each left out on purpose, with the reason in
+#: :func:`_home_config`: ``bridge`` (a compiled install of the shipped bridge, not
+#: the user's tree), ``traces`` and ``telemetry`` (written by the tracing and usage
+#: code), ``subagent_sessions`` (per-product runtime state), ``playbooks`` (which
+#: resolves under ``workspace`` by default and so is covered by the first entry).
 _OWN_SOURCE_DIRS = ("workspace", "tmp", "plugins", "agents")
 
 # Raven's own token files name their credentials with words that mean nothing on
@@ -246,6 +252,31 @@ def _home_config() -> re.Pattern[str]:
     vendored agents (``agents``,
     ``raven/agent/subagent/vendored_agents.py``). Rewriting ``token = ...`` lines
     in that source breaks every edit built from them, so those four stay exempt.
+    They are the set known to hold source a turn edits, not a survey of the home:
+    a directory that starts holding such source has to join ``_OWN_SOURCE_DIRS``,
+    which is why that list is not called exhaustive. The neighbours measured when
+    this list was narrowed are outside it on purpose:
+
+    * ``bridge`` -- the WhatsApp bridge as installed under the home
+      (``raven/config/paths.py``:``get_bridge_install_dir``), a copy of the
+      shipped ``bridge/`` built by ``_build_bridge`` (``shutil.copytree`` then
+      ``npm install`` and ``tsc``). It does hold source-shaped text, and the
+      ``private token: string`` annotation in its ``src/server.ts`` is rewritten
+      to ``private token: [redacted]`` by this pass -- a known cost, taken
+      because it is a build the next ``ensure_bridge_dir`` replaces, not a tree a
+      turn's edit belongs in. Its credentials are not in there: the bridge token
+      and the Baileys auth state are siblings, under ``whatsapp-auth``.
+    * ``traces`` (``raven/tracing/config.py``) and ``telemetry``
+      (``raven/token_wise/usage_tracker.py``) -- written by the tracing and usage
+      code, never read back as source.
+    * ``subagent_sessions`` (``raven/config/product_render.py``) -- per-product
+      runtime state: rendered config, ``TOOLS.md``, ``agent_memory``, caches.
+    * ``playbooks`` -- the user layer resolves to ``<workspace>/playbooks``
+      (``raven/rpc/methods/playbooks.py``) unless ``playbooks.dir`` overrides it,
+      so the default is already inside the first entry; an override elsewhere in
+      the home was never covered by this pass and is not a directory name this
+      list can exempt without also exempting ``bridge``-style build output.
+
     The OAuth token store (``oauth/<provider>/...``) is deliberately not among
     them: it holds no source to edit, and a read of it is a credential file like
     another program's settings, so it loses its tokens to this pass —
