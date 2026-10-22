@@ -425,6 +425,22 @@ async def test_the_streamed_fold_also_reads_the_reply_after_the_split() -> None:
     assert response.content == ""
 
 
+def test_the_unparsed_thought_is_split_only_for_a_backend_that_leaks_one() -> None:
+    """The split the streamed exit makes before it folds sentinels, on its own."""
+    from raven.providers.streaming import _split_unparsed_thought
+
+    leaky = SimpleNamespace(emits_unparsed_reasoning=lambda: True)
+    careful = SimpleNamespace(emits_unparsed_reasoning=lambda: False)
+    duck_typed = SimpleNamespace()
+    reply = "plan</think>\nanswer"
+
+    assert _split_unparsed_thought(leaky, reply, None) == ("answer", "plan")
+    # A structured thought that already arrived wins outright.
+    assert _split_unparsed_thought(leaky, reply, "structured") == (reply, "structured")
+    assert _split_unparsed_thought(careful, reply, None) == (reply, None)
+    assert _split_unparsed_thought(duck_typed, reply, None) == (reply, None)
+
+
 async def test_a_stream_that_stays_empty_is_reported_as_the_failure_it_is() -> None:
     """Once the reconnects are spent the verdict still stands. Handed back as an
     empty reply, evidence that the request was never processed read as a reply
