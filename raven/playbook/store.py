@@ -54,6 +54,33 @@ _FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
 _BLOCK_RE = re.compile(r"```yaml\s+playbook-spec\n(.*?)\n```", re.DOTALL)
 
 
+class _SpecBlockLoader(yaml.SafeLoader):
+    """``yaml.SafeLoader`` reading every mapping key as the text it is written as.
+
+    Every mapping in the block is keyed by a name -- a route, a param, an input,
+    a server -- while YAML 1.1 reads a bare ``yes``, ``on``, ``true`` or ``1`` as a
+    boolean or a number, and a decision node's routes are naturally ``yes`` and ``no``.
+    ``save`` quotes such a key, so only a hand-written file meets this. Values
+    keep their YAML types.
+    """
+
+    def construct_mapping(self, node, deep=False):
+        # Flattened first, so the keys a merge brings in are read as text too.
+        self.flatten_mapping(node)
+        for key, _ in node.value:
+            if isinstance(key, yaml.ScalarNode):
+                key.tag = "tag:yaml.org,2002:str"
+        return super().construct_mapping(node, deep=deep)
+
+
+def _load_block(text: str) -> object:
+    loader = _SpecBlockLoader(text)
+    try:
+        return loader.get_single_data()
+    finally:
+        loader.dispose()
+
+
 class PlaybookExistsError(FileExistsError):
     """Raised when save() would clobber an existing playbook."""
 
@@ -231,7 +258,7 @@ class PlaybookStore:
         block_match = _BLOCK_RE.search(text)
         if block_match is None:
             raise ValueError(f"playbook {name!r}: no '```yaml playbook-spec' block in playbook.md")
-        data = yaml.safe_load(block_match.group(1)) or {}
+        data = _load_block(block_match.group(1)) or {}
         data["name"] = front.get("name")
         data["description"] = front.get("description")
         if data["name"] != name:

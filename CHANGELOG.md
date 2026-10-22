@@ -496,6 +496,12 @@ All notable changes to Raven are documented here.
   prompt, and a reference to no declared param is refused when the playbook is
   saved or loaded.
 
+- A hand-written playbook whose decision node names a route `yes`, `no`, `on`,
+  `off`, `true`, `false` or a bare number loads. YAML 1.1 read such a key as a
+  boolean or a number, the playbook failed to load, and the runtime dropped it
+  from the library; every key in the spec block is now read as the text it is
+  written as. Values keep their YAML types.
+
 - In the web UI, the **What came back** fold of a DAG node that stopped on
   a decision no longer opens onto the brief written for the model -- the
   `resolve_dag_node` calls it may make and that tool's whole schema, all in

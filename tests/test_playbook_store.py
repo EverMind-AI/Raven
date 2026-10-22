@@ -216,6 +216,59 @@ def test_hand_written_duplicate_param_input_is_rejected_on_load(tmp_path):
         _store(tmp_path).load("broken-project-path")
 
 
+def _load_triage(tmp_path, routes: str, chosen: str) -> PlaybookSpec:
+    """Load a hand-written two-node playbook whose decision node declares ``routes`` (YAML lines)."""
+    target = tmp_path / "triage"
+    target.mkdir()
+    (target / "playbook.md").write_text(
+        "---\nname: triage\ndescription: triage one report\n---\n\n"
+        "```yaml playbook-spec\n"
+        "version: 1\nmode: dag\nconfirm: false\n"
+        "taskSummary: decide whether a report is a bug, and fix it if it is\n"
+        "triggers:\n  keywords: [triage]\n"
+        "nodes:\n"
+        "  - id: decide\n"
+        "    subagent: raven\n"
+        "    nodeSummary: decide whether it is a bug\n"
+        "    promptTemplate: read the report and say whether it describes a bug\n"
+        "    routes:\n" + "".join(f"      {line}\n" for line in routes.splitlines()) + "  - id: fix\n"
+        "    subagent: raven\n"
+        "    nodeSummary: fix the bug\n"
+        "    promptTemplate: fix the bug the report describes\n"
+        "    dependsOn: [decide]\n"
+        f"    when: decide.{chosen}\n"
+        "```\n",
+        encoding="utf-8",
+    )
+    return _store(tmp_path).load("triage")
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [("yes", "no"), ("on", "off"), ("true", "false"), ("1", "2")],
+    ids=["yes-no", "on-off", "true-false", "digits"],
+)
+def test_hand_written_route_names_load_as_written(tmp_path, first, second):
+    """YAML 1.1 reads a bare ``yes``, ``on``, ``true`` or ``1`` as a boolean or a number,
+    and a decision node's routes are naturally named that way. Read so, each failed the string
+    a route name is, and the runtime dropped the playbook from the library over it."""
+    spec = _load_triage(tmp_path, f"{first}: it describes a bug\n{second}: it describes something else", first)
+
+    assert spec.confirm is False
+    assert spec.nodes is not None
+    assert spec.nodes[0].routes == {first: "it describes a bug", second: "it describes something else"}
+    assert spec.nodes[1].when == f"decide.{first}"
+
+
+def test_route_names_a_merge_brings_in_load_as_written_too(tmp_path):
+    """Read before the merge, ``yes`` and ``1`` both became ``True`` -- one key, so a route
+    was lost without a word."""
+    spec = _load_triage(tmp_path, "<<: {yes: it describes a bug, 1: it describes a feature}\nno: it is neither", "yes")
+
+    assert spec.nodes is not None
+    assert spec.nodes[0].routes == {"yes": "it describes a bug", "1": "it describes a feature", "no": "it is neither"}
+
+
 def test_save_rejects_a_semantically_invalid_graph(tmp_path):
     bad = _spec("invalid dependency").model_copy(
         update={
