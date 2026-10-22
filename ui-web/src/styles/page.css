@@ -1243,7 +1243,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    this column is meant to be the exchange, not the sentence. */
 .turn { display: flex; flex-direction: column; min-width: 0; }
 .turn.me { align-self: flex-end; align-items: flex-end; max-width: 70%; }
-.turn.ai { align-self: stretch; width: 100%; max-width: 760px; margin-right: auto; gap: 6px; }
+.turn.ai { align-self: stretch; width: 100%; max-width: var(--col); margin-right: auto; gap: 6px; }
 /* The design's bubble (Figma: Raven / UserMessage): #333 at a 12px radius, and
    the reply's 1.8 line so a long question reads at the same measure as its
    answer. The inset is what keeps a one-liner at the design's 40px: it is
