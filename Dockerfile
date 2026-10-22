@@ -113,11 +113,14 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     fi
 
 # The distributables beside the host wheel, discovered through the
-# `raven.plugins` entry-point group. everos-memory by default: the gateway
-# starts the everos memory server on boot, so without it memory is the one
-# capability that silently does nothing. ppt-engine and design-engine are
-# opt-in -- between them they add matplotlib, pymupdf and cairo.
-ARG RAVEN_PLUGINS="everos-memory"
+# `raven.plugins` entry-point group. Both memory backends by default: the
+# gateway starts the everos memory server on boot, so without everos-memory
+# memory is the one capability that silently does nothing, and
+# everos-cloud-memory lets a container point at the hosted EverOS instead
+# (raven and httpx only, and it costs nothing until memory.backend names it).
+# ppt-engine and design-engine are opt-in -- between them they add
+# matplotlib, pymupdf and cairo.
+ARG RAVEN_PLUGINS="everos-memory,everos-cloud-memory"
 RUN --mount=type=cache,target=/root/.cache/uv \
     set -eu; \
     if [ -n "${RAVEN_PLUGINS}" ]; then \

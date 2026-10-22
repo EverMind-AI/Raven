@@ -337,10 +337,12 @@ install_raven() {
     # Install all channel adapters by default. If the umbrella extra fails to
     # resolve/build on this platform, fall back to base raven so one broken
     # channel SDK cannot block the whole install.
-    # The default config names the everos memory backend, which ships as its
-    # own distribution beside the wheel -- carry it, and degrade loudly (the
-    # host boots memoryless and `raven doctor` says why) if it cannot build.
+    # The default config names the everos memory backend, and a user can point
+    # memory at the hosted EverOS instead; each ships as its own distribution
+    # beside the wheel -- carry both, and degrade loudly (the host boots
+    # memoryless and `raven doctor` says why) if they cannot build.
     memory_dir="$script_dir/plugins-dist/everos-memory"
+    cloud_dir="$script_dir/plugins-dist/everos-cloud-memory"
     # Raven-Design and Raven-PPT keep their harness in a distribution too, and
     # the roster gates on it: discovery reads the `engine` block in each
     # agents/<product>/subagent.json and disables the row when that package is
@@ -369,13 +371,13 @@ install_raven() {
     }
     # Four rungs, dropping one capability each: the engines carry native
     # builds (PDF, raster, plotting) that a platform can refuse on its own, so
-    # they fall before the memory plugin rather than taking it down with them.
-    if ! tool_install "$script_dir[channels]" "$memory_dir" "$design_dir" "$ppt_dir"; then
+    # they fall before the memory plugins rather than taking them down too.
+    if ! tool_install "$script_dir[channels]" "$memory_dir" "$cloud_dir" "$design_dir" "$ppt_dir"; then
       warn "Channel dependencies failed to install; retrying with base raven. Some channels stay unavailable (see: raven channels list)."
-      if ! tool_install "$script_dir" "$memory_dir" "$design_dir" "$ppt_dir"; then
+      if ! tool_install "$script_dir" "$memory_dir" "$cloud_dir" "$design_dir" "$ppt_dir"; then
         warn "A product engine failed to build; Raven-Design and Raven-PPT stay disabled (raven doctor explains)."
-        if ! tool_install "$script_dir" "$memory_dir"; then
-          warn "EverOS memory plugin failed to install; long-term memory stays off (raven doctor explains)."
+        if ! tool_install "$script_dir" "$memory_dir" "$cloud_dir"; then
+          warn "The EverOS memory plugins failed to install; long-term memory stays off (raven doctor explains)."
           tool_install "$script_dir"
         fi
       fi
@@ -451,7 +453,7 @@ install_raven() {
       # Both option pairs expand unquoted below and must stay two words each;
       # mktemp paths carry no spaces.
       p_args="--with-requirements $plugins"
-      grep '^everos-memory ' "$plugins" > "$memory_only" || true
+      grep -E '^(everos-memory|everos-cloud-memory) ' "$plugins" > "$memory_only" || true
       if [ -s "$memory_only" ] && ! cmp -s "$plugins" "$memory_only"; then
         m_args="--with-requirements $memory_only"
       fi

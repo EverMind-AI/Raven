@@ -17,6 +17,7 @@ import { csi } from './csi.js'
  * DEC private mode numbers
  */
 export const DEC = {
+  AUTO_WRAP: 7,
   CURSOR_VISIBLE: 25,
   ALT_SCREEN: 47,
   ALT_SCREEN_CLEAR: 1049,
@@ -48,6 +49,10 @@ export const EFE = decset(DEC.FOCUS_EVENTS)
 export const DFE = decreset(DEC.FOCUS_EVENTS)
 export const SHOW_CURSOR = decset(DEC.CURSOR_VISIBLE)
 export const HIDE_CURSOR = decreset(DEC.CURSOR_VISIBLE)
+// DECAWM: with auto-wrap off, a glyph that would run past the right margin
+// is clamped at the last column instead of continuing on the next row.
+export const ENABLE_AUTO_WRAP = decset(DEC.AUTO_WRAP)
+export const DISABLE_AUTO_WRAP = decreset(DEC.AUTO_WRAP)
 export const ENTER_ALT_SCREEN = decset(DEC.ALT_SCREEN_CLEAR)
 export const EXIT_ALT_SCREEN = decreset(DEC.ALT_SCREEN_CLEAR)
 // Mouse tracking: 1000 reports button press/release/wheel, 1002 adds drag

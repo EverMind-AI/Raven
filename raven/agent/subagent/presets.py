@@ -86,12 +86,7 @@ from raven.agent.subagent.acp_registry_presets import (
     ACP_REGISTRY_PRESETS,
     ACP_REGISTRY_SHIM_PRESETS,
 )
-from raven.agent.subagent.mirasim_presets import (
-    MIRASIM_EXECUTABLE,
-    MIRASIM_INSTALL_HINT,
-    MIRASIM_PRESETS,
-    MIRASIM_SHIM_PRESETS,
-)
+from raven.agent.subagent.mirasim_presets import MIRASIM_PRESETS, MIRASIM_SHIM_PRESETS
 from raven.agent.subagent.vendored_agents import _resolved_python
 from raven.utils.commands import resolve_subagent_command
 
@@ -164,7 +159,6 @@ version to pin: the shim that answers is the Raven that launched it.
 
 SHIM_REQUIRED_EXECUTABLES: dict[str, tuple[str, str]] = {
     "pi": ("pi", "npm install -g @earendil-works/pi-coding-agent"),
-    **{key: (MIRASIM_EXECUTABLE, MIRASIM_INSTALL_HINT) for key in MIRASIM_SHIM_PRESETS},
 }
 """The local agent a shim drives, as ``(executable, install command)``, by preset key.
 
@@ -175,9 +169,11 @@ executable as well, so a machine without it reports the row absent with the
 install beside it, instead of offering a connect that fails a minute later
 inside the adapter with the same sentence. Listed only where the shim really
 does reach for a local install: ``pi-acp`` launches ``pi`` and fails with
-"executable not found" without it. A Mirasim row asks after ``mirasim`` as the
-sign that Mirasim is installed: the adapter itself runs no executable, it
-reaches the Mirasim host already running on the machine. The
+"executable not found" without it. A Mirasim row is not here: its adapter runs
+no executable, it reaches the Mirasim host running on the machine, and Mirasim
+puts its own CLI on no PATH -- so ``_probe_acp`` asks
+:func:`raven.agent.subagent.mirasim_presets.presence` after the host, or the
+launcher under Mirasim's home, instead. The
 other two shims bring their agent along -- ``codex-acp`` ships it as its own binary, and ``claude-agent-acp``
 runs the CLI its ``@anthropic-ai/claude-agent-sdk`` pin carries as a
 per-platform optional dependency (read from the 0.66.0, 0.79.0 and 0.81.1

@@ -396,6 +396,49 @@ class SnapshotStore:
         except OSError as exc:  # a snapshot is a cache, never a dependency
             logger.warning("acp capability snapshot write failed (not remembered): {}", exc)
 
+    def revise(self, snapshot: CapabilitySnapshot, **changes: Any) -> tuple[CapabilitySnapshot, bool] | None:
+        """Apply ``changes`` to the stored record ``snapshot`` was read from.
+
+        For a write that re-measured some fields of a record, so only those are
+        written, onto the row as it stands inside the lock: another holder of
+        the same record may have revised a different field since ``snapshot``
+        was read, and writing the caller's whole copy back would undo it.
+
+        Nothing is written when the stored row carries another measurement
+        stamp than ``snapshot``. A Test or the boot backfill that recorded in
+        the meantime is newer evidence about everything, the same "newest
+        measurement wins" rule the boot backfill applies to its own late
+        verdicts. With no stored row, ``snapshot`` itself is the base.
+
+        Returns the record now stored and whether this call wrote it, so a
+        caller that stood down holds the newer record and builds its next
+        revision on that stamp rather than being refused again for as long as
+        it lives. Flagged stale when it was measured under another launch
+        config than ``snapshot``, or when ``snapshot`` already was: for the
+        caller's launch it proves no more than that. ``None`` when the store
+        could not be written, or holds only a row that cannot be read back.
+        """
+
+        def merge(current: str | None) -> tuple[str | None, tuple[CapabilitySnapshot, bool] | None]:
+            rows = self._parse(current)
+            stored = next((r for r in rows if r.get("agent") == snapshot.agent), None)
+            if stored is not None and int(stored.get("measuredAtMs") or 0) != snapshot.measured_at_ms:
+                newer = CapabilitySnapshot.from_row(stored)
+                if newer is None:
+                    return None, None
+                return None, (replace(newer, stale=snapshot.stale or newer.fingerprint != snapshot.fingerprint), False)
+            base = (CapabilitySnapshot.from_row(stored) if stored is not None else None) or snapshot
+            updated = replace(base, stale=snapshot.stale, **changes)
+            rows = [r for r in rows if r.get("agent") != snapshot.agent]
+            rows.append(updated.to_row())
+            return self._dump(rows), (updated, True)
+
+        try:
+            return atomic_update(self._path, merge)
+        except OSError as exc:  # a snapshot is a cache, never a dependency
+            logger.warning("acp capability snapshot write failed (not remembered): {}", exc)
+            return None
+
     def load(self, configs: Sequence[Any], *, allow_stale: bool = False) -> dict[str, CapabilitySnapshot]:
         """Snapshots for these configs, keyed by agent name.
 
@@ -670,43 +713,72 @@ def _read_session_modes(result: Any) -> tuple[AcpMode, ...]:
     )
 
 
-def relearn_session_modes(
+def relearn_session_menus(
     snapshot: CapabilitySnapshot | None,
     result: Any,
     *,
     store: SnapshotStore | None = None,
 ) -> CapabilitySnapshot | None:
-    """Re-record an agent's modes from a live session response, if they moved.
+    """Re-record an agent's modes and model menu from a live session response, if they moved.
 
-    The menu is measured once at probe time and cached, but the agent
-    re-advertises it on every route into a session (``_with_modes`` in the
-    fork's ACP methods), so the response a dispatch already holds is newer
+    Both menus are measured once at probe time and cached, but the agent
+    re-advertises them on its way into a session -- the modes on every route
+    (``_with_modes`` in the fork's ACP methods), the models at least on
+    ``session/new`` -- so the response a dispatch already holds is newer
     evidence than the snapshot. Without this the cache only ever moves when
     someone presses Test: ``snapshot_fingerprint`` covers how the agent is
-    LAUNCHED, and an agent that reworded its own modes launches identically, so
-    nothing marks the stored text stale and the dispatching model goes on
-    reading a menu the agent no longer serves.
+    LAUNCHED, and an agent that reworded its own modes or renamed its models
+    launches identically, so nothing marks the stored menus stale -- the
+    dispatching model goes on reading modes the agent no longer serves, and the
+    row's picker goes on offering model ids it no longer takes.
 
-    The stored fingerprint is kept rather than recomputed. Only the modes were
-    re-measured here, and claiming a fresh handshake would clear a staleness
-    flag the rest of the snapshot has not earned.
+    Read with the probe's own parsers, from the response this route was sending
+    for anyway: nothing here opens a session or starts a process.
+
+    The stored fingerprint and measurement stamp are kept rather than renewed.
+    Only the menus were re-measured here, and claiming a fresh handshake would
+    clear a staleness flag the rest of the snapshot has not earned. Only the
+    menus this response reported are written, and none when a newer
+    measurement has replaced the record ``snapshot`` was read from
+    (``SnapshotStore.revise``). That newer record is returned instead, unrevised:
+    this response may predate it, so its menus are not taken over it, but the
+    caller's next response is then judged against the stamp actually stored.
 
     ``None`` when there was nothing to learn, which includes a response carrying
-    no modes at all. That is read as "this route did not report them", never as
-    "the agent dropped them": erasing the menu takes the ``mode`` argument out
-    of the spawn schema entirely, and a stale description is the smaller harm.
+    neither menu. Each menu is judged on its own, and an absent or empty one is
+    read as "this route did not report it", never as "the agent dropped it":
+    erasing the modes takes the ``mode`` argument out of the spawn schema, and
+    erasing the models takes the picker off the row, both worse than a stale
+    entry. A model menu the agent flagged as unread is not taken either, for
+    the reason ``_read_session_menu_unread`` gives.
     """
     if snapshot is None:
         return None
+    changes: dict[str, Any] = {}
     modes = _read_session_modes(result)
-    if not modes or modes == snapshot.available_modes:
+    if modes and modes != snapshot.available_modes:
+        changes["available_modes"] = modes
+    choices = () if _read_session_menu_unread(result) else _read_session_model_choices(result)
+    if choices and choices != snapshot.model_choices:
+        changes["model_choices"] = choices
+        changes["model_menu_measured"] = True
+    if not changes:
         return None
-    updated = replace(snapshot, available_modes=modes)
-    (store or SnapshotStore()).record(updated)
+    revised = (store or SnapshotStore()).revise(snapshot, **changes)
+    if revised is None:
+        return None
+    updated, written = revised
+    if not written:
+        logger.info(
+            "acp agent {!r}: session menus not re-recorded over a newer measurement; building on that one next",
+            snapshot.agent,
+        )
+        return updated
     logger.info(
-        "acp agent {!r}: re-recorded {} mode(s) from a session response",
+        "acp agent {!r}: re-recorded {} mode(s) and {} model(s) from a session response",
         snapshot.agent,
-        len(modes),
+        len(updated.available_modes),
+        len(updated.model_choices),
     )
     return updated
 
@@ -1079,7 +1151,7 @@ __all__ = [
     "looks_like_auth",
     "npx_fetch_failure",
     "npx_fetch_lead",
-    "relearn_session_modes",
+    "relearn_session_menus",
     "snapshot_fingerprint",
     "steer_offered",
     "verify_agent",

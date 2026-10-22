@@ -86,7 +86,7 @@ one-line installer also upgrades, and ends on the running page.
 - Assets: the `raven` wheel and source distribution, four plugin wheels
   (`everos_memory`, `everos_cloud_memory`, `design_engine`, `ppt_engine`), the
   locked constraints file `raven-constraints.txt`, and the plugin list
-  `raven-plugins.txt`, which installs every plugin wheel but `everos_cloud_memory`
+  `raven-plugins.txt`, which installs every plugin wheel the release carries
 
 ## Notes
 

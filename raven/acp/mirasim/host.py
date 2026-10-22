@@ -18,8 +18,14 @@ sessions and the same machine identity. Where the host listens, in the order
 Two frames are never sent, because the answers carry secrets: ``ready`` makes
 the host push its whole settings tree, IM bot tokens included, and
 ``getConfig`` answers with the configuration. No frame is logged whole --
-only the reason a refusal gives, which names what failed -- and the token
-travels in a header, never in a URL.
+only the reason a refusal gives, which names what failed. The token travels in
+the query of the upgrade request, which is where the host reads it: its own
+clients send it there, and a host from 0.0.571 on answers a token sent in a
+header alone with 401 (measured against 0.0.571, 0.0.576 and 0.0.585). It goes
+in the ``x-mirasim-token`` header as well, which the hosts this adapter was
+written against (0.0.537 to 0.0.558) read. So the one URL that carries it is
+never logged and never quoted in an error: a refused upgrade is worded from
+its status, and the token is taken out of whatever else is said.
 
 One connection serves every session of the adapter. A frame comes back to its
 request by what the host echoes, which differs per frame: ``clientRef`` on
@@ -43,6 +49,7 @@ from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import aiohttp
 from loguru import logger
@@ -211,13 +218,14 @@ class HostConnection:
                 connector=connector, timeout=aiohttp.ClientTimeout(total=None, connect=CONNECT_TIMEOUT_S)
             )
             headers = {"x-mirasim-token": address.token} if address.token else {}
+            failed: BaseException | None = None
             try:
                 version = await _health(session, address, headers)
                 # The session's timeout bounds the connection, not the upgrade's answer: a host that
                 # takes the request and never upgrades would hold this lock, and every send, forever.
                 async with asyncio.timeout(CONNECT_TIMEOUT_S):
                     ws = await session.ws_connect(
-                        f"{address.base_url}/ws",
+                        upgrade_url(address),
                         headers=headers,
                         max_msg_size=MAX_FRAME_BYTES,
                     )
@@ -225,10 +233,16 @@ class HostConnection:
                 await session.close()
                 if not isinstance(exc, (aiohttp.ClientError, OSError, TimeoutError)):
                     raise
-                said = str(exc) or (
-                    "it did not answer in time" if isinstance(exc, TimeoutError) else type(exc).__name__
+                failed = exc
+            if failed is not None:
+                # Raised outside the handler so nothing is chained by default: a refused
+                # upgrade's own exception holds the request, URL and token included
+                # (`request_info`), and a formatted traceback would print it. Any other
+                # failure names no URL and stays the cause.
+                unavailable = HostUnavailableError(
+                    f"cannot reach the Mirasim host at {address.describe()}: {_reason(failed, address)}"
                 )
-                raise HostUnavailableError(f"cannot reach the Mirasim host at {address.describe()}: {said}") from exc
+                raise unavailable from (None if isinstance(failed, aiohttp.ClientResponseError) else failed)
             self._session, self._ws, self.address, self.version = session, ws, address, version
             self.lost_at = None
             self.epoch += 1
@@ -347,6 +361,40 @@ class HostConnection:
                 logger.debug("Mirasim adapter: the Mirasim host is still unreachable: {}", exc)
 
 
+def upgrade_url(address: HostAddress) -> str:
+    """The URL the WebSocket upgrade is requested at: ``/ws``, with the token in its query when there is one.
+
+    The one place the token is put in a URL (see the module docstring); nothing
+    logs or quotes what this returns.
+    """
+    base = f"{address.base_url}/ws"
+    return f"{base}?token={quote(address.token, safe='')}" if address.token else base
+
+
+def _reason(exc: BaseException, address: HostAddress) -> str:
+    """Why the host could not be reached, in words that carry nothing of the token.
+
+    A refused upgrade is a ``ClientResponseError`` whose ``str()`` quotes the
+    request's URL, token and all, so it is worded from its status instead (and
+    not chained either, see :meth:`HostConnection.connect`) -- and
+    a host that turns the token away is told apart from one that is not there,
+    in words the roster does not read as the agent's own sign-in being wrong
+    (``looks_like_auth``): the token is Raven's way in to the host, not the
+    agent's. Whatever another failure says has the token taken out as well.
+    """
+    if isinstance(exc, aiohttp.ClientResponseError):
+        if exc.status in (401, 403):
+            where = f"Mirasim's run/local-{address.port}.token" if address.port else "its token file"
+            return (
+                f"it turned this connection away: the token Raven read from {where} is not the one it takes. "
+                "Start Mirasim again, which writes that file afresh, then try again"
+            )
+        said = f"its upgrade answered HTTP {exc.status}: {exc.message}"
+    else:
+        said = str(exc) or ("it did not answer in time" if isinstance(exc, TimeoutError) else type(exc).__name__)
+    return said.replace(address.token, "<token>") if address.token else said
+
+
 async def _health(session: aiohttp.ClientSession, address: HostAddress, headers: dict[str, str]) -> str | None:
     """The host's version from ``/api/health``, or ``None``: a host that cannot say is still one to talk to."""
     try:
@@ -374,4 +422,5 @@ __all__ = [
     "parse_address",
     "port_token",
     "remote_socket",
+    "upgrade_url",
 ]

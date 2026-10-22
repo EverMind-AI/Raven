@@ -709,16 +709,17 @@ def run(argv=None):
             return f"{name.strip()} @ {local[url.strip()]}" if sep and url.strip() in local else line
 
         plugin_lines = [relocate(line) for line in plugin_lines]
-    memory_lines = [line for line in plugin_lines if line.partition(" @ ")[0].strip() == "everos-memory"]
+    memory = ("everos-memory", "everos-cloud-memory")
+    memory_lines = [line for line in plugin_lines if line.partition(" @ ")[0].strip() in memory]
 
     # Two independent things can fail: the channel extras, and the plugins
-    # (the engines' native builds first, the memory plugin after). A failed
+    # (the engines' native builds first, the memory plugins after). A failed
     # attempt does not say which, so the rungs walk both axes and stop at the
     # first that lands -- the largest install this machine can build -- and
     # report exactly what that rung lacks:
-    #   1 channels + all plugins      4 base + memory plugin
+    #   1 channels + all plugins      4 base + memory plugins
     #   2 base + all plugins          5 channels, no plugins
-    #   3 channels + memory plugin    6 base, no plugins
+    #   3 channels + memory plugins   6 base, no plugins
     lost_channels = "Channel dependencies failed to install; some channels stay unavailable (see: raven channels list)."
     lost_engines = "A product engine failed to install; Raven-Design and Raven-PPT stay disabled (raven doctor explains)."
     lost_plugins = (

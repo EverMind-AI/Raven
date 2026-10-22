@@ -2842,8 +2842,13 @@ they already granted. `SHIM_LAUNCHED_PRESETS` declares that split per preset and
 every acp command to it. A **bundled shim** (`BUNDLED_SHIM_PRESETS`) is one Raven ships rather
 than fetches: `raven.acp.mirasim` serves an agent Mirasim runs, as one more client of the
 Mirasim host running on the machine (its WebSocket protocol), launched on Raven's own
-interpreter (`{PYTHON}`, expanded when the preset is read), so there is no pin; the executable
-its probe asks after is `mirasim` (`SHIM_REQUIRED_EXECUTABLES`).
+interpreter (`{PYTHON}`, expanded when the preset is read), so there is no pin; and its probe asks
+after Mirasim itself rather than an executable (`mirasim_presets.presence`: a host that answers -- the
+desktop port behind a token that is not blank, or the socket of a server run here over ssh -- else the
+launcher Mirasim writes under its home, `mirasim` on the login PATH or a server installed here over ssh,
+Mirasim putting its CLI on no PATH; a file a dead host left behind, token or socket, is an install and
+not a host), since the adapter runs none -- a row with Mirasim installed but not running says to open
+the app, or to let the app on another computer reach this one again.
 _Avoid_: inferring it from the command shape. An agent whose own CLI happens to ship on npm
 (`opencode-ai`) is not a shim, and fetching it would run a second copy beside the user's
 install and report the agent as present on a machine that does not have it - `_probe_acp`

@@ -1231,6 +1231,26 @@ def test_upgrade_helper_keeps_the_channel_extras_when_only_an_engine_fails(
     assert LOST_CHANNELS not in err and LOST_PLUGINS not in err
 
 
+def test_upgrade_helper_keeps_both_memory_backends_when_the_engines_fail(
+    monkeypatch: pytest.MonkeyPatch,
+    release_directory: _ReleaseDirectory,
+) -> None:
+    """A release ships a local and a hosted memory backend, and the rung that
+    drops the engines exists so long-term memory outlives them. Keeping only
+    the local distribution uninstalls the cloud one from under a host whose
+    `memory.backend` names it -- a native build refusing on this platform would
+    take that user's memory with it."""
+    cloud = f"everos-cloud-memory @ {RELEASE_DIR}/everos_cloud_memory-0.1.0-py3-none-any.whl\n"
+    lines = PLUGIN_LIST.splitlines(keepends=True)
+    release_directory.files["raven-plugins.txt"] = "".join([lines[0], cloud, *lines[1:]]).encode("utf-8")
+    run = Mock(side_effect=[Mock(returncode=9)] * 4 + [Mock(returncode=0)])
+    monkeypatch.setattr(subprocess, "run", run)
+    helper_main = _load_upgrade_helper()
+
+    assert helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"]) == 0
+    assert _uv_calls(run)[-1]["plugins"] == lines[0] + cloud
+
+
 def test_upgrade_helper_walks_both_axes_and_lands_on_the_largest_install(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

@@ -353,3 +353,196 @@ def test_the_host_variables_a_row_can_name_are_the_ones_the_adapter_reads() -> N
     from raven.agent.subagent.mirasim_presets import HOST_ENV_KEYS
 
     assert set(HOST_ENV_KEYS) == {host_mod.HOST_ENV, "MIRASIM_HOME"}
+
+
+# -- whether Mirasim is here: what the probe reads instead of an executable --------
+
+
+def test_the_places_the_presence_check_looks_are_the_adapters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """One rule in two packages: this one may not import the adapter, a served surface.
+
+    The names and paths, and the decision too: a token file the adapter reads as no token (blank) is no
+    host here either, so a listener behind it is `installed`, as `locate_host` finds nothing.
+    """
+    from raven.acp.mirasim import host as host_mod
+    from raven.agent.subagent import mirasim_presets as mp
+
+    assert mp.HOST_ENV == host_mod.HOST_ENV and mp.DESKTOP_PORT == host_mod.DESKTOP_PORT
+    assert mp.remote_socket() == host_mod.remote_socket()
+    for env in ({}, {"MIRASIM_HOME": str(tmp_path)}):
+        assert mp.mirasim_home(env) == host_mod.mirasim_home(env)
+    env = {"MIRASIM_HOME": str(tmp_path)}
+    monkeypatch.setattr(mp, "remote_root", lambda: tmp_path / "no-remote")
+    monkeypatch.setattr(mp, "_listening", lambda port: port == mp.DESKTOP_PORT)
+    mp.token_file(env).parent.mkdir(parents=True)
+    for written in ("desk\n", "", "   \n"):
+        mp.token_file(env).write_text(written, encoding="utf-8")
+        assert mp.desktop_token(env) == host_mod.port_token(host_mod.DESKTOP_PORT, env)
+        found = host_mod.locate_host(env)
+        state, _where = mp.presence(env, path=str(tmp_path / "bin"))
+        assert (state == "running") == (found is not None), written
+    assert host_mod.locate_host(env) is None and mp.presence(env, path=None)[0] == "installed"
+
+
+@pytest.fixture
+def nowhere(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """A Mirasim home, a PATH and a remote root with nothing of Mirasim in them."""
+    from raven.agent.subagent import mirasim_presets as mp
+
+    listening = mp._listening  # the real one, for the test that is about it
+    monkeypatch.setattr(mp, "remote_root", lambda: tmp_path / "no-remote")
+    monkeypatch.setattr(mp, "_listening", lambda port: False)
+    (tmp_path / "bin").mkdir()
+    return {"env": {"MIRASIM_HOME": str(tmp_path / "mirasim")}, "path": str(tmp_path / "bin"), "listening": listening}
+
+
+def test_with_nothing_of_mirasim_here_it_is_absent(nowhere: dict[str, Any]) -> None:
+    from raven.agent.subagent.mirasim_presets import presence
+
+    assert presence(nowhere["env"], path=nowhere["path"]) == ("absent", "")
+
+
+def test_the_launcher_under_mirasims_home_or_on_the_path_means_installed_but_no_host(
+    tmp_path: Path, nowhere: dict[str, Any]
+) -> None:
+    """Mirasim writes `bin/mirasim` under its home and puts that directory on no PATH; an owner may."""
+    from raven.agent.subagent.mirasim_presets import LAUNCHER, presence
+
+    launcher = Path(nowhere["env"]["MIRASIM_HOME"]).joinpath(*LAUNCHER)
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    assert presence(nowhere["env"], path=nowhere["path"]) == ("installed", str(launcher))
+
+    launcher.unlink()
+    # `shutil.which` on Windows finds a command only under a PATHEXT extension; elsewhere, an executable bit.
+    on_path = tmp_path / "bin" / ("mirasim.cmd" if sys.platform == "win32" else "mirasim")
+    on_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    on_path.chmod(0o755)
+    state, where = presence(nowhere["env"], path=nowhere["path"])
+    assert state == "installed" and str(Path(where)).lower() == str(on_path).lower()
+
+
+@pytest.mark.parametrize("name", ["mirasim.cmd", "mirasim.exe"])
+def test_a_launcher_with_the_extension_a_windows_command_carries_is_found(nowhere: dict[str, Any], name: str) -> None:
+    from raven.agent.subagent.mirasim_presets import LAUNCHER, presence
+
+    launcher = Path(nowhere["env"]["MIRASIM_HOME"]).joinpath(*LAUNCHER).with_name(name)
+    launcher.parent.mkdir(parents=True)
+    launcher.write_bytes(b"")
+    assert presence(nowhere["env"], path=nowhere["path"]) == ("installed", str(launcher))
+
+
+def test_a_token_file_counts_as_a_host_only_while_something_listens_and_holds_a_token(
+    nowhere: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A killed host leaves its token file behind (measured against 0.0.571); a stopped one removes it."""
+    from raven.agent.subagent import mirasim_presets as mp
+
+    mp.token_file(nowhere["env"]).parent.mkdir(parents=True)
+    mp.token_file(nowhere["env"]).write_text("desk\n", encoding="utf-8")
+    assert mp.presence(nowhere["env"], path=nowhere["path"]) == ("installed", nowhere["env"]["MIRASIM_HOME"])
+
+    monkeypatch.setattr(mp, "_listening", lambda port: port == mp.DESKTOP_PORT)
+    assert mp.presence(nowhere["env"], path=nowhere["path"]) == ("running", f"127.0.0.1:{mp.DESKTOP_PORT}")
+    # A blank file is no token to the adapter (`port_token`), so what listens behind it is not its host.
+    mp.token_file(nowhere["env"]).write_text("  \n", encoding="utf-8")
+    assert mp.presence(nowhere["env"], path=nowhere["path"]) == ("installed", nowhere["env"]["MIRASIM_HOME"])
+
+
+def test_a_listener_on_the_desktop_port_with_no_token_file_is_not_a_host(
+    nowhere: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Anything may hold the port; the token file is what makes it Mirasim's, as the adapter reads it."""
+    from raven.agent.subagent import mirasim_presets as mp
+
+    monkeypatch.setattr(mp, "_listening", lambda port: True)
+    assert mp.presence(nowhere["env"], path=nowhere["path"]) == ("absent", "")
+
+
+def test_listening_is_read_off_the_loopback_port_itself(
+    nowhere: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import socket
+
+    from raven.agent.subagent import mirasim_presets as mp
+
+    monkeypatch.setattr(mp, "_listening", nowhere["listening"])  # the real one is under test here
+    with socket.socket() as server:
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        port = server.getsockname()[1]
+        monkeypatch.setattr(mp, "DESKTOP_PORT", port)  # before the token file is named after it
+        mp.token_file(nowhere["env"]).parent.mkdir(parents=True)
+        mp.token_file(nowhere["env"]).write_text("desk\n", encoding="utf-8")
+        assert mp.presence(nowhere["env"], path=nowhere["path"]) == ("running", f"127.0.0.1:{port}")
+    assert mp.presence(nowhere["env"], path=nowhere["path"])[0] == "installed"
+
+
+def test_a_host_named_in_the_environment_is_running_whatever_the_files_say(nowhere: dict[str, Any]) -> None:
+    from raven.agent.subagent.mirasim_presets import HOST_ENV, presence
+
+    env = {**nowhere["env"], HOST_ENV: "4971"}
+    assert presence(env, path=nowhere["path"]) == ("running", f"the host named in {HOST_ENV}")
+
+
+@pytest.fixture
+def remote_root(nowhere: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A `~/.mirasim-remote` of its own, short enough to bind a socket under (macOS caps the path at 104)."""
+    import shutil
+    import tempfile
+
+    from raven.agent.subagent import mirasim_presets as mp
+
+    root = Path(tempfile.mkdtemp(prefix="mrs-", dir="/tmp" if os.path.isdir("/tmp") else None))
+    monkeypatch.setattr(mp, "remote_root", lambda: root)
+    yield root
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def _remote_layout(root: Path, *, version: str = "0.0.587") -> Path:
+    """What the desktop client leaves on a machine it delivered a server to, with the server stopped."""
+    from raven.agent.subagent.mirasim_presets import REMOTE_SERVERS, REMOTE_START
+
+    (root.joinpath(*REMOTE_SERVERS) / version).mkdir(parents=True)
+    start = root.joinpath(*REMOTE_START)
+    start.parent.mkdir(parents=True)
+    start.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (root / "run").mkdir()
+    return start
+
+
+def test_a_server_mirasim_installed_over_ssh_and_stopped_is_installed_not_absent(
+    nowhere: dict[str, Any], remote_root: Path
+) -> None:
+    """Its clean stop removes the socket, the pid and the version; the install stays, and the row must not
+    send this owner to the desktop app's download page."""
+    from raven.agent.subagent import mirasim_presets as mp
+
+    start = _remote_layout(remote_root)
+    assert mp.presence(nowhere["env"], path=nowhere["path"]) == ("installed", str(start))
+    start.unlink()  # a delivered version with no current server picked yet
+    assert mp.presence(nowhere["env"], path=nowhere["path"]) == ("installed", str(remote_root / "servers"))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="a unix socket")
+def test_the_socket_of_a_server_run_over_ssh_is_a_host_only_while_it_answers(
+    nowhere: dict[str, Any], remote_root: Path
+) -> None:
+    """A server that was killed, or whose machine rebooted, leaves `run/server.sock` on disk: Mirasim's own
+    start script removes it before every start, and so do not read the file as a host."""
+    import socket
+
+    from raven.agent.subagent import mirasim_presets as mp
+
+    _remote_layout(remote_root)
+    sock_path = mp.remote_socket()
+    with socket.socket(socket.AF_UNIX) as server:
+        server.bind(str(sock_path))
+        server.listen(1)
+        assert mp.presence(nowhere["env"], path=nowhere["path"]) == ("running", str(sock_path))
+    assert sock_path.exists(), "closing the listener leaves the file, as a killed server does"
+    assert mp.presence(nowhere["env"], path=nowhere["path"]) == ("installed", str(remote_root / "current" / "start.sh"))
+    # Only what the dead server left: still an install, never a host.
+    (remote_root / "current" / "start.sh").unlink()
+    (remote_root / "servers" / "0.0.587").rmdir()
+    assert mp.presence(nowhere["env"], path=nowhere["path"]) == ("installed", str(remote_root))

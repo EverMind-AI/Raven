@@ -172,20 +172,20 @@ jobs:
       #     --with-requirements`, so what a complete install is made of is
       #     written here once, from what this job just built, and nowhere
       #     else. Direct URLs on purpose: a bare name would be resolved against
-      #     PyPI, where none of these names are ours. The everos line is what
-      #     the helper keeps when the engines cannot build, so its name is a
-      #     contract (tests/test_release_plugin_list.py).
+      #     PyPI, where none of these names are ours. The two everos lines are
+      #     what the helper keeps when the engines cannot build, so their names
+      #     are a contract (tests/test_release_plugin_list.py).
       - name: Write the plugin list
         run: |
           base="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}"
           : > dist/raven-plugins.txt
-          for whl in dist/everos_memory-*.whl dist/design_engine-*.whl dist/ppt_engine-*.whl; do
+          for whl in dist/everos_memory-*.whl dist/everos_cloud_memory-*.whl dist/design_engine-*.whl dist/ppt_engine-*.whl; do
             [ -f "$whl" ] || { echo "no wheel matches $whl"; exit 1; }
             name="$(basename "$whl" | cut -d- -f1 | tr _ -)"
             echo "$name @ $base/$(basename "$whl")" >> dist/raven-plugins.txt
           done
           cat dist/raven-plugins.txt
-          test "$(wc -l < dist/raven-plugins.txt)" -eq 3
+          test "$(wc -l < dist/raven-plugins.txt)" -eq 4
 
       # 4d) The release installs itself before anything is published: the wheel,
       #     the constraints, the plugin list and the plugin wheels as one whole,
@@ -194,7 +194,7 @@ jobs:
       #     from a copy of the list rewritten to point at the release directory
       #     here; the rewrite only matches the exact public prefix, so a list
       #     that named any other place fails the grep below. Then the installed
-      #     raven has to answer, carry the three plugin packages, and have the
+      #     raven has to answer, carry the four plugin packages, and have the
       #     `web` the installer ends on.
       - name: Install the release from dist with install.sh
         env:
@@ -214,7 +214,7 @@ jobs:
           wheel="$(ls dist/raven-*-py3-none-any.whl)"
           RAVEN_WHEEL_URL="file://$gate/$(basename "$wheel")" sh -c 'cat install.sh | sh'
           "$UV_TOOL_BIN_DIR/raven" --version
-          "$UV_TOOL_DIR/raven/bin/python" -c "import raven_everos, raven_design, raven_ppt"
+          "$UV_TOOL_DIR/raven/bin/python" -c "import raven_everos, raven_everos_cloud, raven_design, raven_ppt"
           "$UV_TOOL_BIN_DIR/raven" web --help >/dev/null
 
       - name: Upload artifacts
