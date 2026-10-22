@@ -4487,6 +4487,13 @@ class FsDirsResult(_Strict):
     parent: str | None = Field(..., description="One level up; null at the filesystem root.")
     home: str = Field(..., description="The user's home directory, where the browser starts.")
     ok: bool = Field(..., description="Whether the listed directory itself may be a session's working directory.")
+    roots: list[FsDirEntry] = Field(
+        default_factory=list,
+        description=(
+            "The other filesystem roots, listed only while the directory listed is one: a root has no parent, "
+            "so on a host with several (Windows drives) they are reachable no other way."
+        ),
+    )
     entries: list[FsDirEntry] = Field(
         ..., description="Subdirectories only, dotfiles omitted, sorted by name; at most the first 500 found."
     )

@@ -4459,6 +4459,10 @@ export interface FsDirsResult {
    */
   ok: boolean;
   /**
+   * The other filesystem roots, listed only while the directory listed is one: a root has no parent, so on a host with several (Windows drives) they are reachable no other way.
+   */
+  roots?: FsDirEntry[];
+  /**
    * Subdirectories only, dotfiles omitted, sorted by name; at most the first 500 found.
    */
   entries: FsDirEntry[];

@@ -73,14 +73,19 @@ export interface WdState {
   readonly picking: boolean
   /** Bumped by every open, so a popover opened twice is measured twice. */
   readonly opened: number
-  /** The menu, or the folder browser the menu's last row opens. */
-  readonly view: 'menu' | 'browse'
+  /** The menu, the folder browser the menu's last row opens, or the list of
+   *  drives that a browser standing on a root cannot reach by walking. */
+  readonly view: 'menu' | 'browse' | 'drives'
   /** The menu's rows, built on open; null while it has never been opened. */
   readonly listed: readonly WdRow[] | null
   /** The directory the browser stands in, or null before the first answer. */
   readonly listing: DirListing | null
   /** A listing is on its way. */
   readonly loading: boolean
+  /** Bumped by every read the browser asks for, refused or not: the path
+   *  bar holds what was typed into it, and a refusal leaves the browser where
+   *  it stood, so the field is keyed on this to come back with that path. */
+  readonly asked: number
   /** Why the browser could not open, said on the menu; null when it could. */
   readonly err: string | null
   /** What the "@" menu's row shows, or null while nothing has drawn it yet. */
@@ -88,7 +93,8 @@ export interface WdState {
 }
 
 const shut: WdState = {
-  open: false, picking: false, opened: 0, view: 'menu', listed: null, listing: null, loading: false, err: null, paint: null,
+  open: false, picking: false, opened: 0, view: 'menu', listed: null, listing: null, loading: false, asked: 0,
+  err: null, paint: null,
 }
 const store = makeStore<WdState>(shut)
 
@@ -108,7 +114,8 @@ export function set(next: WdState): void {
   const now = get()
   if (next.open === now.open && next.picking === now.picking && next.opened === now.opened
     && next.view === now.view && next.listed === now.listed && next.listing === now.listing
-    && next.loading === now.loading && next.err === now.err && samePaint(next.paint, now.paint)) return
+    && next.loading === now.loading && next.asked === now.asked && next.err === now.err
+    && samePaint(next.paint, now.paint)) return
   store.set(next)
 }
 
@@ -253,12 +260,15 @@ const detailOf = (e: unknown): string => {
    lands after a later ask, a close or a switch is dropped. */
 let asking = 0
 
-/* Whether the menu's last row opens the host's own folder dialog (Finder, the
-   Explorer dialog) rather than the in-page walk below: the gateway's host has
-   one AND runs on this desktop, so the dialog opens where the reader is. A
-   remote gateway would open it on somebody else's screen. Whether the host has
-   one is the handshake's to say: a gateway in a container, or on a headless
-   box reached through a forwarded port, is served at a loopback address too. */
+/* Whether the menu's last row opens the host's own folder dialog (Finder, or
+   zenity/kdialog on a Linux desktop) rather than the in-page walk below: the
+   gateway's host has one AND runs on this desktop, so the dialog opens where
+   the reader is. A remote gateway would open it on somebody else's screen.
+   Whether the host has one is the handshake's to say: a gateway in a container,
+   or on a headless box reached through a forwarded port, is served at a
+   loopback address too. A Windows gateway never announces one -- its dialog
+   opens behind the browser (raven/rpc/folder_dialog.py) -- so the same few
+   lines put the walk in front of a reader on their own Windows desktop. */
 export function nativePick(): boolean {
   try {
     const src = ds('workspace')
@@ -341,7 +351,7 @@ export async function browse(path?: string): Promise<void> {
     return
   }
   const ticket = ++asking
-  set({ ...get(), loading: true, err: null })
+  set({ ...get(), loading: true, err: null, asked: get().asked + 1 })
   try {
     const listing = await fn(path)
     if (ticket !== asking || !get().open) return
@@ -356,6 +366,26 @@ export async function browse(path?: string): Promise<void> {
 export function back(): void {
   asking += 1
   set({ ...get(), view: 'menu', listed: menuRows(), loading: false, err: null })
+}
+
+/** The view a root needs: the other roots the gateway's machine exposes.
+ *  A root has no parent to go up to, so without this a browser that started
+ *  in the user's home could never reach a second drive. */
+export function drives(): void {
+  const here = get().listing
+  const roots = here?.roots
+  if (!roots || !roots.length) return
+  asking += 1
+  set({ ...get(), view: 'drives', loading: false, err: null })
+}
+
+/** A path typed into the browser's bar: read as any other folder, and refused
+ *  the same way, on the view the reader is looking at. */
+export function go(path: string): Promise<void> {
+  const at = path.trim()
+  if (!at) return Promise.resolve()
+  asking += 1
+  return browse(at)
 }
 
 /** The browser's "use this folder", offered only where the engine would take it. */

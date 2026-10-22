@@ -9271,6 +9271,14 @@
       "en": "Choose the folder in the dialog that opened...",
       "zh": "在弹出的窗口里选择文件夹…"
     },
+    "gui.wd.drives": {
+      "en": "Drives",
+      "zh": "盘符"
+    },
+    "gui.wd.typed": {
+      "en": "Type a folder path",
+      "zh": "输入文件夹路径"
+    },
     "gui.picker.empty_provider": {
       "en": "No models under this account",
       "zh": "这个账号下还没有模型"

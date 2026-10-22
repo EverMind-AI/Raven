@@ -30,6 +30,16 @@ import type { JSX } from 'react'
 const CHECK = 'M5 12.5l4.5 4.5L19 7'
 const HOME = 'M4 11.5 12 5l8 6.5V19a1 1 0 0 1-1 1h-4.5v-5h-5v5H5a1 1 0 0 1-1-1Z'
 const UP = 'M12 19V6M6 12l6-6 6 6'
+/* A stack of drives: two slabs, each with its light. */
+const DRIVES = 'M4 6.5h16v4H4ZM4 13.5h16v4H4ZM7 8.5h.01M7 15.5h.01'
+
+/* A long path shows its end, which names the folder the browser stands in --
+   the reason the bar used to be drawn right to left. A field has to stay left
+   to right to be typed into, so it is scrolled to its end as it mounts
+   instead; it mounts again on every read, refused or not. */
+function showEnd(el: HTMLInputElement | null): void {
+  if (el) el.scrollLeft = el.scrollWidth
+}
 /* The chip's folder, spelled here rather than imported: the chip imports this
    file, and a glyph is not worth a cycle. */
 /** A folder, in the same 24-unit outline the shield next door is drawn in.
@@ -84,8 +94,12 @@ function Menu({ rows, err, picking }: { rows: readonly wd.WdRow[]; err: string |
   )
 }
 
-/* The browser: where it stands, the folders under it, and the two ways out. */
-function Browser({ at, loading, err }: { at: DirListing; loading: boolean; err: string | null }): JSX.Element {
+/* The browser: where it stands, the folders under it, and the two ways out. A
+   root has no parent, so where the gateway's machine has several roots
+   (Windows drives) the bar offers the list of the others; the path itself is a
+   field, so a folder can be named rather than walked to. */
+function Browser({ at, loading, err, asked }: { at: DirListing; loading: boolean; err: string | null; asked: number }): JSX.Element {
+  const roots = at.roots || []
   return (
     <>
       <div className="chrome-wd-path">
@@ -97,10 +111,35 @@ function Browser({ at, loading, err }: { at: DirListing; loading: boolean; err: 
           disabled={!at.parent} onClick={() => { if (at.parent) void wd.browse(at.parent) }}>
           <Glyph d={UP} />
         </button>
-        {/* Wrapped in left-to-right marks: the path is shown from its end when
-            it overflows (direction: rtl in the stylesheet), and a bidi-neutral
-            separator at either end would otherwise flip it. */}
-        <span className="chrome-wd-p" title={at.path}>{'‎'}{at.path}{'‎'}</span>
+        {roots.length
+          ? (
+            <button className="chrome-wd-nav chrome-wd-drives" data-tip={t('gui.wd.drives')}
+              aria-label={t('gui.wd.drives')} onClick={() => wd.drives()}>
+              <Glyph d={DRIVES} />
+            </button>
+          )
+          : null}
+        {/* A field rather than a label: the walk cannot reach a folder nobody
+            has listed (a dotfolder, one past the listing's cap), and the
+            gateway takes any absolute path. Re-mounted on every read, refused
+            or not, so a path that was not taken is replaced by wherever the
+            browser actually stands. */}
+        <input
+          key={`${at.path}#${asked}`}
+          ref={showEnd}
+          className="chrome-wd-p chrome-wd-typed"
+          type="text"
+          defaultValue={at.path}
+          title={at.path}
+          aria-label={t('gui.wd.typed')}
+          placeholder={t('gui.wd.typed')}
+          spellCheck={false}
+          onKeyDown={(e) => {
+            if (e.key !== 'Enter') return
+            e.preventDefault()
+            void wd.go(e.currentTarget.value)
+          }}
+        />
       </div>
       <div className="chrome-wd-list" role="list">
         {at.entries.map((e) => (
@@ -134,6 +173,32 @@ function Browser({ at, loading, err }: { at: DirListing; loading: boolean; err: 
   )
 }
 
+/* The roots a root cannot reach by walking: the other drives, one row each. */
+function Drives({ roots, err }: { roots: readonly { name: string; path: string; ok: boolean }[]; err: string | null }): JSX.Element {
+  return (
+    <>
+      <div className="chrome-wd-list" role="list">
+        {roots.map((root) => (
+          <button
+            key={root.path}
+            role="listitem"
+            className={root.ok ? 'prow' : 'prow chrome-wd-off'}
+            title={root.ok ? root.path : t('gui.wd.blocked')}
+            onClick={() => void wd.browse(root.path)}
+          >
+            <Glyph d={DRIVES} className="pico" />
+            <span className="nm">{root.name}</span>
+          </button>
+        ))}
+        {err ? <div className="note chrome-wd-err" role="alert">{err}</div> : null}
+      </div>
+      <div className="chrome-wd-foot">
+        <button className="chrome-wd-btn" onClick={() => wd.back()}>{t('gui.wd.back')}</button>
+      </div>
+    </>
+  )
+}
+
 export function WorkdirPopover(): JSX.Element {
   const s = useSyncExternalStore(wd.subscribe, wd.get)
   useSyncExternalStore(lang.subscribe, lang.get)
@@ -150,8 +215,10 @@ export function WorkdirPopover(): JSX.Element {
           it can take a click, and the served tree carries the shell alone. */}
       {s.open
         ? (s.view === 'browse' && s.listing
-          ? <Browser at={s.listing} loading={s.loading} err={s.err} />
-          : <Menu rows={s.listed || []} err={s.err} picking={s.picking} />)
+          ? <Browser at={s.listing} loading={s.loading} err={s.err} asked={s.asked} />
+          : s.view === 'drives' && s.listing
+            ? <Drives roots={s.listing.roots || []} err={s.err} />
+            : <Menu rows={s.listed || []} err={s.err} picking={s.picking} />)
         : null}
     </div>
   )

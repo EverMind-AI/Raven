@@ -45,7 +45,8 @@ TRAJECTORY_CAPABILITY = "trajectory-v1"
 BUGREPORT_CAPABILITY = "bugreport-v1"
 # Announced while this host has a folder dialog to open (`fs.pick_dir`), so the
 # page offers that dialog only where one can come up and walks the gateway's
-# folders in the page everywhere else.
+# folders in the page everywhere else. A Windows host never announces it: its
+# dialog opens behind the browser (raven.rpc.folder_dialog).
 FOLDER_DIALOG_CAPABILITY = "folder-dialog-v1"
 _bugreport_url_warned = False
 

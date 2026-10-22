@@ -391,4 +391,94 @@ describe('the workspace a draft picks', () => {
     /* Still on the menu: the refusal did not replace it. */
     expect(byName('gui.wd.none')).toBeTruthy()
   })
+
+  it('offers the other drives where the walk reached a drive root, and enters the one chosen', async () => {
+    /* A drive root has no parent, so a browser that started under C: can reach
+       no other drive by walking. The listing names them; the browser shows
+       them as a view of their own, and a click re-reads through `browse`. */
+    const asked: Array<string | undefined> = []
+    /* C: holds the agent's own data here, so its row is greyed and explained
+       like any ancestor folder -- and still a way in. */
+    const drives = [
+      { name: 'C:\\', path: 'C:\\', ok: false },
+      { name: 'D:\\', path: 'D:\\', ok: true },
+    ]
+    const listings: Record<string, DirListing> = {
+      'C:\\': { path: 'C:\\', parent: null, home: 'C:\\Users\\me', ok: true, roots: drives, entries: [] },
+      'D:\\': { path: 'D:\\', parent: null, home: 'C:\\Users\\me', ok: true, roots: drives, entries: [{ name: 'projects', path: 'D:\\projects', ok: true }] },
+      'D:\\projects': { path: 'D:\\projects', parent: 'D:\\', home: 'C:\\Users\\me', ok: true, roots: [], entries: [] },
+    }
+    workspace(async (p) => { asked.push(p ?? 'C:\\'); return listings[p ?? 'C:\\']! })
+    openFolders()
+    act(() => byName('gui.wd.open_remote').click())
+    await settle()
+    expect(pop().querySelector<HTMLButtonElement>('.chrome-wd-drives')).not.toBeNull()
+    act(() => pop().querySelector<HTMLButtonElement>('.chrome-wd-drives')!.click())
+    await settle()
+    expect(wd.get().view).toBe('drives')
+    expect(pop().dataset.view).toBe('drives')
+    expect(prows().map((r) => r.querySelector('.nm')?.textContent)).toEqual(['C:\\', 'D:\\'])
+    expect(byName('C:\\').classList.contains('chrome-wd-off')).toBe(true)
+    expect(byName('C:\\').title).toBe('gui.wd.blocked')
+    expect(byName('C:\\').disabled).toBe(false)
+    expect(byName('D:\\').classList.contains('chrome-wd-off')).toBe(false)
+    expect(byName('D:\\').title).toBe('D:\\')
+    act(() => byName('D:\\').click())
+    await settle()
+    expect(asked.at(-1)).toBe('D:\\')
+    expect(wd.get().view).toBe('browse')
+    expect(pop().querySelector('.chrome-wd-p')?.getAttribute('title')).toBe('D:\\')
+    expect(prows().map((r) => r.querySelector('.nm')?.textContent)).toEqual(['projects'])
+  })
+
+  it('offers no list of drives where there is one root', async () => {
+    workspace(async () => ({ path: '/', parent: null, home: '/home/me', ok: true, roots: [], entries: [] }))
+    openFolders()
+    act(() => byName('gui.wd.open_remote').click())
+    await settle()
+    expect(pop().querySelector('.chrome-wd-drives')).toBeNull()
+  })
+
+  it('reads a folder path typed into the bar, and says so when it is refused', async () => {
+    const asked: Array<string | undefined> = []
+    workspace(async (p) => {
+      asked.push(p)
+      if (p === '/nope') throw { data: { detail: 'not a directory' } }
+      return { path: p ?? '/home/me', parent: '/home', home: '/home/me', ok: true, entries: [] }
+    })
+    openFolders()
+    act(() => byName('gui.wd.open_remote').click())
+    await settle()
+    const field = (): HTMLInputElement => pop().querySelector<HTMLInputElement>('.chrome-wd-typed')!
+    expect(field().value).toBe('/home/me')
+    act(() => {
+      field().value = '/srv/elsewhere'
+      field().dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      field().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      await Promise.resolve()
+    })
+    await settle()
+    expect(asked.at(-1)).toBe('/srv/elsewhere')
+    expect(pop().querySelector('.chrome-wd-p')?.getAttribute('title')).toBe('/srv/elsewhere')
+    expect(field().value).toBe('/srv/elsewhere')
+
+    act(() => {
+      field().value = '/nope'
+      field().dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      field().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      await Promise.resolve()
+    })
+    await settle()
+    expect(pop().querySelector('.chrome-wd-err')?.textContent).toBe('gui.wd.failed {"detail":"not a directory"}')
+    expect(wd.get().view).toBe('browse')
+    /* The browser stayed where it stood, and the bar says so: a field left
+       holding a path nothing listed would read as the folder the "Use this
+       folder" button picks, which is not the one it picks. */
+    expect(pop().querySelector('.chrome-wd-p')?.getAttribute('title')).toBe('/srv/elsewhere')
+    expect(field().value).toBe('/srv/elsewhere')
+  })
 })

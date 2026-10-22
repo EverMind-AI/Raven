@@ -17,7 +17,7 @@ import os
 import re
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Any, get_args
 
 from loguru import logger
@@ -2021,9 +2021,10 @@ async def fs_dirs(params: dict, *, agent_loop_factory=None) -> dict:
     the picker lets such a row be entered and only withholds the pick.
 
     The cap counts directories FOUND, not names examined, so a folder is never
-    dropped for sorting late among its siblings: the picker offers no typed
-    path, and a subtree left out of the listing cannot be reached at all.
-    Bounding the input instead would buy speed with the answer. The scan is
+    dropped for sorting late among its siblings: bounding the names examined
+    instead would answer "no subfolders" for a subtree the reader can see, and
+    the page cannot tell that apart from an empty folder. Bounding the input
+    would buy speed with the answer. The scan is
     cheap regardless because the type comes off the dirent -- ``os.scandir``
     answers ``is_dir`` from what the kernel already returned, so a directory of
     thirty thousand files costs no stats at all. And the walk runs off the
@@ -2076,8 +2077,38 @@ def _walk_dirs(target: Path, agent_home: Path) -> dict:
         "parent": None if target.parent == target else str(target.parent),
         "home": str(Path.home()),
         "ok": allowed(target),
+        "roots": [{"name": root, "path": root, "ok": allowed(Path(root))} for root in _roots_at(target)],
         "entries": entries,
     }
+
+
+def _windows_drives() -> list[str]:
+    """Every drive this Windows host exposes, as ``C:\\``-style roots.
+
+    ``os.listdrives`` (3.12+) reads them from the system rather than probing
+    every letter, so a mapping added since boot shows up without a scan. A
+    drive that is not ready is still listed: Explorer shows it too, and asking
+    for it answers with the same error as any folder that is gone.
+    """
+    try:
+        return list(os.listdrives())
+    except (AttributeError, OSError):
+        return []
+
+
+def _roots_at(target: PurePath) -> list[str]:
+    """The other filesystem roots, offered only while standing on one.
+
+    A root has no parent, so the browser's upward walk ends there; on a host
+    with several roots (Windows drives) that would make every other root
+    unreachable from a picker that started in the user's home. Further down
+    the tree these are siblings of nothing, so the list is empty. Each root is
+    judged by the caller, as a folder row is: the drive holding agent home is
+    an ancestor of it, which ``session.create`` refuses.
+    """
+    if target.parent != target or not sys.platform.startswith("win"):
+        return []
+    return _windows_drives()
 
 
 async def _run_pick_dir(argv: list[str]) -> str | None:
@@ -2111,7 +2142,8 @@ async def fs_pick_dir(params: dict, *, agent_loop_factory=None) -> dict:
     is the reader's own desktop, which is the page's call to make -- it knows
     where it is being served from -- so the method itself does not refuse a
     remote caller; it would merely open a dialog nobody sees, and a host with
-    no dialog says so instead.
+    no dialog says so instead. Windows is one of those hosts: see
+    :mod:`raven.rpc.folder_dialog` for why it has no command here.
 
     The answer carries the same ``ok`` ``fs.dirs`` puts on every entry, so the
     page can decline a folder the create would refuse without a second call.
