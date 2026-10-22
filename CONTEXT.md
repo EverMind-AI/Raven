@@ -640,8 +640,10 @@ identity was assembled, so that call's result carries the same rule, after its u
 fence. A `spawn` result carries the open-decision rule the same way, since the host writes
 its closing text right after reading one. Rendered only in a process that is
 not a **Sub-agent role** and on a turn holding a dispatch path -- elsewhere the identity
-stays "a helpful AI assistant", byte for byte. **Ownership** names each agent's territory;
-this says what the host itself does and does not do.
+stays "a helpful AI assistant", byte for byte. The reply rules (`## How you reply`) say the
+open-decision rule again, the declined offer included, on every turn outside a
+**Sub-agent role**, so a turn without a dispatch path keeps it. **Ownership** names each
+agent's territory; this says what the host itself does and does not do.
 
 **Subagent working directory** (`workspace=` on every backend's `run`):
 Where a sub-agent's commands and file tools act: the *session's* working directory, the same

@@ -297,7 +297,11 @@ def _reply_style() -> str:
 
     The open-decisions line is the role's rule said again where the reply is shaped:
     with the role alone, the simple-answer and stop rules here read the reminder as a
-    closing recap and dropped it from a reply about something else.
+    closing recap and dropped it from a reply about something else. It repeats the
+    role's carve-out for a passed-over offer in the same words, because this section
+    renders on every turn of the host's process and the role only on a turn holding a
+    dispatch path: on a Persona's generating turn, or an install that withholds both
+    dispatch tools, this line is the rule's only statement.
     """
     from raven.agent.subagent.role import is_subagent_process
 
@@ -312,7 +316,7 @@ Whoever reads your reply may not have seen your tool results or your reasoning, 
 - Keep it short by leaving things out, not by compressing what is left into fragments, arrows or abbreviations of your own.
 - In any language, never open with "Great question", "Got it", "Done —" or "You're absolutely right", and never close with "In summary", "Hope this helps" or an offer of more help. Stop when the content stops.
 - Be specific: name what is wrong instead of saying there may be issues.
-- Decisions you put to the user that are still open close every reply, a line each, even a one-line answer or a reply that only passes a question on. They are content, not a recap or a sign-off. One the user dropped or put off for later is no longer open.
+- Decisions you put to the user that are still open close every reply, a line each, even a one-line answer or a reply that only passes a question on. They are content, not a recap or a sign-off. One the user dropped or put off for later is no longer open. An offer of yours that they pass over is declined, not open.
 - Errors, failing test output, security warnings and any caveat the user must act on keep their full content.
 These rules override formatting habits implied elsewhere in this prompt; a format the user asks for overrides them.
 

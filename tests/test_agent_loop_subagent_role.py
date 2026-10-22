@@ -330,8 +330,9 @@ def test_the_reply_rules_close_every_reply_with_the_decisions_still_open(workspa
     (glm-5.3-flash), a one-line answer to an unrelated question carried the open
     decisions in 0 of 6 runs with the role alone -- the simple-answer and
     stop-when-the-content-stops rules above read the reminder as a closing recap --
-    and in 7 of 12 with this line. Its last sentence keeps a deferral: a wording
-    without it asked again about what the user had just put off."""
+    and in 7 of 12 with this line. Its sentence on what the user dropped or put off
+    keeps a deferral: a wording without it asked again about what the user had just
+    put off."""
     plain = render.identity_text(workspace)
     section = plain.split("## How you reply", 1)[1].split("\n\nReply directly", 1)[0]
 
@@ -339,6 +340,33 @@ def test_the_reply_rules_close_every_reply_with_the_decisions_still_open(workspa
     assert "a reply that only passes a question on" in section
     assert "not a recap or a sign-off" in section
     assert "One the user dropped or put off for later is no longer open." in section
+
+
+def test_a_turn_without_the_role_still_reads_a_passed_over_offer_as_declined(
+    workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reply rules render on every turn of the host's process, the role only on a
+    turn that holds a dispatch path: a Persona's generating turn holds none, nor does
+    an install that withholds `spawn` and `run_subagent_dag`. There the open-decision
+    line is the rule's only statement, so it carries the role's carve-out in the same
+    words; without it a closing "shall I ...?" the user moved past reads as a decision
+    still open, to be asked again on every reply."""
+    clause = "An offer of yours that they pass over is declined, not open."
+
+    host = render.identity_text(workspace)
+    assert clause in host.split("## Your role", 1)[1].split("\n## ", 1)[0]
+    assert clause in host.split("## How you reply", 1)[1].split("\n\nReply directly", 1)[0]
+
+    no_role = render.identity_text(workspace, dispatch_tools=())
+    rules = no_role.split("## How you reply", 1)[1].split("\n\nReply directly", 1)[0]
+    assert "## Your role" not in no_role
+    assert "Decisions you put to the user that are still open close every reply" in rules
+    assert clause in rules
+
+    monkeypatch.setenv("RAVEN_SUBAGENT", "1")
+    child = render.identity_text(workspace)
+    assert "You are Raven, a helpful AI assistant." in child
+    assert clause not in child
 
 
 def test_the_reply_rules_head_each_task_in_a_report_on_several(workspace) -> None:
