@@ -853,7 +853,11 @@ iteration; prefills, nudges and continuations are steps. Recovery switched off c
 with text and fails a refusal; an empty reply then ends the turn with no text.
 Either way a turn that reaches its end with no text raises `AnswerlessTurnError` rather than
 replying -- unless one of its tools already put an answer in front of the reader (the message
-tool's `sent_in_turn`, or an inline research answer the turn itself streamed).
+tool's `sent_in_turn`, or an inline research answer the turn itself streamed). A turn the message
+tool has already answered takes no RETRY, STEP_DOWN or FALLBACK and no FAIL: whatever the instant
+moves (PREFILL, NUDGE, CONTINUE) did not mend ends the turn answered, with no text of its own. A
+resend or step-down wait is announced as a `NoticeKind.LLM_RETRY` notice, `empty_reply` or
+`thinking_only` as its detail, which is how a surface says the runtime is still working.
 PREFILL is asked of the provider first (`LLMProvider.supports_assistant_prefill`): the Anthropic
 family rejects a trailing assistant message while thinking is on, and through a gateway that
 rejection can arrive as a stream that never yields a byte, so a provider that answers no never
@@ -867,11 +871,12 @@ The waits the Agent Loop spends on a model call that came back an *error* before
 turn up. The provider's own retries are seconds long and suit a dropped connection; a gateway
 serving error pages outlasts them, so a retryable verdict buys one rung of this ladder and the
 same ask goes out again — the messages are untouched, so nothing is appended for the failed
-call. The wait is announced as a `NoticeKind.LLM_RETRY` notice carrying the error *category*,
-which is how a surface can say the runtime is still working rather than showing nothing for
-minutes. A streamed call whose verdict is fallback-worthy goes to the next fallback model before
-it waits, because only the plain path walks a model chain inside the provider. A non-retryable
-verdict, or a spent ladder, ends the turn.
+call. The wait is announced as a `NoticeKind.LLM_RETRY` notice carrying the error *category*
+(Empty-Response Recovery's waits use the same notice), which is how a surface can say the
+runtime is still working rather than showing nothing for minutes. A streamed call whose verdict
+is fallback-worthy goes to the next fallback model before it waits, because only the plain path
+walks a model chain inside the provider. A non-retryable verdict, or a spent ladder, ends the
+turn.
 _Avoid_: "retry" unqualified — Empty-Response Recovery's RETRY resends the same request after a
 call that *succeeded* and returned no text; this one answers a call that failed.
 

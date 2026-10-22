@@ -62,6 +62,7 @@ from raven.contracts.llm_provider import REASONING_EFFORT_LADDER
 from raven.providers import rates
 from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, ToolCallRequest, send_max_tokens
 from raven.providers.litellm_provider import LiteLLMProvider
+from raven.spine.events import NoticeKind
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import AnswerlessTurnError, Origin, TurnRequest
 
@@ -593,6 +594,29 @@ def _efforts(calls: list[dict]) -> list[str | None]:
     return [call.get("reasoning_effort") for call in calls]
 
 
+def _recorded_sleeps(monkeypatch, timeline: list | None = None) -> list[float]:
+    """Make the loop's waits instant and recorded: only ``turn_path``'s ``asyncio.sleep`` is replaced.
+
+    A ``timeline``, when given, also gets ``("sleep", seconds)`` in the order the waits happen
+    among whatever else it collects.
+    """
+    slept: list[float] = []
+
+    class _Asyncio:
+        """``asyncio`` as the loop module sees it, with only the sleep recorded."""
+
+        def __getattr__(self, name):
+            return getattr(asyncio, name)
+
+        async def sleep(self, delay, *_args, **_kwargs):
+            slept.append(delay)
+            if timeline is not None:
+                timeline.append(("sleep", delay))
+
+    monkeypatch.setattr(turn_path, "asyncio", _Asyncio())
+    return slept
+
+
 _ORIGINS = pytest.mark.parametrize("origin", [Origin.USER, Origin.CRON])
 
 
@@ -658,18 +682,7 @@ async def test_an_expensive_empty_is_resent_once(workspace, monkeypatch):
 async def test_resends_back_off_between_attempts(workspace, monkeypatch):
     calls = _served(monkeypatch, [_reply("")] * 4)
     monkeypatch.setattr(turn_path, "empty_retry_delay", lambda n, **_: float(n))
-    slept: list[float] = []
-
-    class _Asyncio:
-        """``asyncio`` as the loop module sees it, with only the sleep recorded."""
-
-        def __getattr__(self, name):
-            return getattr(asyncio, name)
-
-        async def sleep(self, delay, *_args, **_kwargs):
-            slept.append(delay)
-
-    monkeypatch.setattr(turn_path, "asyncio", _Asyncio())
+    slept = _recorded_sleeps(monkeypatch)
 
     await _fail(_litellm_agent(workspace))
 
@@ -990,6 +1003,95 @@ async def test_the_wrap_up_after_a_switch_goes_to_the_model_the_turn_is_on(works
     assert _models(calls) == [_MODEL] * 4 + ["fb"] * 3
 
 
+def _wire_message_tool(agent: AgentLoop) -> list[str]:
+    """Point the loop's message tool at a recorder, on this turn's own target, so a send reaches it and counts as the reply."""
+    sent: list[str] = []
+
+    async def send(content: str, media: list[str]) -> None:
+        sent.append(content)
+
+    message = agent.tools.get("message")
+    message.set_context("test", "c1")
+    message.set_send_callback(send)
+    return sent
+
+
+_SEND = '{"content": "here is your answer"}'
+
+
+@pytest.mark.asyncio
+async def test_an_empty_reply_after_the_message_tool_sent_ends_the_turn_answered(workspace, monkeypatch):
+    """The reader has the answer. The nudge is instant and still asked; the backed-off resends are not."""
+    calls = _served(monkeypatch, [_tool_reply("message", _SEND), _reply(""), _reply(""), _reply("never asked")])
+    slept = _recorded_sleeps(monkeypatch)
+    agent = _litellm_agent(workspace)
+    sent = _wire_message_tool(agent)
+
+    out = await agent._process_message(_turn(), session_key="s1")
+
+    assert sent == ["here is your answer"]
+    assert out is None, "the message tool answered, so the turn has no reply of its own to send"
+    assert len(calls) == 3, "the send, the empty reply, and the reply the nudge asked for"
+    assert calls[2]["messages"][-1]["content"] == POST_TOOL_NUDGE
+    assert slept == []
+
+
+@pytest.mark.asyncio
+async def test_an_answered_turn_that_ends_on_the_last_iteration_is_not_wrapped_up(workspace, monkeypatch):
+    """The wrap-up is for a turn that ran out of budget. This one ended because the reader already has
+    its answer, and a summary asked for now would be a second reply and a call nobody needed."""
+    calls = _served(
+        monkeypatch, [_tool_reply("message", _SEND), _reply(""), _reply(""), _reply("a wrap-up nobody asked for")]
+    )
+    agent = _litellm_agent(workspace, max_iterations=3)
+    _wire_message_tool(agent)
+
+    final, _used, _messages, outcome = await agent._run_agent_loop(_seed())
+
+    assert len(calls) == 3, "the send, the empty reply, and the nudged one: the third iteration is the cap"
+    assert final is None and outcome.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_the_same_script_without_the_send_takes_the_resend_ladder(workspace, monkeypatch):
+    """The control: the message tool was never wired, so it sent nothing, and the empty replies are the turn's to recover."""
+    calls = _served(monkeypatch, [_tool_reply("message", _SEND)] + [_reply("")] * 5 + [_reply("never asked")])
+    slept = _recorded_sleeps(monkeypatch)
+
+    failed = await _fail(_litellm_agent(workspace))
+
+    assert str(failed) == EMPTY_REPLY_FAILURE
+    assert len(calls) == 6, "the call that sent nothing, the nudge, and three resends"
+    assert len(slept) == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "script,fallbacks,asked",
+    [
+        pytest.param(lambda: [_reply("", reasoning="hmm, let me think")] * 5, [], 4, id="step_down"),
+        pytest.param(lambda: [_reply("no", finish="content_filter"), _reply("fb's answer")], ["fb"], 2, id="fallback"),
+        pytest.param(lambda: [_reply("", finish="length")] * 6, [], 5, id="failure"),
+    ],
+)
+async def test_the_paid_moves_and_the_failure_give_way_once_the_message_tool_sent(
+    workspace, monkeypatch, script, fallbacks, asked
+):
+    """A step-down and a fallback are re-asks behind a backoff, and a failure is a verdict on a turn the
+    reader already has an answer to. The instant moves before them still run: two prefills, three continuations."""
+    calls = _served(monkeypatch, [_tool_reply("message", _SEND), *script()])
+    slept = _recorded_sleeps(monkeypatch)
+    agent = _litellm_agent(workspace)
+    _wire_message_tool(agent)
+
+    _final, _used, _messages, outcome = await agent._run_agent_loop(_seed(), fallback_models=fallbacks)
+
+    assert outcome.status == "completed" and outcome.error is None
+    assert len(calls) == asked
+    assert _models(calls) == [_MODEL] * asked and _efforts(calls) == [None] * asked
+    assert slept == []
+
+
 @pytest.mark.asyncio
 async def test_a_failure_on_the_last_iteration_is_not_wrapped_up(workspace, monkeypatch):
     """Two prefills and two step-downs take the three iterations there are. The turn that
@@ -1083,15 +1185,88 @@ def _finished_stream(*texts: str) -> _Stream:
 class _Sink:
     """The turn's delta and notice outlets, collecting what reaches them."""
 
-    def __init__(self) -> None:
+    def __init__(self, timeline: list | None = None) -> None:
         self.text: list[str] = []
         self.notices: list[tuple[object, str]] = []
+        self._timeline = timeline
 
     async def delta(self, text: str) -> None:
         self.text.append(text)
 
     async def notice(self, kind, detail: str) -> None:
         self.notices.append((kind, detail))
+        if self._timeline is not None:
+            self._timeline.append(("notice", detail))
+
+
+@pytest.mark.asyncio
+async def test_a_resend_says_when_it_waits(workspace, monkeypatch):
+    """One notice per backoff, each ahead of its wait: the status is for the seconds it names."""
+    _served(monkeypatch, [_reply(""), _reply(""), _reply("the answer")])
+    timeline: list = []
+    _recorded_sleeps(monkeypatch, timeline)
+    sink = _Sink(timeline)
+
+    final, _used, _messages, _outcome = await _litellm_agent(workspace)._run_agent_loop(_seed(), on_notice=sink.notice)
+
+    assert final == "the answer"
+    assert sink.notices == [(NoticeKind.LLM_RETRY, "empty_reply")] * 2
+    assert [step[0] for step in timeline] == ["notice", "sleep", "notice", "sleep"]
+
+
+@pytest.mark.asyncio
+async def test_a_step_down_says_when_it_waits(workspace, monkeypatch):
+    """The prefills before it are instant and announce nothing; the step-down is the wait."""
+    _served(monkeypatch, [_reply("", reasoning="hmm, let me think")] * 3 + [_reply("the answer")])
+    timeline: list = []
+    _recorded_sleeps(monkeypatch, timeline)
+    sink = _Sink(timeline)
+
+    final, _used, _messages, _outcome = await _litellm_agent(workspace)._run_agent_loop(_seed(), on_notice=sink.notice)
+
+    assert final == "the answer"
+    assert sink.notices == [(NoticeKind.LLM_RETRY, "thinking_only")]
+    assert [step[0] for step in timeline] == ["notice", "sleep"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "script,fallbacks",
+    [
+        pytest.param(lambda: [_reply("the answer")], [], id="answers_at_once"),
+        pytest.param(lambda: [_tool_reply(), _reply(""), _reply("the answer")], [], id="nudged"),
+        pytest.param(lambda: [_reply("", reasoning="hmm, let me think"), _reply("the answer")], [], id="prefilled"),
+        pytest.param(lambda: [_reply("no", finish="content_filter"), _reply("the answer")], ["fb"], id="fell_back"),
+        pytest.param(lambda: [_reply("", finish="length"), _reply("the answer")], [], id="continued"),
+    ],
+)
+async def test_a_turn_that_does_not_wait_announces_nothing(workspace, monkeypatch, script, fallbacks):
+    _served(monkeypatch, script())
+    sink = _Sink()
+
+    final, _used, _messages, _outcome = await _litellm_agent(workspace)._run_agent_loop(
+        _seed(), fallback_models=fallbacks, on_notice=sink.notice
+    )
+
+    assert final == "the answer"
+    assert sink.notices == []
+
+
+@pytest.mark.asyncio
+async def test_a_wedged_notice_outlet_does_not_park_a_resend(workspace, monkeypatch):
+    """The notice is a status hint, staged like the ladder's: an outlet that never returns costs the hint, not the turn."""
+    _served(monkeypatch, [_reply(""), _reply("the answer")])
+    agent = _litellm_agent(workspace)
+    agent.provider.generation = dataclasses.replace(agent.provider.generation, first_byte_timeout=0.05)
+
+    async def wedged(kind, detail: str) -> None:
+        await asyncio.sleep(30)
+
+    final, _used, _messages, _outcome = await asyncio.wait_for(
+        agent._run_agent_loop(_seed(), on_notice=wedged), timeout=10
+    )
+
+    assert final == "the answer"
 
 
 @pytest.mark.asyncio

@@ -30,9 +30,11 @@ class NoticeKind(StrEnum):
     # this one replaces the answer rather than accompanying it, so an outlet
     # that renders nothing else should still render this.
     ACTION_BLOCKED = "action_blocked"
-    # A model call failed and the Model-Error Ladder is waiting before asking
-    # again. The turn is still running: the detail is the error category, never
-    # the vendor's own body.
+    # The loop is waiting before it asks the model again: after a call that
+    # failed (the Model-Error Ladder), or after a reply that said nothing
+    # (Empty-Response Recovery's resend and step-down). The turn is still
+    # running: the detail is the error category, or `empty_reply` /
+    # `thinking_only`, never the vendor's own body.
     LLM_RETRY = "llm_retry"
     # The turn ended on a silence marker: an outlet draws one faint line, a channel sends nothing.
     SILENT_TURN = "silent_turn"

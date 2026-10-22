@@ -349,6 +349,12 @@ _TURN_TRANSIENT_KEYS = ("_recovery_synthetic", ATTACHED_IMAGE_KEY)
 # and this says why.
 _NO_CONTENT_UNRECOVERED = "The model returned no content, and this turn's empty-response recovery is switched off."
 
+# The moves a turn that the message tool has already answered does not take: the three backed-off
+# re-asks of the same step, and the failure that follows them.
+_GIVEN_UP_ONCE_ANSWERED = frozenset(
+    {RecoveryAction.RETRY, RecoveryAction.STEP_DOWN, RecoveryAction.FALLBACK, RecoveryAction.FAIL}
+)
+
 
 def _log_what_the_model_said(response: Any) -> None:
     """Record the assistant's own words and how much it thought.
@@ -924,6 +930,10 @@ class TurnPathMixin:
         # Set with the failure when the model produced nothing at all, which is
         # what tells a caller an empty run from one that failed in some other way.
         no_output = False
+        # Set when the loop ended a turn the message tool had already answered, on a
+        # reply with nothing in it: that is not running out of budget, so the wrap-up
+        # that fills a turn which did is not asked for this one.
+        ended_answered = False
 
         # The turn's window bookkeeping: the last billed context size, the retry
         # budgets every shrink draws on, and the picture window. Held here and
@@ -1066,6 +1076,26 @@ class TurnPathMixin:
         )
         iter_msg_base = 0
         pending_gen_overrides: dict[str, Any] | None = None
+
+        async def _announce_wait(detail: str) -> None:
+            """Say the loop is waiting before it asks the model again, as the status line the next output replaces.
+
+            Only a category or a fixed word, never the vendor's own body: that can carry
+            a masked key and an account URL, and this text is read by everyone watching
+            the turn. Staged like the episode boundary: a bounded outlet queue with a
+            wedged worker behind it would park the turn here for the whole wait, and
+            the notice is a status hint -- losing one is a silent wait, not a turn lost.
+            """
+            if on_notice is None:
+                return
+            from raven.spine.events import NoticeKind as _NoticeKind
+
+            await first_call.stage(
+                "the retry-notice emit",
+                on_notice(_NoticeKind.LLM_RETRY, detail),
+                iteration=iteration,
+                fallback=None,
+            )
 
         def _land_hook_note(decision) -> None:
             """Honor a hook's ``append_note``: the note joins the last message
@@ -1968,23 +1998,7 @@ class TurnPathMixin:
                             len(ladder),
                             (clean or "")[:160],
                         )
-                        if on_notice is not None:
-                            # Only the category: the vendor's own body can carry
-                            # a masked key and an account URL, and this text is
-                            # read by everyone watching the turn.
-                            from raven.spine.events import NoticeKind as _NoticeKind
-
-                            # Staged like the episode boundary: a bounded outlet
-                            # queue with a wedged worker behind it would park the
-                            # turn here for the whole ladder, and the notice is a
-                            # status hint -- losing one is a silent wait, not a
-                            # turn lost.
-                            await first_call.stage(
-                                "the retry-notice emit",
-                                on_notice(_NoticeKind.LLM_RETRY, verdict.category),
-                                iteration=iteration,
-                                fallback=None,
-                            )
+                        await _announce_wait(verdict.category)
                         iteration -= 1  # the failed call did no work; don't bill it
                         await asyncio.sleep(delay)
                         continue
@@ -2036,6 +2050,23 @@ class TurnPathMixin:
                     fallback_left=bool(fallbacks_left),
                     resend_budget=resends_allowed,
                 )
+                answered_by_tool = False
+                if action in _GIVEN_UP_ONCE_ANSWERED:
+                    mt = self.tools.get("message")
+                    answered_by_tool = isinstance(mt, MessageTool) and mt.sent_in_turn
+                if answered_by_tool:
+                    # The reader already has the answer, sent by the message tool. A
+                    # reply the instant moves (prefill, nudge, continuation) did not
+                    # mend is not worth a backed-off re-ask of the same step, a model
+                    # switch, or a verdict on a turn that answered: it ends answered,
+                    # with no text of its own, as it did before recovery could tell
+                    # the difference.
+                    logger.info(
+                        "empty-recovery: the message tool already answered this turn; ending it on a {} reply instead of {}",
+                        kind.name,
+                        action.name,
+                    )
+                    action = RecoveryAction.COMPLETE
                 if action is RecoveryAction.PREFILL:
                     recovery.prefills += 1
                     logger.warning(
@@ -2086,6 +2117,7 @@ class TurnPathMixin:
                         delay,
                     )
                     pending_gen_overrides = call_overrides
+                    await _announce_wait("empty_reply")
                     iteration -= 1
                     await asyncio.sleep(delay)
                     continue
@@ -2112,6 +2144,7 @@ class TurnPathMixin:
                     # message, which a prefill-refusing provider rejects.
                     _drop_trailing_prefills(messages)
                     pending_gen_overrides = {"reasoning_effort": next_rung}
+                    await _announce_wait("thinking_only")
                     iteration -= 1
                     await asyncio.sleep(delay)
                     continue
@@ -2253,8 +2286,10 @@ class TurnPathMixin:
                 _stamp_reasoning_ms(messages, response)
                 _stamp_context_used(messages, response)
                 final_content = clean
-                # Reachable with no text only when recovery is switched off.
+                # Reachable with no text only when recovery is switched off, or
+                # when the message tool had already answered.
                 no_output = not clean
+                ended_answered = answered_by_tool
                 break
 
         # A row recorded while a tool ran rides the next iteration's flush,
@@ -2266,8 +2301,10 @@ class TurnPathMixin:
         if leftover is not None and (lost := leftover.pending_rows()):
             logger.info("question autofill: {} row(s) ended the turn unwritten", len(lost))
 
-        if final_content is None and (
-            stalled_tool is not None or iteration >= iteration_cap or stopped_by == "wall_clock"
+        if (
+            final_content is None
+            and not ended_answered
+            and (stalled_tool is not None or iteration >= iteration_cap or stopped_by == "wall_clock")
         ):
             if stalled_tool is not None:
                 stopped_by = "stalled_tool"
