@@ -1050,7 +1050,7 @@ def _registered(_home, *rows):
 
 
 def test_a_key_machine_whose_id_is_a_password_machine_s_address_is_not_written(_home):
-    """Its ``Host labbox`` alias would take the password machine at ``LabBox`` (ssh matches ``Host`` case-blind)
+    """Its ``Host labbox`` alias would take the password machine at ``LabBox`` (names compare ignoring case)
     to this machine's address. Connecting refuses that pair by name, but only once the alias exists; the
     writer every registration goes through refuses it before (reviewed 2026-10-20)."""
     _registered(_home, PASSWORD_LAB)
@@ -1070,7 +1070,7 @@ def test_a_password_machine_at_a_key_machine_s_id_is_not_written_even_before_its
     with pytest.raises(ValueError, match="key machine 'labbox'") as refused:
         adder.write(dict(PASSWORD_LAB), password="hunter2")
 
-    assert "its own address" in str(refused.value)
+    assert "('198.51.100.66')" in str(refused.value) and "its IP address or full domain name" in str(refused.value)
     assert [r["id"] for r in connections.load()] == ["labbox"]
     assert not connections.password_path("lab").exists()
 
@@ -1087,6 +1087,44 @@ def test_a_password_machine_at_an_alias_left_with_one_mark_and_no_machine_is_not
         adder.write(dict(PASSWORD_LAB, host="labbox"))
 
     assert not (_home / "connections.json").exists()
+
+
+@pytest.mark.parametrize("order", ["key-after-password", "password-after-key"])
+@pytest.mark.parametrize("key_host", ["gpu1", "GPU1"], ids=["as-written", "another-case"])
+def test_a_key_machine_named_after_its_own_address_and_a_password_machine_there_both_register(_home, order, key_host):
+    """Key machine ``gpu1`` at ``gpu1`` and password machine ``gpu1-shared`` at ``gpu1``: the alias Raven writes
+    for the key machine names the address it is called by, so ssh logs the password machine in where it was
+    registered, and the pair registers in either order (reviewed 2026-10-22)."""
+    key = {"id": "gpu1", "transport": "ssh", "host": key_host, "port": 2200, "user": "owner", "key": "~/k"}
+    password = {
+        "id": "gpu1-shared",
+        "transport": "ssh",
+        "host": "gpu1",
+        "port": 22,
+        "user": "shared",
+        "auth": "password",
+    }
+    first, second = (password, key) if order == "key-after-password" else (key, password)
+
+    adder.write(dict(first))
+    adder.write_ssh_alias(first)
+    adder.write(dict(second))
+
+    assert [r["id"] for r in connections.load()] == [first["id"], second["id"]]
+
+
+def test_a_password_machine_is_refused_when_the_block_on_disk_redirects_though_the_registry_does_not(_home):
+    """The registry row is what the next add writes the block from, but ssh reads the block as it is now: a key
+    machine at its own name whose block was edited to another address still takes the password machine there."""
+    key = {"id": "gpu1", "transport": "ssh", "host": "gpu1", "port": 22, "user": "owner", "key": "~/k"}
+    _registered(_home, key)
+    adder.write_ssh_alias(dict(key, host="10.0.0.5"))
+
+    with pytest.raises(ValueError, match="ssh alias Raven keeps") as refused:
+        adder.write({"id": "gpu1-shared", "transport": "ssh", "host": "gpu1", "user": "shared", "auth": "password"})
+
+    assert "does not keep ssh at that name" in str(refused.value)
+    assert [r["id"] for r in connections.load()] == ["gpu1"]
 
 
 def test_rows_that_do_not_meet_register_as_before(_home):

@@ -937,8 +937,8 @@ async def test_a_password_machine_at_another_machine_s_alias_is_refused_as_a_fie
 async def test_a_pair_one_machine_s_alias_would_redirect_is_refused_before_anything_is_kept_or_reached(
     supported_host, pool, rhome, monkeypatch, order
 ):
-    """Either order: a key machine whose id is a registered password machine's address (``LabBox``, ssh matches
-    ``Host`` case-blind), or a password machine at a registered key machine's id whose alias is not written.
+    """Either order: a key machine whose id is a registered password machine's address (``LabBox``, names compare
+    ignoring case), or a password machine at a registered key machine's id whose alias is not written.
     Refused as a field that cannot be used, naming the other machine, before a password is kept or a probe
     runs (reviewed 2026-10-20)."""
     monkeypatch.setattr(connection_add, "probe", lambda row, **kw: pytest.fail("reached a pair that cannot register"))

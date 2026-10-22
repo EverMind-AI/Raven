@@ -340,7 +340,7 @@ def ssh_env(row: dict[str, Any], *, password_file: Path | None = None) -> dict[s
             f"no password is kept here for machine {label!r} ({secret}); remove the machine and register it again"
         )
     host, port, _key, user = ssh_target(row)
-    if host.lower() in managed_aliases():
+    if alias_redirects(host, managed_alias_hostnames()):
         # ssh would follow the block Raven wrote for that other machine, and
         # the helper would then wait for that machine's prompt: the password
         # goes only where the owner registered it, whatever ssh resolves.
@@ -348,7 +348,7 @@ def ssh_env(row: dict[str, Any], *, password_file: Path | None = None) -> dict[s
             f"machine {label!r} is registered at {host!r}, which is also the ssh alias Raven keeps in "
             f"~/.ssh/config for machine {host.lower()!r}: ssh would log in at that machine's address, so the "
             f"password kept for {label!r} is not sent; remove one of the two machines, or register {label!r} "
-            "again at its own address"
+            "again at an address that is not one of these aliases (its IP address or full domain name)"
         )
     target, unresolved = _prompt_target(host, port, user)
     return {
@@ -386,15 +386,75 @@ def managed_aliases() -> set[str]:
     A file that cannot be read adds nothing: ssh, run as the same account,
     skips a user config it cannot open, so it follows none of its blocks.
     """
+    return set(managed_alias_hostnames())
+
+
+#: The keywords of the block ``connection_add.write_ssh_alias`` writes. A password connection's
+#: command line names its own port and account (:func:`ssh_argv`), which win over the block's, and
+#: offers no key (:data:`PASSWORD_AUTH`): only ``HostName`` decides where its password goes.
+_ALIAS_KEYWORDS = frozenset({"hostname", "port", "user", "identityfile"})
+
+
+def managed_alias_hostnames() -> dict[str, frozenset[str]]:
+    """Where each ``Host`` block Raven keeps sends ssh: the ``HostName`` of every block, lowercased, by lowercased id.
+
+    The same blocks :func:`managed_aliases` counts. ``""`` stands for a block
+    that cannot be read as the one Raven writes -- one of its marks gone, no
+    ``Host <id>`` line after the first, a second ``HostName``, or a keyword
+    Raven does not write (``ProxyCommand``, ``Include``, ``Match`` ...) --
+    where nothing says ssh stays at the name it was given. A block runs, as
+    ssh reads it, to the next ``Host`` or ``Match`` line, closing mark or not.
+    """
     homes = {Path(os.path.expanduser("~")), passwd_home()}
-    found: set[str] = set()
+    found: dict[str, set[str]] = {}
     for home in homes - {None}:
         try:
             text = (home / ".ssh" / "config").read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        found.update(conn_id.lower() for conn_id in _ALIAS_MARK_LINE.findall(text))
-    return found
+        lines = text.splitlines()
+        marks: dict[str, list[int]] = {}
+        for index, line in enumerate(lines):
+            if matched := _ALIAS_MARK_LINE.match(line):
+                marks.setdefault(matched.group(1), []).append(index)
+        for conn_id, at in marks.items():
+            sends = _alias_hostname(lines, at[0] + 1, conn_id) if len(at) == 2 else ""
+            found.setdefault(conn_id.lower(), set()).add(sends)
+    return {conn_id: frozenset(sends) for conn_id, sends in found.items()}
+
+
+def _alias_hostname(lines: list[str], start: int, conn_id: str) -> str:
+    """The lowercased ``HostName`` of the ``Host <conn_id>`` block from ``lines[start]`` on; ``""`` when the block
+    is not one Raven wrote (:func:`managed_alias_hostnames`)."""
+    hostnames: list[str] = []
+    seen_host = False
+    for line in lines[start:]:
+        words = line.strip().replace("=", " ", 1).split()
+        if not words or words[0].startswith("#"):
+            continue
+        keyword = words[0].lower()
+        if keyword in {"host", "match"}:
+            if seen_host:
+                break
+            if keyword == "match" or words[1:] != [conn_id]:
+                return ""
+            seen_host = True
+            continue
+        if not seen_host or keyword not in _ALIAS_KEYWORDS:
+            return ""
+        if keyword == "hostname":
+            if len(words) != 2:
+                return ""
+            hostnames.append(words[1].lower())
+    return hostnames[0] if seen_host and len(hostnames) == 1 else ""
+
+
+def alias_redirects(host: str, kept: dict[str, frozenset[str]]) -> bool:
+    """Whether a Raven ``Host`` block in ``kept`` (:func:`managed_alias_hostnames`) would send ssh, asked for
+    ``host``, anywhere but ``host`` itself. Names compare ignoring case, which also refuses a mixed-case spelling the
+    block would not take: the safe direction."""
+    sends = kept.get(host.lower())
+    return sends is not None and sends != {host.lower()}
 
 
 #: How long ``ssh -G`` may take to say how it resolves a host (config, and DNS

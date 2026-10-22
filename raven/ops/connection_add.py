@@ -373,47 +373,62 @@ def alias_collision(row: dict[str, Any], rows: list[dict[str, Any]]) -> str:
     """Why registering ``row`` beside ``rows`` would let a ``Host`` alias Raven writes decide where a password
     machine logs in; empty when it would not.
 
-    Raven writes ``Host <id>`` for every key machine (:func:`write_ssh_alias`),
-    and ssh follows it for any connection to that name, case-blind. A password
-    machine registered at such a name would log in at the key machine's
-    address, with its password (reviewed 2026-10-20). Both orders are refused:
-    a key machine whose id is a registered password machine's address, and a
-    password machine at a registered key machine's id or at an alias Raven
-    keeps with no machine left behind it. Connecting refuses the pair again by
-    name (``transport.ssh_env``), which is what still covers a pair written
-    before this check existed.
+    Raven writes ``Host <id>`` / ``HostName <address>`` for every key machine
+    (:func:`write_ssh_alias`), and ssh follows it for any connection to that
+    name. A password machine registered at such a name would log in at the key
+    machine's address, with its password (reviewed 2026-10-20). Both orders
+    are refused: a key machine whose id is a registered password machine's
+    address, and a password machine at a registered key machine's id or at an
+    alias Raven keeps with no machine left behind it. A pair whose alias names
+    the very address it is called by (key machine ``gpu1`` at ``gpu1``) sends
+    the password nowhere else and registers; the registry row (what the next
+    add rewrites the block from) and the block in ~/.ssh/config must both say
+    so. Names compare ignoring case, though OpenSSH took ``Host labbox`` for
+    ``labbox`` only and not ``LabBox`` (measured 2026-10-20): a mixed-case
+    pair is refused although ssh would not redirect it, the safe direction.
+    Connecting refuses the pair again by name (``transport.ssh_env``), which
+    is what still covers a pair written before this check existed.
     """
-    from raven.ops.transport import managed_aliases
+    from raven.ops.transport import alias_redirects, managed_alias_hostnames
 
     if transport_of(row) == LOCAL:
         return ""
     conn_id = str(row.get("id") or "").strip()
     if not password_auth(row):
+        address = str(row.get("host") or "").strip()
         for other in rows:
             if transport_of(other) == SSH and password_auth(other):
                 host = str(other.get("host") or "").strip()
-                if host.lower() == conn_id.lower():
+                if host.lower() == conn_id.lower() and address.lower() != host.lower():
                     return (
                         f"id {conn_id!r} is the address password machine {str(other.get('id') or '?')!r} is "
                         f"registered at ({host!r}): the ssh alias Raven writes for this id would take that "
-                        "machine's logins, and its password, to this machine. Pick another id"
+                        f"machine's logins, and its password, to this machine's address ({address!r}). Pick "
+                        "another id"
                     )
         return ""
     host = str(row.get("host") or "").strip()
     for other in rows:
         other_id = str(other.get("id") or "").strip()
-        if transport_of(other) == SSH and not password_auth(other) and other_id.lower() == host.lower():
+        other_host = str(other.get("host") or "").strip()
+        if (
+            transport_of(other) == SSH
+            and not password_auth(other)
+            and other_id.lower() == host.lower()
+            and other_host.lower() != host.lower()
+        ):
             return (
                 f"machine {conn_id!r} would log in at {host!r}, the id of key machine {other_id!r}: the ssh alias "
                 f"Raven keeps for {other_id!r} would take this machine's logins, and its password, to "
-                f"{other_id!r}'s address. Register {conn_id!r} at its own address, or remove {other_id!r} first"
+                f"{other_id!r}'s address ({other_host!r}). Register {conn_id!r} at an address that is no "
+                f"machine's id here (its IP address or full domain name), or remove {other_id!r} first"
             )
-    if host.lower() in managed_aliases():
+    if alias_redirects(host, managed_alias_hostnames()):
         return (
             f"machine {conn_id!r} would log in at {host!r}, the ssh alias Raven keeps in ~/.ssh/config for a "
-            f"machine {host.lower()!r} that is no longer registered: ssh would follow it to that address. Take "
-            f"the '{ALIAS_MARK.format(conn_id=host.lower())}' block out of ~/.ssh/config, or register "
-            f"{conn_id!r} at its own address"
+            f"machine {host.lower()!r}, and that block does not keep ssh at that name: ssh would follow it elsewhere. "
+            f"Take the '{ALIAS_MARK.format(conn_id=host.lower())}' block out of ~/.ssh/config, or register "
+            f"{conn_id!r} at an address that is not one of these aliases (its IP address or full domain name)"
         )
     return ""
 

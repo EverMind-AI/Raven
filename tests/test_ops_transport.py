@@ -562,7 +562,7 @@ def test_a_password_machine_whose_host_is_another_machine_s_managed_alias_is_ref
     """A key machine registered under the id ``labbox`` makes Raven write ``Host labbox`` / ``HostName <its
     address>``. Following ssh's resolution through that block handed the password kept for ``lab`` -- a password
     machine at ``labbox`` -- to the key machine's address, and the model can register such a machine (reviewed
-    2026-10-20). ssh matches ``Host`` case-blind, so the refusal does too."""
+    2026-10-20). The refusal ignores case, though OpenSSH took ``Host labbox`` for ``labbox`` only: the safe way."""
     from raven.ops.connection_add import store_password
 
     config = _key_machine_alias("labbox", "198.51.100.66")
@@ -636,6 +636,104 @@ def test_the_owner_s_own_alias_beside_raven_s_blocks_still_names_the_prompt_it_r
     env = transport.ssh_env({"id": "own", "transport": "ssh", "host": "ownerbox", "user": "alice", "auth": "password"})
 
     assert env[transport.ASKPASS_FOR_ENV] == "alice@192.0.2.8"
+
+
+@_posix_helper
+@pytest.mark.skipif(_REAL_SSH is None, reason="an OpenSSH client resolves the host")
+@pytest.mark.parametrize("spelled", ["gpu1", "GPU1"], ids=["as-written", "another-case"])
+def test_a_raven_alias_that_names_its_own_address_lets_the_password_machine_there_log_in(
+    tmp_path, monkeypatch, supported_host, spelled
+):
+    """Key machine ``gpu1`` at ``gpu1`` makes Raven write ``Host gpu1`` / ``HostName gpu1``; a password machine at
+    ``gpu1`` under another account still logs in at ``gpu1``, the address it was registered at (reviewed
+    2026-10-22). The command line's port and account win over the block's, which the real client confirms."""
+    from raven.ops.connection_add import store_password, write_ssh_alias
+
+    write_ssh_alias({"id": "gpu1", "transport": "ssh", "host": "gpu1", "port": 2200, "user": "owner", "key": "~/k"})
+    config = Path(os.path.expanduser("~/.ssh/config"))
+    monkeypatch.setattr(transport, "passwd_home", lambda: config.parent.parent, raising=False)
+    wrapper_dir = tmp_path / "bin"
+    wrapper_dir.mkdir()
+    (wrapper_dir / "ssh").write_text(f'#!/bin/sh\nexec "{_REAL_SSH}" -F "{config}" "$@"\n', encoding="utf-8")
+    (wrapper_dir / "ssh").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{wrapper_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    store_password("gpu1-shared", "hunter2")
+
+    row = {"id": "gpu1-shared", "transport": "ssh", "host": spelled, "port": 22, "user": "shared", "auth": "password"}
+    env = transport.ssh_env(row)
+
+    assert env[transport.ASKPASS_FOR_ENV] == "shared@gpu1" and env[transport.ASKPASS_UNRESOLVED_ENV] == ""
+    resolved = transport.resolve_with_ssh(transport.ssh_argv(spelled, 22, "", user="shared", password=True))
+    assert (resolved.first("hostname"), resolved.first("port"), resolved.first("user")) == ("gpu1", "22", "shared")
+
+
+_MARK_GPU1 = "# raven connection gpu1 (managed; rewritten on every add)"
+_KEEPS = [_MARK_GPU1, "Host gpu1", "  HostName gpu1", "  Port 2200", "  User owner", "  IdentityFile ~/k", _MARK_GPU1]
+
+
+@_posix_helper
+@pytest.mark.parametrize(
+    ("block", "elsewhere", "sent"),
+    [
+        (_KEEPS, [], True),
+        ([*_KEEPS[:2], "  HostName=GPU1", *_KEEPS[3:]], [], True),
+        ([*_KEEPS[:2], "  HostName 10.0.0.5", *_KEEPS[3:]], [], False),
+        (_KEEPS[:-1], [], False),
+        ([*_KEEPS[:-1], "  ProxyCommand ssh jump -W 10.0.0.5:22", _MARK_GPU1], [], False),
+        ([*_KEEPS[:-1], "  ProxyJump jump", _MARK_GPU1], [], False),
+        ([*_KEEPS, "  ProxyCommand ssh jump -W 10.0.0.5:22"], [], False),
+        ([*_KEEPS[:3], "  HostName 10.0.0.5", *_KEEPS[3:]], [], False),
+        ([*_KEEPS[:-1], "  Include more.conf", _MARK_GPU1], [], False),
+        ([_MARK_GPU1, "Host gpu1 jump", *_KEEPS[2:]], [], False),
+        (_KEEPS, [*_KEEPS[:2], "  HostName 10.0.0.5", *_KEEPS[3:]], False),
+    ],
+    ids=[
+        "keeps-the-name",
+        "keeps-it-in-another-case",
+        "another-hostname",
+        "one-mark-left",
+        "proxy-command",
+        "proxy-jump",
+        "a-line-after-the-closing-mark",
+        "a-second-hostname",
+        "an-include",
+        "a-second-pattern",
+        "the-other-home-redirects",
+    ],
+)
+def test_only_a_raven_block_that_keeps_ssh_at_the_name_lets_a_password_through(
+    tmp_path, monkeypatch, supported_host, block, elsewhere, sent
+):
+    """The password goes out only when every block Raven keeps for the name, in either home, is the block Raven
+    writes and names the name itself as ``HostName``. Anything else in it -- another address, a proxy, a line ssh
+    still reads into the block past its closing mark, a mark gone -- may move the connection, and is refused before
+    ssh starts. The stand-in names the row's own host, as the real one would for the block that keeps it."""
+    from raven.ops.connection_add import store_password
+
+    passwd_home = tmp_path / "passwd-home"
+    monkeypatch.setattr(transport, "passwd_home", lambda: passwd_home, raising=False)
+    for home, lines in ((Path(os.path.expanduser("~")), block), (passwd_home, elsewhere)):
+        if lines:
+            (home / ".ssh").mkdir(parents=True, exist_ok=True)
+            (home / ".ssh" / "config").write_text("\n".join([*lines, "", "Host ownerbox", "  HostName 192.0.2.8", ""]))
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    ran = tmp_path / "ssh-ran"
+    (bin_dir / "ssh").write_text(f"#!/bin/sh\ntouch '{ran}'\necho 'hostname gpu1'\n", encoding="utf-8")
+    (bin_dir / "ssh").chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    store_password("gpu1-shared", "hunter2")
+    row = {"id": "gpu1-shared", "transport": "ssh", "host": "gpu1", "user": "shared", "auth": "password"}
+
+    if sent:
+        assert transport.ssh_env(row)[transport.ASKPASS_FOR_ENV] == "shared@gpu1"
+        return
+    with pytest.raises(TransportError, match="which is also the ssh alias Raven keeps") as refused:
+        transport.ssh_env(row)
+    assert "its IP address or full domain name" in str(refused.value) and "hunter2" not in str(refused.value)
+    assert not ran.exists(), "refused before ssh was asked anything"
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not available on Windows")

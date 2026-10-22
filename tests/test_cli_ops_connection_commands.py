@@ -1255,7 +1255,8 @@ def test_add_refuses_a_pair_one_machine_s_alias_would_redirect_even_without_a_pr
     out = CliRunner().invoke(connection_app, argv, input=given)
 
     assert out.exit_code == 1, out.output
-    assert named in " ".join(out.output.split()) and "Nothing was written" in out.output
+    said = " ".join(out.output.split())
+    assert named in said and "Nothing was written" in said
     assert [r["id"] for r in json.loads(store.read_text())["connections"]] == [theirs["id"]]
     assert not (rhome / "keys" / "box.password").exists()
     assert not (tmp_path / ".ssh" / "config").exists()
