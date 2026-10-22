@@ -227,6 +227,56 @@ async def test_a_failed_turn_files_its_question_once_with_what_had_streamed(work
     assert "the socket went away" in msgs[-1]["content"]
 
 
+class _CutThenDies(LLMProvider):
+    """Streams "half an " and loses the connection; the call that follows dies before it says a word."""
+
+    def __init__(self, death: BaseException):
+        super().__init__(api_key="test")
+        self._death = death
+        self.calls = 0
+
+    async def chat(self, messages, **kwargs: Any):
+        raise AssertionError("the streaming path is the one under test")
+
+    async def chat_stream(self, **kwargs: Any):
+        from raven.providers.base import ChatDelta
+
+        self.calls += 1
+        if self.calls == 1:
+            yield ChatDelta(content="half an ")
+            raise ConnectionError("connection reset by peer")
+        raise self._death
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+class _Refused(Exception):
+    status_code = 400  # fatal: neither reconnected nor waited out
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("death", "status"), [(_Refused("invalid request"), "failed"), (asyncio.CancelledError(), "cancelled")]
+)
+async def test_the_words_of_a_cut_answer_are_filed_when_its_continuation_dies_unheard(workspace, death, status):
+    """The cut answer's words sit in the loop's list as a recovery row that is never
+    persisted, and a continuation that dies before saying anything leaves the reader's
+    words as exactly that row's text. The rescue must not take them for committed, or
+    the answer the reader watched is gone on the next reload."""
+    agent = _agent(workspace, _CutThenDies(death))
+
+    async def _sink(_text: str) -> None:
+        return None
+
+    with pytest.raises(type(death)):
+        await agent._process_message(_make_msg("hello"), on_token_delta=_sink)
+
+    msgs = _persisted(workspace)
+    assert [(m["role"], m["content"]) for m in msgs[:-1]] == [("user", "hello"), ("assistant", "half an ")]
+    assert msgs[-1]["turn_ended"]["status"] == status
+
+
 # --- the other way a turn dies: an error response the ladder could not wait out ---
 
 

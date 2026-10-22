@@ -1002,6 +1002,9 @@ class TurnPathMixin:
         # Set when a prefill re-feeds reasoning the ceiling cut: the next call
         # continues mid-thought, and its opening fragment is not content.
         cut_continuation = False
+        # Set when a stream cut mid-answer is about to be continued: the next call
+        # carries on the step the cut one opened rather than starting another.
+        merge_episode = False
         # Sticky across a turn's step-downs: once the descent reaches a rung, the
         # next one must not read the turn's own effort again and hand back the
         # value that already came up thinking and nothing else.
@@ -1176,8 +1179,10 @@ class TurnPathMixin:
             )
 
             # Mark the episode boundary (one per model call) so an outlet can
-            # group this call's reasoning + text + tools into a single step.
-            if on_episode_start is not None:
+            # group this call's reasoning + text + tools into a single step. Not
+            # for the continuation of a cut answer: a boundary there would show
+            # the reader one answer as two steps.
+            if on_episode_start is not None and not merge_episode:
                 # A bounded per-outlet queue with a wedged worker behind it parks
                 # here forever; the boundary is a grouping hint, so losing one is
                 # a step drawn wrong, not a turn lost.
@@ -1187,6 +1192,7 @@ class TurnPathMixin:
                     iteration=iteration,
                     fallback=None,
                 )
+            merge_episode = False
 
             # Take any INJECT-ed user messages (BusyPolicy.INJECT) into this
             # iteration before its LLM call. Media-carrying injects keep their
@@ -2188,6 +2194,7 @@ class TurnPathMixin:
                     messages[-1]["_recovery_synthetic"] = True
                     messages.append({"role": "user", "content": NETWORK_CUT_CONTINUATION, "_recovery_synthetic": True})
                     prev_had_tool_calls = False
+                    merge_episode = True
                     continue
                 if action is RecoveryAction.CONTINUE and kind is ReplyKind.TRUNCATED:
                     # Cut at the ceiling with nothing in it: the model is told so
@@ -3270,8 +3277,15 @@ class TurnPathMixin:
                     }
                 )
             text = (streamed.get("text") or "").strip()
+            # A recovery row does not count as committed: it is scaffolding that is
+            # dropped below, and the partial of a cut answer is one -- a continuation
+            # that died before saying anything leaves the reader's words as exactly
+            # that row's text.
             if text and not any(
-                m.get("role") == "assistant" and str(m.get("content") or "").strip() == text for m in tail
+                m.get("role") == "assistant"
+                and not m.get("_recovery_synthetic")
+                and str(m.get("content") or "").strip() == text
+                for m in tail
             ):
                 partial: dict[str, Any] = {"role": "assistant", "content": streamed["text"]}
                 if (thought := (streamed.get("thought") or "").strip()) and not any(

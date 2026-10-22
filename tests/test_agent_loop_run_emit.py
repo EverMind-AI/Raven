@@ -20,6 +20,7 @@ from raven.agent.hook.adapters import DecisionConsumerAdapter
 from raven.agent.loop import AgentLoop
 from raven.agent.loop._shared import _MID_TURN_HEADER
 from raven.agent.loop.bundles import HostWiring
+from raven.agent.loop.recovery import NETWORK_CUT_CONTINUATION
 from raven.contracts.llm_provider import ChatDelta, LLMResponse, ToolCallRequest
 from raven.contracts.loop_hooks import AgentHook, HookDecision
 from raven.contracts.tool import Tool, ToolResult
@@ -589,6 +590,119 @@ async def test_run_emits_one_episode_start_per_model_call(tmp_path):
     first_ep = next(i for i, e in enumerate(sink.events) if isinstance(e, EvEpisodeStart))
     first_tool = next(i for i, e in enumerate(sink.events) if isinstance(e, EvToolEvent))
     assert first_ep < first_tool
+
+
+class _CutThenContinued:
+    """The first stream dies after its opening words and the second finishes the
+    answer, keeping the messages each call was sent."""
+
+    def __init__(self) -> None:
+        self.calls: list[list[dict]] = []
+
+    async def chat_stream(self, **kwargs):
+        self.calls.append(list(kwargs.get("messages") or []))
+        if len(self.calls) == 1:
+            yield ChatDelta(content="Hello ")
+            raise ConnectionError("connection reset by peer")
+        yield ChatDelta(content="world.")
+        yield ChatDelta(content=None, finish_reason="stop")
+
+    def get_default_model(self) -> str:
+        return "fake/model"
+
+
+async def test_a_cut_answer_is_continued_in_the_same_step(tmp_path):
+    # A stream that dies after "Hello " is continued instead of failing the turn, and
+    # the continuation streams into the step the cut call opened: one boundary, one
+    # unbroken run of deltas for the reader, and one saved answer.
+    provider = _CutThenContinued()
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    sink = _EmitCollector()
+
+    await loop.run_turn(_req("hi"), sink, _drain, stream=True)
+
+    assert len(provider.calls) == 2
+    assert provider.calls[1][-1]["content"] == NETWORK_CUT_CONTINUATION
+    assert len([e for e in sink.events if isinstance(e, EvEpisodeStart)]) == 1
+    assert "".join(e.delta for e in sink.events if isinstance(e, EvStreamDelta)) == "Hello world."
+    session = loop.sessions.get_or_create("cli:c")
+    assert session.messages[-1]["role"] == "assistant"
+    assert session.messages[-1]["content"] == "Hello world."
+
+
+class _CutThenActsThenAnswers:
+    """The first stream dies after its opening words, the continuation calls a tool,
+    and the call after the tool answers."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def chat_stream(self, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            yield ChatDelta(content="Hello ")
+            raise ConnectionError("connection reset by peer")
+        if self.calls == 2:
+            yield ChatDelta(
+                content=None,
+                tool_call_delta={
+                    "tool_calls": [{"index": 0, "id": "t1", "function": {"name": "faketool", "arguments": "{}"}}]
+                },
+            )
+        else:
+            yield ChatDelta(content="done")
+        yield ChatDelta(content=None, finish_reason="stop")
+
+    def get_default_model(self) -> str:
+        return "fake/model"
+
+
+async def test_the_step_after_a_continued_answer_opens_as_usual(tmp_path):
+    # The boundary is skipped once, for the continuation alone: the call after the
+    # tool the continuation made is a step of its own.
+    provider = _CutThenActsThenAnswers()
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_FakeTool())
+    sink = _EmitCollector()
+
+    await loop.run_turn(_req("hi"), sink, _drain, stream=True)
+
+    assert provider.calls == 3
+    assert [e.index for e in sink.events if isinstance(e, EvEpisodeStart)] == [0, 1]
+
+
+class _CutAtTheCeilingThenAnswers:
+    """An empty reply that stopped at the output ceiling, then the answer."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def chat_stream(self, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            yield ChatDelta(content=None, finish_reason="length", usage={"prompt_tokens": 3, "completion_tokens": 4096})
+            return
+        yield ChatDelta(content="done")
+        yield ChatDelta(content=None, finish_reason="stop")
+
+    def get_default_model(self) -> str:
+        return "fake/model"
+
+
+async def test_the_other_continuations_still_open_a_step_of_their_own(tmp_path):
+    # Only a cut answer is carried on in the step it opened: a call that is asked
+    # again because it produced nothing is a step of its own, as it always was.
+    provider = _CutAtTheCeilingThenAnswers()
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    sink = _EmitCollector()
+
+    await loop.run_turn(_req("hi"), sink, _drain, stream=True)
+
+    assert provider.calls == 2
+    assert [e.index for e in sink.events if isinstance(e, EvEpisodeStart)] == [0, 1]
 
 
 async def test_inject_message_merged_before_next_iteration(tmp_path):
