@@ -608,19 +608,28 @@ def test_ravens_own_home_is_not_read_as_another_programs_settings() -> None:
     import os
 
     from raven.home import raven_home
-    from raven.security.redact import redact_home_config_read
+    from raven.security.redact import _OWN_SOURCE_DIRS, redact_home_config_read
 
     source = "token = self.get_token(request)\napi_key=config.api_key_value\n"
     own = raven_home()
     # The real layout: Raven's home is a dot-directory of the home, so the
     # matcher would otherwise fire on it.
     assert str(own.parent) == os.path.expanduser("~").rstrip("/") and own.name.startswith(".")
-    for arguments in (
-        {"path": str(own / "workspace" / "app.py")},
-        {"path": str(own / "tmp" / "x.py")},
-        {"command": f"cat {own}/workspace/app.py"},
-    ):
-        assert redact_home_config_read(arguments, source) == source, arguments
+    # Every member of the list, read from the list: a directory added there
+    # without its two spellings working is the #833 regression, and a test that
+    # respelled the four names would have missed the fifth. ``tmp`` is the
+    # channels' scratch root (``raven/agent/workdir.py:default_channel_root``,
+    # ``<raven home>/tmp`` with the default workspace) -- the busiest of the four
+    # and, before this, the one with a single spelling covered.
+    for name in _OWN_SOURCE_DIRS:
+        for arguments in (
+            {"path": str(own / name / "x.py")},
+            {"command": f"cat {own}/{name}/x.py"},
+        ):
+            assert redact_home_config_read(arguments, source) == source, arguments
+    # And the store is not on it: adding it is the one edit that would hand #842
+    # back, so the list is asserted rather than trusted.
+    assert "oauth" not in _OWN_SOURCE_DIRS
     settings = '{"apiKey": "sk-or-v1-0123456789abcdef0123456789abcdef"}'
     qwen = os.path.join(os.path.expanduser("~"), ".qwen", "settings.json")
     assert "0123456789abcdef0123456789abcdef" not in redact_home_config_read({"path": qwen}, settings)
@@ -1086,6 +1095,47 @@ def test_every_branch_of_the_oauth_store_gate(monkeypatch: pytest.MonkeyPatch, t
     # English words in prose are not a credential, whatever the store holds.
     prose = "Refresh the page and access the network."
     assert redact_home_config_read({"path": str(store / "minimax_global.json")}, prose) == prose
+    # What "prose is safe" actually means, pinned: the shape is what saves it, not
+    # the gate. A passage that quotes a token sample is rewritten, and the passage
+    # around it survives -- the docstring says this rather than claiming prose is
+    # untouchable.
+    note = 'The file holds {"refresh": "abcdef0123456789abcdef"} as an example.\n'
+    assert (
+        redact_home_config_read({"path": str(store / "minimax_global.json")}, note)
+        == 'The file holds {"refresh": "[redacted]"} as an example.\n'
+    )
+
+
+def test_the_store_is_found_wherever_the_home_is(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The two resolvers, on a home that is neither under ``HOME`` nor a dot-directory.
+
+    ``_own_oauth_store`` asks ``config.paths.oauth_dir`` and ``_home_config`` asks
+    ``raven_home()`` and the home; they are separate questions -- "is this Raven's
+    store" against "is this any program's dot-directory of the home" -- and this is
+    the case where the answers differ, so it is the case that says whether the
+    store is still covered when its home is somewhere unusual. It is: the store's
+    own absolute path is the pattern's first root, with no abbreviation to add.
+    """
+    from raven.security.redact import _home_config, redact_home_config_read
+
+    elsewhere = tmp_path / "instance" / "ravenhome"
+    monkeypatch.setenv("RAVEN_HOME", str(elsewhere))
+    store = elsewhere / "oauth"
+    value = "mmx_0123456789abcdefghij"
+    tokens = '{"access": "%s"}' % value
+
+    shown = redact_home_config_read({"path": str(store / "minimax_global.json")}, tokens)
+    assert shown == '{"access": "[redacted]"}', shown
+    # ``~/.raven`` is somebody else's dot-directory now, so it falls under the
+    # general rule rather than the exemption: the matcher has no skip there,
+    # because the skip only describes a home that *is* ``<home>/.<name>``.
+    assert _home_config().search("~/.raven/workspace/app.py")
+    source = "token = self.get_token(request)\n"
+    assert redact_home_config_read({"path": "~/.raven/workspace/app.py"}, source) != source
+    # The four source directories are exempt in the relocated home, which is the
+    # home this process actually has.
+    for name in ("workspace", "tmp", "plugins", "agents"):
+        assert redact_home_config_read({"path": str(elsewhere / name / "x.py")}, source) == source, name
 
 
 def test_the_home_directories_outside_the_exemption_still_lose_their_tokens() -> None:
@@ -1156,7 +1206,12 @@ def test_ravens_own_plugin_and_agent_source_is_not_redacted_while_its_tokens_sti
     # The sibling that does hold credentials is untouched by the widening: the
     # same shape of source line there is still rewritten, and a token file still
     # loses its values.
-    assert scrub_tool_output({"path": str(oauth_dir() / "x.py")}, source) != source
+    named = scrub_tool_output({"path": str(oauth_dir() / "x.py")}, source)
+    assert named == "token = [redacted])\napi_key = [redacted]\n", named
+    # That shape is what #833 was about: the line is unusable source. The store
+    # has no source to edit, which is why it is the one place the pass may write
+    # like this.
+    assert "self.get_token" not in named
     tokens = '{"access": "mmx_FAKEACCESS0123456789abcdef", "refresh": "mmx_FAKEREFRESH0123456789abcdef"}'
     shown = scrub_tool_output({"path": str(oauth_dir() / "minimax_global.json")}, tokens)
     assert "mmx_FAKEACCESS0123456789abcdef" not in shown and "mmx_FAKEREFRESH0123456789abcdef" not in shown, shown

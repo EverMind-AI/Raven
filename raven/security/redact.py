@@ -217,7 +217,7 @@ _OAUTH_TOKEN_FIELD = re.compile(r'("(?:access|refresh)"\s*:\s*")([^\s"\\]{16,})'
 
 
 def _own_oauth_store() -> re.Pattern[str]:
-    """A path into Raven's OAuth token directory, in any spelling a call may use.
+    """A path into Raven's OAuth token directory, in the spellings calls have used.
 
     The directory is asked of ``raven/config/paths.py``, which owns where
     credentials live, rather than assembled here from ``raven_home()``: a store
@@ -233,6 +233,22 @@ def _own_oauth_store() -> re.Pattern[str]:
     ``litellm_setup._point_oauth_tokens_at_raven`` for Copilot), and each of those
     overrides its own directory by environment variable when the driver owns it,
     which is a read outside the home and was never this pass's to redact.
+
+    The spellings are enumerated rather than claimed: the store's own path, and
+    ``~`` / ``$HOME`` / ``${HOME}`` with the store's path relative to the home,
+    each followed by ``/``, ``\\``, the end of the string or a quote. Not covered,
+    and not claimed to be: a Windows path spelled with forward slashes or a drive
+    letter, and any spelling differing in case -- ``re`` is case-sensitive here and
+    the writers' own paths keep whatever case ``raven_home()`` returns. A store not
+    under the home (``RAVEN_HOME`` elsewhere) has no abbreviation to add and is
+    matched by its absolute path alone, which is the only spelling a call can use
+    for it.
+
+    This is a second resolver beside :func:`_home_config`, not the same one: that
+    one answers "is this any program's dot-directory of the home", this one "is
+    this Raven's token store". They share ``raven_home()`` through
+    ``config.paths.oauth_dir`` and are asserted together wherever a change could
+    make one wider than the other.
     """
     from raven.config.paths import oauth_dir
 
@@ -292,6 +308,9 @@ def _home_config() -> re.Pattern[str]:
       code, never read back as source.
     * ``subagent_sessions`` (``raven/config/product_render.py``) -- per-product
       runtime state: rendered config, ``TOOLS.md``, ``agent_memory``, caches.
+    * ``cache`` (``raven/sandbox/compat_bin.py``, ``raven/providers/codex_client_version.py``)
+      and ``runtime`` (``raven/cli/tui_commands.py``, a node install) -- build and
+      download caches, regenerated rather than edited.
     * ``playbooks`` -- the user layer resolves to ``<workspace>/playbooks``
       (``raven/rpc/methods/playbooks.py``) unless ``playbooks.dir`` overrides it,
       so the default is already inside the first entry; an override elsewhere in
@@ -304,6 +323,16 @@ def _home_config() -> re.Pattern[str]:
     :func:`redact_home_config_read` additionally applies
     :data:`_OAUTH_TOKEN_FIELD` there, for the token fields whose names are
     ordinary words.
+
+    Why the store is not left to the pass that already existed: from #833 until
+    this change the whole of Raven's home was exempt here, on the argument that
+    Raven's own keys are taken out by the exact-match pass over ``config.json``
+    (``raven/config/held_secrets.py``). That pass reads ``config.json`` only, and
+    it finds a credential by the name on it -- ``api_key``, ``token``, ``secret``.
+    ``access`` and ``refresh``, which is what ``save_token`` writes, are ordinary
+    English words and name nothing, so nothing caught the token files at all. The
+    argument held for the keys it was about and never held for the store, which is
+    why the exemption is now this list instead of the whole home.
     """
     from raven.home import raven_home
 
@@ -332,7 +361,13 @@ def redact_home_config_read(arguments: Any, text: str) -> str:
     Raven's own OAuth store is the one place a second pass runs, for the token
     fields whose names (``access``, ``refresh``) are ordinary words -- see
     :data:`_OAUTH_TOKEN_FIELD`. It is gated on the read reaching that directory,
-    so it costs nothing anywhere else and cannot touch prose.
+    so it costs nothing anywhere else. Prose is safe for a reason narrower than
+    that: the field shape is required (a quoted ``access`` or ``refresh``, a colon,
+    then sixteen characters with no space or quote), so a sentence saying "refresh
+    the page" is untouched, while a passage that quotes a token sample -- a note
+    explaining the file format, with ``"refresh": "<40 hex>"`` in it -- is rewritten
+    with the rest of the passage intact. The gate is on the path, not on whether
+    the text is prose.
     """
     if not text:
         return text
