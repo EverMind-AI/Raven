@@ -169,6 +169,25 @@ def without_sentinels(content: str | None) -> str | None:
     return content if _stripped(content) else ""
 
 
+def may_fold_to_nothing(streamed: str) -> bool:
+    """Whether a reply that has streamed ``streamed`` so far can still be one
+    ``without_sentinels`` folds to nothing.
+
+    The streaming exit holds a reply back from the watcher while this is true,
+    so a reply that is only a sentinel is never shown and then taken away. A
+    sentinel can arrive split across deltas, and ``<|im_`` read on its own is
+    text, so the tail that begins a sentinel without completing it is set aside
+    before the rest is tested: only the next delta can say whether it was one.
+    """
+    pending = 0
+    for sentinel in _UPSTREAM_SENTINELS:
+        for size in range(len(sentinel) - 1, pending, -1):
+            if streamed.endswith(sentinel[:size]):
+                pending = size
+                break
+    return not _stripped(streamed[: len(streamed) - pending])
+
+
 def said_nothing(content: str | None, tool_calls: list["ToolCallRequest"]) -> bool:
     """Whether this response carries no reply for anyone.
 
@@ -308,4 +327,11 @@ def transport_failure_message(evidence: str) -> str:
     )
 
 
-__all__ = ["flag_transport_failure", "prompt_chars", "said_nothing", "transport_failure_message", "without_sentinels"]
+__all__ = [
+    "flag_transport_failure",
+    "may_fold_to_nothing",
+    "prompt_chars",
+    "said_nothing",
+    "transport_failure_message",
+    "without_sentinels",
+]

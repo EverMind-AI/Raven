@@ -378,7 +378,10 @@ All notable changes to Raven are documented here.
   the loop's empty-response recovery (prefill, nudge, retry) instead. A reply
   that is nothing but an upstream sentinel (`<|im_end|>`) reaches the loop
   empty on both response paths and takes the same recovery, rather than being
-  delivered as the answer.
+  delivered as the answer. A streamed reply no longer shows the sentinel on
+  screen first: the opening of a reply is held back while it could still be
+  only a sentinel, even one split across chunks, and goes out unchanged the
+  moment it cannot.
 
 - The TUI no longer loses or scrambles the rest of a line after an emoji
   made of several code points, such as the black bird (U+1F426 U+200D

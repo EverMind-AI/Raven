@@ -437,6 +437,224 @@ async def test_a_stream_that_stays_empty_ends_as_empty_not_as_an_error() -> None
     assert response.content == ""
 
 
+# ---------- what the watcher sees while it streams ----------------------------
+
+
+class _ScriptedStream:
+    """A stream that sends `contents` as content deltas, then ends as told.
+
+    `emitted` is what the watcher was handed; `shown_before` records how much of
+    it had gone out by the time each delta after the first was sent, which is
+    what a watcher's wait for the first token is made of.
+    """
+
+    generation = GenerationSettings()
+
+    def __init__(
+        self,
+        *contents: str,
+        finish: str | None = "stop",
+        error_delta: bool = False,
+        raises: Exception | None = None,
+    ) -> None:
+        self.contents = contents
+        self.finish = finish
+        self.error_delta = error_delta
+        self.raises = raises
+        self.emitted: list[str] = []
+        self.shown_before: list[int] = []
+
+    async def chat_stream(self, *a: Any, **kw: Any):
+        for index, content in enumerate(self.contents):
+            if index:
+                self.shown_before.append(len("".join(self.emitted)))
+            yield ChatDelta(content=content)
+        if self.raises is not None:
+            raise self.raises
+        if self.error_delta:
+            from raven.contracts.llm_provider import ErrorClassification
+
+            yield ChatDelta(
+                content="the upstream failed",
+                finish_reason="error",
+                error_classification=ErrorClassification(category="network", retryable=False),
+            )
+            return
+        if self.finish is not None:
+            yield ChatDelta(
+                content=None, finish_reason=self.finish, usage={"prompt_tokens": 2900, "total_tokens": 2950}
+            )
+
+    def classify_error(self, exc: Any = None, content: Any = None) -> Any:
+        from raven.contracts.llm_provider import ErrorClassification
+
+        return ErrorClassification(category="network", retryable=True)
+
+
+async def _watched(stream: Any, **kw: Any) -> LLMResponse:
+    from raven.providers.streaming import stream_llm_call
+
+    async def watch(text: str) -> None:
+        stream.emitted.append(text)
+
+    return await stream_llm_call(
+        stream,
+        messages=[{"role": "user", "content": "hi" * 6000}],
+        tools=None,
+        model="stub",
+        on_token_delta=watch,
+        **kw,
+    )
+
+
+async def test_a_reply_that_is_only_a_sentinel_is_never_shown_to_the_watcher() -> None:
+    """The review's reproduction: the response folded to empty while the
+    callback had already been handed `<|im_end|>`."""
+    stream = _ScriptedStream("<|im_end|>")
+
+    response = await _watched(stream)
+
+    assert stream.emitted == []
+    assert response.content == ""
+
+
+@pytest.mark.parametrize(
+    "contents",
+    [
+        ("<|im_", "end|>"),
+        ("<", "|", "im", "_e", "nd|>"),
+        ("\n", "<|eot_", "id|>", " "),
+        ("<|endoftext|><|im_", "end|>"),
+    ],
+)
+async def test_a_sentinel_split_across_deltas_is_held_until_it_completes(contents: tuple[str, ...]) -> None:
+    """`<|im_` on its own is text; only the next delta says it was a sentinel."""
+    stream = _ScriptedStream(*contents)
+
+    response = await _watched(stream)
+
+    assert stream.emitted == []
+    assert response.content == ""
+
+
+@pytest.mark.parametrize(
+    ("contents", "shown_before"),
+    [
+        (("Hello", " world"), [5]),
+        (("<", "div>hello</div>"), [0]),
+        (("\n", " ", "Hi"), [0, 0]),
+    ],
+)
+async def test_an_ordinary_reply_reaches_the_watcher_whole_and_on_time(
+    contents: tuple[str, ...], shown_before: list[int]
+) -> None:
+    """A reply that does not begin like a sentinel goes out on its first delta;
+    one that opens with `<` or whitespace waits only for the character that
+    tells it apart, and then goes out exactly as it came."""
+    stream = _ScriptedStream(*contents)
+
+    response = await _watched(stream)
+
+    assert "".join(stream.emitted) == response.content == "".join(contents)
+    assert "" not in stream.emitted
+    assert stream.shown_before == shown_before
+
+
+async def test_a_reply_that_only_looked_like_a_sentinel_goes_out_at_the_end() -> None:
+    stream = _ScriptedStream("<|im")
+
+    response = await _watched(stream)
+
+    assert stream.emitted == ["<|im"]
+    assert response.content == "<|im"
+
+
+@pytest.mark.parametrize(
+    "contents",
+    [("<|im_end|>", "the answer"), ("the answer", "<|im_end|>"), ("<|im_", "end|>", "the answer")],
+)
+async def test_a_sentinel_beside_a_real_answer_is_shown_as_it_is_returned(contents: tuple[str, ...]) -> None:
+    stream = _ScriptedStream(*contents)
+
+    response = await _watched(stream)
+
+    assert "".join(stream.emitted) == response.content == "".join(contents)
+
+
+@pytest.mark.parametrize(
+    ("stream", "content"),
+    [
+        (_ScriptedStream("<|im_end|>", finish="length"), ""),
+        (_ScriptedStream("<|im_", "end|>", finish=None), ""),
+        (_ScriptedStream("<|im_end|>", error_delta=True), "the upstream failed"),
+    ],
+    ids=["truncated", "closed-early", "error-delta"],
+)
+async def test_a_failed_stream_does_not_release_a_held_sentinel(stream: _ScriptedStream, content: str) -> None:
+    response = await _watched(stream)
+
+    assert stream.emitted == []
+    assert response.content == content
+
+
+async def test_a_stream_that_raises_after_a_sentinel_has_shown_nothing() -> None:
+    stream = _ScriptedStream("<|im_", raises=RuntimeError("connection reset"))
+
+    with pytest.raises(RuntimeError):
+        await _watched(stream)
+
+    assert stream.emitted == []
+
+
+class _AnswerCutThenSentinel(_ScriptedStream):
+    """A first attempt that streams words and drops, then a second that is only
+    the end marker."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.attempts = 0
+
+    async def chat_stream(self, *a: Any, **kw: Any):
+        self.attempts += 1
+        if self.attempts == 1:
+            yield ChatDelta(content="partial")
+            raise RuntimeError("connection reset")
+        yield ChatDelta(content="<|im_end|>")
+        yield ChatDelta(content=None, finish_reason="stop", usage={"prompt_tokens": 2900, "total_tokens": 2950})
+
+
+async def test_a_retried_attempt_holds_its_own_opening_again() -> None:
+    """What the first attempt released does not release the second's."""
+    stream = _AnswerCutThenSentinel()
+
+    response = await _watched(stream, retry_after_output=True)
+
+    assert stream.attempts == 2
+    assert stream.emitted == ["partial"]
+    assert response.content == ""
+
+
+@pytest.mark.parametrize(
+    "contents",
+    [("<|im_end|>",), ("<|im_", "end|>"), ("<", "div>"), ("<|im_end|>", "the answer"), ("Hello",)],
+)
+async def test_without_a_watcher_the_reply_is_unchanged(contents: tuple[str, ...]) -> None:
+    """Spawn and the DAG stream with no callback; holding back is only about
+    what a watcher is shown."""
+    from raven.providers.streaming import stream_llm_call
+
+    watched = await _watched(_ScriptedStream(*contents))
+    unwatched = await stream_llm_call(
+        _ScriptedStream(*contents),
+        messages=[{"role": "user", "content": "hi" * 6000}],
+        tools=None,
+        model="stub",
+    )
+
+    assert unwatched.content == watched.content
+    assert unwatched.finish_reason == watched.finish_reason
+
+
 # ---------- what the verdict is worth: the ladder acts on it ------------------
 
 
