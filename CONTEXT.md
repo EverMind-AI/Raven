@@ -855,7 +855,8 @@ model is tried -- each once, with nothing repeated on it, and the switch held fo
 turn -- and then FAIL: status `error`, worded after Hermes per kind, with `no_output` set when the
 model gave nothing back. Resends, step-downs and switches ask the same step again and bill no
 iteration; prefills, nudges and continuations are steps. Recovery switched off completes any reply
-with text and fails a refusal; an empty reply then ends the turn with no text.
+with text -- a cut stream's as an exhausted one is, with `PARTIAL_STREAM_NOTE` and status
+`interrupted` -- and fails a refusal; an empty reply then ends the turn with no text.
 Either way a turn that reaches its end with no text raises `AnswerlessTurnError` rather than
 replying -- unless one of its tools already put an answer in front of the reader (the message
 tool's `sent_in_turn`, or an inline research answer the turn itself streamed). A turn the message

@@ -1639,6 +1639,25 @@ async def test_three_cut_continuations_deliver_the_partial_with_the_note(workspa
 
 
 @pytest.mark.asyncio
+async def test_a_cut_answer_is_called_partial_when_recovery_is_switched_off(workspace, monkeypatch):
+    """With recovery off nothing asks the model to go on, which is the exhausted case with its
+    continuations spent at zero: the reader gets what streamed and the note says it is not the whole
+    of it. Delivered as an ordinary turn, a cut answer would pass for a finished one."""
+    calls = _served(monkeypatch, [_cut_stream("Hello "), _finished_stream("world.")])
+    agent = _litellm_agent(workspace, limits=RecoveryLimits(enabled=False))
+    sink = _Sink()
+
+    final, _used, messages, outcome = await agent._run_agent_loop(_seed(), on_token_delta=sink.delta)
+
+    note = "\n\n" + PARTIAL_STREAM_NOTE
+    assert len(calls) == 1, "nothing asked the model to go on"
+    assert final == "Hello" + note, "trimmed the way the exhausted path trims it, then the note"
+    assert outcome.status == "interrupted" and outcome.error is None
+    assert sink.text == ["Hello ", note], "the reader saw the words once and the note once"
+    assert (messages[-1]["role"], messages[-1]["content"]) == ("assistant", final)
+
+
+@pytest.mark.asyncio
 async def test_a_whole_body_that_lacks_a_finish_is_delivered_as_it_stands(workspace):
     """Only a stream can be cut: a plain call hands back the whole body, finish or none."""
 

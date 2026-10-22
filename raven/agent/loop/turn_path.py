@@ -2278,10 +2278,12 @@ class TurnPathMixin:
                     # continuation that came back empty leaves the partial as it was.
                     tail = strip_think_blocks(response.content or "", trim=False) if clean else ""
                     clean = ("".join(recovery.parts) + tail).strip()
-                if kind is ReplyKind.NETWORK_CUT and recovery.continuations >= MAX_CONTINUATIONS:
-                    # Still cut after the last continuation: the reader gets what
-                    # there is, and the note says it is not the whole of it. Pushed
-                    # after the hooks above, so a rolled-back reply never carries it.
+                if kind is ReplyKind.NETWORK_CUT and action is RecoveryAction.COMPLETE:
+                    # Cut, and nothing will ask the model to go on: the continuations are
+                    # spent, or recovery is switched off, which is the same with none made.
+                    # The reader gets what there is, and the note says it is not the whole
+                    # of it. Pushed after the hooks above, so a rolled-back reply never
+                    # carries it.
                     note = "\n\n" + PARTIAL_STREAM_NOTE
                     clean += note
                     status = "interrupted"
