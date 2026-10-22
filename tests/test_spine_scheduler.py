@@ -227,6 +227,26 @@ async def test_running_turn_names_the_turn_the_lane_is_running():
     assert await asyncio.wait_for(first.result(), timeout=1.0) is None
 
 
+async def test_running_turn_is_none_once_the_turn_task_has_ended():
+    """Between the turn's task ending and the worker resolving its future, a
+    cancel could only report as stopped a turn that had already finished."""
+    runner = HangingRunner()
+    sched = _scheduler(runner)
+    handle = sched.submit(_req(channel="tg", chat_id="1"))
+    await runner.started.wait()
+    lane = sched._lanes["tg:1"]
+    live = lane._run_task
+    ended = asyncio.get_running_loop().create_future()
+    ended.set_result(None)
+    lane._run_task = ended
+    try:
+        assert sched.running_turn("tg:1") is None
+    finally:
+        lane._run_task = live
+    await handle.cancel()
+    assert await asyncio.wait_for(handle.result(), timeout=1.0) is None
+
+
 # --- lane reaper (idle recycling + recycle/submit atomicity) ---
 
 
