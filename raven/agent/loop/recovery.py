@@ -80,62 +80,6 @@ _THINK_BLOCK_RE = re.compile(
     re.IGNORECASE,
 )
 
-
-def lower_reasoning_effort(
-    current: str | None,
-    wire_keys: Callable[[str | None], object] | None = None,
-) -> str | None:
-    """One rung less reasoning than ``current``, or None when there is none left.
-
-    The plain empty retry's way of asking a different question. An empty body
-    with reasoning behind it is a call whose thinking spent the output ceiling
-    before the answer began -- measured, five in a row at exactly the ceiling --
-    so the request that has to change is the one deciding how much of that
-    ceiling thinking may take.
-
-    ``None`` in means the turn named no effort and the backend applied its own,
-    which is the case the log showed: not a low request, an unstated one. It
-    descends to the lowest rung this repo documents in config rather than to the
-    floor, so the first retry is a stated request for little thinking and the
-    next one can still differ from it.
-
-    An effort this ladder does not carry returns None: a value a caller invented
-    is not one we can reason about a rung below.
-
-    ``wire_keys`` is the provider's answer to "what would a request for this
-    effort carry" (``LLMProvider.reasoning_wire_keys``), and a rung whose answer
-    equals ``current``'s is skipped rather than sent: a request that has not
-    changed gets the answer that has not changed. It is a rung the label hides
-    -- on the Anthropic Messages wire ``minimal`` and ``low`` both serialize to
-    ``effort: low``, so descending by label alone bought a second retry that was
-    the first failure again at full price. Skipping is not descending twice:
-    when every rung below collapses onto this one there is nothing left to
-    change and this returns None, which the caller reads as the same dead end as
-    a spent budget. Without ``wire_keys`` the labels stand on their own, which is
-    right for every wire that sends the effort as the caller named it.
-    """
-    candidate = _next_rung(current)
-    if candidate is None or wire_keys is None:
-        return candidate
-    here = wire_keys(current)
-    while candidate is not None and wire_keys(candidate) == here:
-        candidate = _next_rung(candidate)
-    return candidate
-
-
-def _next_rung(current: str | None) -> str | None:
-    """The next label down, before any question about what it sends."""
-    if current is None:
-        return "low"
-    try:
-        index = REASONING_EFFORT_LADDER.index(current.strip().lower())
-    except (AttributeError, ValueError):
-        return None
-    if index + 1 >= len(REASONING_EFFORT_LADDER):
-        return None
-    return REASONING_EFFORT_LADDER[index + 1]
-
-
 MAX_CONTINUATIONS = 3
 REASONING_EXCERPT_MAX = 500
 EMPTY_RETRY_BASE_DELAY_S = 5.0

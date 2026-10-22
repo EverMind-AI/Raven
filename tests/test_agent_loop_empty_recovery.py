@@ -51,7 +51,6 @@ from raven.agent.loop.recovery import (
     has_inline_thinking,
     has_thinking,
     limits_from_defaults,
-    lower_reasoning_effort,
     next_step_down,
     reasoning_excerpt,
     reply_kind,
@@ -1949,28 +1948,12 @@ async def test_an_exhausted_recovery_ends_the_turn_with_error_status(workspace):
     assert not any(m.get("role") == "assistant" for m in messages)
 
 
-def test_the_effort_ladder_descends_one_rung_and_stops(monkeypatch):
-    """The descent, on its own. ``None`` in is a turn that named no effort and
-    let the backend pick, so the first rung down is the lowest effort this repo
-    documents in config -- a stated request, which an unstated one is not."""
-    assert lower_reasoning_effort(None) == "low"
-    assert lower_reasoning_effort("high") == "medium"
-    assert lower_reasoning_effort("low") == "minimal"
-    assert lower_reasoning_effort("minimal") is None, "the floor, so a later retry cannot invent a rung"
-    assert lower_reasoning_effort("HIGH ") == "medium", "an effort is a config string, not a keyword"
-    assert lower_reasoning_effort("enthusiastic") is None, "a value we cannot place has no rung below it"
+def test_the_anthropic_wire_tells_the_step_down_rungs_apart():
+    """A step-down only pays for itself if the request it sends differs from the one that came back.
 
-
-def test_a_rung_the_wire_cannot_tell_apart_is_skipped_not_sent():
-    """A retry only pays for itself if the request it re-sends differs.
-
-    Reviewer, 2026-09-10: on the Anthropic Messages wire ``_ADAPTIVE_EFFORTS``
-    maps both ``minimal`` and ``low`` onto ``low``, so descending by label alone
-    produced ``output_config.effort: low`` twice for an adaptive model and
-    ``reasoning.effort: low`` twice otherwise -- the second retry was the first
-    failure again at full price, which is the defect the ladder exists to
-    remove. Asked of the provider, the collapsed rung is skipped, and when every
-    rung below collapses onto this one there is nothing left to change.
+    On the Anthropic Messages wire ``minimal`` and ``low`` serialize to one request, which is why a
+    step-down asks the provider what a rung sends. It lands only on ``high`` and ``low``, and those
+    are two requests there, neither of them the unstated one a turn starts from.
     """
     from raven.agent.loop.turn_path import _reasoning_wire_keys
     from raven.providers.anthropic_messages_provider import AnthropicMessagesProvider
@@ -1979,30 +1962,21 @@ def test_a_rung_the_wire_cannot_tell_apart_is_skipped_not_sent():
         provider = AnthropicMessagesProvider(api_key="k", default_model=model)
         wire = _reasoning_wire_keys(provider, model)
         assert wire is not None
-        assert wire("low") == wire("minimal"), f"{model}: the two rungs really are one request"
-        assert lower_reasoning_effort("low", wire) is None, "so there is no rung below low here"
-        assert lower_reasoning_effort("medium", wire) == "low"
-        assert lower_reasoning_effort(None, wire) == "low"
-        # And the descent from the top still gets a distinct request each step.
-        efforts, effort = [], "max"
-        while effort is not None:
-            efforts.append(effort)
-            effort = lower_reasoning_effort(effort, wire)
-        assert efforts == ["max", "xhigh", "high", "medium", "low"]
-        assert len({wire(e) for e in efforts}) == len(efforts), "every rung sent is its own request"
+        assert len({wire(None), wire("high"), wire("low")}) == 3, f"{model}: every rung sent is its own request"
+        assert next_step_down(None, wire) == "high"
+        assert next_step_down("high", wire) == "low"
+        assert next_step_down("low", wire) is None
 
 
-def test_a_wire_that_sends_the_label_verbatim_keeps_every_rung():
+def test_a_wire_that_sends_the_label_verbatim_skips_no_rung():
     """The chat and responses wires send the effort as the caller named it, so
     the labels stand on their own and nothing is skipped."""
-    from raven.providers.base import LLMProvider
-
     wire = LLMProvider.reasoning_wire_keys
     shape = lambda effort: repr(wire(None, "m", effort))  # noqa: E731 - one expression, read once
 
-    assert shape("low") != shape("minimal")
-    assert lower_reasoning_effort("low", shape) == "minimal"
-    assert lower_reasoning_effort("minimal", shape) is None
+    assert shape("high") != shape("low")
+    assert next_step_down(None, shape) == "high"
+    assert next_step_down("high", shape) == "low"
 
 
 def test_a_provider_that_cannot_answer_leaves_the_descent_on_the_labels():
@@ -2010,14 +1984,14 @@ def test_a_provider_that_cannot_answer_leaves_the_descent_on_the_labels():
     from raven.agent.loop.turn_path import _reasoning_wire_keys
 
     assert _reasoning_wire_keys(SimpleNamespace(), "m") is None
-    assert lower_reasoning_effort("low", None) == "minimal"
+    assert next_step_down("max", None) == "high"
 
     def raises(_effort):
         raise RuntimeError("no")
 
     broken = _reasoning_wire_keys(SimpleNamespace(reasoning_wire_keys=lambda *a: raises(a)), "m")
     assert broken is not None
-    assert lower_reasoning_effort("low", broken) == "minimal", "an unanswerable question is not a same request"
+    assert next_step_down("max", broken) == "high", "an unanswerable question is not a same request"
 
 
 @pytest.mark.asyncio
