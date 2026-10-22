@@ -165,6 +165,16 @@ def _cache_tokens(usage: Any) -> tuple[int | None, int | None]:
     )
 
 
+def _refusal_of(carrier: Any) -> str | None:
+    """The refusal text a message or delta carries, when the upstream sent one.
+
+    Read with ``getattr`` because the SDK's own types do not declare the field: it
+    is there only when the upstream's body had it.
+    """
+    text = getattr(carrier, "refusal", None)
+    return text if isinstance(text, str) and text else None
+
+
 def _reasoning_tokens(usage: Any) -> int | None:
     """How much of the output the model spent thinking, when the protocol says so.
 
@@ -904,7 +914,10 @@ class LiteLLMProvider(LLMProvider):
                     # actually received (None, then) beside it. A consumer cannot
                     # tell that fabricated stop from a real one otherwise, and a
                     # reply cut mid-thought must not read as a finished one.
-                    if delta.finish_reason and _finish_was_made_up(stream):
+                    # Except a refusal: the upstream did send it, but at a point where
+                    # the wrapper has recorded no finish yet, which is the very state
+                    # that marks a stop as made up.
+                    if delta.finish_reason and delta.finish_reason != "refusal" and _finish_was_made_up(stream):
                         delta.finish_synthesized = True
                     delivered = delivered or bool(delta.content or delta.tool_call_delta)
                     # The terminal delta of a stream that delivered nothing is the
@@ -975,12 +988,18 @@ class LiteLLMProvider(LLMProvider):
             tool_calls = getattr(delta_obj, "tool_calls", None)
             usage = getattr(chunk, "usage", None)
             reasoning_content = getattr(delta_obj, "reasoning_content", None) or None
+            refusal = _refusal_of(delta_obj)
             # Upstream states why it stopped only on the terminal chunk, which
             # otherwise carries no payload at all. Dropping that chunk would
             # discard the one signal that says the response was cut off at the
             # output ceiling rather than finished -- the difference between "the
             # model is done" and "the model was interrupted mid-token".
             finish_reason = getattr(choice, "finish_reason", None) or None
+            if refusal:
+                # The refusal is the reply, and the finish says so: the terminal
+                # chunk after it will only say ``stop``.
+                content = content or refusal
+                finish_reason = "refusal"
 
             tool_call_delta: dict[str, Any] | None = None
             if tool_calls:
@@ -1054,6 +1073,12 @@ class LiteLLMProvider(LLMProvider):
                 "LiteLLM response has {} choices, merged {} tool_calls", len(response.choices), len(raw_tool_calls)
             )
 
+        # Settled before the transport verdict below: a refusal is the reply, and
+        # a reply with strange accounting is still a reply.
+        if refusal := _refusal_of(message):
+            content = content or refusal
+            finish_reason = "refusal"
+
         tool_calls = []
         for tc in raw_tool_calls:
             # Parse arguments from JSON string if needed. Strict first, so that
@@ -1104,7 +1129,7 @@ class LiteLLMProvider(LLMProvider):
         # delivered as an answer is this verdict. Both gates there
         # (`!= "error"`) then work unchanged.
         evidence = flag_transport_failure(
-            # The upstream's own word, not the `or "stop"` default below: a
+            # The upstream's own word, not the `or "unknown"` default below: a
             # provider that sent no finish reason never said this call ended
             # normally, so there is nothing here to disbelieve.
             finish_reason=finish_reason,
@@ -1142,7 +1167,7 @@ class LiteLLMProvider(LLMProvider):
         return LLMResponse(
             content=content,
             tool_calls=tool_calls,
-            finish_reason=finish_reason or "stop",
+            finish_reason=finish_reason or "unknown",
             usage=usage,
             reasoning_content=reasoning_content,
             thinking_blocks=thinking_blocks,

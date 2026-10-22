@@ -448,6 +448,36 @@ async def test_a_stream_that_stays_empty_is_reported_as_the_failure_it_is() -> N
     assert "upstream" in (response.content or "").lower()
 
 
+class _DeclinedThenStop:
+    """A stream that declines, then closes on the ``stop`` every stream closes on."""
+
+    generation = GenerationSettings()
+
+    def __init__(self, verdict: str) -> None:
+        self.verdict = verdict
+
+    async def chat_stream(self, *a: Any, **kw: Any):
+        yield ChatDelta(content="I can't help with that", finish_reason=self.verdict)
+        yield ChatDelta(content=None, finish_reason="stop", usage={"prompt_tokens": 2900, "total_tokens": 2950})
+
+
+@pytest.mark.parametrize("verdict", ["refusal", "content_filter"])
+async def test_a_stop_after_a_refusal_does_not_overwrite_it(verdict: str) -> None:
+    """The ``stop`` that closes a stream only says the stream is over. Read as the
+    model's own finish it turned a refusal into a reply that happened to be short."""
+    from raven.providers.streaming import stream_llm_call
+
+    response = await stream_llm_call(
+        _DeclinedThenStop(verdict),
+        messages=[{"role": "user", "content": "hi"}],
+        tools=None,
+        model="stub",
+    )
+
+    assert response.finish_reason == verdict
+    assert response.content == "I can't help with that"
+
+
 # ---------- what the watcher sees while it streams ----------------------------
 
 
@@ -882,14 +912,18 @@ def test_a_cached_prompt_is_not_a_dead_request() -> None:
 def test_an_upstream_that_said_nothing_about_how_it_ended_is_not_accused() -> None:
     """The verdict disbelieves a claim; it does not invent one.
 
-    `_parse_response` defaults a missing finish reason to `stop` on the way
-    out. Reading that default back would condemn every provider that omits the
-    field -- a case nobody reported, and one the streaming side already settles
-    differently (see `test_llm_call_stream_empty_stream_yields_empty_content`).
+    `_parse_response` defaults a missing finish reason to `unknown` on the way
+    out, which says only that nothing was said. Read back as a claim it would
+    condemn every provider that omits the field -- a case nobody reported, and
+    one the streaming side settles the same way (see
+    `test_llm_call_stream_empty_stream_yields_empty_content`).
     """
     silent = _Response(choices=[_Choice(message=_Msg(), finish_reason=None)])  # type: ignore[arg-type]
 
-    assert _provider()._parse_response(silent).finish_reason == "stop"
+    parsed = _provider()._parse_response(silent)
+
+    assert parsed.finish_reason == "unknown"
+    assert parsed.error_classification is None
 
 
 # ---------- against the library itself, not a double -------------------------
