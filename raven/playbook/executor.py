@@ -57,9 +57,10 @@ def _fill_text(text: str, spec: PlaybookSpec, values: Mapping[str, str], where: 
     """Fill one piece of playbook text, minus any secret, and say what was withheld.
 
     Every path that turns playbook text into something a model or a sub-agent
-    reads goes through here, and there are three: the guidance reply, the compose
-    input, and a node's prompt template. They had a redaction each and a log line
-    between two of them, so the third changed a work order and said nothing --
+    reads goes through here: the guidance reply, the compose input, a node's
+    prompt template, and a route condition -- the last reaching the judge in the
+    model's place. They had a redaction each and a log line between two of them,
+    so one changed a work order and said nothing --
     leaving an operator to debug a graph that could not do what the file asked,
     with no trace of why.
 
