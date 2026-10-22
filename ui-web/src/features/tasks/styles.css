@@ -742,7 +742,9 @@
    handle and the routes after a selection's first give way first: each starts
    from nothing and grows into the room the others leave, up to its own width.
    The agent's name gives way next. The chip and the first route never do. */
-.tkrunl2 { display: flex; align-items: center; gap: 6px; overflow: hidden; white-space: nowrap; }
+.tkrunl2 { display: flex; align-items: center; gap: 0; overflow: hidden; white-space: nowrap; }
+/* Space the fields, not the two parts of one selection. */
+.tkrunl2 > * + :not(.tkrunselrest) { margin-left: 6px; }
 .tkrunag { font-size: 12px; color: var(--text-3); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .tkrunhandle {
   flex: 1 1 0;
@@ -768,7 +770,8 @@
    selection. The arrow and the first route keep their width, so the line can no longer cut them
    down to the arrow; only a route longer than the line itself ends in an ellipsis. The routes
    after it shrink to a letter and an ellipsis: narrower, a line's first letter is clipped
-   rather than replaced by one, so they would end in a cut letter that says nothing follows. */
+   rather than replaced by one, so they would end in a cut letter that says nothing follows.
+   Keep the separator's space with the first route, outside the text that may be cut. */
 .tkrunsel,
 .tkrunselrest {
   overflow: hidden;
@@ -777,7 +780,7 @@
   font-size: 10.5px;
   color: var(--moss);
 }
-.tkrunsel { flex: none; max-width: 100%; }
+.tkrunsel { flex: none; max-width: 100%; white-space: pre; }
 .tkrunselrest { flex: 1 1 0; max-width: max-content; min-width: 2ch; }
 
 /* The top-right status cluster (`.rt`, proto.css:1083-1091): icon-or-word
