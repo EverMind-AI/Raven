@@ -24,9 +24,11 @@ All notable changes to Raven are documented here.
   line, in a log or in an answer; such a machine gets no ssh alias and no jump
   host, its password answers the registered account's own password prompt (at
   the address as ssh resolves it, so a `Host` alias from the owner's ssh config
-  works too, though not one Raven wrote for another machine: such a pair is
-  refused at registration in either order and again on connecting, and a
-  password connection never canonicalizes the host)
+  works too, though not one Raven wrote for another machine that sends ssh
+  elsewhere: such a pair is refused at registration in either order and again
+  on connecting, while a key machine whose alias names its own id as the
+  address, `gpu1` at `gpu1`, leaves a password machine at `gpu1` free to
+  register, and a password connection never canonicalizes the host)
   and no other, Oncall campaigns run on it as Raven's own
   connections do and at
   the registered address alone, and the mode is not offered on Windows. A failed

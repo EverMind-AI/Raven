@@ -446,7 +446,10 @@ the askpass helper answers the registered account's own password prompt (`user@h
 `ssh -G` resolves it -- the `HostKeyAlias`, else the `HostName` in canonical form -- named by
 `transport.ASKPASS_FOR_ENV`; a host that is the id of a `Host` alias Raven keeps for a key machine,
 `transport.ALIAS_MARK`, is refused rather than followed when that alias sends ssh to another
-`HostName` (`transport.managed_alias_hostnames`), at registration in either order by
+`HostName` (`transport.managed_alias_hostnames`), and so is a block that is not the one Raven
+writes -- one of its two marks gone, a keyword Raven does not write (`ProxyCommand`, `Include`
+...), a missing or second `HostName`, a second pattern on its `Host` line -- at registration in
+either order by
 `connection_add.alias_collision` and again on connecting; one reader, `transport.resolve_with_ssh`,
 serves both this and a key machine's defaults, and a password connection never canonicalizes) and no other, another account's, a second factor's and a one-time
 password's included; Oncall's ssh and rsync log in to such a row the same way, at the registry's
