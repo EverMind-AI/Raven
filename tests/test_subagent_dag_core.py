@@ -7,7 +7,6 @@ render/store are exercised over a tiny in-memory duck-typed backend.
 from __future__ import annotations
 
 import json
-import os
 import pathlib
 import posixpath
 import re
@@ -1051,17 +1050,6 @@ async def test_read_node_returns_its_own_transcript() -> None:
 
 # A real, well-formed run id: _check_run_id runs the moment prepare_replan
 # reads the old graph, well before anything this suite is actually about.
-# A workdir reference that lands in the node root only reaches the node-root rule where it
-# passes confinement first.
-_POSIX_REFERENCE_PATHS = pytest.mark.skipif(
-    os.name == "nt",
-    reason=(
-        "check_confined resolves a workdir reference with POSIX path rules, so on Windows it refuses "
-        "every such reference as outside the roots before the node-root rule is reached"
-    ),
-)
-
-
 _OLD_RUN_ID = "20260904T000000Z-00000001"
 
 
@@ -1256,7 +1244,6 @@ async def test_replanning_refuses_a_reference_to_a_live_completed_node_that_wrot
     assert "b" in out
 
 
-@_POSIX_REFERENCE_PATHS
 async def test_replanning_refuses_an_absolute_path_to_a_node_that_may_not_execute(tmp_path) -> None:
     """A replacement graph is held to the rules a submitted one is, the node root by any
     spelling included: refused here, it never becomes a run that fails on a missing file."""
@@ -1580,7 +1567,9 @@ def test_a_reference_landing_outside_every_root_is_rejected(path: str) -> None:
         check_confined(path, what="ref", roots=_ROOTS)
 
 
-@pytest.mark.parametrize("path", ["/work/notes.md", "../elsewhere/notes.md"])
+@pytest.mark.parametrize(
+    "path", ["/work/notes.md", "../elsewhere/notes.md", r"..\elsewhere\notes.md", r"C:\work\notes.md", "C:notes.md"]
+)
 def test_without_roots_a_reference_must_stay_relative(path: str) -> None:
     with pytest.raises(DagValidationError, match="must be relative"):
         check_confined(path, what="ref")
@@ -1608,6 +1597,27 @@ def test_a_nodes_prefixed_reference_cannot_escape_the_node_root(path: str) -> No
     """
     with pytest.raises(DagValidationError):
         check_confined(path, what="ref", roots=None)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        r"@nodes/..\..\secret.md",
+        r"@nodes/sub\..\..\secret.md",
+        r"@nodes/C:\Users\agent\secret.md",
+        "@nodes/C:secret.md",
+        r"@nodes/\\server\share\secret.md",
+    ],
+    ids=["backslash-parent", "backslash-through-a-child", "drive-absolute", "drive-relative", "unc"],
+)
+def test_a_nodes_prefixed_reference_cannot_escape_by_windows_path_rules(path: str) -> None:
+    """A Windows read takes a backslash as a separator and a drive as an anchor -- a
+    drive-relative path lands in that drive's current directory -- so each of these leaves
+    the node root there. Refused on every host: no artifact name holds either, and a graph
+    is then valid or not wherever it is checked."""
+    for roots in (_ROOTS, None):
+        with pytest.raises(DagValidationError, match="node artifacts"):
+            check_confined(path, what="ref", roots=roots)
 
 
 # --- render across runs --------------------------------------------------
@@ -3545,6 +3555,7 @@ def test_at_nodes_case_aliases_use_the_reserved_node_identity(kind: str, spellin
 async def test_at_nodes_aliases_respect_the_filesystem_and_reserved_ids(
     tmp_path: Path, kind: str, relative: str
 ) -> None:
+    anchored = "{drive}" in relative
     relative = relative.format(drive=tmp_path.drive or "C:")
     artifacts = tmp_path / "nodes"
     artifacts.mkdir()
@@ -3565,7 +3576,14 @@ async def test_at_nodes_aliases_respect_the_filesystem_and_reserved_ids(
             _branch_node(id="reader", depends_on=["r", "Gate"], when="r.done", prompt_template=template, inputs=inputs),
         ]
     )
-    if aliases_output or relative in ("GATE.out.md", "gate.out.md"):
+    if anchored:
+        # Naming another drive, the same spelling lands outside the node root, so confinement
+        # refuses a drive on every host; where it does reach the artifact, the alias rule
+        # still names the node.
+        assert "must be relative to and within this session's node artifacts" in errors[0]
+        assert len(errors) == (2 if aliases_output else 1)
+        assert all("of node 'Gate', which may not execute" in error for error in errors[1:])
+    elif aliases_output or relative in ("GATE.out.md", "gate.out.md"):
         assert len(errors) == 1
         assert "of node 'Gate', which may not execute" in errors[0]
         assert "use {{ Gate.output }} instead" in errors[0]
@@ -3573,7 +3591,6 @@ async def test_at_nodes_aliases_respect_the_filesystem_and_reserved_ids(
         assert errors == []
 
 
-@_POSIX_REFERENCE_PATHS
 @pytest.mark.parametrize("kind", ["ref", "ref_path", "input"])
 @pytest.mark.parametrize(
     "spelling",
@@ -3614,7 +3631,6 @@ def test_a_path_into_the_node_root_without_at_nodes_is_refused_too(tmp_path: Pat
     assert errors([_branch_node(id="Gate"), _branch_node(**reader, depends_on=["Gate"])]) == []
 
 
-@_POSIX_REFERENCE_PATHS
 @pytest.mark.parametrize(("link", "refused"), [(True, True), (False, False)], ids=["through-a-link", "same-name"])
 def test_a_workdir_reference_is_judged_by_the_file_its_read_would_open(
     tmp_path: Path, link: bool, refused: bool

@@ -2941,7 +2941,10 @@ files, by path. A relative reference resolves against the working directory; eit
 may also be named absolute. `@nodes/<node_id>...` is a third, narrower address -- this
 session's own node artifacts alone, checked lexically against that one prefix rather than
 against these roots -- reaching a node's own prompt file too, which the short
-`{{ <node_id>.output }}` form cannot.
+`{{ <node_id>.output }}` form cannot. A reference resolves by the host's path rules, so on
+Windows a backslash separates and a drive anchors; the lexical checks -- on `@nodes/`, and on
+a reference checked without roots -- refuse what would escape under POSIX or Windows rules
+alike, so they answer the same on every host.
 Stops at Subagent history rather than at Agent home on purpose. Agent home also holds user
 memory, installed skills, and every *other* conversation's transcript and sub-agent history,
 already off limits to a working directory (`workdir.py`'s `_PROTECTED_SUBTREES`) -- and a
@@ -2952,8 +2955,10 @@ memory, into a sub-agent's prompt. Containment is decided on where the reference
 disk rather than on how it is spelled: both the resolved path and each root go through
 `realpath`, so a symlink inside a root that points outside every one of them is refused
 rather than followed, and a root reached through a symlink still contains its own files. The
-error names the path the author wrote, never the physical one, which could describe a
-directory they were not entitled to learn about.
+comparison keeps the case `realpath` gives each existing component rather than folding it,
+so two directories differing only in case, which a case-sensitive Windows directory can
+hold, stay two. The error names the path the author wrote, never the physical one, which
+could describe a directory they were not entitled to learn about.
 
 **The fence rule** (`raven/agent/subagent/prompt_render.py`, `dag_render.py`):
 What a resolved reference's content gets on the way into a prompt, decided by the kind of

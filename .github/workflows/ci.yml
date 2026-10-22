@@ -427,6 +427,15 @@ jobs:
           $env:PATH = (Join-Path $env:ProgramFiles 'Git\usr\bin') + ';' + $env:PATH
           uv run --frozen --python 3.13 --no-sync pytest tests/test_subagent_dag_runner.py -k 'test_the_finish_text or test_branch_e2e_one_tool_call' -q -n 0 --tb=short
 
+      # A file reference is confined with the host's path rules -- a backslash
+      # separates and a drive anchors -- which the Linux shards never exercise.
+      # One pytest call: a failing native command earlier in a PowerShell step
+      # does not fail the step.
+      - name: Test DAG file-reference confinement
+        run: |
+          $env:PATH = (Join-Path $env:ProgramFiles 'Git\usr\bin') + ';' + $env:PATH
+          uv run --frozen --python 3.13 --no-sync pytest tests/test_subagent_prompt_template.py tests/test_playbook_validate.py tests/test_subagent_dag_core.py tests/test_subagent_dag_runner.py -k 'template or validate or reference or node_root or nodes_prefix or may_not_execute or both_ref_forms or history or addressable or reachable_by_path' -q -n 0 --tb=short
+
       # A launch rewrites the agents' prompt files. Keeping a private file's
       # DACL and recovering from a read-only one are Windows facts the Linux
       # shards skip.

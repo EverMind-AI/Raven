@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """Root-confinement guard for author-provided DAG file references."""
 
+import ntpath
 import os
 import posixpath
+from types import ModuleType
 
 from raven.agent.subagent.prompt_errors import DagValidationError
 
@@ -36,7 +38,8 @@ def check_confined(path: str, *, what: str, roots: tuple[str, ...] | None = None
 
     A ``@nodes/`` reference is always confined to this session's own node
     artifacts and is checked lexically against that prefix alone --
-    ``@nodes/../..`` is refused exactly like a bare ``../..``.
+    ``@nodes/../..`` is refused exactly like a bare ``../..``, and so is
+    ``@nodes/..\\..``, which leaves the root on a Windows host.
 
     Everything else is checked against ``roots``: the session working directory
     and ``<session_dir>/subagents/``, this conversation's sub-agent history. The
@@ -58,8 +61,9 @@ def check_confined(path: str, *, what: str, roots: tuple[str, ...] | None = None
     the string the author wrote: a symlink inside a root can name a target
     outside every one of them, and the read follows the link. Both sides go
     through ``realpath``, so a root reached through a symlink still contains its
-    own files. That makes this a local-filesystem question -- every caller reads
-    through a local backend today; a remote one would have to ask its own side.
+    own files. That makes this a local-filesystem question, answered with the
+    host's path rules -- every caller reads through a local backend today; a
+    remote one would have to ask its own side.
 
     ``roots`` is optional because the two callers know different things: the
     tool checks a graph before dispatching anything and knows both roots, while
@@ -102,8 +106,10 @@ def check_confined(path: str, *, what: str, roots: tuple[str, ...] | None = None
 def resolve_reference(relative: str, roots: tuple[str, ...]) -> tuple[str, str]:
     """Where a reference outside ``@nodes/`` lands, as written out and on disk.
 
-    A relative path resolves against the first root. The second path is the first
-    through ``realpath``: the read follows a symlink, so a question about where a
+    A relative path resolves against the first root, with the host's path rules
+    the read uses: on Windows a backslash separates, and a path rooted without a
+    drive takes the first root's. The second path is the first through
+    ``realpath``: the read follows a symlink, so a question about where a
     reference lands is asked of that one. Shared by every such question, so two
     rules about one reference cannot resolve it two ways.
 
@@ -117,19 +123,29 @@ def resolve_reference(relative: str, roots: tuple[str, ...]) -> tuple[str, str]:
         `tuple[str, str]`:
             The normalized path, then its physical form.
     """
-    base = posixpath.normpath(roots[0])
-    resolved = posixpath.normpath(relative if posixpath.isabs(relative) else posixpath.join(base, relative))
+    resolved = os.path.normpath(os.path.join(os.path.normpath(roots[0]), relative))
     return resolved, os.path.realpath(resolved)
 
 
 def _check_shape(path: str, relative: str, *, what: str, root: str) -> None:
-    """Refuse an absolute or base-escaping path without resolving it."""
-    normalized = posixpath.normpath(relative)
-    if posixpath.isabs(relative) or relative.startswith("\\") or normalized == ".." or normalized.startswith("../"):
+    """Refuse an absolute or base-escaping path without resolving it.
+
+    Judged by POSIX and Windows rules both, whatever the host: a backslash or a
+    drive escapes only on Windows, no artifact name carries either, and the
+    verdict on a graph then does not depend on where it is checked.
+    """
+    if any(_escapes(relative, rules) for rules in (posixpath, ntpath)):
         where = "this session's node artifacts" if root == "nodes" else "the session workdir"
         raise DagValidationError(
             f"{what} path '{path}' must be relative to and within {where}",
         )
+
+
+def _escapes(relative: str, rules: ModuleType) -> bool:
+    """Whether ``relative`` is anchored, or climbs out of its base, under ``rules``."""
+    drive, anchor, _ = rules.splitroot(relative)
+    normalized = rules.normpath(relative)
+    return bool(drive or anchor) or normalized == rules.pardir or normalized.startswith(rules.pardir + rules.sep)
 
 
 def within(child: str, root: str) -> bool:
@@ -139,6 +155,14 @@ def within(child: str, root: str) -> bool:
     supplies the containment half, and its caller supplies the resolution. Kept
     public because a caller comparing two paths it has resolved itself should
     use the same rule rather than writing a second one.
+
+    Separators follow the host's rules, so on Windows either slash separates.
+    Case is compared as written, deliberately: ``realpath`` already gives every
+    existing component its on-disk case, so folding would change the answer
+    only for a path that is not there to read -- and would take two directories
+    differing only in case, which a case-sensitive Windows directory can hold,
+    for one.
     """
-    normalized = posixpath.normpath(root)
-    return child == normalized or child.startswith(normalized.rstrip("/") + "/")
+    child = os.path.normpath(child)
+    normalized = os.path.normpath(root)
+    return child == normalized or child.startswith(normalized.rstrip(os.sep) + os.sep)
