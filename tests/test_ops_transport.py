@@ -334,6 +334,18 @@ def test_the_helper_answers_the_prompt_ssh_writes_for_the_host_it_resolves(
     assert (done.returncode, done.stdout) == (0, "hunter2\n"), done.stderr
 
 
+#: A stand-in that answers only after the cap: the one case whose expected reason is the timeout.
+_SSH_HANGS = "/bin/sleep 3; echo 'hostname 10.9.9.9'"
+
+
+def _cap_only_the_hang(monkeypatch, stand_in: str | None) -> None:
+    """A short cap for the stand-in that sleeps past it, the production one for every other: the first exec of a
+    freshly written script took 320-530 ms on macOS (reviewed 2026-10-22), and a 0.3 s cap on every case named
+    that start-up a timeout instead of the failure the stand-in reports."""
+    if stand_in == _SSH_HANGS:
+        monkeypatch.setattr(transport, "_RESOLVE_TIMEOUT_S", 0.3)
+
+
 @_posix_helper
 @pytest.mark.parametrize(
     "stand_in",
@@ -341,7 +353,7 @@ def test_the_helper_answers_the_prompt_ssh_writes_for_the_host_it_resolves(
         "echo 'hostname 10.9.9.9'; echo 'ssh: Could not resolve hostname: Name or service not known' >&2; exit 255",
         "echo 'usage: ssh [-46AaCfGgKkMNnqsTtVvXxYy] destination [command]'",
         None,
-        "/bin/sleep 3; echo 'hostname 10.9.9.9'",
+        _SSH_HANGS,
     ],
     ids=["ssh-fails", "nothing-resolved", "no-ssh-here", "ssh-hangs"],
 )
@@ -356,7 +368,7 @@ def test_when_ssh_cannot_say_how_it_resolves_the_host_the_helper_waits_for_the_r
         (bin_dir / "ssh").write_text(f"#!/bin/sh\n{stand_in}\n", encoding="utf-8")
         (bin_dir / "ssh").chmod(0o755)
     monkeypatch.setenv("PATH", str(bin_dir))
-    monkeypatch.setattr(transport, "_RESOLVE_TIMEOUT_S", 0.3)
+    _cap_only_the_hang(monkeypatch, stand_in)
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
     store_password("box", "hunter2")
 
@@ -379,9 +391,10 @@ def test_when_ssh_cannot_say_how_it_resolves_the_host_the_helper_waits_for_the_r
         ("echo 'ssh: Could not resolve hostname: Name or service not known' >&2; exit 255", "ssh -G exited 255"),
         ("echo 'usage: ssh [-46AaCfGgKkMNnqsTtVvXxYy] destination [command]'", "ssh -G named no host"),
         (None, "ssh -G could not be started"),
-        ("/bin/sleep 3; echo 'hostname 10.9.9.9'", "ssh -G took over 0.3 s"),
+        (_SSH_HANGS, "ssh -G took over 0.3 s"),
+        ("/bin/sleep 0.45; echo 'ssh: Could not resolve hostname' >&2; exit 255", "ssh -G exited 255"),
     ],
-    ids=["ssh-fails", "nothing-resolved", "no-ssh-here", "ssh-hangs"],
+    ids=["ssh-fails", "nothing-resolved", "no-ssh-here", "ssh-hangs", "ssh-fails-after-a-slow-start"],
 )
 def test_when_ssh_cannot_say_how_it_resolves_the_host_the_helper_s_refusal_says_so(
     tmp_path, monkeypatch, supported_host, stand_in, why
@@ -397,7 +410,7 @@ def test_when_ssh_cannot_say_how_it_resolves_the_host_the_helper_s_refusal_says_
         (bin_dir / "ssh").write_text(f"#!/bin/sh\n{stand_in}\n", encoding="utf-8")
         (bin_dir / "ssh").chmod(0o755)
     monkeypatch.setenv("PATH", str(bin_dir))
-    monkeypatch.setattr(transport, "_RESOLVE_TIMEOUT_S", 0.3)
+    _cap_only_the_hang(monkeypatch, stand_in)
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
     store_password("box", "hunter2")
 
