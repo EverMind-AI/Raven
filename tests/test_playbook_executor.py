@@ -110,7 +110,7 @@ def _dag_spec(**over):
 
 
 def _branching_nodes() -> list[NodeSpec]:
-    """A decision, the branch one of its routes opens, and a step that waits on both."""
+    """A decision node, the branch one of its routes opens, and a step that waits on both."""
     return [
         NodeSpec(
             id="triage",
@@ -931,7 +931,7 @@ def test_the_dag_mode_section_gives_a_branch_its_fields_and_the_one_rule_about_t
 def test_the_compose_prompt_gives_a_branch_its_fields_and_the_one_rule_about_them():
     """A prompt that says a branch is expressible has to hand over the fields to write one
     with, and the one rule a branch breaks when it is forgotten: a node that depends on
-    a decision names it in its guard."""
+    a decision node names it in its guard."""
     compose = " ".join(build_compose_prompt("assemble it", COMPOSE_PROFILES, []).split())
 
     listed = {word.strip() for word in compose.split("camelCase fields:", 1)[-1].split(")", 1)[0].split("/")}

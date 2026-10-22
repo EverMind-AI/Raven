@@ -1970,7 +1970,7 @@ def test_the_guide_gives_the_operator_precedence_the_schema_leaves_to_it() -> No
 def test_the_guide_says_a_false_or_unknown_guard_leaves_the_node_not_executed() -> None:
     """`not_executed` covers both a guard that came out false and one that came out
     unknown, and the two reasons are distinguishable in the manifest. Unknown is not
-    false -- an atom naming a route of a decision that never ran is unknown, not
+    false -- an atom naming a route of a decision node that never ran is unknown, not
     false -- so a guard `not risk.high` does not run the node when risk was never
     judged, and the reason says which happened."""
     guide = _guide_text()
@@ -3158,7 +3158,7 @@ def test_a_decision_node_in_depends_on_must_appear_in_when() -> None:
 
 
 def test_a_decision_node_that_depends_on_another_decision_must_name_it_in_when() -> None:
-    """A nested decision is bound like any other node: it says which route of its parent it wants."""
+    """A nested decision node is bound like any other node: it says which route of its parent it wants."""
     errors = _branch_graph([_decision(), _decision("r2", depends_on=["r"])])
     assert errors == [
         "node 'r2' depends on decision node 'r', which must appear in when -- "
@@ -3213,8 +3213,8 @@ def test_a_decision_depending_on_a_plain_node_must_still_be_named() -> None:
 
 
 def test_a_node_that_declines_the_route_and_names_the_decision_is_allowed() -> None:
-    """Naming the decision is the whole obligation: `.done` is a node that runs on
-    every route, and it is accepted however the decision itself is guarded."""
+    """Naming the decision node is the whole obligation: `.done` is a node that runs on
+    every route, and it is accepted however the decision node itself is guarded."""
     assert (
         _branch_graph(
             [
@@ -4287,7 +4287,7 @@ _BRANCH_RUN_ID = "20261015T120000Z-0badc0de"
 
 
 def _branching_nodes() -> list[dict]:
-    """Two decisions (one `select: one`, one `select: many`), a guarded node, and a node inside its branch."""
+    """Two decision nodes (one `select: one`, one `select: many`), a guarded node, and a node inside its branch."""
     return [
         _branch_node(id="notes"),
         _branch_node(
@@ -4389,7 +4389,7 @@ async def test_read_run_reads_the_outcome_off_the_manifest_and_the_request_off_t
 
 
 async def test_read_run_keeps_an_empty_selection_as_an_empty_list() -> None:
-    """A `select: many` decision that chose nothing is still a decision: a falsy value is not an absent one."""
+    """A `select: many` decision node that chose nothing still made a selection: a falsy value is not an absent one."""
     run = await _read_branching_run()
 
     scan = next(entry for entry in run["files"] if entry["node"] == "scan")
@@ -4432,7 +4432,7 @@ async def _read_one_node(node: dict) -> dict:
 async def test_read_run_shows_routes_and_the_effective_select_only_on_a_node_that_branches(
     node: dict, shown: dict
 ) -> None:
-    """The run-started event says `select: one` for a decision that left it unset; the snapshot says the same.
+    """The run-started event says `select: one` for a decision node that left it unset; the snapshot says the same.
 
     A node branches when it has a route in `routes`, as the runner reads it, so an empty `routes` reads as none
     and a stray `select` on a node with no routes is not shown.
@@ -4444,7 +4444,7 @@ async def test_read_run_shows_routes_and_the_effective_select_only_on_a_node_tha
 
 @pytest.mark.parametrize("routes", [5, ["a"], "ab", True], ids=["number", "list", "string", "bool"])
 async def test_read_run_does_not_trip_over_routes_that_are_not_a_mapping(routes: object) -> None:
-    """A hand-edited graph.json must not raise out of `dag.get` -- `list(5)` does -- nor be read as a decision:
+    """A hand-edited graph.json must not raise out of `dag.get` -- `list(5)` does -- nor be read as a decision node:
     `list("ab")` would have made two routes of one string."""
     entry = await _read_one_node({"routes": routes, "select": "many"})
 
@@ -4649,7 +4649,7 @@ async def test_read_run_returns_the_outcomes_the_runner_wrote_under_the_names_it
 
 
 async def test_read_run_describes_each_node_the_way_the_run_started_event_did() -> None:
-    """Both say `select: one` for a decision that left it unset, and neither says anything of a node that does
+    """Both say `select: one` for a decision node that left it unset, and neither says anything of a node that does
     not branch: a client that read the event and one that read the snapshot must not disagree about a node."""
     result, be, events = await _run_a_branching_graph()
     started = next(value for name, value in events if name == "dag_run_started")["nodes"]
@@ -4733,15 +4733,15 @@ def test_the_skill_documents_conditional_branches() -> None:
     # Spaces separate tokens; inside an atom (`r . a`) the guard does not parse.
     assert "Spacing between tokens is free; an atom is one token, written without spaces." in section
     # A decision node's prompt asks for a conclusion; conditions are decidable and
-    # a single-select decision has a route for everything else.
+    # a single-select decision node has a route for everything else.
     assert "asks for the conclusion" in section
     assert "mutually exclusive and decidable" in section
     assert "catch-all" in section
     # Every decision node a node depends on is named in its `when`: the general rule,
-    # and the same rule for one decision depending on another.
+    # and the same rule for one decision node depending on another.
     assert (
         "**Every decision node in `depends_on` must appear in the node's `when`.** A node cannot depend on a "
-        "decision and stay silent about it"
+        "decision node and stay silent about it"
     ) in section
     assert "decision node that depends on another decision node" in section
     # One titled block per input that may be missing, and no `@nodes/` path to a
@@ -4761,8 +4761,8 @@ def test_the_skill_documents_conditional_branches() -> None:
     # Unknown is a value of its own, and the upstream check runs before the guard.
     assert "Unknown is not false: a route of a decision node that was never executed is *unknown*" in section
     assert (
-        "that check comes first, so `<node>.done`, true whatever the decision did, cannot revive a node with "
-        "no input left on that path"
+        "that check comes first, so `<node>.done`, true whatever the decision node chose, cannot revive a node "
+        "with no input left on that path"
     ) in section
 
 
@@ -4835,13 +4835,13 @@ def test_the_skills_resident_description_names_the_branch_in_one_graph() -> None
         "A step whose result decides what runs next is a decision node: give it routes, and guard what follows "
         "with when, all in one graph."
     ) in description
-    # Loops are still graphs in series: a branch is a decision inside one graph, not a cycle.
+    # Loops are still graphs in series: a branch is chosen inside one graph, not a cycle.
     assert "Iteration is graphs in series, one graph per round, driven by you." in description
 
 
 def test_the_skills_worked_example_is_a_graph_the_runtime_accepts() -> None:
     """The example is copied, so it has to be a valid submission as written -- and
-    the one submission that exercises the whole feature: two decisions, a guarded
+    the one submission that exercises the whole feature: two decision nodes, a guarded
     branch off each, a merge behind both, and a merge that reads a branch it did not
     take."""
     section = _heading_span(_repo_text(_SKILL), "## Conditional branches")
@@ -4857,7 +4857,7 @@ def test_the_skills_worked_example_is_a_graph_the_runtime_accepts() -> None:
     # The prose around the example counts what it shows, and calls a guarded node a
     # node that carries a guard rather than a guard.
     prose = _flat(section)
-    assert "One graph, two decisions, four guarded steps:" in prose
+    assert "One graph, two decision nodes, four guarded steps:" in prose
     assert sum(1 for node in spec.nodes if node.routes) == 2
     assert sum(1 for node in spec.nodes if node.when) == 4
     assert "`fix`, `design` and `deep_review` each open a branch, and each carries that branch's guard." in prose

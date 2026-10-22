@@ -136,7 +136,7 @@ count as done. Its output is withheld from the nodes that depend on it, and you 
 message naming the node, what is missing, and which downstream nodes are blocked behind it.
 
 That message arrives mid-run, not at the end. The rest of the graph keeps going: only the
-blocked branch waits.
+nodes that depend on it wait.
 
 Answer it by calling `resolve_dag_node` through `tool_call`: it is not in your tool list,
 and `tool_call` is the only way to name it. The report you receive carries that tool's
@@ -145,8 +145,8 @@ what the three decisions mean, not how to spell them.
 
 - `continue` sends your message to the node and lets it try again, keeping the graph and
   everything it has already done.
-- `abandon` gives up on that node. Its dependents are skipped; the other branches finish
-  normally.
+- `abandon` gives up on that node. Its dependents are skipped; every node that does not
+  depend on it finishes normally.
 - `replan` replaces what is left of the graph: this run stops and a new one starts from the
   nodes you supply. Nodes this run completed are referenced (`depends_on` plus
   `{{ <id>.output }}`), never re-declared; every other node needs a new id, including a redo
@@ -195,7 +195,7 @@ flag (default `true`) is described above.
 | `depends_on` | no | Upstream node ids that must finish before this node runs. May also name a task this conversation already finished — an earlier run's node, or a `spawn` — which only records the dependency. |
 | `inputs` | no | Object mapping a key to a literal string, to `{"file": "<path>"}`, or to `{"node": "<id>"}` for another node's output — exactly one of the three, with nothing else in the object. |
 | `instance` | no | A stable handle (e.g. `researcher`). Nodes sharing it run sequentially in id order and reuse one sub-agent session — only on an agent the roster tags `[stateful]`. |
-| `routes` | no | Makes this node a **decision**: route name to the condition, in plain words, under which its answer selects that route. See `Conditional branches`. |
+| `routes` | no | Makes this node a **decision node**: route name to the condition, in plain words, under which its answer selects that route. See `Conditional branches`. |
 | `select` | no | `"one"` (the default where there are routes): exactly one route. `"many"`: any number, none included. Only with `routes`. |
 | `when` | no | Guard. This node runs only if it holds once its dependencies settle. See `Conditional branches`. |
 
@@ -362,8 +362,8 @@ or only an answer; a scan that finds something and a review that only makes sens
 did. Without it the run has to finish, you read the result, and you submit a second graph,
 which costs a turn and a charge on the hourly dispatch allowance.
 
-Three fields do it. They are independent: a node may be a decision, guarded, both, or
-neither.
+Three fields do it. They are independent: a node may be a decision node, guarded, both,
+or neither.
 
 | Field | On | Meaning |
 | --- | --- | --- |
@@ -392,13 +392,13 @@ Two more that no check enforces, and that the judge's reading depends on:
   judge something to read the answer against. Note what that asks the node for: its
   conclusion, not a route name.
 - **The conditions are mutually exclusive and decidable**, and a `select: "one"` decision
-  gets a catch-all route for everything else, so every answer the node could give selects
+  node gets a catch-all route for everything else, so every answer the node could give selects
   exactly one route. Make that catch-all one route whose condition is "anything else", and
   name it in the node's `routes` alongside the specific ones. Without it, an answer that
   fits none of the conditions leaves the judge no right route to report, and it is held to
   the routes you declared: it may pick the nearest one, which sends the graph down a branch
-  the answer does not support, or report none, which fails the node. Give a decision only a
-  defect route and a feature-request route, and a node that concludes it is looking at a
+  the answer does not support, or report none, which fails the node. Give a decision node
+  only a defect route and a feature-request route, and a node that concludes it is looking at a
   usage question lands on one of the two, or stops the graph.
 
 **A guard reads only what the node depends on.** `when` names `<node>.<route>` — that
@@ -409,8 +409,8 @@ parentheses; `not` binds tightest, then `and`, then `or`, and the words are lowe
 Spacing between tokens is free; an atom is one token, written without spaces.
 
 **Every decision node in `depends_on` must appear in the node's `when`.** A node cannot
-depend on a decision and stay silent about it; `<node>.done` is how you say "whatever it
-chose". This holds for a decision node that depends on another decision node too — a
+depend on a decision node and stay silent about it; `<node>.done` is how you say "whatever
+it chose". This holds for a decision node that depends on another decision node too — a
 nested branch names its parent in its own `when`, like any node.
 
 **Guard the entry node of a branch, and every node of the branch that also depends on
@@ -433,7 +433,7 @@ route of a decision node that was never executed is *unknown*, so `not risk.high
 hold when no risk was ever judged — nobody decided. A node the branch left out is never
 dispatched, never takes a concurrency slot, and writes no output. One whose every
 in-graph dependency was left out ends the same way, reason `upstream_not_executed` — that
-check comes first, so `<node>.done`, true whatever the decision did, cannot revive a node
+check comes first, so `<node>.done`, true whatever the decision node chose, cannot revive a node
 with no input left on that path.
 
 **A decision node whose route cannot be established fails.** If the judge cannot be
@@ -491,7 +491,7 @@ prompt keeps one shape across runs.
 
 The owner asked: "Handle issue 123 — work out what kind of issue it is, do the work it
 needs, and draft the reply." What it needs depends on the triage, and how closely the
-change has to be reviewed depends on what it touches. One graph, two decisions, four
+change has to be reviewed depends on what it touches. One graph, two decision nodes, four
 guarded steps:
 
 ```json
@@ -569,9 +569,9 @@ other, and `question` is the catch-all that takes every answer the other two do 
 guard. `deep_review` shows the guard rule above at work: it reads `fix` and `design`, but
 it also depends on `triage` and `risk`, which run on every route, so nothing leaves it out
 with the branches it reads; its own guard is what keeps it off the `question` path.
-`reply` merges a decision and two branches: the decision is named in its `when`, as
+`reply` merges a decision node and two branches: the decision node is named in its `when`, as
 `triage.done`, because it runs whatever was chosen; the two branch nodes are only in its
-`depends_on`, since neither is a decision.
+`depends_on`, since neither is a decision node.
 
 ## Examples
 
@@ -666,7 +666,7 @@ Terminal outputs:
   skipped nodes show `(no output file)` plus an `error:` line). A node a branch left out
   is listed too, as `[not_executed]` with a `reason:` line saying which of the three it was,
   and a decision node carries a `selected_routes:` line — `(none)` when a `select: "many"`
-  decision selected nothing, which is a decision in its own right and not a missing one.
+  decision node selected nothing, which is a selection in its own right and not a missing one.
 - When a node completed and every one of its dependents was not executed, its output is a
   terminal output of the run: on a path the branch cut short, that node's output is the last
   word on it.

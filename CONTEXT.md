@@ -3577,14 +3577,18 @@ Nothing the node writes selects a route: the same constrained verdict call that 
 also picks the route, as a tool argument, and a selection is valid only if the judge reports
 one of the declared names, so a node that writes "route: bug" into its own answer has said
 nothing about the branch. `select` says how many an answer may take: `"one"` — exactly one,
-and what unset means once `routes` is set — or `"many"`, any number including none. A node
-may be a decision and guarded at once, which is a nested branch. Its selection is recorded
+and what unset means once `routes` is set — or `"many"`, any number including none. A decision
+node may also be guarded, which is a nested branch. Its selection is recorded
 per run (`selected_routes`, plus the judge's `route_evidence`) and read by clients beside
 the status. Where an ordinary node's judge failure or timeout reads as accomplished, a
 decision node whose route cannot be established fails ("The route could not be determined:
 ..."), its output withdrawn and its dependents skipped, with no fallback route and no
 adjudication. For the same reason a graph declaring routes is refused on a host with no
 provider to judge with.
+_Avoid_: "decision" alone, for the node or for what it chose -- a decision is the main agent's
+answer to an **exception** report, the `decision` that `resolve_dag_node` takes (continue,
+abandon or replan). Say decision node for the node, and its selection or selected routes for
+what its judge chose.
 
 **Route (DAG branch)** (a key of `routes`; `raven/agent/subagent/dag_graph.py`):
 One branch a decision node chooses between, named by the graph's author. A guard names it
@@ -3598,6 +3602,8 @@ _Avoid_: the routing-table rows of a **Routing entry** (`routes` on an agent tab
 which pick the backend a task runs on), and the runner's unrelated `_route_available`
 (`raven/agent/subagent/dag_runner.py`), which asks whether the main agent has any way to
 call `resolve_dag_node` — neither is a branch of a graph.
+_Avoid_: "branch" for any other part of a graph, such as what waits on a failed node --
+that is the node's dependents; a branch is the path a route selects.
 
 **Guard** (`when` on `DagNodeSpec`; `raven/agent/subagent/dag_guard.py`):
 The condition under which a node runs, as a three-valued expression over atoms
@@ -3606,7 +3612,7 @@ The condition under which a node runs, as a three-valued expression over atoms
 evaluated by a hand-written parser, never `eval`. An atom may name only a decision node of
 this graph that is in the node's `depends_on`, and only a route that node declares or
 `done`; every decision node of the graph in `depends_on` must appear in the guard, since a
-node cannot depend on a decision and stay silent about it. Two guards that can never hold
+node cannot depend on a decision node and stay silent about it. Two guards that can never hold
 are refused at submission: two un-negated routes of one `select: "one"` node in one `and`
 chain, and `not <node>.done`. These checks preserve surrounding negation and disjunction:
 an impossible arm does not reject an `or` whose other arm can hold. The runner reads a guard
@@ -3625,14 +3631,18 @@ Distinct from `skipped`, which says something went wrong and poisons its depende
 `not_executed` dependency poisons nothing, so a merge node with one input left out is not
 stopped by it and reads the fixed sentence in its place. Three reasons, recorded beside the
 status and read back as `reason`: `when_false` (the guard is false — the branch was not
-selected), `when_unknown` (the guard is unknown — a decision it names was never made), and
+selected), `when_unknown` (the guard is unknown — a decision node it names never chose), and
 `upstream_not_executed` (every dependency this node has in the graph was left out, which is
-decided before the guard and is why `<node>.done`, true whatever the decision did, cannot
+decided before the guard and is why `<node>.done`, true whatever the decision node chose, cannot
 revive a node with no input left on that path). Terminal in every reader: it is never
 rewritten to `interrupted`, a replan and a stop leave it as it is, and a later run naming
 one is refused with "its branch was not selected, so it wrote no output" — the id stays
 claimed. The run's tally counts it only when there is one, so a run without branches tallies
 exactly as before.
+_Avoid_: "skipped" for it -- `skipped` is the status of a node that never ran because
+something went wrong before it (a dependency failed, was abandoned or was itself skipped, or
+the run was stopped), and it skips that node's dependents in turn. A node a branch left out
+is not executed, and nothing went wrong.
 
 **replan** (adjudication decision; `raven/agent/subagent/dag_adjudication.py`) -- the answer
 to an exception report that replaces the plan instead of the node: the agent hands

@@ -190,7 +190,7 @@ describe('the board card', () => {
       expect(document.querySelector('.tkrunselrest')).toBeNull()
     })
 
-    it('shows an empty selection as none: it chose nothing, which is a decision and not a blank', () => {
+    it('shows an empty selection as none: it chose nothing, which is an answer and not a blank', () => {
       render(<BoardCard node={node({ status: 'completed', selected_routes: [] })} now={1000} />)
       expect(document.querySelector('.tkrunsel')?.textContent).toBe('\u2192 gui.tasks.node_sel_none')
     })
