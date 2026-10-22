@@ -31,6 +31,12 @@ has already put an answer in front of the reader. It is not a fourth mode --
 there is nothing left to try -- it is the answer to the question the caller asks
 next, which is whether this turn produced anything.
 
+:func:`reply_kind` names what a reply with no tool call is -- text, a silence marker, a refusal, a
+stream cut mid-answer, thinking with no answer, a reply cut at the output ceiling, or nothing -- and
+:func:`decide` maps that kind and what the turn has already spent (:class:`RecoveryState`) to the
+next :class:`RecoveryAction`. Both are pure: the loop supplies the facts they cannot see (the
+provider's prefill support, the rung to step down to, the fallback models left) and does the acting.
+
 This is distinct from Sentinel's NudgeInjector / NudgePolicy, which inject
 *proactive suggestions* onto an outbound reply; this module instead recovers an
 empty turn before it is ever sent.
@@ -38,13 +44,18 @@ empty turn before it is ever sent.
 
 from __future__ import annotations
 
+import random
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, field
 from enum import Enum, auto
 
 from raven.config import schema as config_schema
 from raven.contracts.llm_provider import REASONING_EFFORT_LADDER, LLMResponse
+from raven.providers.streaming import DECLINED_FINISH_REASONS
+from raven.providers.usage import reported_cost, token_count
+from raven.spine.silence import is_silence
+from raven.spine.turn import Origin
 
 # In-content thinking markers. Some models (Ollama, certain Qwen gateways) put
 # the reasoning in ``content`` as <think>…</think> rather than in the structured
@@ -56,7 +67,7 @@ from raven.contracts.llm_provider import REASONING_EFFORT_LADDER, LLMResponse
 _THINK_TAG_RE = re.compile(r"</?(?:[a-z][\w.-]{0,15}:)?(?:think|thinking|reasoning)>", re.IGNORECASE)
 _NS = r"(?:[a-z][\w.-]{0,15}:)?"
 _THINK_BLOCK_RE = re.compile(
-    rf"<{_NS}(think|thinking|reasoning)>[\s\S]*?</{_NS}\1>",
+    rf"<{_NS}(think|thinking|reasoning)>([\s\S]*?)</{_NS}\1>",
     re.IGNORECASE,
 )
 
@@ -142,14 +153,50 @@ OUTPUT_LIMIT_NUDGE = (
     "calls instead of one."
 )
 
+MAX_CONTINUATIONS = 3
+REASONING_EXCERPT_MAX = 500
+EMPTY_RETRY_BASE_DELAY_S = 5.0
+EMPTY_RETRY_MAX_DELAY_S = 60.0
+
+# Worded after Hermes, without the emoji Hermes puts on its failures.
+HERMES_POST_TOOL_NUDGE = "You just executed tool calls but returned an empty response. Please process the tool results above and continue with the task."
+OUTPUT_LIMIT_CONTINUATION = "[System: Your previous response was truncated by the output length limit. Continue exactly where you left off. Do not restart or repeat prior text. Finish the answer directly.]"
+NETWORK_CUT_CONTINUATION = "[System: The previous response was cut off by a network error mid-stream. Continue exactly where you left off. Do not restart or repeat prior text. Finish the answer directly.]"
+EMPTY_REPLY_FAILURE = "No reply: the model returned empty content after retries and any fallback models. Try `continue`, switch the model, or check the tool output above."
+THINKING_ONLY_FAILURE = "The model produced only internal reasoning and no final answer, despite retries. Its last reasoning, which may contain the answer:"
+TRUNCATED_FAILURE = "Processing stopped: the response remained truncated after {n} continuation attempts. Try again."
+REFUSAL_FAILURE = "The model declined to respond to this request (a safety refusal, not a Raven failure)."
+REFUSAL_EXPLANATION = " The model's explanation: {text}"
+REFUSAL_NO_EXPLANATION = " The model returned no explanation."
+PARTIAL_STREAM_NOTE = (
+    "No reply: streaming stopped early and only a partial response was recovered. Send `continue` to resume."
+)
+
+
+class ReplyKind(Enum):
+    """What a reply without a tool call is (:func:`reply_kind`)."""
+
+    TEXT = auto()  # an answer to deliver
+    SILENT = auto()  # a silence marker: the model chose to say nothing
+    REFUSAL = auto()  # the upstream declined; any text is the model's explanation
+    NETWORK_CUT = auto()  # a stream that sent text and never finished
+    THINKING_ONLY = auto()  # reasoning and no answer
+    TRUNCATED = auto()  # stopped at the output ceiling with nothing in it
+    POST_TOOL_EMPTY = auto()  # nothing, right after the turn ran tools
+    EMPTY = auto()  # nothing at all
+
 
 class RecoveryAction(Enum):
     """What the loop should do about an empty assistant response."""
 
-    COMPLETE = auto()  # visible text present, or recovery off → finish the turn
+    COMPLETE = auto()  # visible text present, partial text to deliver as it stands, or recovery off → finish the turn
+    SILENT = auto()  # a silence marker → end the turn without delivering it
     PREFILL = auto()  # thinking-only → re-feed reasoning, re-request
     NUDGE = auto()  # post-tool empty → inject (empty) + user nudge, re-request
     RETRY = auto()  # plain empty → re-request as-is
+    STEP_DOWN = auto()  # thinking-only, prefills spent → re-request at the next effort down
+    CONTINUE = auto()  # cut off → ask the model to carry on where it stopped
+    FALLBACK = auto()  # → re-request on the next fallback model
     FAIL = auto()  # budgets spent with nothing to show → the turn fails, it does not reply
 
 
@@ -161,6 +208,9 @@ class RecoveryLimits:
     post_tool_empty_max_nudges: int = 1
     thinking_prefill_max_retries: int = 2
     empty_content_max_retries: int = 3
+    #: The reported cost (USD) of one empty reply at which it is resent once
+    #: rather than ``empty_content_max_retries`` times (:func:`resend_budget`).
+    empty_retry_cost_threshold_usd: float = 0.25
     #: How long the loop waits, and how many times, when a model call comes back as
     #: a retryable error after the provider's own ladder gave up. The provider's
     #: ladder is seconds long -- right for a dropped connection, and too short for
@@ -195,6 +245,7 @@ def limits_from_defaults(defaults: object) -> RecoveryLimits:
         post_tool_empty_max_nudges=getattr(defaults, "post_tool_empty_max_nudges", 1),
         thinking_prefill_max_retries=getattr(defaults, "thinking_prefill_max_retries", 2),
         empty_content_max_retries=getattr(defaults, "empty_content_max_retries", 3),
+        empty_retry_cost_threshold_usd=getattr(defaults, "empty_retry_cost_threshold_usd", 0.25),
         llm_error_retry_delays=_ladder(getattr(defaults, "llm_error_retry_delays", None)),
         llm_retry_after_output=bool(getattr(defaults, "llm_retry_after_output", False)),
         image_window_budget_bytes=max(0, int(getattr(defaults, "image_window_budget_bytes", 12_000_000))),
@@ -210,6 +261,61 @@ def _ladder(configured: object) -> tuple[float, ...]:
     if configured is None:
         return config_schema.LLM_ERROR_RETRY_DELAYS_DEFAULT
     return tuple(float(delay) for delay in configured)
+
+
+@dataclass(frozen=True)
+class EmptyAttempt:
+    """One empty reply of the turn's current streak, as :func:`deterministic_empty` reads it."""
+
+    model: str
+    finish_reason: str
+    usage_present: bool  # a prompt was counted (cache included) and completion_tokens is reported
+    zero_output: bool  # usage_present and completion_tokens + reasoning_tokens == 0
+
+    @classmethod
+    def of(cls, response: LLMResponse, model: str) -> EmptyAttempt:
+        """The attempt ``response`` was, read with the providers' rules for a count.
+
+        A usage object with no prompt counted in it is no evidence -- a proxy can
+        send one with every field zero -- so it fails open, as Hermes's guard does.
+        """
+        usage = _usage(response)
+        prompt = token_count(usage.get("prompt_tokens")) or 0
+        if not usage.get("prompt_tokens_include_cache", True):
+            # Anthropic counts the cache apart, so a prompt read wholly from it reports no fresh tokens.
+            prompt += (token_count(usage.get("cache_read_input_tokens")) or 0) + (
+                token_count(usage.get("cache_creation_input_tokens")) or 0
+            )
+        completion = token_count(usage.get("completion_tokens"))
+        reasoning = token_count(usage.get("reasoning_tokens")) or 0
+        usage_present = prompt > 0 and completion is not None
+        return cls(
+            model=model,
+            finish_reason=response.finish_reason or "",
+            usage_present=usage_present,
+            zero_output=usage_present and (completion or 0) + reasoning == 0,
+        )
+
+
+@dataclass
+class RecoveryState:
+    """What one turn's recovery has spent so far, as :func:`decide` reads it."""
+
+    rungs_used: set[str]  # the turn's, shared by every attempt of it
+    prefills: int = 0
+    nudges: int = 0
+    resends: int = 0
+    continuations: int = 0
+    max_tokens_base: int | None = None  # the ceiling the first truncated call carried
+    fallbacks_used: int = 0
+    refusal_fell_back: bool = False
+    empty_streak: list[EmptyAttempt] = field(default_factory=list)
+    parts: list[str] = field(default_factory=list)  # what a network-cut answer has streamed so far
+
+
+def _usage(response: LLMResponse) -> dict:
+    usage = response.usage
+    return usage if isinstance(usage, dict) else {}
 
 
 def strip_think_blocks(text: str) -> str:
@@ -248,6 +354,191 @@ def has_inline_thinking(content: str | None) -> bool:
 def has_thinking(response: LLMResponse) -> bool:
     """True when the response produced reasoning in any form (structured or inline)."""
     return bool(response.reasoning_content or response.thinking_blocks or has_inline_thinking(response.content))
+
+
+def reply_kind(
+    response: LLMResponse,
+    visible: str | None,
+    *,
+    origin: Origin | None,
+    prev_had_tool_calls: bool,
+    streamed: bool,
+) -> ReplyKind:
+    """What a reply that carries no tool call is, by the first of these rules it meets.
+
+    ``visible`` is ``response.content`` once think blocks are out. A refusal is named before text
+    because the text is the model's explanation of it, and thinking before a cut because a reply that
+    thought and was cut is thinking-only: TRUNCATED is a cut with no reasoning behind it.
+    """
+    has_text = bool(visible and visible.strip())
+    if has_text and is_silence(visible, origin):
+        return ReplyKind.SILENT
+    if response.finish_reason in DECLINED_FINISH_REASONS:
+        return ReplyKind.REFUSAL
+    if has_text:
+        # Only a stream can be cut: a whole body that lacks a finish is still a whole body.
+        return ReplyKind.NETWORK_CUT if streamed and response.finish_reason == "unknown" else ReplyKind.TEXT
+    if has_thinking(response) or (token_count(_usage(response).get("reasoning_tokens")) or 0) > 0:
+        return ReplyKind.THINKING_ONLY
+    if response.truncated:
+        return ReplyKind.TRUNCATED
+    return ReplyKind.POST_TOOL_EMPTY if prev_had_tool_calls else ReplyKind.EMPTY
+
+
+# The kinds with no text of their own: when a cut answer already streamed, they leave it as the answer.
+_TEXTLESS_KINDS = frozenset({ReplyKind.EMPTY, ReplyKind.POST_TOOL_EMPTY, ReplyKind.THINKING_ONLY, ReplyKind.TRUNCATED})
+
+
+def decide(
+    kind: ReplyKind,
+    state: RecoveryState,
+    limits: RecoveryLimits,
+    *,
+    prefill_supported: bool,
+    next_rung: str | None,
+    fallback_left: bool,
+    resend_budget: int,
+) -> RecoveryAction:
+    """The next move for a reply of ``kind``, given what the turn has already spent (``state``).
+
+    The caller supplies what only it can see: whether the provider takes a prefill, the rung
+    :func:`next_step_down` offers, whether a fallback model remains, and :func:`resend_budget`'s
+    answer. A fallback model gets one try, so on one nothing is repeated: the next move is another
+    model or the end.
+    """
+    if kind is ReplyKind.SILENT:
+        return RecoveryAction.SILENT
+    if not limits.enabled:
+        # The turn ends as it did before recovery existed; the caller fails it if nothing answered.
+        return RecoveryAction.FAIL if kind is ReplyKind.REFUSAL else RecoveryAction.COMPLETE
+    if kind is ReplyKind.TEXT or (state.parts and kind in _TEXTLESS_KINDS):
+        return RecoveryAction.COMPLETE
+    if kind is ReplyKind.REFUSAL:
+        return _fallback_or_fail(fallback_left and not state.refusal_fell_back)
+    if kind is ReplyKind.NETWORK_CUT:
+        return RecoveryAction.CONTINUE if state.continuations < MAX_CONTINUATIONS else RecoveryAction.COMPLETE
+    if kind is ReplyKind.TRUNCATED:
+        return RecoveryAction.CONTINUE if state.continuations < MAX_CONTINUATIONS else RecoveryAction.FAIL
+    on_fallback = state.fallbacks_used > 0
+    if kind is ReplyKind.THINKING_ONLY:
+        if not on_fallback:
+            if prefill_supported and state.prefills < limits.thinking_prefill_max_retries:
+                return RecoveryAction.PREFILL
+            if next_rung is not None:
+                return RecoveryAction.STEP_DOWN
+        return _fallback_or_fail(fallback_left)
+    if kind is ReplyKind.POST_TOOL_EMPTY and state.nudges < limits.post_tool_empty_max_nudges:
+        return RecoveryAction.NUDGE
+    # A plain empty, or a post-tool one whose nudges are spent.
+    if not on_fallback and state.resends < resend_budget and not deterministic_empty(state.empty_streak):
+        return RecoveryAction.RETRY
+    return _fallback_or_fail(fallback_left)
+
+
+def _fallback_or_fail(fallback_left: bool) -> RecoveryAction:
+    return RecoveryAction.FALLBACK if fallback_left else RecoveryAction.FAIL
+
+
+def deterministic_empty(streak: Sequence[EmptyAttempt]) -> bool:
+    """Whether the streak says one more resend would come back empty too.
+
+    Hermes's zero-output guard: two or more replies, each with usage that proves nothing was
+    generated, from one model and one finish. Usage that is missing or shows output keeps the full
+    budget, so the guard fails open.
+    """
+    if len(streak) < 2:
+        return False
+    first = streak[0]
+    return all(
+        attempt.usage_present
+        and attempt.zero_output
+        and (attempt.model, attempt.finish_reason) == (first.model, first.finish_reason)
+        for attempt in streak
+    )
+
+
+def resend_budget(response: LLMResponse, limits: RecoveryLimits) -> int:
+    """How many times an empty reply may be resent: once, when the call that came back empty was dear.
+
+    Every resend bills the whole prompt again for no answer. The cost is the one the call reported
+    (``usage["cost_usd"]``): estimating it can fetch the price table on the event loop, and a call
+    that reports none keeps the full budget.
+    """
+    cost = reported_cost(_usage(response).get("cost_usd"))
+    if cost is not None and cost >= limits.empty_retry_cost_threshold_usd:
+        return min(1, limits.empty_content_max_retries)
+    return limits.empty_content_max_retries
+
+
+# The only rungs a step-down lands on. Never `minimal`, which Codex refuses with HTTP 400.
+_STEP_DOWN_RUNGS = ("high", "low")
+
+
+def next_step_down(
+    current: str | None,
+    wire_keys: Callable[[str | None], object] | None = None,
+    *,
+    used: Collection[str] = (),
+) -> str | None:
+    """The next of ``high`` and ``low`` below ``current``, or None when there is none to ask for.
+
+    ``None`` is an effort the turn never stated, which sits above both. A rung already in ``used``
+    is skipped -- each is asked for once a turn -- and so is one ``wire_keys`` says serializes like
+    ``current`` (``LLMProvider.reasoning_wire_keys``): the same request would only fail again at full
+    price. An effort the ladder does not carry has no rung below it.
+    """
+    try:
+        depth = -1 if current is None else REASONING_EFFORT_LADDER.index(current.strip().lower())
+    except (AttributeError, ValueError):
+        return None
+    here = wire_keys(current) if wire_keys is not None else None
+    for rung in _STEP_DOWN_RUNGS:
+        if REASONING_EFFORT_LADDER.index(rung) <= depth or rung in used:
+            continue
+        if wire_keys is not None and wire_keys(rung) == here:
+            continue
+        return rung
+    return None
+
+
+def empty_retry_delay(attempt: int, *, rand: Callable[[], float] = random.random) -> float:
+    """Seconds to wait before resend number ``attempt`` (1-based): Hermes's jittered backoff.
+
+    The bounds are read when called so a test can shorten them.
+    """
+    exponent = max(0, attempt - 1)
+    # The same guard Hermes has: the cap has long since won, and a huge power overflows the float.
+    delay = (
+        EMPTY_RETRY_MAX_DELAY_S
+        if exponent >= 63
+        else min(EMPTY_RETRY_BASE_DELAY_S * 2**exponent, EMPTY_RETRY_MAX_DELAY_S)
+    )
+    return delay * (1 + 0.5 * rand())
+
+
+def reasoning_excerpt(response: LLMResponse) -> str:
+    """The first ``REASONING_EXCERPT_MAX`` characters of what the model thought, "" if it left no text.
+
+    For a failure that has no answer to show, so the reader can still see where the model got to.
+    """
+    text = _thinking_text(response)
+    return text[:REASONING_EXCERPT_MAX] + "..." if len(text) > REASONING_EXCERPT_MAX else text
+
+
+def _thinking_text(response: LLMResponse) -> str:
+    """The reasoning field, else the thinking blocks, else the text inside inline think tags."""
+    if response.reasoning_content and response.reasoning_content.strip():
+        return response.reasoning_content.strip()
+    # Joined as the Anthropic adapter joins the same blocks into ``reasoning_content``.
+    blocks = "".join(
+        block["thinking"]
+        for block in response.thinking_blocks or ()
+        if isinstance(block, dict) and isinstance(block.get("thinking"), str)
+    ).strip()
+    if blocks:
+        return blocks
+    inline = (match.group(2).strip() for match in _THINK_BLOCK_RE.finditer(response.content or ""))
+    return "\n\n".join(part for part in inline if part)
 
 
 def classify_empty_response(

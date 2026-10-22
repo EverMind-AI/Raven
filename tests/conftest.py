@@ -705,10 +705,11 @@ def _no_production_waits(request: pytest.FixtureRequest, monkeypatch: pytest.Mon
 
     A stub that answers every call with an error drives the code under test
     into its backoff, and the backoff is tuned for a real outage: the loop's
-    LLM-error ladder is 105 s, the provider's 7 s per model, a memory store
-    retries for 52 s, a subagent steer waits 3 s for a hook, an ACP cancel is
-    given 5 s to settle, the gateway holds delivery 2 s at teardown. One
-    checkpoint test slept 133 s that way and proved nothing by it.
+    LLM-error ladder is 105 s, the provider's 7 s per model, an empty reply's
+    resend backs off 5 to 60 s, a memory store retries for 52 s, a subagent
+    steer waits 3 s for a hook, an ACP cancel is given 5 s to settle, the
+    gateway holds delivery 2 s at teardown. One checkpoint test slept 133 s
+    that way and proved nothing by it.
 
     The lengths stay. ``len(ladder)`` is how both retry ladders count their
     attempts, so an empty tuple would change behaviour rather than speed; the
@@ -723,6 +724,7 @@ def _no_production_waits(request: pytest.FixtureRequest, monkeypatch: pytest.Mon
     if request.node.get_closest_marker("production_timing"):
         return
     from raven.acp_client import client as acp_client
+    from raven.agent.loop import recovery
     from raven.agent.subagent import manager
     from raven.config import schema
     from raven.gateway import spine
@@ -734,6 +736,8 @@ def _no_production_waits(request: pytest.FixtureRequest, monkeypatch: pytest.Mon
 
     monkeypatch.setattr(LLMProvider, "_CHAT_RETRY_DELAYS", shortened(LLMProvider._CHAT_RETRY_DELAYS))
     monkeypatch.setattr(schema, "LLM_ERROR_RETRY_DELAYS_DEFAULT", shortened(schema.LLM_ERROR_RETRY_DELAYS_DEFAULT))
+    monkeypatch.setattr(recovery, "EMPTY_RETRY_BASE_DELAY_S", 0.001)
+    monkeypatch.setattr(recovery, "EMPTY_RETRY_MAX_DELAY_S", 0.001)
     monkeypatch.setattr(store_pipeline, "BACKOFF_S", shortened(store_pipeline.BACKOFF_S))
     monkeypatch.setattr(manager, "_STEER_HOOK_GRACE_S", 0.05)
     monkeypatch.setattr(acp_client, "_CANCEL_SETTLE_S", 0.05)

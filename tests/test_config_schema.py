@@ -1,5 +1,6 @@
 """Tests for ``raven.config.schema.AgentDefaults.context_window_tokens``,
-``AgentDefaults.compaction`` and ``ProviderConfig.endpoints``.
+``AgentDefaults.compaction``, ``AgentDefaults.empty_retry_cost_threshold_usd`` and
+``ProviderConfig.endpoints``.
 
 The context-window tests: None (or 0) means "figure it out" against the
 model's real window; a positive value pins it. See
@@ -17,6 +18,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from raven.agent.loop.recovery import limits_from_defaults
 from raven.config.schema import AgentDefaults, CompactionConfig, ProviderConfig, ProviderEndpoint
 
 
@@ -153,3 +155,20 @@ def test_compaction_tolerates_foreign_and_legacy_keys() -> None:
 def test_compaction_slice_reaches_agent_defaults() -> None:
     defaults = AgentDefaults.model_validate({"compaction": {"enabled": True}})
     assert defaults.compaction.enabled is True
+
+
+def test_the_cost_threshold_is_read_from_config() -> None:
+    assert AgentDefaults.model_validate({"emptyRetryCostThresholdUsd": 0.5}).empty_retry_cost_threshold_usd == 0.5
+    assert AgentDefaults().empty_retry_cost_threshold_usd == 0.25
+    assert (
+        AgentDefaults(empty_retry_cost_threshold_usd=0.5).model_dump(by_alias=True)["emptyRetryCostThresholdUsd"] == 0.5
+    )
+    assert limits_from_defaults(AgentDefaults()).empty_retry_cost_threshold_usd == 0.25
+    configured = AgentDefaults.model_validate({"emptyRetryCostThresholdUsd": 0.5})
+    assert limits_from_defaults(configured).empty_retry_cost_threshold_usd == 0.5
+
+
+@pytest.mark.parametrize("threshold", [0, -0.25])
+def test_the_cost_threshold_must_be_positive(threshold: float) -> None:
+    with pytest.raises(ValidationError):
+        AgentDefaults.model_validate({"emptyRetryCostThresholdUsd": threshold})

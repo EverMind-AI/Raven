@@ -18,19 +18,43 @@ from unittest.mock import patch
 
 import pytest
 
-from raven.agent.loop import AgentLoop
+from raven.agent.loop import AgentLoop, recovery
 from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.agent.loop.recovery import (
+    EMPTY_REPLY_FAILURE,
+    HERMES_POST_TOOL_NUDGE,
+    MAX_CONTINUATIONS,
+    NETWORK_CUT_CONTINUATION,
+    OUTPUT_LIMIT_CONTINUATION,
     OUTPUT_LIMIT_NUDGE,
+    PARTIAL_STREAM_NOTE,
     POST_TOOL_NUDGE,
+    REASONING_EXCERPT_MAX,
+    REFUSAL_EXPLANATION,
+    REFUSAL_FAILURE,
+    REFUSAL_NO_EXPLANATION,
+    THINKING_ONLY_FAILURE,
+    TRUNCATED_FAILURE,
+    EmptyAttempt,
     RecoveryAction,
     RecoveryLimits,
+    RecoveryState,
+    ReplyKind,
     classify_empty_response,
+    decide,
+    deterministic_empty,
+    empty_retry_delay,
     has_inline_thinking,
     has_thinking,
     limits_from_defaults,
     lower_reasoning_effort,
+    next_step_down,
+    reasoning_excerpt,
+    reply_kind,
+    resend_budget,
+    strip_think_blocks,
 )
+from raven.contracts.llm_provider import REASONING_EFFORT_LADDER
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.spine.message import ChatType, Source
@@ -192,6 +216,353 @@ def test_limits_from_defaults_maps_fields():
 
 def test_limits_from_defaults_uses_defaults_for_missing_attrs():
     assert limits_from_defaults(object()) == RecoveryLimits()
+
+
+# --------------------------------------------------------------------------- #
+# unit: reply kind and the recovery decision                                   #
+# --------------------------------------------------------------------------- #
+
+
+def _kind(content, finish="stop", *, origin=Origin.USER, streamed=False, prev_had_tool_calls=False, **fields):
+    """``reply_kind`` asked the way the loop asks it, of the text left once think blocks are out."""
+    response = LLMResponse(content=content or None, finish_reason=finish, **fields)
+    visible = (strip_think_blocks(content) or None) if content else None
+    return reply_kind(response, visible, origin=origin, prev_had_tool_calls=prev_had_tool_calls, streamed=streamed)
+
+
+@pytest.mark.parametrize(
+    "content,finish,extra,origin,streamed,kind",
+    [
+        ("[SILENT]", "stop", {}, Origin.USER, False, ReplyKind.SILENT),
+        ("[SILENT] nothing new", "stop", {}, Origin.USER, False, ReplyKind.TEXT),
+        ("[SILENT] nothing new", "stop", {}, Origin.CRON, False, ReplyKind.SILENT),
+        ("", "content_filter", {}, Origin.USER, False, ReplyKind.REFUSAL),
+        ("I can't", "refusal", {}, Origin.USER, False, ReplyKind.REFUSAL),
+        ("partial", "unknown", {}, Origin.USER, True, ReplyKind.NETWORK_CUT),
+        ("partial", "unknown", {}, Origin.USER, False, ReplyKind.TEXT),
+        ("", "stop", {"reasoning_content": "hmm"}, Origin.USER, False, ReplyKind.THINKING_ONLY),
+        ("", "stop", {"usage": {"reasoning_tokens": 5}}, Origin.USER, False, ReplyKind.THINKING_ONLY),
+        ("", "length", {"truncated": True}, Origin.USER, False, ReplyKind.TRUNCATED),
+        ("", "stop", {}, Origin.USER, False, ReplyKind.EMPTY),
+        # A refusal outranks the text that came with it: the text is the model's explanation.
+        ("I can't help with that", "content_filter", {}, Origin.CRON, True, ReplyKind.REFUSAL),
+        # A cut stream needs something to have streamed.
+        ("", "unknown", {}, Origin.USER, True, ReplyKind.EMPTY),
+        ("<think>hmm</think>", "stop", {}, Origin.USER, False, ReplyKind.THINKING_ONLY),
+        (
+            "",
+            "stop",
+            {"thinking_blocks": [{"type": "redacted_thinking", "data": "x"}]},
+            Origin.USER,
+            False,
+            ReplyKind.THINKING_ONLY,
+        ),
+        # Thinking says why a cut reply is empty, so it is named before the cut.
+        ("", "length", {"truncated": True, "reasoning_content": "hmm"}, Origin.USER, False, ReplyKind.THINKING_ONLY),
+        # A count the providers' reader does not accept is no evidence of thinking.
+        ("", "stop", {"usage": {"reasoning_tokens": "n/a"}}, Origin.USER, False, ReplyKind.EMPTY),
+        ("", "stop", {"usage": {"reasoning_tokens": True}}, Origin.USER, False, ReplyKind.EMPTY),
+    ],
+)
+def test_reply_kind(content, finish, extra, origin, streamed, kind):
+    assert _kind(content, finish, origin=origin, streamed=streamed, **extra) is kind
+
+
+def test_an_empty_reply_after_tools_is_its_own_kind():
+    assert _kind("", prev_had_tool_calls=True) is ReplyKind.POST_TOOL_EMPTY
+    assert _kind("", prev_had_tool_calls=True, reasoning_content="hmm") is ReplyKind.THINKING_ONLY
+    assert _kind("", "length", prev_had_tool_calls=True, truncated=True) is ReplyKind.TRUNCATED
+    assert _kind("done", prev_had_tool_calls=True) is ReplyKind.TEXT
+
+
+def test_blank_visible_text_is_no_text():
+    response = LLMResponse(content="  \n ")
+    assert (
+        reply_kind(response, "  \n ", origin=Origin.USER, prev_had_tool_calls=False, streamed=True) is ReplyKind.EMPTY
+    )
+
+
+def _state(**fields) -> RecoveryState:
+    return RecoveryState(rungs_used=set(), **fields)
+
+
+_ON = RecoveryLimits()
+_OFF = RecoveryLimits(enabled=False)
+_ZERO_OUTPUT = EmptyAttempt(model="m", finish_reason="stop", usage_present=True, zero_output=True)
+_PARTIAL = ["The answer is "]
+_K = ReplyKind
+_A = RecoveryAction
+# Every other move open, so a wrong answer cannot hide behind a closed one.
+_ROOM = {"fallback_left": True, "next_rung": "high"}
+
+
+def _row(case, kind, action, *, state=None, limits=_ON, **asked):
+    """One table row; the facts the loop supplies default to a prefill-taking provider with nothing left to try."""
+    asked = {"prefill_supported": True, "next_rung": None, "fallback_left": False, "resend_budget": 3, **asked}
+    return pytest.param(kind, state or _state(), limits, asked, action, id=case)
+
+
+_DECIDE_TABLE = [
+    # Recovery off: a marker is still silence and a refusal still fails; the rest ends as main ends it.
+    _row("off-silent", _K.SILENT, _A.SILENT, limits=_OFF, **_ROOM),
+    _row("off-refusal", _K.REFUSAL, _A.FAIL, limits=_OFF, **_ROOM),
+    *(
+        _row(f"off-{kind.name}", kind, _A.COMPLETE, limits=_OFF, **_ROOM)
+        for kind in (_K.TEXT, _K.NETWORK_CUT, _K.THINKING_ONLY, _K.TRUNCATED, _K.POST_TOOL_EMPTY, _K.EMPTY)
+    ),
+    _row("text", _K.TEXT, _A.COMPLETE),
+    _row("silent", _K.SILENT, _A.SILENT),
+    # A continuation that came back with nothing delivers what had already streamed.
+    *(
+        _row(f"parts-{kind.name}", kind, _A.COMPLETE, state=_state(parts=list(_PARTIAL)), **_ROOM)
+        for kind in (_K.EMPTY, _K.POST_TOOL_EMPTY, _K.THINKING_ONLY, _K.TRUNCATED)
+    ),
+    _row("parts-NETWORK_CUT", _K.NETWORK_CUT, _A.CONTINUE, state=_state(parts=list(_PARTIAL), continuations=1)),
+    _row("parts-REFUSAL", _K.REFUSAL, _A.FALLBACK, state=_state(parts=list(_PARTIAL)), fallback_left=True),
+    _row("refusal-falls-back", _K.REFUSAL, _A.FALLBACK, fallback_left=True),
+    _row(
+        "refusal-falls-back-once",
+        _K.REFUSAL,
+        _A.FAIL,
+        state=_state(refusal_fell_back=True, fallbacks_used=1),
+        fallback_left=True,
+    ),
+    _row("refusal-without-fallback", _K.REFUSAL, _A.FAIL),
+    # What a refusal has spent is its own flag, not the count of fallbacks the turn used for other reasons.
+    _row("refusal-after-another-fallback", _K.REFUSAL, _A.FALLBACK, state=_state(fallbacks_used=1), fallback_left=True),
+    _row("cut-continues", _K.NETWORK_CUT, _A.CONTINUE, state=_state(continuations=MAX_CONTINUATIONS - 1)),
+    _row("cut-spent", _K.NETWORK_CUT, _A.COMPLETE, state=_state(continuations=MAX_CONTINUATIONS), **_ROOM),
+    _row("truncated-continues", _K.TRUNCATED, _A.CONTINUE),
+    _row("truncated-spent", _K.TRUNCATED, _A.FAIL, state=_state(continuations=MAX_CONTINUATIONS), **_ROOM),
+    _row("thinking-prefills", _K.THINKING_ONLY, _A.PREFILL, next_rung="high"),
+    _row("thinking-prefills-twice", _K.THINKING_ONLY, _A.PREFILL, state=_state(prefills=1), next_rung="high"),
+    _row("thinking-steps-down", _K.THINKING_ONLY, _A.STEP_DOWN, state=_state(prefills=2), **_ROOM),
+    _row("thinking-no-prefill-steps-down", _K.THINKING_ONLY, _A.STEP_DOWN, prefill_supported=False, next_rung="high"),
+    _row(
+        "thinking-no-prefill-budget-steps-down",
+        _K.THINKING_ONLY,
+        _A.STEP_DOWN,
+        limits=RecoveryLimits(thinking_prefill_max_retries=0),
+        next_rung="high",
+    ),
+    _row("thinking-falls-back", _K.THINKING_ONLY, _A.FALLBACK, state=_state(prefills=2), fallback_left=True),
+    _row("thinking-fails", _K.THINKING_ONLY, _A.FAIL, state=_state(prefills=2)),
+    # A fallback model is tried once: no prefill, no step-down, no resend on it.
+    _row("thinking-on-fallback-moves-on", _K.THINKING_ONLY, _A.FALLBACK, state=_state(fallbacks_used=1), **_ROOM),
+    _row(
+        "thinking-on-last-fallback-fails", _K.THINKING_ONLY, _A.FAIL, state=_state(fallbacks_used=1), next_rung="high"
+    ),
+    _row("post-tool-nudges", _K.POST_TOOL_EMPTY, _A.NUDGE),
+    _row("post-tool-nudges-on-fallback", _K.POST_TOOL_EMPTY, _A.NUDGE, state=_state(fallbacks_used=1), **_ROOM),
+    _row("post-tool-then-resends", _K.POST_TOOL_EMPTY, _A.RETRY, state=_state(nudges=1)),
+    _row("post-tool-then-falls-back", _K.POST_TOOL_EMPTY, _A.FALLBACK, state=_state(nudges=1, resends=3), **_ROOM),
+    _row("post-tool-then-fails", _K.POST_TOOL_EMPTY, _A.FAIL, state=_state(nudges=1, resends=3)),
+    _row("post-tool-then-moves-on", _K.POST_TOOL_EMPTY, _A.FALLBACK, state=_state(nudges=1, fallbacks_used=1), **_ROOM),
+    _row(
+        "post-tool-no-nudge-budget",
+        _K.POST_TOOL_EMPTY,
+        _A.RETRY,
+        limits=RecoveryLimits(post_tool_empty_max_nudges=0),
+    ),
+    _row("empty-resends", _K.EMPTY, _A.RETRY),
+    _row("empty-resends-a-third-time", _K.EMPTY, _A.RETRY, state=_state(resends=2)),
+    _row("empty-falls-back", _K.EMPTY, _A.FALLBACK, state=_state(resends=3), fallback_left=True),
+    _row("empty-fails", _K.EMPTY, _A.FAIL, state=_state(resends=3)),
+    _row("empty-expensive-resent-once", _K.EMPTY, _A.FAIL, state=_state(resends=1), resend_budget=1),
+    _row("empty-no-resend-budget", _K.EMPTY, _A.FALLBACK, resend_budget=0, fallback_left=True),
+    # Two zero-output empties of one signature: the resends are skipped, the fallback is not.
+    _row(
+        "empty-deterministic-skips-resends",
+        _K.EMPTY,
+        _A.FALLBACK,
+        state=_state(resends=1, empty_streak=[_ZERO_OUTPUT, _ZERO_OUTPUT]),
+        fallback_left=True,
+    ),
+    _row(
+        "empty-deterministic-fails",
+        _K.EMPTY,
+        _A.FAIL,
+        state=_state(resends=1, empty_streak=[_ZERO_OUTPUT, _ZERO_OUTPUT]),
+    ),
+    _row("empty-one-zero-output-is-not-deterministic", _K.EMPTY, _A.RETRY, state=_state(empty_streak=[_ZERO_OUTPUT])),
+    _row("empty-on-fallback-moves-on", _K.EMPTY, _A.FALLBACK, state=_state(fallbacks_used=1), fallback_left=True),
+    _row("empty-on-last-fallback-fails", _K.EMPTY, _A.FAIL, state=_state(fallbacks_used=1)),
+]
+
+
+@pytest.mark.parametrize("kind,state,limits,asked,action", _DECIDE_TABLE)
+def test_decide_table(kind, state, limits, asked, action):
+    assert decide(kind, state, limits, **asked) is action
+
+
+@pytest.mark.parametrize(
+    "current,used,rung",
+    [
+        (None, (), "high"),
+        (None, ("high",), "low"),
+        ("max", (), "high"),
+        ("xhigh", (), "high"),
+        ("high", (), "low"),
+        ("medium", (), "low"),
+        ("low", (), None),
+        ("minimal", (), None),
+        ("bogus", (), None),
+        ("high", ("low",), None),
+        (None, ("high", "low"), None),
+        ("max", ("high",), "low"),
+        ("HIGH", (), "low"),
+        (" Max ", (), "high"),
+    ],
+)
+def test_next_step_down(current, used, rung):
+    assert next_step_down(current, used=used) == rung
+
+
+def test_a_rung_the_wire_cannot_tell_apart_is_skipped():
+    assert next_step_down(None, lambda e: {"effort": "high"} if e in (None, "high") else {"effort": e}) == "low"
+    assert next_step_down("max", lambda e: {}) is None
+
+
+def test_the_step_down_never_leaves_high_and_low():
+    wires = (None, lambda effort: {"effort": effort}, lambda effort: {}, lambda effort: {"effort": "low"})
+    for current in (*REASONING_EFFORT_LADDER, None, "bogus", "", "HIGH", " Max "):
+        for used in ((), ("high",), ("low",), ("high", "low")):
+            for wire in wires:
+                rung = next_step_down(current, wire, used=used)
+                assert rung in {"high", "low", None}, (current, used, rung)
+                assert rung not in used, (current, used, rung)
+
+
+@pytest.mark.production_timing
+def test_empty_retry_delay_is_hermes_jittered_backoff():
+    assert empty_retry_delay(1, rand=lambda: 0.0) == 5.0 and empty_retry_delay(1, rand=lambda: 1.0) == 7.5
+    assert empty_retry_delay(2, rand=lambda: 0.0) == 10.0 and empty_retry_delay(5, rand=lambda: 0.0) == 60.0
+    assert empty_retry_delay(9, rand=lambda: 1.0) == 90.0
+    assert 60.0 <= empty_retry_delay(10_000) <= 90.0
+    assert empty_retry_delay(0, rand=lambda: 0.0) == 5.0
+
+
+def test_the_backoff_reads_its_bounds_when_called(monkeypatch):
+    """The suite shrinks the bounds to a millisecond, which works only while they are read per call."""
+    monkeypatch.setattr(recovery, "EMPTY_RETRY_BASE_DELAY_S", 1.0)
+    monkeypatch.setattr(recovery, "EMPTY_RETRY_MAX_DELAY_S", 3.0)
+    assert [empty_retry_delay(n, rand=lambda: 0.0) for n in (1, 2, 3)] == [1.0, 2.0, 3.0]
+
+
+def _attempt(model="m", finish="stop", **usage) -> EmptyAttempt:
+    usage = {"prompt_tokens": 50_000, "completion_tokens": 0, **usage}
+    return EmptyAttempt.of(LLMResponse(content=None, finish_reason=finish, usage=usage), model)
+
+
+def test_two_zero_output_empties_of_one_signature_are_deterministic():
+    zero = _attempt()
+    assert zero == EmptyAttempt(model="m", finish_reason="stop", usage_present=True, zero_output=True)
+    assert deterministic_empty([zero, _attempt()]) is True
+    assert deterministic_empty([zero, _attempt(), _attempt()]) is True
+    assert deterministic_empty([]) is False
+    assert deterministic_empty([zero]) is False
+    # Usage that is no evidence fails open: missing, no prompt counted, no completion reported.
+    assert deterministic_empty([zero, EmptyAttempt.of(LLMResponse(content=None), "m")]) is False
+    assert deterministic_empty([zero, _attempt(prompt_tokens=0)]) is False
+    assert deterministic_empty([zero, _attempt(completion_tokens=None)]) is False
+    assert deterministic_empty([zero, _attempt(finish="unknown")]) is False
+    assert deterministic_empty([zero, _attempt(model="other")]) is False
+    assert deterministic_empty([zero, _attempt(completion_tokens=3)]) is False
+    assert deterministic_empty([zero, _attempt(reasoning_tokens=12)]) is False
+    # Zero output claimed without usage behind it is no evidence either.
+    unproven = EmptyAttempt(model="m", finish_reason="stop", usage_present=False, zero_output=True)
+    assert deterministic_empty([zero, unproven]) is False
+
+
+def test_an_empty_attempt_reads_usage_the_way_the_providers_report_it():
+    assert _attempt(completion_tokens="n/a").usage_present is False
+    assert _attempt(prompt_tokens=True).usage_present is False
+    assert _attempt(prompt_tokens=50_000.0).usage_present is False
+    assert _attempt(reasoning_tokens="n/a").zero_output is True
+    # An adapter that counts the cache apart (Anthropic) still counts a prompt read wholly from it.
+    cached = _attempt(prompt_tokens=0, cache_read_input_tokens=50_000, prompt_tokens_include_cache=False)
+    assert cached.usage_present is True and cached.zero_output is True
+
+
+def test_an_expensive_empty_gets_one_resend():
+    def budget(cost=None, **limits):
+        usage = {} if cost is None else {"cost_usd": cost}
+        return resend_budget(LLMResponse(content=None, usage=usage), RecoveryLimits(**limits))
+
+    assert budget(0.30) == 1
+    assert budget(0.25) == 1
+    assert budget(0.10) == 3
+    assert budget() == 3
+    assert budget(0.10, empty_retry_cost_threshold_usd=0.05) == 1
+    assert budget(0.30, empty_content_max_retries=0) == 0
+    assert budget("0.30") == 3
+    assert budget(True) == 3
+
+
+def test_the_excerpt_keeps_the_first_500_characters():
+    excerpt = reasoning_excerpt(LLMResponse(content=None, reasoning_content="x" * 900))
+    assert len(excerpt) == REASONING_EXCERPT_MAX + 3 == 503
+    assert excerpt == "x" * 500 + "..."
+    assert reasoning_excerpt(LLMResponse(content=None, reasoning_content="y" * 500)) == "y" * 500
+    assert reasoning_excerpt(LLMResponse(content=None)) == ""
+    assert reasoning_excerpt(LLMResponse(content="the answer")) == ""
+
+
+def test_the_excerpt_reads_the_reasoning_field_then_thinking_blocks_then_inline_tags():
+    blocks = [
+        {"type": "thinking", "thinking": "from ", "signature": "s"},
+        {"type": "redacted_thinking", "data": "zz"},
+        {"type": "thinking", "thinking": "blocks"},
+    ]
+    both = LLMResponse(content="<think>inline</think>", reasoning_content="field", thinking_blocks=blocks)
+    assert reasoning_excerpt(both) == "field"
+    assert reasoning_excerpt(LLMResponse(content="<think>inline</think>", thinking_blocks=blocks)) == "from blocks"
+    inline = LLMResponse(content="<think> inline </think>answer<mm:thinking>more</mm:thinking>")
+    assert reasoning_excerpt(inline) == "inline\n\nmore"
+    assert reasoning_excerpt(LLMResponse(content="</think>", reasoning_content="  ")) == ""
+    assert reasoning_excerpt(LLMResponse(content=None, reasoning_content="\n  hmm \n")) == "hmm"
+    assert reasoning_excerpt(LLMResponse(content=None, reasoning_content="  ", thinking_blocks=blocks)) == "from blocks"
+
+
+def test_the_wording_is_copied_verbatim():
+    assert MAX_CONTINUATIONS == 3
+    assert REASONING_EXCERPT_MAX == 500
+    assert (
+        HERMES_POST_TOOL_NUDGE
+        == "You just executed tool calls but returned an empty response. Please process the tool results above and continue with the task."
+    )
+    assert (
+        OUTPUT_LIMIT_CONTINUATION
+        == "[System: Your previous response was truncated by the output length limit. Continue exactly where you left off. Do not restart or repeat prior text. Finish the answer directly.]"
+    )
+    assert (
+        NETWORK_CUT_CONTINUATION
+        == "[System: The previous response was cut off by a network error mid-stream. Continue exactly where you left off. Do not restart or repeat prior text. Finish the answer directly.]"
+    )
+    assert (
+        EMPTY_REPLY_FAILURE
+        == "No reply: the model returned empty content after retries and any fallback models. Try `continue`, switch the model, or check the tool output above."
+    )
+    assert (
+        THINKING_ONLY_FAILURE
+        == "The model produced only internal reasoning and no final answer, despite retries. Its last reasoning, which may contain the answer:"
+    )
+    assert (
+        TRUNCATED_FAILURE
+        == "Processing stopped: the response remained truncated after {n} continuation attempts. Try again."
+    )
+    assert (
+        TRUNCATED_FAILURE.format(n=MAX_CONTINUATIONS)
+        == "Processing stopped: the response remained truncated after 3 continuation attempts. Try again."
+    )
+    assert REFUSAL_FAILURE == "The model declined to respond to this request (a safety refusal, not a Raven failure)."
+    assert REFUSAL_EXPLANATION == " The model's explanation: {text}"
+    assert REFUSAL_EXPLANATION.format(text="I can't.") == " The model's explanation: I can't."
+    assert REFUSAL_NO_EXPLANATION == " The model returned no explanation."
+    assert (
+        PARTIAL_STREAM_NOTE
+        == "No reply: streaming stopped early and only a partial response was recovered. Send `continue` to resume."
+    )
 
 
 # --------------------------------------------------------------------------- #
