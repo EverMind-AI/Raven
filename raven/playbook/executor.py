@@ -537,7 +537,24 @@ class PlaybookExecutor:
             # missing X" would invite the same wrong call again.
             return ExecutionPlan(kind="questions", reply="Error: " + " ".join(fill_errors))
         nodes = [
-            n.model_copy(update={"prompt_template": _fill_text(n.prompt_template, spec, values, f"node {n.id!r}")})
+            n.model_copy(
+                update={
+                    "prompt_template": _fill_text(n.prompt_template, spec, values, f"node {n.id!r}"),
+                    # A route condition reaches the judge where a prompt reaches
+                    # its node, so it is filled on the same terms -- secrets
+                    # withheld included, by _fill_text itself.
+                    **(
+                        {
+                            "routes": {
+                                name: _fill_text(condition, spec, values, f"node {n.id!r} route {name!r}")
+                                for name, condition in n.routes.items()
+                            }
+                        }
+                        if n.routes
+                        else {}
+                    ),
+                }
+            )
             for n in nodes
         ]
         blanks = [(n.id, f) for n in nodes for f in FILLABLE_REQUIRED if not str(getattr(n, f, "") or "").strip()]

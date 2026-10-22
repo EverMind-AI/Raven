@@ -349,6 +349,13 @@ def validate_graph_nodes(
                 errors.append(f"node {node.id!r}: params.{ref} names no declared param")
             # A secret here is withheld at fill time, not refused at the file --
             # see the note in :func:`validate_structure`.
+        for name, condition in (node.routes or {}).items():
+            # The judge reads a condition where a node reads its prompt: an
+            # undeclared reference there is the same author mistake, and an
+            # unfilled one hinged a decision on text no reader can evaluate.
+            for ref in param_refs(condition):
+                if ref not in param_names:
+                    errors.append(f"node {node.id!r}: params.{ref} in route {name!r} names no declared param")
         for key, value in node.inputs.items():
             for ref in _nested_param_refs(value):
                 errors.append(
