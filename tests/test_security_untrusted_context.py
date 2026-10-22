@@ -1005,6 +1005,89 @@ def test_ravens_own_oauth_tokens_are_redacted_like_another_programs(monkeypatch:
     assert scrub_tool_output({"path": "tests/test_keys.py"}, source) == source
 
 
+def test_every_branch_of_the_oauth_store_gate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    r"""Each branch of the two regexes that guard the token store, one case each.
+
+    ``_own_oauth_store`` alternates four roots -- the store's own path and its
+    ``~`` / ``$HOME`` / ``${HOME}`` spellings -- and ends in
+    ``(?:[/\\]|$|["'\s])``. ``_OAUTH_TOKEN_FIELD`` is
+    ``("(?:access|refresh)"\s*:\s*")([^\s"\\]{16,})``: sixteen characters or more,
+    no whitespace, no quote, no backslash. A branch without a case is a branch
+    that can be deleted without a test going red, which is how the three
+    abbreviations fell out of this pattern once already.
+    """
+    from raven.config.paths import oauth_dir
+    from raven.security.redact import redact_home_config_read
+
+    # The home moves too: the abbreviations only exist when the store sits under
+    # it, which is what ``store.relative_to(home)`` asks.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / ".raven"))
+    store = oauth_dir()
+    assert store == tmp_path / ".raven" / "oauth", store
+    value = "mmx_0123456789abcdefghij"
+    tokens = '{"access": "%s", "refresh": "%s"}' % (value, value)
+
+    # The four roots. The last is the store's own path; the three before it are
+    # what a model actually writes, and none of them had a case.
+    for path in (
+        f"{store}/minimax_global.json",
+        "~/.raven/oauth/minimax_global.json",
+        "$HOME/.raven/oauth/minimax_global.json",
+        "${HOME}/.raven/oauth/minimax_global.json",
+    ):
+        shown = redact_home_config_read({"path": path}, tokens)
+        assert value not in shown, (path, shown)
+        assert shown == '{"access": "[redacted]", "refresh": "[redacted]"}', (path, shown)
+
+    # ``{16,}``: fifteen is prose, sixteen is a credential. Both sides.
+    for width, redacted in ((15, False), (16, True), (17, True)):
+        secret = "a" * width
+        shown = redact_home_config_read({"path": str(store / "minimax_global.json")}, '{"access": "%s"}' % secret)
+        if redacted:
+            assert shown == '{"access": "[redacted]"}', (width, shown)
+        else:
+            assert shown == '{"access": "%s"}' % secret, (width, shown)
+
+    # ``[^\s"\\]`` stops at a space, so only the run before it is the value.
+    # Every run under sixteen leaves the line alone; a sixteen-character run is
+    # replaced and the rest of the line survives with it.
+    short = '{"access": "abcdefghijklmno mno"}'
+    assert redact_home_config_read({"path": str(store / "minimax_global.json")}, short) == short
+    spaced = '{"access": "abcdefghijklmnopqrst uv"}'
+    assert (
+        redact_home_config_read({"path": str(store / "minimax_global.json")}, spaced) == '{"access": "[redacted] uv"}'
+    )
+
+    # The same class stops at a backslash, which is how a quote inside a JSON
+    # string arrives: the value up to the escape is replaced, the tail after it
+    # is not claimed and not dropped -- the substitution does not cut the line.
+    escaped = '{"access": "abcdefghijklmnop\\"tail"}'
+    assert (
+        redact_home_config_read({"path": str(store / "minimax_global.json")}, escaped)
+        == '{"access": "[redacted]\\"tail"}'
+    )
+    short_escaped = '{"access": "abcdefghijklmno\\"tail"}'
+    assert redact_home_config_read({"path": str(store / "minimax_global.json")}, short_escaped) == short_escaped
+
+    # The boundary after a root. ``/`` is the ordinary one; ``\\`` is accepted so a
+    # spelling that mixes separators still matches; the store standing alone is
+    # matched by the end-of-string arm, and quoted by the ``["'\s]`` arm.
+    assert value not in redact_home_config_read({"command": "cat ~/.raven/oauth\\minimax_global.json"}, tokens)
+    assert value not in redact_home_config_read({"command": f"ls {store}"}, tokens)
+    assert value not in redact_home_config_read({"command": f'ls "{store}"'}, tokens)
+    # The limit, stated: the root's own separators are the platform's, so a POSIX
+    # store spelled entirely with backslashes does not match. On Windows the root
+    # is a backslash path and this is the spelling that matches instead.
+    whole_backslash = "\\root\\.raven\\oauth\\minimax_global.json"
+    assert redact_home_config_read({"path": whole_backslash}, tokens) == tokens
+
+    # The false positive #833 fixed, at the gate that now runs there: two ordinary
+    # English words in prose are not a credential, whatever the store holds.
+    prose = "Refresh the page and access the network."
+    assert redact_home_config_read({"path": str(store / "minimax_global.json")}, prose) == prose
+
+
 def test_the_home_directories_outside_the_exemption_still_lose_their_tokens() -> None:
     """The exemption is four directories, not "whatever is beside the token store".
 
