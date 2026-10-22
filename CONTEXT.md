@@ -814,9 +814,9 @@ bracketed form. Two rules read the set and the turn's `Origin` picks one (`is_si
 case, edge whitespace and stray edge punctuation forgiven up to `SILENCE_MAX_CHARS`, so prose
 that merely mentions a marker is delivered. A turn the runtime itself started -- the proactive
 origins `SENTINEL`, `CRON`, `HEARTBEAT` and `SUBAGENT` -- takes the loose rule
-(`is_loose_silence`): nobody is waiting on it and models wrap the marker in a note on why they
-stayed quiet, so a marker that is the whole reply, sits alone on the first or last line, or is
-a bracketed `[SILENT]` opening the reply is silence, whatever the length. `may_become_silence`
+(`is_loose_silence`) on top of the strict one: nobody is waiting on it and models wrap the marker
+in a note on why they stayed quiet, so a marker alone on the first or last line, or a bracketed
+`[SILENT]` opening the reply, is silence too, whatever the length. `may_become_silence`
 is the strict rule's streaming counterpart: it says whether the text so far could still turn
 into a marker, so a surface holds it back instead of showing it and retracting it.
 Only a turn that completed can be silent: a failed turn is a failure whatever its last text

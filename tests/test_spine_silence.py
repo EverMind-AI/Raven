@@ -60,6 +60,12 @@ def test_every_runtime_origin_reads_the_loose_rule(origin):
     assert is_silence("[SILENT] No changes", origin)
 
 
+@pytest.mark.parametrize("origin", [Origin.CRON, Origin.SUBAGENT])
+@pytest.mark.parametrize("text", ["*NO_REPLY*", ".NO_REPLY", "NO_REPLY."])
+def test_a_runtime_turn_forgives_edge_punctuation_around_a_bare_marker(text, origin):
+    assert is_silence(text, origin)
+
+
 @pytest.mark.parametrize(
     "text,held",
     [

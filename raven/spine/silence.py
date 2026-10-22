@@ -10,11 +10,11 @@ Silence is something the model chooses, by answering with a marker. It is not:
 
 One marker set is read by two rules, so the lanes cannot drift apart. The strict rule
 (``is_exact_silence``) serves a turn a person started: the reply must be exactly a marker, so
-anything the model meant to say reaches the person waiting on it. The loose rule
-(``is_loose_silence``) serves a turn the runtime started (cron, sub-agent, sentinel, heartbeat):
-nobody is waiting, the model is told to answer ``[SILENT]`` when nothing is new, and models
-reliably wrap it in a short note on why they stayed quiet, so a marker that opens the reply or
-sits on its own first or last line counts too.
+anything the model meant to say reaches the person waiting on it. A turn the runtime started
+(cron, sub-agent, sentinel, heartbeat) reads the loose rule (``is_loose_silence``) as well as the
+strict one: nobody is waiting, the model is told to answer ``[SILENT]`` when nothing is new, and
+models reliably wrap it in a short note on why they stayed quiet, so a marker that opens the reply
+or sits on its own first or last line counts too.
 
 ``may_become_silence`` is the strict rule's counterpart for streaming: it says whether the text so
 far could still turn out to be a marker, so a surface holds it back instead of showing a marker
@@ -108,13 +108,16 @@ def is_loose_silence(text: object) -> bool:
 
 
 def is_silence(text: object, origin: Origin | None) -> bool:
-    """Whether ``text`` is silence under the rule ``origin`` picks.
+    """Whether ``text`` is silence under the rules ``origin`` picks.
 
-    A turn the runtime started reads the loose rule; every other origin, and none, reads the strict
-    one, so an origin this table does not know delivers a marker rather than swallowing a reply.
+    A turn the runtime started reads the loose rule and the strict one: the loose matcher takes a
+    whole-reply marker as written, so ``NO_REPLY.`` needs the strict rule's forgiveness of edge
+    punctuation, and whatever stays quiet on a person's turn stays quiet here too. Every other
+    origin, and none, reads the strict rule alone, so an origin this table does not know delivers a
+    marker rather than swallowing a reply.
     """
     if origin in _RUNTIME_ORIGINS:
-        return is_loose_silence(text)
+        return is_loose_silence(text) or is_exact_silence(text)
     return is_exact_silence(text)
 
 
