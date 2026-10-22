@@ -27,7 +27,6 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from raven.context_engine.history.markers import HISTORY_PRIVATE_KEYS
-from raven.contracts.llm_provider import REASONING_EFFORT_LADDER
 
 SUMMARY_MARKER = "[Context summary — earlier steps were compacted to fit the context window]"
 
@@ -73,10 +72,11 @@ SUMMARY_MAX_TOKENS = 32_000
 # measured at 1466 tokens.
 _SUMMARY_ESTIMATE_SLACK = 0.05
 
-# A handoff brief is mechanical: read the transcript, list what it says. The
-# floor of ``REASONING_EFFORT_LADDER`` rather than the turn's own
-# effort, which is what the two failures above were run at.
-SUMMARY_REASONING_EFFORT = REASONING_EFFORT_LADDER[-1]
+# A handoff brief is mechanical: read the transcript, list what it says. Low
+# rather than the turn's own effort, which is what the two failures above were
+# run at -- and rather than the ladder's floor, minimal, which the Codex backend
+# refuses with an HTTP 400.
+SUMMARY_REASONING_EFFORT = "low"
 
 # Per-message ceiling when rendering the head into the summary request. The
 # head already fits the window (the trigger fires below it), this only guards

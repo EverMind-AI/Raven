@@ -25,7 +25,6 @@ from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
 from raven.agent.window import compaction, shrink
 from raven.config.raven import CheckpointConfig, RuntimeConfig
 from raven.config.schema import AgentDefaults, CompactionConfig
-from raven.contracts.llm_provider import REASONING_EFFORT_LADDER
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.providers.rates import resolve_max_output_tokens
 from raven.spine.message import ChatType, Source
@@ -452,8 +451,7 @@ async def test_the_head_summary_is_not_asked_to_think(workspace):
     / 45264 chars, then 112 / 54248) spent the whole budget thinking and came
     back with an empty body -- a reasoning model pays for thinking out of the
     same budget as the answer. Compaction then degraded to blind elision for
-    the rest of that run. The turn keeps its effort; the summary takes the
-    ladder floor.
+    the rest of that run. The turn keeps its effort; the summary asks for low.
     """
     provider = _CompactionScriptProvider([_tool_step(1, usage=_HUGE_USAGE), _answer()])
     agent = _agent(workspace, provider, cfg=_cfg(prune=False))
@@ -461,11 +459,15 @@ async def test_the_head_summary_is_not_asked_to_think(workspace):
 
     await agent._run_agent_loop(_initial(seed_rounds=6))
 
-    assert provider.summary_efforts == [compaction.SUMMARY_REASONING_EFFORT]
-    assert compaction.SUMMARY_REASONING_EFFORT == REASONING_EFFORT_LADDER[-1]
+    assert provider.summary_efforts == ["low"]
     assert provider.main_efforts and set(provider.main_efforts) == {"high"}, (
         "the turn's own calls keep the session's effort; only the summary is pinned"
     )
+
+
+def test_the_summary_asks_low():
+    """Not the ladder's floor: the Codex backend refuses ``minimal`` with an HTTP 400."""
+    assert compaction.SUMMARY_REASONING_EFFORT == "low"
 
 
 @pytest.mark.asyncio

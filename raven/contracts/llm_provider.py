@@ -48,12 +48,9 @@ class ErrorClassification:
     refuses_prompt_cache: bool = False
 
 
-#: Reasoning efforts this repo sends, strongest first. The set the Anthropic
-#: transport can map a thinking budget for, and the set OpenRouter accepts in
-#: its native reasoning object, so a rung taken from here is a value every
-#: backend the loop talks to already understands. Here rather than beside the
-#: loop's recovery because the window's head summary reads its floor too, and
-#: neither the loop nor the window is allowed to import the other.
+#: Reasoning efforts this repo sends, strongest first: the set the Anthropic
+#: transport maps a thinking budget for and OpenRouter takes in its reasoning
+#: object. Codex refuses ``minimal`` (HTTP 400), so no recovery asks for it.
 REASONING_EFFORT_LADDER: tuple[str, ...] = ("max", "xhigh", "high", "medium", "low", "minimal")
 
 
