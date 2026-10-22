@@ -489,6 +489,13 @@ All notable changes to Raven are documented here.
   either. Turns recorded before this keep the attribution they were recorded
   with.
 
+- A playbook's route conditions are filled the way its prompts are. A
+  `${params.<key>}` in a decision node's condition reached the judge as
+  written, and one naming no declared param passed validation; now it reaches
+  the judge as its value, a secret param in one is withheld as it is from a
+  prompt, and a reference to no declared param is refused when the playbook is
+  saved or loaded.
+
 - In the web UI, the **What came back** fold of a DAG node that stopped on
   a decision no longer opens onto the brief written for the model -- the
   `resolve_dag_node` calls it may make and that tool's whole schema, all in

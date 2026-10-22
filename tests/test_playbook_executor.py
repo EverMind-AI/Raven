@@ -397,6 +397,29 @@ async def test_an_empty_skills_list_is_written_not_blank():
     assert "already specifies" in plan.reply
 
 
+async def test_a_route_condition_reaches_the_judge_with_its_params_filled_and_its_secrets_withheld():
+    """The judge reads a condition as it was dispatched, so a reference left in one is text
+    it has to guess at -- and a secret filled into one would leave the host with it."""
+    tool = FakeDagTool()
+    ex = PlaybookExecutor(dag_tool=tool)
+    triage, *rest = _branching_nodes()
+    routes = {"bug": "a defect at least ${params.severity}", "other": "anything else {{ params.TOKEN }}"}
+    spec = _dag_spec(
+        params={
+            "severity": ParamSpec(type="string", required=True, description="how severe must a defect be?"),
+            "TOKEN": ParamSpec(type="secret", description="the tracker token"),
+        },
+        nodes=[triage.model_copy(update={"routes": routes}), *rest],
+    )
+
+    plan = await ex.execute(spec, params={"severity": "major", "TOKEN": "s3cr3t-value"}, confirmed=True)
+
+    assert plan.kind == "dag", plan.reply
+    dispatched = {node["id"].rsplit("-", 1)[-1]: node for node in tool.calls[0]["nodes"]}
+    assert dispatched["triage"]["routes"]["bug"] == "a defect at least major"
+    assert "s3cr3t-value" not in json.dumps(tool.calls[0]["nodes"])
+
+
 async def test_executor_dag_hands_nodes_to_the_graph_tool_with_params_filled():
     tool = FakeDagTool()
     ex = PlaybookExecutor(dag_tool=tool)
