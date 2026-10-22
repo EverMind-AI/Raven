@@ -267,16 +267,20 @@ async def _streamed_turn(agent: AgentLoop, seen: list[str]):
 
 
 @pytest.mark.asyncio
-async def test_a_stall_after_streamed_output_is_not_retried_by_the_outer_ladder_unless_asked(workspace):
+async def test_a_stall_after_streamed_output_is_continued_not_asked_again_unless_asked(workspace):
     """The whole loop, not the helper alone: a stream that produced a word and then
     stalled used to come back as a retryable error response, and the outer ladder
     asked again regardless of `llm_retry_after_output` -- an interactive client
-    received the output of two attempts. Off, the turn fails on the first attempt;
-    on, the retry's answer is the answer and the caller saw both, as agreed."""
+    received the output of two attempts. Off, the word stays where the reader saw it
+    and the model is asked to go on from it, so the answer is the word and what
+    follows; on, the retry's answer is the answer and the caller saw both, as agreed."""
+    provider = _StallsThenAnswers()
     seen: list[str] = []
-    with pytest.raises(TimeoutError):
-        await _streamed_turn(_streaming_agent(workspace, _StallsThenAnswers(), retry_after_output=False), seen)
-    assert seen == ["partial"]
+    out = await _streamed_turn(_streaming_agent(workspace, provider, retry_after_output=False), seen)
+
+    assert out is not None and out[0] == "partialanswer"
+    assert provider.calls == 2
+    assert seen == ["partial", "answer"]
 
     provider = _StallsThenAnswers()
     seen = []
@@ -321,22 +325,21 @@ class _StreamsThenReportsFailure(LLMProvider):
 
 
 @pytest.mark.asyncio
-async def test_a_failure_delta_after_streamed_output_is_not_retried_unless_asked(workspace):
+async def test_a_failure_delta_after_streamed_output_is_continued_not_asked_again_unless_asked(workspace):
     """The twin of the stall above, in the shape the tree's own adapter produces:
     the failure arrives as a delta rather than as a raise, so the rule that a
     rendered stream is not asked again was never reached and the outer ladder
     asked anyway -- the watcher saw the answer start over, up to four times. Off,
-    the turn fails on the first attempt and says why; on, the retry's answer is
-    the answer and the caller saw both, as agreed."""
+    the words the reader saw are kept and the model is asked to go on from them;
+    on, the retry's answer is the answer and the caller saw both, as agreed."""
     provider = _StreamsThenReportsFailure()
     seen: list[str] = []
 
-    with pytest.raises(AnswerlessTurnError) as failed:
-        await _streamed_turn(_streaming_agent(workspace, provider, retry_after_output=False), seen)
+    out = await _streamed_turn(_streaming_agent(workspace, provider, retry_after_output=False), seen)
 
-    assert provider.calls == 1, "the reader had seen words, so the ladder did not ask again"
-    assert seen == ["partial"]
-    assert "503 upstream connect error" in str(failed.value)
+    assert out is not None and out[0] == "partialanswer"
+    assert provider.calls == 2, "the reader had seen words, so the answer was continued, not drawn again"
+    assert seen == ["partial", "answer"]
 
     provider = _StreamsThenReportsFailure()
     seen = []
@@ -358,20 +361,18 @@ class _OneFallbackBehind:
 async def test_a_failure_delta_after_streamed_output_does_not_fall_back_either(workspace):
     """A fallback model is another ask of the same step. The reader had already seen the first answer
     begin, so it would see a second, whole one drawn under it: the same duplicate the ladder is kept
-    from, by another door. Off, the turn fails on the first attempt as it always has; on, the caller
+    from, by another door. Off, the answer is continued on the model that began it; on, the caller
     accepted seeing the output twice and the fallback goes first, as it does for any other streamed error."""
     provider = _StreamsThenReportsFailure()
     agent = _streaming_agent(workspace, provider, retry_after_output=False)
     agent.router = _OneFallbackBehind()
     seen: list[str] = []
 
-    with pytest.raises(AnswerlessTurnError) as failed:
-        await _streamed_turn(agent, seen)
+    out = await _streamed_turn(agent, seen)
 
-    assert provider.calls == 1
-    assert provider.models == ["stub"], "the fallback model was never asked"
-    assert seen == ["partial"], "nothing of a second answer reached the reader"
-    assert "503 upstream connect error" in str(failed.value)
+    assert out is not None and out[0] == "partialanswer"
+    assert provider.models == ["stub", "stub"], "the fallback model was never asked"
+    assert seen == ["partial", "answer"], "nothing of a second whole answer reached the reader"
 
     provider = _StreamsThenReportsFailure()
     agent = _streaming_agent(workspace, provider, retry_after_output=True)

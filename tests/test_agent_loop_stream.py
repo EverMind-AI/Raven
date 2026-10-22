@@ -244,14 +244,16 @@ async def test_llm_call_stream_passes_messages_tools_model_to_provider() -> None
 # ---------------------------------------------------------------------------
 
 
-async def test_llm_call_stream_timeout_after_output_fails_the_turn_unless_asked() -> None:
+async def test_llm_call_stream_timeout_after_output_hands_back_the_words_unless_asked() -> None:
     """A mid-stream stall (TimeoutError from the per-chunk idle cap) after words were
-    streamed follows the same rule as any other mid-stream failure: the turn fails
-    (N-TURNFAILED) unless the caller asked to retry after output. Handed back as a
-    retryable response instead, the loop's own ladder asked again and an
-    interactive client received the words of two attempts. Asked for, the response
-    is structured and retryable, and its content is the account of the failure --
-    the words that streamed are the caller's to keep, not the error's text."""
+    streamed follows the same rule as any other mid-stream failure: it is not asked
+    again unless the caller asked to retry after output. Handed back as a retryable
+    response, the loop's own ladder asked again and an interactive client received
+    the words of two attempts. The words the reader saw come back instead as the
+    answer so far, with no finish, for the loop to ask the model to go on from; the
+    turn does not fail. Asked for, the response is structured and retryable, and its
+    content is the account of the failure -- the words that streamed are the
+    caller's to keep, not the error's text."""
 
     class _TimeoutStreamProvider:
         classify_error = LLMProvider.classify_error
@@ -265,9 +267,10 @@ async def test_llm_call_stream_timeout_after_output_fails_the_turn_unless_asked(
     async def on_delta(text: str) -> None:
         seen.append(text)
 
-    with pytest.raises(TimeoutError):
-        await _bind_helper(_TimeoutStreamProvider())(messages=[], tools=None, model="m", on_token_delta=on_delta)
+    response = await _bind_helper(_TimeoutStreamProvider())(messages=[], tools=None, model="m", on_token_delta=on_delta)
     assert seen == ["partial"]
+    assert (response.content, response.finish_reason) == ("partial", "unknown")
+    assert response.error_classification is None
 
     fake_self = SimpleNamespace(
         provider=_TimeoutStreamProvider(),
@@ -341,15 +344,13 @@ def _half_then_error(verdict: ErrorClassification | None) -> list[ChatDelta]:
     ]
 
 
-async def test_an_error_delta_after_rendered_output_has_its_retry_spent() -> None:
+async def test_an_error_delta_after_rendered_output_hands_back_the_words() -> None:
     """The shape the Anthropic adapter hands back: it catches a failure that
     happened mid-stream and reports it as a terminal error delta instead of
-    raising, so the words already on the reader's screen never reach the rule the
-    raise path holds. Left retryable, the caller's own ladder asked again and the
-    same answer was drawn from the top up to four times; left fallback-worthy, the
-    loop switched models and drew a whole second answer under the first. Both are
-    ways of asking again, so both are spent. The flags that repair the request
-    itself survive: the verdict is spent of asking again, not replaced."""
+    raising. The words already on the reader's screen are what is left of the
+    call, and they come back as the answer so far, with no finish, for the loop to
+    ask the model to go on from -- not as an error whose retry would draw them
+    again from the top."""
     verdict = ErrorClassification("server", retryable=True, should_fallback=True, should_compress=True)
     provider = _FakeProvider(_half_then_error(verdict))
     seen: list[str] = []
@@ -360,6 +361,39 @@ async def test_an_error_delta_after_rendered_output_has_its_retry_spent() -> Non
     response = await _bind_helper(provider)(messages=[], tools=None, model="m", on_token_delta=on_delta)
 
     assert seen == ["the first half"]
+    assert (response.content, response.finish_reason) == ("the first half", "unknown")
+    assert response.error_classification is None
+
+
+def _thought_then_error(verdict: ErrorClassification | None) -> list[ChatDelta]:
+    """A stream that thought aloud, then reported its failure as a delta."""
+    return [
+        ChatDelta(content=None, reasoning_content="the first half"),
+        ChatDelta(
+            content="Error calling LLM (server@claude): 503", finish_reason="error", error_classification=verdict
+        ),
+    ]
+
+
+async def test_an_error_delta_after_rendered_thought_has_its_retry_spent() -> None:
+    """A thought is not an answer to go on from, so what the reader saw of this call
+    leaves only its failure -- and the failure arrives as a delta, so the thought
+    already on the reader's screen never reaches the rule the raise path holds. Left
+    retryable, the caller's own ladder asked again and the same thought was drawn
+    from the top up to four times; left fallback-worthy, the loop switched models and
+    drew a whole second one under the first. Both are ways of asking again, so both
+    are spent. The flags that repair the request itself survive: the verdict is spent
+    of asking again, not replaced."""
+    verdict = ErrorClassification("server", retryable=True, should_fallback=True, should_compress=True)
+    provider = _FakeProvider(_thought_then_error(verdict))
+    thoughts: list[str] = []
+
+    async def on_thought(text: str) -> None:
+        thoughts.append(text)
+
+    response = await _bind_helper(provider)(messages=[], tools=None, model="m", on_reasoning_delta=on_thought)
+
+    assert thoughts == ["the first half"]
     assert response.content == "Error calling LLM (server@claude): 503"
     assert response.error_classification is not None
     assert response.error_classification.retryable is False
@@ -405,7 +439,7 @@ async def test_an_error_delta_before_any_output_keeps_its_retry() -> None:
     assert response.error_classification.retryable is True
 
 
-async def test_an_unclassified_error_delta_after_output_is_classified_and_spent() -> None:
+async def test_an_unclassified_error_delta_after_rendered_thought_is_classified_and_spent() -> None:
     """A delta that carries no verdict leaves the caller to read one out of the
     error text -- and it would read a retryable failure straight back. So the
     verdict is built here, where it is still known that something was rendered."""
@@ -414,14 +448,14 @@ async def test_an_unclassified_error_delta_after_output_is_classified_and_spent(
         classify_error = LLMProvider.classify_error
 
         async def chat_stream(self, **_kwargs: Any):
-            yield ChatDelta(content="the first half")
+            yield ChatDelta(content=None, reasoning_content="the first half")
             yield ChatDelta(content="Error calling LLM (server@claude): 503", finish_reason="error")
 
-    async def on_delta(_text: str) -> None:
+    async def on_thought(_text: str) -> None:
         return None
 
     response = await _bind_helper(_ErrorDeltaWithoutVerdict())(
-        messages=[], tools=None, model="m", on_token_delta=on_delta
+        messages=[], tools=None, model="m", on_reasoning_delta=on_thought
     )
 
     assert response.error_classification is not None
@@ -430,8 +464,9 @@ async def test_an_unclassified_error_delta_after_output_is_classified_and_spent(
 
 async def test_llm_call_stream_does_not_reconnect_after_emitting_deltas() -> None:
     """Reconnecting a stream that already emitted deltas would duplicate them in
-    the caller's UI, so a partially-streamed failure is not retried — it
-    propagates, which is what makes the turn fail (N-TURNFAILED)."""
+    the caller's UI, so a partially-streamed failure is not retried -- what the
+    reader saw comes back as the answer so far, and the loop asks the model to go
+    on from it."""
 
     class _FailAfterContent:
         classify_error = LLMProvider.classify_error
@@ -451,11 +486,11 @@ async def test_llm_call_stream_does_not_reconnect_after_emitting_deltas() -> Non
     async def on_delta(text: str) -> None:
         seen.append(text)
 
-    with pytest.raises(_ApiError):
-        await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
+    response = await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
 
     assert provider.calls == 1  # retryable, but deltas already reached the caller
     assert seen == ["partial"]
+    assert (response.content, response.finish_reason) == ("partial", "unknown")
 
 
 async def test_llm_call_stream_reconnects_when_nothing_was_emitted() -> None:
@@ -1242,10 +1277,11 @@ class _DiesMidStream:
 
 
 async def test_llm_call_stream_retries_after_output_only_when_asked() -> None:
-    """A mid-stream failure after words were streamed fails the turn, as N-TURNFAILED
-    asks -- a person watching would see the words twice. An unattended caller says so
-    through the limits and gets the call asked again: one deck build had two hours
-    behind it when a dropped connection ended the turn with nothing published."""
+    """A mid-stream failure after words were streamed is not asked again -- a person
+    watching would see the words twice -- and the words come back as the answer so
+    far instead. An unattended caller says so through the limits and gets the call
+    asked again: one deck build had two hours behind it when a dropped connection
+    ended the turn with nothing published."""
     from types import SimpleNamespace
 
     provider = _DiesMidStream()
@@ -1272,6 +1308,8 @@ async def test_llm_call_stream_retries_after_output_only_when_asked() -> None:
         _MAX_STREAM_RECONNECTS=AgentLoop._MAX_STREAM_RECONNECTS,
         _recovery_limits=RecoveryLimits(llm_error_retry_delays=(0.0,)),
     )
-    with pytest.raises(_ApiError):
-        await AgentLoop._llm_call_stream.__get__(fake_self)(messages=[], tools=None, model="m", on_token_delta=on_delta)
-    assert fresh.calls == 1, "off, the turn fails on the first mid-stream error"
+    handed_back = await AgentLoop._llm_call_stream.__get__(fake_self)(
+        messages=[], tools=None, model="m", on_token_delta=on_delta
+    )
+    assert fresh.calls == 1, "off, the call is not made again after the first mid-stream error"
+    assert (handed_back.content, handed_back.finish_reason) == ("half an ", "unknown")

@@ -156,12 +156,14 @@ async def test_a_finished_turn_writes_no_marker(workspace):
 
 class _StreamingThenDying(LLMProvider):
     """Streams ``chunks``, then raises -- the shape a stop or a dropped
-    connection takes while the answer is already on the reader's screen."""
+    connection takes while the answer is already on the reader's screen.
+    ``mid_call`` has the model part-way through a tool call when it goes."""
 
-    def __init__(self, chunks: list[str], death: BaseException):
+    def __init__(self, chunks: list[str], death: BaseException, *, mid_call: bool = False):
         super().__init__(api_key="test")
         self._chunks = chunks
         self._death = death
+        self._mid_call = mid_call
 
     async def chat(self, messages, **kwargs: Any):
         raise AssertionError("the streaming path is the one under test")
@@ -171,14 +173,21 @@ class _StreamingThenDying(LLMProvider):
 
         for chunk in self._chunks:
             yield ChatDelta(content=chunk)
+        if self._mid_call:
+            yield ChatDelta(
+                content=None,
+                tool_call_delta={
+                    "tool_calls": [{"index": 0, "id": "c1", "function": {"name": "write_file", "arguments": '{"pa'}}]
+                },
+            )
         raise self._death
 
     def get_default_model(self) -> str:
         return "stub"
 
 
-async def _streamed_turn(workspace: Path, death: BaseException) -> None:
-    agent = _agent(workspace, _StreamingThenDying(["half an ", "answer"], death))
+async def _streamed_turn(workspace: Path, death: BaseException, *, mid_call: bool = False) -> None:
+    agent = _agent(workspace, _StreamingThenDying(["half an ", "answer"], death, mid_call=mid_call))
 
     async def _sink(_text: str) -> None:
         return None
@@ -204,8 +213,11 @@ async def test_a_cancelled_turn_files_its_question_once_with_what_had_streamed(w
 
 @pytest.mark.asyncio
 async def test_a_failed_turn_files_its_question_once_with_what_had_streamed(workspace):
+    """Words alone are handed back and continued when the stream dies, so the turn that
+    still fails here is one whose model was part-way through a tool call: there is no
+    answer to go on from, and the failure stands."""
     with pytest.raises(RuntimeError):
-        await _streamed_turn(workspace, RuntimeError("the socket went away"))
+        await _streamed_turn(workspace, RuntimeError("the socket went away"), mid_call=True)
 
     msgs = _persisted(workspace)
     users = [m for m in msgs if m.get("role") == "user"]

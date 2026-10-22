@@ -657,6 +657,10 @@ class TurnPathMixin:
             max_reconnects=self._MAX_STREAM_RECONNECTS,
             retry_delays=tuple(limits.llm_error_retry_delays),
             retry_after_output=bool(limits.llm_retry_after_output),
+            # The loop is the caller that can ask the model to go on from a cut
+            # answer (``ReplyKind.NETWORK_CUT``). The sub-agent backend streams
+            # through the same call and cannot, so it is not handed one.
+            hand_back_partial=True,
             **generation,
         )
 

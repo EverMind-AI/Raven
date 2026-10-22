@@ -16,7 +16,7 @@ import json
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import aclosing
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -121,6 +121,121 @@ def _split_unparsed_thought(
     return content, reasoning_content
 
 
+@dataclass(frozen=True)
+class _Produced:
+    """What a stream attempt had produced when it ended after its output reached the reader.
+
+    The state lives in ``stream_llm_call``'s own variables, and the three exits that
+    can hand the answer back instead of failing need all of it; one value keeps their
+    call sites from each taking a dozen arguments.
+    """
+
+    provider: "LLMProvider | Any"
+    content_buf: list[str]
+    reasoning_buf: list[str]
+    tool_call_slots: list[dict[str, Any]]
+    on_token_delta: Callable[[str], Awaitable[None]] | None
+    content_released: bool
+    usage: dict[str, Any] | None
+    thinking_blocks: list[dict[str, Any]] | None
+    record: CallRecord | None
+    reasoning_ms: int | None
+    hand_back: bool
+
+
+async def _hand_back(produced: _Produced, cause: str) -> LLMResponse | None:
+    """The answer a stream died in, as a reply with no finish -- or None where there is none to hand back.
+
+    What the reader has seen of it is all a failure leaves, and a caller that can
+    ask the model to go on from there (``hand_back``) is better served by it than by
+    the failure. Only an answer counts: thought alone, a sentinel, or words beside a
+    tool call still in the making stay the failure they were. The finish is
+    ``unknown`` because the upstream never sent one, which is also what lets the loop
+    tell this reply from a finished one.
+
+    An opening still held back, because it could have been a sentinel, is shown
+    first, exactly as the end of a stream shows one: the continuation that follows
+    has to land after words the reader can see.
+    """
+    if not produced.hand_back or produced.tool_call_slots:
+        return None
+    raw = "".join(produced.content_buf)
+    content, reasoning_content = _split_unparsed_thought(
+        produced.provider, raw, "".join(produced.reasoning_buf) or None
+    )
+    content = without_sentinels(content)
+    if not content:
+        return None
+    if produced.on_token_delta is not None and not produced.content_released:
+        await produced.on_token_delta(raw)
+    logger.warning(
+        "the stream died after {} chars of its answer; handing them back as a reply with no finish: {}",
+        len(content),
+        cause[:160],
+    )
+    return LLMResponse(
+        content=content,
+        finish_reason="unknown",
+        usage=produced.usage or {},
+        reasoning_content=reasoning_content,
+        thinking_blocks=produced.thinking_blocks,
+        reasoning_ms=produced.reasoning_ms,
+        call_record=produced.record,
+    )
+
+
+async def _cut_or_raise(exc: Exception, produced: _Produced) -> LLMResponse:
+    """The exit for a stream that raised after its output reached the reader and was not to be asked again.
+
+    Hands back the answer when there is one (:func:`_hand_back`), and otherwise raises
+    ``exc`` itself, so the provider's own exception reaches the caller unchanged as it
+    did through the bare ``raise`` this stands in for. A function and not a branch
+    because ``stream_llm_call`` is at the complexity ceiling, and both raising exits
+    need the same answer.
+    """
+    partial = await _hand_back(produced, f"{type(exc).__name__}: {exc}")
+    if partial is None:
+        raise exc
+    return partial
+
+
+async def _answer_to_error_delta(
+    produced: _Produced,
+    *,
+    error_content: str | None,
+    error_classification: ErrorClassification | None,
+    after_output: bool,
+) -> LLMResponse:
+    """The reply for a stream whose terminal delta reported the failure instead of raising it.
+
+    ``after_output``: something of the attempt had reached the reader and the caller
+    did not ask for a retry. The answer is handed back when there is one; otherwise
+    the verdict is spent here, the last place that knows something was rendered. A
+    provider that swallows a mid-stream failure into its terminal delta reports it
+    as retryable, and the caller's own ladder would ask the same question again --
+    with words already on the reader's screen, the answer drawn from the top a
+    second time.
+    """
+    if after_output:
+        partial = await _hand_back(produced, (error_content or "")[:160])
+        if partial is not None:
+            return partial
+        error_classification = _spent(error_classification, produced.provider, error_content)
+        logger.warning(
+            "Stream LLM error [{}] after {} chars of output; not asking again: {}",
+            error_classification.category if error_classification is not None else "unclassified",
+            sum(len(part) for part in produced.content_buf),
+            (error_content or "")[:160],
+        )
+    return LLMResponse(
+        content=error_content,
+        finish_reason="error",
+        error_classification=error_classification,
+        usage=produced.usage or {},
+        call_record=produced.record,
+    )
+
+
 async def stream_llm_call(
     provider: "LLMProvider | Any",
     *,
@@ -132,6 +247,7 @@ async def stream_llm_call(
     max_reconnects: int = 1,
     retry_delays: Sequence[float] = (),
     retry_after_output: bool = False,
+    hand_back_partial: bool = False,
     **stream_kwargs: Any,
 ) -> LLMResponse:
     """Stream an LLM response via ``provider.chat_stream`` + accumulate to LLMResponse.
@@ -151,7 +267,13 @@ async def stream_llm_call(
     rendered them, so a second attempt would duplicate its output. The rule holds
     however the failure arrives: a provider that hands one back as its terminal
     error delta instead of raising has that delta's verdict spent of its
-    retryability, so the caller's own ladder does not ask again either. Before the
+    retryability, so the caller's own ladder does not ask again either. What the
+    reader has seen is then all a failure leaves, and a caller that can ask the
+    model to go on from it (``hand_back_partial``) is handed those words as a reply
+    whose finish reason is ``unknown``, not the failure -- for a raise, a stall and
+    a terminal error delta alike. Only an answer counts: thought alone, a sentinel,
+    or words beside a tool call still in the making fail as before, and a caller
+    that asked to ``retry_after_output`` keeps the retry of the whole call. Before the
     first delta there is nothing to duplicate, so a retryable error reconnects up
     to ``max_reconnects`` times at once, then waits out ``retry_delays`` -- the
     loop's own ladder, seconds to minutes, for a gateway that serves error pages
@@ -243,6 +365,22 @@ async def stream_llm_call(
     error_classification: ErrorClassification | None = None
     upstream_finish_reason: str | None = None
     transport_evidence: str | None = None
+
+    def produced() -> _Produced:
+        """The attempt that is ending, as the exits that hand its answer back read it."""
+        return _Produced(
+            provider,
+            content_buf,
+            reasoning_buf,
+            tool_call_slots,
+            on_token_delta,
+            content_released,
+            final_usage,
+            thinking_blocks,
+            record,
+            reasoning_ms,
+            hand_back_partial,
+        )
 
     for attempt in range(max_reconnects + len(retry_delays) + 1):
         attempt_t0 = time.monotonic()
@@ -380,12 +518,13 @@ async def stream_llm_call(
         except TimeoutError as exc:
             # The idle cap already waited the full timeout; reconnecting would
             # double an already-long stall, so a stall ends the call. After output
-            # it ends the turn too, unless the caller asked for a retry: handed back
-            # as a retryable response, the loop's own ladder asked again and a
-            # person watching the stream saw the words twice, which is the rule
-            # the branch below holds and this one did not.
+            # it is not asked again either, unless the caller asked for a retry:
+            # handed back as a retryable response, the loop's own ladder asked again
+            # and a person watching the stream saw the words twice, which is the rule
+            # the branch below holds and this one did not. What the reader saw is
+            # handed back as the answer so far, or the stall raised when it is not one.
             if rendered() and not retry_after_output:
-                raise
+                return await _cut_or_raise(exc, produced())
             # Classified from the live exception rather than a fresh
             # TimeoutError: a first-byte timeout says which bound it was and how
             # long it waited, and throwing that away left the loop logging an
@@ -403,13 +542,15 @@ async def stream_llm_call(
                 call_record=record,
             )
         except Exception as exc:
-            # Every path out of here but one is a bare `raise` so the provider's
-            # own exception reaches the caller unchanged: per N-TURNFAILED the turn
-            # must fail (the lane emits TurnFailed) rather than resolve into a
-            # "Sorry" text reply.
+            # Every path out of here but two leaves the provider's own exception to
+            # reach the caller unchanged: per N-TURNFAILED the turn must fail (the
+            # lane emits TurnFailed) rather than resolve into a "Sorry" text reply.
+            # The two are the error response `strip_images` asks for below, and the
+            # answer the reader already saw, which a caller that can continue it is
+            # handed instead.
             emitted = rendered()
             if emitted and not retry_after_output:
-                raise
+                return await _cut_or_raise(exc, produced())
             # Duck-typed providers need not implement classify_error; treat a
             # missing classifier as fatal so the real error surfaces instead of
             # an AttributeError raised from inside this handler.
@@ -476,25 +617,11 @@ async def stream_llm_call(
             await asyncio.sleep(delay)
 
     if had_error:
-        if rendered() and not retry_after_output:
-            # A provider that swallows a mid-stream failure into its terminal
-            # delta reports it as retryable, and the caller's own ladder then
-            # asks the same question again -- with words already on the reader's
-            # screen, the answer is drawn from the top a second time. The retry
-            # is spent here, the last place that knows something was rendered.
-            error_classification = _spent(error_classification, provider, error_content)
-            logger.warning(
-                "Stream LLM error [{}] after {} chars of output; not asking again: {}",
-                error_classification.category if error_classification is not None else "unclassified",
-                sum(len(part) for part in content_buf),
-                (error_content or "")[:160],
-            )
-        return LLMResponse(
-            content=error_content,
-            finish_reason="error",
+        return await _answer_to_error_delta(
+            produced(),
+            error_content=error_content,
             error_classification=error_classification,
-            usage=final_usage or {},
-            call_record=record,
+            after_output=rendered() and not retry_after_output,
         )
 
     if transport_evidence:
