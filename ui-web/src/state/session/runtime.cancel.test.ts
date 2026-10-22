@@ -234,6 +234,30 @@ describe('the reply to turn.cancel', () => {
     expect(h.sent()).toEqual([])
   })
 
+  it('names a turn the runtime opened by the id its turn.started carried', async () => {
+    /* No handle was bound for a delegated result re-entering, so the server
+       reaches it only by id -- and only while it is still the turn running. */
+    const h = await harness()
+    h.pipeline.dispatch({ type: 'turn.started', payload: { turn_id: 't-reentry' } })
+
+    h.runtime.stop()
+
+    expect(h.asked[0]).toEqual(['turn.cancel', { session_key: 's1', turn_id: 't-reentry' }])
+    await h.settle()
+    /* The fold forgot it, so the next stop cannot name a turn that has ended. */
+    expect(h.runtime.state().openedTurn).toBeNull()
+  })
+
+  it('sends no id for a turn a send opened', async () => {
+    const h = await harness()
+    h.pipeline.dispatch({ type: 'turn.started', payload: { turn_id: 't-reentry' } })
+    h.pipeline.dispatch({ type: 'message.start', payload: { turn_id: 't-sent', content: 'next' } })
+
+    h.runtime.stop()
+
+    expect(h.asked[0]).toEqual(['turn.cancel', { session_key: 's1' }])
+  })
+
   it('does nothing at all for a turn the reader cannot stop', async () => {
     /* The machine's own guard, exercised with an uncancellable stream: while
        the phase is not one stop can act on, the button must neither call the

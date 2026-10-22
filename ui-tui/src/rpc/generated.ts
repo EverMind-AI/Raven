@@ -3513,6 +3513,7 @@ export interface TurnUnsubscribeResult {
 export interface TurnCancelParams {
   session_key: string;
   target?: DirectTarget;
+  turn_id?: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

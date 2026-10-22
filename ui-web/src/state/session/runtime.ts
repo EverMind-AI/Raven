@@ -81,6 +81,13 @@ export class SessionRuntime {
   startedAt = 0
   answerAt = 0
 
+  /* The running turn's id when the runtime opened it (a delegated result
+     re-entering), from its `turn.started`; null for a turn a send opened. The
+     stop button names it, because no handle was bound for such a turn and
+     `turn.cancel` reaches it only by id -- and only while it is the one
+     running, so a stop that arrives late cannot land on the next turn. */
+  openedTurn: string | null = null
+
   /* Only read while off screen, same as `phase`. */
   queue: string[] = []
 
@@ -152,6 +159,7 @@ export const state = (): SessionRuntime => viewRuntime()
 export function reset(rt: SessionRuntime = viewRuntime()): void {
   transcript.stopStream()
   rt.st = null; rt.steps = []; rt.say = ''; rt.open.clear(); rt.sawEpisode = false
+  rt.openedTurn = null
   rt.startedAt = Date.now()
   rt.answerAt = 0
 }
@@ -377,13 +385,17 @@ function runsOn(sessionId: string | null | undefined): Recent | null {
 /* The stop button: cancel the turn the reader started. */
 export function stop(): void {
   /* The machine's guard, not a statement about the turn: a send-bound turn and
-     a runtime-opened one (a delegated result re-entering) are both backed by
-     `turn.cancel` on the server, so what stops a second press here is the
-     cancelling phase the first press moved the machine into. */
+     a runtime-opened one (a delegated result re-entering) can both be stopped,
+     so what stops a second press here is the cancelling phase the first press
+     moved the machine into. The runtime-opened one is named by its id: the
+     server cancels it only while it is still the turn running, and goes past a
+     message the reader slipped into it -- that message runs next as a turn of
+     its own, as it does when a sent turn is stopped. */
   if (!turn.cancellable()) return
   const owner = sessionCurrent()
+  const opened = viewRuntime().openedTurn
   turn.dispatch({ type: 'cancel' })
-  gateway().call('turn.cancel', { session_key: owner as string })
+  gateway().call('turn.cancel', { session_key: owner as string, ...(opened ? { turn_id: opened } : {}) })
     .then(() => {
       get(owner)?.dispatch({ type: 'idle' })
       if (sessionCurrent() === owner) { drawMeter(); goState(); sessionDraw(); drain() }

@@ -2823,6 +2823,7 @@ export interface TurnUnsubscribeResult {
 export interface TurnCancelParams {
   session_key: string;
   target?: DirectTarget;
+  turn_id?: string;
 }
 export interface TurnCancelResult {
   cancelled: boolean;

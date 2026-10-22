@@ -750,11 +750,11 @@ async def turn_cancel(
     """``turn.cancel`` — cancel the in-flight turn + notify subscribers.
 
     Sequence:
-      1. Look up the active turn handle. Absent, ask the scheduler whether the
-         lane is running a turn of its own -- a runtime-opened turn (a
-         delegated result re-entering) binds no handle; cancelling it cancels
-         only that running turn and emits the same frame. Neither there →
-         ``{cancelled: False}``.
+      1. Find the turn to cancel. With ``turn_id``: the lane's running turn,
+         and only when it carries that id -- whether ``turn.send`` bound it or
+         the runtime opened it (a delegated result re-entering, which binds no
+         handle). Without: the active turn handle, else the oldest pending
+         inject. Neither there → ``{cancelled: False}``.
       2. Cancel what was found.
       3. ``emitter.emit(session_key, error(reason="cancelled_by_client"))`` — the
          client resets its UI off this event. This is the ONLY cancelled-turn
@@ -765,6 +765,16 @@ async def turn_cancel(
          handler drops the active-turn slot) before returning, so the next
          ``turn.send`` cannot race a half-unwound turn into a phantom -32003.
       5. Return ``{cancelled: True}``.
+
+    A named cancel goes past pending injects to the running turn: an inject
+    already merged into it ends with it, as it does when a bound turn is
+    cancelled, and one still waiting in the lane's mailbox falls back to a turn
+    of its own once the cancelled turn unwinds -- the spine never drops it, so
+    the reader's correction runs rather than vanishing under the stop. An
+    unnamed cancel keeps its older reach on purpose: callers that send no id
+    (the terminal UI, the ACP adapter's ``session/cancel``) mean the turn they
+    started, and reaching for whatever the lane happens to be running would
+    stop a cron wake, or a delegated turn that began after the request left.
 
     The subscription is SESSION-scoped, not turn-scoped: a per-turn cancel ends
     only the turn and MUST leave the session's subscriptions open so the next
@@ -784,35 +794,29 @@ async def turn_cancel(
         else parsed.session_key
     )
 
-    reach = _cancellable(lane)
-    if reach is None:
-        # No bound handle can still mean a turn is running: a runtime-opened
-        # turn (a delegated result re-entering) binds neither slot, yet the
-        # scheduler holds it as the lane's running turn and its task is
-        # cancellable like any other. Cancel only that running turn -- queued
-        # work keeps its place, as a bound handle's cancel leaves it -- emit the
-        # one cancelled frame (the sink stays silent on a cancelled TurnFailed),
-        # and hold until the lane has unwound the turn before answering. The
-        # seam is probed, not assumed: a scheduler without it (a test fake)
-        # answers ``cancelled: False``, exactly as before the seam existed.
-        scheduler = _scheduler
-        running_probe = getattr(scheduler, "running_future", None) if scheduler is not None else None
-        fut = running_probe(lane) if callable(running_probe) else None
-        cancel_probe = getattr(scheduler, "cancel_running", None) if scheduler is not None else None
-        if fut is None or not callable(cancel_probe) or not cancel_probe(lane):
+    if parsed.turn_id is not None:
+        # Probed, not assumed, like ``_lane_in_flight``: a scheduler without
+        # the seam (a test fake) has no running turn to name.
+        probe = getattr(_scheduler, "running_turn", None)
+        running = probe(lane) if callable(probe) else None
+        if running is None or running[0] != parsed.turn_id:
             return {"cancelled": False}
-
+        handle = running[1]
+        await handle.cancel()
         if emitter is not None:
             await emitter.emit(
                 parsed.session_key,
                 {
                     "type": "error",
-                    "payload": _tag(_cancel_payload((turn_ids or {}).get(lane, "")), (direct_targets or {}).get(lane)),
+                    "payload": _tag(_cancel_payload(parsed.turn_id), (direct_targets or {}).get(lane)),
                 },
             )
-
-        await fut
+        await handle.result()
         return {"cancelled": True}
+
+    reach = _cancellable(lane)
+    if reach is None:
+        return {"cancelled": False}
     handle, inject_id = reach
 
     await handle.cancel()

@@ -1745,6 +1745,12 @@ class TurnCancelParams(_Strict):
     # handler looks up a key nothing was ever registered under and reports
     # "nothing to cancel" for a turn that is plainly running.
     target: DirectTarget | None = None
+    # The turn to cancel, by the id its opening frame carried. Present, the
+    # cancel reaches the lane's running turn only when that turn has this id,
+    # whoever opened it -- the one way to stop a turn the runtime opened (a
+    # delegated result re-entering), which binds no handle. Absent, the cancel
+    # reaches only what this surface bound: a turn.send turn or a pending inject.
+    turn_id: str | None = None
 
 
 class TurnCancelResult(_Strict):
