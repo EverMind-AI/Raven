@@ -268,6 +268,24 @@ async def system_upgrade(params: dict) -> dict:
             data["command"] = command
         return ConfigValidationError(detail, data=data)
 
+    if not SERVE.running:
+        raise _refuse("not_serving", "system.upgrade is only available while `raven serve` is running")
+
+    # Classified before the gateway's process answers: no release upgrade
+    # applies to a checkout whatever supervises the process, and the
+    # unsupervised recovery's first command (`raven upgrade`) refuses a
+    # checkout, so offering it there hands the reader a step that cannot work.
+    if _is_editable_install():
+        # A checkout tracks upstream `main`, so no release is ever "newer" for
+        # it in the sense the button means; and both `raven upgrade` and the
+        # page's default fallback refuse it. Name the two steps that do work.
+        raise _refuse(
+            "editable",
+            "This Raven is a source checkout, so released upgrades do not apply to it. "
+            "Update it with git, then reinstall.",
+            "git pull\n" + (r".\install.ps1" if os.name == "nt" else "./install.sh"),
+        )
+
     if SERVE.hosted_by_gateway:
         if SERVE.supervisor_pid is None:
             # Nothing would bring this gateway back: started by hand, or under
@@ -288,19 +306,6 @@ async def system_upgrade(params: dict) -> dict:
                 "Raven is still working on a turn, a sub-agent or a pending question. "
                 "Upgrading restarts it and would cut that off; let it finish first.",
             )
-    if not SERVE.running:
-        raise _refuse("not_serving", "system.upgrade is only available while `raven serve` is running")
-
-    if _is_editable_install():
-        # A checkout tracks upstream `main`, so no release is ever "newer" for
-        # it in the sense the button means; and both `raven upgrade` and the
-        # page's default fallback refuse it. Name the two steps that do work.
-        raise _refuse(
-            "editable",
-            "This Raven is a source checkout, so released upgrades do not apply to it. "
-            "Update it with git, then reinstall.",
-            "git pull\n" + (r".\install.ps1" if os.name == "nt" else "./install.sh"),
-        )
     try:
         # Network-bound and synchronous (httpx), so keep it off the event loop.
         plan = await asyncio.to_thread(plan_upgrade)

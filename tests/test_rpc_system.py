@@ -324,6 +324,30 @@ class TestUpgradingFromAGatewayHostedPage:
         assert excinfo.value.data["command"] == "raven upgrade\nraven web"
         assert spawned == {}
 
+    async def test_it_classifies_a_checkout_before_the_unsupervised_refusal(self, monkeypatch, tmp_path):
+        """An editable install under a hand-started gateway is both at once, and
+        the checkout answer has to win: `raven upgrade` refuses a checkout, so
+        the unsupervised recovery's first command can never work there."""
+        from raven.cli.serve_commands import SERVE
+        from raven.rpc.methods.system import system_upgrade
+        from raven.updates import upgrade as upgrade_commands
+
+        def plan() -> None:
+            raise AssertionError("a checkout should be refused before the release lookup")
+
+        monkeypatch.setattr(upgrade_commands, "_is_editable_install", lambda: True)
+        monkeypatch.setattr(upgrade_commands, "plan_upgrade", plan)
+        SERVE.arm_hosted(18792, "tok", "cookie")
+        SERVE.hand_over(lambda: pytest.fail("stopped an unsupervised gateway"), lambda: None, None)
+        try:
+            with pytest.raises(ConfigValidationError) as excinfo:
+                await system_upgrade({})
+        finally:
+            SERVE.disarm()
+
+        assert excinfo.value.data["reason"] == "editable", excinfo.value.data
+        assert excinfo.value.data["command"].startswith("git pull")
+
     async def test_it_refuses_while_work_the_page_cannot_see_is_running(self, monkeypatch, tmp_path):
         """The page checks its own turn. An IM turn or a sub-agent on the same
         engine is invisible to it, and the restart would cut it off."""
