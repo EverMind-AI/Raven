@@ -86,9 +86,11 @@ What gets recorded, and where:
   `HostName` or `HostKeyAlias` your ssh config gives an alias, an address in
   its canonical form -- so the address can be an alias from your ssh config.
   Not one of the `Host <id>` aliases Raven itself writes for key machines,
-  though: a password machine whose address is such an id would log in at that
-  other machine's address, so it is refused by name and its password is not
-  sent. Registration refuses the pair in either order -- a password machine at
+  though, when it points elsewhere: a password machine whose address is such
+  an id would log in at that other machine's address, so it is refused by name
+  and its password is not sent. An alias whose `HostName` is the id itself
+  (key machine `gpu1` at `gpu1`) moves nothing, and the pair is accepted.
+  Registration refuses the pair in either order -- a password machine at
   a key machine's id, or a key machine whose id is a password machine's
   address -- and connecting refuses it again for a pair registered before.
   A password connection also turns off `CanonicalizeHostname`, so it reaches
