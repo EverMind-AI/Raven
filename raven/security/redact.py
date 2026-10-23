@@ -384,6 +384,9 @@ def _home_config() -> re.Pattern[str]:
     ignored, so ``C:\\Users\\a\\.raven\\Workspace`` is the ``workspace`` directory; on POSIX
     ``/`` separates and ``Workspace`` is not ``workspace``. Either way a name
     ends at a separator, a quote or the end, so ``pluginsfoo`` is not exempt.
+    Before the name, separators may repeat and ``.`` segments may sit between
+    them: the arguments are matched as the call wrote them, no caller
+    normalizes them first, and ``.raven//workspace`` is the same directory.
 
     The OAuth token store (``oauth/<provider>/...``) is deliberately not among
     them: it holds no source to edit, and a read of it is a credential file like
@@ -413,7 +416,8 @@ def _home_config() -> re.Pattern[str]:
     if own.parent == home_dir and own.name.startswith("."):
         name = re.escape(own.name[1:])
         boundary = r"(?:/|\\|$|[\"'\s])"
-        lead = sep if style == _WINDOWS else r"[/\\]"
+        lead = sep if style == _WINDOWS else "/+"
+        lead += r"(?:\." + lead + r")*"
         source = r"(?:" + lead + r"(?:" + "|".join(_OWN_SOURCE_DIRS) + r"))" + boundary
         skip = r"(?!" + name + r"(?:" + source + r"|(?:$|[\"'\s])))"
     return re.compile(r"(?:~|\$HOME|\$\{HOME\}|" + home + r")" + sep + r"\." + skip + r"[A-Za-z0-9_-]", flags)
