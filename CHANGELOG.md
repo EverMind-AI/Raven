@@ -456,7 +456,10 @@ All notable changes to Raven are documented here.
   column, the boot starts the rail folded, a rail opened from its twin lies
   over the content and folds again when a row in it is pressed, shrinking a
   window under 640px folds a standing rail, the agent and machine drawers
-  are capped to the window less a gutter, and their action bar wraps.
+  are capped to the window less a gutter, and their action bar wraps. The
+  first-run wizard drops its own 780px floor below 780px too, so its Next
+  stays inside a phone's window, and its provider form and model role rows
+  put each label over its control instead of running past the edge.
 
 - What an agent on a registered machine writes on stderr reaches Raven even
   when no link held the agent at the time. The node kept those lines but, when
