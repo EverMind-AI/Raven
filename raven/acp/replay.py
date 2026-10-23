@@ -111,6 +111,10 @@ def _assistant(entry: dict[str, Any], *, cwd: str | None) -> list[dict[str, Any]
     it (that is what ``action_blocked`` means), and the text stored beside it is
     the runtime's instruction to the model, not an answer, so the notice is
     drawn in the text's position and the text itself is not sent.
+
+    A ``silent`` entry is the model's own silence marker, and the live turn sent
+    no text for it either, so its text is not replayed: a client would draw
+    ``[SILENT]`` as the agent's reply. What the model thought before it stays.
     """
     ended = entry.get("turn_ended")
     if isinstance(ended, dict):
@@ -123,7 +127,7 @@ def _assistant(entry: dict[str, Any], *, cwd: str | None) -> list[dict[str, Any]
     if isinstance(notice, dict):
         if said := notice_text(notice):
             out.append(_chunk("agent_message_chunk", _clip(said)))
-    elif text := _text_of(entry):
+    elif entry.get("silent") is not True and (text := _text_of(entry)):
         out.append(_chunk("agent_message_chunk", text))
     for call in entry.get("tool_calls") or ():
         announced = _tool_call(call, cwd=cwd)

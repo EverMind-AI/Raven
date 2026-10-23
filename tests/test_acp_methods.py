@@ -484,6 +484,38 @@ class TestSessionLoad:
         for frame in rig.written:
             validate_outbound(frame)
 
+    async def test_a_reloaded_silent_turn_replays_no_answer(self, rig):
+        """The live turn sent no text for a marker row, only what the model
+        thought, so a load that replayed ``[SILENT]`` would show the marker as
+        the agent's reply. The last row is the control: the same shape without
+        the flag still speaks, so the absence above is the flag's doing."""
+        rig.stack.stored["acp:old"] = [
+            {"role": "user", "text": "anything new?"},
+            {"role": "assistant", "text": "[SILENT]", "silent": True, "reasoning_content": "nothing has changed"},
+            {"role": "user", "text": "and now?"},
+            {"role": "assistant", "text": "all quiet"},
+        ]
+        await rig.handshake()
+
+        await rig.call(
+            "session/load",
+            {"sessionId": "acp:old", "cwd": str(rig.tmp_path / "project"), "mcpServers": []},
+        )
+
+        replayed = [
+            (u["sessionUpdate"], u["content"]["text"])
+            for u in rig.updates()
+            if "content" in u and "text" in u["content"]
+        ]
+        assert replayed == [
+            ("user_message_chunk", "anything new?"),
+            ("agent_thought_chunk", "nothing has changed"),
+            ("user_message_chunk", "and now?"),
+            ("agent_message_chunk", "all quiet"),
+        ]
+        for frame in rig.written:
+            validate_outbound(frame)
+
     async def test_the_session_becomes_promptable(self, rig):
         """A load that did not register the session would replay a history the
         client then cannot continue."""
