@@ -18,6 +18,7 @@ import asyncio
 import copy
 import dataclasses
 import tempfile
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -2985,6 +2986,49 @@ async def test_the_gate_lets_punctuation_that_leads_prose_through_once_the_prose
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "first",
+    [
+        pytest.param("\U0001f680", id="emoji"),
+        pytest.param("╔══", id="box_drawing"),
+        pytest.param("→", id="arrow"),
+    ],
+)
+async def test_a_reply_that_opens_on_a_symbol_goes_out_at_its_first_delta(first):
+    """No marker starts with a symbol, and the strict rule forgives none at a marker's edge -- only
+    whitespace and punctuation -- so a reply that opens on an emoji, a box-drawing line or an arrow
+    shows at its first delta that it is not one."""
+    seen, deliver = _collecting()
+    gate = SilenceGate(deliver, hold_all=False)
+
+    await gate(first)
+    assert seen == [first]
+    await gate(" Launched")
+    assert seen == [first, " Launched"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.production_timing
+async def test_a_long_hold_costs_each_delta_only_its_own_length():
+    """Held text was read again whole on every delta until a letter came: 40,000 one-character
+    newlines took 23 seconds of the event loop. Each delta is read on its own now, so the run is
+    quick and still held -- blank lines before a marker, and after it."""
+    seen, deliver = _collecting()
+    gate = SilenceGate(deliver, hold_all=False)
+
+    started = time.perf_counter()
+    for _ in range(40_000):
+        await gate("\n")
+    await gate("[SILENT]")
+    for _ in range(40_000):
+        await gate("\n")
+    elapsed = time.perf_counter() - started
+
+    assert seen == [], "blank lines and a marker are all still held"
+    assert elapsed < 1.0, f"80,000 one-character deltas took {elapsed:.2f}s"
+
+
+@pytest.mark.asyncio
 async def test_a_proactive_turn_holds_the_whole_call():
     seen, deliver = _collecting()
     gate = SilenceGate(deliver, hold_all=True)
@@ -3054,6 +3098,22 @@ async def test_a_marker_wrapped_in_punctuation_is_silent_and_never_streams(works
     )
 
     assert outcome.silent is True and final == "**[SILENT]**"
+    assert messages[-1].get("_silent") is True
+    assert sink.text == []
+
+
+@pytest.mark.asyncio
+async def test_a_bold_marker_streamed_a_character_at_a_time_is_silent_and_never_streams(workspace, monkeypatch):
+    """Read a delta at a time, the asterisk is still the punctuation the strict rule forgives, so
+    ``*NO_REPLY*`` is held however finely it arrives, and dropped."""
+    _served(monkeypatch, [_finished_stream(*"*NO_REPLY*")])
+    sink = _Sink()
+
+    final, _used, messages, outcome = await _litellm_agent(workspace)._run_agent_loop(
+        _seed(), on_token_delta=sink.delta
+    )
+
+    assert outcome.silent is True and final == "*NO_REPLY*"
     assert messages[-1].get("_silent") is True
     assert sink.text == []
 

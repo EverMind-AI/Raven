@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import random
 import re
+import unicodedata
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -64,7 +65,7 @@ from raven.config import schema as config_schema
 from raven.contracts.llm_provider import REASONING_EFFORT_LADDER, LLMResponse
 from raven.providers.streaming import DECLINED_FINISH_REASONS, STREAM_CUT
 from raven.providers.usage import reported_cost, token_count
-from raven.spine.silence import is_silence, may_become_silence
+from raven.spine.silence import SILENCE_MAX_CHARS, is_silence, may_become_silence
 from raven.spine.turn import Origin
 
 # In-content thinking markers. Some models (Ollama, certain Qwen gateways) put
@@ -607,13 +608,17 @@ class SilenceGate:
 
     A marker is the model saying nothing, so a surface that streams must never show it and then
     take it back. Deltas are held while the text so far could still resolve to a marker under the
-    strict rule (``may_become_silence``), and go out together with everything after them the
-    moment it cannot -- which a reply that begins like prose does at its first delta, so an
-    ordinary answer waits for nothing. Text with nothing readable in it yet (whitespace, or the
-    ``*`` of ``*NO_REPLY*``) is undecided too: the strict rule forgives that wrapping, so a marker
-    may still follow it. A turn from a proactive origin (``hold_all``) is read by the
-    loose rule, whose marker may close a report on its last line, and only the whole call can show
-    that, so every delta waits for :meth:`release` or :meth:`discard`.
+    strict rule, and go out together with everything after them the moment it cannot -- which a
+    reply that begins like prose does at its first delta, so an ordinary answer waits for nothing.
+    Before its first letter or digit the text is undecided only while it is whitespace and the
+    punctuation the strict rule forgives at a marker's edge (the ``*`` of ``*NO_REPLY*``): any other
+    character there -- a symbol, an emoji, a box-drawing line -- starts no marker, and the reply goes
+    out at once. From the first letter or digit on, it is the strict rule's prefix test
+    (``may_become_silence``). Each delta is read on its own against what the ones before it left,
+    so a long hold costs a delta no more than a short one. A turn from a proactive origin
+    (``hold_all``) is read by the loose rule, whose marker may close a report on its last line,
+    and only the whole call can show that, so every delta waits for :meth:`release` or
+    :meth:`discard`.
 
     The loop decides once it has read the reply: ``discard`` for a marker, which goes to no one,
     ``release`` for anything else, and for a reply that ends in tool calls, whose words are not a
@@ -623,9 +628,16 @@ class SilenceGate:
     def __init__(self, deliver, *, hold_all: bool) -> None:
         self._deliver = deliver
         self._hold_all = hold_all
-        self._held = ""
+        self._held: list[str] = []
         self._open = False
         self._dropped = False
+        # What the strict rule reads of the held text: the text with its edge whitespace off, and the
+        # whitespace after it, which joins it only once more text follows. Neither grows past
+        # SILENCE_MAX_CHARS, beyond which no text is a marker.
+        self._body = ""
+        self._gap = ""
+        self._worded = False
+        self._may_be_marker = True
 
     async def __call__(self, delta: str) -> None:
         if self._dropped:
@@ -633,20 +645,42 @@ class SilenceGate:
         if self._open:
             await self._deliver(delta)
             return
-        self._held += delta
-        if not self._hold_all and any(c.isalnum() for c in self._held) and not may_become_silence(self._held):
+        self._held.append(delta)
+        if not self._hold_all and not self._undecided_with(delta):
             await self.release()
+
+    def _undecided_with(self, delta: str) -> bool:
+        """Whether the held text, ``delta`` now included, could still resolve to a marker."""
+        grew = False
+        for char in delta:
+            if char.isspace():
+                if self._body and len(self._body) + len(self._gap) < SILENCE_MAX_CHARS:
+                    self._gap += char
+                continue
+            if len(self._body) + len(self._gap) >= SILENCE_MAX_CHARS:
+                return False
+            if char.isalnum():
+                self._worded = True
+            elif not self._worded and not unicodedata.category(char).startswith("P"):
+                return False
+            self._body += self._gap + char
+            self._gap = ""
+            grew = True
+        if grew and self._worded:
+            self._may_be_marker = may_become_silence(self._body)
+        return self._may_be_marker
 
     async def release(self) -> None:
         """Deliver what is held, then let the rest through untouched."""
         if self._dropped or self._open:
             return
         self._open = True
-        text, self._held = self._held, ""
+        text = "".join(self._held)
+        self._held = []
         if text:
             await self._deliver(text)
 
     def discard(self) -> None:
         """Drop what is held and everything after it: the reply was a marker, and a marker is shown to no one."""
-        self._held = ""
+        self._held = []
         self._dropped = True
