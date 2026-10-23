@@ -2055,6 +2055,38 @@ async def test_a_stream_cut_on_the_last_iteration_ends_on_what_streamed_with_the
     assert (messages[-1]["role"], messages[-1]["content"]) == ("assistant", final)
 
 
+@pytest.mark.asyncio
+async def test_a_spent_wall_clock_ends_a_cut_answer_on_what_streamed_with_the_note(workspace, monkeypatch):
+    """The wall clock is read between iterations, which is where a cut answer waits for its
+    continuation. Spent there, it stops the turn as the iteration cap does: what streamed, then the
+    note, as an ``interrupted`` turn -- not a wrap-up streamed straight onto the partial."""
+    from raven.agent.loop import TURN_BUDGETS_KEY
+    from raven.providers import litellm_provider
+
+    clock = [1000.0]
+    monkeypatch.setattr(turn_path, "monotonic", lambda: clock[0])
+    calls = _served(monkeypatch, [_DyingStream("The answer is 4"), _finished_stream("Wrap-up: here.")])
+    served = litellm_provider.acompletion
+
+    async def a_minute_per_call(**kwargs):
+        clock[0] += 60
+        return await served(**kwargs)
+
+    monkeypatch.setattr(litellm_provider, "acompletion", a_minute_per_call)
+    sink = _Sink()
+
+    final, _used, messages, outcome = await _litellm_agent(workspace)._run_agent_loop(
+        _seed(), on_token_delta=sink.delta, hook_metadata={TURN_BUDGETS_KEY: {"wall_clock_seconds": 30}}
+    )
+
+    note = "\n\n" + PARTIAL_STREAM_NOTE
+    assert len(calls) == 1, "neither the continuation nor a wrap-up was asked for"
+    assert final == "The answer is 4" + note
+    assert outcome.status == "interrupted" and outcome.error is None
+    assert "".join(sink.text) == final
+    assert (messages[-1]["role"], messages[-1]["content"]) == ("assistant", final)
+
+
 class _ReadsTheReply(AgentHook):
     """An ``after_iteration`` hook that writes down the reply it is handed, as one that checks it does."""
 

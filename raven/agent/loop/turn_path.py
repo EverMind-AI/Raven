@@ -1204,6 +1204,23 @@ class TurnPathMixin:
             _drop_trailing_prefills(messages)
             return previous
 
+        async def _end_on_the_partial() -> str:
+            """End the turn on a cut answer no continuation will finish, and return what it ends on.
+
+            The continuation failed, or the turn has no iteration or time left to ask for it. The
+            reader already holds what streamed, so that is the answer, the note says it is not the
+            whole of it, and the turn is ``interrupted``. Nothing more is asked for: a wrap-up would
+            stream onto the partial and be all the record kept.
+            """
+            nonlocal messages, status
+            note = "\n\n" + PARTIAL_STREAM_NOTE
+            final = "".join(recovery.parts).strip() + note
+            status = "interrupted"
+            if on_token_delta is not None:
+                await on_token_delta(note)
+            messages = self.context.add_assistant_message(messages, final)
+            return final
+
         while iteration < iteration_cap:
             # Checked here and not mid-generation: cancelling a call in flight
             # discards a finished generation and leaves no answer, and a deadline
@@ -2039,18 +2056,13 @@ class TurnPathMixin:
                         # The continuation of a cut answer failed. The reader holds the answer so far, and a
                         # wait or another model would only ask for more of it again, so the turn ends here as
                         # an exhausted continuation does: what streamed, said to be partial, and no failure.
-                        note = "\n\n" + PARTIAL_STREAM_NOTE
                         logger.warning(
                             "empty-recovery: the continuation of a cut answer failed; ending the turn on the "
                             "{} chars that streamed: {}",
                             sum(len(part) for part in recovery.parts),
                             (clean or "")[:160],
                         )
-                        final_content = "".join(recovery.parts).strip() + note
-                        status = "interrupted"
-                        if on_token_delta is not None:
-                            await on_token_delta(note)
-                        messages = self.context.add_assistant_message(messages, final_content)
+                        final_content = await _end_on_the_partial()
                         break
                     # The provider's ladder is seconds long and has already run. A
                     # gateway serving error pages for a few minutes outlasts it, and
@@ -2164,15 +2176,6 @@ class TurnPathMixin:
                         "empty-recovery: the message tool already answered this turn; ending it on a {} reply instead of {}",
                         kind.name,
                         action.name,
-                    )
-                    action = RecoveryAction.COMPLETE
-                if action is RecoveryAction.CONTINUE and kind is ReplyKind.NETWORK_CUT and iteration >= iteration_cap:
-                    # A continuation is a step, and this was the turn's last. Left to the
-                    # exhaustion wrap-up, the cut answer would have a summary streamed straight
-                    # onto it and only the summary filed, so it ends the turn as a spent
-                    # continuation budget does: what streamed, with the note, ``interrupted``.
-                    logger.warning(
-                        "empty-recovery: stream cut mid-answer on the turn's last iteration; ending on what streamed"
                     )
                     action = RecoveryAction.COMPLETE
                 if action is RecoveryAction.PREFILL:
@@ -2427,11 +2430,21 @@ class TurnPathMixin:
         if leftover is not None and (lost := leftover.pending_rows()):
             logger.info("question autofill: {} row(s) ended the turn unwritten", len(lost))
 
-        if (
+        exhausted = (
             final_content is None
             and not ended_answered
             and (stalled_tool is not None or iteration >= iteration_cap or stopped_by == "wall_clock")
-        ):
+        )
+        if exhausted and recovery.parts:
+            # The turn ran out -- of iterations or of time -- with a cut answer waiting on its
+            # continuation, which there is no room left to ask for. A wrap-up would stream onto
+            # the partial the reader already holds, so the partial is the answer.
+            stopped_by = "stalled_tool" if stalled_tool is not None else stopped_by or "iteration_cap"
+            logger.warning(
+                "Turn stopped ({}) with a cut answer awaiting its continuation; ending on what streamed", stopped_by
+            )
+            final_content = await _end_on_the_partial()
+        elif exhausted:
             if stalled_tool is not None:
                 stopped_by = "stalled_tool"
                 logger.warning("Turn stopped on a repeating `{}`; synthesizing final answer", stalled_tool)
