@@ -1031,6 +1031,7 @@ def test_every_branch_of_the_oauth_store_gate(monkeypatch: pytest.MonkeyPatch, t
     # The home moves too: the abbreviations only exist when the store sits under
     # it, which is what ``store.relative_to(home)`` asks.
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / ".raven"))
     store = oauth_dir()
     assert store == tmp_path / ".raven" / "oauth", store
@@ -1295,6 +1296,12 @@ async def test_the_oauth_store_gate_holds_on_a_windows_host(monkeypatch: pytest.
         # argument quoting the path -- keeps its doubled backslashes.
         {"command": "python -c " + json.dumps(f"print(open({json.dumps(native)}).read())")},
         {"path": "C:\\Users\\a\\.raven\\oauth"},
+        # Windows resolves a dot segment to the same file, so the gate has to
+        # recognize it; the arguments are matched as the call wrote them.
+        {"path": "C:\\Users\\a\\.raven\\.\\oauth\\minimax_global.json"},
+        {"path": "C:/Users/a/.raven/./oauth/minimax_global.json"},
+        {"path": "~/.raven/./oauth/minimax_global.json"},
+        {"path": "~\\.raven\\.\\oauth\\minimax_global.json"},
     ):
         assert await _dispatched(arguments, _STORE_TOKENS) == redacted, arguments
     # The directory boundary survives the wider separators: a sibling whose
@@ -1322,6 +1329,9 @@ async def test_the_oauth_store_gate_keeps_posix_spelling_on_a_posix_host(monkeyp
         {"path": "~/.raven/oauth/minimax_global.json"},
         {"command": "cat ${HOME}/.raven/oauth/minimax_global.json"},
         {"path": "/home/a/.raven/oauth"},
+        {"path": "/home/a/.raven/./oauth/minimax_global.json"},
+        {"path": "~/.raven//oauth/minimax_global.json"},
+        {"path": "~/.raven/./oauth/minimax_global.json"},
     ):
         assert await _dispatched(arguments, _STORE_TOKENS) == redacted, arguments
     for arguments in (

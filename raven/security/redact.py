@@ -300,10 +300,13 @@ def _own_oauth_store() -> re.Pattern[str]:
     more of a name, so ``oauth-other`` is not the store. Each root is built
     segment by segment in the host's terms (:func:`_host_paths`): on Windows
     every separator inside it is either slash, one or more, and the pattern
-    ignores case, as the filesystem does; on POSIX a separator is ``/`` and
-    case counts. A store not under the home (``RAVEN_HOME`` elsewhere) has no
-    abbreviation to add and is matched by its absolute path alone, which is the
-    only spelling a call can use for it.
+    ignores case, as the filesystem does; on POSIX a separator is one or more
+    ``/`` and case counts. Between two segments a separator may repeat and a
+    ``.`` segment may sit between them, as ``.raven\\.\\oauth`` is the same
+    directory as ``.raven\\oauth``; the arguments are matched as the call wrote
+    them, and no caller normalizes a path first. A store not under the home
+    (``RAVEN_HOME`` elsewhere) has no abbreviation to add and is matched by its
+    absolute path alone, which is the only spelling a call can use for it.
 
     This is a second resolver beside :func:`_home_config`, not the same one: that
     one answers "is this any program's dot-directory of the home", this one "is
@@ -314,10 +317,13 @@ def _own_oauth_store() -> re.Pattern[str]:
     """
     from raven.home import oauth_home
 
-    flavour, sep, flags = _host_paths(_path_style())
+    style = _path_style()
+    flavour, sep, flags = _host_paths(style)
     store = flavour(str(oauth_home()))
     home_dir = flavour(os.path.expanduser("~"))
-    roots = [_spelled(store, sep)]
+    gap = sep if style == _WINDOWS else "/+"
+    gap += r"(?:\." + gap + r")*"
+    roots = [_spelled(store, gap)]
     # The shell spellings, derived from the store's own path rather than spelled
     # here. The old condition compared the store's *parent* with the home, which
     # held while the root was ``~/.raven`` and stopped holding the moment the
@@ -329,7 +335,7 @@ def _own_oauth_store() -> re.Pattern[str]:
     except ValueError:
         rel = None
     if rel is not None and rel.parts:
-        roots += [re.escape(prefix) + sep + _spelled(rel, sep) for prefix in ("~", "$HOME", "${HOME}")]
+        roots += [re.escape(prefix) + gap + _spelled(rel, gap) for prefix in ("~", "$HOME", "${HOME}")]
     return re.compile(r"(?:" + "|".join(dict.fromkeys(roots)) + r")(?:[/\\]|$|[\"'\s])", flags)
 
 
