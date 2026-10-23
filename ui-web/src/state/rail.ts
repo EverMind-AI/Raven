@@ -19,7 +19,7 @@
  * (src/features/rail/).
  */
 
-/** Served standing: page.html carries no data-rail, and the boot applies open. */
+/** Served standing: page.html carries no data-rail, and the boot applies `stands()`. */
 let open = true
 
 /** Whether the rail stands. */
