@@ -427,12 +427,12 @@ def test_anthropic_records_what_a_request_asks_for_without_the_key() -> None:
 
 
 def test_every_wrapper_forwards_the_question_of_what_a_rung_sends() -> None:
-    """The empty-response retry asks the provider the loop holds, which in
+    """The thinking-only step-down asks the provider the loop holds, which in
     production is a wrapper.
 
     The base answer -- every label is its own request -- is the wrong answer for
-    the Anthropic wire, and answering it here would leave the retry re-sending an
-    unchanged request exactly where the collapse was measured. Pinned the way
+    the Anthropic wire, and answering it here would leave the step-down re-sending
+    an unchanged request exactly where the collapse was measured. Pinned the way
     ``wire_model_id`` and ``supports_assistant_prefill`` are pinned: by naming
     the wrappers, so a new one cannot inherit the default silently.
     """

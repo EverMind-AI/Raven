@@ -274,9 +274,11 @@ def flag_transport_failure(
 
     * An empty reply with honest usage is a model that returned nothing. The
       agent loop recovers that by changing the request (a prefill, a post-tool
-      nudge) or retrying it, and none of that is reachable once a response is
-      reported as an error. Retrying the identical request, which is all this
-      verdict can ask for, is also the one thing that does not help there.
+      nudge, a lower reasoning effort) or by resending it unchanged, and none
+      of that is reachable once a response is reported as an error. Resending
+      the identical request, all this verdict can ask for, was long held not
+      to help there; the loop does it anyway for a plain empty reply because,
+      as Hermes reads one, it is usually a transient fault upstream.
     * An answer with strange accounting is an answer. Gateways under-report
       usage, and a verdict that overrode a real reply would trade this fault
       for a worse one.
