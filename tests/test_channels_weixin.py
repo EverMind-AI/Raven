@@ -232,9 +232,6 @@ def test_send_raises_when_context_token_missing():
         asyncio.run(ch.send("u1", "hi"))
 
 
-# ── the sendmessage verdict reads ret as well as errcode (#210) ───────
-
-
 def _post_returning(data: dict):
     async def fake_post(endpoint, body=None, *, auth=True):
         return data
@@ -262,7 +259,7 @@ def test_send_text_still_raises_on_nonzero_errcode():
 def test_send_text_accepts_an_all_zero_verdict():
     ch = _channel()
     ch._post = _post_returning({"ret": 0, "errcode": 0})
-    asyncio.run(ch._send_text("u1", "test", "ctok"))  # delivered: no raise
+    asyncio.run(ch._send_text("u1", "test", "ctok"))
 
 
 def test_send_media_raises_when_ret_nonzero_but_errcode_zero(tmp_path):
