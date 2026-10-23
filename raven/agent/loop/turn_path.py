@@ -401,10 +401,10 @@ def _reasoning_wire_keys(provider: Any, model: str | None) -> Any:
     """The provider's "what would this effort send" answer, or None.
 
     None when the provider cannot say -- a test double, or an adapter from
-    before the method existed -- and the retry descent then reads the labels on
-    their own, which is what it did before. Never allowed to be the thing that
-    fails: this is asked while recovering a turn that has already produced
-    nothing, and an exception here would replace an empty answer with an error.
+    before the method existed -- and the step-down of a thinking-only reply then
+    reads the labels on their own, which is what it did before. Never allowed to
+    be the thing that fails: this is asked while recovering a reply that brought
+    no answer, and an exception here would replace that reply with an error.
     """
     ask = getattr(provider, "reasoning_wire_keys", None)
     if not callable(ask):
