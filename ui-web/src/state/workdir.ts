@@ -354,7 +354,7 @@ function dirs(): Dirs | null {
    browser once it stands somewhere -- and replaces nothing. Answers that land
    after the popover closed, or after a later ask, are dropped. */
 
-async function read(path?: string): Promise<boolean> {
+async function read(path?: string, also?: string): Promise<boolean> {
   const fn = dirs()
   if (!fn) {
     set({ ...get(), err: t('gui.wd.not_live') })
@@ -363,7 +363,23 @@ async function read(path?: string): Promise<boolean> {
   const ticket = ++asking
   set({ ...get(), loading: true, err: null, asked: get().asked + 1 })
   try {
-    const listing = await fn(path)
+    let listing
+    try {
+      listing = await fn(path)
+    } catch (first) {
+      /* A paste carries the whitespace around it, and the folder it names does
+         not. The host refuses the padded path, so a second read tries it
+         without the padding -- and the refusal the reader is shown is the
+         first one, about the path they typed. What is acted on is the folder
+         the read landed on, so a name that ends in a space is still that
+         folder. */
+      if (!also || also === path) throw first
+      try {
+        listing = await fn(also)
+      } catch {
+        throw first
+      }
+    }
     if (ticket !== asking || !get().open) return false
     set({ ...get(), view: 'browse', listing, loading: false, err: null })
     return true
@@ -399,11 +415,14 @@ export function drives(): void {
 /** A path typed into the browser's bar: read as any other folder, and refused
  *  the same way, on the view the reader is looking at. The value is passed
  *  through unchanged, because a Windows name may end in a space once the
- *  extended path prefix authored it, and trimming would name a sibling. */
+ *  extended path prefix authored it, and trimming would name a sibling; the
+ *  path without its surrounding whitespace is read only if the exact one is
+ *  refused, which is what a paste with a newline around it gets. */
 export function go(path: string): Promise<void> {
-  if (!path.trim()) return Promise.resolve()
+  const at = path.trim()
+  if (!at) return Promise.resolve()
   asking += 1
-  return browse(path)
+  return read(path, at).then(() => undefined)
 }
 
 /** The browser's "use this folder", offered only where the engine would take
@@ -421,7 +440,7 @@ export async function useHere(path?: string): Promise<void> {
   const press = ++presses
   using = press
   try {
-    if (!(await read(at))) return
+    if (!(await read(at, at.trim()))) return
     /* A typed path is judged as a row is: walking into a folder the engine would
        refuse stays allowed, the pick alone is withheld. */
     const landed = get().listing

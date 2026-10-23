@@ -553,6 +553,102 @@ describe('the workspace a draft picks', () => {
     expect(pop().dataset.open).toBe('false')
   })
 
+  it('reads a listed name ending in a space exactly, when Enter reads the bar', async () => {
+    /* The same name as the case above, entered rather than pressed: the bar's
+       Enter reads the path too, and it must read the listed folder itself.
+       Trimming it here would ask for a sibling the host never listed. */
+    const asked: Array<string | undefined> = []
+    const listed = '\\\\?\\C:\\srv\\typed '
+    workspace(async (p) => {
+      asked.push(p)
+      if (p === 'C:/srv') {
+        return {
+          path: 'C:/srv',
+          parent: 'C:/',
+          home: 'C:/Users/me',
+          ok: true,
+          entries: [{ name: 'typed ', path: listed, ok: true }],
+        }
+      }
+      return { path: p ?? 'C:/srv', parent: 'C:/', home: 'C:/Users/me', ok: true, entries: [] }
+    })
+    openFolders()
+    act(() => byName('gui.wd.open_remote').click())
+    await settle()
+
+    await act(async () => {
+      await wd.go(listed)
+    })
+    await settle()
+    expect(asked).toContain(listed)
+    expect(wd.get().listing?.path).toBe(listed)
+  })
+
+  it('reads a pasted path without the whitespace around it', async () => {
+    /* A paste carries the whitespace around it -- a newline off a terminal,
+       a space off a clipboard -- and the folder it names does not. The host
+       refuses the padded path outright, so the bar reads it again without
+       the padding and stands where that read landed. */
+    const asked: Array<string | undefined> = []
+    workspace(async (p) => {
+      asked.push(p)
+      if (p !== undefined && p !== p.trim()) throw { data: { detail: 'not a directory' } }
+      return { path: p ?? '/home/me', parent: '/home', home: '/home/me', ok: true, entries: [] }
+    })
+    openFolders()
+    act(() => byName('gui.wd.open_remote').click())
+    await settle()
+
+    await act(async () => {
+      await wd.go(' /srv/elsewhere\n')
+    })
+    await settle()
+    expect(asked).toEqual([undefined, ' /srv/elsewhere\n', '/srv/elsewhere'])
+    expect(wd.get().listing?.path).toBe('/srv/elsewhere')
+    expect(pop().querySelector('.chrome-wd-err')).toBeNull()
+  })
+
+  it('says the refusal of the path as typed when the unpadded one is refused too', async () => {
+    /* Both reads refused: the reader is told about the path they typed, not
+       about the one the bar tried second. */
+    const asked: Array<string | undefined> = []
+    workspace(async (p) => {
+      asked.push(p)
+      throw { data: { detail: `not a directory: ${p}` } }
+    })
+    openFolders()
+    act(() => byName('gui.wd.open_remote').click())
+    await settle()
+
+    await act(async () => {
+      await wd.go(' /nope ')
+    })
+    await settle()
+    expect(asked).toEqual([undefined, ' /nope ', '/nope'])
+    expect(pop().querySelector('.chrome-wd-err')?.textContent).toBe('gui.wd.failed {"detail":"not a directory:  /nope "}')
+  })
+
+  it('uses a pasted path without the whitespace around it, when Use reads the bar', async () => {
+    /* The same padding read through the other door: Use reads the bar before
+       it picks, so the folder it stages is the one the read landed on. */
+    const asked: Array<string | undefined> = []
+    workspace(async (p) => {
+      asked.push(p)
+      if (p !== undefined && p !== p.trim()) throw { data: { detail: 'not a directory' } }
+      return { path: p ?? '/home/me', parent: '/home', home: '/home/me', ok: true, entries: [] }
+    })
+    openFolders()
+    act(() => byName('gui.wd.open_remote').click())
+    await settle()
+
+    await act(async () => {
+      await wd.useHere(' /srv/elsewhere\n')
+    })
+    await settle()
+    expect(asked).toEqual([undefined, ' /srv/elsewhere\n', '/srv/elsewhere'])
+    expect(wd.staged()).toBe('/srv/elsewhere')
+  })
+
   it('holds the first Use while its typed read is in flight, so a double press cannot name the folder it left', async () => {
     /* The read sets loading and bumps asked, so the path bar comes back holding
        the folder the browser stands in while the typed path is on its way. A
