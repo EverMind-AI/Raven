@@ -1338,7 +1338,7 @@ _SETTINGS = '{"apiKey": "sk-or-v1-0123456789abcdef0123456789abcdef"}'
 
 
 async def test_the_source_exemption_ignores_case_on_a_windows_host(monkeypatch: pytest.MonkeyPatch) -> None:
-    r"""``C:\Users\a\.raven\Workspace`` is the workspace on Windows, whatever the case.
+    r"""``C:\Users\a\.raven\Workspace`` is the ``workspace`` directory on Windows, whatever the case.
 
     The exemption compared the four names case-sensitively, so a Windows turn
     reading its own source under a differently cased spelling had its

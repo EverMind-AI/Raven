@@ -381,7 +381,7 @@ def _home_config() -> re.Pattern[str]:
 
     The home and the four names are compared in the host's terms
     (:func:`_host_paths`): on Windows either slash separates and case is
-    ignored, so ``C:\\Users\\a\\.raven\\Workspace`` is the workspace; on POSIX
+    ignored, so ``C:\\Users\\a\\.raven\\Workspace`` is the ``workspace`` directory; on POSIX
     ``/`` separates and ``Workspace`` is not ``workspace``. Either way a name
     ends at a separator, a quote or the end, so ``pluginsfoo`` is not exempt.
 
