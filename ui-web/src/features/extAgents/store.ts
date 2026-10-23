@@ -708,12 +708,14 @@ let presses = 0
    for how it ended, then the corrections the note may need later. A stop that
    answers, after the grace, that nothing was running turns the note into
    `missed`; one that answers it stopped the run turns `unconfirmed` into
-   `cancelled`; and a connect that lands after all takes the note down -- it
-   said, or allowed, that nothing was written -- and is told in a toast. */
+   `cancelled`, and so does the connect's own refusal as cancelled; and a
+   connect that lands after all takes the note down -- it said, or allowed,
+   that nothing was written -- and is told in a toast. */
+type Late = { name: string } | { cancelled: true } | null
 function sayStopped(
   outcome: { stopped: Stopped; answer: Promise<StopAnswer> },
   ours: () => boolean,
-  landing: Promise<string | null>,
+  late: Promise<Late>,
   machine: string
 ): void {
   if (ours()) set({ mconnectStopped: outcome.stopped })
@@ -723,10 +725,14 @@ function sayStopped(
     if (said === 'nothing' && note !== '') set({ mconnectStopped: 'missed' })
     if (said === 'stopped' && note === 'unconfirmed') set({ mconnectStopped: 'cancelled' })
   })
-  void landing.then((name) => {
-    if (name === null) return
+  void late.then((got) => {
+    if (got === null) return
+    if ('cancelled' in got) {
+      if (ours() && get().mconnectStopped === 'unconfirmed') set({ mconnectStopped: 'cancelled' })
+      return
+    }
     if (ours()) set({ mconnectStopped: '' })
-    landedLate(name, machine)
+    landedLate(got.name, machine)
   })
 }
 
@@ -787,7 +793,7 @@ export async function connectOnMachine(
        preset offered once more -- a second press while the first run still
        goes is refused server-side, before anything is spent. */
     settled()
-    sayStopped(outcome, ours, write.then(got => ('name' in got ? got.name : null)), machine)
+    sayStopped(outcome, ours, write.then((got): Late => ('name' in got ? { name: got.name } : got.cancelled ? { cancelled: true } : null)), machine)
     return { landed: false, current: current(), name: pending }
   }
   const got = outcome.got
@@ -852,7 +858,7 @@ export async function reconnectOnMachine(
     /* The row's own pending mark goes with the wait: `act` takes it off when
        the write answers, which a write with no answer never does. */
     set({ joining: without(get().joining, name) })
-    sayStopped(outcome, ours, write.then(refused => (refused === null ? name : null)), machine)
+    sayStopped(outcome, ours, write.then((refused): Late => (refused === null ? { name } : refused.cancelled ? { cancelled: true } : null)), machine)
     return { landed: false, current: current(), name }
   }
   const refused = outcome.got

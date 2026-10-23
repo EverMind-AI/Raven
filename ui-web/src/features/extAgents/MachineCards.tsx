@@ -564,7 +564,8 @@ export function MachineConnectSheet({ row, s }: { row: MachineRow; s: ExtAgentsS
       <div className="extAgents-act">
         {busy && !late ? (
           /* The way out of the wait, left of the press that started it: the
-             run is stopped on the machine and nothing is written. */
+             run on the machine is asked to stop, and the stop's answer says
+             whether anything was written (`awaitRun`). */
           <button className="mini danger" disabled={s.mconnectCancelling} onClick={() => store.cancelConnect()} type="button">
             {s.mconnectCancelling ? <Spin /> : null}
             {t(s.mconnectCancelling ? 'gui.machine.cancelling' : 'gui.cancel')}

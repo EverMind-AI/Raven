@@ -1629,7 +1629,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.machine.connecting': 'Starting it on the machine',
     'gui.machine.connecting_for': 'Starting it on the machine, {s}s so far',
     'gui.machine.connecting_hint':
-      'The node on the machine starts it, then it has to answer one test message: a few seconds to a minute as a rule, five minutes at most. Cancel stops it; nothing is written then.',
+      'The node on the machine starts it, then it has to answer one test message: a few seconds to a minute as a rule, five minutes at most. Cancel asks it to stop, and this form says whether anything was written.',
     'gui.machine.cancelling': 'Stopping',
     'gui.machine.connect_cancelled_head': 'Cancelled',
     'gui.machine.connect_cancelled': 'Cancelled; nothing was written. It can be connected again.',
@@ -5021,7 +5021,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.machine.connecting': '正在机器上启动它',
     'gui.machine.connecting_for': '正在机器上启动它，已等 {s} 秒',
     'gui.machine.connecting_hint':
-      '机器上的节点先启动它，再等它答一句测试消息：一般几秒到一分钟，最多等 5 分钟。点「取消」会停掉这一跑，什么都不写入。',
+      '机器上的节点先启动它，再等它答一句测试消息：一般几秒到一分钟，最多等 5 分钟。点「取消」会请求停掉这一跑，这里会说有没有写入。',
     'gui.machine.cancelling': '正在停止',
     'gui.machine.connect_cancelled_head': '已取消',
     'gui.machine.connect_cancelled': '已取消，没有写入。可以再接一次。',

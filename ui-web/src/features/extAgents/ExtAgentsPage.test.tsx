@@ -3794,6 +3794,37 @@ describe('the machines module', () => {
     }
   })
 
+  it('says the cancel when the connect itself refuses as cancelled after a stop that failed', async () => {
+    /* The connect's own cancelled refusal is the server saying nothing was written, as
+       much as the stop's true answer is: arriving after the grace, it corrects the note. */
+    const presets: PresetChoice[] = [
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] }
+    ]
+    const held = heldConnect()
+    const { toasts } = install([row()], {
+      machines: [ready()],
+      presets: async () => presets,
+      connectOnMachine: async () => held.connect(),
+      cancelRun: () => Promise.reject(new Error('socket closed'))
+    })
+    store._resetForTests({ graceMs: 20 })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    await click(sheetAct('gui.machine.connect_do'))
+    await click(sheetAct('gui.cancel'))
+    await act(async () => {
+      await new Promise(res => setTimeout(res, 60))
+    })
+    expect(store.get().mconnectStopped).toBe('unconfirmed')
+    await held.release({ cancelled: "the run of sub-agent 'codex@box' was cancelled before it answered, so it was not added" })
+    await settle()
+    expect(store.get().mconnectStopped).toBe('cancelled')
+    expect(note()).toEqual({ t: 'gui.machine.connect_cancelled_head', said: 'gui.machine.connect_cancelled' })
+    expect(toasts).toEqual([])
+  })
+
   it('says the cancel once the stop answers that it stopped the run, even with no answer from the connect', async () => {
     const presets: PresetChoice[] = [
       { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] }
