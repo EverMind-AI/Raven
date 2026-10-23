@@ -112,6 +112,11 @@ class TurnRequest:
     # Per-turn UI choice for Playbook generation. None inherits the configured
     # default; off/task/persona are resolved before the setup model call.
     playbook_mode: str | None = None
+    # ``(trace_id, span_id)`` of the span that dispatched the work this turn
+    # reports on, set only by a submitter announcing a dispatched result. A turn
+    # no longer inherits its submitter's context, so where it came from has to
+    # be stated here; the kernel carries the pair to the runner uninterpreted.
+    dispatch_link: tuple[str, str] | None = None
 
 
 # A lane is a serial domain, so an instance that is to answer while the main

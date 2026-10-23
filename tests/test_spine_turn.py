@@ -115,3 +115,13 @@ def test_direct_target_carries_agent_and_handle():
         direct_target=("Raven-Code", "refactor-auth"),
     )
     assert req.direct_target == ("Raven-Code", "refactor-auth")
+
+
+def test_dispatch_link_defaults_to_none():
+    req = TurnRequest(origin=Origin.USER, source=_src(), text="hi")
+    assert req.dispatch_link is None
+
+
+def test_dispatch_link_carries_trace_and_span():
+    req = TurnRequest(origin=Origin.SUBAGENT, source=_src(), text="hi", dispatch_link=("trace-1", "span-1"))
+    assert req.dispatch_link == ("trace-1", "span-1")

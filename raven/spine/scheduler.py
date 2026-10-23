@@ -7,6 +7,7 @@ pool and event sink are placeholders filled in by later sub-steps.
 
 import asyncio
 import contextlib
+import contextvars
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable
@@ -170,11 +171,23 @@ class OriginPools:
 
 
 class Lane:
-    def __init__(self, runner: TurnRunner, pools: OriginPools, sink: EventSink, conversation_id: str):
+    def __init__(
+        self,
+        runner: TurnRunner,
+        pools: OriginPools,
+        sink: EventSink,
+        conversation_id: str,
+        home: contextvars.Context | None = None,
+    ):
         self._runner = runner
         self._pools = pools
         self._sink = sink
         self._conversation_id = conversation_id
+        # Every task this lane starts begins from a fresh copy of this context,
+        # never from its submitter's: a worker created inside a sub-agent's
+        # report would otherwise carry that frame's state -- its trace span
+        # above all -- into every turn queued behind it.
+        self._home = home if home is not None else contextvars.copy_context()
         self._pending: deque[tuple[TurnRequest, asyncio.Future]] = deque()
         self._worker: asyncio.Task | None = None
         self._run_task: asyncio.Task | None = None
@@ -220,7 +233,7 @@ class Lane:
             # queue and run like a normal turn.
             self._enqueue(req, fut)
         if self._worker is None or self._worker.done():
-            self._worker = loop.create_task(self._run_worker())
+            self._worker = loop.create_task(self._run_worker(), context=self._home.copy())
         return fut
 
     def _enqueue(self, req: TurnRequest, fut: asyncio.Future, *, front: bool = False) -> None:
@@ -355,7 +368,7 @@ class Lane:
             # own report completes, the turn is cancellable without having named
             # its end.
             self._payload_reported = False
-            self._run_task = asyncio.create_task(self._run_turn(req))
+            self._run_task = asyncio.create_task(self._run_turn(req), context=self._home.copy())
             outcome: TurnOutcome | TurnFailed | None = None
             try:
                 # The payload's three answers: the outcome of a turn that ran, the
@@ -589,6 +602,10 @@ class Scheduler:
 
     def __init__(self, runner: TurnRunner, pools: OriginPools, sink: EventSink):
         self._loop = asyncio.get_running_loop()  # home loop; submit must come from here
+        # Home context: every turn starts from a copy of this one, whoever
+        # submitted it, so what a host sets for its turns must be set before
+        # the scheduler is built.
+        self._home = contextvars.copy_context()
         self._runner = runner
         self._pools = pools
         self._sink = sink
@@ -608,13 +625,13 @@ class Scheduler:
         conversation_id = self._conversation_id(req)
         lane = self._lanes.get(conversation_id)
         if lane is None:
-            lane = Lane(self._runner, self._pools, self._sink, conversation_id)
+            lane = Lane(self._runner, self._pools, self._sink, conversation_id, self._home)
             self._lanes[conversation_id] = lane
         handle = TurnHandle(lane, lane.submit(req, policy))
         # Lazy-start the reaper alongside the first lane (same pattern as the
         # lane worker); it self-terminates when no lanes remain.
         if self._reaper is None or self._reaper.done():
-            self._reaper = self._loop.create_task(self._reap_loop())
+            self._reaper = self._loop.create_task(self._reap_loop(), context=self._home.copy())
         return handle
 
     def cancel_conversation(self, conversation_id: str) -> int:
