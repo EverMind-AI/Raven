@@ -409,7 +409,9 @@ the dispatcher.
 pops the pending messages for that session and appends them to the agent's
 outgoing reply. The agent loop applies this in its `after_send` chain and skips
 it for system-origin turns so a proactive reply does not get a nudge layered on
-top of itself.
+top of itself. A turn the model ends on a silence marker has no reply for it to
+modify: the chain runs with no outbound text, the modifier is not called, and the
+queued nudge waits for the next reply.
 
 Constraints: a TTL drops stale entries, a per-session cap evicts the oldest
 beyond it (FIFO), and the pending queue is persisted through the shared

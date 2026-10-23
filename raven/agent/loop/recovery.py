@@ -600,7 +600,7 @@ class SilenceGate:
     take it back. Deltas are held while the text so far could still resolve to a marker under the
     strict rule (``may_become_silence``), and go out together with everything after them the
     moment it cannot -- which a reply that begins like prose does at its first delta, so an
-    ordinary answer waits for nothing. A turn the runtime started (``hold_all``) is read by the
+    ordinary answer waits for nothing. A turn from a proactive origin (``hold_all``) is read by the
     loose rule, whose marker may close a report on its last line, and only the whole call can show
     that, so every delta waits for :meth:`release` or :meth:`discard`.
 

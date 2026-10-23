@@ -195,7 +195,8 @@ short-circuit, modify outbound content, or roll the iteration back and re-sample
 injected messages and generation overrides for that one call); `before_iteration` may also
 withhold tools for the iteration, the iteration phases may leave the model a harness note on
 the last message (`append_note`), and `before_user_inbound` may rewrite the inbound text
-(`modified_content`, chained through `inbound_content`). Multiple hooks chain via `CompositeHook`; the EvalEngine
+(`modified_content`, chained through `inbound_content`). `after_send` also fires on a **Silent
+Turn**, with `outbound_content` None (hook surface version 4). Multiple hooks chain via `CompositeHook`; the EvalEngine
 wires three concrete implementations. It remains the loop's *timing* contract and stays open to
 any hook: what changed is that the bundled agents no longer write their product logic here, but
 as an Agent Participant seated in this chain.
@@ -808,12 +809,12 @@ _Avoid_: "shadow git" as the term — Checkpoint is the per-turn snapshot it pro
 
 **Silence Marker** (`spine/silence.py`):
 What a model answers with to say a turn has nothing to report: `[SILENT]`, `SILENT`, `NO_REPLY`
-or `NO REPLY` (`SILENCE_MARKERS`); `SILENCE_INSTRUCTION` is the sentence that teaches the
-bracketed form. Two rules read the set and the turn's `Origin` picks one (`is_silence`). A
-`USER` turn takes the strict rule (`is_exact_silence`): the whole reply must be a marker, with
-case, edge whitespace and stray edge punctuation forgiven up to `SILENCE_MAX_CHARS`, so prose
-that merely mentions a marker is delivered. A turn the runtime itself started -- the proactive
-origins `SENTINEL`, `CRON`, `HEARTBEAT` and `SUBAGENT` -- takes the loose rule
+or `NO REPLY` (`SILENCE_MARKERS`); `SILENCE_INSTRUCTION` is the two sentences that teach the
+bracketed form. Two rules read the set, and the turn's `Origin` decides which of them apply
+(`is_silence`). A `USER` turn takes the strict rule (`is_exact_silence`) alone: the whole reply
+must be a marker, with case, edge whitespace and stray edge punctuation forgiven up to
+`SILENCE_MAX_CHARS`, so prose that merely mentions a marker is delivered. A turn from a
+proactive origin -- `SENTINEL`, `CRON`, `HEARTBEAT` or `SUBAGENT` -- takes the loose rule
 (`is_loose_silence`) on top of the strict one: nobody is waiting on it and models wrap the marker
 in a note on why they stayed quiet, so a marker alone on the first or last line, or a bracketed
 `[SILENT]` opening the reply, is silence too, whatever the length. `may_become_silence`
@@ -825,14 +826,35 @@ said, and a reply with no text at all is not silence but an empty response, whic
 _Avoid_: "empty reply" for silence — an empty reply is a failure; a Silence Marker is what the
 model chose to write.
 
+**Silent Turn** (`agent/loop/turn_path.py`, `agent/loop/recovery.py`, `spine/events.py`):
+A turn whose last reply is a Silence Marker the model chose to write. It ends as a success and
+nothing is delivered for it: `_process_message` returns no reply, so a channel sends nothing, and
+a surface that streams is shown none of the marker -- the `SilenceGate` holds the start of a reply
+while it could still be one, and drops it when the loop reads the reply as a marker (a turn from
+a proactive origin, whose marker may close a report, holds the whole call instead). The marker row
+stays in the history with the marker as its content, filed with `silent: true` so a reload does
+not read it as an answer, and it carries the turn's Response Meta. The turn reports itself as
+`TurnOutcome.silent` (copied onto `TurnEnded.silent`) and, for a surface drawing it live, as a
+closing `NoticeKind.SILENT_TURN` notice. The `after_send` hook chain still runs, with
+`outbound_content` None: a response modifier is left unasked, so a nudge it would pop stays
+queued for the next reply, and the personalizer learns nothing; text a hook composes there is
+delivered as the reply, and the turn is then not silent. A turn the message tool has already
+answered is not a Silent Turn whatever it ends on -- its answer reached the reader.
+Distinct from a `no_output` failure. A Silent Turn is the model saying nothing on purpose, so it
+succeeds; `no_output` is what a turn is failed with when the model gave nothing back at all after
+every retry (`AnswerlessTurnError`). `NO_REPLY` names a marker, never that failure.
+_Avoid_: "empty reply" or "no reply" for a Silent Turn — an empty reply is **Empty-Response
+Recovery**'s, and `no_output` its failure; "silent" for a failed turn that happened to say nothing.
+
 **Empty-Response Recovery** (`agent/loop/recovery.py`):
 The policy for a model reply that carries no tool call. `reply_kind` reads the reply as one
 kind -- text, a Silence Marker, a refusal, a stream cut mid-answer, thinking with no answer, a
 reply cut at the output ceiling with nothing in it, nothing right after tools, or nothing --
 and `decide` names the move from that kind and what the turn has already spent
-(`RecoveryState`), under `RecoveryLimits`. Text completes; a refusal (a `refusal` or
-`content_filter` finish) outranks the text that came with it, which is the model's explanation,
-and is never resent: one switch to a fallback model, then the turn fails. A stream that sent text
+(`RecoveryState`), under `RecoveryLimits`. Text completes; a Silence Marker ends the turn as a
+**Silent Turn**; a refusal (a `refusal` or `content_filter` finish) outranks the text that came
+with it, which is the model's explanation, and is never resent: one switch to a fallback model,
+then the turn fails. A stream that sent text
 and no finish reason is CONTINUEd -- the model is asked to go on, and the parts are joined --
 up to `MAX_CONTINUATIONS` times, after which the partial is delivered with `PARTIAL_STREAM_NOTE`
 as an `interrupted` turn; a continuation that comes back empty leaves what streamed as the
@@ -3451,8 +3473,9 @@ What an ACP agent attaches to its `session/prompt` response under `_meta`, the f
 schema reserves for an agent's own metadata, kept on the run record as `acp_response_meta`
 verbatim and namespaced as sent. Raven serving the agent side fills it from the turn's
 observer stash: whatever a hook filed under `metadata["observers"]["acp_meta"]` is read
-back off the turn's last substantive assistant message once the turn has landed, so the
-loop_hooks paper's filing is the only seam a plugin needs - no plugin touches the wire, and
+back off the turn's last substantive assistant message once the turn has landed -- for a
+**Silent Turn** that is its marker row -- so the loop_hooks paper's filing is the only seam a
+plugin needs - no plugin touches the wire, and
 a turn that filed nothing answers with its stop reason alone. Raven driving the agent side
 reads none of it: the table reaches the spawn record's `meta.json` and the DAG run's
 per-node entry through the same channel as the frame pointer, and an agent's report

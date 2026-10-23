@@ -1368,7 +1368,7 @@ class TurnPathMixin:
             ):
                 gen_overrides["max_tokens"] = reply_room
             # A reply that is a silence marker is shown to no one, so the start of one is
-            # held until the loop has read the reply. A turn the runtime started holds the
+            # held until the loop has read the reply. A turn from a proactive origin holds the
             # whole call, because its marker may close a report and only the end of the call
             # shows that. The gates below deliver into this one.
             silence_gate = (

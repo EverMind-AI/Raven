@@ -2789,7 +2789,7 @@ async def test_a_reply_that_is_no_marker_is_shown_whole(workspace, monkeypatch, 
 
     assert final == "2 deals filtered" and outcome.silent is False
     if origin is Origin.CRON:
-        assert sink.text == ["2 deals filtered"], "a runtime turn holds the call and shows it in one piece"
+        assert sink.text == ["2 deals filtered"], "a proactive turn holds the call and shows it in one piece"
     else:
         assert sink.text == ["2 deals ", "filtered"], "a person's reply types out as it always did"
 
@@ -2838,7 +2838,7 @@ async def test_a_marker_held_for_a_hook_is_still_never_shown(workspace, monkeypa
     "origin,reply",
     [
         pytest.param(Origin.USER, "NO", id="user_a_marker_prefix_that_is_no_marker"),
-        pytest.param(Origin.CRON, "2 deals filtered", id="runtime_report"),
+        pytest.param(Origin.CRON, "2 deals filtered", id="proactive_report"),
     ],
 )
 async def test_a_reply_held_for_a_hook_is_shown_once_it_is_kept(workspace, monkeypatch, origin, reply):
@@ -2918,7 +2918,7 @@ async def test_a_cut_reply_that_began_like_a_marker_still_shows_its_start(worksp
             Origin.USER, "NO", "There is one file.", ["NO", "There is one file."], id="user_start_of_a_marker"
         ),
         pytest.param(
-            Origin.CRON, "Checking the inbox", "[SILENT]", ["Checking the inbox"], id="runtime_words_then_a_marker"
+            Origin.CRON, "Checking the inbox", "[SILENT]", ["Checking the inbox"], id="proactive_words_then_a_marker"
         ),
     ],
 )
@@ -3055,7 +3055,7 @@ async def test_text_a_hook_composes_on_a_silent_turn_is_delivered(workspace, mon
 
 
 @pytest.mark.asyncio
-async def test_a_runtime_turn_that_skips_after_send_stays_silent(workspace, monkeypatch):
+async def test_a_proactive_turn_that_skips_after_send_stays_silent(workspace, monkeypatch):
     _served(monkeypatch, [_reply("nothing changed\n\n[SILENT]")])
     sees = _Sees(reply="never asked")
     silence: dict[str, bool] = {}
