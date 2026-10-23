@@ -133,7 +133,7 @@ from raven.providers.first_byte import first_byte_budget
 from raven.providers.tool_calls import openai_tool_call
 from raven.session.refs import TOOL_RESULT_TRUNCATION_MARKER, tool_result_view
 from raven.spine.events import bound_failure_text
-from raven.spine.turn import AnswerlessTurnError
+from raven.spine.turn import PROACTIVE_ORIGINS, AnswerlessTurnError
 from raven.token_wise import usage_context
 from raven.token_wise.turn_spend import TurnSpend
 from raven.tracing import config as tracing_config
@@ -1372,7 +1372,7 @@ class TurnPathMixin:
             # whole call, because its marker may close a report and only the end of the call
             # shows that. The gates below deliver into this one.
             silence_gate = (
-                SilenceGate(on_token_delta, hold_all=origin not in (Origin.USER, None))
+                SilenceGate(on_token_delta, hold_all=origin in PROACTIVE_ORIGINS)
                 if on_token_delta is not None
                 else None
             )

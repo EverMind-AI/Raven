@@ -4,7 +4,7 @@ import dataclasses
 
 import pytest
 
-from raven.spine import BusyPolicy, ChatType, Origin, Source, TurnRequest
+from raven.spine import PROACTIVE_ORIGINS, BusyPolicy, ChatType, Origin, Source, TurnRequest
 
 
 def _src():
@@ -29,6 +29,17 @@ def test_origin_is_closed_five_value_enum_without_system():
     assert not hasattr(Origin, "SYSTEM")  # a zero-producer origin, intentionally absent
     with pytest.raises(ValueError):
         Origin("system")
+
+
+def test_the_proactive_origins_are_every_origin_a_person_does_not_start():
+    assert PROACTIVE_ORIGINS == frozenset({Origin.SENTINEL, Origin.CRON, Origin.HEARTBEAT, Origin.SUBAGENT})
+    assert PROACTIVE_ORIGINS == frozenset(Origin) - {Origin.USER}, "a new origin has to be put on one side of the line"
+
+
+@pytest.mark.parametrize("origin", [*Origin, None])
+def test_the_proactive_origins_agree_with_the_spelling_the_loop_and_the_pools_used(origin):
+    """The stream hold used to read "not a person's turn" and the pools a tuple of four: one set stands for both."""
+    assert (origin in PROACTIVE_ORIGINS) == (origin not in (Origin.USER, None))
 
 
 def test_busy_policy_is_closed_three_value_enum():

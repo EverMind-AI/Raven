@@ -17,6 +17,12 @@ class Origin(StrEnum):
     SUBAGENT = "subagent"
 
 
+# The origins the runtime starts on its own, which nobody is waiting on: they share the system pool and
+# read the loose silence rule. SUBAGENT is the turn that re-injects a result; a sub-agent's own
+# execution runs off the scheduler behind a separate gate.
+PROACTIVE_ORIGINS = frozenset({Origin.SENTINEL, Origin.CRON, Origin.HEARTBEAT, Origin.SUBAGENT})
+
+
 class AnswerlessTurnError(Exception):
     """A runner's own report that the turn it ran ended with no answer.
 

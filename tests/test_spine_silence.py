@@ -2,7 +2,7 @@
 
 import pytest
 
-from raven.spine import Origin
+from raven.spine import PROACTIVE_ORIGINS, Origin
 from raven.spine.silence import (
     SILENCE_INSTRUCTION,
     SILENCE_MARKERS,
@@ -38,7 +38,7 @@ def test_anything_else_is_not_exact_silence(text):
 @pytest.mark.parametrize(
     "text", ["[SILENT] No changes detected", "2 deals filtered\n\n[SILENT]", "NO_REPLY\nnothing changed", "silent"]
 )
-def test_a_runtime_turn_may_wrap_the_marker(text):
+def test_a_proactive_turn_may_wrap_the_marker(text):
     assert is_loose_silence(text)
 
 
@@ -55,14 +55,14 @@ def test_the_origin_picks_the_rule():
     assert is_silence("NO_REPLY", Origin.USER)
 
 
-@pytest.mark.parametrize("origin", [o for o in Origin if o is not Origin.USER])
-def test_every_runtime_origin_reads_the_loose_rule(origin):
+@pytest.mark.parametrize("origin", sorted(PROACTIVE_ORIGINS))
+def test_every_proactive_origin_reads_the_loose_rule(origin):
     assert is_silence("[SILENT] No changes", origin)
 
 
 @pytest.mark.parametrize("origin", [Origin.CRON, Origin.SUBAGENT])
 @pytest.mark.parametrize("text", ["*NO_REPLY*", ".NO_REPLY", "NO_REPLY."])
-def test_a_runtime_turn_forgives_edge_punctuation_around_a_bare_marker(text, origin):
+def test_a_proactive_turn_forgives_edge_punctuation_around_a_bare_marker(text, origin):
     assert is_silence(text, origin)
 
 

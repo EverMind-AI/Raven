@@ -10,7 +10,7 @@ Silence is something the model chooses, by answering with a marker. It is not:
 
 One marker set is read by two rules, so the lanes cannot drift apart. The strict rule
 (``is_exact_silence``) serves a turn a person started: the reply must be exactly a marker, so
-anything the model meant to say reaches the person waiting on it. A turn the runtime started
+anything the model meant to say reaches the person waiting on it. A turn from a proactive origin
 (cron, sub-agent, sentinel, heartbeat) reads the loose rule (``is_loose_silence``) as well as the
 strict one: nobody is waiting, the model is told to answer ``[SILENT]`` when nothing is new, and
 models reliably wrap it in a short note on why they stayed quiet, so a marker that opens the reply
@@ -23,7 +23,7 @@ and retracting it.
 
 import unicodedata
 
-from raven.spine.turn import Origin
+from raven.spine.turn import PROACTIVE_ORIGINS, Origin
 
 SILENT_MARKER = "[SILENT]"
 SILENCE_MARKERS = frozenset({SILENT_MARKER, "SILENT", "NO_REPLY", "NO REPLY"})
@@ -34,8 +34,6 @@ SILENCE_INSTRUCTION = (
     "to suppress delivery. Never combine [SILENT] with content — either report your findings normally, "
     "or say [SILENT] and nothing more."
 )
-
-_RUNTIME_ORIGINS = frozenset({Origin.CRON, Origin.SUBAGENT, Origin.SENTINEL, Origin.HEARTBEAT})
 
 
 def _canonical_silence_candidate(text: str) -> str:
@@ -110,13 +108,13 @@ def is_loose_silence(text: object) -> bool:
 def is_silence(text: object, origin: Origin | None) -> bool:
     """Whether ``text`` is silence under the rules ``origin`` picks.
 
-    A turn the runtime started reads the loose rule and the strict one: the loose matcher takes a
+    A turn from a proactive origin reads the loose rule and the strict one: the loose matcher takes a
     whole-reply marker as written, so ``NO_REPLY.`` needs the strict rule's forgiveness of edge
     punctuation, and whatever stays quiet on a person's turn stays quiet here too. Every other
     origin, and none, reads the strict rule alone, so an origin this table does not know delivers a
     marker rather than swallowing a reply.
     """
-    if origin in _RUNTIME_ORIGINS:
+    if origin in PROACTIVE_ORIGINS:
         return is_loose_silence(text) or is_exact_silence(text)
     return is_exact_silence(text)
 

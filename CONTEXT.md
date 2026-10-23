@@ -1032,8 +1032,8 @@ emits for any exception a runner lets out, this one included.
 
 **OriginPools**:
 Per-origin concurrency gates: a `USER` pool, a `system` pool for proactive origins
-(`SENTINEL`, `CRON`, `HEARTBEAT`, `SUBAGENT`), and a `direct` pool for Direct Chats, sized
-independently with no borrowing. A user turn never waits on a proactive task's LLM slot, and
+(`PROACTIVE_ORIGINS`: `SENTINEL`, `CRON`, `HEARTBEAT`, `SUBAGENT`), and a `direct` pool for Direct
+Chats, sized independently with no borrowing. A user turn never waits on a proactive task's LLM slot, and
 never waits behind several sub-agents answering. The direct pool is chosen per *request*
 rather than per origin - a Direct Chat is a `USER` turn, and an origin of its own would need
 a deliberate home in every origin switch in the codebase.

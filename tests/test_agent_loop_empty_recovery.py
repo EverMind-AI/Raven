@@ -2901,7 +2901,7 @@ async def test_the_gate_lets_punctuation_that_leads_prose_through_once_the_prose
 
 
 @pytest.mark.asyncio
-async def test_a_runtime_turn_holds_the_whole_call():
+async def test_a_proactive_turn_holds_the_whole_call():
     seen, deliver = _collecting()
     gate = SilenceGate(deliver, hold_all=True)
 
