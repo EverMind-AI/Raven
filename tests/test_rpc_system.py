@@ -557,6 +557,10 @@ async def test_an_install_replacement_window_answers_in_progress_without_stubbin
     `importlib.metadata.version()` calls `distribution()` internally, so the
     stub answers for `raven` only and forwards every other name to the real
     implementation.
+
+    The release lookup reads the same metadata and names the same window, so
+    it is made unreachable: left real, it answers `in_progress` on its own and
+    the test passes with the probe's guard deleted.
     """
     import asyncio
     import importlib.metadata as md
@@ -571,7 +575,11 @@ async def test_an_install_replacement_window_answers_in_progress_without_stubbin
             raise md.PackageNotFoundError(name)
         return real_distribution(name)
 
+    def plan() -> None:
+        raise AssertionError("the probe should refuse before the release lookup")
+
     monkeypatch.setattr(upgrade_commands.metadata, "distribution", fake_distribution)
+    monkeypatch.setattr(upgrade_commands, "plan_upgrade", plan)
 
     dispatcher = Dispatcher()
     register_system_methods(dispatcher)
@@ -594,6 +602,10 @@ async def test_malformed_install_metadata_answers_not_upgradable_without_stubbin
     parse. The genuine `_direct_url_data()` turns that into
     `UpgradeError("Malformed Raven installation metadata")`, and the handler
     has to name it as the refusal it is rather than let it escape.
+
+    The release lookup re-reads `direct_url.json` and raises the same
+    `UpgradeError`, so it is made unreachable for the same reason as in the
+    replacement-window test above.
     """
     import asyncio
     import importlib.metadata as md
@@ -616,7 +628,11 @@ async def test_malformed_install_metadata_answers_not_upgradable_without_stubbin
             return _MalformedMetadata()
         return real_distribution(name)
 
+    def plan() -> None:
+        raise AssertionError("the probe should refuse before the release lookup")
+
     monkeypatch.setattr(upgrade_commands.metadata, "distribution", fake_distribution)
+    monkeypatch.setattr(upgrade_commands, "plan_upgrade", plan)
 
     dispatcher = Dispatcher()
     register_system_methods(dispatcher)
