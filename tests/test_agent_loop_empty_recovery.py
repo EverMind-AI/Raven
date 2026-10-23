@@ -41,6 +41,7 @@ from raven.agent.loop.recovery import (
     REFUSAL_FAILURE,
     REFUSAL_NO_EXPLANATION,
     THINKING_ONLY_FAILURE,
+    THINKING_ONLY_UNRETRIED_FAILURE,
     TRUNCATED_FAILURE,
     EmptyAttempt,
     RecoveryAction,
@@ -510,6 +511,10 @@ def test_the_wording_is_copied_verbatim():
     assert (
         THINKING_ONLY_FAILURE
         == "The model produced only internal reasoning and no final answer, despite retries. Its last reasoning, which may contain the answer:"
+    )
+    assert (
+        THINKING_ONLY_UNRETRIED_FAILURE
+        == "The model produced only internal reasoning and no final answer. Its last reasoning, which may contain the answer:"
     )
     assert (
         TRUNCATED_FAILURE
@@ -2787,6 +2792,23 @@ async def test_a_prefill_refusing_provider_goes_straight_to_the_step_down(worksp
     assert out is not None and out[0] == "real answer"
     assert provider.efforts == [None, "high", "low"]
     assert provider.last_roles == ["user"] * 3, f"a prefill went to the provider: {provider.last_roles}"
+
+
+@pytest.mark.asyncio
+async def test_a_thinking_only_failure_with_nothing_to_ask_again_claims_no_retries(workspace):
+    """No prefill the provider takes, no rung below the turn's effort, no fallback model: the first
+    thinking-only reply is the last, and the failure says what it was without claiming retries."""
+    provider = _PrefillRefusingThinkingProvider(thinking_calls=5)
+    agent = _make_agent(workspace, provider)
+    agent.set_session_policy("s1", reasoning_effort="low")
+
+    failed = await _fail(agent)
+
+    assert provider.calls == 1, "nothing was asked again"
+    assert str(failed) == (
+        "The model produced only internal reasoning and no final answer. "
+        "Its last reasoning, which may contain the answer:\n\nlet me think"
+    )
 
 
 class _AlwaysCutProvider(LLMProvider):

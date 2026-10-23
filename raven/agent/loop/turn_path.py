@@ -96,6 +96,7 @@ from raven.agent.loop.recovery import (
     REFUSAL_FAILURE,
     REFUSAL_NO_EXPLANATION,
     THINKING_ONLY_FAILURE,
+    THINKING_ONLY_UNRETRIED_FAILURE,
     TRUNCATED_FAILURE,
     ContinuationGate,
     DraftGate,
@@ -192,21 +193,20 @@ def _llm_failure_detail(content: str | None, verdict: ErrorClassification | None
     return canonical_llm_error(category, None, "the provider gave no detail")
 
 
-def _recovery_failure_text(kind: ReplyKind, response: LLMResponse, visible: str | None) -> str:
+def _recovery_failure_text(kind: ReplyKind, response: LLMResponse, visible: str | None, spent: RecoveryState) -> str:
     """What a turn is failed with when recovery could not mend a reply of ``kind``, at full length.
 
     Scrubbed here, ahead of the bounded copy the lane carries, because two of
     the four texts quote the model: its reasoning, or its own refusal.
+    ``spent`` is what recovery tried this turn, which the words must not
+    overstate.
     """
     if kind is ReplyKind.THINKING_ONLY:
+        head = THINKING_ONLY_FAILURE if spent.asked_again else THINKING_ONLY_UNRETRIED_FAILURE
         excerpt = reasoning_excerpt(response)
         # Hermes appends the excerpt only when the reasoning left text; without
         # it the sentence would end on a colon that leads nowhere.
-        text = (
-            f"{THINKING_ONLY_FAILURE}\n\n{excerpt}"
-            if excerpt
-            else THINKING_ONLY_FAILURE.partition(" Its last reasoning")[0]
-        )
+        text = f"{head}\n\n{excerpt}" if excerpt else head.partition(" Its last reasoning")[0]
     elif kind is ReplyKind.TRUNCATED:
         text = TRUNCATED_FAILURE.format(n=MAX_CONTINUATIONS)
     elif kind is ReplyKind.REFUSAL:
@@ -2333,7 +2333,7 @@ class TurnPathMixin:
                         recovery.resends,
                         recovery.continuations,
                     )
-                    error_full = _recovery_failure_text(kind, response, clean)
+                    error_full = _recovery_failure_text(kind, response, clean, recovery)
                     error_detail = bound_failure_text(error_full)
                     no_output = kind in (ReplyKind.EMPTY, ReplyKind.POST_TOOL_EMPTY)
                     # Kept as the returned content too. Nothing delivers it: the caller fails

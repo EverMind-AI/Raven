@@ -96,6 +96,10 @@ OUTPUT_LIMIT_CONTINUATION = "[System: Your previous response was truncated by th
 NETWORK_CUT_CONTINUATION = "[System: The previous response was cut off by a network error mid-stream. Continue exactly where you left off. Do not restart or repeat prior text. Finish the answer directly.]"
 EMPTY_REPLY_FAILURE = "No reply: the model returned empty content after retries and any fallback models. Try `continue`, switch the model, or check the tool output above."
 THINKING_ONLY_FAILURE = "The model produced only internal reasoning and no final answer, despite retries. Its last reasoning, which may contain the answer:"
+# For a turn that had nothing to ask again with: no prefill the provider takes, no rung, no fallback model.
+THINKING_ONLY_UNRETRIED_FAILURE = (
+    "The model produced only internal reasoning and no final answer. Its last reasoning, which may contain the answer:"
+)
 TRUNCATED_FAILURE = "Processing stopped: the response remained truncated after {n} continuation attempts. Try again."
 REFUSAL_FAILURE = "The model declined to respond to this request (a safety refusal, not a Raven failure)."
 REFUSAL_EXPLANATION = " The model's explanation: {text}"
@@ -246,6 +250,13 @@ class RecoveryState:
     refusal_fell_back: bool = False
     empty_streak: list[EmptyAttempt] = field(default_factory=list)
     parts: list[str] = field(default_factory=list)  # what a network-cut answer has streamed so far
+
+    @property
+    def asked_again(self) -> bool:
+        """Whether recovery has asked the model anything again this turn, by any move."""
+        return bool(
+            self.prefills or self.nudges or self.resends or self.continuations or self.fallbacks_used or self.rungs_used
+        )
 
 
 def _usage(response: LLMResponse) -> dict:
