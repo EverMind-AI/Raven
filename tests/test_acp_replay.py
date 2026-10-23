@@ -369,6 +369,49 @@ class TestRuntimeMarks:
 
         assert replay(_map_to_wire([marker], "acp:s1"), session_id="acp:s1") == []
 
+    def test_a_silent_turn_the_runtime_opened_replays_as_nothing(self):
+        """The prompt of a turn the runtime opened is prose for the model, and with
+        the marker that closed the turn sent as no text it replayed as a user
+        message nobody answered. The whole turn is left out, its narration and tool
+        call included, as the session list leaves it out; the report after it is
+        the control, the same shape answered."""
+        calls = [{"id": "c1", "type": "function", "function": {"name": "list_dir", "arguments": "{}"}}]
+        stored = [
+            {"role": "user", "content": "how is the build?"},
+            {"role": "assistant", "content": "Still running; I will report back."},
+            {"role": "user", "content": "[Unprompted report from 'ci']\n\nstill compiling", "origin": "subagent"},
+            {"role": "assistant", "content": "Checking.", "reasoning_content": "routine", "tool_calls": calls},
+            {"role": "tool", "content": "build/", "tool_call_id": "c1", "name": "list_dir"},
+            {"role": "assistant", "content": "Nothing to report yet.\n[SILENT]", "silent": True},
+            {"role": "user", "content": "[Unprompted report from 'ci']\n\n3 tests failed", "origin": "subagent"},
+            {"role": "assistant", "content": "The build finished with 3 failing tests."},
+        ]
+
+        updates = _valid(replay(_map_to_wire(stored, "acp:s1"), session_id="acp:s1"))
+
+        assert _texts(updates) == [
+            "how is the build?",
+            "Still running; I will report back.",
+            "[Unprompted report from 'ci']\n\n3 tests failed",
+            "The build finished with 3 failing tests.",
+        ]
+        assert "tool_call" not in _kinds(updates)
+
+    def test_a_person_answered_with_silence_still_replays_their_message(self):
+        """Only a turn the runtime opened is left out: a person's own message is
+        conversation even when the model answers it with its marker."""
+        stored = [
+            {"role": "user", "content": "anything new?"},
+            {"role": "assistant", "content": "[SILENT]", "silent": True, "reasoning_content": "nothing changed"},
+        ]
+
+        updates = _valid(replay(_map_to_wire(stored, "acp:s1"), session_id="acp:s1"))
+
+        assert [(u["sessionUpdate"], u["content"]["text"]) for u in updates] == [
+            ("user_message_chunk", "anything new?"),
+            ("agent_thought_chunk", "nothing changed"),
+        ]
+
     def test_a_broken_turn_keeps_the_words_the_model_had_already_said(self):
         """The marker is filed after the partial answer, so the reader sees how
         far the turn got and then why it stopped."""

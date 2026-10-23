@@ -61,7 +61,9 @@ def replay(messages: Any, *, session_id: str, cwd: str | None = None) -> list[di
     """
     if not isinstance(messages, list):
         return []
-    entries = [m for m in messages if isinstance(m, dict) and m.get("role")]
+    # Before the cap, which bounds what a client draws: a turn that is never
+    # drawn takes none of that room.
+    entries = _without_silent_runtime_turns([m for m in messages if isinstance(m, dict) and m.get("role")])
     dropped = max(0, len(entries) - MAX_REPLAYED_MESSAGES)
     if dropped:
         entries = entries[-MAX_REPLAYED_MESSAGES:]
@@ -81,6 +83,31 @@ def replay(messages: Any, *, session_id: str, cwd: str | None = None) -> list[di
     for entry in entries:
         updates.extend(_replay_entry(entry, cwd=cwd))
     return updates
+
+
+def _without_silent_runtime_turns(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The transcript less every turn the runtime opened and the model closed
+    with its silence marker.
+
+    The marker is sent as no text, so such a turn replayed as the runtime's prose
+    for the model, drawn as a user message, with no answer under it. The whole
+    turn goes, the narration and tool calls on the way included, by the rule the
+    session list reads a transcript with (``SessionManager._scan_file``): only a
+    user row carrying ``origin`` opens a turn that can be taken back, so a
+    person's own message stays when the model answers it with silence.
+    """
+    kept: list[dict[str, Any]] = []
+    opened_at: int | None = None
+    for entry in entries:
+        role = entry.get("role")
+        if role == "user":
+            opened_at = len(kept) if entry.get("origin") else None
+        elif role == "assistant" and entry.get("silent") is True and opened_at is not None:
+            del kept[opened_at:]
+            opened_at = None
+            continue
+        kept.append(entry)
+    return kept
 
 
 def _replay_entry(entry: dict[str, Any], *, cwd: str | None) -> list[dict[str, Any]]:
