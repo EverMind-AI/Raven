@@ -851,9 +851,13 @@ class WeixinChannel(ChannelBase):
             if text:
                 for chunk in split_message(text, p.MAX_MESSAGE_LEN):
                     await self._send_text(chat_id, chunk, ctx_token)
-        except Exception:
+        except Exception as e:
             logger.exception("Error sending message")
-            raise
+            # Only a transient failure goes back to the hub, which retries by
+            # replaying this whole send: a refusal would come back the same, with
+            # every part before it delivered again (raven.channels.errors).
+            if retryable_http(e):
+                raise
         finally:
             await self._typing.stop(chat_id, clear_remote=True)
 

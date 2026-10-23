@@ -8,11 +8,17 @@ import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
+from loguru import logger
 
 from raven.channels.adapters.weixin import crypto
 from raven.channels.adapters.weixin import protocol as p
 from raven.channels.adapters.weixin.channel import SessionEndedError, WeixinChannel
+from raven.gateway.outlet import ChannelOutletAdapter
+from raven.spine import ChatType, Media, MediaOut, Source, Text
+from raven.spine import delivery as delivery_mod
+from raven.spine.delivery import DeliveryHub
 from tests.conftest import make_channel_config, with_channel_fields
 
 
@@ -283,6 +289,117 @@ def test_send_media_raises_when_ret_nonzero_but_errcode_zero(tmp_path):
     ch._client = SimpleNamespace(post=fake_cdn_post)
     with pytest.raises(RuntimeError, match=r"send media error \(ret=-2 errcode=0\)"):
         asyncio.run(ch._send_media_file("u1", str(media), "ctok"))
+
+
+# ── outbound send: transient vs permanent failures ────────────────────
+
+_DELIVERED = {"ret": 0, "errcode": 0}
+_REFUSED = {"ret": -2, "errcode": 0, "errmsg": "prepare failed"}
+_TWO_PARTS = "a" * p.MAX_MESSAGE_LEN + "\n" + "b" * 10
+_TO_U1 = Source(channel="weixin", chat_id="u1", sender_id="u1", chat_type=ChatType.DM)
+
+
+def _status_error(code: int) -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", "https://ilink.example/ilink/bot/sendmessage")
+    return httpx.HTTPStatusError(str(code), request=request, response=httpx.Response(code, request=request))
+
+
+def _wired_ch(post):
+    """`_send_ch` with the real text and media sends, answered by `post`."""
+    ch = _send_ch()
+    del ch._send_text, ch._send_one_media
+    ch._post = post
+    return ch
+
+
+def _post_failing_with(answer):
+    """A `_post` that raises `answer` when it is an exception and returns it otherwise."""
+
+    async def post(endpoint, body=None, *, auth=True):
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    return post
+
+
+def _post_refusing_texts_from(prefix: str):
+    """A sendmessage that records each text and refuses the ones starting with `prefix`."""
+    sent: list[str] = []
+
+    async def post(endpoint, body=None, *, auth=True):
+        text = body["msg"]["item_list"][0]["text_item"]["text"]
+        sent.append(text)
+        return _REFUSED if text.startswith(prefix) else _DELIVERED
+
+    return post, sent
+
+
+@pytest.mark.parametrize(
+    "error",
+    [httpx.ConnectTimeout("connect timed out"), httpx.ReadError("connection reset"), _status_error(503)],
+    ids=["timeout", "transport", "5xx"],
+)
+def test_send_reraises_a_transient_failure_for_the_hub_to_retry(error):
+    ch = _wired_ch(_post_failing_with(error))
+    with pytest.raises(type(error)):
+        asyncio.run(ch.send("u1", "hi"))
+
+
+@pytest.mark.parametrize(
+    ("answer", "logged"),
+    [
+        (_REFUSED, "ret=-2 errcode=0"),
+        ({"ret": 0, "errcode": 5, "errmsg": "rate limited"}, "ret=0 errcode=5"),
+        (_status_error(400), "HTTPStatusError: 400"),
+    ],
+    ids=["ret", "errcode", "4xx"],
+)
+def test_send_logs_a_permanent_failure_rather_than_raising_it(answer, logged):
+    """A refusal comes back the same on every retry (raven.channels.errors), so
+    it is logged for the operator rather than raised for the hub to replay."""
+    ch = _wired_ch(_post_failing_with(answer))
+    lines: list[str] = []
+    sink = logger.add(lambda m: lines.append(str(m)), level="ERROR", format="{message}")
+    try:
+        asyncio.run(ch.send("u1", "hi"))
+    finally:
+        logger.remove(sink)
+    assert any(logged in line for line in lines)
+
+
+async def test_a_reply_whose_second_part_is_refused_reaches_the_chat_once(monkeypatch):
+    """The hub replays a whole send that raises, so a raised refusal of the
+    second part delivered the first one again on every retry."""
+    monkeypatch.setattr(delivery_mod, "_RETRY_BASE_DELAY", 0)
+    post, sent = _post_refusing_texts_from("b")
+    outlet = ChannelOutletAdapter(_wired_ch(post))
+    await DeliveryHub(send_max_retries=3)._deliver_with_retry(outlet, Text(content=_TWO_PARTS, source=_TO_U1))
+    assert sent == ["a" * p.MAX_MESSAGE_LEN, "b" * 10]
+
+
+async def test_refused_media_whose_notice_is_refused_too_is_uploaded_once(monkeypatch, tmp_path):
+    """Refused media falls back to a text notice; with the notice refused as
+    well and raised, the hub uploaded the file again on every retry."""
+    monkeypatch.setattr(delivery_mod, "_RETRY_BASE_DELAY", 0)
+    media = tmp_path / "pic.png"
+    media.write_bytes(b"not really a png")
+    uploads: list[str] = []
+
+    async def post(endpoint, body=None, *, auth=True):
+        if "getuploadurl" in endpoint:
+            return {"upload_full_url": "https://cdn.example/upload"}
+        return _REFUSED
+
+    async def cdn_post(url, content=None, headers=None):
+        uploads.append(url)
+        return SimpleNamespace(raise_for_status=lambda: None, headers={"x-encrypted-param": "p"})
+
+    ch = _wired_ch(post)
+    ch._client = SimpleNamespace(post=cdn_post)
+    out = MediaOut(media=(Media(path=str(media), mime="image/png", kind="image"),), source=_TO_U1)
+    await DeliveryHub(send_max_retries=3)._deliver_with_retry(ChannelOutletAdapter(ch), out)
+    assert uploads == ["https://cdn.example/upload"]
 
 
 # ── _process_message gating + dedup (text path, no network) ───────────
