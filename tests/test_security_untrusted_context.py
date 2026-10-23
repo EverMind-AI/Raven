@@ -1221,3 +1221,109 @@ def test_ravens_own_plugin_and_agent_source_is_not_redacted_while_its_tokens_sti
     # A plugin directory outside Raven's home is not Raven's home, and was never
     # in scope for this pass either way.
     assert scrub_tool_output({"path": "plugins/example.py"}, source) == source
+
+
+_WINDOWS_HOME = "C:\\Users\\a"
+_STORE_TOKENS = '{"access": "mmx_FAKEACCESS0123456789abcdef", "refresh": "mmx_FAKEREFRESH0123456789abcdef"}'
+
+
+def _host(monkeypatch: pytest.MonkeyPatch, style: str, home: str) -> None:
+    """Drive the matcher as ``style``'s host with ``home`` as the user's home.
+
+    ``_path_style`` is the seam, so the Windows branch runs on a Linux box: the
+    home is a ``PureWindowsPath``, which spells and compares like Windows on
+    any host, and nothing here reads a path off the disk.
+    """
+    from pathlib import PurePosixPath, PureWindowsPath
+
+    flavour = PureWindowsPath if style == "windows" else PurePosixPath
+    monkeypatch.setattr("raven.security.redact._path_style", lambda: style)
+    monkeypatch.setenv("HOME", home)
+    monkeypatch.setattr("raven.home.raven_home", lambda: flavour(home) / ".raven")
+    monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [])
+
+
+async def _dispatched(arguments: dict, text: str) -> str:
+    """``text`` as a tool call with ``arguments`` returns it through the registry."""
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.contracts.tool import Tool, ToolResult
+
+    class _Reads(Tool):
+        name = "reads"
+        description = "returns a file's text"
+        parameters = {"type": "object", "properties": {"path": {"type": "string"}, "command": {"type": "string"}}}
+
+        async def execute(self, **_):  # noqa: ANN003
+            return ToolResult(text, text)
+
+    registry = ToolRegistry()
+    registry.register(_Reads())
+    return str(await registry.execute("reads", arguments))
+
+
+async def test_the_oauth_store_gate_holds_on_a_windows_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    r"""A Windows host spells the store with backslashes, a drive letter and any case.
+
+    Two things kept the gate shut there. The arguments were matched as
+    ``json.dumps`` output, which doubles every backslash, against a root taken
+    from ``str(store)``, which has single ones; and the ``~`` spellings joined
+    ``~/`` to ``str(rel)``, which is ``.raven\oauth`` on Windows, so the common
+    ``~/.raven/oauth/...`` never matched. Through the registry, so the path is
+    the one every tool result takes.
+    """
+    import json
+
+    from raven.security.redact import _own_oauth_store
+
+    _host(monkeypatch, "windows", _WINDOWS_HOME)
+    redacted = '{"access": "[redacted]", "refresh": "[redacted]"}'
+    native = "C:\\Users\\a\\.raven\\oauth\\minimax_global.json"
+    for arguments in (
+        {"path": native},
+        {"path": "C:/Users/a/.raven/oauth/minimax_global.json"},
+        {"path": "c:\\users\\A\\.Raven\\OAuth\\minimax_global.json"},
+        {"path": "~/.raven/oauth/minimax_global.json"},
+        {"path": "~\\.raven\\oauth\\minimax_global.json"},
+        {"path": "$HOME/.raven\\oauth/minimax_global.json"},
+        {"command": f'type "{native}"'},
+        {"command": f"Get-Content {native}"},
+        # A value that already carries ``json.dumps``' escaping -- a script
+        # argument quoting the path -- keeps its doubled backslashes.
+        {"command": "python -c " + json.dumps(f"print(open({json.dumps(native)}).read())")},
+        {"path": "C:\\Users\\a\\.raven\\oauth"},
+    ):
+        assert await _dispatched(arguments, _STORE_TOKENS) == redacted, arguments
+    # The directory boundary survives the wider separators: a sibling whose
+    # name merely starts with ``oauth`` is not the store.
+    for arguments in (
+        {"path": "C:\\Users\\a\\.raven\\oauth-other\\minimax_global.json"},
+        {"path": "C:\\Users\\a\\.raven\\oauthx"},
+        {"path": "~/.raven/oauth-other/minimax_global.json"},
+    ):
+        assert "mmx_FAKEACCESS0123456789abcdef" in await _dispatched(arguments, _STORE_TOKENS), arguments
+    # The pattern is case-blind only here, because Windows paths are.
+    assert _own_oauth_store().flags & __import__("re").IGNORECASE
+
+
+async def test_the_oauth_store_gate_keeps_posix_spelling_on_a_posix_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Windows widening stays on Windows: POSIX keeps ``/`` and its case."""
+    import re
+
+    from raven.security.redact import _own_oauth_store
+
+    _host(monkeypatch, "posix", "/home/a")
+    redacted = '{"access": "[redacted]", "refresh": "[redacted]"}'
+    for arguments in (
+        {"path": "/home/a/.raven/oauth/minimax_global.json"},
+        {"path": "~/.raven/oauth/minimax_global.json"},
+        {"command": "cat ${HOME}/.raven/oauth/minimax_global.json"},
+        {"path": "/home/a/.raven/oauth"},
+    ):
+        assert await _dispatched(arguments, _STORE_TOKENS) == redacted, arguments
+    for arguments in (
+        {"path": "/home/a/.raven/OAuth/minimax_global.json"},
+        {"path": "/home/a/.raven/oauth-other/minimax_global.json"},
+        {"path": "\\home\\a\\.raven\\oauth\\minimax_global.json"},
+    ):
+        assert "mmx_FAKEACCESS0123456789abcdef" in await _dispatched(arguments, _STORE_TOKENS), arguments
+    assert not _own_oauth_store().flags & re.IGNORECASE

@@ -29,9 +29,9 @@ leave the process should not be put on the wire in the first place.
 
 from __future__ import annotations
 
-import json
 import os
 import re
+from pathlib import PurePath, PurePosixPath, PureWindowsPath
 from typing import Any
 
 REPLACEMENT = "[redacted]"
@@ -193,6 +193,64 @@ def redact(text: str, *, truncated: bool = False) -> str:
     return text
 
 
+_POSIX, _WINDOWS = "posix", "windows"
+
+
+def _path_style() -> str:
+    """The path spelling this host compares by. A seam, so a test can drive the
+    other host's branch: a Linux run cannot read a Windows path."""
+    return _WINDOWS if os.name == "nt" else _POSIX
+
+
+def _host_paths(style: str) -> tuple[type[PurePath], str, int]:
+    """The path flavour, the separator pattern and the regex flags ``style`` compares by.
+
+    Windows takes either slash, repeated -- a path quoted inside a script
+    argument arrives with ``json.dumps``' doubled backslashes -- and ignores
+    case, because its filesystem does. POSIX keeps ``/`` and its case.
+    """
+    if style == _WINDOWS:
+        return PureWindowsPath, r"[/\\]+", re.IGNORECASE
+    return PurePosixPath, "/", 0
+
+
+def _spelled(path: PurePath, sep: str) -> str:
+    """``path`` as a pattern, segment by segment, joined by ``sep``.
+
+    Escaping ``str(path)`` whole would freeze the separators inside the path
+    to the one the host prints; matching by segment lets every separator in
+    it take the host's alternatives.
+    """
+    parts = [re.escape(part) for part in path.parts[1:]] if path.anchor else [re.escape(p) for p in path.parts]
+    if not path.anchor:
+        return sep.join(parts)
+    head = re.escape(path.anchor.rstrip("/\\"))
+    if path.anchor.endswith(("/", "\\")):
+        head += sep
+    return head + sep.join(parts)
+
+
+def _argument_strings(arguments: Any, *, depth: int = 0) -> list[str]:
+    """Every string in a call's arguments, decoded, as the caller wrote it.
+
+    Matched one by one rather than as ``json.dumps`` output, which escapes
+    every backslash and so hides a Windows path from a pattern built from the
+    path itself. Keys are included: a tool may take paths as mapping keys.
+    """
+    if depth > 12:
+        return []
+    if isinstance(arguments, str):
+        return [arguments]
+    if isinstance(arguments, dict):
+        found: list[str] = []
+        for key, value in arguments.items():
+            found += _argument_strings(key, depth=depth + 1) + _argument_strings(value, depth=depth + 1)
+        return found
+    if isinstance(arguments, (list, tuple)):
+        return [text for item in arguments for text in _argument_strings(item, depth=depth + 1)]
+    return [] if arguments is None else [str(arguments)]
+
+
 #: The subdirectories of Raven's home a coding turn reads its own source from.
 #: Exempt from the home-config pass. Not a claim that the rest of the home holds
 #: no source-shaped text: it is the set known to hold source a turn edits, and a
@@ -238,13 +296,14 @@ def _own_oauth_store() -> re.Pattern[str]:
 
     The spellings are enumerated rather than claimed: the store's own path, and
     ``~`` / ``$HOME`` / ``${HOME}`` with the store's path relative to the home,
-    each followed by ``/``, ``\\``, the end of the string or a quote. Not covered,
-    and not claimed to be: a Windows path spelled with forward slashes or a drive
-    letter, and any spelling differing in case -- ``re`` is case-sensitive here and
-    the writers' own paths keep whatever case ``raven_home()`` returns. A store not
-    under the home (``RAVEN_HOME`` elsewhere) has no abbreviation to add and is
-    matched by its absolute path alone, which is the only spelling a call can use
-    for it.
+    each followed by ``/``, ``\\``, the end of the string or a quote -- never by
+    more of a name, so ``oauth-other`` is not the store. Each root is built
+    segment by segment in the host's terms (:func:`_host_paths`): on Windows
+    every separator inside it is either slash, one or more, and the pattern
+    ignores case, as the filesystem does; on POSIX a separator is ``/`` and
+    case counts. A store not under the home (``RAVEN_HOME`` elsewhere) has no
+    abbreviation to add and is matched by its absolute path alone, which is the
+    only spelling a call can use for it.
 
     This is a second resolver beside :func:`_home_config`, not the same one: that
     one answers "is this any program's dot-directory of the home", this one "is
@@ -255,9 +314,10 @@ def _own_oauth_store() -> re.Pattern[str]:
     """
     from raven.home import oauth_home
 
-    store = oauth_home()
-    home_dir = os.path.expanduser("~").rstrip("/")
-    roots = [re.escape(str(store))]
+    flavour, sep, flags = _host_paths(_path_style())
+    store = flavour(str(oauth_home()))
+    home_dir = flavour(os.path.expanduser("~"))
+    roots = [_spelled(store, sep)]
     # The shell spellings, derived from the store's own path rather than spelled
     # here. The old condition compared the store's *parent* with the home, which
     # held while the root was ``~/.raven`` and stopped holding the moment the
@@ -268,10 +328,9 @@ def _own_oauth_store() -> re.Pattern[str]:
         rel = store.relative_to(home_dir)
     except ValueError:
         rel = None
-    if rel is not None:
-        spelled = str(rel)
-        roots += [re.escape(prefix) + "/" + re.escape(spelled) for prefix in ("~", "$HOME", "${HOME}")]
-    return re.compile(r"(?:" + "|".join(dict.fromkeys(roots)) + r")(?:[/\\]|$|[\"'\s])")
+    if rel is not None and rel.parts:
+        roots += [re.escape(prefix) + sep + _spelled(rel, sep) for prefix in ("~", "$HOME", "${HOME}")]
+    return re.compile(r"(?:" + "|".join(dict.fromkeys(roots)) + r")(?:[/\\]|$|[\"'\s])", flags)
 
 
 def _redact_oauth_store(text: str) -> str:
@@ -374,13 +433,12 @@ def redact_home_config_read(arguments: Any, text: str) -> str:
     """
     if not text:
         return text
-    try:
-        blob = arguments if isinstance(arguments, str) else json.dumps(arguments, ensure_ascii=False)
-    except (TypeError, ValueError):
-        blob = str(arguments)
-    if _own_oauth_store().search(blob):
+    strings = _argument_strings(arguments)
+    store = _own_oauth_store()
+    if any(store.search(value) for value in strings):
         text = _redact_oauth_store(text)
-    return redact(text) if _home_config().search(blob) else text
+    config = _home_config()
+    return redact(text) if any(config.search(value) for value in strings) else text
 
 
 # A mapping key that names its value a secret. The structure carries the label
