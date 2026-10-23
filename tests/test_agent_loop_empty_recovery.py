@@ -2912,6 +2912,35 @@ async def test_a_cut_reply_that_began_like_a_marker_still_shows_its_start(worksp
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "hooks,origin",
+    [
+        pytest.param([_Holds()], Origin.USER, id="held_for_a_hook"),
+        pytest.param([], Origin.CRON, id="held_by_the_silence_gate"),
+        pytest.param([_Holds()], Origin.CRON, id="held_by_both"),
+    ],
+)
+async def test_words_beside_a_tool_call_reach_the_reader_before_the_tool_runs(workspace, monkeypatch, hooks, origin):
+    """Neither hold parks a preamble for the length of the tool run: it is not the reply a hook can send
+    back, nor one a marker could be, so it is let go of the moment the call is known to end in a tool."""
+    _served(monkeypatch, [_preamble_then_tool_stream("Checking the inbox"), _finished_stream("done")])
+    agent = _litellm_agent(workspace, hooks=hooks)
+    sink = _Sink()
+    shown_when_the_tool_ran: list[list[str]] = []
+    real_execute = agent.tools.execute
+
+    async def execute(name, arguments, **kwargs):
+        shown_when_the_tool_ran.append(list(sink.text))
+        return await real_execute(name, arguments, **kwargs)
+
+    monkeypatch.setattr(agent.tools, "execute", execute)
+
+    await agent._run_agent_loop(_seed(), on_token_delta=sink.delta, origin=origin)
+
+    assert shown_when_the_tool_ran == [["Checking the inbox"]]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "origin,preamble,ending,seen",
     [
         pytest.param(
@@ -2961,7 +2990,7 @@ class _Sees(AgentHook):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("origin", [Origin.USER, Origin.CRON])
-async def test_a_marker_reply_ends_the_turn_silently(workspace, monkeypatch, origin):
+async def test_a_marker_reply_returns_nothing_and_files_a_flagged_row(workspace, monkeypatch, origin):
     """No reply, the row kept and flagged, nothing streamed, and the turn says it was silent."""
     _served(monkeypatch, [_finished_stream(*_chunked("[SILENT]"))])
     agent = _litellm_agent(workspace)
@@ -2981,7 +3010,45 @@ async def test_a_marker_reply_ends_the_turn_silently(workspace, monkeypatch, ori
 
 
 @pytest.mark.asyncio
-async def test_a_silent_turn_filing_its_marker_without_a_stream_is_silent_too(workspace, monkeypatch):
+async def test_a_marker_reply_ends_the_turn_silently(workspace, monkeypatch):
+    """A person's turn, the reply is ``[SILENT]``: the turn's exit, end to end through the real adapter."""
+    from raven.spine.events import Notice, StreamDelta, Text
+
+    _served(monkeypatch, [_finished_stream("[SIL", "ENT]")])
+    agent = _litellm_agent(workspace)
+
+    async def _noop(**_kw) -> None:
+        return None
+
+    agent._start_executor = _noop
+    agent._connect_mcp = _noop
+    returned: list = []
+    process = agent._process_message
+
+    async def spy(*args, **kwargs):
+        returned.append(await process(*args, **kwargs))
+        return returned[-1]
+
+    monkeypatch.setattr(agent, "_process_message", spy)
+    events: list = []
+
+    async def emit(event) -> None:
+        events.append(event)
+
+    outcome = await agent.run_turn(_turn("anything new?"), emit, lambda: [])
+
+    assert returned == [None], "nothing is left to deliver"
+    rows = agent.sessions.get_or_create("test:c1").messages
+    assert (rows[-1]["role"], rows[-1]["content"], rows[-1]["silent"]) == ("assistant", "[SILENT]", True)
+    deltas = [e.delta for e in events if isinstance(e, StreamDelta)]
+    assert not any(ch in delta for delta in deltas for ch in "[SILENT]"), deltas
+    assert not any(isinstance(e, Text) for e in events)
+    assert [e.kind for e in events if isinstance(e, Notice)] == [NoticeKind.SILENT_TURN]
+    assert outcome.silent is True and outcome.explicit_reply is False
+
+
+@pytest.mark.asyncio
+async def test_a_marker_from_a_plain_call_ends_the_turn_silently(workspace, monkeypatch):
     """The same turn on a surface that does not stream: a plain call, one reply, which is the marker."""
     _served(monkeypatch, [_reply("NO_REPLY")])
     agent = _litellm_agent(workspace)
