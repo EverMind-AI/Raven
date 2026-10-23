@@ -878,7 +878,8 @@ of iterations or time while a continuation is still owed, with no wrap-up. A str
 closed without a terminal chunk -- all a backend that never sends one leaves -- and a body that
 names no finish read `unknown` and are delivered as they stand. The continuation streams into the
 step the cut answer opened. A reply with only thinking is PREFILLed twice when there is thinking
-to re-feed (reasoning text or blocks; one known only by its reasoning-token count goes straight
+to re-feed (`has_thinking_to_refeed`: reasoning text that is not blank, or thinking blocks; one
+known only by its reasoning-token count, an empty think block or blank reasoning goes straight
 on), then STEP_DOWNed: asked again at whichever of `high` and `low` lie below the turn's effort
 (an unstated effort is above both), once each a turn and never at `minimal` (Codex refuses it),
 the rungs skipped that the wire cannot tell apart (`LLMProvider.reasoning_wire_keys`). A reply
