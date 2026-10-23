@@ -90,9 +90,13 @@ REASONING_EXCERPT_MAX = 500
 EMPTY_RETRY_BASE_DELAY_S = 5.0
 EMPTY_RETRY_MAX_DELAY_S = 60.0
 
-# Worded after Hermes, without the emoji Hermes puts on its failures.
-POST_TOOL_NUDGE = "You just executed tool calls but returned an empty response. Please process the tool results above and continue with the task."
-OUTPUT_LIMIT_CONTINUATION = "[System: Your previous response was truncated by the output length limit. Continue exactly where you left off. Do not restart or repeat prior text. Finish the answer directly.]"
+# Worded after Hermes, without the emoji Hermes puts on its failures, except where Raven's narrower
+# trigger would make Hermes' words false. OUTPUT_LIMIT_CONTINUATION follows a cut that left no text,
+# no reasoning and no tool call, so it keeps Hermes' frame but cannot ask the model to go on from where
+# it stopped, nor presume an answer was owed rather than a call. POST_TOOL_NUDGE also allows a final
+# answer: the tool results may be all the task needed.
+POST_TOOL_NUDGE = "You just executed tool calls but returned an empty response. Please process the tool results above and continue with the task, or give your final answer now."
+OUTPUT_LIMIT_CONTINUATION = "[System: Your previous response was cut off by the output length limit before it produced any text or tool call, so nothing from it was kept. Keep this response short: answer briefly, or make the tool call the task needs. If a payload you were writing is too large for one response, send it across several smaller calls.]"
 NETWORK_CUT_CONTINUATION = "[System: The previous response was cut off by a network error mid-stream. Continue exactly where you left off. Do not restart or repeat prior text. Finish the answer directly.]"
 EMPTY_REPLY_FAILURE = "No reply: the model returned empty content after retries and any fallback models. Try `continue`, switch the model, or check the tool output above."
 THINKING_ONLY_FAILURE = "The model produced only internal reasoning and no final answer, despite retries. Its last reasoning, which may contain the answer:"

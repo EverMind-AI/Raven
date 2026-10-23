@@ -490,15 +490,16 @@ def test_the_excerpt_reads_the_reasoning_field_then_thinking_blocks_then_inline_
 
 
 def test_the_wording_is_copied_verbatim():
+    """Hermes' texts, except where Raven's narrower trigger would make them false (see recovery.py)."""
     assert MAX_CONTINUATIONS == 3
     assert REASONING_EXCERPT_MAX == 500
     assert (
         POST_TOOL_NUDGE
-        == "You just executed tool calls but returned an empty response. Please process the tool results above and continue with the task."
+        == "You just executed tool calls but returned an empty response. Please process the tool results above and continue with the task, or give your final answer now."
     )
     assert (
         OUTPUT_LIMIT_CONTINUATION
-        == "[System: Your previous response was truncated by the output length limit. Continue exactly where you left off. Do not restart or repeat prior text. Finish the answer directly.]"
+        == "[System: Your previous response was cut off by the output length limit before it produced any text or tool call, so nothing from it was kept. Keep this response short: answer briefly, or make the tool call the task needs. If a payload you were writing is too large for one response, send it across several smaller calls.]"
     )
     assert (
         NETWORK_CUT_CONTINUATION
@@ -959,6 +960,24 @@ async def test_a_truncation_failure_counts_the_continuations_its_answer_had(
     failed = await _fail(_litellm_agent(workspace), "write the report")
 
     assert str(failed) == f"Processing stopped: the response remained truncated after {attempts}. Try again."
+
+
+@pytest.mark.asyncio
+async def test_the_output_limit_nudge_does_not_presume_a_tool_call_was_owed(workspace, monkeypatch):
+    """The continuation follows a cut that left no text, no reasoning and no tool call, and that says
+    nothing about what the turn owed: a plain question reaches it as well as a file write. Wording that
+    told such a turn to emit a call would point it at a tool the task never needed, and wording that
+    told it to go on from where it left off would point it at text that does not exist."""
+    calls = _served(monkeypatch, [_reply("", finish="length")] * 4)
+
+    await _fail(_litellm_agent(workspace), "which year did the timezone database begin")
+
+    delivered = [m for call in calls for m in call["messages"] if m.get("content") == OUTPUT_LIMIT_CONTINUATION]
+    assert delivered, "an answer-only turn never reached the continuation"
+    text = str(delivered[0]["content"])
+    assert "answer" in text, "the continuation offers the answer-only turn no valid recovery"
+    assert "tool call" in text, "the continuation no longer names the call recovery"
+    assert "left off" not in text and "repeat" not in text, "there is nothing from the cut reply to go on from"
 
 
 @pytest.mark.asyncio
