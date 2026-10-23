@@ -191,6 +191,7 @@ describe('toTranscriptMessages: a turn the model chose not to answer', () => {
     expect(msgs.at(-1)!.text).toBe(SILENT_LINE)
     expect(msgs.some(msg => msg.text.includes('SILENT'))).toBe(false)
     expect(msgs[1]!.episodes?.[0]?.tools[0]).toMatchObject({ id: 'call-1', name: 'terminal' })
+    expect(msgs[1]!.episodes?.[1]).toMatchObject({ reasoning: 'Nothing changed since the last run.', tools: [] })
   })
 
   it('leaves a row without the flag alone, whatever it says', () => {
