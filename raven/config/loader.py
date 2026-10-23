@@ -8,10 +8,11 @@ import shutil
 import sys
 from collections.abc import Iterator, Mapping
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, Literal, NamedTuple
 
 from pydantic import ValidationError
 
+from raven.config import login_path
 from raven.config.schema import Config
 from raven.home import get_config_path, raven_home, set_config_path
 from raven.utils.atomic_io import atomic_replace, atomic_update
@@ -32,9 +33,10 @@ CURRENT_CONFIG_VERSION = 15
 # ``contextWindowTokens: 65536`` the user had put back by hand, after our own
 # notice invited them to. Adding a migration means adding a floor here.
 # The stamp is a scalar: while the research rename holds it at six
-# (_research_rename_pending), every later floor re-runs on each load too, so
-# a new floor must keep the standing discipline -- idempotent, and silent
-# when it changes nothing.
+# (_research_rename_pending), or a pi row waits to learn which pi its launch
+# runs and holds it at fourteen (_shim_pins_waiting), every later floor re-runs
+# on each load too, so a new floor must keep the standing discipline --
+# idempotent, and silent when it changes nothing.
 _CONTEXT_WINDOW_MIGRATION = 1
 _AUTO_PROVIDER_MIGRATION = 2
 _RETIRED_GATEWAY_WEB_MIGRATION = 3
@@ -363,9 +365,10 @@ def _persist_migrations(path: Path, from_version: int = 0, *, refresh_interprete
     """
 
     rename_pending = False
+    pins_waiting = False
 
     def _apply(_text: str | None) -> tuple[str | None, bool]:
-        nonlocal rename_pending
+        nonlocal rename_pending, pins_waiting
         # Re-read inside the transaction so the migrated content is exactly
         # what is on disk while the lock is held -- an update_* writer cannot
         # slip an edit in between this read and the replace.
@@ -412,6 +415,7 @@ def _persist_migrations(path: Path, from_version: int = 0, *, refresh_interprete
             if from_version < _SHIM_PIN_REFRESH_MIGRATION:
                 retired = _RETIRED_SHIM_COMMANDS[_SHIM_PIN_REFRESH_MIGRATION]
                 changed = _migrate_retired_shim_pins(raw, retired) or changed
+                pins_waiting = _shim_pins_waiting(raw, retired)
             if refresh_interpreters:
                 changed = _refresh_bundled_shim_interpreters(raw) or changed
         if not changed:
@@ -425,7 +429,11 @@ def _persist_migrations(path: Path, from_version: int = 0, *, refresh_interprete
         return
 
     if parsed:
-        target = _RESEARCH_RENAME_MIGRATION - 1 if rename_pending else CURRENT_CONFIG_VERSION
+        target = CURRENT_CONFIG_VERSION
+        if pins_waiting:
+            target = _SHIM_PIN_REFRESH_MIGRATION - 1
+        if rename_pending:
+            target = _RESEARCH_RENAME_MIGRATION - 1
         _write_migration_version(path, version=target)
 
 
@@ -1155,7 +1163,7 @@ _RETIRED_SHIM_COMMANDS: dict[int, dict[str, frozenset[str]]] = {
 }
 
 
-class _AgentFloor(NamedTuple):
+class AgentFloor(NamedTuple):
     """The local agent an adapter build drives, and the oldest release of it the build works with."""
 
     executable: str
@@ -1171,20 +1179,31 @@ class _AgentFloor(NamedTuple):
 # moved over an older one, a working row becomes one that opens no session.
 # Spelled out for the reason ``_SHIM_COMMANDS`` is, and held to the preset's own
 # executable and upgrade by tests/test_config_loader.py.
-_SHIM_COMMAND_NEEDS: dict[str, _AgentFloor] = {
+_SHIM_COMMAND_NEEDS: dict[str, AgentFloor] = {
     # 0.0.34 asks pi for its model's thinking levels as a session opens, an RPC pi
     # answers from 0.81.0; an older pi refuses it by name (measured 2026-10-23 on
     # pi 0.80.10), and no session opens.
-    "npx -y pi-acp@0.0.34": _AgentFloor(
+    "npx -y pi-acp@0.0.34": AgentFloor(
         "pi", "@earendil-works/pi-coding-agent", (0, 81, 0), "npm install -g @earendil-works/pi-coding-agent@latest"
     ),
 }
 
-_PACKAGE_VERSION = re.compile(r"^(\d+)\.(\d+)\.(\d+)")
+
+def shim_agent_floor(preset: str) -> AgentFloor | None:
+    """What the adapter build ``preset`` ships needs of its local agent, or ``None`` when it needs nothing.
+
+    The one statement of that floor: the probe's reading of an agent below it is
+    worded from here.
+    """
+    return _SHIM_COMMAND_NEEDS.get(_SHIM_COMMANDS.get(preset, ""))
 
 
-def _npm_package_version(executable: str, package: str, path: str | None) -> tuple[int, int, int] | None:
-    """The version of ``package`` that ``executable`` on ``path`` comes from, or ``None`` when unreadable.
+# A version as npm writes one: major.minor.patch, then an optional pre-release.
+_PACKAGE_VERSION = re.compile(r"^(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?")
+
+
+def _npm_package_version(executable: str, package: str, path: str) -> str | None:
+    """The version ``package`` gives itself where ``executable`` on ``path`` comes from, or ``None``.
 
     Off the package's own ``package.json`` rather than ``--version``, since loading
     a config starts no process: found from the real path of the bin npm links, the
@@ -1201,36 +1220,68 @@ def _npm_package_version(executable: str, package: str, path: str | None) -> tup
             continue
         if not isinstance(package_json, dict) or package_json.get("name") != package:
             continue
-        match = _PACKAGE_VERSION.match(str(package_json.get("version") or ""))
-        if match is None:
-            return None
-        major, minor, patch = (int(part) for part in match.groups())
-        return major, minor, patch
+        version = package_json.get("version")
+        return version if isinstance(version, str) else None
     return None
 
 
-def _held_back(row: dict[str, Any], command: str) -> str | None:
-    """Why ``row`` cannot move onto ``command`` yet, as the end of a sentence, or ``None`` when it can.
+def _ranked(version: str) -> tuple[int, int, int, int] | None:
+    """``version`` in the order npm ranks it, a pre-release before the release it leads to."""
+    match = _PACKAGE_VERSION.match(version)
+    if match is None:
+        return None
+    major, minor, patch = (int(part) for part in match.groups()[:3])
+    return major, minor, patch, 0 if match.group(4) else 1
 
-    Read for this computer only: a row on a registered machine runs that machine's
-    agent, which nothing here can look at.
+
+def _pin_verdict(row: dict[str, Any], command: str) -> tuple[Literal["move", "keep", "wait"], str]:
+    """Whether ``row`` moves onto ``command`` now, stays (with why, to end a sentence), or waits.
+
+    The agent is read on the PATH the row's launch gets: the row's own ``env`` one,
+    else the login shell's as its last capture recorded it (`login_path`). Before
+    any capture neither is known, so which agent a launch runs is not known either,
+    and the row waits rather than being moved or kept on a guess. A row on a
+    registered machine runs that machine's agent, which nothing here can look at.
     """
     need = _SHIM_COMMAND_NEEDS.get(command)
     if need is None:
-        return None
+        return "move", ""
     name, oldest = need.executable, ".".join(str(part) for part in need.oldest)
-    found = None if row.get("machine") else _npm_package_version(name, need.package, os.environ.get("PATH"))
-    if found is None:
-        return (
-            f"needs {name} {oldest} or newer, and which {name} it runs could not be read here; with {name} "
-            f"{oldest} or newer, change its command to `{command}`."
-        )
-    if found >= need.oldest:
-        return None
-    return (
-        f"needs {name} {oldest} or newer, and this computer has {name} {'.'.join(str(part) for part in found)}: "
-        f"upgrade it with `{need.upgrade}`, then change its command to `{command}`."
+    unread = (
+        f"needs {name} {oldest} or newer, and which {name} it runs could not be read here; with {name} "
+        f"{oldest} or newer, change its command to `{command}`."
     )
+    if str(row.get("machine") or "").strip():
+        return "keep", unread
+    env = row.get("env")
+    own = env.get("PATH") if isinstance(env, dict) else None
+    path = own if isinstance(own, str) and own else login_path.recall()
+    if path is None:
+        return "wait", ""
+    version = _npm_package_version(name, need.package, path)
+    ranked = _ranked(version) if version is not None else None
+    if ranked is None:
+        return "keep", unread
+    if ranked >= (*need.oldest, 1):
+        return "move", ""
+    return "keep", (
+        f"needs {name} {oldest} or newer, and this computer has {name} {version}: upgrade it with "
+        f"`{need.upgrade}`, then change its command to `{command}`."
+    )
+
+
+def _shim_pins_waiting(data: dict[str, Any], retired: Mapping[str, frozenset[str]]) -> bool:
+    """Whether a row on a pin ``retired`` names still waits to learn which agent its launch runs."""
+    for _alias, rows in _subagent_alias_rows(data):
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            preset = str(row.get("preset") or "")
+            command = row.get("command")
+            if isinstance(command, str) and command in retired.get(preset, frozenset()):
+                if _pin_verdict(row, _SHIM_COMMANDS[preset])[0] == "wait":
+                    return True
+    return False
 
 
 def _migrate_retired_shim_pins(
@@ -1264,12 +1315,18 @@ def _migrate_retired_shim_pins(
     ``_migrate_retired_deep_research`` gives.
 
     A build that needs its local agent at a version (`_SHIM_COMMAND_NEEDS`) is
-    taken only beside an agent that new. A row whose agent is older, or could
-    not be read -- on a registered machine, or off this process's PATH -- stays
-    on the build it works with, and its owner is told what the newer one needs.
-    The floor passes all the same: told once, the owner moves the row by hand.
+    taken only beside an agent that new, read on the PATH the row's launch gets
+    (`_pin_verdict`). A row whose agent is older, or could not be read -- on a
+    registered machine, or one npm did not install -- stays on the build it works
+    with, and its owner is told what the newer one needs; once told, the owner
+    moves the row by hand. A row whose launch PATH nothing has recorded yet is
+    left untouched and unannounced, and the file pass holds the floor open
+    (`_shim_pins_waiting`) until a load that knows it decides. Every load re-runs
+    the floor until then, so a row it keeps is announced by the load that passes
+    it, not by each of those.
     """
     changed = False
+    waiting = _shim_pins_waiting(data, retired)
     for alias, rows in _subagent_alias_rows(data):
         for row in rows:
             if not isinstance(row, dict):
@@ -1280,11 +1337,13 @@ def _migrate_retired_shim_pins(
                 continue
             current = _SHIM_COMMANDS[preset]
             name = row.get("name") or "?"
-            held = _held_back(row, current)
-            if held is not None:
+            verdict, why = _pin_verdict(row, current)
+            if verdict == "wait" or (verdict == "keep" and waiting):
+                continue
+            if verdict == "keep":
                 notice = (
                     f"Kept: subagents.{alias}[{name}] still launches `{command}`. The adapter build its preset "
-                    f"ships now, `{current}`, {held}"
+                    f"ships now, `{current}`, {why}"
                 )
             else:
                 row["command"] = current

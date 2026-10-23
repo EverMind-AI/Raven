@@ -1441,15 +1441,15 @@ def _pi_row(command: object, **extra: object) -> dict:
 _PI_PACKAGE = "@earendil-works/pi-coding-agent"
 
 
-def _pi_on_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, version: str | None) -> None:
-    """This process's PATH holding only a pi laid out the way `npm i -g` lays one out, or no pi at all.
+def _pi_install(prefix: Path, version: str | None) -> str:
+    """A PATH holding only a pi laid out the way `npm i -g` lays one out, or no pi at all.
 
     Its build folder carries a nameless package.json of its own, as many ESM builds
     ship one, so the version is read from the package's and not the first found."""
-    bin_dir = tmp_path / "pi-prefix" / "bin"
+    bin_dir = prefix / "bin"
     bin_dir.mkdir(parents=True)
     if version is not None:
-        package = tmp_path / "pi-prefix" / "lib" / "node_modules" / _PI_PACKAGE
+        package = prefix / "lib" / "node_modules" / _PI_PACKAGE
         (package / "dist").mkdir(parents=True)
         (package / "package.json").write_text(json.dumps({"name": _PI_PACKAGE, "version": version}))
         (package / "dist" / "package.json").write_text(json.dumps({"type": "module"}))
@@ -1457,7 +1457,14 @@ def _pi_on_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, version: str | 
         cli.write_text("#!/usr/bin/env node\n")
         cli.chmod(0o755)
         (bin_dir / "pi").symlink_to(os.path.relpath(cli, bin_dir))
-    monkeypatch.setenv("PATH", str(bin_dir))
+    return str(bin_dir)
+
+
+def _launches_run_on(path: str) -> None:
+    """What a capture of the login shell records: the PATH a launch here gets."""
+    from raven.config import login_path
+
+    login_path.remember(path)
 
 
 # The stock commands the second floor retired: what each shim preset shipped
@@ -1584,9 +1591,7 @@ def test_the_retired_pin_table_leads_to_the_command_its_preset_ships_now() -> No
             assert commands and loader._SHIM_COMMANDS[preset] not in commands, (floor, preset)
 
 
-def test_a_config_past_the_first_pin_floor_moves_only_the_pins_the_next_floor_retired(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_a_config_past_the_first_pin_floor_moves_only_the_pins_the_next_floor_retired(tmp_path: Path) -> None:
     """A config through floor 11 has had its rows moved once. A later floor moves
     the pins it retired itself and no others: an older stock pin on such a config is
     one its owner put back after the first move, which the watermark exists to let
@@ -1598,7 +1603,7 @@ def test_a_config_past_the_first_pin_floor_moves_only_the_pins_the_next_floor_re
     from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
     from raven.config import loader
 
-    _pi_on_path(monkeypatch, tmp_path, "0.81.0")
+    _launches_run_on(_pi_install(tmp_path / "pi", "0.81.0"))
     claude, codex, pi = (THIRD_PARTY_SUBAGENT_PRESETS[key]["command"] for key in ("claude_code", "codex", "pi"))
     put_back = _claude_row(_RETIRED_CLAUDE[1], name="Claude-put-back")
     loader._migration_notices.clear()
@@ -1627,7 +1632,7 @@ def test_a_config_past_the_first_pin_floor_moves_only_the_pins_the_next_floor_re
     assert loader.drain_migration_notices() == []
 
 
-def test_a_pi_row_stays_on_the_adapter_its_pi_can_answer(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_a_pi_row_stays_on_the_adapter_its_pi_can_answer(tmp_path: Path) -> None:
     """pi-acp 0.0.34 asks pi for its model's thinking levels as a session opens, which a
     pi older than 0.81.0 refuses as an unknown command, so no session opens (measured
     2026-10-23 on pi 0.80.10). Moved over such a pi, a working row would stop working:
@@ -1635,7 +1640,7 @@ def test_a_pi_row_stays_on_the_adapter_its_pi_can_answer(monkeypatch: pytest.Mon
     from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS, upgrade_hint_for
     from raven.config import loader
 
-    _pi_on_path(monkeypatch, tmp_path, "0.80.10")
+    _launches_run_on(_pi_install(tmp_path / "pi", "0.80.10"))
     loader._migration_notices.clear()
     data = {"subagents": {"agents": [_pi_row(_SECOND_RETIRED[2])]}}
 
@@ -1649,10 +1654,8 @@ def test_a_pi_row_stays_on_the_adapter_its_pi_can_answer(monkeypatch: pytest.Mon
     assert f"`{THIRD_PARTY_SUBAGENT_PRESETS['pi']['command']}`" in notice
 
 
-@pytest.mark.parametrize("where", ["no pi on this PATH", "a pi npm did not install", "on a machine"])
-def test_a_pi_row_whose_pi_cannot_be_read_stays_where_it_works(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, where: str
-) -> None:
+@pytest.mark.parametrize("where", ["no pi on the launch PATH", "a pi npm did not install", "on a machine"])
+def test_a_pi_row_whose_pi_cannot_be_read_stays_where_it_works(tmp_path: Path, where: str) -> None:
     """Moving it would be a guess about a pi nobody looked at, and the build it is on
     works with every pi. Its owner is told what the newer one needs, not told to upgrade.
 
@@ -1662,15 +1665,16 @@ def test_a_pi_row_whose_pi_cannot_be_read_stays_where_it_works(
 
     row = _pi_row(_SECOND_RETIRED[2])
     if where == "on a machine":
-        _pi_on_path(monkeypatch, tmp_path, "0.81.0")
+        _launches_run_on(_pi_install(tmp_path / "pi", "0.81.0"))
         row = _pi_row(_SECOND_RETIRED[2], machine="box")
     elif where == "a pi npm did not install":
-        _pi_on_path(monkeypatch, tmp_path, None)
-        shim = tmp_path / "pi-prefix" / "bin" / "pi"
+        launch_path = _pi_install(tmp_path / "pi", None)
+        shim = Path(launch_path) / "pi"
         shim.write_text('#!/bin/sh\nexec somewhere-else "$@"\n')
         shim.chmod(0o755)
+        _launches_run_on(launch_path)
     else:
-        _pi_on_path(monkeypatch, tmp_path, None)
+        _launches_run_on(_pi_install(tmp_path / "pi", None))
     loader._migration_notices.clear()
     data = {"subagents": {"agents": [json.loads(json.dumps(row))]}}
 
@@ -1683,7 +1687,7 @@ def test_a_pi_row_whose_pi_cannot_be_read_stays_where_it_works(
     assert "npm install" not in notice, "no pi was read, so none is called too old"
 
 
-def test_a_pi_installed_beside_an_npm_shim_is_read_too(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_a_pi_installed_beside_an_npm_shim_is_read_too(tmp_path: Path) -> None:
     """npm on Windows writes `pi.cmd` beside `node_modules` rather than linking into the package."""
     from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
     from raven.config import loader
@@ -1695,7 +1699,7 @@ def test_a_pi_installed_beside_an_npm_shim_is_read_too(monkeypatch: pytest.Monke
     shim = prefix / "pi"
     shim.write_text("#!/bin/sh\n")
     shim.chmod(0o755)
-    monkeypatch.setenv("PATH", str(prefix))
+    _launches_run_on(str(prefix))
     data = {"subagents": {"agents": [_pi_row(_SECOND_RETIRED[2])]}}
 
     loader._migrate_config(data, from_version=14)
@@ -1703,10 +1707,128 @@ def test_a_pi_installed_beside_an_npm_shim_is_read_too(monkeypatch: pytest.Monke
     assert data == {"subagents": {"agents": [_pi_row(THIRD_PARTY_SUBAGENT_PRESETS["pi"]["command"])]}}
 
 
-def test_a_file_whose_pi_row_stays_back_still_passes_the_floor(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("ravens_own", "launched_with", "moves"), [("0.82.3", "0.80.10", False), ("0.80.10", "0.82.3", True)]
+)
+def test_the_pi_read_is_the_one_a_launch_runs_not_ravens_own(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ravens_own: str, launched_with: str, moves: bool
+) -> None:
+    """A launch runs on the login shell's PATH, not on raven's. Read off raven's, with the
+    login shell's pi at 0.80.10 and raven's at 0.82.3, the row moved beside the pi that
+    refuses it; the other way round it stayed, told to upgrade a pi already new."""
+    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
+    from raven.config import loader
+
+    monkeypatch.setenv("PATH", _pi_install(tmp_path / "ravens", ravens_own))
+    _launches_run_on(_pi_install(tmp_path / "launched", launched_with))
+    data = {"subagents": {"agents": [_pi_row(_SECOND_RETIRED[2])]}}
+
+    loader._migrate_config(data, from_version=14)
+
+    expected = THIRD_PARTY_SUBAGENT_PRESETS["pi"]["command"] if moves else _SECOND_RETIRED[2]
+    assert data == {"subagents": {"agents": [_pi_row(expected)]}}
+
+
+def test_a_row_that_sets_its_own_path_is_read_on_it(tmp_path: Path) -> None:
+    """A launch lays the row's own env over the login shell's, so its PATH is the one that runs."""
+    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
+    from raven.config import loader
+
+    _launches_run_on(_pi_install(tmp_path / "login", "0.80.10"))
+    own = {"PATH": _pi_install(tmp_path / "own", "0.81.0")}
+    data = {"subagents": {"agents": [_pi_row(_SECOND_RETIRED[2], env=own)]}}
+
+    loader._migrate_config(data, from_version=14)
+
+    assert data == {"subagents": {"agents": [_pi_row(THIRD_PARTY_SUBAGENT_PRESETS["pi"]["command"], env=own)]}}
+
+
+@pytest.mark.parametrize(
+    ("version", "moves"),
+    [
+        ("0.81.0", True),
+        ("0.80.10", False),
+        ("0.81.0-beta.1", False),
+        ("0.82.0-beta.1", True),
+        ("0.9.0", False),
+        ("0.100.0", True),
+        ("1.4.0", True),
+    ],
+)
+def test_a_pi_row_moves_only_beside_a_pi_at_or_past_the_floor(tmp_path: Path, version: str, moves: bool) -> None:
+    """Compared as versions: a pre-release of the floor comes before it, and 0.9 before 0.81."""
+    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
+    from raven.config import loader
+
+    _launches_run_on(_pi_install(tmp_path / "pi", version))
+    data = {"subagents": {"agents": [_pi_row(_SECOND_RETIRED[2])]}}
+
+    loader._migrate_config(data, from_version=14)
+
+    expected = THIRD_PARTY_SUBAGENT_PRESETS["pi"]["command"] if moves else _SECOND_RETIRED[2]
+    assert data == {"subagents": {"agents": [_pi_row(expected)]}}
+
+
+def test_a_pi_row_waits_for_a_launch_path_before_it_moves_or_stays(tmp_path: Path) -> None:
+    """Before the first capture nothing here knows which pi a launch runs, and starting the
+    login shell is not something loading a config does. So the row is left as it is,
+    unannounced, and the floor stays open until a load that knows decides it once."""
+    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
+
+    pi = THIRD_PARTY_SUBAGENT_PRESETS["pi"]["command"]
+    p = tmp_path / "config.json"
+    _write(p, {"subagents": {"agents": [_pi_row(_SECOND_RETIRED[2])]}})
+    _stamp_path(p).write_text(json.dumps({"version": 14}), encoding="utf-8")
+    drain_migration_notices()
+
+    assert [a.command for a in load_config(p).subagents.agents] == [_SECOND_RETIRED[2]]
+    assert json.loads(p.read_text(encoding="utf-8"))["subagents"]["agents"] == [_pi_row(_SECOND_RETIRED[2])]
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": 14}
+    assert drain_migration_notices() == []
+
+    _launches_run_on(_pi_install(tmp_path / "pi", "0.81.0"))
+
+    assert [a.command for a in load_config(p).subagents.agents] == [pi]
+    assert json.loads(p.read_text(encoding="utf-8"))["subagents"]["agents"] == [_pi_row(pi)]
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+    assert [n.split("]")[0] for n in drain_migration_notices()] == ["Migrated: subagents.agents[Pi"]
+    load_config(p)
+    assert drain_migration_notices() == []
+
+
+def test_a_row_kept_while_another_waits_is_announced_once_when_the_floor_passes(tmp_path: Path) -> None:
+    """While one row waits, the floor re-runs on every load, and a row it keeps would be
+    announced on each of them. Its notice comes with the load that passes the floor."""
+    p = tmp_path / "config.json"
+    _write(
+        p,
+        {
+            "subagents": {
+                "agents": [_pi_row(_SECOND_RETIRED[2]), _pi_row(_SECOND_RETIRED[2], name="Pi-box", machine="box")]
+            }
+        },
+    )
+    _stamp_path(p).write_text(json.dumps({"version": 14}), encoding="utf-8")
+    drain_migration_notices()
+
+    for _load in range(2):
+        load_config(p)
+        assert drain_migration_notices() == []
+
+    _launches_run_on(_pi_install(tmp_path / "pi", "0.81.0"))
+    load_config(p)
+    assert sorted(n.split("]")[0] for n in drain_migration_notices()) == [
+        "Kept: subagents.agents[Pi-box",
+        "Migrated: subagents.agents[Pi",
+    ]
+    load_config(p)
+    assert drain_migration_notices() == []
+
+
+def test_a_file_whose_pi_row_stays_back_still_passes_the_floor(tmp_path: Path) -> None:
     """Run once, as every floor is: the owner is told once, and a row they then move by
     hand -- or move back -- is theirs."""
-    _pi_on_path(monkeypatch, tmp_path, "0.80.10")
+    _launches_run_on(_pi_install(tmp_path / "pi", "0.80.10"))
     p = tmp_path / "config.json"
     _write(p, {"subagents": {"agents": [_pi_row(_SECOND_RETIRED[2])]}})
     _stamp_path(p).write_text(json.dumps({"version": 14}), encoding="utf-8")
@@ -1731,11 +1853,13 @@ def test_each_adapter_floor_names_the_agent_its_preset_drives_and_how_to_upgrade
     assert loader._SHIM_COMMAND_NEEDS, "nothing waits on an agent's version: drop the gate rather than this test"
     for command, need in loader._SHIM_COMMAND_NEEDS.items():
         (preset,) = [key for key, current in loader._SHIM_COMMANDS.items() if current == command]
+        assert loader.shim_agent_floor(preset) == need, preset
         row = SimpleNamespace(preset=preset)
         requirement = shim_requirement_for(row)
         assert requirement is not None and requirement[0] == need.executable, preset
         assert requirement[1].split()[-1] == need.package, preset
         assert upgrade_hint_for(row) == need.upgrade, preset
+    assert loader.shim_agent_floor("codex") is None, "a build that brings its own agent waits on none"
 
 
 def test_a_file_past_the_first_pin_floor_has_its_second_floor_pins_carried_in_the_file(tmp_path: Path) -> None:

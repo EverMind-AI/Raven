@@ -274,6 +274,28 @@ pi answers from 0.81.0; an older pi refuses it by name, and no session opens unt
 pi is upgraded (measured 2026-10-23 on pi 0.80.10)."""
 
 
+def _pi_too_old(cfg: Any, said: str, judged: str | None = None) -> tuple[str, Remedy] | None:
+    """pi-acp's refusal over a pi older than it needs, and the fix, or ``None`` for any other text.
+
+    One reading for every surface that shows the refusal: a connect (`_refusal`),
+    the Test button and the roster, the last two over the handshake's record
+    (`_process_refusal`, `_probe_acp`). The floor it names is config's
+    (`raven.config.loader.shim_agent_floor`), the one the pin migration reads.
+    """
+    if getattr(cfg, "preset", None) != "pi" or not _PI_TOO_OLD.search(said if judged is None else judged):
+        return None
+    from raven.config.loader import shim_agent_floor
+
+    floor = shim_agent_floor("pi")
+    first = f"older than {'.'.join(map(str, floor.oldest))}, the first pi" if floor else "older than the first pi"
+    up = upgrade_hint_for(cfg)
+    how = f" with `{up}`" if up else ""
+    return (
+        f"its pi is {first} that answers what its adapter asks as a session opens; "
+        f"upgrade pi{how} and connect again. It said: {said}"
+    )[:_DETAIL_CAP], Remedy("upgrade", up)
+
+
 def _refusal(cfg: Any, said: str, answer: str | None = None) -> tuple[str, Remedy | None]:
     """`_refusal_detail`'s sentence, and the remedy it was written from.
 
@@ -292,13 +314,8 @@ def _refusal(cfg: Any, said: str, answer: str | None = None) -> tuple[str, Remed
     # first so a bad API key is not told to sign in.
     if github_copilot.applies(cfg) and (named := github_copilot.read(judged)) is not None:
         return named[0][:_DETAIL_CAP], named[1]
-    if getattr(cfg, "preset", None) == "pi" and _PI_TOO_OLD.search(judged):
-        up = upgrade_hint_for(cfg)
-        how = f" with `{up}`" if up else ""
-        return (
-            "its pi is older than 0.81.0, the first pi that answers what its adapter asks as a session opens; "
-            f"upgrade pi{how} and connect again. It said: {said}"
-        )[:_DETAIL_CAP], Remedy("upgrade", up)
+    if (named := _pi_too_old(cfg, said, judged)) is not None:
+        return named
     if not looks_like_auth(judged):
         # Read off the agent's answer only: a launch that died says nothing
         # about a provider, and its stderr can name an unreachable host that is
@@ -455,7 +472,9 @@ def _process_refusal(cfg: Any, shown: str) -> tuple[str, Remedy | None] | None:
     on a Node.js older than its package declares was run on the wrong one
     (`_stale_node`). A timed-out prompt or an empty turn carries nothing, and is
     named only for an agent measured to go silent that way
-    (`presets.DIAGNOSE_HINTS`), with the command that makes it say why.
+    (`presets.DIAGNOSE_HINTS`), with the command that makes it say why. pi-acp's
+    refusal over a pi too old for it is read here as a connect reads it
+    (`_pi_too_old`), since the Test button reads the handshake's record here.
 
     Runs ``node --version`` for a Node.js agent that quit, so its callers keep it
     off the event loop.
@@ -479,6 +498,8 @@ def _process_refusal(cfg: Any, shown: str) -> tuple[str, Remedy | None] | None:
                 f"{stale.found} ({stale.node}); upgrade Node.js{how} and connect again. It said: {shown}"
             )[:_DETAIL_CAP], Remedy("runtime", stale.upgrade, needs=stale.needs, found=stale.found)
         return shown[:_DETAIL_CAP], Remedy("exited")
+    if (named := _pi_too_old(cfg, shown)) is not None:
+        return named
     if _PROMPT_TIMEOUT.search(shown):
         run = diagnose_hint_for(cfg)
         if run:
@@ -708,7 +729,9 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
             f"installed at {resolved}, but its model menu has not been measured yet -- run a test",
             resolved,
         )
-    return done(snapshot.status, snapshot.detail, resolved)
+    # The record of a refusal reads as Test and a connect read it.
+    named = _pi_too_old(cfg, snapshot.detail)
+    return done(snapshot.status, named[0] if named else snapshot.detail, resolved)
 
 
 def _model_ids(payload: Any) -> list[str] | None:

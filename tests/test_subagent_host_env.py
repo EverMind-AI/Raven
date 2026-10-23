@@ -12,6 +12,7 @@ read; the sections at the end cover that capture and the launch that consumes it
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shlex
 import sys
@@ -222,6 +223,77 @@ def windows_host(monkeypatch: pytest.MonkeyPatch) -> _FakeWinreg:
 
 def _no_shell(argv: list[str], **_: Any) -> NoReturn:
     raise AssertionError(f"no shell is started on Windows, got {argv}")
+
+
+# ---- the PATH a capture leaves for config to read ---------------------------------
+
+
+@pytest.fixture
+def no_capture_yet(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(backend_env, "_LOGIN_ENV", None)
+    monkeypatch.setattr(backend_env, "_LOGIN_ENV_FAILED", False)
+
+
+def test_a_capture_records_the_path_a_launch_gets_for_config_to_read(
+    no_capture_yet: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Config moves a row onto an adapter build only beside the agent that build needs, so it
+    reads that agent on the PATH a launch gets -- the login shell's, which only a capture can
+    tell, and config starts no process to take one."""
+    from raven.config import login_path
+
+    monkeypatch.setattr(backend_env, "_capture_now", lambda **_: {"PATH": "/the/login/shell/bin"})
+    assert login_path.recall() is None
+
+    backend_env.login_shell_env()
+
+    assert login_path.recall() == "/the/login/shell/bin"
+
+
+def test_a_capture_that_falls_back_records_ravens_own_path(
+    no_capture_yet: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A launch after a failed capture runs on raven's own environment, so that PATH is the one."""
+    from raven.config import login_path
+
+    monkeypatch.setenv("PATH", "/ravens/own/bin")
+    monkeypatch.setattr(backend_env, "_capture_now", lambda **_: None)
+
+    assert backend_env.login_shell_env()["PATH"] == "/ravens/own/bin"
+    assert login_path.recall() == "/ravens/own/bin"
+
+
+def test_a_refresh_records_the_path_it_took_and_a_failed_one_keeps_the_last(
+    no_capture_yet: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from raven.config import login_path
+
+    monkeypatch.setattr(backend_env, "_capture_now", lambda **_: {"PATH": "/first"})
+    backend_env.login_shell_env()
+    monkeypatch.setattr(backend_env, "_capture_now", lambda **_: {"PATH": "/after/an/install"})
+    assert backend_env.refresh_login_shell_env() is True
+    assert login_path.recall() == "/after/an/install"
+
+    monkeypatch.setattr(backend_env, "_capture_now", lambda **_: None)
+    assert backend_env.refresh_login_shell_env() is False
+    assert login_path.recall() == "/after/an/install"
+
+
+def test_what_config_reads_is_nothing_until_a_well_formed_record_exists() -> None:
+    from raven.config import login_path
+    from raven.home import raven_home
+
+    record = raven_home() / "cache" / "login-path.json"
+    assert login_path.recall() is None
+    for written in ("", "not json", json.dumps(["/a"]), json.dumps({"PATH": 7}), json.dumps({"PATH": ""})):
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text(written, encoding="utf-8")
+        assert login_path.recall() is None, written
+
+    login_path.remember("/a:/b")
+
+    assert json.loads(record.read_text(encoding="utf-8")) == {"PATH": "/a:/b"}
+    assert login_path.recall() == "/a:/b"
 
 
 def test_windows_capture_takes_path_from_the_stores_and_every_other_value_from_raven(
