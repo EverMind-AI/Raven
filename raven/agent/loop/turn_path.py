@@ -2035,8 +2035,11 @@ class TurnPathMixin:
                     verdict = response.error_classification
                     if verdict is None and (classify := getattr(self.provider, "classify_error", None)) is not None:
                         verdict = classify(content=clean or None)
-                    # A model that has a fallback goes there before the turn waits. Only
-                    # a streamed call needs the loop to do it: a plain call walks
+                    # A streamed call whose error came back as a response goes to the
+                    # next fallback model before the turn waits. One whose provider
+                    # raised never reaches here: the stream reconnects and waits out
+                    # this same ladder itself (``retry_delays``), then the error fails
+                    # the turn with no fallback model tried. A plain call walks
                     # ``[model, *fallbacks]`` inside the provider's own retry layer,
                     # and has already been through it by the time it comes back an error.
                     if streamed_call and fallbacks_left and verdict is not None and verdict.should_fallback:
