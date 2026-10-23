@@ -13,9 +13,11 @@ import pytest
 
 from raven.acp_client.asker import ApprovalViaAsk, AskViaTool, current_ask, current_autofill
 from raven.acp_client.resolver import Autofill
+from raven.agent.loop.recovery import EMPTY_REPLY_FAILURE
 from raven.agent.tools.ask_user import AskUserTool
 from raven.config.raven import SubagentQuestionsConfig
-from raven.gateway.spine import _DELIVERY_GRACE, build_gateway
+from raven.gateway.spine import _DELIVERY_GRACE, _make_gateway_sink, build_gateway
+from raven.providers.base import bound_llm_detail
 from raven.spine import (
     AnswerlessTurnError,
     ChatType,
@@ -23,11 +25,14 @@ from raven.spine import (
     Origin,
     Source,
     Text,
+    TurnEnded,
+    TurnFailed,
     TurnOutcome,
     TurnRequest,
+    TurnStarted,
     Usage,
 )
-from raven.spine.delivery import Capabilities
+from raven.spine.delivery import Capabilities, DeliveryHub
 from raven.spine.message import Media
 
 
@@ -35,9 +40,11 @@ def _src(channel="telegram", chat_id="c1") -> Source:
     return Source(channel=channel, chat_id=chat_id, sender_id="user", chat_type=ChatType.DM)
 
 
-def _req(text="ping", *, channel="telegram", chat_id="c1", conversation="cron:1") -> TurnRequest:
+def _req(
+    text="ping", *, channel="telegram", chat_id="c1", conversation="cron:1", origin: Origin = Origin.CRON
+) -> TurnRequest:
     return TurnRequest(
-        origin=Origin.CRON,
+        origin=origin,
         source=_src(channel, chat_id),
         text=text,
         conversation=conversation,
@@ -276,8 +283,8 @@ async def test_gateway_sink_sends_error_reply_on_failure():
     assert agent.notify_count >= 1
 
 
-async def _reply_to_a_failed_turn(exc: BaseException) -> list[str]:
-    """What a channel reader is sent when ``run_turn`` ends with ``exc``."""
+async def _reply_to_a_failed_turn(exc: BaseException, *, origin: Origin = Origin.CRON) -> list[str]:
+    """What a channel reader is sent when ``run_turn`` of an ``origin`` turn ends with ``exc``."""
 
     class _GaveUpAgent(_ReplyAgent):
         async def run_turn(self, req, emit, drain, *, stream, usage_sink=None, text_sink=None):
@@ -287,7 +294,9 @@ async def _reply_to_a_failed_turn(exc: BaseException) -> list[str]:
     scheduler, hub, _readback, _sources, teardown = build_gateway(_GaveUpAgent(), {"telegram": ch})
     try:
         try:
-            await scheduler.submit(_req(channel="telegram", chat_id="c9")).result()
+            await scheduler.submit(
+                _req(channel="telegram", chat_id="c9", conversation=f"{origin.value}:1", origin=origin)
+            ).result()
         except Exception:
             pass
         await hub.wait_idle("telegram")
@@ -334,6 +343,96 @@ async def test_gateway_sink_keeps_the_canned_reply_for_a_crash():
     sent = await _reply_to_a_failed_turn(RuntimeError("connect /Users/ops/.raven/run/agent.sock: no such file"))
     assert sent == ["Sorry, I encountered an error."]
     assert "/Users/ops" not in sent[0]
+
+
+# --- a scheduled run that got no output from the model is not reported to a chat ---
+
+
+async def test_a_cron_run_that_got_no_output_is_not_delivered():
+    """A scheduled run has no reader waiting on it, and its job records the
+    failure; a chat message for every empty hourly check would be noise."""
+    sent = await _reply_to_a_failed_turn(AnswerlessTurnError(EMPTY_REPLY_FAILURE, no_output=True))
+
+    assert sent == []
+
+
+async def test_a_user_turn_that_got_no_output_is_told_so():
+    """A person is waiting on the answer, so the failure is what they get."""
+    sent = await _reply_to_a_failed_turn(AnswerlessTurnError(EMPTY_REPLY_FAILURE, no_output=True), origin=Origin.USER)
+
+    assert sent == [bound_llm_detail(EMPTY_REPLY_FAILURE)]
+
+
+@pytest.mark.parametrize("origin", [Origin.HEARTBEAT, Origin.SENTINEL, Origin.SUBAGENT])
+async def test_only_a_cron_runs_no_output_failure_is_withheld(origin):
+    """The other turns the runtime opens keep the report they always had."""
+    sent = await _reply_to_a_failed_turn(AnswerlessTurnError(EMPTY_REPLY_FAILURE, no_output=True), origin=origin)
+
+    assert sent == [bound_llm_detail(EMPTY_REPLY_FAILURE)]
+
+
+class _RecordingHub(DeliveryHub):
+    """Keeps what the sink dispatches instead of queueing it for an outlet."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.dispatched: list[Text] = []
+
+    async def dispatch(self, out) -> None:
+        self.dispatched.append(out)
+
+
+def _no_output_failure(conversation_id: str, turn_id: str) -> TurnFailed:
+    return TurnFailed(
+        error=EMPTY_REPLY_FAILURE,
+        cancelled=False,
+        conversation_id=conversation_id,
+        turn_id=turn_id,
+        reported=True,
+        no_output=True,
+    )
+
+
+async def test_a_no_output_failure_is_judged_by_its_own_turn():
+    """The gateway runs a cron run and a person's turn at the same time, each in
+    its own pool: the cron run's failure is withheld, and the same failure on the
+    turn beside it is not."""
+    hub = _RecordingHub()
+    sources = {"cron:1": _src(chat_id="c7"), "telegram:u1": _src(chat_id="u1")}
+    sink = _make_gateway_sink(hub, _ReplyAgent(), sources)
+
+    await sink(TurnStarted(origin=Origin.CRON, conversation_id="cron:1", turn_id="t-cron"))
+    await sink(TurnStarted(origin=Origin.USER, conversation_id="telegram:u1", turn_id="t-user"))
+    await sink(_no_output_failure("telegram:u1", "t-user"))
+    await sink(_no_output_failure("cron:1", "t-cron"))
+
+    told = [(out.source.chat_id, out.content) for out in hub.dispatched]
+    assert told == [("u1", bound_llm_detail(EMPTY_REPLY_FAILURE))]
+
+
+@pytest.mark.parametrize("how", ["ended", "failed", "cancelled"])
+async def test_a_finished_cron_turn_is_forgotten(how):
+    """The gateway runs for weeks, so the sink holds a cron run's id only while
+    it runs. The id is reused here to see whether it is still held: a no-output
+    failure on a turn that is not a cron run is told."""
+    finish = {
+        "ended": TurnEnded(
+            usage=Usage(0, 0, 0), latency_ms=0.0, explicit_reply=True, conversation_id="cron:1", turn_id="t1"
+        ),
+        "failed": TurnFailed(error="boom", cancelled=False, conversation_id="cron:1", turn_id="t1"),
+        "cancelled": TurnFailed(error="cancelled", cancelled=True, conversation_id="cron:1", turn_id="t1"),
+    }[how]
+    hub = _RecordingHub()
+    sources = {"cron:1": _src(chat_id="c7")}
+    sink = _make_gateway_sink(hub, _ReplyAgent(), sources)
+    await sink(TurnStarted(origin=Origin.CRON, conversation_id="cron:1", turn_id="t1"))
+    await sink(finish)
+    told_before = len(hub.dispatched)
+
+    sources["cron:1"] = _src(chat_id="c7")
+    await sink(_no_output_failure("cron:1", "t1"))
+
+    assert len(hub.dispatched) == told_before + 1
 
 
 def test_a_failed_turn_reply_reads_by_what_the_failure_was():

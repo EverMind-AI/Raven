@@ -173,9 +173,11 @@ def _make_gateway_sink(
     TurnFailed fire ``on_turn_complete`` (the WakeScheduler's parked-wake
     signal), and on a non-cancelled failure deliver a user-visible error reply
     to the originating channel -- the failure's category when a model call was
-    what failed. A cancelled turn (/stop) fires the wake and
-    sends no reply -- unless ``cut_by_reload`` says a generation swap did the
-    cancelling, in which case the channel is told the reply was cut.
+    what failed. A cron turn the model gave no output for sends none either: no
+    one is waiting on it, and its job records the failure. A cancelled turn
+    (/stop) fires the wake and sends no reply -- unless ``cut_by_reload`` says a
+    generation swap did the cancelling, in which case the channel is told the
+    reply was cut.
 
     notify fires on every origin (cron / sentinel / heartbeat / channel) rather
     than on user turns only -- benign and slightly more correct:
@@ -183,16 +185,25 @@ def _make_gateway_sink(
     just un-park any turn, and a wake parked during a proactive turn is never
     stranded."""
 
+    cron_turns: set[str] = set()
+
     async def sink(event: TurnEvent) -> None:
         if isinstance(event, TurnStarted):
+            if event.origin is Origin.CRON:
+                cron_turns.add(event.turn_id)
             return
         if isinstance(event, (TurnEnded, TurnFailed)):
             source = sources.pop(event.conversation_id, None)
+            was_cron = event.turn_id in cron_turns
+            cron_turns.discard(event.turn_id)
             if isinstance(event, TurnFailed) and source is not None:
                 if not event.cancelled:
-                    await hub.dispatch(
-                        Text(content=_failed_turn_reply(event.error, reported=event.reported), source=source)
-                    )
+                    # A recurring run that hits this would put the same line in
+                    # the chat every time it fires.
+                    if not (was_cron and event.no_output):
+                        await hub.dispatch(
+                            Text(content=_failed_turn_reply(event.error, reported=event.reported), source=source)
+                        )
                 elif cut_by_reload is not None and cut_by_reload():
                     # /stop is the user's own act and stays silent; a reload is
                     # not, so the reply it cut is owed at least a sentence.
