@@ -189,13 +189,6 @@ describe('the rail', () => {
   })
 })
 
-/* Last in the file on purpose: applying a language is module state for
-   everything after it. Same claim as the two dialogs': every word here is the
-   catalogue's, read at render time, so the rail cannot come back in the
-   language before the flip. A re-render alone would not show it: React diffs
-   against the props it rendered last, so a value it never changes is a value it
-   never writes again, and only a remount asks the component what the text
-   is. */
 /* The window's width, as `matchMedia` answers it (happy-dom does no layout):
    an EventTarget carrying `matches`, which is all state/rail.ts reads of it. */
 describe('the rail on a window under the fold', () => {
@@ -245,6 +238,13 @@ describe('the rail on a window under the fold', () => {
   })
 })
 
+/* Last in the file on purpose: applying a language is module state for
+   everything after it. Same claim as the two dialogs': every word here is the
+   catalogue's, read at render time, so the rail cannot come back in the
+   language before the flip. A re-render alone would not show it: React diffs
+   against the props it rendered last, so a value it never changes is a value it
+   never writes again, and only a remount asks the component what the text
+   is. */
 describe('the rail once a language is applied', () => {
   it('renders the applied words when the column is mounted again', () => {
     const KEYED = ['#newBtn span', '#agentsBtn span', '#upnote .t', '#upnote .rl', '.me .who .n']

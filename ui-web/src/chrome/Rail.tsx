@@ -226,9 +226,6 @@ function RailFoot(): JSX.Element {
   )
 }
 
-/* The column and its six children, in the order page.html had them. #list is
-   handed over empty: the rail island roots itself in it (src/main.tsx), so
-   React must not own that child list. */
 /* On a window under the fold the rail lies over the page (styles/page.css,
    state/rail.ts `FOLDS`), so a press that goes somewhere -- a module, a
    session, a new task, the import, the settings -- folds it, the way a drawer
@@ -246,6 +243,9 @@ function foldOnPick(aside: HTMLElement | null): void {
   })
 }
 
+/* The column and its six children, in the order page.html had them. #list is
+   handed over empty: the rail island roots itself in it (src/main.tsx), so
+   React must not own that child list. */
 export function Rail(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
   return (
