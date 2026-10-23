@@ -379,6 +379,12 @@ def _home_config() -> re.Pattern[str]:
       the home was never covered by this pass and is not a directory name this
       list can exempt without also exempting ``bridge``-style build output.
 
+    The home and the four names are compared in the host's terms
+    (:func:`_host_paths`): on Windows either slash separates and case is
+    ignored, so ``C:\\Users\\a\\.raven\\Workspace`` is the workspace; on POSIX
+    ``/`` separates and ``Workspace`` is not ``workspace``. Either way a name
+    ends at a separator, a quote or the end, so ``pluginsfoo`` is not exempt.
+
     The OAuth token store (``oauth/<provider>/...``) is deliberately not among
     them: it holds no source to edit, and a read of it is a credential file like
     another program's settings, so it loses its tokens to this pass —
@@ -398,16 +404,19 @@ def _home_config() -> re.Pattern[str]:
     """
     from raven.home import raven_home
 
-    home_dir = os.path.expanduser("~").rstrip("/")
-    home = re.escape(home_dir)
-    own = raven_home()
+    style = _path_style()
+    flavour, sep, flags = _host_paths(style)
+    home_dir = flavour(os.path.expanduser("~"))
+    home = _spelled(home_dir, sep) if len(home_dir.parts) > 1 else re.escape(home_dir.anchor.rstrip("/\\"))
+    own = flavour(str(raven_home()))
     skip = ""
-    if str(own.parent) == home_dir and own.name.startswith("."):
+    if own.parent == home_dir and own.name.startswith("."):
         name = re.escape(own.name[1:])
         boundary = r"(?:/|\\|$|[\"'\s])"
-        source = r"(?:[/\\](?:" + "|".join(_OWN_SOURCE_DIRS) + r"))" + boundary
+        lead = sep if style == _WINDOWS else r"[/\\]"
+        source = r"(?:" + lead + r"(?:" + "|".join(_OWN_SOURCE_DIRS) + r"))" + boundary
         skip = r"(?!" + name + r"(?:" + source + r"|(?:$|[\"'\s])))"
-    return re.compile(r"(?:~|\$HOME|\$\{HOME\}|" + home + r")/\." + skip + r"[A-Za-z0-9_-]")
+    return re.compile(r"(?:~|\$HOME|\$\{HOME\}|" + home + r")" + sep + r"\." + skip + r"[A-Za-z0-9_-]", flags)
 
 
 def redact_home_config_read(arguments: Any, text: str) -> str:

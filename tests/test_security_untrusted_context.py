@@ -1327,3 +1327,61 @@ async def test_the_oauth_store_gate_keeps_posix_spelling_on_a_posix_host(monkeyp
     ):
         assert "mmx_FAKEACCESS0123456789abcdef" in await _dispatched(arguments, _STORE_TOKENS), arguments
     assert not _own_oauth_store().flags & re.IGNORECASE
+
+
+_SOURCE = "token = self.get_token(request)\n"
+_SETTINGS = '{"apiKey": "sk-or-v1-0123456789abcdef0123456789abcdef"}'
+
+
+async def test_the_source_exemption_ignores_case_on_a_windows_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    r"""``C:\Users\a\.raven\Workspace`` is the workspace on Windows, whatever the case.
+
+    The exemption compared the four names case-sensitively, so a Windows turn
+    reading its own source under a differently cased spelling had its
+    ``token = ...`` lines rewritten. Each name still ends at a separator, a
+    quote or the end: ``pluginsfoo`` is not ``plugins`` in any case.
+    """
+    import json
+
+    from raven.security.redact import _OWN_SOURCE_DIRS
+
+    _host(monkeypatch, "windows", _WINDOWS_HOME)
+    for name in _OWN_SOURCE_DIRS:
+        for spelled in (name, name.upper(), name.title()):
+            native = f"C:\\Users\\a\\.raven\\{spelled}\\app.py"
+            for arguments in (
+                {"path": native},
+                {"path": f"c:/users/A/.Raven/{spelled}/app.py"},
+                {"path": f"~\\.raven\\{spelled}\\app.py"},
+                {"command": f'type "C:\\Users\\a\\.raven\\{spelled}"'},
+                {"command": "python -c " + json.dumps(f"open({json.dumps(native)})")},
+            ):
+                assert await _dispatched(arguments, _SOURCE) == _SOURCE, arguments
+    for arguments in (
+        {"path": "C:\\Users\\a\\.raven\\pluginsfoo\\app.py"},
+        {"path": "C:\\Users\\a\\.raven\\PLUGINSFOO\\app.py"},
+        {"path": "~/.raven/Workspace2/app.py"},
+        {"path": "C:\\Users\\a\\.raven\\oauth\\app.py"},
+    ):
+        assert await _dispatched(arguments, _SOURCE) == "token = [redacted])\n", arguments
+    # The home itself is matched in the host's terms, so another program's
+    # settings under it lose their key however the path is written.
+    for arguments in (
+        {"path": "C:\\Users\\a\\.qwen\\settings.json"},
+        {"path": "C:\\USERS\\A\\.QWEN\\settings.json"},
+        {"path": "C:/Users/a/.qwen/settings.json"},
+    ):
+        assert "0123456789abcdef0123456789abcdef" not in await _dispatched(arguments, _SETTINGS), arguments
+
+
+async def test_the_source_exemption_keeps_case_on_a_posix_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    """POSIX paths are case-sensitive, so ``Workspace`` is not ``workspace`` there."""
+    from raven.security.redact import _OWN_SOURCE_DIRS
+
+    _host(monkeypatch, "posix", "/home/a")
+    for name in _OWN_SOURCE_DIRS:
+        for arguments in ({"path": f"/home/a/.raven/{name}/app.py"}, {"command": f"cat ~/.raven/{name}/app.py"}):
+            assert await _dispatched(arguments, _SOURCE) == _SOURCE, arguments
+        for arguments in ({"path": f"/home/a/.raven/{name.title()}/app.py"}, {"path": f"~/.raven/{name}foo/app.py"}):
+            assert await _dispatched(arguments, _SOURCE) == "token = [redacted])\n", arguments
+    assert "0123456789abcdef" not in await _dispatched({"path": "/home/a/.qwen/settings.json"}, _SETTINGS)
