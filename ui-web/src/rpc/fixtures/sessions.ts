@@ -164,8 +164,9 @@ function scheduled(env: FixtureEnv): Record<string, ResultOf<'session.resume'>['
       { role: 'assistant', text: '\u8ddf\u5230\u4e00\u534a\u505c\u4e86\uff1a\u65e5\u5fd7\u91cc\u6709\u4e00\u6761\u5e26\u4e86\u6d3b\u7684 Authorization \u5934\uff0c\u5b83\u5728\u7b49\u4f60\u8bf4\u8981\u4e0d\u8981\u628a\u5b83\u5199\u8fdb\u62a5\u544a\u3002', timestamp: at(D1E) },
       /* The next morning's firing, which found nothing new: the model answered
          with its silence marker. The row is kept and the page never draws its
-         text; the session list reads past it, so the row's preview and its time
-         stay where the last answer left them (`last` and `ago` above). */
+         text; the session list leaves the whole firing out, its prompt row
+         included, so the row's time stays where the last answer left it (`ago`
+         above) and its preview is still that answer's. */
       { role: 'user', text: CRON_DIGEST, origin: 'cron', timestamp: at(D1E - DAY + 9 * MIN) },
       { role: 'assistant', text: '[SILENT]', silent: true, timestamp: at(D1E - DAY + 8 * MIN) },
     ],
