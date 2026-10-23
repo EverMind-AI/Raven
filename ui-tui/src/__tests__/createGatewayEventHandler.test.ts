@@ -397,6 +397,22 @@ describe('createGatewayEventHandler', () => {
     expect(assistant?.text).toBe(rendered)
   })
 
+  it('appends no assistant row for a turn the model chose not to answer', () => {
+    const appended: Msg[] = []
+    const onEvent = createGatewayEventHandler(buildCtx(appended))
+
+    onEvent({ payload: {}, type: 'message.start' } as any)
+    onEvent({ payload: { text: 'abc' }, type: 'message.delta' } as any)
+    // The typed notice marks the turn on the shared controller; this path has
+    // no frame of its own for it.
+    turnController.recordSilentTurn()
+    onEvent({ payload: { text: '[SILENT]' }, type: 'message.complete' } as any)
+
+    // Neither the marker nor the preview is drawn, and the fallback that stands
+    // an empty turn in for an assistant row stays out of it too.
+    expect(appended).toEqual([])
+  })
+
   it('always accumulates raw text in message.delta and ignores `rendered` (#16391)', () => {
     const appended: Msg[] = []
     const onEvent = createGatewayEventHandler(buildCtx(appended))

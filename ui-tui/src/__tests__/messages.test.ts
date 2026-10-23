@@ -155,6 +155,55 @@ describe('toTranscriptMessages', () => {
   })
 })
 
+describe('toTranscriptMessages: a turn the model chose not to answer', () => {
+  const SILENT_LINE = 'Raven chose not to reply.'
+
+  it('a reloaded silent row renders the same muted line', () => {
+    const msgs = toTranscriptMessages([
+      { role: 'user', text: 'anything new?' },
+      // The marker is what the model read and wrote; a reader never sees it.
+      { role: 'assistant', text: '[SILENT]', silent: true }
+    ])
+
+    expect(msgs).toEqual([
+      { role: 'user', text: 'anything new?' },
+      { role: 'system', text: SILENT_LINE }
+    ])
+  })
+
+  it('keeps the work and the thought the turn showed, and draws no answer under them', () => {
+    const msgs = toTranscriptMessages([
+      { role: 'user', text: 'anything new?' },
+      {
+        role: 'assistant',
+        text: 'Checking the logs.',
+        tool_calls: [{ arguments: '{"command":"tail app.log"}', id: 'call-1', name: 'terminal' }]
+      },
+      { role: 'tool', text: 'quiet', tool_call_id: 'call-1', name: 'terminal' },
+      { role: 'assistant', text: '[SILENT]', silent: true, reasoning_content: 'Nothing changed since the last run.' }
+    ])
+
+    expect(msgs.map(msg => [msg.role, msg.kind ?? ''])).toEqual([
+      ['user', ''],
+      ['assistant', 'episodes'],
+      ['system', '']
+    ])
+    expect(msgs.at(-1)!.text).toBe(SILENT_LINE)
+    expect(msgs.some(msg => msg.text.includes('SILENT'))).toBe(false)
+    expect(msgs[1]!.episodes?.[0]?.tools[0]).toMatchObject({ id: 'call-1', name: 'terminal' })
+  })
+
+  it('leaves a row without the flag alone, whatever it says', () => {
+    const msgs = toTranscriptMessages([
+      { role: 'user', text: 'what should I answer when there is nothing to report?' },
+      { role: 'assistant', text: '[SILENT]' }
+    ])
+
+    expect(msgs.at(-1)).toMatchObject({ role: 'assistant', text: '[SILENT]' })
+    expect(msgs.some(msg => msg.role === 'system')).toBe(false)
+  })
+})
+
 describe('toTranscriptMessages: resumed tool calls', () => {
   const RESUMED = [
     { role: 'user', text: 'read it' },

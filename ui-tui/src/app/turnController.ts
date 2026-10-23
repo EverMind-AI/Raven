@@ -167,6 +167,7 @@ class TurnController {
   toolTokenAcc = 0
   turnTools: string[] = []
   private turnNotice = ''
+  private turnSilent = false
 
   private activeTools: ActiveTool[] = []
   private activeReasoningText = ''
@@ -218,6 +219,7 @@ class TurnController {
     this.episodes = []
     this.lastEpisodeStartMs = 0
     this.turnNotice = ''
+    this.turnSilent = false
 
     patchTurnState(state => ({
       ...state,
@@ -545,6 +547,27 @@ class TurnController {
     patchTurnState({ notice: line })
   }
 
+  /**
+   * The model ended the turn on its silence marker: nothing is delivered, and
+   * the turn reads as the one muted line `recordNotice` carries.
+   *
+   * The reply streams through `bufRef` and the live `streaming` text until the
+   * turn lands, so whatever of it was already drawn is taken back here and the
+   * commit in `recordMessageComplete` writes none of it. What the turn said
+   * between its steps was flushed into the episodes and segments as it went:
+   * that is narration, not the reply, and it stays.
+   */
+  recordSilentTurn() {
+    if (this.interrupted) {
+      return
+    }
+
+    this.turnSilent = true
+    this.streamTimer = clear(this.streamTimer)
+    this.bufRef = ''
+    patchTurnState({ streaming: '' })
+  }
+
   recordTodos(value: unknown) {
     if (this.interrupted) {
       return
@@ -656,13 +679,17 @@ class TurnController {
     this.closeReasoningSegment()
     this.stampLastEpisodeDuration()
 
+    // A silent turn's text is its marker, which is never drawn: neither the
+    // buffer nor a payload that carries it becomes an answer.
+    const silent = this.turnSilent
+
     // Ink renders markdown via <Md>; the gateway's Rich-rendered ANSI
     // (`payload.rendered`) is for terminals that can't.  Prioritising
     // `rendered` here garbles output whenever a user opts into
     // `display.final_response_markdown: render` because raw ANSI escapes
     // pass through into the React tree.  Prefer raw text and fall back
     // only when the gateway elected not to send any (#16391).
-    const rawText = (payload.text ?? payload.rendered ?? this.bufRef).trimStart()
+    const rawText = silent ? '' : (payload.text ?? payload.rendered ?? this.bufRef).trimStart()
     const split = splitReasoning(rawText)
     const finalText = finalTail(split.text, this.segmentMessages)
     const existingReasoning = this.reasoningText.trim() || String(payload.reasoning ?? '').trim()
@@ -777,7 +804,7 @@ class TurnController {
     this.interrupted = false
     patchTurnState({ activity: [], outcome: '' })
 
-    return { finalMessages, finalText, wasInterrupted }
+    return { finalMessages, finalText, silent, wasInterrupted }
   }
 
   recordMessageDelta({ text }: { rendered?: string; text?: string }) {
@@ -1156,6 +1183,7 @@ class TurnController {
     this.toolTokenAcc = 0
     this.interrupted = false
     this.turnNotice = ''
+    this.turnSilent = false
     this.persistedToolLabels.clear()
     patchUiState({ busy: true })
     patchTurnState({

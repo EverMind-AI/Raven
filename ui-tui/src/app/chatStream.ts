@@ -414,6 +414,11 @@ const dispatch = (
         showTransientNotice(event.payload.kind)
         return
       }
+      // The model ended the turn on its silence marker: the line below is all
+      // the turn has to say, and any preview already streamed is taken back.
+      if (event.payload.kind === 'silent_turn') {
+        turnController.recordSilentTurn()
+      }
       // Runtime prose, not the model's: never merged into the streamed answer.
       // Handed to the turn rather than appended here, because it arrives mid-turn
       // and this turn's steps reach the transcript only at `message.complete` --
@@ -588,9 +593,10 @@ const onMessageComplete = (
     patchUiState(s => ({ ...s, usage: { ...s.usage, ...ev.payload.usage } }))
   }
   clearRunning(null)
-  const { finalMessages, finalText, wasInterrupted } = turnController.recordMessageComplete({})
+  const { finalMessages, finalText, silent, wasInterrupted } = turnController.recordMessageComplete({})
   if (!wasInterrupted && appendMessage) {
-    const msgs: Msg[] = finalMessages.length > 0 ? finalMessages : [{ role: 'assistant', text: finalText }]
+    // A silent turn has no answer for the empty-turn fallback to stand in for.
+    const msgs: Msg[] = finalMessages.length > 0 || silent ? finalMessages : [{ role: 'assistant', text: finalText }]
     msgs.forEach(appendMessage)
     appendArtifacts(state, appendMessage)
   }
