@@ -399,9 +399,11 @@
 /* every display rule below would otherwise beat the hidden attribute */
 [hidden] { display: none !important; }
 html, body { height: 100%; margin: 0; }
-/* Below the floor the window scrolls sideways instead of the layout folding
-   itself away: the rail and the reading column both have a width under which
-   they simply cannot do their job. */
+/* The body's floor is the width the rail and the reading column need side by
+   side; each has a width under which it cannot do its job. A window under it
+   used to scroll sideways rather than squeeze them, which on a phone was the
+   780px shell in a 390px window, so under it the shell folds instead (the
+   narrow-window blocks below). */
 html { overflow-x: auto; overflow-y: hidden; background: var(--ink); }
 body {
   background: var(--ink); color: var(--text);
