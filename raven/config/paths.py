@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from raven.config.loader import get_config_path, raven_home
+from raven.home import oauth_home
 from raven.utils.paths import ensure_dir
 
 
@@ -86,13 +87,18 @@ def get_bridge_install_dir() -> Path:
 def oauth_dir() -> Path:
     """Where every OAuth provider's credentials live, without touching the disk.
 
-    The single definition of the location; :func:`get_oauth_dir` adds the
-    creating and tightening, and every caller that only needs to *name* the
-    directory -- a redaction pass matching a path, a test building an expected
-    one -- asks for it here. Deriving it a second time is what sent a token file
-    to one directory and the reader to another.
+    The config shelf's name for :func:`raven.home.oauth_home`, which computes
+    the path; :func:`get_oauth_dir` adds the creating and tightening, and every
+    caller that only needs to *name* the directory -- a test building an
+    expected one -- asks for it here. The redaction pass asks ``raven.home``
+    for the same path rather than asking this shelf: it sits in a layer this
+    shelf already imports, so a definition asked of here would close that pair
+    into a cycle.
+
+    One definition under two names. Deriving it a second time is what sent a
+    token file to one directory and the reader to another.
     """
-    return raven_home() / "oauth"
+    return oauth_home()
 
 
 def get_oauth_dir() -> Path:

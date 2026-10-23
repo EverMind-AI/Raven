@@ -297,6 +297,30 @@ def test_home_implements_the_layout_paper(tmp_path, monkeypatch) -> None:
     assert home.raven_home() == Path.home() / DEFAULT_HOME_DIRNAME
 
 
+def test_the_oauth_store_path_has_one_definition(tmp_path, monkeypatch) -> None:
+    """The store's path is computed once, in ``raven.home``.
+
+    The writers ask ``config.paths.oauth_dir``; the redaction pass asks
+    ``home.oauth_home``. Both have to answer the same path, or a token is
+    written into one directory and the reader looks in another -- the failure
+    the single definition exists to prevent. The two answers are compared
+    here, so moving one of them without the other fails in this file rather
+    than in a redaction test that would pass over it.
+    """
+    from pathlib import Path
+
+    from raven import home
+    from raven.config.paths import oauth_dir
+
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "elsewhere"))
+    assert home.oauth_home() == tmp_path / "elsewhere" / "oauth"
+    assert oauth_dir() == home.oauth_home()
+
+    monkeypatch.setenv("RAVEN_HOME", "   ")
+    assert home.oauth_home() == Path.home() / ".raven" / "oauth"
+    assert oauth_dir() == home.oauth_home()
+
+
 def test_the_workspace_follows_raven_home_too(tmp_path, monkeypatch) -> None:
     """The half that matters most.
 

@@ -219,14 +219,16 @@ _OAUTH_TOKEN_FIELD = re.compile(r'("(?:access|refresh)"\s*:\s*")([^\s"\\]{16,})'
 def _own_oauth_store() -> re.Pattern[str]:
     """A path into Raven's OAuth token directory, in the spellings calls have used.
 
-    The directory is asked of ``raven/config/paths.py``, which owns where
-    credentials live, rather than assembled here from ``raven_home()``: a store
-    that moves has to move this pattern with it, or the pass keeps pointing at a
-    directory no writer uses and every test built the same way stays green.
-    ``oauth_dir()`` and not ``get_oauth_dir()`` for the same reason that helper's
-    docstring gives: the latter creates and chmods the directory, and a
-    redaction pass must not have side effects on the filesystem it is reading
-    about.
+    The directory is asked of ``raven/home.py``, which owns where the store
+    sits under the home, rather than assembled here from ``raven_home()``: a
+    store that moves has to move this pattern with it, or the pass keeps
+    pointing at a directory no writer uses and every test built the same way
+    stays green. The config shelf's own name for that path is
+    ``config.paths.oauth_dir``, which answers with the same function, so the
+    writers and this pattern cannot drift apart. ``oauth_home()`` and not
+    ``get_oauth_dir()`` for the same reason that helper's docstring gives: the
+    latter creates and chmods the directory, and a redaction pass must not have
+    side effects on the filesystem it is reading about.
 
     One root covers every provider: the writers all derive from ``get_oauth_dir()``
     (``minimax_oauth.token_path``, ``chatgpt_token.token_dir``,
@@ -247,12 +249,13 @@ def _own_oauth_store() -> re.Pattern[str]:
     This is a second resolver beside :func:`_home_config`, not the same one: that
     one answers "is this any program's dot-directory of the home", this one "is
     this Raven's token store". They share ``raven_home()`` through
-    ``config.paths.oauth_dir`` and are asserted together wherever a change could
-    make one wider than the other.
+    ``home.oauth_home`` -- the one definition the config shelf's ``oauth_dir``
+    also answers with -- and are asserted together wherever a change could make
+    one wider than the other.
     """
-    from raven.config.paths import oauth_dir
+    from raven.home import oauth_home
 
-    store = oauth_dir()
+    store = oauth_home()
     home_dir = os.path.expanduser("~").rstrip("/")
     roots = [re.escape(str(store))]
     # The shell spellings, derived from the store's own path rather than spelled

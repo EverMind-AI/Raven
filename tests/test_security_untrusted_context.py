@@ -1109,7 +1109,7 @@ def test_every_branch_of_the_oauth_store_gate(monkeypatch: pytest.MonkeyPatch, t
 def test_the_store_is_found_wherever_the_home_is(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The two resolvers, on a home that is neither under ``HOME`` nor a dot-directory.
 
-    ``_own_oauth_store`` asks ``config.paths.oauth_dir`` and ``_home_config`` asks
+    ``_own_oauth_store`` asks ``home.oauth_home`` and ``_home_config`` asks
     ``raven_home()`` and the home; they are separate questions -- "is this Raven's
     store" against "is this any program's dot-directory of the home" -- and this is
     the case where the answers differ, so it is the case that says whether the
