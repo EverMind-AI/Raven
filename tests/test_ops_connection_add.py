@@ -1152,3 +1152,15 @@ def test_the_model_cannot_register_a_key_machine_whose_id_is_a_password_machine_
 
     assert out.startswith("REFUSED") and "password machine 'lab'" in out and "Nothing was written" in out
     assert not (_home / ".ssh" / "config").exists()
+
+
+def test_the_model_registers_a_key_machine_named_after_its_own_address_beside_a_password_machine_there(_home, reached):
+    """The pair the writer lets through, key machine ``gpu1`` at ``gpu1`` beside a password machine at ``gpu1``, is
+    let through on the model's path too: the check asked before anything is reached sees the address this machine
+    is called by, not an empty one."""
+    _registered(_home, dict(PASSWORD_LAB, id="gpu1-shared", host="gpu1"))
+
+    out = add(id="gpu1", host="gpu1")
+
+    assert "wrote gpu1" in out, out
+    assert [r["id"] for r in connections.load()] == ["gpu1-shared", "gpu1"]
