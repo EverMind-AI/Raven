@@ -1032,7 +1032,7 @@ class TurnPathMixin:
         # Sticky across a turn's step-downs: once the descent reaches a rung, the
         # next one must not read the turn's own effort again and hand back the
         # value that already came up thinking and nothing else.
-        empty_retry_effort: str | None = None
+        step_down_effort: str | None = None
         # Whether the call goes through the stream path. Mirrors the test the
         # Action role applies: that is the path with no fallback chain of its own
         # and the only one a reply can be cut mid-answer on.
@@ -2099,7 +2099,7 @@ class TurnPathMixin:
                 # just came back thinking is skipped instead of paid for again.
                 next_rung = (
                     next_step_down(
-                        empty_retry_effort or call_reasoning_effort,
+                        step_down_effort or call_reasoning_effort,
                         _reasoning_wire_keys(self.provider, call_model),
                         used=recovery.rungs_used,
                     )
@@ -2196,7 +2196,7 @@ class TurnPathMixin:
                     # this re-ask only -- a call that answers leaves the turn's own
                     # effort standing. Each rung is asked for once.
                     recovery.rungs_used.add(next_rung)
-                    empty_retry_effort = next_rung
+                    step_down_effort = next_rung
                     delay = empty_retry_delay(len(recovery.rungs_used))
                     logger.warning(
                         "empty-recovery: thinking-only reply, asking again at reasoning_effort {} (was {}) in {:.1f}s",

@@ -148,8 +148,11 @@ class RecoveryLimits:
         default_factory=lambda: config_schema.LLM_ERROR_RETRY_DELAYS_DEFAULT
     )
     #: Whether a streamed call that failed after it had already produced output is
-    #: asked again. Off, the turn fails (N-TURNFAILED): a person watching the stream
-    #: has seen the words and would see them twice. On, for an unattended agent whose
+    #: asked again, whole: a person watching the stream has seen the words and would
+    #: see them twice. Off, the loop's answering call hands back what streamed and
+    #: asks the model to go on from it (``NETWORK_CUT``), while a call with nothing to
+    #: continue it -- an exhausted turn's wrap-up, the watch-work judgement, a
+    #: sub-agent's run -- fails (N-TURNFAILED). On, for an unattended agent whose
     #: client is a machine: one measured deck build had two hours behind it when a
     #: mid-stream "Network connection lost" ended the turn with nothing published.
     llm_retry_after_output: bool = False
@@ -437,9 +440,10 @@ def next_step_down(
 
 
 def empty_retry_delay(attempt: int, *, rand: Callable[[], float] = random.random) -> float:
-    """Seconds to wait before resend number ``attempt`` (1-based): Hermes's jittered backoff.
+    """Seconds to wait before the ``attempt``-th (1-based) resend or step-down: Hermes's jittered backoff.
 
-    The bounds are read when called so a test can shorten them.
+    Each move counts its own: a resend by the turn's resends, a step-down by the rungs it has
+    stepped to. The bounds are read when called so a test can shorten them.
     """
     exponent = max(0, attempt - 1)
     # The same guard Hermes has: the cap has long since won, and a huge power overflows the float.
