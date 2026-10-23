@@ -114,11 +114,65 @@ def _unavailable(reason: str) -> NoReturn:
     pytest.skip(f"Chromium unavailable: {reason}")
 
 
+WINDOWS_INSTALLS = (
+    r"Google\Chrome\Application\chrome.exe",
+    r"Microsoft\Edge\Application\msedge.exe",
+)
+
+
+def _chrome_executable() -> str | None:
+    """The browser to measure with, by PATH name first and then by install path.
+
+    A Linux host answers to `google-chrome` or `chromium` on PATH. Windows ships
+    neither name -- the binary is `chrome.exe`, and the installer leaves it under
+    Program Files without adding that directory to PATH. Looking the install
+    paths up unconditionally keeps one code path for every host: on Linux they
+    simply do not exist, and the PATH name above is what answers.
+    """
+    for name in ("google-chrome", "chromium", "chromium-browser", "chrome", "msedge"):
+        found = shutil.which(name)
+        if found:
+            return found
+    for root in (os.environ.get("PROGRAMFILES"), os.environ.get("PROGRAMFILES(X86)"), os.environ.get("LOCALAPPDATA")):
+        if not root:
+            continue
+        for install in WINDOWS_INSTALLS:
+            candidate = Path(root) / install
+            if candidate.is_file():
+                return str(candidate)
+    return None
+
+
+def test_the_browser_is_found_by_path_name_then_by_windows_install_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Each way a host can carry the browser, decided without needing that host.
+
+    The Windows install path is the branch the Linux unit job never runs, so a
+    single case there would leave the default-off bug uncovered: a Windows host
+    whose Chrome sits in Program Files and whose PATH names none of the four.
+    """
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/chromium" if name == "chromium" else None)
+    assert _chrome_executable() == "/usr/bin/chromium"
+
+    chrome = tmp_path / "Google" / "Chrome" / "Application" / "chrome.exe"
+    chrome.parent.mkdir(parents=True)
+    chrome.write_bytes(b"")
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    monkeypatch.setenv("PROGRAMFILES", str(tmp_path))
+    monkeypatch.delenv("PROGRAMFILES(X86)", raising=False)
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    assert _chrome_executable() == str(chrome)
+
+    monkeypatch.setenv("PROGRAMFILES", str(tmp_path / "absent"))
+    assert _chrome_executable() is None
+
+
 @pytest.fixture(scope="module")
 def browser() -> Iterator[Browser]:
-    executable = shutil.which("google-chrome") or shutil.which("chromium")
+    executable = _chrome_executable()
     if executable is None:
-        _unavailable("neither google-chrome nor chromium is on PATH")
+        _unavailable("no google-chrome, chromium, chrome or msedge on PATH or under Program Files")
     with sync_playwright() as pw:
         try:
             b = pw.chromium.launch(executable_path=executable, args=["--no-sandbox", "--disable-gpu"])
