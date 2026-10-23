@@ -54,6 +54,7 @@ const STOPPED: Record<Exclude<ExtAgentsState['mconnectStopped'], ''>, { head: st
   cancelled: { head: 'gui.machine.connect_cancelled_head', said: 'gui.machine.connect_cancelled' },
   timeout: { head: 'gui.machine.connect_timeout_head', said: 'gui.machine.connect_timeout' },
   missed: { head: 'gui.machine.connect_missed_head', said: 'gui.machine.connect_missed' },
+  unconfirmed: { head: 'gui.machine.connect_unconfirmed_head', said: 'gui.machine.connect_unconfirmed' },
 }
 
 function MachineTile(): JSX.Element {
@@ -431,12 +432,11 @@ export function MachineConnectSheet({ row, s }: { row: MachineRow; s: ExtAgentsS
   }, [busy])
   const waited = busy && s.mconnectSince !== null ? Math.max(0, Math.floor((Date.now() - s.mconnectSince) / 1000)) : 0
   /* How the last wait ended without the agent's answer, when it did: the
-     reader's Cancel, said plainly; the ceiling, or a stop that came too late
-     to stop anything, said as a warning with where to look. None is drawn
-     while a new write runs. */
+     reader's Cancel the stop confirmed, said plainly; the ceiling, a stop that
+     came too late to stop anything, or one that never confirmed, said as a
+     warning with where to look. None is drawn while a new write runs. */
   const stopped = busy ? '' : s.mconnectStopped
-  const timedOut = stopped === 'timeout'
-  const unsure = timedOut || stopped === 'missed'
+  const unsure = stopped === 'timeout' || stopped === 'missed' || stopped === 'unconfirmed'
   /* The stop found nothing running: the wait goes on, with no Cancel left to offer. */
   const late = busy && s.mconnectLate
   const headClass = 'extAgents-by' + ((s.mconnectFailed || unsure) && !busy ? ' extAgents-by-bad' : '')

@@ -147,7 +147,8 @@ export interface ExtAgentsState {
   /* How the form's last wait ended without an answer: the reader's Cancel,
      the ceiling, or a stop that found nothing left to stop (`missed`), which
      means the connect was past the point where it could be cancelled and may
-     have been written (`awaitRun`). None is the agent's refusal, and the form
+     have been written, or a Cancel whose stop never said it stopped the run
+     (`unconfirmed`) (`awaitRun`). None is the agent's refusal, and the form
      says each in its own words; cleared by the next press and the next opening. */
   mconnectStopped: '' | Stopped
   /* Cancel pressed, and the run not yet stopped: the button says so once. */
@@ -620,11 +621,14 @@ async function loadPresets(): Promise<void> {
    drawer the caller may put the machine's sheet back into: closed or replaced
    meanwhile, the write's end changes nothing on screen. The busy mark is
    cleared only when it is still this write's. */
-type Stopped = 'cancelled' | 'timeout' | 'missed'
-/* `missed` resolves true when the stop's answer, whenever it comes, is that
-   nothing was running: a wait that ended before that answer said `cancelled`
-   or `timeout`, and the form corrects it. */
-type Outcome<T> = { got: T } | { stopped: Stopped; missed: Promise<boolean> }
+type Stopped = 'cancelled' | 'timeout' | 'missed' | 'unconfirmed'
+/* What the stop answered: it found the run and stopped it, it found nothing
+   running, or the call failed. Only `stopped` lets a Cancel say nothing was
+   written. */
+type StopAnswer = 'stopped' | 'nothing' | 'unknown'
+/* `answer` resolves whenever the stop answers: a wait that ended before it
+   did is corrected by it (`sayStopped`). */
+type Outcome<T> = { got: T } | { stopped: Stopped; answer: Promise<StopAnswer> }
 
 /* The end of a form's wait other than the answer, by generation: the form's
    Cancel resolves it, and so does the ceiling's timer. */
@@ -652,7 +656,9 @@ const stops = new Map<number, (why: Stopped) => void>()
    is too late to, and goes on waiting for the connect's own answer, up to
    the ceiling (and one more grace when the ceiling is what pressed the stop).
    Unanswered by then, the wait ends as `missed`, which says it may have been
-   written. */
+   written. A Cancel whose grace ends before the stop said it stopped the run
+   -- no answer yet, or the call failed -- ends as `unconfirmed`, not
+   `cancelled`: nothing is known about the write either way. */
 async function awaitRun<T>(gen: number, name: string, write: Promise<T>): Promise<Outcome<T>> {
   const answered = write.then((got): Outcome<T> => ({ got }))
   const deadline = Date.now() + connectCeilingMs
@@ -669,20 +675,23 @@ async function awaitRun<T>(gen: number, name: string, write: Promise<T>): Promis
   try {
     const first = await Promise.race([answered, stopped.then(() => null)])
     if (first) return first
-    const missed = source()
+    const heard: { answer?: StopAnswer } = {}
+    const answer = source()
       .cancelRun(name)
       .then(
-        (ok) => !ok,
-        () => false
+        (ok): StopAnswer => (ok ? 'stopped' : 'nothing'),
+        (): StopAnswer => 'unknown'
       )
+      .then((said) => (heard.answer = said))
     const late = Symbol('late')
-    const second = await Promise.race([answered, after(stopGraceMs), missed.then((m) => (m ? late : new Promise<never>(() => {})))])
+    const second = await Promise.race([answered, after(stopGraceMs), answer.then((said) => (said === 'nothing' ? late : new Promise<never>(() => {})))])
     if (second === late) {
       if (get().mconnectBusy === gen) set({ mconnectLate: true, mconnectCancelling: false })
       const rest = Math.max(deadline - Date.now(), stopGraceMs)
-      return (await Promise.race([answered, after(rest)])) ?? { stopped: 'missed', missed }
+      return (await Promise.race([answered, after(rest)])) ?? { stopped: 'missed', answer }
     }
-    return second ?? { stopped: reason, missed }
+    if (second) return second
+    return { stopped: reason === 'cancelled' && heard.answer !== 'stopped' ? 'unconfirmed' : reason, answer }
   } finally {
     clearTimeout(ceiling)
     for (const timer of timers) clearTimeout(timer)
@@ -696,20 +705,23 @@ async function awaitRun<T>(gen: number, name: string, write: Promise<T>): Promis
 let presses = 0
 
 /* The form after a wait that ended without the connect's answer: the note
-   for how it ended, then two corrections the note may need later. A stop that
-   answers, after the grace, that nothing was running turns a `cancelled` or
-   `timeout` note into `missed`; and a connect that lands after all takes the
-   note down -- it said, or allowed, that nothing was written -- and is told
-   in a toast. */
+   for how it ended, then the corrections the note may need later. A stop that
+   answers, after the grace, that nothing was running turns the note into
+   `missed`; one that answers it stopped the run turns `unconfirmed` into
+   `cancelled`; and a connect that lands after all takes the note down -- it
+   said, or allowed, that nothing was written -- and is told in a toast. */
 function sayStopped(
-  outcome: { stopped: Stopped; missed: Promise<boolean> },
+  outcome: { stopped: Stopped; answer: Promise<StopAnswer> },
   ours: () => boolean,
   landing: Promise<string | null>,
   machine: string
 ): void {
   if (ours()) set({ mconnectStopped: outcome.stopped })
-  void outcome.missed.then((missed) => {
-    if (missed && ours() && get().mconnectStopped !== '') set({ mconnectStopped: 'missed' })
+  void outcome.answer.then((said) => {
+    if (!ours()) return
+    const note = get().mconnectStopped
+    if (said === 'nothing' && note !== '') set({ mconnectStopped: 'missed' })
+    if (said === 'stopped' && note === 'unconfirmed') set({ mconnectStopped: 'cancelled' })
   })
   void landing.then((name) => {
     if (name === null) return

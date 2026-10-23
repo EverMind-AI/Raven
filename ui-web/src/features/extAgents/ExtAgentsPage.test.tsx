@@ -3486,7 +3486,8 @@ describe('the machines module', () => {
     /* The socket that went silent without closing is the case the ceiling exists for, and
        on that socket the stop request hangs exactly as the connect did: awaited, it would
        have held the form open for ever a second time. The stop is sent and the grace runs
-       from that moment, on the ceiling's path and on the Cancel press alike. */
+       from that moment, on the ceiling's path and on the Cancel press alike; a Cancel whose
+       stop never answered is said as unconfirmed, not as cancelled. */
     const presets: PresetChoice[] = [
       { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] }
     ]
@@ -3524,7 +3525,7 @@ describe('the machines module', () => {
     await act(async () => {
       await new Promise(res => setTimeout(res, 60))
     })
-    expect(sheetStatus()).toBe('gui.machine.connect_cancelled_head')
+    expect(sheetStatus()).toBe('gui.machine.connect_unconfirmed_head')
     expect(store.get().mconnectBusy).toBeNull()
     expect(store.get().mconnectCancelling).toBe(false)
     expect(sheetActs()).toEqual(['gui.machine.connect_do'])
@@ -3562,6 +3563,7 @@ describe('the machines module', () => {
     expect(sheetStatus()).toBe('gui.machine.connect_late_for {"s":"0"}')
     expect(sheetAbouts()).toEqual(['gui.machine.preset_connecting {"name":"Codex"}', 'gui.machine.connect_late_hint'])
     expect(sheetActs()).toEqual(['gui.machine.connecting'])
+    expect(store.get().mconnectCancelling).toBe(false)
     /* Well past the grace: still waiting, and nothing said about a cancel. */
     await act(async () => {
       await new Promise(res => setTimeout(res, 80))
@@ -3612,10 +3614,10 @@ describe('the machines module', () => {
     expect(toasts).toEqual([])
   })
 
-  it('takes back a cancel note when the stop answers after the grace that nothing was running, and when the connect lands', async () => {
+  it('takes back an unconfirmed note when the stop answers after the grace that nothing was running, and when the connect lands', async () => {
     /* The stop is sent, not awaited, so the grace can end before it answers and the form
-       says "Cancelled". A later answer that nothing was running turns that into the
-       too-late note; a landing after it takes the note down and is toasted. */
+       says the cancel is unconfirmed. A later answer that nothing was running turns that
+       into the too-late note; a landing after it takes the note down and is toasted. */
     const presets: PresetChoice[] = [
       { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] }
     ]
@@ -3637,7 +3639,7 @@ describe('the machines module', () => {
     await act(async () => {
       await new Promise(res => setTimeout(res, 60))
     })
-    expect(sheetStatus()).toBe('gui.machine.connect_cancelled_head')
+    expect(sheetStatus()).toBe('gui.machine.connect_unconfirmed_head')
     await act(async () => {
       answerStop(false)
     })
@@ -3676,14 +3678,14 @@ describe('the machines module', () => {
       await act(async () => {
         await new Promise(res => setTimeout(res, 60))
       })
-      expect(sheetStatus()).toBe('gui.machine.connect_cancelled_head')
+      expect(sheetStatus()).toBe('gui.machine.connect_unconfirmed_head')
     }
     expect(answers).toHaveLength(2)
     await act(async () => {
       answers[0]!(false)
     })
     await settle()
-    expect(sheetStatus()).toBe('gui.machine.connect_cancelled_head')
+    expect(sheetStatus()).toBe('gui.machine.connect_unconfirmed_head')
     /* The second press's own answer still corrects its own note. */
     await act(async () => {
       answers[1]!(false)
@@ -3714,7 +3716,7 @@ describe('the machines module', () => {
     await act(async () => {
       await new Promise(res => setTimeout(res, 60))
     })
-    expect(sheetStatus()).toBe('gui.machine.connect_cancelled_head')
+    expect(sheetStatus()).toBe('gui.machine.connect_unconfirmed_head')
     await held.release(null)
     await settle()
     expect(note()).toBeNull()
@@ -3727,7 +3729,7 @@ describe('the machines module', () => {
     expect(note()).toBeNull()
   })
 
-  it('keeps the cancel note when the stop answers that it stopped the run', async () => {
+  it('says the cancel once a stop that answers after the grace says it stopped the run', async () => {
     const presets: PresetChoice[] = [
       { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] }
     ]
@@ -3748,12 +3750,73 @@ describe('the machines module', () => {
     await act(async () => {
       await new Promise(res => setTimeout(res, 60))
     })
+    expect(store.get().mconnectStopped).toBe('unconfirmed')
     await act(async () => {
       answerStop(true)
     })
     await settle()
     expect(sheetStatus()).toBe('gui.machine.connect_cancelled_head')
     expect(note()).toEqual({ t: 'gui.machine.connect_cancelled_head', said: 'gui.machine.connect_cancelled' })
+  })
+
+  it('never says nothing was written when the stop gives no answer, whether it hangs or fails', async () => {
+    /* Only the stop's answer says whether the run was stopped. A grace that ends with
+       that answer missing, or with the call failing, knows nothing of the kind, so the
+       form says the cancel was not confirmed and the entry may still be written. */
+    const presets: PresetChoice[] = [
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] }
+    ]
+    const stops: Array<() => Promise<boolean>> = [() => new Promise(() => {}), () => Promise.reject(new Error('socket closed'))]
+    install([row()], {
+      machines: [ready()],
+      presets: async () => presets,
+      connectOnMachine: () => new Promise(() => {}),
+      cancelRun: () => stops.shift()!()
+    })
+    store._resetForTests({ graceMs: 20 })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    for (let press = 0; press < 2; press++) {
+      await click(sheetAct('gui.machine.connect_do'))
+      await click(sheetAct('gui.cancel'))
+      await act(async () => {
+        await new Promise(res => setTimeout(res, 60))
+      })
+      expect(store.get().mconnectStopped).toBe('unconfirmed')
+      expect(sheetStatus()).toBe('gui.machine.connect_unconfirmed_head')
+      expect(note()).toEqual({ t: 'gui.machine.connect_unconfirmed_head', said: 'gui.machine.connect_unconfirmed' })
+      expect(sheet()!.querySelector('.extAgents-note')!.className).toContain('extAgents-note-warn')
+      expect(store.get().mconnectBusy).toBeNull()
+      expect(store.get().mconnectCancelling).toBe(false)
+      expect(sheetActs()).toEqual(['gui.machine.connect_do'])
+    }
+  })
+
+  it('says the cancel once the stop answers that it stopped the run, even with no answer from the connect', async () => {
+    const presets: PresetChoice[] = [
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] }
+    ]
+    install([row()], {
+      machines: [ready()],
+      presets: async () => presets,
+      connectOnMachine: () => new Promise(() => {})
+    })
+    store._resetForTests({ graceMs: 20 })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    await click(sheetAct('gui.machine.connect_do'))
+    await click(sheetAct('gui.cancel'))
+    await act(async () => {
+      await new Promise(res => setTimeout(res, 60))
+    })
+    expect(store.get().mconnectStopped).toBe('cancelled')
+    expect(note()).toEqual({ t: 'gui.machine.connect_cancelled_head', said: 'gui.machine.connect_cancelled' })
+    expect(store.get().mconnectBusy).toBeNull()
+    expect(store.get().mconnectCancelling).toBe(false)
   })
 
   it('says it is too late to cancel a Reconnect whose stop finds nothing running, and does not leave the row pending', async () => {
