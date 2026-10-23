@@ -211,31 +211,40 @@ export const turnErrorLine = (payload: ErrorEvent['payload'], kept = false): str
   return `error: ${payload.message} (code=${payload.code})${detail ? `: ${detail}` : ''}`
 }
 
-const FENCE_OPEN = /^\s*\[BEGIN UNTRUSTED ([^ #]+) #([^ ]+) /
+const FENCE_OPEN = /\[BEGIN UNTRUSTED ([^ #\]]+) #([^ \]]+) [^\n]*\n/g
 
 /**
  * A stored tool result as the call returned it. The runtime keeps a string
  * result inside wrap_untrusted's fence, followed by any note of its own to the
- * model; live previews draw the raw result, so a resumed one keeps only the
- * fenced part. The fence ends only at the close marker carrying the opening
- * line's source and nonce, as ui-web's `defence` reads it, and a result stored
- * without a fence is kept whole. Nothing is trimmed: `previewLines` reads the
- * indentation.
+ * model, and fences a result made of content blocks one text block at a time,
+ * which session.resume joins with spaces. Live previews draw the raw result, so
+ * a resumed one keeps every fenced part, joined by newlines, and drops what lies
+ * between and after them. A fence ends only at the close marker carrying its
+ * opening marker's source and nonce, as ui-web's `defence` reads one, and the
+ * next opening marker is looked for after that close, so a marker quoted inside
+ * a result stays content. A result stored without a fence is kept whole.
+ * Nothing is trimmed: `previewLines` reads the indentation.
  */
 const storedResult = (text: string): string => {
-  const lines = text.split('\n')
-  const start = lines.findIndex(line => FENCE_OPEN.test(line))
-  const open = start < 0 ? null : FENCE_OPEN.exec(lines[start]!)
+  const open = new RegExp(FENCE_OPEN.source, 'g')
+  const parts: string[] = []
+  let marker: null | RegExpExecArray
 
-  if (!open) {
-    return text
+  while ((marker = open.exec(text))) {
+    const start = marker.index + marker[0].length
+    const close = `\n[END UNTRUSTED ${marker[1]} #${marker[2]}]`
+    const end = text.indexOf(close, start - 1)
+
+    parts.push(text.slice(start, end < 0 ? undefined : Math.max(start, end)))
+
+    if (end < 0) {
+      break
+    }
+
+    open.lastIndex = end + close.length
   }
 
-  const close = `[END UNTRUSTED ${open[1]} #${open[2]}]`
-  const rest = lines.slice(start + 1)
-  const end = rest.findIndex(line => line.trimStart().startsWith(close))
-
-  return (end < 0 ? rest : rest.slice(0, end)).join('\n')
+  return parts.length ? parts.join('\n') : text
 }
 
 /**
