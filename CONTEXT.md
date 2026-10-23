@@ -89,7 +89,8 @@ _Avoid_: calling a single LLM call the "agent loop" — the loop spans all Itera
 Product guidance for the tool-free reply when a Turn stops at its iteration or time
 budget or on a repeating tool call. A product may request one buffered format repair
 and format the static fallback; a Turn without this policy keeps the Agent Loop's
-generic wrap-up.
+generic wrap-up. A Turn that stops while a cut answer still waits for its continuation
+asks for no such reply: it ends on what streamed (**Empty-Response Recovery**).
 
 **Harness Modules** (`agent/harness/`, paper `contracts/harness.py`):
 The four generation-scoped strategy roles the Agent Loop delegates to without giving up its
@@ -817,12 +818,14 @@ must be a marker, with case, edge whitespace and stray edge punctuation forgiven
 proactive origin -- `SENTINEL`, `CRON`, `HEARTBEAT` or `SUBAGENT` -- takes the loose rule
 (`is_loose_silence`) on top of the strict one: nobody is waiting on it and models wrap the marker
 in a note on why they stayed quiet, so a marker alone on the first or last line, or a bracketed
-`[SILENT]` opening the reply, is silence too, whatever the length. `may_become_silence`
+`[SILENT]` opening the reply, is silence too, whatever the length. A turn whose caller waits on
+its text (`reply_awaited`: an A2A one-shot turn, which runs as `HEARTBEAT` for its pool) takes
+neither rule, and its reply comes back as written, a marker included. `may_become_silence`
 is the strict rule's streaming counterpart: it says whether the text so far could still turn
 into a marker, so a surface holds it back instead of showing it and retracting it.
-Only a turn that completed can be silent: a failed turn is a failure whatever its last text
-said, and a reply with no text at all is not silence but an empty response, which
-**Empty-Response Recovery** handles.
+Only a turn that did not fail can be silent -- one that ran out of budget is, when its wrap-up is
+a marker: a failed turn is a failure whatever its last text said, and a reply with no text at all
+is not silence but an empty response, which **Empty-Response Recovery** handles.
 _Avoid_: "empty reply" for silence — an empty reply is a failure; a Silence Marker is what the
 model chose to write.
 
@@ -830,20 +833,26 @@ model chose to write.
 A turn whose last reply is a Silence Marker the model chose to write. It ends as a success and
 nothing is delivered for it: `_process_message` returns no reply, so a channel sends nothing, and
 a surface that streams is shown none of the marker -- the `SilenceGate` holds the start of a reply
-while it could still be one, and drops it when the loop reads the reply as a marker (a turn from
-a proactive origin, whose marker may close a report, holds the whole call instead). The marker row
-stays in the history with the marker as its content, filed with `silent: true` so a reload does
-not read it as an answer, and it carries the turn's Response Meta. The turn reports itself as
+while it could still be one (before the first letter or digit, only whitespace and the edge
+punctuation a marker may carry; anything else goes out at once), and drops it when the loop reads
+the reply as a marker (a turn from a proactive origin, whose marker may close a report, holds the
+whole call instead). An exhausted turn's wrap-up is gated and read the same way. The marker row
+stays in the history holding the model's whole reply -- the marker, or, from a proactive origin,
+the note around it -- filed with `silent: true` so a reload does not read it as an answer, and it
+carries the turn's Response Meta. The turn reports itself as
 `TurnOutcome.silent` (copied onto `TurnEnded.silent`) and, for a surface drawing it live, as a
 closing `NoticeKind.SILENT_TURN` notice. The `after_send` hook chain still runs, with
 `outbound_content` None: a response modifier is left unasked, so a nudge it would pop stays
 queued for the next reply, and the personalizer learns nothing; text a hook composes there is
 delivered as the reply, and the turn is then not silent. A turn the message tool has already
-answered is not a Silent Turn whatever it ends on -- its answer reached the reader.
+answered is not a Silent Turn whatever it ends on -- its answer reached the reader, so no
+`SILENT_TURN` notice goes out; a marker it ends on is still filed `silent: true`, so a reload
+draws the muted line after the delivered reply where the live view drew none.
 Distinct from a `no_output` failure. A Silent Turn is the model saying nothing on purpose, so it
 succeeds; `no_output` is what a turn is failed with when its last reply was empty -- no text, no
-tool call, no reasoning -- once every retry was spent (`AnswerlessTurnError`). `NO_REPLY` names a
-marker, never that failure.
+tool call, no reasoning -- once every retry was spent, or, with recovery switched off, when its
+last reply had no text and was not a refusal (`AnswerlessTurnError`). `NO_REPLY` names a marker,
+never that failure.
 _Avoid_: "empty reply" or "no reply" for a Silent Turn — an empty reply is **Empty-Response
 Recovery**'s, and `no_output` its failure; "silent" for a failed turn that happened to say nothing.
 
@@ -863,14 +872,17 @@ to its static line) instead of failing, unless `llm_retry_after_output` asks for
 again. The model is asked to go on, and the parts are joined, up to `MAX_CONTINUATIONS` times,
 after which the partial is delivered with `PARTIAL_STREAM_NOTE` as an `interrupted` turn. A
 continuation that comes back empty leaves what streamed as the answer; one that comes back as an
-error, a stream cut off before any new text included, ends the turn the same way at once, with no
-wait and no fallback model. A stream that merely closed without a terminal chunk -- all a backend
-that never sends one leaves -- and a body that names no finish read `unknown` and are delivered as
-they stand. The continuation streams into the step the cut answer opened. A reply with only
-thinking is PREFILLed twice, re-feeding the model its own reasoning,
-then STEP_DOWNed: asked again at `high` and at `low`, once each a turn and never at `minimal`
-(Codex refuses it), the rungs skipped that the wire cannot tell apart
-(`LLMProvider.reasoning_wire_keys`). A reply cut at the ceiling with nothing in it is CONTINUEd
+error, a stream cut off before any new text included, ends the turn at once on the partial with
+the note, as `interrupted`, with no wait and no fallback model -- and so does a turn that runs out
+of iterations or time while a continuation is still owed, with no wrap-up. A stream that merely
+closed without a terminal chunk -- all a backend that never sends one leaves -- and a body that
+names no finish read `unknown` and are delivered as they stand. The continuation streams into the
+step the cut answer opened. A reply with only thinking is PREFILLed twice when there is thinking
+to re-feed (reasoning text or blocks; one known only by its reasoning-token count goes straight
+on), then STEP_DOWNed: asked again at whichever of `high` and `low` lie below the turn's effort
+(an unstated effort is above both), once each a turn and never at `minimal` (Codex refuses it),
+the rungs skipped that the wire cannot tell apart (`LLMProvider.reasoning_wire_keys`). A reply
+cut at the ceiling with nothing in it is CONTINUEd
 with `OUTPUT_LIMIT_CONTINUATION` and a doubling `max_tokens` (clamped by `send_max_tokens`), the
 effort untouched, then fails. Nothing right after tools is NUDGEd once, then treated as nothing.
 An empty reply is RETRYed: the same request resent unchanged, up to `empty_content_max_retries`
@@ -906,10 +918,11 @@ serving error pages outlasts them, so a retryable verdict buys one rung of this 
 same ask goes out again — the messages are untouched, so nothing is appended for the failed
 call. The wait is announced as a `NoticeKind.LLM_RETRY` notice carrying the error *category*
 (Empty-Response Recovery's waits use the same notice), which is how a surface can say the
-runtime is still working rather than showing nothing for minutes. A streamed call whose verdict
-is fallback-worthy goes to the next fallback model before it waits, because only the plain path
-walks a model chain inside the provider. A non-retryable verdict, or a spent ladder, ends the
-turn.
+runtime is still working rather than showing nothing for minutes. A streamed call whose error
+comes back as a response with a fallback-worthy verdict goes to the next fallback model before it
+waits, because only the plain path walks a model chain inside the provider; an error the provider
+raises mid-stream is reconnected and waited out on this same ladder inside the stream, then ends
+the turn with no fallback model tried. A non-retryable verdict, or a spent ladder, ends the turn.
 _Avoid_: "retry" unqualified — Empty-Response Recovery's RETRY resends the same request after a
 call that *succeeded* and returned no text; this one answers a call that failed.
 
@@ -1015,8 +1028,8 @@ already the report a reader should see — the model call the loop gave up on, i
 or the loop's when the provider gave none; or a reply that Empty-Response Recovery could not mend
 (nothing, only thinking, a cut that stayed cut, a refusal), in Hermes's wording for that kind.
 `no_output` marks the turn whose last reply was empty -- no text, no tool call, and no reasoning,
-refusal or cut at the output ceiling -- once recovery was spent, or any last reply without text with
-recovery off; the attempts before the last are not covered.
+refusal or cut at the output ceiling -- once recovery was spent, or, with recovery off, any last
+reply without text but a refusal; the attempts before the last are not covered.
 `describe_failure` passes its text through unchanged (it arrives bounded from the layer that built
 it), and the `turn_ended` marker that says so is filed before the failure leaves the loop. The marker
 is worded twice, for its two readers: `turn_ended.reason` keeps the provider's account for whoever is
