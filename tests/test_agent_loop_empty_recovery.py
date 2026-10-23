@@ -184,6 +184,11 @@ def _kind(content, finish="stop", *, origin=Origin.USER, streamed=False, prev_ha
         ("[SILENT]", "stop", {}, Origin.USER, False, ReplyKind.SILENT),
         ("[SILENT] nothing new", "stop", {}, Origin.USER, False, ReplyKind.TEXT),
         ("[SILENT] nothing new", "stop", {}, Origin.CRON, False, ReplyKind.SILENT),
+        # A marker is read before a declined finish: whatever a filter stamped on it, it is the model's
+        # choice, and read as a refusal it would fail the turn quoting itself as the explanation.
+        ("[SILENT]", "content_filter", {}, Origin.USER, False, ReplyKind.SILENT),
+        ("NO_REPLY", "refusal", {}, Origin.USER, True, ReplyKind.SILENT),
+        ("nothing new\n\n[SILENT]", "content_filter", {}, Origin.CRON, True, ReplyKind.SILENT),
         ("", "content_filter", {}, Origin.USER, False, ReplyKind.REFUSAL),
         ("I can't", "refusal", {}, Origin.USER, False, ReplyKind.REFUSAL),
         ("partial", STREAM_CUT, {}, Origin.USER, True, ReplyKind.NETWORK_CUT),
@@ -194,6 +199,9 @@ def _kind(content, finish="stop", *, origin=Origin.USER, streamed=False, prev_ha
         ("partial", STREAM_CUT, {}, Origin.USER, False, ReplyKind.TEXT),
         ("", "stop", {"reasoning_content": "hmm"}, Origin.USER, False, ReplyKind.THINKING_ONLY),
         ("", "stop", {"usage": {"reasoning_tokens": 5}}, Origin.USER, False, ReplyKind.THINKING_ONLY),
+        # One reasoning token is thinking; none is not.
+        ("", "stop", {"usage": {"reasoning_tokens": 1}}, Origin.USER, False, ReplyKind.THINKING_ONLY),
+        ("", "stop", {"usage": {"reasoning_tokens": 0}}, Origin.USER, False, ReplyKind.EMPTY),
         ("", "length", {"truncated": True}, Origin.USER, False, ReplyKind.TRUNCATED),
         ("", "stop", {}, Origin.USER, False, ReplyKind.EMPTY),
         # A refusal outranks the text that came with it: the text is the model's explanation.
@@ -3580,6 +3588,21 @@ async def test_a_marker_from_a_plain_call_ends_the_turn_silently(workspace, monk
     silence: dict[str, bool] = {}
 
     out = await agent._process_message(_turn(), session_key="s1", silence=silence)
+
+    assert out is None and silence == {"silent": True}
+    assert agent.sessions.get_or_create("s1").messages[-1]["silent"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_marker_with_a_declined_finish_ends_a_cron_turn_silently(workspace, monkeypatch):
+    """A filter can stamp its finish on a reply that is nothing but the marker. The marker is still
+    the model's choice, so the turn ends silent; read as a refusal, it would fail the turn with the
+    marker as the model's explanation, and the gateway would post that failure to the chat."""
+    _served(monkeypatch, [_reply("[SILENT]", finish="content_filter")])
+    agent = _litellm_agent(workspace)
+    silence: dict[str, bool] = {}
+
+    out = await agent._process_message(_turn("check the inbox", Origin.CRON), session_key="s1", silence=silence)
 
     assert out is None and silence == {"silent": True}
     assert agent.sessions.get_or_create("s1").messages[-1]["silent"] is True
