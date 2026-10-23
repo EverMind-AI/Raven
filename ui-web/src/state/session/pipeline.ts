@@ -103,9 +103,10 @@ export function stream(frame: unknown): void {
       // not a failure -- no red dot for doing what was asked.
       const cancelled = ev.type === 'error' && (ev.payload || {}).reason === 'cancelled_by_client'
       /* A silent turn delivered nothing, so ending is not news: no unread mark and
-         no move up the rail, only the badge that said it was running coming off. */
+         no move up the rail, only the badge that said it was running coming off.
+         A mark an earlier turn left is news that is still there, and stays. */
       const silent = ev.type === 'message.complete' && !ev.payload?.target && endedSilent(rt, ev)
-      if (s && silent) { s.status = null; sessionDraw() }
+      if (s && silent) { if (s.status === 'run') { s.status = null; sessionDraw() } }
       else if (s) { s.status = ev.type === 'error' && !cancelled ? 'err' : 'done'; touchSession(rt.key) }
       void refreshList()
     }

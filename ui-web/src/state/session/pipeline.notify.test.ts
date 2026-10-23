@@ -294,8 +294,8 @@ describe('the stream envelope', () => {
     const silent = () => ({ type: 'notice', payload: { kind: 'silent_turn', detail: '' } })
     const ends = () => ({ type: 'message.complete' })
 
-    const away = async () => {
-      const h = await harness({ rows: [{ id: 'away', status: 'run' }] })
+    const away = async (status = 'run') => {
+      const h = await harness({ rows: [{ id: 'away', status }] })
       h.subSession['sub:away'] = 'away'
       h.parkedTurns.set('away', { events: [] })
       const frame = (event: unknown) => h.pipeline.stream({ subscription_id: 'sub:away', event })
@@ -312,6 +312,19 @@ describe('the stream envelope', () => {
       expect(h.seen.touched).toEqual([])
       /* The list is still re-read: that is the server's own account of the row. */
       expect(h.seen.refreshes).toBe(1)
+    })
+
+    it('keeps an unread mark an earlier turn left on the row', async () => {
+      /* The conversation finished an answer while the reader was away, so the row is held on `done`
+         until they open it. Ending the next turn silent is not news, but it does not take back the
+         news that is already there -- only the badge that said a turn was running comes off. */
+      const { h, frame } = await away('done')
+
+      frame(silent())
+      frame(ends())
+
+      expect(h.rows[0]!.status).toBe('done')
+      expect(h.seen.touched).toEqual([])
     })
 
     it('reads the notice off the runtime when it ran on screen before the reader left', async () => {
