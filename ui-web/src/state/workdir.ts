@@ -397,12 +397,13 @@ export function drives(): void {
 }
 
 /** A path typed into the browser's bar: read as any other folder, and refused
- *  the same way, on the view the reader is looking at. */
+ *  the same way, on the view the reader is looking at. The value is passed
+ *  through unchanged, because a Windows name may end in a space once the
+ *  extended path prefix authored it, and trimming would name a sibling. */
 export function go(path: string): Promise<void> {
-  const at = path.trim()
-  if (!at) return Promise.resolve()
+  if (!path.trim()) return Promise.resolve()
   asking += 1
-  return browse(at)
+  return browse(path)
 }
 
 /** The browser's "use this folder", offered only where the engine would take
@@ -412,8 +413,8 @@ export async function useHere(path?: string): Promise<void> {
   const here = get().listing
   if (!here || !here.ok) return
   if (using !== null) return
-  const at = path?.trim() ?? ''
-  if (!at || at === here.path) {
+  const at = path ?? ''
+  if (!at.trim() || at === here.path) {
     pick(here.path)
     return
   }

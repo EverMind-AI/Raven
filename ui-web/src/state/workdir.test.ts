@@ -490,6 +490,43 @@ describe('the workspace a draft picks', () => {
     expect(field().value).toBe('/srv/elsewhere')
   })
 
+  it('uses the listed folder exactly, including a trailing space in its name', async () => {
+    /* A Windows directory reached through the extended path prefix can end in
+       a space, and the host lists it with that character. The browser's Use
+       must ask for the listed folder itself, not a trimmed sibling. */
+    const asked: Array<string | undefined> = []
+    const listed = '\\\\?\\C:\\srv\\typed '
+    workspace(async (p) => {
+      asked.push(p)
+      if (p === 'C:/srv') {
+        return {
+          path: 'C:/srv',
+          parent: 'C:/',
+          home: 'C:/Users/me',
+          ok: true,
+          entries: [{ name: 'typed ', path: listed, ok: true }],
+        }
+      }
+      return { path: p ?? 'C:/srv', parent: 'C:/', home: 'C:/Users/me', ok: true, entries: [] }
+    })
+    openFolders()
+    act(() => byName('gui.wd.open_remote').click())
+    await settle()
+
+    await act(async () => {
+      await wd.browse(listed)
+    })
+    await settle()
+    expect(wd.get().listing?.path).toBe(listed)
+
+    await act(async () => {
+      await wd.useHere(listed)
+    })
+    await settle()
+    expect(asked.at(-1)).toBe(listed)
+    expect(wd.staged()).toBe(listed)
+  })
+
   it('uses a path typed into the bar when Use this folder is pressed before Enter', async () => {
     const asked: Array<string | undefined> = []
     workspace(async (p) => {
