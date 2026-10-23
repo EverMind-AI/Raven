@@ -180,6 +180,22 @@ async def test_an_answered_question_is_not_closed() -> None:
     assert _of_method(frames, "clarify.closed") == []
 
 
+async def test_an_answer_from_elsewhere_closes_the_surface_that_asked() -> None:
+    # A message typed into the composer answers the question without the
+    # prompt that drew it; that prompt only drops itself when it answers.
+    frames, send_frame = _frame_collector()
+    broker = QuestionBroker(send_frame)
+
+    task = asyncio.create_task(broker.await_question(CID, prompt="?", default="d"))
+    request = await _wait_for_frame(frames)
+    assert broker.reply(CID, "typed", close=True) is True
+
+    assert await task == "typed"
+    closed = await _wait_for_method(frames, "clarify.closed")
+    assert closed["params"]["request_id"] == request["params"]["request_id"]
+    assert broker.reply(CID, "again", close=True) is False
+
+
 async def test_a_cancelled_question_closes_the_surface() -> None:
     # An interrupted turn is the other way a question dies unanswered, and it is
     # why `resetFlowOverlays` used to drop the sheet. It no longer does, so the

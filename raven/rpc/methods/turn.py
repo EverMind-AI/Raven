@@ -518,8 +518,17 @@ async def turn_send(
         and question_broker is not None
         and question_broker.pending_req(lane) is not None
         and not parsed.media
-        and question_broker.reply(lane, parsed.content)
+        and question_broker.reply(lane, parsed.content, close=True)
     ):
+        if emitter is not None:
+            # Still a message the person sent, and every window draws the
+            # sender's own bubble from this frame rather than from the call --
+            # without it the answer was nowhere on the page, only inside the
+            # asking tool's folded row.
+            await emitter.emit(
+                parsed.session_key,
+                {"type": "message.injected", "payload": _tag({"turn_id": turn_id, "content": parsed.content}, target)},
+            )
         return {"turn_id": (turn_ids or {}).get(lane, ""), "accepted": True, "naming": False}
 
     if parsed.busy == "inject" and (is_turn_active(lane) or _lane_in_flight(scheduler, lane)):
