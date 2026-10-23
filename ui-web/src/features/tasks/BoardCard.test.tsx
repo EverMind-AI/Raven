@@ -178,7 +178,7 @@ describe('the board card', () => {
     /* The card is narrow, and the line it shares with the agent's name, handle and tool count was
        cut from the end: the selection went first, down to its arrow. Its first route is held apart
        from the rest so the stylesheet can cut it last (scripts/gates/task-card-selection-css.test.mjs,
-       tests/integration/test_web_task_card_route_real_browser.py). */
+       tests/test_web_task_card_route_real_browser.py). */
     it('holds its first route apart from the routes after it, which are cut first', () => {
       render(<BoardCard node={node({ status: 'completed', selected_routes: ['bug', 'docs', 'question'] })} now={1000} />)
       const line = document.querySelector('.tkrunl2')

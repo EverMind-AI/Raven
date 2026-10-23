@@ -8,7 +8,7 @@
  * way last, to an ellipsis. Route names have no length cap, so the first route
  * must be able to give way: held at its own width, it drove the name to 0px and
  * ran past the line's edge. happy-dom lays nothing out, so only the sheet can
- * say here; tests/integration/test_web_task_card_route_real_browser.py measures
+ * say here; tests/test_web_task_card_route_real_browser.py measures
  * the same line in Chromium.
  */
 import { readFileSync } from 'node:fs'

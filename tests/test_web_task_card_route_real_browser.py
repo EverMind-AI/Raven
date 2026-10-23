@@ -10,23 +10,30 @@ stylesheet (`ui-web/scripts/gates/task-card-selection-css.test.mjs`) can only
 read the declarations; this file renders `BoardCard`'s markup inside the
 `foreignObject` `DagGraph` gives it, under the real `page.css` and
 `features/tasks/styles.css`, and compares the boxes Chromium draws.
+
+It sits in the default selection, not under `tests/integration`, because the
+unit job is the one CI job that runs it: that job's runner ships a system
+Chrome. Without a browser it skips with the reason, except under `CI`, where a
+skip would leave the line unmeasured on every push and so fails instead.
 """
 
 from __future__ import annotations
 
 import html
+import os
 import shutil
 from collections.abc import Iterator
 from pathlib import Path
+from typing import NoReturn
 
 import pytest
 
 pytest.importorskip("playwright.sync_api")
 from playwright.sync_api import Browser, Page, sync_playwright  # noqa: E402
 
-pytestmark = [pytest.mark.integration, pytest.mark.slow(reason="Launches a real Chromium.")]
+pytestmark = pytest.mark.slow(reason="Launches a real Chromium.")
 
-REPO = Path(__file__).resolve().parents[2]
+REPO = Path(__file__).resolve().parents[1]
 SHEETS = (
     REPO / "ui-web" / "src" / "styles" / "page.css",
     REPO / "ui-web" / "src" / "features" / "tasks" / "styles.css",
@@ -83,14 +90,22 @@ def _line(agent: str, instance: str | None, tools: int | None, routes: list[str]
     return "".join(parts)
 
 
+def _unavailable(reason: str) -> NoReturn:
+    if os.environ.get("CI"):
+        pytest.fail(f"Chromium unavailable under CI, which must measure the agent line: {reason}")
+    pytest.skip(f"Chromium unavailable: {reason}")
+
+
 @pytest.fixture(scope="module")
 def browser() -> Iterator[Browser]:
+    executable = shutil.which("google-chrome") or shutil.which("chromium")
+    if executable is None:
+        _unavailable("neither google-chrome nor chromium is on PATH")
     with sync_playwright() as pw:
-        executable = shutil.which("google-chrome") or shutil.which("chromium")
         try:
             b = pw.chromium.launch(executable_path=executable, args=["--no-sandbox", "--disable-gpu"])
-        except Exception as exc:  # noqa: BLE001 - no browser on this host is a skip, not a failure
-            pytest.skip(f"Chromium unavailable: {exc}")
+        except Exception as exc:  # noqa: BLE001 - any launch failure means no browser to measure with
+            _unavailable(str(exc))
         yield b
         b.close()
 
