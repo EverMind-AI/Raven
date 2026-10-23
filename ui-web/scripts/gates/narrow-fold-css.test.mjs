@@ -14,14 +14,14 @@
  * TypeScript constant and the boot cannot read a media block -- and this is
  * where the two are held to one value.
  *
- * The page's floor lifts at 780 for the same reason, and the first-run wizard
- * is the one surface that drew its own floor: a fixed frame the boot opens
- * over everything, whose model step has no Skip and no close. Left at 780 in a
+ * The body's 780px floor lifts below 780, and the first-run wizard is the one
+ * surface that drew a floor of its own: a fixed frame the boot opens over
+ * everything, whose model step has no Skip and no close. Left at 780 in a
  * 390px window, its Next sat past the window's edge and a first run could not
- * finish. Its sheet lifts that floor at the page's width, and its narrow block
+ * finish. Its sheet lifts that floor at the body's width, and its narrow block
  * restacks the settings bodies it embeds, whose rules live in another sheet
  * concatenated in an order neither owns -- so there too the weight is what
- * wins, and is pinned here.
+ * wins, and is held here.
  */
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
@@ -102,14 +102,14 @@ describe('the fold under 640px', () => {
   })
 })
 
-/* The page's floor and the width it lifts at, read from the body rule rather
+/* The body's floor and the width it lifts at, read from the body rule rather
    than written down a second time. */
 const FLOOR = decls('body').get('min-width')
 const LIFT = `(max-width: ${parseInt(FLOOR, 10) - 1}px)`
 const onboard = sheet('features/onboard/styles.css')
 const settings = sheet('features/settings/styles.css')
 
-/* The wizard's narrow block: the one in its sheet under the page's lift. */
+/* The wizard's narrow block: the one in its sheet under the body's lift. */
 function wizardBlock() {
   const blocks = mediaBlocks(LIFT, onboard)
   expect(blocks.length, `one ${LIFT} block in features/onboard/styles.css`).toBe(1)
@@ -141,11 +141,11 @@ function settingsRule(selector, property) {
   return null
 }
 
-describe('the first-run wizard under the page floor', () => {
-  it('lifts its own floor at the width the page lifts the body', () => {
+describe('the first-run wizard under the body floor', () => {
+  it('lifts its own floor at the width the body floor lifts', () => {
     expect(FLOOR).toBe('780px')
     expect(mediaBlocks(LIFT).some((body) => /\bbody\s*\{\s*min-width:\s*0;?\s*\}/.test(body))).toBe(true)
-    expect(decls('.ob-app', onboard).get('min-width'), 'the frame draws the page floor of its own').toBe(FLOOR)
+    expect(decls('.ob-app', onboard).get('min-width'), 'the frame draws a floor of its own, the body floor\'s width').toBe(FLOOR)
     expect(wizardBlock().some(([selector, body]) => selector === '.ob-app' && /min-width:\s*0\s*;?\s*$/.test(body.trim()))).toBe(true)
     /* A floor-lift at any other width would leave a band where the body
        folds and the wizard does not. */
@@ -170,6 +170,23 @@ describe('the first-run wizard under the page floor', () => {
     expect(selector.startsWith('.ob-app ')).toBe(true)
     expect(value).toBe(want)
     expect(weight(selector), `${selector} against ${base}`).toBeGreaterThan(weight(base))
+  })
+
+  /* The page sheet's select wrapper is an inline box, so a 100% vendor box
+     inside it is 100% of its own shrink-to-fit width: the select's 140px. */
+  it('makes the vendor box\'s wrapper a block, over the page sheet\'s inline one', () => {
+    expect(decls('.selw').get('display')).toBe('inline-block')
+    const [selector, value] = wizardSets('display', '.settings-padd', '.selw')
+    expect(value).toBe('block')
+    expect(weight(selector)).toBeGreaterThan(weight('.selw'))
+  })
+
+  /* Same sheet, same weight: the narrow block wins by coming after the base
+     rules. At their 160px the two ends left the step strip no width at all. */
+  it.each(['.ob-brand', '.ob-lang'])('lets %s give its desktop width up to the step strip', (selector) => {
+    expect(decls(selector, onboard).get('min-width')).toBe('160px')
+    expect(wizardSets('min-width', selector)).toEqual([selector, '0'])
+    expect(onboard.indexOf(`@media ${LIFT} {`)).toBeGreaterThan(onboard.indexOf(`${selector} {`))
   })
 
   it('leaves a stacked pill free to take the column rather than its 320px', () => {
