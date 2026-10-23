@@ -1135,8 +1135,8 @@ def _is_editable_install() -> bool:
     return editable
 
 
-def editable_checkout_status() -> tuple[Path, int, int]:
-    """Read the installed checkout against its last fetched origin/main."""
+def editable_checkout() -> Path:
+    """The local directory an editable install was made from."""
     data = _direct_url_data()
     if data is None:
         raise UpgradeError("Editable source checkout metadata is unavailable")
@@ -1149,6 +1149,12 @@ def editable_checkout_status() -> tuple[Path, int, int]:
     checkout = Path(url2pathname(url.path))
     if not checkout.is_absolute():
         raise UpgradeError("Editable source checkout path must be absolute")
+    return checkout
+
+
+def editable_checkout_status() -> tuple[Path, int, int]:
+    """Read the installed checkout against its last fetched origin/main."""
+    checkout = editable_checkout()
     try:
         git = shutil.which("git")
         if git is None:

@@ -552,6 +552,31 @@ def test_is_editable_install_reads_pep_610_metadata(monkeypatch: pytest.MonkeyPa
     distribution.read_text.assert_called_once_with("direct_url.json")
 
 
+def test_editable_checkout_reads_the_directory_from_pep_610_metadata(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    checkout = tmp_path / "source checkout"
+    distribution = Mock()
+    distribution.read_text.return_value = json.dumps({"url": checkout.as_uri(), "dir_info": {"editable": True}})
+    monkeypatch.setattr(upgrade_commands.metadata, "distribution", lambda name: distribution)
+    run = Mock(side_effect=AssertionError("naming the checkout must not run git"))
+    monkeypatch.setattr(upgrade_commands.subprocess, "run", run)
+
+    assert upgrade_commands.editable_checkout() == checkout
+
+
+@pytest.mark.parametrize("url", ["https://example.com/source", "file://remote/source", "file:relative"])
+def test_editable_checkout_refuses_a_url_that_is_not_a_local_directory(
+    monkeypatch: pytest.MonkeyPatch, url: str
+) -> None:
+    distribution = Mock()
+    distribution.read_text.return_value = json.dumps({"url": url, "dir_info": {"editable": True}})
+    monkeypatch.setattr(upgrade_commands.metadata, "distribution", lambda name: distribution)
+
+    with pytest.raises(upgrade_commands.UpgradeError):
+        upgrade_commands.editable_checkout()
+
+
 @pytest.mark.parametrize(
     "raw",
     [
