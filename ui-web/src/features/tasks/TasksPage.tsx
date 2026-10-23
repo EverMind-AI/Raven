@@ -141,11 +141,21 @@ const isGraph = (row: TaskRow): boolean => row.kind === 'dag' && row.nodes.lengt
 
 const GraphTag = (): JSX.Element => <span className="tkgraph">{t('gui.tasks.graph_tag')}</span>
 
+/* The graph tag's place, held unseen on a failed row that has no graph tag of its
+   own. The graph tag ends every row it is on, so without this the row's error tag
+   would stand where the other rows' graph tags do; with no graph tag in the list
+   there is no such column, and nothing to hold. The same element with the same
+   word, so it is exactly as wide as the tag it stands in for in either language. */
+const GraphSlot = (): JSX.Element => (
+  <span className="tkgraph tkslot" aria-hidden="true">{t('gui.tasks.graph_tag')}</span>
+)
+
 /* ── the list ─────────────────────────────────────────────────────────── */
 
-function Row({ row, now, open, onOpen }: {
-  row: TaskRow; now: number; open: boolean; onOpen: (r: TaskRow) => void
+function Row({ row, now, open, graphColumn, onOpen }: {
+  row: TaskRow; now: number; open: boolean; graphColumn: boolean; onOpen: (r: TaskRow) => void
 }): JSX.Element {
+  const failed = row.status === 'failed' || row.status === 'interrupted'
   const dur = taskDuration(row, now)
   /* The step fragment only while the task is running -- a settled row's
      ending is already said by the group it sits in and by the products
@@ -165,20 +175,24 @@ function Row({ row, now, open, onOpen }: {
       >
         <span className={'dot ' + dotOf(row.status)} />
         <div className="bd">
+          {/* Both tags on the name's line, so they sit on its baseline whatever the
+              fonts; the graph tag last, so the graph tags make one column down the
+              list and the error tags the one beside it. */}
           <div className="tline">
             <span className="nm">{row.task_summary || row.id}</span>
-            {isGraph(row) ? <GraphTag /> : null}
+            {failed ? <ErrorTag /> : null}
+            {isGraph(row) ? <GraphTag /> : failed && graphColumn ? <GraphSlot /> : null}
           </div>
           <s className="st">{line}</s>
         </div>
-        {row.status === 'failed' || row.status === 'interrupted' ? <ErrorTag /> : null}
       </button>
     </div>
   )
 }
 
-function Group({ label, list, now, openIds, onOpen }: {
-  label: string; list: TaskRow[]; now: number; openIds: Set<string>; onOpen: (r: TaskRow) => void
+function Group({ label, list, now, openIds, graphColumn, onOpen }: {
+  label: string; list: TaskRow[]; now: number; openIds: Set<string>; graphColumn: boolean
+  onOpen: (r: TaskRow) => void
 }): JSX.Element | null {
   if (!list.length) return null
   return (
@@ -187,7 +201,7 @@ function Group({ label, list, now, openIds, onOpen }: {
       {list.map((r) => (
         <Row
           key={store.rowKey(r)} row={r} now={now}
-          open={openIds.has(paneIdOf(r))} onOpen={onOpen}
+          open={openIds.has(paneIdOf(r))} graphColumn={graphColumn} onOpen={onOpen}
         />
       ))}
     </>
@@ -204,15 +218,18 @@ function List(): JSX.Element {
     return () => clearInterval(id)
   }, [s.rows])
   const openIds = new Set(deskState.panes.filter((p) => p.kind === 'task').map((p) => p.id))
+  /* Across both groups: they share one width, so a column that lines up in one has
+     to line up with the other. */
+  const graphColumn = s.rows.some(isGraph)
   return (
     <div className="salist tasks">
       <Group
         label={t('gui.tasks.running')} list={store.running(s.rows)} now={now}
-        openIds={openIds} onOpen={desk.openDeskTask}
+        openIds={openIds} graphColumn={graphColumn} onOpen={desk.openDeskTask}
       />
       <Group
         label={t('gui.tasks.settled')} list={store.settled(s.rows)} now={now}
-        openIds={openIds} onOpen={desk.openDeskTask}
+        openIds={openIds} graphColumn={graphColumn} onOpen={desk.openDeskTask}
       />
     </div>
   )

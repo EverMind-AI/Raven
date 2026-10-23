@@ -202,8 +202,8 @@
   font-size: 12px;
   color: var(--muted);
 }
-/* The graph tag beside a row's name: the error tag's geometry with no colour
-   of its own, because it says what shape the task is, not how it went. */
+/* The graph tag, last on a row's name line: the error tag's geometry with no
+   colour of its own, because it says what shape the task is, not how it went. */
 .tkgraph {
   flex: none;
   font-family: var(--mono);
@@ -213,6 +213,8 @@
   border-radius: 5px;
   padding: 1px 6px;
 }
+/* Its place on a failed row that has none: kept, not drawn. */
+.tkslot { visibility: hidden; }
 .tkerrb {
   font-size: 12.5px;
   line-height: 1.6;

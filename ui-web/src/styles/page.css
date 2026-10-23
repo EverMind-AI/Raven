@@ -6776,7 +6776,6 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   display: block;
   text-decoration: none;
 }
-.sarow.task > .tkerr { margin-top: 3px; }
 /* The prototype's own three-state dot, shared with the task pane's status
    bar: moss running, clay only for a failure or an interruption, faint grey
    for everything else settled -- carried by `data-st` rather than a new
