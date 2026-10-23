@@ -17,9 +17,10 @@ class Origin(StrEnum):
     SUBAGENT = "subagent"
 
 
-# The origins the runtime starts on its own, which nobody is waiting on: they share the system pool and
-# read the loose silence rule. SUBAGENT is the turn that re-injects a result; a sub-agent's own
-# execution runs off the scheduler behind a separate gate.
+# The origins the runtime starts on its own: they share the system pool and read the loose silence
+# rule. SUBAGENT is the turn that re-injects a result; a sub-agent's own execution runs off the
+# scheduler behind a separate gate. An inbound A2A call runs as HEARTBEAT too, and its peer does wait
+# on the text, so that entrance runs its turn with ``reply_awaited``, outside the silence protocol.
 PROACTIVE_ORIGINS = frozenset({Origin.SENTINEL, Origin.CRON, Origin.HEARTBEAT, Origin.SUBAGENT})
 
 

@@ -299,15 +299,17 @@ def reply_kind(
     origin: Origin | None,
     prev_had_tool_calls: bool,
     streamed: bool,
+    reply_awaited: bool = False,
 ) -> ReplyKind:
     """What a reply that carries no tool call is, by the first of these rules it meets.
 
     ``visible`` is ``response.content`` once think blocks are out. A refusal is named before text
     because the text is the model's explanation of it, and thinking before a cut because a reply that
     thought and was cut is thinking-only: TRUNCATED is a cut with no reasoning behind it.
+    ``reply_awaited`` is a turn whose caller waits on its text, where a marker is text like any other.
     """
     has_text = bool(visible and visible.strip())
-    if has_text and is_silence(visible, origin):
+    if has_text and not reply_awaited and is_silence(visible, origin):
         return ReplyKind.SILENT
     if response.finish_reason in DECLINED_FINISH_REASONS:
         return ReplyKind.REFUSAL

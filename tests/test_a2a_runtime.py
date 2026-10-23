@@ -85,6 +85,28 @@ async def test_a_turn_against_a_real_loop_comes_back_with_its_text(tmp_path: Pat
     assert text == "the real answer"
 
 
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "[SILENT]",
+        "Nightly job: all 42 checks passed.\n\nNO REPLY",
+        "[SILENT] nothing changed since yesterday",
+    ],
+)
+async def test_the_peer_gets_the_reply_verbatim_even_when_it_reads_as_a_silence_marker(
+    tmp_path: Path, reply: str
+) -> None:
+    """The turn runs as `HEARTBEAT` for its lane, and a turn from that origin may end silent -- but
+    the peer is waiting on the text. A marker, or a report that closes on one, is what it gets back,
+    and the session does not file the reply as one nobody was sent."""
+    loop = _loop_without_edges(tmp_path, reply=reply)
+
+    text = await make_run_turn(loop)("summarise the nightly job", conversation_id="a2a:silence", broker=None)
+
+    assert text == reply
+    assert "silent" not in loop.sessions.get_or_create("a2a:silence").messages[-1]
+
+
 async def test_the_one_shot_turn_builds_runner_callables_to_the_spine_contract(tmp_path: Path) -> None:
     """The same defect stated as the contract it breaks, so a failure names the cause.
 

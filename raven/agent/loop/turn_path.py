@@ -881,12 +881,17 @@ class TurnPathMixin:
         spend: TurnSpend | None = None,
         turn_log: TurnLog | None = None,
         rungs_used: set[str] | None = None,
+        reply_awaited: bool = False,
     ) -> tuple[str | None, list[str], list[dict], LoopOutcome]:
         """Run the agent iteration loop.
 
         ``origin`` is the turn's: the watch-work judgement reads the owner's
         request off the messages, and a turn the runtime re-injected has none
-        to read (``watch_work.asked_for``).
+        to read (``watch_work.asked_for``). It also picks the silence rule a
+        reply is read by -- unless ``reply_awaited`` says the caller waits on
+        the turn's text, as an inbound A2A call's peer does: such a turn takes
+        no part in the silence protocol, so nothing is held back for a marker
+        and a marker comes back as the text it is.
 
         ``drain``, when wired, is called at the top of each iteration to pull
         any user messages injected mid-turn (BusyPolicy.INJECT) and merge them
@@ -1390,7 +1395,7 @@ class TurnPathMixin:
             # shows that. The gates below deliver into this one.
             silence_gate = (
                 SilenceGate(on_token_delta, hold_all=origin in PROACTIVE_ORIGINS)
-                if on_token_delta is not None
+                if on_token_delta is not None and not reply_awaited
                 else None
             )
             downstream = silence_gate or on_token_delta
@@ -2101,7 +2106,12 @@ class TurnPathMixin:
                 # extraction so it can't poison future context.
                 limits = self._recovery_limits
                 kind = reply_kind(
-                    response, clean, origin=origin, prev_had_tool_calls=prev_had_tool_calls, streamed=streamed_call
+                    response,
+                    clean,
+                    origin=origin,
+                    prev_had_tool_calls=prev_had_tool_calls,
+                    streamed=streamed_call,
+                    reply_awaited=reply_awaited,
                 )
                 if kind in (ReplyKind.EMPTY, ReplyKind.POST_TOOL_EMPTY):
                     recovery.empty_streak.append(EmptyAttempt.of(response, call_model))
@@ -2436,7 +2446,7 @@ class TurnPathMixin:
             # marker ends the turn silent.
             wrap_up_gate = (
                 SilenceGate(on_token_delta, hold_all=origin in PROACTIVE_ORIGINS)
-                if on_token_delta is not None
+                if on_token_delta is not None and not reply_awaited
                 else None
             )
             final_content = await self._synthesize_final_on_exhaustion(
@@ -2456,7 +2466,7 @@ class TurnPathMixin:
                 ),
                 synthesis_policy=turn_synthesis(turn_meta),
             )
-            silent = is_silence(final_content, origin)
+            silent = not reply_awaited and is_silence(final_content, origin)
             await _settle_silence(wrap_up_gate, silent=silent)
             # Persist the wrap-up into history like any normal final reply.
             # Persistence downstream reads only the returned ``messages`` list,
@@ -2582,6 +2592,7 @@ class TurnPathMixin:
         drain: Drain | None = None,
         hook_sink: dict[str, str] | None = None,
         silence: dict[str, bool] | None = None,
+        reply_awaited: bool = False,
     ) -> tuple[str | None, list[str]] | None:
         """Process a single turn request and return its reply.
 
@@ -2595,6 +2606,8 @@ class TurnPathMixin:
         caller has to send that tail itself. ``silence``, when given, receives
         ``"silent": True`` for the last of those: a turn the model ended on a
         marker, and that nothing replaced with a reply of its own.
+        ``reply_awaited`` keeps a turn whose caller waits on its text out of
+        the silence protocol (``_run_agent_loop``).
         """
         from raven.agent.hook import AgentHookContext
 
@@ -3028,6 +3041,7 @@ class TurnPathMixin:
                 spend=spend,
                 turn_log=live["log"],
                 rungs_used=rungs_used,
+                reply_awaited=reply_awaited,
             )
 
         # Taken BEFORE the first attempt, because the loop appends to the list it is
@@ -3757,6 +3771,7 @@ class TurnPathMixin:
         stream: bool = True,
         usage_sink: dict[str, Any] | None = None,
         text_sink: dict[str, Any] | None = None,
+        reply_awaited: bool = False,
     ) -> "TurnOutcome":
         """Spine-native turn entry: consume a TurnRequest, fan the agent's output
         onto the single ``emit``, return a TurnOutcome. Collapses the legacy
@@ -3790,6 +3805,11 @@ class TurnPathMixin:
 
         ``drain`` pulls user messages injected mid-turn (BusyPolicy.INJECT); it
         is threaded into the agent loop and consumed at the top of each iteration.
+
+        ``reply_awaited`` is for a caller that waits on the reply's text, as an
+        inbound A2A call's peer does: the turn takes no part in the silence
+        protocol, so a Silence Marker is delivered as the text it is, whatever
+        the request's origin.
         """
         from raven.agent.subagent.direct_chat import DirectChatError
         from raven.proactive_engine.schedulers.cron.tool import CronTool
@@ -4054,6 +4074,7 @@ class TurnPathMixin:
                         drain=drain,
                         hook_sink=hook_sink,
                         silence=silence,
+                        reply_awaited=reply_awaited,
                     )
                 except AnswerlessTurnError:
                     # A turn the loop gave up on is not a crash: the executor and

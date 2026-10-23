@@ -297,8 +297,12 @@ async def _run_one_shot_turn(
     carries a `SentinelExtras` payload this call has none of) -- it is a
     proactive, system-origin turn a peer agent asked for, which is exactly what
     `HEARTBEAT` already means elsewhere (`raven/cli/gateway_commands.py`'s
-    `on_heartbeat_execute`). `HEARTBEAT`'s only special case is scheduler lane
-    pooling, irrelevant here since this path never reaches the Scheduler.
+    `on_heartbeat_execute`). Two things ride a proactive origin: scheduler lane
+    pooling, irrelevant here since this path never reaches the Scheduler, and
+    the silence protocol, under which a reply that is or closes on a Silence
+    Marker is withheld. The peer is waiting on the text, so the turn is run
+    with `reply_awaited` and takes no part in that protocol: the reply comes
+    back as the model wrote it.
 
     `conversation_id` is minted by the caller (`RavenAgentExecutor.execute`), not
     here: an A2A `SendMessage` carries no conversation of its own (unlike a
@@ -352,7 +356,7 @@ async def _run_one_shot_turn(
         return []
 
     text_sink: dict[str, str] = {}
-    await agent_loop.run_turn(req, emit, drain, stream=False, text_sink=text_sink)
+    await agent_loop.run_turn(req, emit, drain, stream=False, text_sink=text_sink, reply_awaited=True)
     return text_sink.get("text", "")
 
 

@@ -3113,6 +3113,32 @@ async def test_a_reply_that_is_no_marker_is_shown_whole(workspace, monkeypatch, 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "script,max_iterations",
+    [
+        pytest.param(lambda: [_finished_stream("[SIL", "ENT]")], 10, id="answer"),
+        pytest.param(lambda: [_tool_stream(), _finished_stream("[SIL", "ENT]")], 1, id="wrap_up"),
+    ],
+)
+async def test_a_turn_whose_caller_awaits_its_text_holds_nothing_back_and_is_never_silent(
+    workspace, monkeypatch, script, max_iterations
+):
+    """An inbound A2A call runs as ``HEARTBEAT``, an origin whose turns read the loose rule and hold
+    the whole call, but its peer is waiting on the text: a marker streams as it is typed and is the
+    reply, whether it answers the question or wraps up a turn that ran out of steps."""
+    _served(monkeypatch, script())
+    sink = _Sink()
+
+    final, _used, messages, outcome = await _litellm_agent(workspace, max_iterations=max_iterations)._run_agent_loop(
+        _seed(), on_token_delta=sink.delta, origin=Origin.HEARTBEAT, reply_awaited=True
+    )
+
+    assert final == "[SILENT]" and outcome.silent is False
+    assert sink.text == ["[SIL", "ENT]"]
+    assert "_silent" not in messages[-1]
+
+
+@pytest.mark.asyncio
 async def test_an_error_whose_body_is_a_marker_is_still_a_failure(workspace):
     """A marker is the model's own choice; an error has no model behind it to have made one."""
 
