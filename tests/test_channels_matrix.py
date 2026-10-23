@@ -294,3 +294,13 @@ def test_matrix_spec_import_is_cheap():
     )
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
+
+
+@pytest.mark.asyncio
+async def test_a_turn_that_ended_without_a_reply_stops_typing_the_way_send_does():
+    ch = _channel()
+    ch._stop_typing = AsyncMock()
+
+    await ch.end_turn("!room")
+
+    ch._stop_typing.assert_awaited_once_with("!room", clear=True)

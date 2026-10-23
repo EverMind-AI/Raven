@@ -1138,3 +1138,11 @@ async def test_a_confirmed_scan_does_not_move_polling_to_another_operator(tmp_pa
     assert ch.rebind_state()["phase"] == "confirmed"
     assert ch._token == "new-token"
     assert ch._base_url == before, "a base outside the configured operator is not adopted"
+
+
+def test_a_turn_that_ended_without_a_reply_stops_typing_the_way_send_does():
+    ch = _send_ch()
+
+    asyncio.run(ch.end_turn("u1"))
+
+    ch._stop_typing.assert_awaited_once_with("u1", clear_remote=True)

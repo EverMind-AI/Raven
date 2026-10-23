@@ -470,3 +470,20 @@ def test_ready_ignores_a_resume_gateway_outside_the_operator():
     asyncio.run(ch._gateway_loop())
     assert ch._session_id == "sess9"
     assert ch._resume_url is None, "the first frame on a resumed socket carries the bot token"
+
+
+def test_a_turn_that_ended_without_a_reply_stops_the_typing_indicator():
+    """Typing stops on ``send``; a turn the model ended silently sends nothing."""
+
+    async def scenario():
+        ch = _channel()
+        loop_task = asyncio.create_task(asyncio.sleep(3600))
+        ch._typing_tasks["c1"] = loop_task
+
+        await ch.end_turn("c1")
+        await asyncio.sleep(0)
+
+        assert "c1" not in ch._typing_tasks
+        assert loop_task.cancelled()
+
+    asyncio.run(scenario())

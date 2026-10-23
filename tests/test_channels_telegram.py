@@ -352,3 +352,20 @@ def test_telegram_spec_import_is_cheap():
     )
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
+
+
+def test_a_turn_that_ended_without_a_reply_stops_the_typing_indicator():
+    """Typing stops on ``send``; a turn the model ended silently sends nothing."""
+
+    async def scenario():
+        ch = _channel()
+        loop_task = asyncio.create_task(asyncio.sleep(3600))
+        ch._typing["c1"] = loop_task
+
+        await ch.end_turn("c1")
+        await asyncio.sleep(0)
+
+        assert "c1" not in ch._typing
+        assert loop_task.cancelled()
+
+    asyncio.run(scenario())
