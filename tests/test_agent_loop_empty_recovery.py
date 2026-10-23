@@ -2681,6 +2681,55 @@ async def test_the_gate_holds_leading_whitespace_until_the_reply_shows_what_it_i
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deltas",
+    [
+        pytest.param(["*", "NO_REPLY", "*"], id="bold_marker"),
+        pytest.param(["**", "[SILENT]", "**"], id="bold_bracketed_marker"),
+        pytest.param([".", "NO_REPLY"], id="stray_full_stop"),
+        pytest.param(["\n\n", "-", " SILENT"], id="whitespace_and_a_dash"),
+    ],
+)
+async def test_the_gate_holds_a_marker_wrapped_in_punctuation(deltas):
+    """The strict rule forgives edge punctuation, so ``*NO_REPLY*`` is a marker and none of it may be shown:
+    the ``*`` that arrives first is not the point at which the reply stopped being one."""
+    seen, deliver = _collecting()
+    gate = SilenceGate(deliver, hold_all=False)
+
+    for delta in deltas:
+        await gate(delta)
+    assert seen == []
+    gate.discard()
+
+    assert seen == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first", ["42", "1.", "\u4f60", "caf\u00e9"])
+async def test_a_reply_that_opens_on_a_letter_or_a_digit_is_not_held(first):
+    """No marker begins with a digit or a non-Latin letter, so the first delta already shows what the reply is."""
+    seen, deliver = _collecting()
+    gate = SilenceGate(deliver, hold_all=False)
+
+    await gate(first)
+
+    assert seen == [first]
+
+
+@pytest.mark.asyncio
+async def test_the_gate_lets_punctuation_that_leads_prose_through_once_the_prose_shows():
+    seen, deliver = _collecting()
+    gate = SilenceGate(deliver, hold_all=False)
+
+    await gate("**")
+    assert seen == [], "nothing readable yet"
+    await gate("Summary")
+    assert seen == ["**Summary"], "released whole, in order, the moment the reply is plainly not a marker"
+    await gate("**")
+    assert seen == ["**Summary", "**"]
+
+
+@pytest.mark.asyncio
 async def test_a_runtime_turn_holds_the_whole_call():
     seen, deliver = _collecting()
     gate = SilenceGate(deliver, hold_all=True)
@@ -2738,6 +2787,20 @@ async def test_a_marker_reply_closes_the_loop_silent_and_never_streams(workspace
     last = messages[-1]
     assert (last["role"], last["content"], last.get("_silent")) == ("assistant", "[SILENT]", True)
     assert sink.text == [], "the marker is held back and then dropped, so no reader sees any of it"
+
+
+@pytest.mark.asyncio
+async def test_a_marker_wrapped_in_punctuation_is_silent_and_never_streams(workspace, monkeypatch):
+    _served(monkeypatch, [_finished_stream("**", "[SILENT]", "**")])
+    sink = _Sink()
+
+    final, _used, messages, outcome = await _litellm_agent(workspace)._run_agent_loop(
+        _seed(), on_token_delta=sink.delta
+    )
+
+    assert outcome.silent is True and final == "**[SILENT]**"
+    assert messages[-1].get("_silent") is True
+    assert sink.text == []
 
 
 @pytest.mark.asyncio

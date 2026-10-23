@@ -600,7 +600,9 @@ class SilenceGate:
     take it back. Deltas are held while the text so far could still resolve to a marker under the
     strict rule (``may_become_silence``), and go out together with everything after them the
     moment it cannot -- which a reply that begins like prose does at its first delta, so an
-    ordinary answer waits for nothing. A turn from a proactive origin (``hold_all``) is read by the
+    ordinary answer waits for nothing. Text with nothing readable in it yet (whitespace, or the
+    ``*`` of ``*NO_REPLY*``) is undecided too: the strict rule forgives that wrapping, so a marker
+    may still follow it. A turn from a proactive origin (``hold_all``) is read by the
     loose rule, whose marker may close a report on its last line, and only the whole call can show
     that, so every delta waits for :meth:`release` or :meth:`discard`.
 
@@ -623,8 +625,7 @@ class SilenceGate:
             await self._deliver(delta)
             return
         self._held += delta
-        # Blank text so far says nothing about what the reply will be, so it never settles the question.
-        if not self._hold_all and self._held.strip() and not may_become_silence(self._held):
+        if not self._hold_all and any(c.isalnum() for c in self._held) and not may_become_silence(self._held):
             await self.release()
 
     async def release(self) -> None:
