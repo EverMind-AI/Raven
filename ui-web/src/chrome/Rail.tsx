@@ -228,12 +228,15 @@ function RailFoot(): JSX.Element {
 
 /* On a window under the fold the rail lies over the page (styles/page.css,
    state/rail.ts `FOLDS`), so a press that goes somewhere -- a module, a
-   session, a new task, the import, the settings -- folds it, the way a drawer
+   session, the draft row, the import, the settings -- folds it, the way a drawer
    closes on the choice made in it. The rail's own controls keep it open: its
    toggle, the search and its box, a group's head, the grip. A native listener
    on the aside rather than React handlers on each row, because the session
-   rows are the rail island's, a root of its own under #list; in the bubble
-   phase, so the press has done its work before the rail goes. */
+   rows are the rail island's, a root of its own under #list. In the bubble
+   phase, which runs it after a session row's handler (that root is inside
+   the aside) but before the module and settings buttons' (App is a portal,
+   so React hears those above the aside); chrome/Rail.test.tsx presses both
+   kinds under the fold. */
 const PICKS = '.navi, .sess, .me'
 
 function foldOnPick(aside: HTMLElement | null): void {
