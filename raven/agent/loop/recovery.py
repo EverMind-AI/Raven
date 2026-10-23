@@ -63,7 +63,7 @@ from raven.config import schema as config_schema
 from raven.contracts.llm_provider import REASONING_EFFORT_LADDER, LLMResponse
 from raven.providers.streaming import DECLINED_FINISH_REASONS
 from raven.providers.usage import reported_cost, token_count
-from raven.spine.silence import is_silence
+from raven.spine.silence import is_silence, may_become_silence
 from raven.spine.turn import Origin
 
 # In-content thinking markers. Some models (Ollama, certain Qwen gateways) put
@@ -591,3 +591,52 @@ class ContinuationGate:
         self._held = ""
         if text:
             await self._deliver(text)
+
+
+class SilenceGate:
+    """Holds the start of a reply back while it could still turn out to be a silence marker.
+
+    A marker is the model saying nothing, so a surface that streams must never show it and then
+    take it back. Deltas are held while the text so far could still resolve to a marker under the
+    strict rule (``may_become_silence``), and go out together with everything after them the
+    moment it cannot -- which a reply that begins like prose does at its first delta, so an
+    ordinary answer waits for nothing. A turn the runtime started (``hold_all``) is read by the
+    loose rule, whose marker may close a report on its last line, and only the whole call can show
+    that, so every delta waits for :meth:`release` or :meth:`discard`.
+
+    The loop decides once it has read the reply: ``discard`` for a marker, which goes to no one,
+    ``release`` for anything else, and for a reply that ends in tool calls, whose words are not a
+    reply a marker could be.
+    """
+
+    def __init__(self, deliver, *, hold_all: bool) -> None:
+        self._deliver = deliver
+        self._hold_all = hold_all
+        self._held = ""
+        self._open = False
+        self._dropped = False
+
+    async def __call__(self, delta: str) -> None:
+        if self._dropped:
+            return
+        if self._open:
+            await self._deliver(delta)
+            return
+        self._held += delta
+        # Blank text so far says nothing about what the reply will be, so it never settles the question.
+        if not self._hold_all and self._held.strip() and not may_become_silence(self._held):
+            await self.release()
+
+    async def release(self) -> None:
+        """Deliver what is held, then let the rest through untouched."""
+        if self._dropped or self._open:
+            return
+        self._open = True
+        text, self._held = self._held, ""
+        if text:
+            await self._deliver(text)
+
+    def discard(self) -> None:
+        """Drop what is held and everything after it: the reply was a marker, and a marker is shown to no one."""
+        self._held = ""
+        self._dropped = True

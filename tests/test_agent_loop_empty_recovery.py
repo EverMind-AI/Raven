@@ -46,6 +46,7 @@ from raven.agent.loop.recovery import (
     RecoveryLimits,
     RecoveryState,
     ReplyKind,
+    SilenceGate,
     decide,
     deterministic_empty,
     empty_retry_delay,
@@ -2591,3 +2592,110 @@ async def test_a_turn_that_was_not_cut_clears_a_marker_left_by_an_earlier_one(wo
     # Said rather than left unsaid: a save merges over the record on disk, so
     # the marker is cleared by writing None. Its reader asks for an int.
     assert agent.sessions.get_or_create("s1").metadata.get("output_limit_turn_at") is None
+
+
+# --------------------------------------------------------------------------- #
+# the silence gate: a marker never reaches a reader                            #
+# --------------------------------------------------------------------------- #
+
+
+def _collecting() -> tuple[list[str], object]:
+    seen: list[str] = []
+
+    async def deliver(text: str) -> None:
+        seen.append(text)
+
+    return seen, deliver
+
+
+@pytest.mark.asyncio
+async def test_the_gate_lets_a_reply_through_once_it_cannot_be_a_marker():
+    seen, deliver = _collecting()
+    gate = SilenceGate(deliver, hold_all=False)
+
+    await gate("He")
+
+    assert seen == ["He"], "a start that is no marker prefix is not held at all"
+    await gate("llo")
+    assert seen == ["He", "llo"], "and what follows goes straight out"
+
+
+@pytest.mark.asyncio
+async def test_the_gate_holds_a_marker_and_drops_it():
+    seen, deliver = _collecting()
+    gate = SilenceGate(deliver, hold_all=False)
+
+    for delta in ("NO", "_REP", "LY"):
+        await gate(delta)
+    assert seen == [], "every prefix of a marker is held, the whole marker included"
+    gate.discard()
+    await gate("!")
+    await gate.release()
+
+    assert seen == [], "nothing is delivered once the gate is discarded"
+
+
+@pytest.mark.asyncio
+async def test_a_held_prefix_that_was_not_a_marker_goes_out_at_the_end():
+    seen, deliver = _collecting()
+    gate = SilenceGate(deliver, hold_all=False)
+
+    await gate("NO")
+    assert seen == []
+    await gate.release()
+    assert seen == ["NO"]
+    await gate("pe")
+    assert seen == ["NO", "pe"], "a released gate is open for the rest of the call"
+
+
+@pytest.mark.asyncio
+async def test_a_held_prefix_goes_out_whole_when_the_reply_turns_out_to_be_prose():
+    """The cache and what came after leave together, so the reader sees the reply once and in order."""
+    seen, deliver = _collecting()
+    gate = SilenceGate(deliver, hold_all=False)
+
+    await gate("[SILENT]")
+    await gate(" nothing")
+    assert seen == ["[SILENT] nothing"]
+    await gate(" new here")
+    assert seen == ["[SILENT] nothing", " new here"]
+
+
+@pytest.mark.asyncio
+async def test_the_gate_holds_leading_whitespace_until_the_reply_shows_what_it_is():
+    """A newline before the marker says nothing about the reply, so it is not the point of no return."""
+    seen, deliver = _collecting()
+    gate = SilenceGate(deliver, hold_all=False)
+
+    await gate("\n")
+    await gate("[SILENT]")
+    assert seen == []
+    gate.discard()
+    assert seen == []
+
+    seen, deliver = _collecting()
+    gate = SilenceGate(deliver, hold_all=False)
+    await gate("\n")
+    await gate("Hello")
+    assert seen == ["\nHello"]
+
+
+@pytest.mark.asyncio
+async def test_a_runtime_turn_holds_the_whole_call():
+    seen, deliver = _collecting()
+    gate = SilenceGate(deliver, hold_all=True)
+
+    await gate("2 deals filtered")
+    await gate("\n\n")
+    assert seen == [], "the marker may be the last line, so nothing is known until the call ends"
+    await gate.release()
+    assert seen == ["2 deals filtered\n\n"]
+    await gate("[SILENT]")
+    assert seen == ["2 deals filtered\n\n", "[SILENT]"], "released, it is open"
+
+    seen, deliver = _collecting()
+    gate = SilenceGate(deliver, hold_all=True)
+    await gate("2 deals filtered\n\n")
+    await gate("[SILENT]")
+    gate.discard()
+    assert seen == []
