@@ -1447,6 +1447,19 @@ async def test_a_refusal_that_explains_nothing_says_so(workspace, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_a_refusal_with_no_text_quotes_its_reasoning_as_the_explanation(workspace, monkeypatch):
+    """A filter can end a reply before any text, after the model reasoned about the request. That
+    reasoning is the only account of the refusal there is, so the failure quotes it rather than
+    saying the model gave no explanation."""
+    thought = "This asks for something the policy does not allow, so I should decline."
+    _served(monkeypatch, [_reply(None, finish="content_filter", reasoning=thought)])
+
+    failed = await _fail(_litellm_agent(workspace))
+
+    assert str(failed) == REFUSAL_FAILURE + REFUSAL_EXPLANATION.format(text=thought)
+
+
+@pytest.mark.asyncio
 async def test_a_refusal_switches_to_one_fallback_model(workspace, monkeypatch):
     calls = _served(monkeypatch, [_reply("I can't help with that", finish="content_filter"), _reply("fb's answer")])
     agent = _litellm_agent(workspace)
