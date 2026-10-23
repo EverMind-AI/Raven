@@ -73,8 +73,9 @@ All notable changes to Raven are documented here.
   stop's answer says whether anything was written. While the
   proof runs the row reports `test_running`, a Test on it is refused as a
   second test is, and a connect pressed during a Test is refused the same
-  way, before anything is spent. A wait with no answer ends after five
-  minutes -- the server's own worst case -- with the run asked to stop and the
+  way, before anything is spent. A wait with no answer ends after ten
+  minutes -- above the server's own worst case, the capability record
+  included -- with the run asked to stop and the
   Agents page named as where to look, instead of one line that never changed
   (seen once on 2026-10-20, after the socket dropped without saying so). A
   machine nobody has reached yet reads *Not connected; the link opens when

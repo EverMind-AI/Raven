@@ -458,7 +458,8 @@ async def subagents_add(params: dict, *, agent_loop_factory: "AgentLoopFactory |
     backend, and a refusal in the agent's own words when nothing answers. So
     this spends one call on that agent's own quota, and can hold the add for up
     to the row's own start window plus `_ENABLE_PING_TIMEOUT_SECONDS`
-    (`probe._ping_bounds`); while it runs, `subagents.test_cancel` on the name
+    (`probe._ping_bounds`), then, for an acp row, up to two start windows more
+    for the capability record (`_record_after_the_answer`); while it runs, `subagents.test_cancel` on the name
     the entry would land under stops it, and the add refuses with `cancelled`
     in its data (`_run_once`). `force: true` bypasses it, as on the
     switch. A refusal stores nothing at all -- not the row disabled -- because
@@ -1228,7 +1229,7 @@ async def _run_once(cfg: Any, name: str, *, refusal: str) -> PingResult:
     The login shell's capture is inside the task, as it is for a test, so a
     cancel pressed during it ends the wait too. So is the capability record an
     acp row that answered is measured with (`_record_after_the_answer`): that
-    is a second launch and handshake, up to the preset's start window, and
+    is a second launch and handshake, two requests of up to the preset's start window each, and
     outside the task it ran after the name had left `_RUNNING` -- a cancel then
     answered `cancelled: false` and the caller went on to write. Inside it, the
     whole stretch between the press and the write is one run a cancel reaches.
@@ -1356,7 +1357,8 @@ async def subagents_toggle(params: dict, *, agent_loop_factory: "AgentLoopFactor
     answers: the roster's entry criterion is that the agent works now, not that
     it is installed. So this spends one call on that agent's own quota and can
     hold the switch for up to the row's own start window plus
-    `_ENABLE_PING_TIMEOUT_SECONDS` (`probe._ping_bounds`). Exempt: switching
+    `_ENABLE_PING_TIMEOUT_SECONDS` (`probe._ping_bounds`), then, for an acp
+    row, up to two start windows more for the capability record. Exempt: switching
     off, a `builtin` row (this process, with no backend to reach), and
     `force: true`, the operator's override for an agent whose provider is
     briefly down. A refusal writes nothing.

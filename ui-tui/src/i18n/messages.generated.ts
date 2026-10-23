@@ -1629,13 +1629,13 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.machine.connecting': 'Starting it on the machine',
     'gui.machine.connecting_for': 'Starting it on the machine, {s}s so far',
     'gui.machine.connecting_hint':
-      'The node on the machine starts it, then it has to answer one test message: a few seconds to a minute as a rule, five minutes at most. Cancel asks it to stop, and this form says whether anything was written.',
+      'The node on the machine starts it, then it has to answer one test message: a few seconds to a minute as a rule, ten minutes at most. Cancel asks it to stop, and this form says whether anything was written.',
     'gui.machine.cancelling': 'Stopping',
     'gui.machine.connect_cancelled_head': 'Cancelled',
     'gui.machine.connect_cancelled': 'Cancelled; nothing was written. It can be connected again.',
     'gui.machine.connect_timeout_head': 'No answer',
     'gui.machine.connect_timeout':
-      'No answer in five minutes, so the form asked the run to stop. See the Agents page for whether it connected; if not, connect again.',
+      'No answer in ten minutes, so the form asked the run to stop. See the Agents page for whether it connected; if not, connect again.',
     'gui.machine.connect_late_for': 'Too late to cancel; waiting for it to finish, {s}s so far',
     'gui.machine.connect_late_hint':
       'There was nothing left to stop: it had already answered, or had not started yet, so it may still be written. This form says how it ends.',
@@ -5021,12 +5021,12 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.machine.connecting': '正在机器上启动它',
     'gui.machine.connecting_for': '正在机器上启动它，已等 {s} 秒',
     'gui.machine.connecting_hint':
-      '机器上的节点先启动它，再等它答一句测试消息：一般几秒到一分钟，最多等 5 分钟。点「取消」会请求停掉这一跑，这里会说有没有写入。',
+      '机器上的节点先启动它，再等它答一句测试消息：一般几秒到一分钟，最多等 10 分钟。点「取消」会请求停掉这一跑，这里会说有没有写入。',
     'gui.machine.cancelling': '正在停止',
     'gui.machine.connect_cancelled_head': '已取消',
     'gui.machine.connect_cancelled': '已取消，没有写入。可以再接一次。',
     'gui.machine.connect_timeout_head': '没有等到答复',
-    'gui.machine.connect_timeout': '等了 5 分钟没有答复，已请求停止。到「智能体」页看它有没有接上；没有的话再接一次。',
+    'gui.machine.connect_timeout': '等了 10 分钟没有答复，已请求停止。到「智能体」页看它有没有接上；没有的话再接一次。',
     'gui.machine.connect_late_for': '已经来不及取消，正在等它收尾，已等 {s} 秒',
     'gui.machine.connect_late_hint':
       '已经没有可停的了：它要么已经答过，要么还没开始，所以仍可能写入。结束后这里会说结果。',

@@ -190,12 +190,14 @@ export const { get, subscribe } = store
 
 /* How long the machine form waits for a connect's answer before it stops the
    run itself, and how long it then gives the answer to arrive. The ceiling is
-   the server's own worst case for the add -- the node launch, the preset's
-   start window and the answer, then the capability record -- so a connect
-   that is merely slow is never cut short, while a wait with no end (a
-   connection that dropped without the socket saying so, seen once on
-   2026-10-20) ends here instead of never. */
-const CONNECT_CEILING_MS = 5 * 60_000
+   above the server's own worst case for the add -- the node launch, the
+   preset's start window and the answer, then the capability record's two
+   requests of up to that window each: 120 + 60 + 240 = 420s for the slowest
+   preset, before the link's own calls -- so a connect that is merely slow is
+   never cut short, while a wait with no end (a connection that dropped
+   without the socket saying so, seen once on 2026-10-20) ends here instead
+   of never. */
+const CONNECT_CEILING_MS = 10 * 60_000
 const STOP_GRACE_MS = 8_000
 let connectCeilingMs = CONNECT_CEILING_MS
 let stopGraceMs = STOP_GRACE_MS
