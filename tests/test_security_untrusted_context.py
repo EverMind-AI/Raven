@@ -1389,3 +1389,107 @@ async def test_the_source_exemption_keeps_case_on_a_posix_host(monkeypatch: pyte
         for arguments in ({"path": f"/home/a/.raven/{name.title()}/app.py"}, {"path": f"~/.raven/{name}foo/app.py"}):
             assert await _dispatched(arguments, _SOURCE) == "token = [redacted])\n", arguments
     assert "0123456789abcdef" not in await _dispatched({"path": "/home/a/.qwen/settings.json"}, _SETTINGS)
+
+
+@pytest.mark.parametrize(
+    "spelled",
+    [
+        "~/.raven/{}/app.py",
+        "~/.raven//{}/app.py",
+        "~/.raven/./{}/app.py",
+        "/home/a/.raven///.//./{}/app.py",
+        "cat $HOME/.raven//{}",
+        "cat ~/.raven/./{}",
+    ],
+)
+async def test_a_repeated_slash_or_dot_segment_still_reaches_the_posix_source_exemption(
+    monkeypatch: pytest.MonkeyPatch, spelled: str
+) -> None:
+    """``~/.raven//workspace`` and ``~/.raven/./workspace`` are ``~/.raven/workspace``.
+
+    The pass matches the arguments as the call wrote them -- no caller
+    normalizes a path first -- so a doubled slash or a ``.`` segment before a
+    source directory names the same directory and must not cost its source lines.
+    """
+    from raven.security.redact import _OWN_SOURCE_DIRS
+
+    _host(monkeypatch, "posix", "/home/a")
+    for name in _OWN_SOURCE_DIRS:
+        arguments = {"command" if spelled.startswith("cat ") else "path": spelled.format(name)}
+        assert await _dispatched(arguments, _SOURCE) == _SOURCE, arguments
+
+
+@pytest.mark.parametrize(
+    "spelled",
+    [
+        "~/.raven\\{}/app.py",
+        "~/.raven/{}foo/app.py",
+        "~/.raven//{}foo/app.py",
+        "~/.raven/./{}foo/app.py",
+        "~/.raven/.{}/app.py",
+        "~/.raven/oauth/x.json",
+        "~/.raven//oauth/x.json",
+        "~/.raven/./oauth/x.json",
+    ],
+)
+async def test_a_posix_spelling_of_another_entry_is_not_the_source_exemption(
+    monkeypatch: pytest.MonkeyPatch, spelled: str
+) -> None:
+    """Only ``/`` separates on POSIX, and a name still ends where the directory does.
+
+    A backslash is a character of a POSIX file name, so ``.raven\\workspace`` is
+    another entry of the home, not Raven's workspace; ``workspacefoo`` and
+    ``.workspace`` are other directories; the OAuth store keeps losing its values
+    however the separators before it are spelled.
+    """
+    from raven.security.redact import _OWN_SOURCE_DIRS
+
+    _host(monkeypatch, "posix", "/home/a")
+    for name in _OWN_SOURCE_DIRS:
+        arguments = {"path": spelled.format(name)}
+        assert await _dispatched(arguments, _SOURCE) == "token = [redacted])\n", arguments
+
+
+@pytest.mark.parametrize(
+    "spelled",
+    [
+        "C:\\Users\\a\\.raven\\\\{}\\app.py",
+        "C:/Users/a/.raven//{}/app.py",
+        "C:\\Users\\a\\.raven\\.\\{}\\app.py",
+        "C:\\Users\\a\\.raven\\\\.\\\\{}\\app.py",
+        "~/.raven/./{}/app.py",
+        "~\\.raven\\./.\\{}\\app.py",
+    ],
+)
+async def test_a_repeated_separator_or_dot_segment_still_reaches_the_windows_source_exemption(
+    monkeypatch: pytest.MonkeyPatch, spelled: str
+) -> None:
+    r"""Either slash, repeated, and ``.\`` segments name the same directory on Windows too."""
+    from raven.security.redact import _OWN_SOURCE_DIRS
+
+    _host(monkeypatch, "windows", _WINDOWS_HOME)
+    for name in _OWN_SOURCE_DIRS:
+        for arguments in ({"path": spelled.format(name)}, {"path": spelled.format(name.upper())}):
+            assert await _dispatched(arguments, _SOURCE) == _SOURCE, arguments
+
+
+@pytest.mark.parametrize(
+    "spelled",
+    [
+        "C:\\Users\\a\\.raven\\\\{}foo\\app.py",
+        "C:\\Users\\a\\.raven\\.\\{}foo\\app.py",
+        "C:\\Users\\a\\.raven\\.{}\\app.py",
+        "C:\\Users\\a\\.raven\\\\oauth\\x.json",
+        "C:\\Users\\a\\.raven\\.\\oauth\\x.json",
+    ],
+)
+async def test_a_windows_spelling_of_another_entry_is_not_the_source_exemption(
+    monkeypatch: pytest.MonkeyPatch, spelled: str
+) -> None:
+    """The wider Windows separators keep the directory boundary and the OAuth store's redaction."""
+    from raven.security.redact import _OWN_SOURCE_DIRS
+
+    _host(monkeypatch, "windows", _WINDOWS_HOME)
+    for name in _OWN_SOURCE_DIRS:
+        arguments = {"path": spelled.format(name)}
+        assert await _dispatched(arguments, _SOURCE) == "token = [redacted])\n", arguments
