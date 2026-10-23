@@ -480,6 +480,9 @@ async def _replay_one_call(monkeypatch: pytest.MonkeyPatch, item_id: str) -> tup
         pytest.param("485256fc-a47f-41be-b14f-2c4a662ddbaf", id="deepseek-uuid"),
         pytest.param("fc3a1b2c-a47f-41be-b14f-2c4a662ddbaf", id="uuid-beginning-with-fc"),
         pytest.param("fc_" + "a" * 62, id="longer-than-64"),
+        pytest.param("fc_abc.def", id="a-character-outside-the-set"),
+        pytest.param("FC_12", id="upper-case-prefix"),
+        pytest.param("fc_", id="nothing-after-the-prefix"),
     ],
 )
 async def test_a_call_another_vendor_answered_is_replayed_under_an_id_codex_takes(
