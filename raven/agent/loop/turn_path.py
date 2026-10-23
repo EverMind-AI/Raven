@@ -1209,10 +1209,12 @@ class TurnPathMixin:
         def _switch_to_next_model() -> str | None:
             """Put the rest of the turn on its next fallback model, and return the model it leaves.
 
-            The new model is asked the step as the turn first asked it: the prefill rows at the
-            end of ``messages`` are the thought of the model being left, and a request ending on
-            one is what a prefill-refusing model rejects. Whatever the reason for the switch --
-            an empty reply's FALLBACK or a streamed error -- the same holds.
+            The prefill rows at the end of ``messages`` come off: they are the thought of the model
+            being left, and a request ending on one is what a prefill-refusing model rejects. The
+            rest of the recovery scaffolding stays, so a nudge or a ceiling continuation written
+            for the model being left still reaches the new one, ending the request on a user row.
+            Whatever the reason for the switch -- an empty reply's FALLBACK or a streamed error --
+            the same holds.
             """
             nonlocal active_model
             previous, active_model = active_model, fallbacks_left.pop(0)

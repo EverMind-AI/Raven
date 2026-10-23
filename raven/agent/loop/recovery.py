@@ -648,15 +648,15 @@ class SilenceGate:
     take it back. Deltas are held while the text so far could still resolve to a marker under the
     strict rule, and go out together with everything after them the moment it cannot -- which a
     reply that begins like prose does at its first delta, so an ordinary answer waits for nothing.
-    Before its first letter or digit the text is undecided only while it is whitespace and the
-    punctuation the strict rule forgives at a marker's edge (the ``*`` of ``*NO_REPLY*``): any other
-    character there -- a symbol, an emoji, a box-drawing line -- starts no marker, and the reply goes
-    out at once. From the first letter or digit on, it is the strict rule's prefix test
-    (``may_become_silence``). Each delta is read on its own against what the ones before it left,
-    so a long hold costs a delta no more than a short one. A turn from a proactive origin
-    (``hold_all``) is read by the loose rule, whose marker may close a report on its last line,
-    and only the whole call can show that, so every delta waits for :meth:`release` or
-    :meth:`discard`.
+    Before its first letter or digit the text is undecided only while it is whitespace and
+    punctuation: the kind the strict rule forgives at a marker's edge (the ``*`` of ``*NO_REPLY*``),
+    and the ``[`` and ``]`` that belong to the ``[SILENT]`` marker itself. Any other character there
+    -- a symbol, an emoji, a box-drawing line -- starts no marker, and the reply goes out at once.
+    From the first letter or digit on, it is the strict rule's prefix test (``may_become_silence``).
+    Each delta is read on its own against what the ones before it left, so a long hold costs a
+    delta no more than a short one. A turn from a proactive origin (``hold_all``) is read by the
+    loose rule, whose marker may close a report on its last line, and only the whole call can show
+    that, so every delta waits for :meth:`release` or :meth:`discard`.
 
     The loop decides once it has read the reply: ``discard`` for a marker, which goes to no one,
     ``release`` for anything else, and for a reply that ends in tool calls, whose words are not a

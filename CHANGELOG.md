@@ -276,7 +276,8 @@ All notable changes to Raven are documented here.
 - Empty and abnormal model replies are handled the way Hermes Agent handles
   them. A reply that is only a silence marker (`[SILENT]`, `SILENT`,
   `NO_REPLY` or `NO REPLY`; a scheduled run, a sub-agent's report or a
-  Sentinel notice may wrap it in a note) ends the turn with nothing sent, and
+  Sentinel notice may wrap it in a note) ends the turn with nothing sent (an
+  A2A peer, which waits on the text, still gets the reply as written), and
   the TUI and web UI draw one muted line, "Raven chose not to reply."; every
   cron reminder teaches the marker, and a silent run counts as a success. An
   empty reply is recovered by its kind: a plain one is resent unchanged up to
