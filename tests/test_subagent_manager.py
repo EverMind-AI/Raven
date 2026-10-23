@@ -2958,6 +2958,7 @@ class _AlwaysToolsProvider(LLMProvider):
         super().__init__(api_key="test")
         self.rounds = 0
         self.toolless_calls = 0
+        self.toolless_asks: list[list[dict[str, Any]]] = []
         self._answer = answer_when_toolless
 
     def get_default_model(self) -> str:
@@ -2968,6 +2969,7 @@ class _AlwaysToolsProvider(LLMProvider):
 
         if not tools:
             self.toolless_calls += 1
+            self.toolless_asks.append(list(messages))
             return LLMResponse(content=self._answer or "", finish_reason="stop")
         self.rounds += 1
         return LLMResponse(
@@ -3011,6 +3013,137 @@ async def test_a_run_with_nothing_to_say_fails_instead_of_reading_as_done(tmp_pa
 
     with pytest.raises(SubagentNoAnswerError, match="no answer"):
         await backend.run("research it", task_id="n2", workspace=tmp_path, executor=None)
+
+
+async def test_a_run_out_of_rounds_is_told_its_budget_ran_out(tmp_path) -> None:
+    """The other half of the wrap-up's wording: this run answered every round,
+    with a tool call, so it is told the budget is spent -- not that it said
+    nothing, which is the blank reply's reason."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    provider = _AlwaysToolsProvider()
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path)
+
+    await backend.run("research it", task_id="n3", workspace=tmp_path, executor=None)
+
+    nudge = provider.toolless_asks[0][-1]
+    assert nudge["role"] == "user"
+    assert "whole tool budget" in nudge["content"]
+    assert "reply was empty" not in nudge["content"], "the run did not answer blank"
+
+
+class _ScriptedProvider(LLMProvider):
+    """Answers each call from a script, and keeps what it was asked."""
+
+    def __init__(self, replies: list[str]) -> None:
+        super().__init__(api_key="test")
+        self.calls: list[list[dict[str, Any]]] = []
+        self._replies = list(replies)
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, messages, tools=None, model=None, **kwargs):
+        self.calls.append(list(messages))
+        return LLMResponse(content=self._replies.pop(0), finish_reason="stop")
+
+
+async def test_a_blank_reply_is_asked_once_more_instead_of_being_the_answer(tmp_path) -> None:
+    """The reply a vendor hands back for an empty turn -- one space from
+    OpenRouter on 2026-10-21, nothing at all from one that keeps no native
+    finish reason -- is not an answer. Returned as one it was recorded
+    ``completed`` and summarised for the parent as the work. It gets the one
+    wrap-up call the run out of rounds gets, worded for what happened: the
+    model did not use its tool budget, it answered nothing.
+    """
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    provider = _ScriptedProvider([" ", "the answer"])
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path)
+
+    out = await backend.run("sum it up", task_id="n4", workspace=tmp_path, executor=None)
+
+    assert out == "the answer"
+    assert len(provider.calls) == 2, "asked once more, with no tools"
+    nudge = provider.calls[1][-1]
+    assert nudge["role"] == "user"
+    assert "reply was empty" in nudge["content"]
+    assert "tool budget" not in nudge["content"], "the budget was not the reason"
+
+
+async def test_a_reply_that_stays_blank_fails_and_names_the_blank(tmp_path) -> None:
+    """Raised, not returned, like the run out of rounds -- and the failure says
+    what happened, not that fifteen rounds were used when one was."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.contracts.subagent_backend import SubagentNoAnswerError
+
+    provider = _ScriptedProvider(["", ""])
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path)
+
+    with pytest.raises(SubagentNoAnswerError, match="reply was empty") as caught:
+        await backend.run("sum it up", task_id="n5", workspace=tmp_path, executor=None)
+
+    assert "rounds" not in str(caught.value)
+    assert len(provider.calls) == 2
+
+
+async def test_the_answer_asked_for_after_a_blank_reply_reaches_a_watching_caller(tmp_path) -> None:
+    """What a direct chat streams has to end with the reply the record stores:
+    once anything has streamed, the turn sends no closing text. The wrap-up
+    call is waited for, not streamed, so its answer went to the record and
+    never to the screen.
+    """
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    provider = _ScriptedProvider([" ", "the answer"])
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path)
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    out = await backend.run("sum it up", task_id="n6", workspace=tmp_path, executor=None, on_delta=on_delta)
+
+    assert out == "the answer"
+    streamed = "".join(seen)
+    assert streamed.endswith(out) and streamed.count(out) == 1, seen
+
+
+async def test_the_answer_asked_for_after_the_rounds_run_out_reaches_a_watching_caller(tmp_path) -> None:
+    """The same on the older path: a run out of rounds answers through the
+    wrap-up call too, and that answer is the reply."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    provider = _AlwaysToolsProvider()
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path)
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    out = await backend.run("research it", task_id="n7", workspace=tmp_path, executor=None, on_delta=on_delta)
+
+    assert out == "here is what I have"
+    assert seen == ["here is what I have"]
+
+
+async def test_a_wrap_up_that_answers_nothing_streams_nothing(tmp_path) -> None:
+    """Only an answer is handed to the watcher: a wrap-up that comes back blank
+    leaves the stream as it was, and the run fails as it would unwatched."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.contracts.subagent_backend import SubagentNoAnswerError
+
+    provider = _ScriptedProvider(["", ""])
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path)
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    with pytest.raises(SubagentNoAnswerError, match="reply was empty"):
+        await backend.run("sum it up", task_id="n8", workspace=tmp_path, executor=None, on_delta=on_delta)
+
+    assert seen == []
 
 
 _LLM_ERROR_REPLY = "Error calling LLM (unknown@openrouter): HTTP 401: User not found."
@@ -4749,13 +4882,17 @@ class _CutOffProvider(LLMProvider):
 
 async def test_a_builtin_run_cut_at_the_ceiling_reports_it(tmp_path) -> None:
     """The in-process lane has the fact first-hand -- it holds the response --
-    so it reports it directly rather than through any transport."""
+    so it reports it directly rather than through any transport. A reply cut
+    with nothing to show is no answer, so the run also fails saying so; the
+    limit is reported before that, which is the shape the record exists for.
+    """
     from raven.agent.subagent import activity
     from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.contracts.subagent_backend import SubagentNoAnswerError
 
     backend = RavenLoopBackend(provider=_CutOffProvider(), model="stub", agent_home=tmp_path)
 
-    with activity.collecting() as did:
+    with activity.collecting() as did, pytest.raises(SubagentNoAnswerError, match="reply was empty"):
         await backend.run("do it", task_id="n1", workspace=tmp_path, executor=None)
 
     assert did.output_limited is True
