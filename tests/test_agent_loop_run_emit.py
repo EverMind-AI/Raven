@@ -1963,10 +1963,9 @@ async def test_a_hook_tail_after_words_that_already_streamed_keeps_its_separator
     assert outcome.silent is False
 
 
-async def test_a_marker_after_the_message_tool_sent_is_told_as_a_silent_row_but_the_turn_replied(tmp_path):
-    """The tool's text reached the reader, and the row the turn ends on is the marker, which a reload draws
-    as the muted line: the client is told so live, once. The marker itself is held back, and the outcome
-    still says a reply went out."""
+async def test_a_marker_after_the_message_tool_sent_does_not_make_the_turn_silent(tmp_path):
+    """The tool's text is the answer and it is on the reader's screen. A surface told the turn ended
+    silent would take that text away, so only the marker is held back and the turn stays an answered one."""
     provider = _FakeStreamToolProvider(
         [
             [_message_tool_call('{"content": "here you go"}')],
@@ -1980,7 +1979,5 @@ async def test_a_marker_after_the_message_tool_sent_is_told_as_a_silent_row_but_
     outcome = await loop.run_turn(_req("send it"), sink, _drain)
 
     assert [e.delta for e in sink.events if isinstance(e, EvStreamDelta)] == ["here you go"]
-    assert [e.kind for e in sink.events if isinstance(e, EvNotice) and e.kind is NoticeKind.SILENT_TURN] == [
-        NoticeKind.SILENT_TURN
-    ]
+    assert not any(isinstance(e, EvNotice) and e.kind is NoticeKind.SILENT_TURN for e in sink.events)
     assert outcome.silent is False and outcome.explicit_reply is True

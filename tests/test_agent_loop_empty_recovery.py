@@ -3370,9 +3370,9 @@ async def test_a_proactive_turn_that_skips_after_send_stays_silent(workspace, mo
 
 
 @pytest.mark.asyncio
-async def test_a_marker_after_the_message_tool_sent_still_files_and_tells_a_silent_row(workspace, monkeypatch):
-    """The reader has the answer from the tool, and the row the turn ends on is still the model's marker:
-    it is filed as one, which a reload draws as the muted line, so the client is told it is one live too."""
+async def test_a_marker_after_the_message_tool_sent_is_not_a_silent_turn(workspace, monkeypatch):
+    """The reader has the answer from the tool; the marker only says there is nothing more.
+    A turn that answered is not a turn that said nothing, and a surface told otherwise would drop the answer."""
     _served(monkeypatch, [_tool_reply("message", _SEND), _reply("NO_REPLY")])
     agent = _litellm_agent(workspace)
     sent = _wire_message_tool(agent)
@@ -3381,37 +3381,8 @@ async def test_a_marker_after_the_message_tool_sent_still_files_and_tells_a_sile
     out = await agent._process_message(_turn(), session_key="s1", silence=silence)
 
     assert sent == ["here is your answer"]
-    assert out is None and silence == {"silent": True}
-    last = agent.sessions.get_or_create("s1").messages[-1]
-    assert (last["content"], last["silent"]) == ("NO_REPLY", True)
-
-
-@pytest.mark.asyncio
-async def test_a_marker_after_the_message_tool_sent_is_told_to_the_client_but_the_turn_replied(workspace, monkeypatch):
-    """The notice follows the row, and the outcome follows the reader: a reply did go out, so the turn
-    is not one that said nothing -- a surface that counts silent turns, or ends a typing indicator on
-    one, must not count this."""
-    from raven.spine.events import Notice, StreamDelta
-
-    _served(monkeypatch, [_tool_stream("message", _SEND), _finished_stream("NO_REPLY")])
-    agent = _litellm_agent(workspace)
-
-    async def _noop(**_kw) -> None:
-        return None
-
-    agent._start_executor = _noop
-    agent._connect_mcp = _noop
-    events: list = []
-
-    async def emit(event) -> None:
-        events.append(event)
-
-    outcome = await agent.run_turn(_turn("anything new?"), emit, lambda: [])
-
-    notices = [e.kind for e in events if isinstance(e, Notice)]
-    assert "".join(e.delta for e in events if isinstance(e, StreamDelta)) == "here is your answer"
-    assert notices.count(NoticeKind.SILENT_TURN) == 1 and notices[-1] is NoticeKind.SILENT_TURN
-    assert outcome.silent is False and outcome.explicit_reply is True
+    assert out is None and silence == {}
+    assert agent.sessions.get_or_create("s1").messages[-1]["content"] == "NO_REPLY"
 
 
 @pytest.mark.asyncio
