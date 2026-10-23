@@ -115,8 +115,8 @@ def _unavailable(reason: str) -> NoReturn:
 
 
 WINDOWS_INSTALLS = (
-    r"Google\Chrome\Application\chrome.exe",
-    r"Microsoft\Edge\Application\msedge.exe",
+    ("Google", "Chrome", "Application", "chrome.exe"),
+    ("Microsoft", "Edge", "Application", "msedge.exe"),
 )
 
 
@@ -137,7 +137,7 @@ def _chrome_executable() -> str | None:
         if not root:
             continue
         for install in WINDOWS_INSTALLS:
-            candidate = Path(root) / install
+            candidate = Path(root, *install)
             if candidate.is_file():
                 return str(candidate)
     return None
