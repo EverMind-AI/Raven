@@ -745,7 +745,8 @@ def _session_to_list_item(info: dict[str, Any]) -> dict[str, Any]:
 
     ``updated_at`` is the latest readable conversational message stamp. User,
     assistant, runtime-origin, and delegated entries all move the picker because
-    each adds visible Session content; tool/system records do not. It falls back
+    each adds visible Session content; tool/system records do not, and neither
+    does a silent assistant row, which delivered nothing. It falls back
     through metadata to creation time for old sessions.
     """
     key = info.get("key", "")

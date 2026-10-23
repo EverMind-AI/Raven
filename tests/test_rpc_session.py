@@ -2905,6 +2905,38 @@ async def test_session_list_keeps_identity_separate_from_latest_preview(
     assert row["last_message_preview"] == "latest answer"
 
 
+async def test_session_list_leaves_a_silent_row_out_of_the_preview_and_the_clock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A silent turn delivered nothing, so its marker is neither the line a
+    picker shows under the title nor activity a session is ordered by. The second
+    session is the same fixture with the flag removed, so only the flag differs."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    mgr = SessionManager(tmp_path)
+    for key, reply, flag in (
+        ("tui:quiet", "[SILENT]", {"silent": True}),
+        ("tui:spoken", "all quiet", {}),
+    ):
+        session = mgr.get_or_create(key)
+        session.add_message("user", "what changed?", timestamp="2026-06-10T10:00:00")
+        session.add_message("assistant", "one file", timestamp="2026-06-10T10:00:05")
+        session.add_message("user", "anything new?", timestamp="2026-06-10T11:00:00")
+        session.add_message("assistant", reply, timestamp="2026-06-10T11:00:05", **flag)
+        mgr.save(session)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
+
+    rows = {row["id"]: row for row in (await session_list({}))["sessions"]}
+
+    assert rows["tui:quiet"]["last_message_preview"] == "anything new?"
+    assert rows["tui:quiet"]["updated_at"] == datetime.fromisoformat("2026-06-10T11:00:00").timestamp()
+    assert rows["tui:spoken"]["last_message_preview"] == "all quiet"
+    assert rows["tui:spoken"]["updated_at"] == datetime.fromisoformat("2026-06-10T11:00:05").timestamp()
+    assert rows["tui:quiet"]["message_count"] == 4, "the row is still in the transcript"
+
+
 async def test_session_compress_hands_back_what_the_caller_must_redraw(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

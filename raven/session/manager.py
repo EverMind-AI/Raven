@@ -876,6 +876,10 @@ class SessionManager:
         cannot serve either -- it only moves when a save writes metadata and
         can lag the transcript by a whole turn.
 
+        A ``silent`` assistant row is left out of the timestamp and the preview
+        alike: the model chose to say nothing, so its marker is neither
+        activity to order by nor a line to show.
+
         The first user message is what session pickers title an untitled
         session with, so its text (flattened to one line, capped) rides along.
         The latest non-empty user or assistant message is a separate display
@@ -903,7 +907,7 @@ class SessionManager:
                         count += 1
                         if isinstance(data, dict):
                             role = data.get("role")
-                            if role in {"user", "assistant"}:
+                            if role in {"user", "assistant"} and data.get("silent") is not True:
                                 text = _message_text(data.get("content"))
                                 if text:
                                     latest_preview = text
