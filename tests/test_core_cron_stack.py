@@ -27,6 +27,7 @@ from raven.proactive_engine.schedulers.cron.types import (
     CronSchedule,
 )
 from raven.spine import Origin, TurnFailed, TurnOutcome, Usage
+from raven.spine.silence import SILENCE_INSTRUCTION
 
 
 def _make_job(
@@ -126,6 +127,16 @@ async def test_reminder_note_carries_schedule_origin(spine):
     assert "set at" in text
 
 
+async def test_the_reminder_teaches_the_silence_marker(spine):
+    handler = make_on_cron_job(submit=spine.submit, readback_texts=spine.readback)
+
+    await handler(_make_job(name="b5"))
+
+    text = spine.captured[0].text
+    assert text.endswith("\n\n" + SILENCE_INSTRUCTION)
+    assert text.count(SILENCE_INSTRUCTION) == 1
+
+
 # ─────────────────────────────────────────────────────────────────────
 # Reply read-back and heartbeat suppression
 # ─────────────────────────────────────────────────────────────────────
@@ -189,6 +200,27 @@ async def test_spine_path_missing_readback_uses_turn_reply_state(explicit_reply:
         system_events.enqueue.assert_called_once()
         assert "(no response)" in system_events.enqueue.call_args.args[0].text
         wake.request_wake_now.assert_called_once_with("cron:job_t2")
+
+
+async def test_a_silent_run_succeeds_without_waking_heartbeat():
+    system_events = MagicMock()
+    wake = MagicMock()
+
+    class _Handle:
+        async def result(self):
+            return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=False, silent=True)
+
+    handler = make_on_cron_job(
+        submit=lambda req: _Handle(),
+        readback_texts={},
+        system_events=system_events,
+        wake=wake,
+    )
+
+    assert await handler(_make_job(channel="telegram", to="c1", name="s1")) is None
+
+    system_events.enqueue.assert_not_called()
+    wake.request_wake_now.assert_not_called()
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -299,6 +331,34 @@ async def test_record_fire_not_called_on_turn_failure():
         await handler(_make_job(name="r2", kind="every"))
 
     cron_service.record_fire.assert_not_called()
+
+
+async def test_a_silent_run_does_not_count_toward_auto_disable():
+    """A silent run sent the user nothing to respond to, so counting it would
+    disable an hourly check that mostly answers [SILENT] at its twelfth fire."""
+    cron_service = MagicMock()
+    cron_service.record_fire.return_value = False
+    outcomes = iter(
+        [
+            TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=False, silent=True),
+            TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True),
+        ]
+    )
+
+    class _Handle:
+        async def result(self):
+            return next(outcomes)
+
+    handler = make_on_cron_job(submit=lambda req: _Handle(), readback_texts={}, cron_service=cron_service)
+    job = _make_job(name="r7", kind="every")
+
+    await handler(job)
+    cron_service.record_fire.assert_not_called()
+
+    # The same job counts a run that replied, so the gate above is the silence, not the setup.
+    await handler(job)
+    cron_service.record_fire.assert_called_once_with("job_r7")
+    assert job.enabled is True
 
 
 async def test_record_fire_not_called_for_oneshot_at_job(spine):
