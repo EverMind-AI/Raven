@@ -337,8 +337,9 @@ def decide(
 
     The caller supplies what only it can see: whether the provider takes a prefill, the rung
     :func:`next_step_down` offers, whether a fallback model remains, and :func:`resend_budget`'s
-    answer. A fallback model gets one try, so on one nothing is repeated: the next move is another
-    model or the end.
+    answer. A fallback model gets one try: on one an empty or thinking-only reply is not resent,
+    prefilled or stepped down again, so the next move is another model or the end. A cut answer is
+    still continued there, and a reply right after tools still nudged.
     """
     if kind is ReplyKind.SILENT:
         return RecoveryAction.SILENT

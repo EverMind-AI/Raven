@@ -133,7 +133,8 @@ class TurnFailed:
     turn_id: str = ""
     reported: bool = False
     full_detail: str | None = None
-    # The model produced no output at all (no text, no reasoning, no tool call) on every attempt.
+    # The last reply had no text, no tool call and nothing else to show (no reasoning, refusal or cut at the
+    # output ceiling) once recovery was spent, or no text with recovery off. Earlier attempts are not covered.
     no_output: bool = False
 
 

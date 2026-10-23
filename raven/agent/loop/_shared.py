@@ -271,9 +271,12 @@ class LoopOutcome:
     the error so a reader who expands the row can read it, and the runner drops
     it when it says nothing more than ``error`` (``attach_full_detail``).
 
-    ``no_output`` is set when the model gave nothing back -- no text, no
-    reasoning, no tool call -- on every attempt. A turn with recovery switched
-    off that ended without text sets it too: nothing there says more than that.
+    ``no_output`` is set when the turn ended on a last reply with no text, no tool
+    call and nothing else to show for it: no reasoning, no refusal, no cut at the
+    output ceiling. Recovery sets it once it has spent its moves on such a reply;
+    with recovery switched off, any last reply without text sets it, thinking
+    included, because nothing there says more than that. The attempts before the
+    last are not covered: they may have thought.
 
     ``silent`` is set when the turn's last reply is a silence marker. That is the
     model's answer, not a failure and not an empty reply: the row stays in the

@@ -843,8 +843,9 @@ is not a Silent Turn -- its answer reached the reader, and `TurnOutcome.silent` 
 unasked, so a nudge it would pop stays queued for the next reply, and the personalizer learns
 nothing; text a hook composes there is delivered as the reply, and the turn is then not silent.
 Distinct from a `no_output` failure. A Silent Turn is the model saying nothing on purpose, so it
-succeeds; `no_output` is what a turn is failed with when the model gave nothing back at all after
-every retry (`AnswerlessTurnError`). `NO_REPLY` names a marker, never that failure.
+succeeds; `no_output` is what a turn is failed with when its last reply was empty -- no text, no
+tool call, no reasoning -- once every retry was spent (`AnswerlessTurnError`). `NO_REPLY` names a
+marker, never that failure.
 _Avoid_: "empty reply" or "no reply" for a Silent Turn — an empty reply is **Empty-Response
 Recovery**'s, and `no_output` its failure; "silent" for a failed turn that happened to say nothing.
 
@@ -878,12 +879,13 @@ An empty reply is RETRYed: the same request resent unchanged, up to `empty_conte
 times, after a jittered backoff -- cut short by two zero-output replies of one model and finish
 (`deterministic_empty`), or by a reply whose reported cost reaches
 `empty_retry_cost_threshold_usd` (`resend_budget`, one resend). Once those are spent, a fallback
-model is tried -- each once, with nothing repeated on it, and the switch held for the rest of the
-turn -- and then FAIL: status `error`, worded after Hermes per kind, with `no_output` set when the
-model gave nothing back. Resends, step-downs and switches ask the same step again and bill no
-iteration; prefills, nudges and continuations are steps. Recovery switched off completes any reply
-with text -- a cut stream's as an exhausted one is, with `PARTIAL_STREAM_NOTE` and status
-`interrupted` -- and fails a refusal; an empty reply then ends the turn with no text.
+model is tried -- each once, with no resend, prefill or step-down on it, and the switch held for the
+rest of the turn -- and then FAIL: status `error`, worded after Hermes per kind, with `no_output`
+set when the last reply was empty (not thinking, a refusal or a cut). Resends, step-downs and
+switches ask the same step again and bill no iteration; prefills, nudges and continuations are
+steps. Recovery switched off completes any reply with text -- a cut stream's as an exhausted one
+is, with `PARTIAL_STREAM_NOTE` and status `interrupted` -- and fails a refusal; an empty reply then
+ends the turn with no text.
 Either way a turn that reaches its end with no text raises `AnswerlessTurnError` rather than
 replying -- unless one of its tools already put an answer in front of the reader (the message
 tool's `sent_in_turn`, or an inline research answer the turn itself streamed). A turn the message
@@ -1014,7 +1016,9 @@ The exception a runner raises to say the turn it ran ended with no answer and th
 already the report a reader should see — the model call the loop gave up on, in the provider's words,
 or the loop's when the provider gave none; or a reply that Empty-Response Recovery could not mend
 (nothing, only thinking, a cut that stayed cut, a refusal), in Hermes's wording for that kind.
-`no_output` marks the turn whose model gave nothing back at all.
+`no_output` marks the turn whose last reply was empty -- no text, no tool call, and no reasoning,
+refusal or cut at the output ceiling -- once recovery was spent, or any last reply without text with
+recovery off; the attempts before the last are not covered.
 `describe_failure` passes its text through unchanged (it arrives bounded from the layer that built
 it), and the `turn_ended` marker that says so is filed before the failure leaves the loop. The marker
 is worded twice, for its two readers: `turn_ended.reason` keeps the provider's account for whoever is

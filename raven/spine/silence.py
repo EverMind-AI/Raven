@@ -13,8 +13,8 @@ One marker set is read by two rules, so the lanes cannot drift apart. The strict
 anything the model meant to say reaches the person waiting on it. A turn from a proactive origin
 (cron, sub-agent, sentinel, heartbeat) reads the loose rule (``is_loose_silence``) as well as the
 strict one: nobody is waiting, the model is told to answer ``[SILENT]`` when nothing is new, and
-models reliably wrap it in a short note on why they stayed quiet, so a marker that opens the reply
-or sits on its own first or last line counts too.
+models reliably wrap it in a short note on why they stayed quiet, so the bracketed ``[SILENT]``
+opening the reply, or any marker alone on its first or last line, counts too.
 
 ``may_become_silence`` is the strict rule's counterpart for streaming: it says whether the text so
 far could still turn out to be a marker, so a surface holds it back instead of showing a marker

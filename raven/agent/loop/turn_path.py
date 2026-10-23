@@ -2301,9 +2301,9 @@ class TurnPathMixin:
                     error_full = _recovery_failure_text(kind, response, clean)
                     error_detail = bound_failure_text(error_full)
                     no_output = kind in (ReplyKind.EMPTY, ReplyKind.POST_TOOL_EMPTY)
-                    # Kept, and read only where a tool has already answered: the
-                    # caller fails an unanswered turn on ``error`` above instead
-                    # of delivering this.
+                    # Kept as the returned content too. Nothing delivers it: the caller fails
+                    # the turn on ``error``, and a turn the message tool had answered never
+                    # reaches this branch.
                     final_content = error_detail
                     status = "error"
                     break

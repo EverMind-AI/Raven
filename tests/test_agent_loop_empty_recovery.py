@@ -254,7 +254,7 @@ def _row(case, kind, action, *, state=None, limits=_ON, **asked):
 
 
 _DECIDE_TABLE = [
-    # Recovery off: a marker is still silence and a refusal still fails; the rest ends as main ends it.
+    # Recovery off: a marker is still silence and a refusal still fails; every other reply completes the turn as it stands.
     _row("off-silent", _K.SILENT, _A.SILENT, limits=_OFF, **_ROOM),
     _row("off-refusal", _K.REFUSAL, _A.FAIL, limits=_OFF, **_ROOM),
     *(
@@ -3341,7 +3341,7 @@ async def test_a_silent_turn_is_not_silenced_by_a_hook_that_composes_nothing(wor
 
 @pytest.mark.asyncio
 async def test_text_a_hook_composes_on_a_silent_turn_is_delivered(workspace, monkeypatch):
-    """Owner ruling B: the hooks keep their say. What one composes on a turn with nothing to say is the reply."""
+    """``after_send`` still runs on a silent turn, and text a hook composes there is the reply."""
     _served(monkeypatch, [_reply("[SILENT]")])
     sink: dict[str, str] = {}
     silence: dict[str, bool] = {}

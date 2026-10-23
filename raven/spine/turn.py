@@ -40,7 +40,8 @@ class AnswerlessTurnError(Exception):
     def __init__(self, *args: object, full_detail: str | None = None, no_output: bool = False) -> None:
         super().__init__(*args)
         self.full_detail = full_detail
-        # The model produced no output at all (no text, no reasoning, no tool call) on every attempt.
+        # The last reply had no text, no tool call and nothing else to show (no reasoning, refusal or cut at the
+        # output ceiling) once recovery was spent, or no text with recovery off. Earlier attempts are not covered.
         self.no_output = no_output
 
 

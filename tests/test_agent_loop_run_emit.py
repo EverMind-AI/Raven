@@ -1911,8 +1911,9 @@ async def test_the_marker_is_not_streamed_to_a_person_that_prefixes_it(tmp_path)
 
 @pytest.mark.parametrize("stream", [True, False])
 async def test_what_a_hook_composes_on_a_silent_turn_reaches_the_reader(tmp_path, stream):
-    """Owner ruling B. Nothing streamed, so the hook's words are the reply, sent whole and without the
-    separator it put in front; the turn is not silent, and nothing says otherwise."""
+    """``after_send`` still runs on a silent turn, and text a hook composes there is the reply. Nothing
+    streamed, so it is sent whole and without the separator the hook put in front; the turn is not
+    silent, and nothing says otherwise."""
     provider = (
         _FakeStreamProvider([ChatDelta(content="[SILENT]")])
         if stream
