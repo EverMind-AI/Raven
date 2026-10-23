@@ -3998,10 +3998,12 @@ class TranscriptMessage(_Strict):
     silent: bool | None = Field(
         default=None,
         description=(
-            "Set on an assistant entry where the model chose not to reply: `text` is its silence "
-            "marker, not an answer. A reader draws one muted line and never treats `text` as the "
-            "answer. Distinct from `notice`, which marks a row the runtime wrote; this row is the "
-            "model's own."
+            "Set on an assistant entry whose text, the model's last word in its turn, is its silence "
+            "marker (from a turn the runtime opened, possibly with a note around it), not an "
+            "answer. A reader draws one muted line and never treats `text` as the answer. A turn "
+            "the message tool had already answered can still carry it: that reply reached the "
+            "reader, and a reload draws the muted line after it. Distinct from `notice`, which "
+            "marks a row the runtime wrote; this row is the model's own."
         ),
     )
 
