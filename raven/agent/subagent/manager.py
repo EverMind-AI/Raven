@@ -2329,7 +2329,10 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
         and that reply is written right after this message is read. Replayed on a
         recorded live DAG notice (glm-5.3-flash), each task got its own heading in
         0 of 6 replies with the resident rules alone and 5 of 6 with the note.
-        Clients draw only what is inside the fence, so no reader sees it.
+        ui-web draws only what is inside the fence and ui-tui a one-line marker in
+        its place; an ACP ``session/load`` replay and a session export draw the
+        stored text itself, so the note shows there, as a spawn announcement's
+        instruction tail does.
         """
         self.remember_origin(origin)
         if self._submit is None:

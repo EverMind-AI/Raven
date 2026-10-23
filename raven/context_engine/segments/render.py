@@ -410,8 +410,13 @@ def reply_rules_note() -> str:
       ``run_subagent_dag`` receipt in 1 of 6 and 5 of 6.
 
     It travels as this system's note after the result's fence, where the fence's own
-    contract does not make it data, and it stays on the stored result.
+    contract does not make it data, and it stays on the stored result. Empty in a
+    process launched to do one task, which renders none of the reply rules it repeats.
     """
+    from raven.agent.subagent.role import is_subagent_process
+
+    if is_subagent_process():
+        return ""
     return (
         "\n\nNote: decisions you put to the user that are still open close this reply too, a line each; a reply "
         "that covers more than one task gives each task its own `### <task>` section, even a one-line status."

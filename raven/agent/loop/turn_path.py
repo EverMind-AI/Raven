@@ -1488,7 +1488,12 @@ class TurnPathMixin:
                             )
                         from raven.context_engine.segments import render
 
-                        if tool_call.name in render.DISPATCH_TOOLS:
+                        # Read off the tool the call reached, as take_metadata is: through
+                        # tool_call, the only route to a run_subagent_dag the fold hides,
+                        # a dispatch's receipt comes back under tool_call's name.
+                        called = self.tools.get(tool_call.name)
+                        reached = called.metadata_owner(tool_call.arguments or {}) if called is not None else None
+                        if reached is not None and reached.name in render.DISPATCH_TOOLS:
                             watch_note += render.reply_rules_note()
                     # The registry already unwrapped any ToolResult: `result` is
                     # the model-facing text, with the optional display string

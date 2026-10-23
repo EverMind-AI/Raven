@@ -833,6 +833,16 @@ class TestHostRole:
         assert "even a one-line status" in note
         assert "When a reply covers more than one task" in reply_rules
 
+    def test_a_sub_agent_role_process_gets_no_reply_rules_note(self, tmp_path: Path, monkeypatch) -> None:
+        """The note says two of the reply rules again, and a process launched to do one task
+        renders none of them, so a dispatch call there, refused or not, earns no note."""
+        from raven.agent.subagent.role import SUBAGENT_ENV_VAR
+
+        assert render.reply_rules_note()
+        monkeypatch.setenv(SUBAGENT_ENV_VAR, "1")
+        assert "## How you reply" not in render.identity_text(tmp_path)
+        assert render.reply_rules_note() == ""
+
     def test_an_offer_the_user_passes_over_is_not_asked_again(self, tmp_path: Path) -> None:
         """Only a decision the host put to the user is open; an offer of more work that
         the user moved past is declined, or every reply would repeat it."""
