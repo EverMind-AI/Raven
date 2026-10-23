@@ -1786,7 +1786,11 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
          sentence for, and it is the only thread a restored card has back to the
          record. */
       if (m.spawn_task_id && h.spawnTask) h.spawnTask(String(m.spawn_task_id))
-      const preview = src.clean(m.text).split('\n').slice(0, 8).map((l) => l.slice(0, 160)).join('\n')
+      /* The stored result is the model's copy: inside its fence, and after it
+         whatever note this system added for the model (a dispatch receipt's
+         reply rules). The live preview is the raw result, so this one is the
+         fence's content alone. */
+      const preview = src.clean(defence(String(m.text || ''))).split('\n').slice(0, 8).map((l) => l.slice(0, 160)).join('\n')
       h.done(src.okOf(m.name || '', preview), preview, m.duration_ms != null ? m.duration_ms : 0, m.diff)
     }
   })
