@@ -4,10 +4,11 @@ import json
 import logging
 import os
 import re
+import shutil
 import sys
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from pydantic import ValidationError
 
@@ -20,7 +21,7 @@ from raven.utils.atomic_io import atomic_replace, atomic_update
 # than on every load -- the watermark is what lets a user re-set by hand
 # whatever a migration cleared. Kept out of the schema on purpose: see
 # ``_stamp_path``.
-CURRENT_CONFIG_VERSION = 14
+CURRENT_CONFIG_VERSION = 15
 
 # The generation that introduced each run-once migration. Each is gated on its
 # own floor rather than on "is this config current", because those are not the
@@ -48,6 +49,7 @@ _SHIM_PIN_MIGRATION = 11
 _DISPLAY_ONLY_ADDRESS_MIGRATION = 12
 _PLANTED_CRON_TIMEZONE_MIGRATION = 13
 _RETIRED_VERDICT_SWITCH_MIGRATION = 14
+_SHIM_PIN_REFRESH_MIGRATION = 15
 
 # The context window every pre-0.1.11 bootstrap wrote to disk verbatim: back
 # then ``AgentDefaults.context_window_tokens`` defaulted to this number and
@@ -400,13 +402,16 @@ def _persist_migrations(path: Path, from_version: int = 0, *, refresh_interprete
             if from_version < _RETIRED_DEEP_RESEARCH_MIGRATION:
                 changed = _migrate_retired_deep_research(raw) or changed
             if from_version < _SHIM_PIN_MIGRATION:
-                changed = _migrate_retired_shim_pins(raw) or changed
+                changed = _migrate_retired_shim_pins(raw, _RETIRED_SHIM_COMMANDS[_SHIM_PIN_MIGRATION]) or changed
             if from_version < _DISPLAY_ONLY_ADDRESS_MIGRATION:
                 changed = _migrate_display_only_addresses(raw) or changed
             if from_version < _PLANTED_CRON_TIMEZONE_MIGRATION:
                 changed = _migrate_planted_cron_timezone(raw) or changed
             if from_version < _RETIRED_VERDICT_SWITCH_MIGRATION:
                 changed = _migrate_retired_verdict_switch(raw) or changed
+            if from_version < _SHIM_PIN_REFRESH_MIGRATION:
+                retired = _RETIRED_SHIM_COMMANDS[_SHIM_PIN_REFRESH_MIGRATION]
+                changed = _migrate_retired_shim_pins(raw, retired) or changed
             if refresh_interpreters:
                 changed = _refresh_bundled_shim_interpreters(raw) or changed
         if not changed:
@@ -1116,71 +1121,178 @@ def _migrate_retired_deep_research(data: dict[str, Any], *, notify: bool = False
     return changed
 
 
-# The stock commands a shim preset shipped before its current pin, with the one
-# it ships now, by preset key -- for a pin whose new build was measured reopening
-# the old one's sessions, the property the migration below rests on, so not
-# every pin that ever moved. Spelled out rather than read off the preset table
-# because config does not import the agent package (``raven.config.agent_names``
-# says why); tests/test_config_loader.py pins the current command to the
-# preset's own, so a pin bumped without extending this fails there instead of
-# stranding every row configured on the pin before it.
-_RETIRED_SHIM_COMMANDS: dict[str, tuple[frozenset[str], str]] = {
-    "claude_code": (
-        frozenset(
+# The command each shim preset ships now, by preset key. Spelled out rather than
+# read off the preset table because config does not import the agent package
+# (``raven.config.agent_names`` says why); tests/test_config_loader.py pins each
+# to the preset's own, so a pin bumped without retiring the one before it here
+# fails there instead of stranding every row configured on that one.
+_SHIM_COMMANDS: dict[str, str] = {
+    "claude_code": "npx -y @agentclientprotocol/claude-agent-acp@0.94.0",
+    "codex": "npx -y @agentclientprotocol/codex-acp@2.2.2",
+    "pi": "npx -y pi-acp@0.0.34",
+}
+
+# The stock commands each floor retired, by preset key -- each for a pin whose
+# new build reopens the old one's sessions, the property the migration below
+# rests on, so not every pin that ever moved. A floor carries only the pins it
+# retired itself: a config already past an earlier floor had those moved once,
+# and an older stock pin on it now is one its owner put back.
+_RETIRED_SHIM_COMMANDS: dict[int, dict[str, frozenset[str]]] = {
+    _SHIM_PIN_MIGRATION: {
+        "claude_code": frozenset(
             {
                 "npx -y @agentclientprotocol/claude-agent-acp@0.66.0",
                 "npx -y @agentclientprotocol/claude-agent-acp@0.79.0",
             }
         ),
-        "npx -y @agentclientprotocol/claude-agent-acp@0.81.1",
-    ),
-    "codex": (
-        frozenset({"npx -y @agentclientprotocol/codex-acp@1.1.14"}),
-        "npx -y @agentclientprotocol/codex-acp@1.13.1",
-    ),
+        "codex": frozenset({"npx -y @agentclientprotocol/codex-acp@1.1.14"}),
+    },
+    _SHIM_PIN_REFRESH_MIGRATION: {
+        "claude_code": frozenset({"npx -y @agentclientprotocol/claude-agent-acp@0.81.1"}),
+        "codex": frozenset({"npx -y @agentclientprotocol/codex-acp@1.13.1"}),
+        "pi": frozenset({"npx -y pi-acp@0.0.33"}),
+    },
 }
 
 
-def _migrate_retired_shim_pins(data: dict[str, Any], *, notify: bool = False) -> bool:
-    """Carry a preset row still on a retired shim pin to the one its preset ships.
+class _AgentFloor(NamedTuple):
+    """The local agent an adapter build drives, and the oldest release of it the build works with."""
+
+    executable: str
+    package: str
+    """The npm package the executable belongs to, whose ``package.json`` gives its version."""
+    oldest: tuple[int, int, int]
+    upgrade: str
+    """The command that moves the agent to its latest release, as the preset table gives it."""
+
+
+# Adapter builds that need their local agent at a version, by the stock command
+# that launches the build. A row moves onto one only beside an agent that new:
+# moved over an older one, a working row becomes one that opens no session.
+# Spelled out for the reason ``_SHIM_COMMANDS`` is, and held to the preset's own
+# executable and upgrade by tests/test_config_loader.py.
+_SHIM_COMMAND_NEEDS: dict[str, _AgentFloor] = {
+    # 0.0.34 asks pi for its model's thinking levels as a session opens, an RPC pi
+    # answers from 0.81.0; an older pi refuses it by name (measured 2026-10-23 on
+    # pi 0.80.10), and no session opens.
+    "npx -y pi-acp@0.0.34": _AgentFloor(
+        "pi", "@earendil-works/pi-coding-agent", (0, 81, 0), "npm install -g @earendil-works/pi-coding-agent@latest"
+    ),
+}
+
+_PACKAGE_VERSION = re.compile(r"^(\d+)\.(\d+)\.(\d+)")
+
+
+def _npm_package_version(executable: str, package: str, path: str | None) -> tuple[int, int, int] | None:
+    """The version of ``package`` that ``executable`` on ``path`` comes from, or ``None`` when unreadable.
+
+    Off the package's own ``package.json`` rather than ``--version``, since loading
+    a config starts no process: found from the real path of the bin npm links, the
+    way ``raven.agent.subagent.node_runtime`` finds an agent's ``engines`` floor, or
+    in the ``node_modules`` beside the shim npm writes on Windows instead of a link.
+    """
+    found = shutil.which(executable, path=path)
+    if found is None:
+        return None
+    for folder in (*Path(os.path.realpath(found)).parents, Path(found).parent / "node_modules" / package):
+        try:
+            package_json = json.loads((folder / "package.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(package_json, dict) or package_json.get("name") != package:
+            continue
+        match = _PACKAGE_VERSION.match(str(package_json.get("version") or ""))
+        if match is None:
+            return None
+        major, minor, patch = (int(part) for part in match.groups())
+        return major, minor, patch
+    return None
+
+
+def _held_back(row: dict[str, Any], command: str) -> str | None:
+    """Why ``row`` cannot move onto ``command`` yet, as the end of a sentence, or ``None`` when it can.
+
+    Read for this computer only: a row on a registered machine runs that machine's
+    agent, which nothing here can look at.
+    """
+    need = _SHIM_COMMAND_NEEDS.get(command)
+    if need is None:
+        return None
+    name, oldest = need.executable, ".".join(str(part) for part in need.oldest)
+    found = None if row.get("machine") else _npm_package_version(name, need.package, os.environ.get("PATH"))
+    if found is None:
+        return (
+            f"needs {name} {oldest} or newer, and which {name} it runs could not be read here; with {name} "
+            f"{oldest} or newer, change its command to `{command}`."
+        )
+    if found >= need.oldest:
+        return None
+    return (
+        f"needs {name} {oldest} or newer, and this computer has {name} {'.'.join(str(part) for part in found)}: "
+        f"upgrade it with `{need.upgrade}`, then change its command to `{command}`."
+    )
+
+
+def _migrate_retired_shim_pins(
+    data: dict[str, Any], retired: Mapping[str, frozenset[str]], *, notify: bool = False
+) -> bool:
+    """Carry a preset row still on a pin ``retired`` names to the one its preset ships.
 
     A shim is the adapter ``npx`` fetches in front of an agent, pinned in
-    ``raven.agent.subagent.presets``, and both shims carry their agent with them,
-    so the pin decides which models a row can reach: ``codex-acp`` 1.1.14 lists
-    models up to GPT-5.6 after the GPT-6 family shipped, and ``claude-agent-acp``
-    0.66.0 offers no Fable 5.1. ``subagents.add`` copies the preset's command into
-    the row, so a bumped pin reached the rows added after it and no others.
+    ``raven.agent.subagent.presets``, and the Claude Code and Codex shims carry
+    their agent with them, so the pin decides which models a row can reach:
+    ``codex-acp`` 1.1.14 lists models up to GPT-5.6 after the GPT-6 family
+    shipped, and ``claude-agent-acp`` 0.66.0 offers no Fable 5.1.
+    ``subagents.add`` copies the preset's command into the row, so a bumped pin
+    reached the rows added after it and no others. ``retired`` is one floor's
+    set (`_RETIRED_SHIM_COMMANDS`).
 
     Carried here rather than surfaced for a remove-and-add the way a transport
     change is (``_upgrade_transport``): that one is manual because the row's
     session handles would stop meaning anything, while a pin bump keeps them --
     measured, codex-acp 1.13.1 reopens a thread 1.1.14 created, and
-    claude-agent-acp 0.81.1 reopens sessions 0.66.0 and 0.79.0 created. The new
-    command is also a new snapshot fingerprint, so the boot backfill re-measures
-    the menu instead of serving the old build's.
+    claude-agent-acp 0.81.1 reopens sessions 0.66.0 and 0.79.0 created; and
+    claude-agent-acp 0.94.0, codex-acp 2.2.2 and pi-acp 0.0.34 reopen what the
+    pins before them created (confirmed 2026-10-23). The new command is also a
+    new snapshot fingerprint, so the boot backfill re-measures the menu instead
+    of serving the old build's.
 
     Only a row that names the preset and still carries the exact stock command:
     an edited command is its owner's pin, and a hand-written row running the
     same string without the provenance field is its owner's too. Silent, and
     False, when it changes nothing, for the reason
     ``_migrate_retired_deep_research`` gives.
+
+    A build that needs its local agent at a version (`_SHIM_COMMAND_NEEDS`) is
+    taken only beside an agent that new. A row whose agent is older, or could
+    not be read -- on a registered machine, or off this process's PATH -- stays
+    on the build it works with, and its owner is told what the newer one needs.
+    The floor passes all the same: told once, the owner moves the row by hand.
     """
     changed = False
     for alias, rows in _subagent_alias_rows(data):
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            pin = _RETIRED_SHIM_COMMANDS.get(str(row.get("preset") or ""))
+            preset = str(row.get("preset") or "")
             command = row.get("command")
-            if pin is None or not isinstance(command, str) or command not in pin[0]:
+            if not isinstance(command, str) or command not in retired.get(preset, frozenset()):
                 continue
-            row["command"] = pin[1]
-            changed = True
-            notice = (
-                f"Migrated: subagents.{alias}[{row.get('name') or '?'}] now launches `{pin[1]}`, the adapter "
-                f"build its preset ships now, in place of `{command}`. Put the old command back if you pinned "
-                "it on purpose."
-            )
+            current = _SHIM_COMMANDS[preset]
+            name = row.get("name") or "?"
+            held = _held_back(row, current)
+            if held is not None:
+                notice = (
+                    f"Kept: subagents.{alias}[{name}] still launches `{command}`. The adapter build its preset "
+                    f"ships now, `{current}`, {held}"
+                )
+            else:
+                row["command"] = current
+                changed = True
+                notice = (
+                    f"Migrated: subagents.{alias}[{name}] now launches `{current}`, the adapter build its preset "
+                    f"ships now, in place of `{command}`. Put the old command back if you pinned it on purpose."
+                )
             if notify and notice not in _migration_notices:
                 _migration_notices.append(notice)
     return changed
@@ -1355,7 +1467,7 @@ def _migrate_config(  # noqa: C901 (cc 45: pre-existing, above the ceiling)
     if from_version < _RETIRED_DEEP_RESEARCH_MIGRATION:
         _migrate_retired_deep_research(data, notify=True)
     if from_version < _SHIM_PIN_MIGRATION:
-        _migrate_retired_shim_pins(data, notify=True)
+        _migrate_retired_shim_pins(data, _RETIRED_SHIM_COMMANDS[_SHIM_PIN_MIGRATION], notify=True)
     if from_version < _DISPLAY_ONLY_ADDRESS_MIGRATION:
         _migrate_display_only_addresses(data, notify=True)
     if from_version < _PLANTED_CRON_TIMEZONE_MIGRATION:
@@ -1368,6 +1480,8 @@ def _migrate_config(  # noqa: C901 (cc 45: pre-existing, above the ceiling)
         # sharing the home can write it again. ``SubagentDagConfig`` forbids it, so it goes
         # on every load; the user was told once, when the floor ran.
         _log.info("Migrated: dropped the retired subagentDag.verdictEnabled switch again")
+    if from_version < _SHIM_PIN_REFRESH_MIGRATION:
+        _migrate_retired_shim_pins(data, _RETIRED_SHIM_COMMANDS[_SHIM_PIN_REFRESH_MIGRATION], notify=True)
 
     # Same for the session-title gate, which changed both name and unit:
     # ``min_input_chars`` counted code points, ``min_input_width`` counts

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -1433,6 +1434,41 @@ def _claude_row(command: object, **extra: object) -> dict:
     }
 
 
+def _pi_row(command: object, **extra: object) -> dict:
+    return {"name": "Pi", "kind": "acp", "preset": "pi", "command": command, "readyTimeoutMs": 120000, **extra}
+
+
+_PI_PACKAGE = "@earendil-works/pi-coding-agent"
+
+
+def _pi_on_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, version: str | None) -> None:
+    """This process's PATH holding only a pi laid out the way `npm i -g` lays one out, or no pi at all.
+
+    Its build folder carries a nameless package.json of its own, as many ESM builds
+    ship one, so the version is read from the package's and not the first found."""
+    bin_dir = tmp_path / "pi-prefix" / "bin"
+    bin_dir.mkdir(parents=True)
+    if version is not None:
+        package = tmp_path / "pi-prefix" / "lib" / "node_modules" / _PI_PACKAGE
+        (package / "dist").mkdir(parents=True)
+        (package / "package.json").write_text(json.dumps({"name": _PI_PACKAGE, "version": version}))
+        (package / "dist" / "package.json").write_text(json.dumps({"type": "module"}))
+        cli = package / "dist" / "cli.js"
+        cli.write_text("#!/usr/bin/env node\n")
+        cli.chmod(0o755)
+        (bin_dir / "pi").symlink_to(os.path.relpath(cli, bin_dir))
+    monkeypatch.setenv("PATH", str(bin_dir))
+
+
+# The stock commands the second floor retired: what each shim preset shipped
+# between floor 11 and floor 15.
+_SECOND_RETIRED = (
+    "npx -y @agentclientprotocol/claude-agent-acp@0.81.1",
+    "npx -y @agentclientprotocol/codex-acp@1.13.1",
+    "npx -y pi-acp@0.0.33",
+)
+
+
 def test_rows_on_a_retired_shim_pin_follow_their_preset_in_the_file(tmp_path: Path) -> None:
     """The shim pin decides which models the agent can reach -- codex-acp 1.1.14
     bundles a codex whose ``model/list`` stops at GPT-5.6, claude-agent-acp 0.66.0
@@ -1535,14 +1571,180 @@ def test_the_retired_pin_table_leads_to_the_command_its_preset_ships_now() -> No
     from raven.config import loader
 
     assert loader._RETIRED_SHIM_COMMANDS, "nothing to carry: drop the migration rather than this test"
-    for preset, (retired, current) in loader._RETIRED_SHIM_COMMANDS.items():
+    for preset, current in loader._SHIM_COMMANDS.items():
         assert preset in SHIM_LAUNCHED_PRESETS, f"{preset} is not a shim: its row runs the user's own install"
         assert current == THIRD_PARTY_SUBAGENT_PRESETS[preset]["command"], (
             f"the {preset} pin moved to {THIRD_PARTY_SUBAGENT_PRESETS[preset]['command']!r} without its "
-            f"migration: rows configured on {current!r} would keep it. Add that command to the retired set "
-            "and give the migration a new floor."
+            f"migration: rows configured on {current!r} would keep it. Retire that command under a new "
+            "floor and point the preset's entry here at the new one."
         )
-        assert retired and current not in retired, preset
+    for floor, retired in loader._RETIRED_SHIM_COMMANDS.items():
+        for preset, commands in retired.items():
+            assert preset in loader._SHIM_COMMANDS, (floor, preset)
+            assert commands and loader._SHIM_COMMANDS[preset] not in commands, (floor, preset)
+
+
+def test_a_config_past_the_first_pin_floor_moves_only_the_pins_the_next_floor_retired(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A config through floor 11 has had its rows moved once. A later floor moves
+    the pins it retired itself and no others: an older stock pin on such a config is
+    one its owner put back after the first move, which the watermark exists to let
+    stand. A config already at the new floor keeps even its stock row.
+
+    The floors are literals, for the reason
+    test_the_retired_deep_research_section_goes_and_its_disabled_entry_stays gives.
+    """
+    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
+    from raven.config import loader
+
+    _pi_on_path(monkeypatch, tmp_path, "0.81.0")
+    claude, codex, pi = (THIRD_PARTY_SUBAGENT_PRESETS[key]["command"] for key in ("claude_code", "codex", "pi"))
+    put_back = _claude_row(_RETIRED_CLAUDE[1], name="Claude-put-back")
+    loader._migration_notices.clear()
+    data = {
+        "subagents": {
+            "agents": [
+                _claude_row(_SECOND_RETIRED[0]),
+                _codex_row(_SECOND_RETIRED[1]),
+                _pi_row(_SECOND_RETIRED[2]),
+                json.loads(json.dumps(put_back)),
+            ]
+        }
+    }
+    loader._migrate_config(data, from_version=14)
+
+    assert data["subagents"]["agents"] == [_claude_row(claude), _codex_row(codex), _pi_row(pi), put_back]
+    assert sorted(n.split("]")[0] for n in loader.drain_migration_notices()) == [
+        "Migrated: subagents.agents[Claude Code",
+        "Migrated: subagents.agents[Codex",
+        "Migrated: subagents.agents[Pi",
+    ]
+
+    at_floor = {"subagents": {"agents": [_pi_row(_SECOND_RETIRED[2])]}}
+    loader._migrate_config(at_floor, from_version=15)
+    assert at_floor == {"subagents": {"agents": [_pi_row(_SECOND_RETIRED[2])]}}
+    assert loader.drain_migration_notices() == []
+
+
+def test_a_pi_row_stays_on_the_adapter_its_pi_can_answer(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """pi-acp 0.0.34 asks pi for its model's thinking levels as a session opens, which a
+    pi older than 0.81.0 refuses as an unknown command, so no session opens (measured
+    2026-10-23 on pi 0.80.10). Moved over such a pi, a working row would stop working:
+    it stays on the build that works with it, and its owner is told what to upgrade."""
+    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS, upgrade_hint_for
+    from raven.config import loader
+
+    _pi_on_path(monkeypatch, tmp_path, "0.80.10")
+    loader._migration_notices.clear()
+    data = {"subagents": {"agents": [_pi_row(_SECOND_RETIRED[2])]}}
+
+    loader._migrate_config(data, from_version=14)
+
+    assert data == {"subagents": {"agents": [_pi_row(_SECOND_RETIRED[2])]}}
+    (notice,) = loader.drain_migration_notices()
+    assert notice.startswith(f"Kept: subagents.agents[Pi] still launches `{_SECOND_RETIRED[2]}`")
+    assert "pi 0.80.10" in notice
+    assert f"`{upgrade_hint_for(SimpleNamespace(preset='pi'))}`" in notice
+    assert f"`{THIRD_PARTY_SUBAGENT_PRESETS['pi']['command']}`" in notice
+
+
+@pytest.mark.parametrize("where", ["no pi on this PATH", "on a machine"])
+def test_a_pi_row_whose_pi_cannot_be_read_stays_where_it_works(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, where: str
+) -> None:
+    """Moving it would be a guess about a pi nobody looked at, and the build it is on
+    works with every pi. Its owner is told what the newer one needs, not told to upgrade."""
+    from raven.config import loader
+
+    if where == "on a machine":
+        _pi_on_path(monkeypatch, tmp_path, "0.81.0")
+        row = _pi_row(_SECOND_RETIRED[2], machine="box")
+    else:
+        _pi_on_path(monkeypatch, tmp_path, None)
+        row = _pi_row(_SECOND_RETIRED[2])
+    loader._migration_notices.clear()
+    data = {"subagents": {"agents": [json.loads(json.dumps(row))]}}
+
+    loader._migrate_config(data, from_version=14)
+
+    assert data == {"subagents": {"agents": [row]}}
+    (notice,) = loader.drain_migration_notices()
+    assert notice.startswith(f"Kept: subagents.agents[Pi] still launches `{_SECOND_RETIRED[2]}`")
+    assert "pi 0.81.0 or newer" in notice
+    assert "npm install" not in notice, "no pi was read, so none is called too old"
+
+
+def test_a_pi_installed_beside_an_npm_shim_is_read_too(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """npm on Windows writes `pi.cmd` beside `node_modules` rather than linking into the package."""
+    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
+    from raven.config import loader
+
+    prefix = tmp_path / "npm"
+    package = prefix / "node_modules" / _PI_PACKAGE
+    package.mkdir(parents=True)
+    (package / "package.json").write_text(json.dumps({"name": _PI_PACKAGE, "version": "0.81.0"}))
+    shim = prefix / "pi"
+    shim.write_text("#!/bin/sh\n")
+    shim.chmod(0o755)
+    monkeypatch.setenv("PATH", str(prefix))
+    data = {"subagents": {"agents": [_pi_row(_SECOND_RETIRED[2])]}}
+
+    loader._migrate_config(data, from_version=14)
+
+    assert data == {"subagents": {"agents": [_pi_row(THIRD_PARTY_SUBAGENT_PRESETS["pi"]["command"])]}}
+
+
+def test_a_file_whose_pi_row_stays_back_still_passes_the_floor(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Run once, as every floor is: the owner is told once, and a row they then move by
+    hand -- or move back -- is theirs."""
+    _pi_on_path(monkeypatch, tmp_path, "0.80.10")
+    p = tmp_path / "config.json"
+    _write(p, {"subagents": {"agents": [_pi_row(_SECOND_RETIRED[2])]}})
+    _stamp_path(p).write_text(json.dumps({"version": 14}), encoding="utf-8")
+    drain_migration_notices()
+
+    cfg = load_config(p)
+
+    assert [a.command for a in cfg.subagents.agents] == [_SECOND_RETIRED[2]]
+    assert json.loads(p.read_text(encoding="utf-8"))["subagents"]["agents"] == [_pi_row(_SECOND_RETIRED[2])]
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+    assert [n.split("]")[0] for n in drain_migration_notices()] == ["Kept: subagents.agents[Pi"]
+    load_config(p)
+    assert drain_migration_notices() == []
+
+
+def test_each_adapter_floor_names_the_agent_its_preset_drives_and_how_to_upgrade_it() -> None:
+    """Spelled out in config, which does not import the agent package: held here to the
+    preset's own executable and upgrade, so the two cannot name different programs."""
+    from raven.agent.subagent.presets import shim_requirement_for, upgrade_hint_for
+    from raven.config import loader
+
+    assert loader._SHIM_COMMAND_NEEDS, "nothing waits on an agent's version: drop the gate rather than this test"
+    for command, need in loader._SHIM_COMMAND_NEEDS.items():
+        (preset,) = [key for key, current in loader._SHIM_COMMANDS.items() if current == command]
+        row = SimpleNamespace(preset=preset)
+        requirement = shim_requirement_for(row)
+        assert requirement is not None and requirement[0] == need.executable, preset
+        assert requirement[1].split()[-1] == need.package, preset
+        assert upgrade_hint_for(row) == need.upgrade, preset
+
+
+def test_a_file_past_the_first_pin_floor_has_its_second_floor_pins_carried_in_the_file(tmp_path: Path) -> None:
+    """The file pass gates on the same floors as the in-memory one, so the two owe each other nothing."""
+    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
+
+    p = tmp_path / "config.json"
+    _write(p, {"subagents": {"agents": [_codex_row(_SECOND_RETIRED[1])]}})
+    _stamp_path(p).write_text(json.dumps({"version": 14}), encoding="utf-8")
+
+    drain_migration_notices()
+    cfg = load_config(p)
+
+    codex = THIRD_PARTY_SUBAGENT_PRESETS["codex"]["command"]
+    assert [a.command for a in cfg.subagents.agents] == [codex]
+    assert json.loads(p.read_text(encoding="utf-8"))["subagents"]["agents"] == [_codex_row(codex)]
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
 
 
 def test_an_address_the_settings_dialog_only_showed_leaves_the_file_once(tmp_path: Path) -> None:

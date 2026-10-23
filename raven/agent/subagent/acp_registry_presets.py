@@ -175,7 +175,12 @@ ACP_REGISTRY_PRESETS: dict[str, dict[str, Any]] = {
         "preset": "pi",
         "kind": "acp",
         "description": "A coding agent CLI with read, bash, edit, write tools and session management.",
-        "command": "npx -y pi-acp@0.0.33",
+        # 0.0.34 asks `pi` for its model's thinking levels as a session opens, an
+        # RPC `pi` answers from 0.81.0 (2026-07-21). An older `pi` refuses it and
+        # no session opens (measured 2026-10-23 on pi 0.80.10), so a row on 0.0.33
+        # moves here only beside a `pi` that new (`_SHIM_COMMAND_NEEDS`,
+        # raven/config/loader.py), and the probe names the upgrade (`_PI_TOO_OLD`).
+        "command": "npx -y pi-acp@0.0.34",
         "readyTimeoutMs": _SHIM_READY_TIMEOUT_MS,
     },
 }

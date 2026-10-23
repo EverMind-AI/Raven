@@ -268,13 +268,20 @@ def _refusal_detail(cfg: Any, said: str, answer: str | None = None) -> str:
     return _refusal(cfg, said, answer)[0]
 
 
+_PI_TOO_OLD = re.compile(r"get_available_thinking_levels failed: Unknown command")
+"""pi-acp 0.0.34 asks pi for its model's thinking levels as a session opens, an RPC
+pi answers from 0.81.0; an older pi refuses it by name, and no session opens until
+pi is upgraded (measured 2026-10-23 on pi 0.80.10)."""
+
+
 def _refusal(cfg: Any, said: str, answer: str | None = None) -> tuple[str, Remedy | None]:
     """`_refusal_detail`'s sentence, and the remedy it was written from.
 
     One decision with two renderings: the sentence is the record the log, the
     CLI and the TUI read, and the remedy is the same verdict as data a page can
-    put in its reader's language. ``None`` for a refusal that is not about a
-    credential, whose words are passed through as they came.
+    put in its reader's language. ``None`` for a refusal that is neither about a
+    credential nor an agent's own measured sentence, whose words are passed
+    through as they came.
     """
     from raven.acp_client.capabilities import looks_like_auth
 
@@ -285,6 +292,13 @@ def _refusal(cfg: Any, said: str, answer: str | None = None) -> tuple[str, Remed
     # first so a bad API key is not told to sign in.
     if github_copilot.applies(cfg) and (named := github_copilot.read(judged)) is not None:
         return named[0][:_DETAIL_CAP], named[1]
+    if getattr(cfg, "preset", None) == "pi" and _PI_TOO_OLD.search(judged):
+        up = upgrade_hint_for(cfg)
+        how = f" with `{up}`" if up else ""
+        return (
+            "its pi is older than 0.81.0, the first pi that answers what its adapter asks as a session opens; "
+            f"upgrade pi{how} and connect again. It said: {said}"
+        )[:_DETAIL_CAP], Remedy("upgrade", up)
     if not looks_like_auth(judged):
         # Read off the agent's answer only: a launch that died says nothing
         # about a provider, and its stderr can name an unreachable host that is

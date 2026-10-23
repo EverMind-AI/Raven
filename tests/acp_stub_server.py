@@ -17,6 +17,9 @@ Behaviour is chosen by ``ACP_STUB_MODE``:
                      else. The handshake still advertises an auth method, which is
                      the point: an advertisement is not evidence that THIS refusal
                      was about a credential.
+- ``pi_needs_newer_pi`` - like ``no_session``, but refused the way pi-acp 0.0.34
+                     refuses every session over a pi older than 0.81.0 (measured
+                     2026-10-23 on pi 0.80.10).
 - ``empty_turn``   - handshake and session fine, but the prompt produces no content
                      and still reports ``stopReason: end_turn``, with the real
                      reason on stderr. This is the shape measured on a live
@@ -776,6 +779,13 @@ def main() -> None:
                 err(request_id, -32000, "no api key configured for this agent")
             elif MODE == "no_session_other":
                 err(request_id, -32000, "selected model is unavailable")
+            elif MODE == "pi_needs_newer_pi":
+                err(
+                    request_id,
+                    -32603,
+                    "Internal error: pi get_available_thinking_levels failed: Unknown command: get_available_thinking_levels",
+                    {},
+                )
             elif MODE == "kimi_not_ready":
                 # Kimi Code 2.1.0 refuses every session it cannot start this way,
                 # signed out, keyless or with a config it cannot parse alike.

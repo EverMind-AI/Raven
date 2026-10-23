@@ -5361,6 +5361,9 @@ def test_the_upgrade_is_the_install_pinned_to_latest(monkeypatch: pytest.MonkeyP
 
     assert presets_mod.upgrade_hint_for(SimpleNamespace(preset="qwen_code")) == "npm i -g @qwen-code/qwen-code@latest"
     assert presets_mod.upgrade_hint_for(SimpleNamespace(preset="claude_code")) is None, "no install hint, no upgrade"
+    assert presets_mod.upgrade_hint_for(SimpleNamespace(preset="pi")) == (
+        "npm install -g @earendil-works/pi-coding-agent@latest"
+    ), "a shim's upgrade is the agent it drives"
     for hint, upgrade in (
         ("npm install -g plain-agent", "npm install -g plain-agent@latest"),
         ("npm i -g @scope/agent@1.2.3", None),
