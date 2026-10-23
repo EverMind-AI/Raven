@@ -133,6 +133,7 @@ from raven.providers.first_byte import first_byte_budget
 from raven.providers.tool_calls import openai_tool_call
 from raven.session.refs import TOOL_RESULT_TRUNCATION_MARKER, tool_result_view
 from raven.spine.events import bound_failure_text
+from raven.spine.silence import is_silence
 from raven.spine.turn import PROACTIVE_ORIGINS, AnswerlessTurnError
 from raven.token_wise import usage_context
 from raven.token_wise.turn_spend import TurnSpend
@@ -703,7 +704,9 @@ class TurnPathMixin:
         it accomplished and deliver its best partial answer. Tools are withheld
         (``tools=None``) so it cannot start another tool call — or an
         ``ask_user`` — at the cliff edge. Falls back to a static message if the
-        call errors or comes back empty, so the turn is never left silent.
+        call errors or comes back empty, so the turn never ends with nothing.
+        A Silence Marker is a reply the model wrote, and comes back as written
+        for the caller to read as one.
 
         A product may add its own guidance and request one format repair. Those
         calls are buffered until a final text is chosen so the streamed reply
@@ -2426,13 +2429,21 @@ class TurnPathMixin:
             #      or not, synthesize a best-effort wrap-up with tools disabled
             #      (and one format repair if requested) instead of a
             #      canned apology. Synthesis falls back to a static message
-            #      internally if the call fails, so the turn is never silent.
+            #      internally if the call fails, so the turn never ends empty.
             status = "interrupted"
+            # The wrap-up is the turn's last reply, so it may be a Silence Marker as an
+            # answer may: its stream is held back as the answering call's is, and a
+            # marker ends the turn silent.
+            wrap_up_gate = (
+                SilenceGate(on_token_delta, hold_all=origin in PROACTIVE_ORIGINS)
+                if on_token_delta is not None
+                else None
+            )
             final_content = await self._synthesize_final_on_exhaustion(
                 messages,
                 active_model,
                 list(fallbacks_left),
-                on_token_delta=on_token_delta,
+                on_token_delta=wrap_up_gate or on_token_delta,
                 on_reasoning_delta=on_reasoning_delta,
                 reasoning_effort=policy.reasoning_effort,
                 prompt=_MAX_ITER_SYNTHESIS_PROMPT if stalled_tool is None else _STALLED_SYNTHESIS_PROMPT,
@@ -2445,6 +2456,8 @@ class TurnPathMixin:
                 ),
                 synthesis_policy=turn_synthesis(turn_meta),
             )
+            silent = is_silence(final_content, origin)
+            await _settle_silence(wrap_up_gate, silent=silent)
             # Persist the wrap-up into history like any normal final reply.
             # Persistence downstream reads only the returned ``messages`` list,
             # so without this the synthesized answer reaches the user via the
@@ -2454,6 +2467,8 @@ class TurnPathMixin:
             # reply lands here.
             if final_content:
                 messages = self.context.add_assistant_message(messages, final_content)
+                if silent:
+                    messages[-1][_SILENT_KEY] = True
 
         # Drop transient empty-recovery scaffolding before persistence /
         # extraction / return: empty recovery marks synthetic nudge/prefill

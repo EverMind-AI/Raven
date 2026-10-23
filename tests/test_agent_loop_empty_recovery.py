@@ -3379,6 +3379,44 @@ async def test_a_marker_from_a_plain_call_ends_the_turn_silently(workspace, monk
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("origin", [Origin.USER, Origin.CRON])
+@pytest.mark.parametrize("stream", [True, False], ids=["streamed", "plain"])
+async def test_a_marker_wrap_up_ends_the_turn_silently(workspace, monkeypatch, origin, stream):
+    """The wrap-up is the turn's last reply, and a model taught the marker gives it one when the budget
+    ran out on nothing worth reporting. It ends the turn as a marker answer does: none of it shown or
+    delivered, the row filed silent, and the turn reported silent with the closing notice."""
+    from raven.spine.events import Notice, StreamDelta, Text
+
+    script = (
+        [_tool_stream(), _tool_stream(), _finished_stream("[SIL", "ENT]")]
+        if stream
+        else [_tool_reply(), _tool_reply(), _reply("[SILENT]")]
+    )
+    calls = _served(monkeypatch, script)
+    agent = _litellm_agent(workspace, max_iterations=2)
+
+    async def _noop(**_kw) -> None:
+        return None
+
+    agent._start_executor = _noop
+    agent._connect_mcp = _noop
+    events: list = []
+
+    async def emit(event) -> None:
+        events.append(event)
+
+    outcome = await agent.run_turn(_turn("check the inbox", origin), emit, lambda: [], stream=stream)
+
+    assert len(calls) == 3, "two steps spent the budget, then the wrap-up"
+    assert [e for e in events if isinstance(e, (StreamDelta, Text))] == [], "none of the marker reached a reader"
+    silent_notices = [e.kind for e in events if isinstance(e, Notice) and e.kind is NoticeKind.SILENT_TURN]
+    assert silent_notices == [NoticeKind.SILENT_TURN]
+    assert outcome.silent is True and outcome.explicit_reply is False
+    rows = agent.sessions.get_or_create("test:c1").messages
+    assert (rows[-1]["role"], rows[-1]["content"], rows[-1].get("silent")) == ("assistant", "[SILENT]", True)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "reply,outbound",
     [
