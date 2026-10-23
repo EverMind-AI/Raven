@@ -490,7 +490,8 @@ async def test_a_call_another_vendor_answered_is_replayed_under_an_id_codex_take
 ) -> None:
     """A stored call keeps the item id of the vendor that answered, and
     DeepSeek's Responses endpoint mints UUIDs. Replayed as they were after a
-    switch to a Codex model, every later turn of the session was refused:
+    switch to a Codex model, the backend refused every later request of the
+    session:
 
         Invalid 'input[9].id': '485256fc-a47f-41be-b14f-2c4a662ddbaf'.
         Expected an ID that begins with 'fc'.
