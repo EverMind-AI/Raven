@@ -594,10 +594,12 @@ All notable changes to Raven are documented here.
   to the tab its entry is in, and another conversation starts on the main
   session's tab alone.
 
-- A decision node's card on the tasks board keeps its first selected route
-  whole. The agent line gave the selection all of its overflow, so a long agent
+- A decision node's card on the tasks board cuts its first selected route
+  last. The agent line gave the selection all of its overflow, so a long agent
   name and a tool count cut it down to its arrow; now the instance handle and
-  any further routes give way first, then the agent's name.
+  any further routes give way first, then the agent's name down to its first
+  few letters, and only then the route, which ends in an ellipsis inside the
+  card.
 
 - An empty reply from a model behind OpenRouter (`content: " "`,
   `finish_reason: stop`) is no longer reported as an upstream transport

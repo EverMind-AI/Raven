@@ -102,7 +102,7 @@ export function selectionText(selected: readonly string[] | undefined): string {
 }
 
 /* The same text cut where the card may cut it: the arrow and the first route, which the agent line
-   keeps whole, and the routes after it, which take only the room the line has left. */
+   cuts last, and the routes after it, which take only the room the line has left. */
 function selectionParts(selected: readonly string[] | undefined): [string, string] {
   if (selected === undefined || selected.length < 2) return [selectionText(selected), '']
   return ['\u2192 ' + selected[0] + ', ', selected.slice(1).join(', ')]
