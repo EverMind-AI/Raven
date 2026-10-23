@@ -1085,9 +1085,10 @@ def test_every_branch_of_the_oauth_store_gate(monkeypatch: pytest.MonkeyPatch, t
     assert value not in redact_home_config_read({"command": "cat ~/.raven/oauth\\minimax_global.json"}, tokens)
     assert value not in redact_home_config_read({"command": f"ls {store}"}, tokens)
     assert value not in redact_home_config_read({"command": f'ls "{store}"'}, tokens)
-    # The limit, stated: the root's own separators are the platform's, so a POSIX
-    # store spelled entirely with backslashes does not match. On Windows the root
-    # is a backslash path and this is the spelling that matches instead.
+    # The limit, stated: the root's own separators are the host's, so a POSIX
+    # store spelled entirely with backslashes does not match. A Windows host takes
+    # either slash inside the root; its cases are driven through the path-style
+    # seam further down.
     whole_backslash = "\\root\\.raven\\oauth\\minimax_global.json"
     assert redact_home_config_read({"path": whole_backslash}, tokens) == tokens
 
@@ -1232,13 +1233,16 @@ def _host(monkeypatch: pytest.MonkeyPatch, style: str, home: str) -> None:
 
     ``_path_style`` is the seam, so the Windows branch runs on a Linux box: the
     home is a ``PureWindowsPath``, which spells and compares like Windows on
-    any host, and nothing here reads a path off the disk.
+    any host, and nothing here reads a path off the disk. Both home variables
+    are set because ``expanduser`` reads ``HOME`` on POSIX and ``USERPROFILE``
+    on Windows, so the cases hold on either runner.
     """
     from pathlib import PurePosixPath, PureWindowsPath
 
     flavour = PureWindowsPath if style == "windows" else PurePosixPath
     monkeypatch.setattr("raven.security.redact._path_style", lambda: style)
     monkeypatch.setenv("HOME", home)
+    monkeypatch.setenv("USERPROFILE", home)
     monkeypatch.setattr("raven.home.raven_home", lambda: flavour(home) / ".raven")
     monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [])
 
