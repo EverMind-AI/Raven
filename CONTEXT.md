@@ -838,8 +838,9 @@ up to `MAX_CONTINUATIONS` times, after which the partial is delivered with `PART
 as an `interrupted` turn; a continuation that comes back empty leaves what streamed as the
 answer. A stream that died after the reader had seen its text -- an error, a stall or a terminal
 error delta -- is the same case: `stream_llm_call` hands the words back with no finish
-(`hand_back_partial`, which only the loop passes, so a sub-agent's dropped stream still fails its
-run) instead of failing, unless `llm_retry_after_output` asks for the whole call again. The
+(`hand_back_partial`, which only the loop's answering call passes: a sub-agent's dropped stream
+still fails its run, and an exhausted turn's wrap-up still falls back to its static line)
+instead of failing, unless `llm_retry_after_output` asks for the whole call again. The
 continuation streams into the step the cut answer opened. A reply with only thinking is
 PREFILLed twice, re-feeding the model its own reasoning,
 then STEP_DOWNed: asked again at `high` and at `low`, once each a turn and never at `minimal`

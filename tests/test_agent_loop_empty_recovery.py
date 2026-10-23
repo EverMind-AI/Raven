@@ -26,6 +26,7 @@ import pytest
 
 from raven.agent.hook import AgentHook
 from raven.agent.loop import AgentLoop, recovery, turn_path
+from raven.agent.loop._shared import _MAX_ITER_STATIC_FALLBACK
 from raven.agent.loop.bundles import HostWiring, ToolWiring, TurnPolicy
 from raven.agent.loop.recovery import (
     EMPTY_REPLY_FAILURE,
@@ -61,7 +62,14 @@ from raven.agent.window import shrink
 from raven.config.schema import CompactionConfig
 from raven.contracts.llm_provider import REASONING_EFFORT_LADDER
 from raven.providers import rates
-from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, ToolCallRequest, send_max_tokens
+from raven.providers.base import (
+    ChatDelta,
+    ErrorClassification,
+    LLMProvider,
+    LLMResponse,
+    ToolCallRequest,
+    send_max_tokens,
+)
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.spine.events import NoticeKind
 from raven.spine.message import ChatType, Source
@@ -1710,6 +1718,67 @@ async def test_a_held_reply_is_released_before_its_continuation_and_the_note_fol
 
     assert outcome.status == "interrupted"
     assert "".join(sink.text) == "The answer is 42" + "\n\n" + PARTIAL_STREAM_NOTE == final
+
+
+class _WrapUpDiesAfterWords(LLMProvider):
+    """Calls a tool while tools are offered; the wrap-up that follows streams a few words and dies.
+
+    ``death`` is raised after the words, or None for a stream that reports its failure as the
+    terminal delta, which is what the Anthropic adapter does with one.
+    """
+
+    def __init__(self, death: Exception | None) -> None:
+        super().__init__(api_key="test")
+        self.death = death
+        self.calls = 0
+
+    async def chat(self, *args, **kwargs):  # pragma: no cover - the streaming path is under test
+        raise AssertionError("the streaming path is the one under test")
+
+    async def chat_stream(self, messages, tools=None, **_kw):
+        self.calls += 1
+        if tools:
+            call = {"index": 0, "id": "t1", "function": {"name": "no_such_tool", "arguments": "{}"}}
+            yield ChatDelta(content=None, tool_call_delta={"tool_calls": [call]})
+            yield ChatDelta(content=None, finish_reason="tool_calls")
+            return
+        yield ChatDelta(content="Summary so far: I looked at")
+        if self.death is not None:
+            raise self.death
+        yield ChatDelta(
+            content="Error calling LLM (network@stub): connection reset",
+            finish_reason="error",
+            error_classification=ErrorClassification("network", retryable=True, should_fallback=True),
+        )
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "death",
+    [ConnectionError("connection reset by peer"), TimeoutError(), None],
+    ids=["raised", "stalled", "error-delta"],
+)
+async def test_a_wrap_up_cut_after_its_words_ends_on_the_static_line(workspace, death):
+    """The wrap-up is one call with no continuation behind it, so its words are the reply or
+    nothing. A stream that died after showing some of them came back as the answer so far, and
+    the wrap-up delivered the fragment as the turn's final word and saved it: the recovery of
+    the answering call, in a place that has none. It fails as it always did, and the turn ends
+    on the static line."""
+    provider = _WrapUpDiesAfterWords(death)
+    agent = _make_agent(workspace, provider, max_iterations=1)
+    sink = _Sink()
+
+    final, _used, messages, outcome = await agent._run_agent_loop(_seed(), on_token_delta=sink.delta)
+
+    fallback = _MAX_ITER_STATIC_FALLBACK.format(n=1)
+    assert provider.calls == 2, "the step that spent the budget and the wrap-up: nothing asked the model to go on"
+    assert outcome.status == "interrupted"
+    assert final == fallback
+    assert (messages[-1]["role"], messages[-1]["content"]) == ("assistant", fallback)
+    assert sink.text[-1] == fallback, "the static line reaches a reader whose stream already showed the cut words"
 
 
 # --------------------------------------------------------------------------- #

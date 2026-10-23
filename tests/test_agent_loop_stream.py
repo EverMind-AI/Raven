@@ -250,8 +250,8 @@ async def test_llm_call_stream_timeout_after_output_hands_back_the_words_unless_
     again unless the caller asked to retry after output. Handed back as a retryable
     response, the loop's own ladder asked again and an interactive client received
     the words of two attempts. The words the reader saw come back instead as the
-    answer so far, with no finish, for the loop to ask the model to go on from; the
-    turn does not fail. Asked for, the response is structured and retryable, and its
+    answer so far, with no finish, for the loop to ask the model to go on from -- to a
+    caller that asks for them; the turn does not fail. Asked for, the response is structured and retryable, and its
     content is the account of the failure -- the words that streamed are the
     caller's to keep, not the error's text."""
 
@@ -267,7 +267,9 @@ async def test_llm_call_stream_timeout_after_output_hands_back_the_words_unless_
     async def on_delta(text: str) -> None:
         seen.append(text)
 
-    response = await _bind_helper(_TimeoutStreamProvider())(messages=[], tools=None, model="m", on_token_delta=on_delta)
+    response = await _bind_helper(_TimeoutStreamProvider())(
+        messages=[], tools=None, model="m", on_token_delta=on_delta, hand_back_partial=True
+    )
     assert seen == ["partial"]
     assert (response.content, response.finish_reason) == ("partial", "unknown")
     assert response.error_classification is None
@@ -278,7 +280,7 @@ async def test_llm_call_stream_timeout_after_output_hands_back_the_words_unless_
         _recovery_limits=RecoveryLimits(llm_retry_after_output=True),
     )
     response = await AgentLoop._llm_call_stream.__get__(fake_self)(
-        messages=[], tools=None, model="m", on_token_delta=on_delta
+        messages=[], tools=None, model="m", on_token_delta=on_delta, hand_back_partial=True
     )
 
     assert response.finish_reason == "error"
@@ -348,9 +350,9 @@ async def test_an_error_delta_after_rendered_output_hands_back_the_words() -> No
     """The shape the Anthropic adapter hands back: it catches a failure that
     happened mid-stream and reports it as a terminal error delta instead of
     raising. The words already on the reader's screen are what is left of the
-    call, and they come back as the answer so far, with no finish, for the loop to
-    ask the model to go on from -- not as an error whose retry would draw them
-    again from the top."""
+    call, and to a caller that asks for them they come back as the answer so far,
+    with no finish, for the loop to ask the model to go on from -- not as an error
+    whose retry would draw them again from the top."""
     verdict = ErrorClassification("server", retryable=True, should_fallback=True, should_compress=True)
     provider = _FakeProvider(_half_then_error(verdict))
     seen: list[str] = []
@@ -358,7 +360,9 @@ async def test_an_error_delta_after_rendered_output_hands_back_the_words() -> No
     async def on_delta(text: str) -> None:
         seen.append(text)
 
-    response = await _bind_helper(provider)(messages=[], tools=None, model="m", on_token_delta=on_delta)
+    response = await _bind_helper(provider)(
+        messages=[], tools=None, model="m", on_token_delta=on_delta, hand_back_partial=True
+    )
 
     assert seen == ["the first half"]
     assert (response.content, response.finish_reason) == ("the first half", "unknown")
@@ -377,7 +381,8 @@ def _thought_then_error(verdict: ErrorClassification | None) -> list[ChatDelta]:
 
 async def test_an_error_delta_after_rendered_thought_has_its_retry_spent() -> None:
     """A thought is not an answer to go on from, so what the reader saw of this call
-    leaves only its failure -- and the failure arrives as a delta, so the thought
+    leaves only its failure, even to a caller that asks for the words back -- and
+    the failure arrives as a delta, so the thought
     already on the reader's screen never reaches the rule the raise path holds. Left
     retryable, the caller's own ladder asked again and the same thought was drawn
     from the top up to four times; left fallback-worthy, the loop switched models and
@@ -391,7 +396,9 @@ async def test_an_error_delta_after_rendered_thought_has_its_retry_spent() -> No
     async def on_thought(text: str) -> None:
         thoughts.append(text)
 
-    response = await _bind_helper(provider)(messages=[], tools=None, model="m", on_reasoning_delta=on_thought)
+    response = await _bind_helper(provider)(
+        messages=[], tools=None, model="m", on_reasoning_delta=on_thought, hand_back_partial=True
+    )
 
     assert thoughts == ["the first half"]
     assert response.content == "Error calling LLM (server@claude): 503"
@@ -415,7 +422,7 @@ async def test_an_error_delta_after_rendered_output_stays_retryable_when_asked()
         return None
 
     response = await AgentLoop._llm_call_stream.__get__(fake_self)(
-        messages=[], tools=None, model="m", on_token_delta=on_delta
+        messages=[], tools=None, model="m", on_token_delta=on_delta, hand_back_partial=True
     )
 
     assert response.error_classification is not None
@@ -455,7 +462,7 @@ async def test_an_unclassified_error_delta_after_rendered_thought_is_classified_
         return None
 
     response = await _bind_helper(_ErrorDeltaWithoutVerdict())(
-        messages=[], tools=None, model="m", on_reasoning_delta=on_thought
+        messages=[], tools=None, model="m", on_reasoning_delta=on_thought, hand_back_partial=True
     )
 
     assert response.error_classification is not None
@@ -465,8 +472,8 @@ async def test_an_unclassified_error_delta_after_rendered_thought_is_classified_
 async def test_llm_call_stream_does_not_reconnect_after_emitting_deltas() -> None:
     """Reconnecting a stream that already emitted deltas would duplicate them in
     the caller's UI, so a partially-streamed failure is not retried -- what the
-    reader saw comes back as the answer so far, and the loop asks the model to go
-    on from it."""
+    reader saw comes back, to a caller that asks for it, as the answer so far, and
+    the loop asks the model to go on from it."""
 
     class _FailAfterContent:
         classify_error = LLMProvider.classify_error
@@ -486,11 +493,62 @@ async def test_llm_call_stream_does_not_reconnect_after_emitting_deltas() -> Non
     async def on_delta(text: str) -> None:
         seen.append(text)
 
-    response = await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
+    response = await call(messages=[], tools=None, model="m", on_token_delta=on_delta, hand_back_partial=True)
 
     assert provider.calls == 1  # retryable, but deltas already reached the caller
     assert seen == ["partial"]
     assert (response.content, response.finish_reason) == ("partial", "unknown")
+
+
+class _DiesAfterWords:
+    """Streams "half an ", then dies: raised when ``death`` is an exception, otherwise
+    reported as the terminal delta the way the Anthropic adapter does it."""
+
+    classify_error = LLMProvider.classify_error
+
+    def __init__(self, death: Exception | None) -> None:
+        self.death = death
+
+    async def chat_stream(self, **_kwargs: Any):
+        yield ChatDelta(content="half an ")
+        if self.death is not None:
+            raise self.death
+        yield ChatDelta(
+            content="Error calling LLM (server@claude): 503",
+            finish_reason="error",
+            error_classification=ErrorClassification("server", retryable=True, should_fallback=True),
+        )
+
+
+@pytest.mark.parametrize(
+    "death", [_ApiError("Server disconnected"), TimeoutError(), None], ids=["raised", "stalled", "error-delta"]
+)
+async def test_llm_call_stream_takes_a_cut_answer_back_only_for_the_call_that_asks(death) -> None:
+    """The opt-in is per call, because only one call of the loop can ask the model to go on
+    from a cut answer: the answering call. The exhaustion wrap-up and the watch-work
+    judgement come through this method too, have no continuation behind them, and would
+    deliver the fragment as the whole of their reply. Left unasked, a stream that died
+    after its words fails for them as it always did -- raised, or reported with its retry
+    spent -- and asked, the same stream comes back as the answer so far."""
+
+    async def on_delta(_text: str) -> None:
+        return None
+
+    call = _bind_helper(_DiesAfterWords(death))
+
+    if death is None:
+        reported = await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
+        assert reported.finish_reason == "error"
+        assert reported.error_classification is not None
+        assert reported.error_classification.retryable is False
+    else:
+        with pytest.raises(type(death)):
+            await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
+
+    answered = await call(messages=[], tools=None, model="m", on_token_delta=on_delta, hand_back_partial=True)
+
+    assert (answered.content, answered.finish_reason) == ("half an ", "unknown")
+    assert answered.error_classification is None
 
 
 async def test_llm_call_stream_reconnects_when_nothing_was_emitted() -> None:
@@ -677,7 +735,7 @@ async def test_llm_call_stream_mid_answer_stall_reports_the_failure_not_the_word
     async def on_delta(text: str) -> None:
         seen.append(text)
 
-    response = await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
+    response = await call(messages=[], tools=None, model="m", on_token_delta=on_delta, hand_back_partial=True)
 
     assert seen == ["half an ans"], "the words still reach the watcher as they arrive"
     assert response.finish_reason == "error"
@@ -1278,8 +1336,9 @@ class _DiesMidStream:
 
 async def test_llm_call_stream_retries_after_output_only_when_asked() -> None:
     """A mid-stream failure after words were streamed is not asked again -- a person
-    watching would see the words twice -- and the words come back as the answer so
-    far instead. An unattended caller says so through the limits and gets the call
+    watching would see the words twice -- and the words come back, to a caller that
+    asks for them, as the answer so far instead. An unattended caller says so
+    through the limits and gets the call
     asked again: one deck build had two hours behind it when a dropped connection
     ended the turn with nothing published."""
     from types import SimpleNamespace
@@ -1296,7 +1355,7 @@ async def test_llm_call_stream_retries_after_output_only_when_asked() -> None:
         seen.append(text)
 
     response = await AgentLoop._llm_call_stream.__get__(fake_self)(
-        messages=[], tools=None, model="m", on_token_delta=on_delta
+        messages=[], tools=None, model="m", on_token_delta=on_delta, hand_back_partial=True
     )
     assert response.content == "whole answer", "the half is dropped, the retry's answer is the answer"
     assert seen == ["half an ", "whole answer"], "the caller saw both -- the price the caller agreed to"
@@ -1309,7 +1368,7 @@ async def test_llm_call_stream_retries_after_output_only_when_asked() -> None:
         _recovery_limits=RecoveryLimits(llm_error_retry_delays=(0.0,)),
     )
     handed_back = await AgentLoop._llm_call_stream.__get__(fake_self)(
-        messages=[], tools=None, model="m", on_token_delta=on_delta
+        messages=[], tools=None, model="m", on_token_delta=on_delta, hand_back_partial=True
     )
     assert fresh.calls == 1, "off, the call is not made again after the first mid-stream error"
     assert (handed_back.content, handed_back.finish_reason) == ("half an ", "unknown")

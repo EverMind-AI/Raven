@@ -5,6 +5,7 @@ persistence.
 from __future__ import annotations
 
 import contextlib
+import functools
 from typing import TYPE_CHECKING
 
 from raven.agent.loop._shared import (
@@ -630,6 +631,8 @@ class TurnPathMixin:
         model: str | None,
         on_token_delta: Callable[[str], Awaitable[None]] | None = None,
         on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
+        *,
+        hand_back_partial: bool = False,
         **generation: Any,
     ) -> LLMResponse:
         """Stream LLM response via ``provider.chat_stream`` + accumulate to LLMResponse.
@@ -639,6 +642,15 @@ class TurnPathMixin:
         ``raven.providers.streaming`` — a sub-agent backend answering a direct
         chat drives the same call and must not drift from it. This method stays
         as the loop's own entry point (its span, its reconnect budget).
+
+        ``hand_back_partial`` is asked for by the one call that can ask the model
+        to go on from a cut answer: the loop's answering call, made through the
+        Action role in ``_run_agent_loop``. The other calls that come through
+        here -- the wrap-up an exhausted turn asks for, the watch-work judgement
+        -- have no continuation behind them and would deliver the fragment as
+        their whole reply, so for them a stream that died after its words fails as
+        it always did. A named parameter and not part of ``generation``, which
+        reaches ``chat_stream`` unchanged.
 
         Generation parameters travel only as the turn's ``gen_overrides``: the
         session's pinned reasoning effort under a hook's rollback override.
@@ -657,10 +669,7 @@ class TurnPathMixin:
             max_reconnects=self._MAX_STREAM_RECONNECTS,
             retry_delays=tuple(limits.llm_error_retry_delays),
             retry_after_output=bool(limits.llm_retry_after_output),
-            # The loop is the caller that can ask the model to go on from a cut
-            # answer (``ReplyKind.NETWORK_CUT``). The sub-agent backend streams
-            # through the same call and cannot, so it is not handed one.
-            hand_back_partial=True,
+            hand_back_partial=hand_back_partial,
             **generation,
         )
 
@@ -1377,7 +1386,11 @@ class TurnPathMixin:
                         tools=call_tools,
                         model=call_model,
                         fallback_models=list(fallbacks_left),
-                        stream_call=self._llm_call_stream,
+                        # The one streaming call that asks for a cut answer back: a
+                        # continuation (``ReplyKind.NETWORK_CUT``) follows it. The
+                        # wrap-up and the watch-work judgement call the same method
+                        # and have nothing to follow them.
+                        stream_call=functools.partial(self._llm_call_stream, hand_back_partial=True),
                         # Spliced here rather than inside the module: both gates are
                         # the shell's own, and which sink a delta reaches is not a
                         # strategy decision. The module reads the field it is handed,

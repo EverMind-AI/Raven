@@ -882,9 +882,10 @@ async def test_retry_after_output_keeps_the_whole_call_retry() -> None:
 
 
 async def test_a_caller_that_did_not_ask_for_the_partial_still_gets_the_failure() -> None:
-    """The sub-agent backend streams through this call as well, and a node whose stream
-    dropped must fail rather than complete on half an answer: handing the partial back
-    is for the one caller that can ask the model to go on from it."""
+    """Handing the partial back is for the one call that can ask the model to go on from
+    it: the loop's answering call. The others that stream through here -- a sub-agent
+    node, the exhaustion wrap-up -- would take half an answer for the whole of it, so a
+    stream that dropped is still the failure it was for them."""
     with pytest.raises(ConnectionError):
         await _watched(_ScriptedStream("Hello ", finish=None, raises=ConnectionError("connection reset")))
 
