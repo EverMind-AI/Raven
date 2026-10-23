@@ -897,11 +897,21 @@ and is the unit of cancellation. A stalled Lane never blocks other Lanes. A conv
 be a *sub*-conversation: a Direct Chat runs on `session#agent/handle`
 (`raven.spine.turn.direct_lane`), which is what lets several instances answer at once while
 the main agent keeps its own serial lane.
+Every task the Scheduler starts for a Lane -- its worker, each turn, and the idle reaper -- begins
+from a fresh copy of the Scheduler's home context, the context it was built in; a turn inherits
+neither its submitter's context nor the worker's, and what one turn sets never reaches the next.
+Whatever a host wants every turn to see (the surface's approval families, for one) must therefore
+be set before the Scheduler is built.
 _Avoid_: conflating Lane with OriginPools — different dimensions (ordering vs. concurrency).
 
 **TurnRequest**:
 The single input to Spine: carries `origin`, `source`, `text`, `media`, and `busy` policy.
 Replaces the old `InboundMessage`.
+`dispatch_link` is the `(trace_id, span_id)` of the span that dispatched the work a turn reports on,
+set only by the submitter announcing a dispatched result; the kernel carries it to the runner
+uninterpreted, and the turn's `session.turn` span records it as `trace.dispatched_by_span_id` /
+`trace.dispatched_in_trace_id`. It is explicit because a turn no longer inherits its submitter's
+context.
 
 **Deliverable** (= `RunnerEvent`):
 The union of all content-type events a runner can emit: `Text | MediaOut | StreamDelta |
@@ -2205,6 +2215,12 @@ dispatched -- sub-agents, their own sub-agents, follow-up turns reporting back -
 resolved through those links. A main-line turn counts as in progress only when it
 is the session's latest, its record is still only a checkpoint, and the session is
 answering right now; a checkpoint left behind by a process that died is selectable.
+A turn reporting a dispatched result carries that link whenever this process knows the span
+that dispatched the work: the `subagent.run` of a spawn that started, the spawning call of one
+cancelled before it started, the span a DAG was dispatched under. A report with no such span --
+a run picked up after a restart, a graph dispatched outside any span -- carries none and is
+therefore main-line, as is an unprompted report from an external agent. A turn never inherits a
+link from earlier work in its session.
 _Avoid_: selecting a dispatched trace as a turn of its own.
 
 **Turn Trace Mark** (`raven/agent/loop/turn_path.py`):
