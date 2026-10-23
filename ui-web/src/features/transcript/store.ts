@@ -1544,7 +1544,10 @@ export const failedTurnLabel = (): string => t('gui.turn_died', { e: '' }).repla
 
 /* The notice kind the runtime raises when a turn ends on the model's silence
    marker. A stored silent row reads as the same kind, so the replayed line is
-   the live one. */
+   the live one -- except after a message-tool reply: that turn's marker is
+   filed silent too, but the server sent no notice live, where the turn landed
+   with the reply as its answer. A reload draws this line there instead, with
+   the reply inside the message call's row. */
 const SILENT_KIND = 'silent_turn'
 
 export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMessage[] = []): void {
@@ -1770,9 +1773,10 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
     if (m.role === 'assistant' && m.silent) {
       /* The model's own silence marker: the row is kept because the model reads
          it next turn, and a reader is shown one quiet line in its place -- the
-         one the live turn closes with. Its reasoning is the model's work and is
-         drawn like any other step's, so the fold has the thought the live turn
-         showed. */
+         one a live silent turn closes with (a marker after a message-tool reply
+         is the exception, see SILENT_KIND). Its reasoning is the model's work
+         and is drawn like any other step's, so the fold has the thought the live
+         turn showed. */
       const thought = String(m.reasoning_content || '').trim()
       if (thought) {
         sealTools()

@@ -124,7 +124,12 @@ export const noticeLine = (notice?: null | TranscriptNotice): string => {
   return detail ? `${said}\n${detail}` : said
 }
 
-/** What a silent entry is read as: the notice the runtime raises for the same event live. */
+/**
+ * What a silent entry is read as: the notice a live silent turn closes with. A
+ * marker after a message-tool reply is filed silent too, though the server sent
+ * no notice for that turn live, so a reload draws this line under the call that
+ * carried the reply.
+ */
 const SILENT_TURN_NOTICE: TranscriptNotice = { kind: 'silent_turn' }
 
 /**

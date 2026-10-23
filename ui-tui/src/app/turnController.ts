@@ -553,9 +553,16 @@ class TurnController {
    *
    * The reply streams through `bufRef` and the live `streaming` text until the
    * turn lands, so whatever of it was already drawn is taken back here and the
-   * commit in `recordMessageComplete` writes none of it. What the turn said
-   * between its steps was flushed into the episodes and segments as it went:
-   * that is narration, not the reply, and it stays.
+   * commit in `recordMessageComplete` writes none of it. Whatever an earlier
+   * flush took out of the buffer (`flushStreamingSegment`, chiefly run when a
+   * tool call starts) is in the episodes and segments as narration, not the
+   * reply, and it stays.
+   *
+   * A message-tool reply is the exception: that tool streams its reply as token
+   * deltas and sends no `tool.start`, so the reply is still in `bufRef` unless a
+   * flush came after it, and this would take it back. It stays on screen only
+   * because the server sends no silent-turn notice for a turn the message tool
+   * answered, whatever the model ends it on.
    */
   recordSilentTurn() {
     if (this.interrupted) {
