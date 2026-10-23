@@ -215,9 +215,9 @@ class ChatDelta:
     `.content` for incremental token text; `tool_call_delta` / `usage` are
     optional carriers for in-stream tool deltas and final usage snapshots.
 
-    `finish_reason` / `error_classification` are only ever set on the
-    terminal delta of a stream (mirroring `LLMResponse`); mid-stream deltas
-    leave both as ``None``.
+    `finish_reason` / `error_classification` ride the terminal delta of a
+    stream (mirroring `LLMResponse`), except that a streamed refusal sets
+    ``finish_reason="refusal"`` on the mid-stream delta that carries its text.
     """
 
     content: str | None

@@ -2934,3 +2934,195 @@ async def test_the_words_beside_a_tool_call_are_released_with_it(
     )
 
     assert sink.text == seen
+
+
+# --------------------------------------------------------------------------- #
+# turn: what a silent turn delivers, files and tells its hooks                 #
+# --------------------------------------------------------------------------- #
+
+
+class _Sees(AgentHook):
+    """An ``after_send`` hook that writes down what it is handed and composes ``reply`` when it has one."""
+
+    def __init__(self, reply: str | None = None) -> None:
+        self.outbound: list[str | None] = []
+        self._reply = reply
+
+    @property
+    def name(self) -> str:
+        return "Sees"
+
+    async def after_send(self, ctx):
+        from raven.agent.hook import HookDecision
+
+        self.outbound.append(ctx.outbound_content)
+        return HookDecision() if self._reply is None else HookDecision(modified_content=self._reply)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin", [Origin.USER, Origin.CRON])
+async def test_a_marker_reply_ends_the_turn_silently(workspace, monkeypatch, origin):
+    """No reply, the row kept and flagged, nothing streamed, and the turn says it was silent."""
+    _served(monkeypatch, [_finished_stream(*_chunked("[SILENT]"))])
+    agent = _litellm_agent(workspace)
+    sink = _Sink()
+    silence: dict[str, bool] = {}
+
+    out = await agent._process_message(
+        _turn(origin=origin), session_key="s1", on_token_delta=sink.delta, silence=silence
+    )
+
+    assert out is None
+    assert silence == {"silent": True}
+    assert sink.text == [], "none of the marker reached a reader"
+    rows = agent.sessions.get_or_create("s1").messages
+    assert [(m["role"], m["content"]) for m in rows] == [("user", "hi"), ("assistant", "[SILENT]")]
+    assert rows[-1]["silent"] is True and "silent" not in rows[0]
+
+
+@pytest.mark.asyncio
+async def test_a_silent_turn_filing_its_marker_without_a_stream_is_silent_too(workspace, monkeypatch):
+    """The same turn on a surface that does not stream: a plain call, one reply, which is the marker."""
+    _served(monkeypatch, [_reply("NO_REPLY")])
+    agent = _litellm_agent(workspace)
+    silence: dict[str, bool] = {}
+
+    out = await agent._process_message(_turn(), session_key="s1", silence=silence)
+
+    assert out is None and silence == {"silent": True}
+    assert agent.sessions.get_or_create("s1").messages[-1]["silent"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reply,outbound",
+    [
+        pytest.param("[SILENT]", [None], id="silent_turn"),
+        pytest.param("all done", ["all done"], id="an_ordinary_turn"),
+    ],
+)
+async def test_after_send_runs_on_a_silent_turn_with_no_outbound(workspace, monkeypatch, reply, outbound):
+    """The chain keeps the turn's books on a silent turn too, so it runs; it is only told there is nothing to send."""
+    _served(monkeypatch, [_reply(reply)])
+    sees = _Sees()
+    modified: list[tuple[str, str]] = []
+
+    def modifier(key: str, content: str) -> str:
+        modified.append((key, content))
+        return content + " [nudge]"
+
+    from raven.agent.hook.adapters import ResponseModifierAdapter
+
+    agent = _litellm_agent(workspace, hooks=[sees, ResponseModifierAdapter(modifier)])
+
+    out = await agent._process_message(_turn(), session_key="s1")
+
+    assert sees.outbound == outbound
+    if reply == "[SILENT]":
+        assert out is None
+        assert modified == [], "a queued nudge is kept for the next reply, not spent on a message nobody gets"
+    else:
+        assert out == ("all done [nudge]", [])
+
+
+@pytest.mark.asyncio
+async def test_a_silent_turn_is_not_silenced_by_a_hook_that_composes_nothing(workspace, monkeypatch):
+    _served(monkeypatch, [_reply("[SILENT]")])
+    sink: dict[str, str] = {}
+    silence: dict[str, bool] = {}
+    agent = _litellm_agent(workspace, hooks=[_Sees(reply="  \n")])
+
+    out = await agent._process_message(_turn(), session_key="s1", silence=silence, hook_sink=sink)
+
+    assert out is None and silence == {"silent": True}
+    assert sink == {}, "blank text is not something to send"
+
+
+@pytest.mark.asyncio
+async def test_text_a_hook_composes_on_a_silent_turn_is_delivered(workspace, monkeypatch):
+    """Owner ruling B: the hooks keep their say. What one composes on a turn with nothing to say is the reply."""
+    _served(monkeypatch, [_reply("[SILENT]")])
+    sink: dict[str, str] = {}
+    silence: dict[str, bool] = {}
+    agent = _litellm_agent(workspace, hooks=[_Sees(reply="\n\nDeck: /out/deck.pptx")])
+
+    out = await agent._process_message(_turn(), session_key="s1", silence=silence, hook_sink=sink)
+
+    assert out == ("Deck: /out/deck.pptx", []), "the separator the hook put in front separates nothing"
+    assert silence == {}, "a turn that replied was not silent"
+    assert sink == {"appended": "\n\nDeck: /out/deck.pptx"}, "the tail a streaming reader is sent keeps it"
+    assert agent.sessions.get_or_create("s1").messages[-1]["content"] == "[SILENT]", "history keeps the model's own row"
+
+
+@pytest.mark.asyncio
+async def test_a_runtime_turn_that_skips_after_send_stays_silent(workspace, monkeypatch):
+    _served(monkeypatch, [_reply("nothing changed\n\n[SILENT]")])
+    sees = _Sees(reply="never asked")
+    silence: dict[str, bool] = {}
+
+    out = await _litellm_agent(workspace, hooks=[sees])._process_message(
+        _turn(origin=Origin.SENTINEL), session_key="s1", origin=Origin.SENTINEL, silence=silence
+    )
+
+    assert out is None and silence == {"silent": True}
+    assert sees.outbound == [], "a sentinel turn has never run the send chain"
+
+
+@pytest.mark.asyncio
+async def test_a_marker_after_the_message_tool_sent_is_not_a_silent_turn(workspace, monkeypatch):
+    """The reader has the answer from the tool; the marker only says there is nothing more.
+    A turn that answered is not a turn that said nothing, and a surface told otherwise would drop the answer."""
+    _served(monkeypatch, [_tool_reply("message", _SEND), _reply("NO_REPLY")])
+    agent = _litellm_agent(workspace)
+    sent = _wire_message_tool(agent)
+    silence: dict[str, bool] = {}
+
+    out = await agent._process_message(_turn(), session_key="s1", silence=silence)
+
+    assert sent == ["here is your answer"]
+    assert out is None and silence == {}
+    assert agent.sessions.get_or_create("s1").messages[-1]["content"] == "NO_REPLY"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reply,taught", [("[SILENT]", []), ("done", [("hi", "done")])])
+async def test_a_silent_turn_teaches_the_personalizer_nothing(workspace, monkeypatch, reply, taught):
+    learned: list[tuple[str, str]] = []
+
+    class _Personalizer:
+        def __init__(self, memory, provider, model) -> None:
+            pass
+
+        async def classify(self, message, history=None):
+            return {"needs_clarification": False}
+
+        async def post_learn(self, message, answer) -> None:
+            learned.append((message, answer))
+
+    monkeypatch.setattr("raven.agent.personalizer.Personalizer", _Personalizer)
+    _served(monkeypatch, [_reply(reply)])
+    agent = _litellm_agent(workspace)
+    agent.enable_personalization = True
+
+    await agent._process_message(_turn(), session_key="s1")
+    await asyncio.gather(*list(agent._consolidation_tasks))
+
+    assert learned == taught
+
+
+@pytest.mark.asyncio
+async def test_after_turn_memory_is_handed_the_markers_text_on_a_silent_turn(workspace, monkeypatch):
+    """What the turn filed is still handed to the memory pipeline: the marker row is a row of the turn."""
+    _served(monkeypatch, [_reply("[SILENT]")])
+    agent = _litellm_agent(workspace)
+    seen: list[dict] = []
+
+    async def after_turn(key, record):
+        seen.append(record)
+
+    monkeypatch.setattr(agent.harness.memory, "after_turn", after_turn)
+
+    await agent._process_message(_turn(), session_key="s1")
+
+    assert [record["final_content"] for record in seen] == ["[SILENT]"]
+    assert seen[0]["messages"][-1]["content"] == "[SILENT]"

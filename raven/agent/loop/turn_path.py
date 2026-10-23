@@ -2529,16 +2529,20 @@ class TurnPathMixin:
         origin: Origin | None = None,
         drain: Drain | None = None,
         hook_sink: dict[str, str] | None = None,
+        silence: dict[str, bool] | None = None,
     ) -> tuple[str | None, list[str]] | None:
         """Process a single turn request and return its reply.
 
         Returns ``(reply_content, media_paths)`` for a turn that produced an
-        outbound reply, or ``None`` for a silent turn (the message tool already
-        sent, or a hook short-circuit chose to return None). ``origin`` is the
+        outbound reply, or ``None`` when there is nothing to send (the message
+        tool already sent, a hook short-circuit chose to return None, or the
+        model ended the turn on a silence marker). ``origin`` is the
         spine TurnRequest's origin. ``hook_sink``, when given, receives under
         ``"appended"`` whatever the ``after_send`` chain added to the end of the
         reply: a streamed reply has already left as deltas by then, so the
-        caller has to send that tail itself.
+        caller has to send that tail itself. ``silence``, when given, receives
+        ``"silent": True`` for the last of those: a turn the model ended on a
+        marker, and that nothing replaced with a reply of its own.
         """
         from raven.agent.hook import AgentHookContext
 
@@ -3163,6 +3167,9 @@ class TurnPathMixin:
             )
             raise
         self._stash_recovery(key, outcome)
+        # The model's last reply is a marker: nothing is sent for it, though the turn is filed
+        # and the send chain below still runs. Cleared if a hook composes a reply in its place.
+        silent = outcome.silent
 
         if final_content is None:
             # Only a turn a tool already answered reaches this now: the guard
@@ -3175,22 +3182,31 @@ class TurnPathMixin:
         # for system-originated turns (Sentinel / subagent) so their reply
         # doesn't get a nudge layered on. A menu pick is USER (its reply IS the
         # user's intent — runs after_send); the Sentinel supersede notice is
-        # SENTINEL and a subagent result is SUBAGENT (both skip).
+        # SENTINEL and a subagent result is SUBAGENT (both skip). A silent turn
+        # runs it like any other: what a hook composes there, a deck built this
+        # turn, is still this turn's to deliver.
         skip_after_send = origin in _SKIP_AFTER_SEND_ORIGINS
         if len(self.hooks) > 0 and not skip_after_send:
             from raven.agent.hook import AgentHookContext
 
             _send_ctx = AgentHookContext(
                 session_key=key,
-                outbound_content=final_content,
+                # None for a marker: the chain keeps the turn's books on a silent turn
+                # too, but there is no reply for a hook to modify or append to.
+                outbound_content=None if silent else final_content,
                 session_history=session.messages[: _turn_start()],
                 metadata=turn_hook_meta,
             )
             _send_decision = await self.hooks.after_send(_send_ctx)
-            if _send_decision.modified_content is not None:
+            composed = _send_decision.modified_content
+            if composed is not None and (not silent or composed.strip()):
                 if hook_sink is not None:
-                    hook_sink["appended"] = _appended_by_hook(final_content, _send_decision.modified_content)
-                final_content = _send_decision.modified_content
+                    hook_sink["appended"] = _appended_by_hook(None if silent else final_content, composed)
+                # With no reply of the model's own, the separator a hook put in front of
+                # its text separates nothing. The tail handed to a streaming caller keeps
+                # it: words the model said beside a tool call may be on screen already.
+                final_content = composed.lstrip() if silent else composed
+                silent = False
 
         # A hook chain's per-turn observer record files onto the turn's last
         # substantive assistant message at persist time -- after the send fire,
@@ -3229,7 +3245,7 @@ class TurnPathMixin:
         # ── Step 4: post-action learning (background, non-blocking) ─────────────
         # Skip for a subagent result re-injection (see the pre-turn flow above):
         # its content is a system-generated announce, not user input to learn from.
-        if self.personalization_enabled and origin is not Origin.SUBAGENT:
+        if self.personalization_enabled and origin is not Origin.SUBAGENT and not silent:
             from raven.agent.personalizer import Personalizer
 
             _p4 = Personalizer(MemoryStore(self.workspace), self.provider, self.model)
@@ -3259,6 +3275,12 @@ class TurnPathMixin:
                     sender_id,
                     preview,
                 )
+            return None
+
+        if silent:
+            logger.info("Silent turn for {}:{}: the model chose not to reply", channel, sender_id)
+            if silence is not None:
+                silence["silent"] = True
             return None
 
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
@@ -3832,6 +3854,7 @@ class TurnPathMixin:
 
         streamed = False
         hook_sink: dict[str, str] = {}
+        silence: dict[str, bool] = {}
 
         async def on_token(text: str) -> None:
             nonlocal streamed
@@ -3978,6 +4001,7 @@ class TurnPathMixin:
                         origin=req.origin,
                         drain=drain,
                         hook_sink=hook_sink,
+                        silence=silence,
                     )
                 except AnswerlessTurnError:
                     # A turn the loop gave up on is not a crash: the executor and
@@ -4012,6 +4036,9 @@ class TurnPathMixin:
                 await emit(StreamDelta(delta=hook_sink["appended"]))
             if text_sink is not None and reply_content:
                 text_sink["text"] = reply_content
+        silent = silence.get("silent", False)
+        if silent:
+            await emit(Notice(kind=NoticeKind.SILENT_TURN))
 
         usage = Usage(
             prompt_tokens=int(usage_sink.get("prompt_tokens", 0) or 0),
@@ -4021,4 +4048,4 @@ class TurnPathMixin:
         # A message-tool reply returns None from _process_message but did reply,
         # so it counts as an explicit reply too.
         replied_via_tool = isinstance(message_tool, MessageTool) and message_tool.sent_in_turn
-        return TurnOutcome(usage=usage, explicit_reply=out is not None or replied_via_tool)
+        return TurnOutcome(usage=usage, explicit_reply=out is not None or replied_via_tool, silent=silent)

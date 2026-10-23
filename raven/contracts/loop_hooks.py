@@ -377,7 +377,9 @@ class AgentHook(ABC):
             and updates user behaviors (no short-circuit, no mod).
 
         Context fields populated: ``session_key``, ``outbound_content``,
-        ``session_history``.
+        ``session_history``. A silent turn fires it too, with
+        ``outbound_content`` None: nothing was said, and text a hook
+        composes there goes out as the reply.
         Returning ``HookDecision(modified_content=...)`` rewrites the
         outbound text — ``CompositeHook`` chains modifications so a
         downstream hook sees the upstream one's output.
@@ -391,11 +393,11 @@ class AgentHook(ABC):
 #: 3: ``session_history`` at every phase, the turn's ``max_iterations`` and
 #: ``context_window_tokens`` on the iteration context, ``HookDecision.notes``
 #: chained by the composite, and the observers stamp moved to persist time,
-#: after the send fire). The
+#: after the send fire; 4: ``after_send`` fires on a silent turn too). The
 #: fingerprint test (tests/test_agent_hook_contract.py) pins the field and
 #: phase rosters to this number, so growth is a bump a reviewer -- and a
 #: product hook author -- sees, rather than a drift nobody counted.
-FACTORY_LOOP_SURFACE_VERSION = 3
+FACTORY_LOOP_SURFACE_VERSION = 4
 
 __tier__ = "factory_loop"
 __all__ = ["AgentHook", "AgentHookContext", "FACTORY_LOOP_SURFACE_VERSION", "HookDecision"]

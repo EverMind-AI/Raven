@@ -1855,3 +1855,128 @@ async def test_run_turn_hands_the_lane_the_long_account_of_a_crash(tmp_path):
         await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
 
     assert raised.value.full_detail == f"RuntimeError: {message}"
+
+
+# ── a turn the model ends on a silence marker ──
+
+
+class _ComposesOnSilence(AgentHook):
+    """An after_send hook that has something to add only when the model said nothing."""
+
+    async def after_send(self, ctx):
+        if ctx.outbound_content is None:
+            return HookDecision(modified_content="\n\nDeck: /out/deck.pptx")
+        return HookDecision()
+
+
+async def test_a_silent_turn_emits_its_notice_and_reports_itself_silent(tmp_path):
+    """Nothing streams, no Text follows, one notice says why, and the outcome carries it to the spine."""
+    chunks = [ChatDelta(content="[SIL"), ChatDelta(content="ENT]")]
+    loop = AgentLoop(provider=_FakeStreamProvider(chunks), workspace=tmp_path)
+    _stub_edges(loop)
+    sink = _EmitCollector()
+
+    outcome = await loop.run_turn(_req("anything new?"), sink, _drain)
+
+    assert not any(isinstance(e, EvStreamDelta) for e in sink.events), "no delta carried any of the marker"
+    assert not any(isinstance(e, EvText) for e in sink.events)
+    assert [e.kind for e in sink.events if isinstance(e, EvNotice)] == [NoticeKind.SILENT_TURN]
+    assert outcome.silent is True
+    assert outcome.explicit_reply is False
+
+
+async def test_a_turn_that_replied_emits_no_silent_notice(tmp_path):
+    loop = AgentLoop(provider=_FakeStreamProvider([ChatDelta(content="all quiet")]), workspace=tmp_path)
+    _stub_edges(loop)
+    sink = _EmitCollector()
+
+    outcome = await loop.run_turn(_req("anything new?"), sink, _drain)
+
+    assert not any(isinstance(e, EvNotice) and e.kind is NoticeKind.SILENT_TURN for e in sink.events)
+    assert outcome.silent is False and outcome.explicit_reply is True
+
+
+async def test_the_marker_is_not_streamed_to_a_person_that_prefixes_it(tmp_path):
+    """The strict rule's reader: what merely starts like a marker is held, and shown the moment it is no marker."""
+    chunks = [ChatDelta(content="NO"), ChatDelta(content="T yet")]
+    loop = AgentLoop(provider=_FakeStreamProvider(chunks), workspace=tmp_path)
+    _stub_edges(loop)
+    sink = _EmitCollector()
+
+    outcome = await loop.run_turn(_req("done?"), sink, _drain)
+
+    assert [e.delta for e in sink.events if isinstance(e, EvStreamDelta)] == ["NOT yet"]
+    assert outcome.silent is False
+
+
+@pytest.mark.parametrize("stream", [True, False])
+async def test_what_a_hook_composes_on_a_silent_turn_reaches_the_reader(tmp_path, stream):
+    """Owner ruling B. Nothing streamed, so the hook's words are the reply, sent whole and without the
+    separator it put in front; the turn is not silent, and nothing says otherwise."""
+    provider = (
+        _FakeStreamProvider([ChatDelta(content="[SILENT]")])
+        if stream
+        else _FakeChatProvider([LLMResponse(content="[SILENT]", finish_reason="stop")])
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path, host=HostWiring(hooks=[_ComposesOnSilence()]))
+    _stub_edges(loop)
+    sink = _EmitCollector()
+
+    outcome = await loop.run_turn(_req("anything new?"), sink, _drain, stream=stream)
+
+    assert [e.content for e in sink.events if isinstance(e, EvText)] == ["Deck: /out/deck.pptx"]
+    assert not any(isinstance(e, EvStreamDelta) for e in sink.events)
+    assert not any(isinstance(e, EvNotice) and e.kind is NoticeKind.SILENT_TURN for e in sink.events)
+    assert outcome.silent is False and outcome.explicit_reply is True
+
+
+async def test_a_hook_tail_after_words_that_already_streamed_keeps_its_separator(tmp_path):
+    """The model said something beside a tool call and then ended on a marker. Those words are on the
+    reader's screen, so the hook's text follows them as the tail it is, with the separator that sets it apart."""
+    provider = _FakeStreamToolProvider(
+        [
+            [
+                ChatDelta(content="Building it. "),
+                ChatDelta(
+                    content=None,
+                    tool_call_delta={
+                        "tool_calls": [{"index": 0, "id": "t1", "function": {"name": "faketool", "arguments": "{}"}}]
+                    },
+                ),
+            ],
+            [ChatDelta(content="[SILENT]")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path, host=HostWiring(hooks=[_ComposesOnSilence()]))
+    _stub_edges(loop)
+    loop.tools.register(_FakeTool())
+    sink = _EmitCollector()
+
+    outcome = await loop.run_turn(_req("build it"), sink, _drain)
+
+    assert [e.delta for e in sink.events if isinstance(e, EvStreamDelta)] == [
+        "Building it. ",
+        "\n\nDeck: /out/deck.pptx",
+    ]
+    assert not any(isinstance(e, EvText) for e in sink.events)
+    assert outcome.silent is False
+
+
+async def test_a_marker_after_the_message_tool_sent_does_not_make_the_turn_silent(tmp_path):
+    """The tool's text is the answer and it is on the reader's screen. A surface told the turn ended
+    silent would take that text away, so only the marker is held back and the turn stays an answered one."""
+    provider = _FakeStreamToolProvider(
+        [
+            [_message_tool_call('{"content": "here you go"}')],
+            [ChatDelta(content="NO_REPLY")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    sink = _EmitCollector()
+
+    outcome = await loop.run_turn(_req("send it"), sink, _drain)
+
+    assert [e.delta for e in sink.events if isinstance(e, EvStreamDelta)] == ["here you go"]
+    assert not any(isinstance(e, EvNotice) and e.kind is NoticeKind.SILENT_TURN for e in sink.events)
+    assert outcome.silent is False and outcome.explicit_reply is True

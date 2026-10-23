@@ -738,6 +738,9 @@ def test_the_factory_loop_surface_is_versioned() -> None:
         },
     }
 
+    # 4 changed when ``after_send`` fires (on a silent turn too), not the vocabulary.
+    pinned[4] = pinned[3]
+
     assert lh.FACTORY_LOOP_SURFACE_VERSION in pinned, (
         "a new surface version needs its roster pinned here in the same change"
     )
@@ -746,3 +749,11 @@ def test_the_factory_loop_surface_is_versioned() -> None:
         "raven/contracts/loop_hooks.py and pin the new roster here -- growing "
         "one without the other is the drift this test exists to stop"
     )
+
+
+def test_the_surface_version_is_4() -> None:
+    """``after_send`` fires on a silent turn too, with no outbound text: a hook that assumed
+    one on every turn is a hook written against 3, and the number is how it learns that."""
+    import raven.contracts.loop_hooks as lh
+
+    assert lh.FACTORY_LOOP_SURFACE_VERSION == 4
