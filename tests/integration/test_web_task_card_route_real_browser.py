@@ -48,13 +48,16 @@ PAGE = """<!doctype html>
 MEASURE = """() => {
   const line = document.querySelector('.tkrunl2'), edge = line.getBoundingClientRect().right
   const ag = line.querySelector('.tkrunag'), sel = line.querySelector('.tkrunsel')
-  const floor = document.getElementById('floor')
+  const floor = document.getElementById('floor'), handle = line.querySelector('.tkrunhandle')
   floor.style.font = getComputedStyle(ag).font
+  const text = document.createRange()
+  text.selectNodeContents(ag)
   return {
     line: line.clientWidth,
     floor: floor.getBoundingClientRect().width,
     agent: ag.getBoundingClientRect().width,
-    agentFull: ag.scrollWidth,
+    agentFull: text.getBoundingClientRect().width,
+    handle: handle ? handle.getBoundingClientRect().width : null,
     sel: sel.clientWidth,
     selFull: sel.scrollWidth,
     selTextOverflow: getComputedStyle(sel).textOverflow,
@@ -127,6 +130,7 @@ def test_a_crowded_line_keeps_the_agent_name_and_ends_the_route_in_an_ellipsis(
     m = _measure(page, _line(agent, instance, tools, routes))
     assert m["line"] == CARD_W - 2 * 14 - 2, m
     assert m["agent"] >= min(m["agentFull"], m["floor"]) - 0.5, m
+    assert m["agent"] <= m["agentFull"] + 0.5, m
     assert m["agent"] > 0, m
     assert m["sel"] > 0, m
     assert m["selFull"] > m["sel"], m
@@ -141,7 +145,15 @@ def test_a_long_agent_name_gives_way_before_a_short_route(page: Page) -> None:
     assert [name for name, past in m["past"] if past > 0.5] == [], m
 
 
+def test_the_handle_gives_way_before_the_agent_name(page: Page) -> None:
+    m = _measure(page, _line("research_assistant_with_a_long_name", "lane-7f3a", None, ["bug"]))
+    assert m["agent"] < m["agentFull"], m
+    assert m["handle"] < 0.5, m
+    assert m["sel"] == m["selFull"], m
+
+
 def test_a_line_with_room_leaves_everything_whole(page: Page) -> None:
     m = _measure(page, _line("triage", None, None, ["everything_else"]))
     assert m["agent"] == pytest.approx(m["agentFull"], abs=0.5), m
     assert m["sel"] == m["selFull"], m
+    assert m["past"][-1][1] < -0.5, m
