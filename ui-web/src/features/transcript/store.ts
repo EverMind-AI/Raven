@@ -482,29 +482,35 @@ export function delivered(lane: Lane, p: {
   } satisfies DeliveredData)
 }
 
-const FENCE_OPEN = /^\s*\[BEGIN UNTRUSTED ([^ #]+) #([^ ]+) /
+const FENCE_OPEN = /\[BEGIN UNTRUSTED ([^ #\]]+) #([^ \]]+) [^\n]*\n/g
 const FENCE_CLOSE = /^\s*\[END UNTRUSTED ([^ #]+) #([^ ]+) /
 
-/* A forged close marker must not end the fence. wrap_untrusted tags both ends
-   with a per-call nonce for exactly that reason: the fence ends only at the
-   line whose source AND nonce match the opening line's. Anything else --
-   including a close-shaped line with a different tag -- is content, and if the
-   genuine close never appears the whole rest is content too. */
+/* A forged close marker must not end a fence. wrap_untrusted tags both ends
+   with a per-call nonce for exactly that reason: a fence ends only at the close
+   marker whose source AND nonce match its opening one's, and the next opening
+   marker is looked for after that close. Anything else -- a close-shaped line
+   with a different tag, a marker the result quotes -- is content, and if the
+   genuine close never appears the whole rest is content too. Every fence is
+   kept, joined by newlines, not only the first: a result made of content blocks
+   is fenced one text block at a time, and session.resume joins the blocks with a
+   space, so one restored row can hold several fences in a row. */
 export function defence(text: string): string {
-  const lines = String(text || '').split('\n')
-  const start = lines.findIndex((l) => FENCE_OPEN.test(l))
-  if (start < 0) {
-    return lines.filter((l) => !FENCE_CLOSE.test(l)).join('\n').trim()
+  const src = String(text || '')
+  const open = new RegExp(FENCE_OPEN.source, 'g')
+  const parts: string[] = []
+  let m: RegExpExecArray | null
+  while ((m = open.exec(src))) {
+    const start = m.index + m[0].length
+    const close = `\n[END UNTRUSTED ${m[1]} #${m[2]}]`
+    const end = src.indexOf(close, start - 1)
+    parts.push(src.slice(start, end < 0 ? undefined : Math.max(start, end)))
+    if (end < 0) break
+    open.lastIndex = end + close.length
   }
-  const m = FENCE_OPEN.exec(lines[start] || '')
-  const tag = m ? `${m[1]} #${m[2]}` : null
-  const rest = lines.slice(start + 1)
-  let end = -1
-  if (tag) {
-    const close = new RegExp(`^\\s*\\[END UNTRUSTED ${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\]`)
-    end = rest.findIndex((l) => close.test(l))
+  if (!parts.length) {
+    return src.split('\n').filter((l) => !FENCE_CLOSE.test(l)).join('\n').trim()
   }
-  return (end < 0 ? rest : rest.slice(0, end)).join('\n').trim()
+  return parts.join('\n').trim()
 }
 
 export function toggleDelivered(lane: Lane, seg: DeliveredData): void {
