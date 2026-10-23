@@ -836,3 +836,25 @@ def test_the_guard_is_not_loosened_by_a_popen_wrapper_that_leaves_ssh_alone(tmp_
     with pytest.raises(AssertionError, match="the real ssh -G ran"):
         transport.resolve_with_ssh(["ssh", "203.0.113.7"])
     assert seen and not ran.exists()
+
+
+def test_the_guard_lets_an_ssh_that_reads_no_config_run(tmp_path_factory, monkeypatch):
+    """Only ``ssh -G`` reads the owner's config without connecting; any other ssh a test starts is not the guard's."""
+    ssh, ran = _owner_ssh(tmp_path_factory, monkeypatch)
+
+    subprocess.run([str(ssh), "-V"], capture_output=True, timeout=10, check=False)
+
+    assert ran.exists()
+
+
+def test_the_guard_finds_ssh_on_the_path_the_command_is_started_with(tmp_path, tmp_path_factory, monkeypatch):
+    """An ``env`` handed to ``Popen`` is where ``ssh`` is looked up, so it is that PATH the guard reads, not this
+    process's own, which here leads to the test's stand-in."""
+    ssh, ran = _owner_ssh(tmp_path_factory, monkeypatch)
+    (tmp_path / "bin").mkdir()
+    _ssh_in(tmp_path / "bin", monkeypatch)
+    env = {**os.environ, "PATH": f"{ssh.parent}{os.pathsep}{os.environ['PATH']}"}
+
+    with pytest.raises(AssertionError, match="the real ssh -G ran"):
+        subprocess.run(["ssh", "-G", "203.0.113.7"], env=env, capture_output=True, timeout=10, check=False)
+    assert not ran.exists()
