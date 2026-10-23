@@ -167,7 +167,8 @@ def make_on_cron_job(
     nudges on the same topic within the dedup window. Without this,
     Sentinel and Cron are blind to each other and the user gets double-
     nudged on the same subject (e.g. user-asked "5/25 birthday cron"
-    fires AND Sentinel proactively reminds at 5/22).
+    fires AND Sentinel proactively reminds at 5/22). A silent run (the
+    model ended on a silence marker) nudged no one, so it writes nothing.
 
     ``system_events`` / ``wake`` are optional. When wired (gateway path),
     a failed cron run, or a success that ended with neither a reply nor a
@@ -341,7 +342,9 @@ def make_on_cron_job(
         # + record_dispatched), so its next tick on the same topic skips via
         # topic_quota. Bypasses policy.check(): the user scheduled this cron, so a
         # self-imposed DND / quota must only INFORM, not veto. No-op without sentinel.
-        if sentinel_runner is not None:
+        # A silent run nudged no one, so it leaves no record, for the same reason it
+        # is not counted above.
+        if sentinel_runner is not None and not outcome.silent:
             _record_cron_dispatch_to_ledger(sentinel_runner, job)
 
         # A reply is already on the delivery path and a silent run chose to deliver

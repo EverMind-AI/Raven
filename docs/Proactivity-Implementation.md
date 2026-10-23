@@ -517,7 +517,8 @@ A cron fire also writes the shared NudgePolicy ledger (a topic-tag fire plus a
 dispatched record marked neutral) so the Sentinel suppresses its own proactive
 nudge on the same topic within the dedup window, without dragging down the
 acceptance rate the Sentinel learns from (a cron is user-initiated, not the
-Sentinel's own proposal). A recurring job that fires repeatedly with no user
+Sentinel's own proposal). A run the model ends on a silence marker nudged no
+one, so it writes nothing. A recurring job that fires repeatedly with no user
 response is automatically disabled when `silent_fire_count` reaches
 `silent_fire_limit` (default 12). Successful fires increment this count, except
 a run the model ends on a silence marker, which sent the user nothing to respond

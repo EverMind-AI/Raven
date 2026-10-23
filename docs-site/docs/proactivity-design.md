@@ -202,9 +202,10 @@ check-and-reserve transaction:
 - The task-discovery menu is policy-gated. A user-selected option is a separate
   execution path, not a second pass through ProactiveSpawn for every action.
 - Cron is explicitly user-scheduled and bypasses `check()`. With a Sentinel
-  runner wired, successful fires update its shared counters and topic ledger.
-  This helps suppress overlapping Sentinel reminders; it is not a guarantee
-  of semantic deduplication across all messages.
+  runner wired, successful fires update its shared counters and topic ledger,
+  except a run the model ends with `[SILENT]`: it nudged no one, so it records
+  nothing. This helps suppress overlapping Sentinel reminders; it is not a
+  guarantee of semantic deduplication across all messages.
 
 ## State and feedback
 

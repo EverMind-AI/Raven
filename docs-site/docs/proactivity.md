@@ -140,7 +140,8 @@ uv run raven sentinel config set --max-nudges-per-hour 1 --max-nudges-per-day 4
 
 Restart afterward. These are Sentinel policy limits, not account-wide billing
 caps. User-scheduled Cron jobs bypass the policy check; when the shared ledger
-is wired, their fires still consume counters seen by Sentinel.
+is wired, their fires still consume counters seen by Sentinel, except a run the
+model ends with `[SILENT]`.
 
 The policy is not a strict send-time barrier for queued messages. Injects are
 checked and charged when queued; deferred reminders are checked at registration
