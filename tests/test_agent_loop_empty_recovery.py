@@ -1669,6 +1669,67 @@ async def test_a_switch_after_a_streamed_error_asks_the_fallback_the_original_qu
     assert provider.requests[2][1] == provider.requests[0][1]
 
 
+class _StreamErrorsThenFallbackReplies(LLMProvider):
+    """``stub`` fails each call with an error a fallback model can answer; ``fb`` answers with ``reply``."""
+
+    def __init__(self, reply: list[ChatDelta]) -> None:
+        super().__init__(api_key="test")
+        self.models: list[str | None] = []
+        self._reply = reply
+
+    async def chat(self, *args, **kwargs):  # pragma: no cover - the streaming path is under test
+        raise AssertionError("the streaming path is the one under test")
+
+    async def chat_stream(self, messages, tools=None, model=None, **_kw):
+        self.models.append(model)
+        if model == "stub":
+            yield ChatDelta(
+                content="Error calling LLM (server@stub): overloaded",
+                finish_reason="error",
+                error_classification=ErrorClassification("server", retryable=True, should_fallback=True),
+            )
+            return
+        for delta in self._reply:
+            yield delta
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+_BILLED = {"prompt_tokens": 5000, "completion_tokens": 40}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reply,failure",
+    [
+        pytest.param([ChatDelta(content=None, finish_reason="stop", usage=_BILLED)], EMPTY_REPLY_FAILURE, id="empty"),
+        pytest.param(
+            [
+                ChatDelta(content=None, reasoning_content="hmm, let me think"),
+                ChatDelta(content=None, finish_reason="stop", usage=_BILLED),
+            ],
+            THINKING_ONLY_FAILURE + "\n\nhmm, let me think",
+            id="thinking_only",
+        ),
+    ],
+)
+async def test_a_fallback_a_streamed_error_switched_to_gets_one_try(workspace, monkeypatch, reply, failure):
+    """A model the turn switched to is tried once, whatever the switch answered: the resends, prefills
+    and step-downs are the first model's. Not counted as a fallback, the one a streamed error reached
+    took the whole ladder again -- three more paid calls for an empty reply."""
+    provider = _StreamErrorsThenFallbackReplies(reply)
+    slept = _recorded_sleeps(monkeypatch)
+
+    _final, _used, _messages, outcome = await _make_agent(workspace, provider)._run_agent_loop(
+        _seed(), fallback_models=["fb"], on_token_delta=_Sink().delta
+    )
+
+    assert provider.models == ["stub", "fb"], "the fallback was asked once, and nothing after it"
+    assert slept == []
+    assert outcome.status == "error" and outcome.error == failure
+
+
 @pytest.mark.asyncio
 async def test_an_upstream_error_on_a_plain_call_is_left_to_the_providers_chain():
     """A non-streamed call already walks ``[model, *fallbacks]`` inside the provider, so the loop
