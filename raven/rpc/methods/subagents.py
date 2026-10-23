@@ -1570,7 +1570,8 @@ async def subagents_test(params: dict, *, agent_loop_factory: "AgentLoopFactory 
 async def subagents_test_cancel(params: dict) -> dict:
     """Cancel the named agent's in-flight run. Only the asyncio task is cancelled here.
 
-    The run is a test's, or the proof prompt a connect sends (`_run_once`):
+    The run is a test's, or the proof prompt a connect sends together with the
+    capability record an acp row is measured with once it answers (`_run_once`):
     that connect -- `subagents.add`, `subagents.toggle`, `subagents.update` --
     then refuses with `cancelled` in its data and writes nothing, where a test
     answers `cancelled: true`. What the cancel reaps belongs to the measurement

@@ -154,7 +154,9 @@ export interface ExtAgentsSource {
   ): Promise<{ name: string } | { refused: string; cancelled?: boolean }>
   /* Stop the run in flight under `name` -- the proof prompt of a connect
      pressed from the machine form, by the name the entry has or lands under;
-     the same call that stops a test. True when there was one to stop. */
+     the same call that stops a test. True when there was one to stop; false
+     when nothing was running, which leaves the connect past the point where
+     it can be cancelled rather than cancelled (`awaitRun`). */
   cancelRun(name: string): Promise<boolean>
 }
 

@@ -724,7 +724,7 @@ function sayStopped(
    ends it. */
 export function cancelConnect(): void {
   const stop = stops.get(get().mconnectGen)
-  if (!stop || get().mconnectLate) return
+  if (!stop) return
   set({ mconnectCancelling: true })
   stop('cancelled')
 }
