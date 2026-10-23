@@ -402,8 +402,11 @@ html, body { height: 100%; margin: 0; }
 /* The body's floor is the width the rail and the reading column need side by
    side; each has a width under which it cannot do its job. A window under it
    used to scroll sideways rather than squeeze them, which on a phone was the
-   780px shell in a 390px window, so under it the shell folds instead (the
-   narrow-window blocks below). */
+   780px shell in a 390px window. Under it the body now gives its floor up:
+   down to 640px the two columns share the window (the rail at its narrowest,
+   190px, still leaves the content usable -- state/rail.ts `FOLDS`), and
+   under 640px the shell folds to one column (the narrow-window blocks
+   below). */
 html { overflow-x: auto; overflow-y: hidden; background: var(--ink); }
 body {
   background: var(--ink); color: var(--text);
@@ -412,9 +415,11 @@ body {
   min-width: 780px;
 }
 /* ── narrow windows ───────────────────────────────────────────────── */
-/* Under the floor the shell folds instead of scrolling sideways. The floor
-   was the width the two columns need; below it a phone was shown the 780px
-   page in a 390px window -- the rail on the left half, every module squeezed
+/* Under the floor the body gives its minimum up instead of scrolling
+   sideways: the two columns share what is left down to 640px, and the next
+   block folds the shell to one column under that. The floor was the width
+   the two columns need; below it a phone was shown the 780px shell in a
+   390px window -- the rail on the left half, every module squeezed
    into what was left (the hub's three tabs stacked, 200px cards, a drawer
    wider than the window) and a horizontal scroll to reach any of it. */
 @media (max-width: 779px) {
