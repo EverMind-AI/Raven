@@ -2343,14 +2343,27 @@ class TurnPathMixin:
                     status = "error"
                     break
 
+                if recovery.parts:
+                    # The answer is what streamed across every call, joined: a
+                    # continuation that came back empty leaves the partial as it was,
+                    # and so does one that came back a marker, which has nothing to add.
+                    tail = (
+                        strip_think_blocks(response.content or "", trim=False)
+                        if clean and action is not RecoveryAction.SILENT
+                        else ""
+                    )
+                    clean = ("".join(recovery.parts) + tail).strip()
+
                 # Before the text is persisted, so a short-circuit replaces it
                 # without leaving the replaced draft in history and a rollback
                 # discards-and-re-samples it. The stream is held to match: a
                 # rollback pops history, and only the draft gate can keep the
-                # reader from having seen what history no longer has.
+                # reader from having seen what history no longer has. The hooks
+                # read the reply the turn keeps: after a continuation, the whole
+                # answer rather than the last call's fragment of it.
                 if hook_ctx is not None:
                     hook_ctx.messages = messages
-                    hook_ctx.response = response
+                    hook_ctx.response = replace(response, content=clean) if recovery.parts else response
                     decision = await self.hooks.after_iteration(hook_ctx)
                     if _hook_rollback(decision):
                         if draft is not None:
@@ -2368,16 +2381,6 @@ class TurnPathMixin:
                 else:
                     await _settle_silence(silence_gate, silent=action is RecoveryAction.SILENT)
 
-                if recovery.parts:
-                    # The answer is what streamed across every call, joined: a
-                    # continuation that came back empty leaves the partial as it was,
-                    # and so does one that came back a marker, which has nothing to add.
-                    tail = (
-                        strip_think_blocks(response.content or "", trim=False)
-                        if clean and action is not RecoveryAction.SILENT
-                        else ""
-                    )
-                    clean = ("".join(recovery.parts) + tail).strip()
                 if kind is ReplyKind.NETWORK_CUT and action is RecoveryAction.COMPLETE:
                     # Cut, and nothing will ask the model to go on: the continuations are
                     # spent, or recovery is switched off, which is the same with none made.

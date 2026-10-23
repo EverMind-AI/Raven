@@ -1927,6 +1927,38 @@ async def test_a_stream_cut_on_the_last_iteration_ends_on_what_streamed_with_the
     assert (messages[-1]["role"], messages[-1]["content"]) == ("assistant", final)
 
 
+class _ReadsTheReply(AgentHook):
+    """An ``after_iteration`` hook that writes down the reply it is handed, as one that checks it does."""
+
+    def __init__(self) -> None:
+        self.read: list[str | None] = []
+
+    @property
+    def name(self) -> str:
+        return "ReadsTheReply"
+
+    async def after_iteration(self, ctx):
+        from raven.agent.hook import HookDecision
+
+        self.read.append(getattr(ctx.response, "content", None))
+        return HookDecision()
+
+
+@pytest.mark.asyncio
+async def test_after_iteration_hooks_read_the_whole_answer_after_a_continuation(workspace, monkeypatch):
+    """A hook reads the reply the turn keeps -- a deck engine looks in it for the path it wrote. After
+    a cut answer was continued, that is the answer joined, not the continuation's fragment of it."""
+    _served(monkeypatch, [_DyingStream("The deck is at out/deck.pptx and "), _finished_stream("it has 12 slides.")])
+    reads = _ReadsTheReply()
+
+    final, _used, _messages, _outcome = await _litellm_agent(workspace, hooks=[reads])._run_agent_loop(
+        _seed(), on_token_delta=_Sink().delta
+    )
+
+    assert final == "The deck is at out/deck.pptx and it has 12 slides."
+    assert reads.read == [final]
+
+
 @pytest.mark.asyncio
 async def test_a_cut_answer_is_called_partial_when_recovery_is_switched_off(workspace, monkeypatch):
     """With recovery off nothing asks the model to go on, which is the exhausted case with its
