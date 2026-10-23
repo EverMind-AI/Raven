@@ -65,15 +65,13 @@ EverOS 是默认记忆后端插件，与 Raven core 独立发行，通过 Memory
 
 1. 上下文组装决定本次模型调用看到什么，长历史可能被归档或压缩。
 2. 记忆存储和召回把选定知识保留到对话之外。
-3. 经验提炼是后端相关能力，与 SkillForge 检索不同。当前树保留了
-   `skillForge.extraction` 配置和关于本地管线的旧描述，但实际宿主装配不消费该设置。
-   不要假定开启它就会启动本地技能提炼或创建 `.cache/skills.db`。
+3. 经验提炼由选用的记忆后端提供，通过该后端的插件设置配置。
+   宿主不使用 `skillForge.extraction` 启动本地提炼管线。
 
-反馈驱动的 skill 版本管理和退役，并不会因为存在配置占位字段就自动生效。
-宣称学会某个过程前，应检查记忆后端实际存储的 case/skill 和健康情况。Harness
+SkillForge 负责技能检索、注入和下载包管理。宿主未实现反馈驱动的技能版本管理与退役。
+可通过记忆后端存储的 case、skill 和健康状态检查保留了哪些经验。Harness
 自进化由独立 Evolver 工具执行，并经过基准评估，先读
 [Evolver：使用与实验](evolver.md)，实现细节见[设计与实现](self-evolution-map.md)。
-不要把检索或后端经验提炼描述为自动修改生产代码。
 
 ## 从已完成任务到可复用知识 { #from-a-completed-task-to-reusable-knowledge }
 
