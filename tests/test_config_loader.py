@@ -1667,7 +1667,7 @@ def test_a_pi_row_whose_pi_cannot_be_read_stays_where_it_works(
     elif where == "a pi npm did not install":
         _pi_on_path(monkeypatch, tmp_path, None)
         shim = tmp_path / "pi-prefix" / "bin" / "pi"
-        shim.write_text("#!/bin/sh\nexec somewhere-else \"$@\"\n")
+        shim.write_text('#!/bin/sh\nexec somewhere-else "$@"\n')
         shim.chmod(0o755)
     else:
         _pi_on_path(monkeypatch, tmp_path, None)
