@@ -354,7 +354,7 @@ async def stream_llm_call(
         upstream_finish_reason = None
         # Left standing, the clock spans the ladder's waits and reports a minute
         # of sleep as a minute of thought -- the only evidence of how long a
-        # silent round actually thought for.
+        # round that showed nothing actually thought for.
         think_t0 = None
         reasoning_ms = None
 
@@ -456,9 +456,9 @@ async def stream_llm_call(
                     if getattr(delta, "call_record", None) is not None:
                         record = delta.call_record
             # The upstream closed the stream before its terminal chunk and nothing
-            # deliverable had arrived: a reply cut mid-thought, not a model that
-            # chose silence. Measured on 2026-09-06: nine deck-build calls ended
-            # this way at 307-314 s each with 11-15k reasoning tokens and no
+            # deliverable had arrived: a reply cut mid-thought, not an empty reply
+            # the model finished. Measured on 2026-09-06: nine deck-build calls
+            # ended this way at 307-314 s each with 11-15k reasoning tokens and no
             # content, and the empty-reply recovery re-sent the same request
             # five more times because the cut looked like a finished reply. Handed
             # back as a retryable network error instead, so the loop's error

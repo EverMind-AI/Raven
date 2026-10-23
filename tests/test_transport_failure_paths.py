@@ -125,22 +125,22 @@ def test_the_error_says_it_was_the_upstream_and_carries_its_evidence() -> None:
     assert response.error_classification.retryable
 
 
-def test_silence_with_honest_usage_is_left_to_the_loop() -> None:
+def test_an_empty_reply_with_honest_usage_is_left_to_the_loop() -> None:
     """The review's finding, as a test.
 
-    An empty response whose prompt was billed truthfully is a model that said
-    nothing -- `recovery.py` recovers that by changing the request (a prefill,
-    a post-tool nudge, a continuation after a cut at the output limit) or by
-    resending it. Reporting it as an error takes all of that out of service,
-    because the loop breaks on an error response before `reply_kind` runs, and
-    the identical request again is all this verdict can ask for.
+    An empty response whose prompt was billed truthfully is a model that
+    returned nothing -- `recovery.py` recovers that by changing the request (a
+    prefill, a post-tool nudge, a continuation after a cut at the output limit)
+    or by resending it. Reporting it as an error takes all of that out of
+    service, because the loop breaks on an error response before `reply_kind`
+    runs, and the identical request again is all this verdict can ask for.
     """
-    silent = _Response(
+    empty = _Response(
         choices=[_Choice(message=_Msg())],
         usage=_Usage(prompt_tokens=2900, completion_tokens=1, total_tokens=2901),
     )
 
-    assert _provider()._parse_response(silent, sent_chars=SENT).finish_reason == "stop"
+    assert _provider()._parse_response(empty, sent_chars=SENT).finish_reason == "stop"
 
 
 def test_content_that_is_only_a_sentinel_counts_as_nothing_delivered() -> None:
@@ -993,11 +993,11 @@ def test_a_laundered_failure_that_still_answered_is_delivered() -> None:
 def test_the_upstreams_own_word_is_read_where_the_library_kept_it() -> None:
     """The case the accounting evidence cannot reach.
 
-    A prompt billed truthfully and an empty reply is a silent model, which is
-    why the accounting verdict refuses it. But an upstream that said
-    `finish_reason=error` did not stay silent -- it reported a failure, and the
-    library filed the original beside the value it rewrote. Read there, the
-    verdict needs no corroboration and no threshold.
+    A prompt billed truthfully and an empty reply is a model that returned
+    nothing, which is why the accounting verdict refuses it. But an upstream
+    that said `finish_reason=error` said something after all -- it reported a
+    failure, and the library filed the original beside the value it rewrote.
+    Read there, the verdict needs no corroboration and no threshold.
     """
     laundered_but_billed_honestly = _Response(
         choices=[
@@ -1147,9 +1147,9 @@ def test_an_upstream_that_said_nothing_about_how_it_ended_is_not_accused() -> No
     one the streaming side settles the same way (see
     `test_llm_call_stream_empty_stream_yields_empty_content`).
     """
-    silent = _Response(choices=[_Choice(message=_Msg(), finish_reason=None)])  # type: ignore[arg-type]
+    no_finish = _Response(choices=[_Choice(message=_Msg(), finish_reason=None)])  # type: ignore[arg-type]
 
-    parsed = _provider()._parse_response(silent)
+    parsed = _provider()._parse_response(no_finish)
 
     assert parsed.finish_reason == "unknown"
     assert parsed.error_classification is None
@@ -1204,11 +1204,11 @@ def test_a_rename_never_seen_before_says_so_without_being_judged_differently() -
 
     A normal end spelled in a way nothing has mapped is recorded as a rename, is
     absent from the allow list, and is reported as a failure -- taking a turn
-    that the loop's own silence recovery should have had. The verdict cannot tell
-    that apart from a new failure dialect and does not try: both are refused, for
-    the reason the allow list exists. What it can do is say which one it is
-    looking at, so the case has a signal at all rather than only a retry nobody
-    asked about.
+    that the loop's own empty-response recovery should have had. The verdict
+    cannot tell that apart from a new failure dialect and does not try: both
+    are refused, for the reason the allow list exists. What it can do is say
+    which one it is looking at, so the case has a signal at all rather than
+    only a retry nobody asked about.
     """
     known = flag_transport_failure(
         finish_reason="stop", content=None, tool_calls=[], native_finish_reason="network_error"
@@ -1404,15 +1404,15 @@ def test_a_picture_is_not_counted_as_prompt_text() -> None:
 async def test_a_vision_turn_with_honest_usage_is_not_reconnected() -> None:
     """The regression the shared measurement closes.
 
-    Images are attached after a tool result, which is exactly where models go
-    silent -- so the two halves of the false verdict coincided by construction:
-    an inflated threshold and an empty response arriving together, on a call
-    where the upstream did nothing wrong. Reconnecting sent the picture twice
-    and logged a transport failure for it.
+    Images are attached after a tool result, which is exactly where models
+    return nothing -- so the two halves of the false verdict coincided by
+    construction: an inflated threshold and an empty response arriving
+    together, on a call where the upstream did nothing wrong. Reconnecting sent
+    the picture twice and logged a transport failure for it.
     """
     from raven.providers.streaming import stream_llm_call
 
-    class _SilentAboutThePicture:
+    class _NothingAboutThePicture:
         generation = GenerationSettings()
 
         def __init__(self) -> None:
@@ -1423,7 +1423,7 @@ async def test_a_vision_turn_with_honest_usage_is_not_reconnected() -> None:
             # Truthful accounting for a megabyte of png.
             yield ChatDelta(content=None, finish_reason="stop", usage={"prompt_tokens": 1800, "total_tokens": 1801})
 
-    provider = _SilentAboutThePicture()
+    provider = _NothingAboutThePicture()
     response = await stream_llm_call(provider, messages=_vision_messages(), tools=None, model="stub")
 
     assert provider.attempts == 1, "the picture was sent twice for a call that did not fail"
@@ -1453,7 +1453,7 @@ def test_a_zero_prompt_beside_a_real_count_is_the_strongest_evidence() -> None:
 def test_a_usage_block_of_nothing_but_zeros_is_not_evidence() -> None:
     """That is a provider not reporting usage. Read as evidence, every empty
     response it ever returns would be called a transport failure -- and the
-    loop's own recovery for a silent model would be unreachable behind it."""
+    loop's own recovery for an empty reply would be unreachable behind it."""
     from raven.providers.transport_failure import flag_transport_failure
 
     assert (
