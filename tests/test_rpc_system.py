@@ -577,9 +577,7 @@ async def test_an_install_replacement_window_answers_in_progress_without_stubbin
     register_system_methods(dispatcher)
     SERVE.arm(18792, "tok", "cookie", asyncio.Event())
     try:
-        resp = await dispatcher.dispatch(
-            {"jsonrpc": "2.0", "id": 21, "method": "system.upgrade", "params": {}}
-        )
+        resp = await dispatcher.dispatch({"jsonrpc": "2.0", "id": 21, "method": "system.upgrade", "params": {}})
     finally:
         SERVE.disarm()
 
@@ -624,9 +622,7 @@ async def test_malformed_install_metadata_answers_not_upgradable_without_stubbin
     register_system_methods(dispatcher)
     SERVE.arm(18792, "tok", "cookie", asyncio.Event())
     try:
-        resp = await dispatcher.dispatch(
-            {"jsonrpc": "2.0", "id": 22, "method": "system.upgrade", "params": {}}
-        )
+        resp = await dispatcher.dispatch({"jsonrpc": "2.0", "id": 22, "method": "system.upgrade", "params": {}})
     finally:
         SERVE.disarm()
 
@@ -688,9 +684,7 @@ async def test_an_unreadable_probe_answers_as_an_ordinary_install_not_an_interna
     stop = asyncio.Event()
     SERVE.arm(18792, "tok", "cookie", stop)
     try:
-        resp = await dispatcher.dispatch(
-            {"jsonrpc": "2.0", "id": 23, "method": "system.upgrade", "params": {}}
-        )
+        resp = await dispatcher.dispatch({"jsonrpc": "2.0", "id": 23, "method": "system.upgrade", "params": {}})
         # The handler schedules the shutdown; wait it out so the timer cannot
         # land on the next test's stop event.
         await asyncio.sleep(0.9)
