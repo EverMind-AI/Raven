@@ -730,7 +730,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
           const msgs: Msg[] = finalMessages.length || silent ? finalMessages : [{ role: 'assistant', text: finalText }]
           msgs.forEach(appendMessage)
 
-          if (bellOnComplete && stdout?.isTTY) {
+          if (bellOnComplete && !silent && stdout?.isTTY) {
             stdout.write('\x07')
           }
         }

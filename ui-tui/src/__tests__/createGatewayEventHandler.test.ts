@@ -413,6 +413,36 @@ describe('createGatewayEventHandler', () => {
     expect(appended).toEqual([])
   })
 
+  const bellCtx = (appended: Msg[], write: ReturnType<typeof vi.fn>) => {
+    const ctx = buildCtx(appended)
+
+    ctx.system = { bellOnComplete: true, stdout: { isTTY: true, write }, sys: vi.fn() }
+
+    return ctx
+  }
+
+  it('rings the opt-in completion bell when an answer lands', () => {
+    const write = vi.fn()
+    const onEvent = createGatewayEventHandler(bellCtx([], write))
+
+    onEvent({ payload: {}, type: 'message.start' } as any)
+    onEvent({ payload: { text: 'all done' }, type: 'message.complete' } as any)
+
+    expect(write.mock.calls).toEqual([['\x07']])
+  })
+
+  it('does not ring it for a turn the model chose not to answer', () => {
+    const write = vi.fn()
+    const onEvent = createGatewayEventHandler(bellCtx([], write))
+
+    onEvent({ payload: {}, type: 'message.start' } as any)
+    turnController.recordSilentTurn()
+    onEvent({ payload: { text: '[SILENT]' }, type: 'message.complete' } as any)
+
+    // A bell is a ping, and a ping is a delivery: nothing was delivered.
+    expect(write).not.toHaveBeenCalled()
+  })
+
   it('always accumulates raw text in message.delta and ignores `rendered` (#16391)', () => {
     const appended: Msg[] = []
     const onEvent = createGatewayEventHandler(buildCtx(appended))
