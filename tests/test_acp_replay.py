@@ -510,6 +510,19 @@ class TestBounds:
 
         assert "not shown" not in updates[0]["content"]["text"]
 
+    def test_a_silent_runtime_turn_takes_none_of_the_room(self):
+        """A turn that is never drawn is left out before the cap is applied, so it cannot push the
+        oldest message a client would have drawn out of the replay."""
+        stored = [{"role": "user", "content": f"m{n}"} for n in range(MAX_REPLAYED_MESSAGES)]
+        stored += [
+            {"role": "user", "content": "[Unprompted report from 'ci']\n\nstill compiling", "origin": "subagent"},
+            {"role": "assistant", "content": "[SILENT]", "silent": True},
+        ]
+
+        texts = _texts(replay(_map_to_wire(stored, "acp:s1"), session_id="acp:s1"))
+
+        assert texts == [f"m{n}" for n in range(MAX_REPLAYED_MESSAGES)]
+
 
 class TestMalformedInput:
     @pytest.mark.parametrize("messages", [None, "transcript", 5, {}])
