@@ -263,7 +263,8 @@ class LoopOutcome:
     recovery could not mend (nothing, only thinking, a cut that stayed cut, a
     refusal). None when the turn produced an answer or a hook salvaged one, and
     also when the turn returned no text at all with the recovery switched off,
-    which the caller fails on by itself. The caller fails the turn on it unless
+    which the caller fails on by itself; a refusal is the exception, worded here
+    whether the recovery is on or off. The caller fails the turn on it unless
     one of the turn's tools has already put an answer in front of the reader.
 
     ``error_full`` is the same failure at length: the failed call's content
@@ -275,8 +276,11 @@ class LoopOutcome:
     call and nothing else to show for it: no reasoning, no refusal, no cut at the
     output ceiling. Recovery sets it once it has spent its moves on such a reply;
     with recovery switched off, any last reply without text sets it, thinking
-    included, because nothing there says more than that. The attempts before the
-    last are not covered: they may have thought.
+    included, because nothing there says more than that -- except a refusal,
+    which fails as a refusal either way and leaves it unset. A turn the message
+    tool had already answered can carry it too, on a last reply with no text of
+    its own; nothing fails that turn, so nothing reads it. The attempts before
+    the last are not covered: they may have thought.
 
     ``silent`` is set when the turn's last reply is a silence marker. That is the
     model's answer, not a failure and not an empty reply: the row stays in the

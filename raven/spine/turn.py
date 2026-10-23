@@ -42,7 +42,8 @@ class AnswerlessTurnError(Exception):
         super().__init__(*args)
         self.full_detail = full_detail
         # The last reply had no text, no tool call and nothing else to show (no reasoning, refusal or cut at the
-        # output ceiling) once recovery was spent, or no text with recovery off. Earlier attempts are not covered.
+        # output ceiling) once recovery was spent; with recovery off, no text at all, a refusal excepted, which
+        # fails as a refusal either way. Earlier attempts are not covered.
         self.no_output = no_output
 
 
