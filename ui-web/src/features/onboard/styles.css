@@ -94,13 +94,17 @@
    reach: the model step has no Skip and the frame no close, so a Next past
    the window's edge is a first run that cannot finish. The frame drops its
    own floor; the top bar's two 160px ends, which centre the strip on a
-   desktop, give way to the strip, whose unwrapped labels then end in an
-   ellipsis rather than run under the language button (from about 350px
-   down, in English). The current step's label is the one kept whole: a
-   later step's item grows from nothing and would otherwise be the first to
-   give, so when it is current it holds its content's width and the steps
-   before it give instead, with the connector shortened to make room; and
-   the step bodies -- the settings
+   desktop, give way to the strip, and the frame's gutters and the bar's gaps
+   narrow, which keeps both names of a two-step strip whole down to 320px.
+   A strip still too short for its unwrapped labels takes the room from the
+   steps other than the current one: such a name ends in an ellipsis down to
+   2.5em, and under that wraps onto a line its item does not show, leaving
+   the numbered dot -- a box narrower than the ellipsis itself is drawn with
+   the first letter clipped in half, so it must never get one. The current
+   step's label is the one kept whole: a later step's item grows from nothing
+   and would otherwise be the first to give, so when it is current it holds
+   its content's width and the steps before it give instead, with the
+   connector shortened to make room; and the step bodies -- the settings
    dialog's, in a column narrower than the dialog -- put a label over its
    control wherever the control would not shrink: the add form's 132px label
    column and its 280px boxes, and the role rows' 320px pills. The settings
@@ -109,11 +113,15 @@
 @media (max-width: 779px) {
   .ob-app { min-width: 0; }
   .ob-brand, .ob-lang { min-width: 0; }
+  .ob-top { gap: 10px; }
+  .ob-top, .ob-main, .ob-foot { padding-left: 16px; padding-right: 16px; }
   .ob-sitem { min-width: 0; }
-  .ob-sitem > span:last-child { overflow: hidden; text-overflow: ellipsis; }
-  .ob-sitem[data-state="current"] > span:last-child { flex: none; overflow: visible; }
+  .ob-sitem:not([data-state="current"]) { min-width: 20px; height: 22px; overflow: hidden; flex-wrap: wrap; align-content: flex-start; }
+  .ob-sitem + .ob-sitem:not([data-state="current"]) { min-width: 50px; }
+  .ob-sitem:not([data-state="current"]) > span:last-child {
+    flex: 1000 1 2.5em; min-width: 2.5em; max-width: max-content; overflow: hidden; text-overflow: ellipsis; }
   .ob-sitem + .ob-sitem[data-state="current"] { min-width: auto; }
-  .ob-sitem + .ob-sitem::before { min-width: 16px; margin: 0 6px; }
+  .ob-sitem + .ob-sitem::before { min-width: 12px; margin: 0 5px; }
   .ob-dot { flex: none; }
   .ob-app .settings-row:has(> .settings-ctl > .settings-mpill) { grid-template-columns: minmax(0, 1fr); }
   .ob-app .settings-cfg.settings-padd .settings-row { grid-template-columns: minmax(0, 1fr); }

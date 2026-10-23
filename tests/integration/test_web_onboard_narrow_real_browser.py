@@ -146,6 +146,41 @@ def test_the_wizard_can_be_finished_at_phone_width(wizard: Page) -> None:
     pytest.fail("the wizard did not close after its last step")
 
 
+# Every step label that is not shown whole, as [label, its box, its item's box,
+# its text's width]: cut by its own clip or by its item's edge.
+CUT = """() => [...document.querySelectorAll('.ob-app .ob-sitem > span:last-child')]
+  .filter((el) => {
+    const b = el.getBoundingClientRect(), item = el.parentElement.getBoundingClientRect()
+    const within = b.left >= item.left - 0.5 && b.right <= item.right + 0.5 && b.top >= item.top - 0.5 && b.bottom <= item.bottom + 0.5
+    return !within || el.scrollWidth > el.clientWidth
+  })
+  .map((el) => {
+    const b = el.getBoundingClientRect(), item = el.parentElement.getBoundingClientRect()
+    return [el.innerText, [Math.round(b.left), Math.round(b.right)], [Math.round(item.left), Math.round(item.right)], el.scrollWidth]
+  })"""
+
+
+@pytest.mark.parametrize("wizard", [(320, 568)], indirect=True, ids=["320x568"])
+def test_every_step_label_is_whole_in_the_narrowest_window(wizard: Page) -> None:
+    """At 320px the two-step strip has room for both names, the step behind the reader's too.
+
+    A label squeezed under the width of the ellipsis is not ended by one: the
+    browser clips the first letter instead, and "Model" read as half an "M".
+    """
+    page = wizard
+    assert page.evaluate(CUT) == [], "model step: step labels not shown whole (label, box, item box, text width)"
+    page.fill(".ob-app .keyfield input", "sk-test-0000")
+    page.get_by_role("button", name="Connect", exact=True).click()
+    page.get_by_role("button", name="Disconnect", exact=True).wait_for()
+    page.locator(".ob-app .settings-pm").first.click()
+    page.get_by_text("claude-sonnet-5", exact=True).first.click()
+    page.wait_for_selector(".ob-app .ob-foot .ob-primary:not(:disabled)")
+    page.locator(".ob-app .ob-foot .ob-primary").click()
+    page.wait_for_function(STEPPED, arg="Model")
+    assert page.locator(".ob-sitem[data-state=done]").inner_text().endswith("Model")
+    assert page.evaluate(CUT) == [], "search step: step labels not shown whole (label, box, item box, text width)"
+
+
 @pytest.mark.parametrize("wizard", [(1280, 800)], indirect=True, ids=["1280x800"])
 def test_a_desktop_window_keeps_the_frame_floor(wizard: Page) -> None:
     assert wizard.evaluate("() => getComputedStyle(document.querySelector('.ob-app')).minWidth") == "780px"

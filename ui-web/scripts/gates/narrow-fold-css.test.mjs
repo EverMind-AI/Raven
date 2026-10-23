@@ -210,18 +210,38 @@ describe('the first-run wizard under the body floor', () => {
     expect(decls('.ob-sitem', onboard).get('white-space')).toBe('nowrap')
     expect(decls('.ob-sitem + .ob-sitem', onboard).get('flex')).toBe('1')
     expect(wizardRule('.ob-sitem', 'min-width')).toBe('0')
-    expect(wizardRule('.ob-sitem > span:last-child', 'overflow')).toBe('hidden')
-    expect(wizardRule('.ob-sitem > span:last-child', 'text-overflow')).toBe('ellipsis')
-    expect(wizardRule('.ob-sitem[data-state="current"] > span:last-child', 'flex')).toBe('none')
-    expect(wizardRule('.ob-sitem[data-state="current"] > span:last-child', 'overflow')).toBe('visible')
+    const label = '.ob-sitem:not([data-state="current"]) > span:last-child'
+    expect(wizardRule(label, 'overflow')).toBe('hidden')
+    expect(wizardRule(label, 'text-overflow')).toBe('ellipsis')
     expect(wizardRule('.ob-sitem + .ob-sitem[data-state="current"]', 'min-width')).toBe('auto')
     expect(weight('.ob-sitem + .ob-sitem[data-state="current"]')).toBeGreaterThan(weight('.ob-sitem + .ob-sitem'))
     expect(wizardRule('.ob-dot', 'flex')).toBe('none')
   })
 
+  /* A box narrower than the ellipsis gets no ellipsis: Chromium draws the
+     first letter clipped in half, which read as half an "M" at 320px. Under
+     its floor the label wraps onto a second line the one-line item clips, and
+     the item keeps the width its connector and dot need. */
+  it('folds a label away rather than give it less than its ellipsis floor', () => {
+    const item = '.ob-sitem:not([data-state="current"])'
+    const label = `${item} > span:last-child`
+    expect(wizardRule(label, 'min-width')).toBe('2.5em')
+    expect(wizardRule(label, 'flex')).toBe('1000 1 2.5em')
+    expect(wizardRule(label, 'max-width')).toBe('max-content')
+    expect(wizardRule(item, 'flex-wrap')).toBe('wrap')
+    expect(wizardRule(item, 'overflow')).toBe('hidden')
+    expect(wizardRule(item, 'height')).toBe('22px')
+    expect(wizardRule(item, 'min-width')).toBe('20px')
+    const connector = wizardRule('.ob-sitem + .ob-sitem::before', 'min-width')
+    const [, side] = /^0\s+(\d+)px$/.exec(wizardRule('.ob-sitem + .ob-sitem::before', 'margin'))
+    const gap = parseInt(decls('.ob-sitem', onboard).get('gap'), 10)
+    const dot = parseInt(decls('.ob-dot', onboard).get('width'), 10)
+    expect(wizardRule(`.ob-sitem + ${item}`, 'min-width')).toBe(`${parseInt(connector, 10) + 2 * Number(side) + gap + dot}px`)
+  })
+
   it('shortens the connector below its desktop minimum', () => {
     expect(decls('.ob-sitem + .ob-sitem::before', onboard).get('min-width')).toBe('34px')
-    expect(wizardRule('.ob-sitem + .ob-sitem::before', 'min-width')).toBe('16px')
+    expect(wizardRule('.ob-sitem + .ob-sitem::before', 'min-width')).toBe('12px')
   })
 
   it('leaves a stacked pill free to take the column rather than its 320px', () => {

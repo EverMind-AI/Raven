@@ -461,7 +461,8 @@ All notable changes to Raven are documented here.
   below 780px too, so its Next stays inside a phone's window, its provider
   form and model role rows put each label over its control instead of running
   past the edge, and its step labels other than the current one end in an
-  ellipsis rather than run under the language button.
+  ellipsis rather than run under the language button -- or, with too little
+  room for one, leave their numbered dot alone rather than half a letter.
 
 - What an agent on a registered machine writes on stderr reaches Raven even
   when no link held the agent at the time. The node kept those lines but, when
