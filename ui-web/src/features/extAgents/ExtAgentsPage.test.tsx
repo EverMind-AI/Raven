@@ -3651,6 +3651,82 @@ describe('the machines module', () => {
     expect(toasts).toEqual(['gui.machine.connected_said {"name":"codex@box"}'])
   })
 
+  it('leaves the note of a later press alone when an earlier press s stop answers late', async () => {
+    /* Two presses on one form: the first one's stop answers only after the second press
+       has ended in its own cancel. That late answer belongs to the first press, so the
+       second's note stands -- the press, not the form, owns the correction. */
+    const presets: PresetChoice[] = [
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] }
+    ]
+    const answers: Array<(cancelled: boolean) => void> = []
+    install([row()], {
+      machines: [ready()],
+      presets: async () => presets,
+      connectOnMachine: () => new Promise(() => {}),
+      cancelRun: () => new Promise<boolean>(res => answers.push(res))
+    })
+    store._resetForTests({ graceMs: 20 })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    for (let press = 0; press < 2; press++) {
+      await click(sheetAct('gui.machine.connect_do'))
+      await click(sheetAct('gui.cancel'))
+      await act(async () => {
+        await new Promise(res => setTimeout(res, 60))
+      })
+      expect(sheetStatus()).toBe('gui.machine.connect_cancelled_head')
+    }
+    expect(answers).toHaveLength(2)
+    await act(async () => {
+      answers[0]!(false)
+    })
+    await settle()
+    expect(sheetStatus()).toBe('gui.machine.connect_cancelled_head')
+    /* The second press's own answer still corrects its own note. */
+    await act(async () => {
+      answers[1]!(false)
+    })
+    await settle()
+    expect(sheetStatus()).toBe('gui.machine.connect_missed_head')
+  })
+
+  it('does not put the too-late note back over a connect that already landed', async () => {
+    const presets: PresetChoice[] = [
+      { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] }
+    ]
+    const held = heldConnect()
+    let answerStop: (cancelled: boolean) => void = () => {}
+    const { toasts } = install([row()], {
+      machines: [ready()],
+      presets: async () => presets,
+      connectOnMachine: async () => held.connect(),
+      cancelRun: () => new Promise<boolean>(res => (answerStop = res))
+    })
+    store._resetForTests({ graceMs: 20 })
+    await mount()
+    await openMachines()
+    await openSheet('Lab box')
+    await click(sheetAct('gui.machine.connect_here'))
+    await click(sheetAct('gui.machine.connect_do'))
+    await click(sheetAct('gui.cancel'))
+    await act(async () => {
+      await new Promise(res => setTimeout(res, 60))
+    })
+    expect(sheetStatus()).toBe('gui.machine.connect_cancelled_head')
+    await held.release(null)
+    await settle()
+    expect(note()).toBeNull()
+    expect(toasts).toEqual(['gui.machine.connected_said {"name":"codex@box"}'])
+    await act(async () => {
+      answerStop(false)
+    })
+    await settle()
+    expect(store.get().mconnectStopped).toBe('')
+    expect(note()).toBeNull()
+  })
+
   it('keeps the cancel note when the stop answers that it stopped the run', async () => {
     const presets: PresetChoice[] = [
       { preset: 'codex', name: 'Codex', kind: 'acp', description: 'd', connected_here: false, off_on_machines: [], on_machines: [] }
