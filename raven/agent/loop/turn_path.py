@@ -208,7 +208,8 @@ def _recovery_failure_text(kind: ReplyKind, response: LLMResponse, visible: str 
         # it the sentence would end on a colon that leads nowhere.
         text = f"{head}\n\n{excerpt}" if excerpt else head.partition(" Its last reasoning")[0]
     elif kind is ReplyKind.TRUNCATED:
-        text = TRUNCATED_FAILURE.format(n=MAX_CONTINUATIONS)
+        tried = spent.ceiling_continuations
+        text = TRUNCATED_FAILURE.format(n=tried, s="" if tried == 1 else "s")
     elif kind is ReplyKind.REFUSAL:
         explanation = visible or reasoning_excerpt(response)
         text = REFUSAL_FAILURE + (
@@ -1581,9 +1582,11 @@ class TurnPathMixin:
             if response.has_tool_calls:
                 # A reply that does something ends the run of empty ones, and a
                 # cut answer the model went on to act on is no longer the start of
-                # the one it gives after the tools.
+                # the one it gives after the tools, which starts with no
+                # continuation of its own.
                 recovery.empty_streak.clear()
                 recovery.parts.clear()
+                recovery.ceiling_continuations = 0
                 if hook_ctx is not None:
                     hook_ctx.messages = messages
                     hook_ctx.response = response
@@ -2295,6 +2298,7 @@ class TurnPathMixin:
                     # the one the first cut call carried; the provider clamps it
                     # to what the model accepts (``send_max_tokens``).
                     recovery.continuations += 1
+                    recovery.ceiling_continuations += 1
                     if recovery.max_tokens_base is None:
                         recovery.max_tokens_base = response.max_tokens
                     if recovery.max_tokens_base:

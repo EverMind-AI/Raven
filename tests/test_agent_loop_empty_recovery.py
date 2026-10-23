@@ -518,10 +518,10 @@ def test_the_wording_is_copied_verbatim():
     )
     assert (
         TRUNCATED_FAILURE
-        == "Processing stopped: the response remained truncated after {n} continuation attempts. Try again."
+        == "Processing stopped: the response remained truncated after {n} continuation attempt{s}. Try again."
     )
     assert (
-        TRUNCATED_FAILURE.format(n=MAX_CONTINUATIONS)
+        TRUNCATED_FAILURE.format(n=MAX_CONTINUATIONS, s="s")
         == "Processing stopped: the response remained truncated after 3 continuation attempts. Try again."
     )
     assert REFUSAL_FAILURE == "The model declined to respond to this request (a safety refusal, not a Raven failure)."
@@ -935,8 +935,30 @@ async def test_a_cut_reply_with_nothing_in_it_is_continued_with_more_room(worksp
     assert [call["max_tokens"] for call in calls] == [4096, 8192, 16384, 32768]
     assert [call["messages"][-1]["content"] for call in calls[1:]] == [OUTPUT_LIMIT_CONTINUATION] * 3
     assert _efforts(calls) == ["medium"] * 4, "there was no reasoning to blame, so the effort is left alone"
-    assert str(failed) == TRUNCATED_FAILURE.format(n=3)
+    assert str(failed) == TRUNCATED_FAILURE.format(n=3, s="s")
     assert failed.no_output is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cuts_before_the_tool,attempts",
+    [
+        pytest.param(1, "2 continuation attempts", id="two_after_the_tool"),
+        pytest.param(2, "1 continuation attempt", id="one_after_the_tool"),
+    ],
+)
+async def test_a_truncation_failure_counts_the_continuations_its_answer_had(
+    workspace, monkeypatch, cuts_before_the_tool, attempts
+):
+    """The continuations are a budget for the turn, and a step that ended in a tool call spent some of
+    it. The answer that fails after the tool had only what was left, and the failure says that number,
+    not the budget's size."""
+    cut = _reply("", finish="length")
+    _served(monkeypatch, [cut] * cuts_before_the_tool + [_tool_reply()] + [cut] * (4 - cuts_before_the_tool))
+
+    failed = await _fail(_litellm_agent(workspace), "write the report")
+
+    assert str(failed) == f"Processing stopped: the response remained truncated after {attempts}. Try again."
 
 
 @pytest.mark.asyncio

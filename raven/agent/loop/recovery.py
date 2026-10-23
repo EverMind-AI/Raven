@@ -100,7 +100,7 @@ THINKING_ONLY_FAILURE = "The model produced only internal reasoning and no final
 THINKING_ONLY_UNRETRIED_FAILURE = (
     "The model produced only internal reasoning and no final answer. Its last reasoning, which may contain the answer:"
 )
-TRUNCATED_FAILURE = "Processing stopped: the response remained truncated after {n} continuation attempts. Try again."
+TRUNCATED_FAILURE = "Processing stopped: the response remained truncated after {n} continuation attempt{s}. Try again."
 REFUSAL_FAILURE = "The model declined to respond to this request (a safety refusal, not a Raven failure)."
 REFUSAL_EXPLANATION = " The model's explanation: {text}"
 REFUSAL_NO_EXPLANATION = " The model returned no explanation."
@@ -250,6 +250,9 @@ class RecoveryState:
     refusal_fell_back: bool = False
     empty_streak: list[EmptyAttempt] = field(default_factory=list)
     parts: list[str] = field(default_factory=list)  # what a network-cut answer has streamed so far
+    # The output-ceiling continuations the current step has had: what a TRUNCATED failure reports, where
+    # ``continuations`` is the turn's budget for every kind.
+    ceiling_continuations: int = 0
 
     @property
     def asked_again(self) -> bool:
