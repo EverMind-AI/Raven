@@ -126,13 +126,15 @@ def test_a_ceiling_as_large_as_the_window_still_leaves_room_for_history(workspac
     # Raven Guidelines above it already state. Still loose, as this bound is
     # meant to be: the regression it guards is history at zero.
     #
-    # Lowered again from 126_000 (measured 125_984) when the host's role gained
+    # Lowered again from 126_000 (measured 125_950) when the host's role gained
     # the open-decision bullet and the reply rules gained the open-decision and
-    # per-task heading lines: 99 + 74 + 47 tokens, each kept because a replay
+    # per-task heading lines: 99 + 74 + 85 tokens, each kept because a replay
     # measured its effect. 14 of the 74 repeat the role's carve-out for a
     # passed-over offer, since on a turn without a dispatch path that line is the
-    # rule's only statement. What stayed out: worked examples, and a second copy
-    # of the rule in the tool descriptions.
+    # rule's only statement; 38 of the 85 widen the heading line from reported
+    # results to every task a reply covers, the reply shape live sessions have.
+    # What stayed out: worked examples, and a second copy of the rule in the tool
+    # descriptions.
     assert budget.available_history > 125_500, "an honest ceiling must not squeeze history toward zero"
     # `reserved_tools` is what the old 129_000 bound was really watching, and it
     # is invariant across those same three paths: paid on every turn of every

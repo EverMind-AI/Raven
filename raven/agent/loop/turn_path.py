@@ -1486,10 +1486,10 @@ class TurnPathMixin:
                             watch_note += render.worker_table_note(
                                 render.live_dispatch_tools(self.tools.get_definitions)
                             )
-                        if tool_call.name == "spawn":
-                            from raven.context_engine.segments import render
+                        from raven.context_engine.segments import render
 
-                            watch_note += render.open_decisions_note()
+                        if tool_call.name in render.DISPATCH_TOOLS:
+                            watch_note += render.reply_rules_note()
                     # The registry already unwrapped any ToolResult: `result` is
                     # the model-facing text, with the optional display string
                     # riding along on it (ToolOutput). The model always gets the

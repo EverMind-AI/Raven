@@ -11,8 +11,9 @@ covers using them, not installing their transports.
 
 Raven itself works as your agent manager. It sorts a request into tasks, hands
 each to the sub-agent that fits it, keeps track of every task until you accept
-the result, and gathers what the agents report into one answer, where each task's
-result gets its own section under a heading that names the task. When it asks you
+the result, and gathers what the agents report into one answer, where each task it
+covers gets its own section under a heading that names the task, whether that is the
+task's result or a single line on how it is going. When it asks you
 to decide several things and your reply settles only some of them, it acts on
 those and asks about the rest again at the end of every reply, until you decide
 each one, drop it or tell it to leave it for later. A later message

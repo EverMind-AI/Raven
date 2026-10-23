@@ -313,13 +313,18 @@ async def test_announce_dag_result_addresses_the_originating_conversation() -> N
 
 
 async def test_announce_dag_result_delivers_the_summary_verbatim() -> None:
-    """The announce carries the run's own summary and nothing else.
+    """The announce carries the run's own summary unaltered, and after it only the
+    reply-rules note a dispatch receipt carries.
 
     A graph's deliverable is its terminal node outputs, so any framing or
-    retell-in-two-sentences instruction wrapped around them is lossy. The
-    untrusted fence is the one exception: node output is attacker-influenceable
-    and this arrives shaped like an inbound message, not like a tool result.
+    retell-in-two-sentences instruction wrapped around them is lossy, and none is
+    added. The untrusted fence stays: node output is attacker-influenceable and
+    this arrives shaped like an inbound message, not like a tool result. The note
+    after it shortens nothing; it says how the reply the host writes next is laid
+    out, which the resident rules alone did not achieve on a DAG notice.
     """
+    from raven.context_engine.segments.render import reply_rules_note
+
     mgr = _make_manager(max_concurrent=1)
     submitted: list[object] = []
     mgr.set_submit(submitted.append)
@@ -330,10 +335,15 @@ async def test_announce_dag_result_delivers_the_summary_verbatim() -> None:
     # Asserted structurally, not against a second wrap_untrusted call: the fence
     # mints a fresh nonce each time, so two wraps of one string never compare
     # equal. Everything between the markers must be the summary, unaltered.
-    lines = submitted[0].text.splitlines()
+    text = submitted[0].text
+    note = reply_rules_note()
+    assert text.endswith(note)
+    assert "gives each task its own `### <task>` section" in note
+    lines = text[: -len(note)].splitlines()
     assert lines[0].startswith("[BEGIN UNTRUSTED subagent ")
     assert lines[-1].startswith("[END UNTRUSTED subagent ")
     assert "\n".join(lines[1:-1]) == summary
+    assert "sentences" not in text and "brief" not in text
 
 
 async def test_announce_dag_result_without_a_submit_does_not_raise() -> None:

@@ -83,6 +83,17 @@ class _SpawnReceiptTool(Tool):
         return "Subagent [Pricing] started (id: a1c3e5f7). I'll notify you when it completes."
 
 
+class _DagReceiptTool(_SpawnReceiptTool):
+    """Stands in for `run_subagent_dag`, which the loop recognises by name."""
+
+    @property
+    def name(self) -> str:
+        return "run_subagent_dag"
+
+    async def execute(self, **kwargs) -> str:
+        return "DAG run dag_a1c3e5f7 started in the background (2 nodes). Its result is announced when it finishes."
+
+
 class _SplitTool(Tool):
     """Returns ToolResult so the loop's unwrap branch is actually exercised."""
 
@@ -463,16 +474,18 @@ async def test_tool_result_splits_model_text_from_display_preview(tmp_path):
     assert start.display == "Which base?"
 
 
-async def test_a_spawn_result_carries_the_open_decision_note_after_its_fence(tmp_path):
+@pytest.mark.parametrize("receipt", [_SpawnReceiptTool, _DagReceiptTool], ids=["spawn", "run_subagent_dag"])
+async def test_a_dispatch_receipt_carries_the_reply_rules_note_after_its_fence(tmp_path, receipt):
     # The note rides on trusted_note, which add_tool_result places after the
     # untrusted fence: inside it the fence's own contract would make it data.
+    dispatch = receipt().name
     provider = _FakeStreamToolProvider(
         [
             [
                 ChatDelta(
                     content=None,
                     tool_call_delta={
-                        "tool_calls": [{"index": 0, "id": "s1", "function": {"name": "spawn", "arguments": "{}"}}]
+                        "tool_calls": [{"index": 0, "id": "s1", "function": {"name": dispatch, "arguments": "{}"}}]
                     },
                 )
             ],
@@ -489,7 +502,7 @@ async def test_a_spawn_result_carries_the_open_decision_note_after_its_fence(tmp
     )
     loop = AgentLoop(provider=provider, workspace=tmp_path)
     _stub_edges(loop)
-    loop.tools.register(_SpawnReceiptTool())
+    loop.tools.register(receipt())
     loop.tools.register(_FakeTool())
 
     notes: dict[str, str] = {}
@@ -509,8 +522,11 @@ async def test_a_spawn_result_carries_the_open_decision_note_after_its_fence(tmp
     await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
 
     rule = "decisions you put to the user that are still open close this reply too"
-    assert rule in notes["spawn"]
-    assert contents["spawn"].index("[END UNTRUSTED spawn") < contents["spawn"].index(rule)
+    sections = "gives each task its own `### <task>` section"
+    assert rule in notes[dispatch]
+    assert sections in notes[dispatch]
+    assert contents[dispatch].index(f"[END UNTRUSTED {dispatch}") < contents[dispatch].index(rule)
+    assert contents[dispatch].index(f"[END UNTRUSTED {dispatch}") < contents[dispatch].index(sections)
     assert notes["faketool"] == ""
 
 

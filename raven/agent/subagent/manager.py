@@ -51,7 +51,7 @@ from raven.agent.subagent_memory import (
 from raven.config.agent_names import canonical_agent_name
 from raven.config.paths import get_sandbox_dir
 from raven.config.schema import TIER_LADDER, ExecToolConfig
-from raven.context_engine.segments.render import dispatch_language_line
+from raven.context_engine.segments.render import dispatch_language_line, reply_rules_note
 from raven.contracts.llm_provider import LLMProvider
 from raven.contracts.subagent_backend import SubagentNoAnswerError
 from raven.observability import semconv
@@ -2323,12 +2323,19 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
         The untrusted fence is not part of that text and stays: node output is
         attacker-influenceable, and unlike a tool result (which the agent knows
         it asked for) this arrives shaped like an inbound message.
+
+        After the fence comes the reply-rules note a dispatch receipt carries. It
+        shortens nothing: it says how the reply the host writes next is laid out,
+        and that reply is written right after this message is read. Replayed on a
+        recorded live DAG notice (glm-5.3-flash), each task got its own heading in
+        0 of 6 replies with the resident rules alone and 5 of 6 with the note.
+        Clients draw only what is inside the fence, so no reader sees it.
         """
         self.remember_origin(origin)
         if self._submit is None:
             logger.warning("DAG run {} finished with no submit wired; result not announced", run_id)
             return
-        injected = wrap_untrusted(summary, source="subagent")
+        injected = wrap_untrusted(summary, source="subagent") + reply_rules_note()
         mark = {"kind": "dag", "label": run_id, "status": "ok", "run_id": run_id}
         if not self._inject(injected, origin, mark):
             return

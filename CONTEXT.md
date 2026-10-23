@@ -637,8 +637,10 @@ covers the work, by its label. Work no worker covers is put to the user -- a wor
 it, or another Harness -- rather than done by the host or sent to an agent outside the enum,
 which offers labels alone. A table a call binds mid-turn (`load_playbook`) arrives after the
 identity was assembled, so that call's result carries the same rule, after its untrusted
-fence. A `spawn` result carries the open-decision rule the same way, since the host writes
-its closing text right after reading one. Rendered only in a process that is
+fence. A dispatch receipt (`spawn`, `run_subagent_dag`) and a background DAG run's
+announcement carry the open-decision rule the same way, together with the reply rule that
+gives each task a reply covers its own heading, since the host writes its closing text right
+after reading one. Rendered only in a process that is
 not a **Sub-agent role** and on a turn holding a dispatch path -- elsewhere the identity
 stays "a helpful AI assistant", byte for byte. The reply rules (`## How you reply`) say the
 open-decision rule again, the declined offer included, on every turn outside a
