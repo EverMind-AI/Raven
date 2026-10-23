@@ -758,8 +758,8 @@ async def test_a_messages_stream_cut_after_its_first_delta_is_not_asked_again(mo
 async def test_a_200_error_body_is_an_upstream_error(monkeypatch) -> None:
     """An overloaded endpoint can answer HTTP 200 with an error object where a
     message belongs. Parsed as a reply it had no content and no stop reason, so it
-    read as a model that chose silence and the loop repaired a healthy request
-    instead of waiting the upstream out."""
+    read as an empty response and the loop repaired a healthy request instead of
+    waiting the upstream out."""
     from raven.providers import anthropic_messages_provider as mod
 
     def handler(request):

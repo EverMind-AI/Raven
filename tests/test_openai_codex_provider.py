@@ -381,8 +381,8 @@ def test_response_incomplete_for_any_other_reason_reads_unknown(monkeypatch):
 
 
 def test_a_refusal_part_is_kept_as_a_refusal(monkeypatch):
-    """A refusal arrives as its own part, not as output text. Dropped, the reply was
-    empty and the ``completed`` that follows made it a model that chose silence."""
+    """A refusal arrives as its own part, not as output text. Dropped, the reply read
+    as an empty response, with the ``completed`` that follows as its finish."""
     resp = _chat_over(
         monkeypatch,
         [

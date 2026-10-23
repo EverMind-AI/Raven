@@ -445,7 +445,7 @@ def _spine_submit(outcomes: list, *, explicit_reply: bool = True, silent: bool =
     an Exception → result() raises (cron failure path); a TurnFailed → result()
     hands it back, as the lane does; a str → stored in readback under
     req.conversation (mimics the gateway capturing runner) so the handler reads
-    it back for the return value or silent completion event."""
+    it back for the return value or no-reply completion event."""
     readback: dict[str, str] = {}
     it = iter(outcomes)
 
@@ -529,7 +529,7 @@ async def test_cron_reply_is_delivered_once_when_heartbeat_checks(tmp_path: Path
 
 
 @pytest.mark.parametrize("response", ["cron result text", None])
-async def test_silent_cron_completion_enqueues_event_and_wakes(response: str | None):
+async def test_a_cron_completion_with_no_reply_enqueues_event_and_wakes(response: str | None):
     from raven.core.cron_stack import make_on_cron_job
 
     submit, readback = _spine_submit([response], explicit_reply=False)
@@ -627,12 +627,12 @@ async def test_cron_failure_after_reply_keeps_the_failure_event():
     wake.stop()
 
 
-async def test_cron_reply_clears_a_queued_silent_completion():
+async def test_cron_reply_clears_a_queued_no_reply_completion():
     from raven.core.cron_stack import make_on_cron_job
 
     submit, readback = _spine_submit(["reply sent"])
     queue = SystemEventQueue()
-    queue.enqueue(SystemEvent(text="earlier silent result", source="cron", context_key="cron:job_wake"))
+    queue.enqueue(SystemEvent(text="earlier no-reply result", source="cron", context_key="cron:job_wake"))
     queue.enqueue(SystemEvent(text="manual task", source="manual", context_key="manual:task"))
     wake = WakeScheduler(coalesce_s=0.01)
     on_job = make_on_cron_job(submit=submit, readback_texts=readback, system_events=queue, wake=wake)

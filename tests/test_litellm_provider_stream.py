@@ -732,8 +732,8 @@ def test_a_missing_finish_reason_reads_unknown() -> None:
 
 def test_a_structured_refusal_is_a_refusal() -> None:
     """OpenAI-shaped upstreams put a refusal in ``message.refusal`` and leave
-    ``content`` null, so the reply read as empty and the ``stop`` beside it as a
-    model that chose silence."""
+    ``content`` null, so the reply read as an empty response, whatever the
+    ``stop`` beside it said."""
     from litellm.types.utils import Message
 
     parsed = _make_provider()._parse_response(
