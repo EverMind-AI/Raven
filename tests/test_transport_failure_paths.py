@@ -30,6 +30,7 @@ import pytest
 
 from raven.contracts.llm_provider import CallRecord, ChatDelta, GenerationSettings, LLMResponse
 from raven.providers.litellm_provider import LiteLLMProvider
+from raven.providers.streaming import STREAM_CUT
 from raven.providers.transport_failure import flag_transport_failure
 
 # ---------- the shape litellm hands back, with the error already laundered ----
@@ -718,14 +719,14 @@ async def test_without_a_watcher_the_reply_is_unchanged(contents: tuple[str, ...
 @pytest.mark.parametrize("failure", [ConnectionError("connection reset"), TimeoutError()], ids=["raised", "stalled"])
 async def test_a_stream_cut_after_text_hands_back_the_partial(failure: Exception) -> None:
     """What the reader has seen of a cut answer is the answer so far. It comes back as
-    a reply with no finish, for the loop to ask the model to go on from, instead of
+    a reply finished as cut, for the loop to ask the model to go on from, instead of
     failing a turn whose reader already holds half of it."""
     stream = _ScriptedStream("Hello ", finish=None, raises=failure)
 
     response = await _watched(stream, hand_back_partial=True)
 
     assert response.content == "Hello "
-    assert response.finish_reason == "unknown"
+    assert response.finish_reason == STREAM_CUT
     assert response.error_classification is None
     assert stream.emitted == ["Hello "]
 
@@ -738,7 +739,7 @@ async def test_a_terminal_error_delta_after_text_hands_back_the_partial() -> Non
 
     response = await _watched(stream, hand_back_partial=True)
 
-    assert (response.content, response.finish_reason) == ("Hello ", "unknown")
+    assert (response.content, response.finish_reason) == ("Hello ", STREAM_CUT)
     assert response.error_classification is None
     assert stream.emitted == ["Hello "]
 
@@ -905,7 +906,7 @@ async def test_a_cut_opening_that_was_held_back_is_shown_when_it_is_handed_back(
 
     response = await _watched(stream, hand_back_partial=True)
 
-    assert (response.content, response.finish_reason) == ("<", "unknown")
+    assert (response.content, response.finish_reason) == ("<", STREAM_CUT)
     assert stream.emitted == ["<"]
 
 

@@ -2009,6 +2009,23 @@ class TurnPathMixin:
                 # Don't persist error responses to session history — they can
                 # poison the context and cause permanent 400 loops.
                 if response.finish_reason == "error":
+                    if recovery.parts:
+                        # The continuation of a cut answer failed. The reader holds the answer so far, and a
+                        # wait or another model would only ask for more of it again, so the turn ends here as
+                        # an exhausted continuation does: what streamed, said to be partial, and no failure.
+                        note = "\n\n" + PARTIAL_STREAM_NOTE
+                        logger.warning(
+                            "empty-recovery: the continuation of a cut answer failed; ending the turn on the "
+                            "{} chars that streamed: {}",
+                            sum(len(part) for part in recovery.parts),
+                            (clean or "")[:160],
+                        )
+                        final_content = "".join(recovery.parts).strip() + note
+                        status = "interrupted"
+                        if on_token_delta is not None:
+                            await on_token_delta(note)
+                        messages = self.context.add_assistant_message(messages, final_content)
+                        break
                     # The provider's ladder is seconds long and has already run. A
                     # gateway serving error pages for a few minutes outlasts it, and
                     # ending the turn here threw away an hour of work on a 40-second

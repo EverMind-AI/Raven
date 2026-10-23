@@ -13,17 +13,18 @@ matches wins:
   text                 a reply to deliver                      COMPLETE
   silence marker       the model chose to say nothing          SILENT
   refusal              the upstream declined                   FALLBACK once, then FAIL
-  stream cut           text, and no finish on a stream         CONTINUE, then COMPLETE with the partial
+  stream cut           text from a stream that died            CONTINUE, then COMPLETE with the partial
   thinking only        reasoning and no answer                 PREFILL, STEP_DOWN, FALLBACK, FAIL
   cut, nothing in it   stopped at the ceiling, empty           CONTINUE with more room, then FAIL
   empty after a tool   nothing right after tool results        NUDGE once, then as an empty reply
   empty                nothing at all                          RETRY, FALLBACK, FAIL
 
 A refusal is never resent, and outranks the text that came with it: that text is
-the model's explanation. A cut stream is asked to go on from what it sent, up to
-``MAX_CONTINUATIONS`` times; a cut at the output ceiling is asked again with more
-room for the answer, and the effort is left alone because nothing in it names the
-reasoning as the cause.
+the model's explanation. A stream that died mid-answer (``STREAM_CUT``) is asked to
+go on from what it sent, up to ``MAX_CONTINUATIONS`` times; one that closed cleanly
+without a terminal chunk, and a body that names no finish, are whole answers. A cut
+at the output ceiling is asked again with more room for the answer, and the effort is
+left alone because nothing in it names the reasoning as the cause.
 
 PREFILL re-feeds the model its own reasoning so it continues into the answer. A
 provider that refuses a trailing assistant message (its
@@ -61,7 +62,7 @@ from enum import Enum, auto
 
 from raven.config import schema as config_schema
 from raven.contracts.llm_provider import REASONING_EFFORT_LADDER, LLMResponse
-from raven.providers.streaming import DECLINED_FINISH_REASONS
+from raven.providers.streaming import DECLINED_FINISH_REASONS, STREAM_CUT
 from raven.providers.usage import reported_cost, token_count
 from raven.spine.silence import is_silence, may_become_silence
 from raven.spine.turn import Origin
@@ -106,7 +107,7 @@ class ReplyKind(Enum):
     TEXT = auto()  # an answer to deliver
     SILENT = auto()  # a silence marker: the model chose to say nothing
     REFUSAL = auto()  # the upstream declined; any text is the model's explanation
-    NETWORK_CUT = auto()  # a stream that sent text and never finished
+    NETWORK_CUT = auto()  # a stream that died after sending text
     THINKING_ONLY = auto()  # reasoning and no answer
     TRUNCATED = auto()  # stopped at the output ceiling with nothing in it
     POST_TOOL_EMPTY = auto()  # nothing, right after the turn ran tools
@@ -308,8 +309,9 @@ def reply_kind(
     if response.finish_reason in DECLINED_FINISH_REASONS:
         return ReplyKind.REFUSAL
     if has_text:
-        # Only a stream can be cut: a whole body that lacks a finish is still a whole body.
-        return ReplyKind.NETWORK_CUT if streamed and response.finish_reason == "unknown" else ReplyKind.TEXT
+        # Only a stream that died carries ``STREAM_CUT``. A clean close without a terminal chunk, and a body
+        # that names no finish, read ``unknown`` and are whole answers.
+        return ReplyKind.NETWORK_CUT if streamed and response.finish_reason == STREAM_CUT else ReplyKind.TEXT
     if has_thinking(response) or (token_count(_usage(response).get("reasoning_tokens")) or 0) > 0:
         return ReplyKind.THINKING_ONLY
     if response.truncated:

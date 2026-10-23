@@ -854,17 +854,19 @@ and `decide` names the move from that kind and what the turn has already spent
 (`RecoveryState`), under `RecoveryLimits`. Text completes; a Silence Marker ends the turn as a
 **Silent Turn**; a refusal (a `refusal` or `content_filter` finish) outranks the text that came
 with it, which is the model's explanation, and is never resent: one switch to a fallback model,
-then the turn fails. A stream that sent text
-and no finish reason is CONTINUEd -- the model is asked to go on, and the parts are joined --
-up to `MAX_CONTINUATIONS` times, after which the partial is delivered with `PARTIAL_STREAM_NOTE`
-as an `interrupted` turn; a continuation that comes back empty leaves what streamed as the
-answer. A stream that died after the reader had seen its text -- an error, a stall or a terminal
-error delta -- is the same case: `stream_llm_call` hands the words back with no finish
-(`hand_back_partial`, which only the loop's answering call passes: a sub-agent's dropped stream
-still fails its run, and an exhausted turn's wrap-up still falls back to its static line)
-instead of failing, unless `llm_retry_after_output` asks for the whole call again. The
-continuation streams into the step the cut answer opened. A reply with only thinking is
-PREFILLed twice, re-feeding the model its own reasoning,
+then the turn fails. A stream that died after the reader had seen its text -- an error, a stall
+or a terminal error delta -- is CONTINUEd: `stream_llm_call` hands the words back as a reply
+finished `stream_cut` (`hand_back_partial`, which only the loop's answering call passes: a
+sub-agent's dropped stream still fails its run, and an exhausted turn's wrap-up still falls back
+to its static line) instead of failing, unless `llm_retry_after_output` asks for the whole call
+again. The model is asked to go on, and the parts are joined, up to `MAX_CONTINUATIONS` times,
+after which the partial is delivered with `PARTIAL_STREAM_NOTE` as an `interrupted` turn. A
+continuation that comes back empty leaves what streamed as the answer; one that comes back as an
+error, a stream cut off before any new text included, ends the turn the same way at once, with no
+wait and no fallback model. A stream that merely closed without a terminal chunk -- all a backend
+that never sends one leaves -- and a body that names no finish read `unknown` and are delivered as
+they stand. The continuation streams into the step the cut answer opened. A reply with only
+thinking is PREFILLed twice, re-feeding the model its own reasoning,
 then STEP_DOWNed: asked again at `high` and at `low`, once each a turn and never at `minimal`
 (Codex refuses it), the rungs skipped that the wire cannot tell apart
 (`LLMProvider.reasoning_wire_keys`). A reply cut at the ceiling with nothing in it is CONTINUEd

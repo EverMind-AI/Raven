@@ -52,6 +52,9 @@ if TYPE_CHECKING:
 #: that closes a stream after one only says the stream is over.
 DECLINED_FINISH_REASONS = frozenset({"refusal", "content_filter"})
 
+#: The finish of an answer handed back from a stream that died; ``unknown`` is what a clean close without one reads.
+STREAM_CUT = "stream_cut"
+
 
 def _finish_after(held: str | None, incoming: str) -> str:
     """The finish reason a stream stands on once ``incoming`` has arrived."""
@@ -144,14 +147,15 @@ class _Produced:
 
 
 async def _hand_back(produced: _Produced, cause: str) -> LLMResponse | None:
-    """The answer a stream died in, as a reply with no finish -- or None where there is none to hand back.
+    """The answer a stream died in, as a ``STREAM_CUT`` reply -- or None where there is none to hand back.
 
     What the reader has seen of it is all a failure leaves, and a caller that can
     ask the model to go on from there (``hand_back``) is better served by it than by
     the failure. Only an answer counts: thought alone, a sentinel, or words beside a
-    tool call still in the making stay the failure they were. The finish is
-    ``unknown`` because the upstream never sent one, which is also what lets the loop
-    tell this reply from a finished one.
+    tool call still in the making stay the failure they were. The upstream sent no
+    finish, and the reply says it was cut rather than ``unknown``: that is also what a
+    stream that closed cleanly without a terminal chunk reads, and such a stream is a
+    whole answer.
 
     An opening still held back, because it could have been a sentinel, is shown
     first, exactly as the end of a stream shows one: the continuation that follows
@@ -169,13 +173,13 @@ async def _hand_back(produced: _Produced, cause: str) -> LLMResponse | None:
     if produced.on_token_delta is not None and not produced.content_released:
         await produced.on_token_delta(raw)
     logger.warning(
-        "the stream died after {} chars of its answer; handing them back as a reply with no finish: {}",
+        "the stream died after {} chars of its answer; handing them back as a cut reply: {}",
         len(content),
         cause[:160],
     )
     return LLMResponse(
         content=content,
-        finish_reason="unknown",
+        finish_reason=STREAM_CUT,
         usage=produced.usage or {},
         reasoning_content=reasoning_content,
         thinking_blocks=produced.thinking_blocks,
@@ -270,7 +274,7 @@ async def stream_llm_call(
     retryability, so the caller's own ladder does not ask again either. What the
     reader has seen is then all a failure leaves, and a caller that can ask the
     model to go on from it (``hand_back_partial``) is handed those words as a reply
-    whose finish reason is ``unknown``, not the failure -- for a raise, a stall and
+    whose finish reason is ``stream_cut``, not the failure -- for a raise, a stall and
     a terminal error delta alike. Only an answer counts: thought alone, a sentinel,
     or words beside a tool call still in the making fail as before, and a caller
     that asked to ``retry_after_output`` keeps the retry of the whole call. Before the

@@ -19,6 +19,7 @@ from raven.agent.loop import AgentLoop
 from raven.agent.loop.recovery import RecoveryLimits
 from raven.providers.base import ChatDelta, ErrorClassification, LLMProvider, LLMResponse
 from raven.providers.rates import DEFAULT_MAX_OUTPUT_TOKENS, resolve_max_output_tokens
+from raven.providers.streaming import STREAM_CUT
 
 
 class _FakeProvider:
@@ -250,7 +251,7 @@ async def test_llm_call_stream_timeout_after_output_hands_back_the_words_unless_
     again unless the caller asked to retry after output. Handed back as a retryable
     response, the loop's own ladder asked again and an interactive client received
     the words of two attempts. The words the reader saw come back instead as the
-    answer so far, with no finish, for the loop to ask the model to go on from -- to a
+    answer so far, finished as cut, for the loop to ask the model to go on from -- to a
     caller that asks for them; the turn does not fail. Asked for, the response is structured and retryable, and its
     content is the account of the failure -- the words that streamed are the
     caller's to keep, not the error's text."""
@@ -271,7 +272,7 @@ async def test_llm_call_stream_timeout_after_output_hands_back_the_words_unless_
         messages=[], tools=None, model="m", on_token_delta=on_delta, hand_back_partial=True
     )
     assert seen == ["partial"]
-    assert (response.content, response.finish_reason) == ("partial", "unknown")
+    assert (response.content, response.finish_reason) == ("partial", STREAM_CUT)
     assert response.error_classification is None
 
     fake_self = SimpleNamespace(
@@ -351,7 +352,7 @@ async def test_an_error_delta_after_rendered_output_hands_back_the_words() -> No
     happened mid-stream and reports it as a terminal error delta instead of
     raising. The words already on the reader's screen are what is left of the
     call, and to a caller that asks for them they come back as the answer so far,
-    with no finish, for the loop to ask the model to go on from -- not as an error
+    finished as cut, for the loop to ask the model to go on from -- not as an error
     whose retry would draw them again from the top."""
     verdict = ErrorClassification("server", retryable=True, should_fallback=True, should_compress=True)
     provider = _FakeProvider(_half_then_error(verdict))
@@ -365,7 +366,7 @@ async def test_an_error_delta_after_rendered_output_hands_back_the_words() -> No
     )
 
     assert seen == ["the first half"]
-    assert (response.content, response.finish_reason) == ("the first half", "unknown")
+    assert (response.content, response.finish_reason) == ("the first half", STREAM_CUT)
     assert response.error_classification is None
 
 
@@ -497,7 +498,7 @@ async def test_llm_call_stream_does_not_reconnect_after_emitting_deltas() -> Non
 
     assert provider.calls == 1  # retryable, but deltas already reached the caller
     assert seen == ["partial"]
-    assert (response.content, response.finish_reason) == ("partial", "unknown")
+    assert (response.content, response.finish_reason) == ("partial", STREAM_CUT)
 
 
 class _DiesAfterWords:
@@ -547,7 +548,7 @@ async def test_llm_call_stream_takes_a_cut_answer_back_only_for_the_call_that_as
 
     answered = await call(messages=[], tools=None, model="m", on_token_delta=on_delta, hand_back_partial=True)
 
-    assert (answered.content, answered.finish_reason) == ("half an ", "unknown")
+    assert (answered.content, answered.finish_reason) == ("half an ", STREAM_CUT)
     assert answered.error_classification is None
 
 
@@ -1371,4 +1372,4 @@ async def test_llm_call_stream_retries_after_output_only_when_asked() -> None:
         messages=[], tools=None, model="m", on_token_delta=on_delta, hand_back_partial=True
     )
     assert fresh.calls == 1, "off, the call is not made again after the first mid-stream error"
-    assert (handed_back.content, handed_back.finish_reason) == ("half an ", "unknown")
+    assert (handed_back.content, handed_back.finish_reason) == ("half an ", STREAM_CUT)

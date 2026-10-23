@@ -141,8 +141,8 @@ class _FakeStreamProvider:
     ``run(req, emit)`` takes when emitting ChatDelta tokens).
 
     Every scripted stream in this module ends with the terminal chunk a real
-    provider sends: a stream that closes without one reads as cut off, and the
-    loop asks the model to continue it."""
+    provider sends. The loop continues a stream that dies after its words, as
+    the ones below that raise do, and not one that merely closes."""
 
     def __init__(self, chunks: list[ChatDelta]) -> None:
         self._chunks = chunks
