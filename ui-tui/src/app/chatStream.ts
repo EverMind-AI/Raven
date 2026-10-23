@@ -593,10 +593,9 @@ const onMessageComplete = (
     patchUiState(s => ({ ...s, usage: { ...s.usage, ...ev.payload.usage } }))
   }
   clearRunning(null)
-  const { finalMessages, finalText, silent, wasInterrupted } = turnController.recordMessageComplete({})
+  const { finalMessages, finalText, wasInterrupted } = turnController.recordMessageComplete({})
   if (!wasInterrupted && appendMessage) {
-    // A silent turn has no answer for the empty-turn fallback to stand in for.
-    const msgs: Msg[] = finalMessages.length > 0 || silent ? finalMessages : [{ role: 'assistant', text: finalText }]
+    const msgs: Msg[] = finalMessages.length > 0 ? finalMessages : [{ role: 'assistant', text: finalText }]
     msgs.forEach(appendMessage)
     appendArtifacts(state, appendMessage)
   }
