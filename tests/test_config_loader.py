@@ -1649,20 +1649,28 @@ def test_a_pi_row_stays_on_the_adapter_its_pi_can_answer(monkeypatch: pytest.Mon
     assert f"`{THIRD_PARTY_SUBAGENT_PRESETS['pi']['command']}`" in notice
 
 
-@pytest.mark.parametrize("where", ["no pi on this PATH", "on a machine"])
+@pytest.mark.parametrize("where", ["no pi on this PATH", "a pi npm did not install", "on a machine"])
 def test_a_pi_row_whose_pi_cannot_be_read_stays_where_it_works(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, where: str
 ) -> None:
     """Moving it would be a guess about a pi nobody looked at, and the build it is on
-    works with every pi. Its owner is told what the newer one needs, not told to upgrade."""
+    works with every pi. Its owner is told what the newer one needs, not told to upgrade.
+
+    A pi with no npm package behind it -- another installer's shim, or another program
+    by that name -- is one nobody looked at either."""
     from raven.config import loader
 
+    row = _pi_row(_SECOND_RETIRED[2])
     if where == "on a machine":
         _pi_on_path(monkeypatch, tmp_path, "0.81.0")
         row = _pi_row(_SECOND_RETIRED[2], machine="box")
+    elif where == "a pi npm did not install":
+        _pi_on_path(monkeypatch, tmp_path, None)
+        shim = tmp_path / "pi-prefix" / "bin" / "pi"
+        shim.write_text("#!/bin/sh\nexec somewhere-else \"$@\"\n")
+        shim.chmod(0o755)
     else:
         _pi_on_path(monkeypatch, tmp_path, None)
-        row = _pi_row(_SECOND_RETIRED[2])
     loader._migration_notices.clear()
     data = {"subagents": {"agents": [json.loads(json.dumps(row))]}}
 
