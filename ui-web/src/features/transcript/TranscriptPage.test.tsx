@@ -2831,9 +2831,9 @@ describe('transcript island, a turn the model chose not to answer', () => {
   const labels = (): Array<string | null | undefined> => quiet().map((n) => n.querySelector('.tx')?.textContent)
 
   /* What the stage does on the notice, in its order: the open step is sealed
-     and its reply taken back, the quiet row is drawn, and the turn then lands
-     flagged silent. The step is not handed to finishTurn, because the notice
-     already let go of it. */
+     and its reply taken back, then the quiet row is drawn; the turn lands
+     flagged silent after. The notice has let go of the open step by then, so
+     finishTurn is handed none -- only the list of steps the turn ran. */
   const hush = (open: ReturnType<typeof mount.step> | null): void => {
     act(() => {
       if (open) { open.seal(); open.dropSay() }
