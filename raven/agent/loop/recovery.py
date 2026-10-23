@@ -30,7 +30,9 @@ PREFILL re-feeds the model its own reasoning so it continues into the answer. A
 provider that refuses a trailing assistant message (its
 ``supports_assistant_prefill`` answers False: Anthropic with thinking on) never
 gets it, and goes straight to STEP_DOWN, so the request handed back never ends on
-an assistant message. STEP_DOWN asks the same step again at ``high`` and then at
+an assistant message; so does a reply whose reasoning is known only by its token
+count (OpenAI and Azure hide the text), which leaves nothing to re-feed.
+STEP_DOWN asks the same step again at ``high`` and then at
 ``low``, once each a turn -- never ``minimal``, which Codex refuses with a 400.
 RETRY resends the request unchanged after a jittered backoff, because nothing in a
 plain empty reply says what to change; two zero-output replies of one model, or a
@@ -44,8 +46,9 @@ left to try -- it is the answer to the question the caller asks next, which is
 whether this turn produced anything.
 
 Both functions are pure: the loop supplies the facts they cannot see (the
-provider's prefill support, the rung to step down to, the fallback models left,
-the resends the cost allows) and does the acting.
+provider's prefill support, whether the reply carries thinking to re-feed, the
+rung to step down to, the fallback models left, the resends the cost allows) and
+does the acting.
 
 This is distinct from Sentinel's NudgeInjector / NudgePolicy, which inject
 *proactive suggestions* onto an outbound reply; this module instead recovers an
@@ -335,17 +338,20 @@ def decide(
     limits: RecoveryLimits,
     *,
     prefill_supported: bool,
+    thinking_to_refeed: bool,
     next_rung: str | None,
     fallback_left: bool,
     resend_budget: int,
 ) -> RecoveryAction:
     """The next move for a reply of ``kind``, given what the turn has already spent (``state``).
 
-    The caller supplies what only it can see: whether the provider takes a prefill, the rung
-    :func:`next_step_down` offers, whether a fallback model remains, and :func:`resend_budget`'s
-    answer. A fallback model gets one try: on one an empty or thinking-only reply is not resent,
-    prefilled or stepped down again, so the next move is another model or the end. A cut answer is
-    still continued there, and a reply right after tools still nudged.
+    The caller supplies what only it can see: whether the provider takes a prefill, whether the
+    reply carries thinking a prefill can re-feed (:func:`has_thinking`: a reasoning field, thinking
+    blocks or inline tags, not a bare token count), the rung :func:`next_step_down` offers, whether
+    a fallback model remains, and :func:`resend_budget`'s answer. A fallback model gets one try: on
+    one an empty or thinking-only reply is not resent, prefilled or stepped down again, so the next
+    move is another model or the end. A cut answer is still continued there, and a reply right
+    after tools still nudged.
     """
     if kind is ReplyKind.SILENT:
         return RecoveryAction.SILENT
@@ -363,7 +369,7 @@ def decide(
     on_fallback = state.fallbacks_used > 0
     if kind is ReplyKind.THINKING_ONLY:
         if not on_fallback:
-            if prefill_supported and state.prefills < limits.thinking_prefill_max_retries:
+            if prefill_supported and thinking_to_refeed and state.prefills < limits.thinking_prefill_max_retries:
                 return RecoveryAction.PREFILL
             if next_rung is not None:
                 return RecoveryAction.STEP_DOWN

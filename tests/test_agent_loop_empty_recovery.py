@@ -249,8 +249,16 @@ _ROOM = {"fallback_left": True, "next_rung": "high"}
 
 
 def _row(case, kind, action, *, state=None, limits=_ON, **asked):
-    """One table row; the facts the loop supplies default to a prefill-taking provider with nothing left to try."""
-    asked = {"prefill_supported": True, "next_rung": None, "fallback_left": False, "resend_budget": 3, **asked}
+    """One table row; the facts the loop supplies default to a prefill-taking provider, a reply whose
+    thinking a prefill can re-feed, and nothing left to try."""
+    asked = {
+        "prefill_supported": True,
+        "thinking_to_refeed": True,
+        "next_rung": None,
+        "fallback_left": False,
+        "resend_budget": 3,
+        **asked,
+    }
     return pytest.param(kind, state or _state(), limits, asked, action, id=case)
 
 
@@ -297,6 +305,10 @@ _DECIDE_TABLE = [
         limits=RecoveryLimits(thinking_prefill_max_retries=0),
         next_rung="high",
     ),
+    # Thinking known only by its token count (the provider hid the text) gives a prefill nothing to re-feed.
+    _row("thinking-count-only-steps-down", _K.THINKING_ONLY, _A.STEP_DOWN, thinking_to_refeed=False, next_rung="high"),
+    _row("thinking-count-only-falls-back", _K.THINKING_ONLY, _A.FALLBACK, thinking_to_refeed=False, fallback_left=True),
+    _row("thinking-count-only-fails", _K.THINKING_ONLY, _A.FAIL, thinking_to_refeed=False),
     _row("thinking-falls-back", _K.THINKING_ONLY, _A.FALLBACK, state=_state(prefills=2), fallback_left=True),
     _row("thinking-fails", _K.THINKING_ONLY, _A.FAIL, state=_state(prefills=2)),
     # A fallback model is tried once: no prefill, no step-down, no resend on it.
@@ -786,6 +798,20 @@ async def test_a_thinking_only_failure_without_reasoning_text_ends_on_its_first_
 
     assert str(failed) == "The model produced only internal reasoning and no final answer, despite retries."
     assert failed.full_detail is None
+
+
+@pytest.mark.asyncio
+async def test_a_thinking_only_reply_known_only_by_its_count_is_stepped_down_at_once(workspace, monkeypatch):
+    """OpenAI and Azure hide the reasoning and report only how many tokens it took. A prefill would
+    re-feed nothing -- an empty assistant row, billed at full price -- so the effort steps down at once."""
+    hidden = _reply("", finish="length", completion=4096, reasoning_tokens=4096)
+    calls = _served(monkeypatch, [hidden, hidden, _reply("the answer")])
+
+    final, _used, _messages, outcome = await _litellm_agent(workspace)._run_agent_loop(_seed())
+
+    assert final == "the answer" and outcome.status == "completed"
+    assert _efforts(calls) == [None, "high", "low"]
+    assert [call["messages"][-1]["role"] for call in calls] == ["user"] * 3, "no request ended on a prefill"
 
 
 @pytest.mark.asyncio
