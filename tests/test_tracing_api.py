@@ -1218,3 +1218,70 @@ def test_llm_purpose_is_recorded_from_the_enclosing_caller(trace_dir):
     labelled, unlabelled = (x for x in _spans_written(trace_dir) if x["name"] == "llm.call")
     assert labelled["attributes"]["llm.purpose"] == "title"
     assert "llm.purpose" not in unlabelled["attributes"]
+
+
+# --- dispatch links: read where the work is dispatched, written on the turn ---
+
+
+def test_dispatch_link_is_the_active_span_and_none_outside_one(trace_dir):
+    assert trace.dispatch_link() is None
+    with trace.span("tool.call") as s:
+        assert trace.dispatch_link() == (s.trace_id, s.span_id)
+        with trace.suppress():
+            assert trace.dispatch_link() is None, "a suppressed tree claims no link"
+    assert trace.dispatch_link() is None
+
+
+def test_dispatch_link_is_none_with_tracing_off(monkeypatch):
+    monkeypatch.setenv("RAVEN_TRACING", "0")
+    with trace.span("tool.call"):
+        assert trace.dispatch_link() is None
+
+
+def test_dispatch_attrs_and_dispatch_link_of_round_trip():
+    attrs = trace.dispatch_attrs(("trace-a", "span-b"))
+
+    assert attrs == {"trace.dispatched_by_span_id": "span-b", "trace.dispatched_in_trace_id": "trace-a"}
+    assert trace.dispatch_link_of(attrs) == ("trace-a", "span-b")
+    assert trace.dispatch_attrs(None) == {}
+    assert trace.dispatch_link_of({}) is None
+    assert trace.dispatch_link_of({"trace.dispatched_by_span_id": "span-b"}) is None, "half a link is no link"
+    assert trace.dispatch_link_of({**attrs, "trace.dispatched_in_trace_id": ""}) is None
+
+
+def _turn_with(dispatch_link):
+    """A ``session.turn`` opened the way ``AgentLoop._process_message`` opens it."""
+    from raven.observability import semconv
+    from raven.spine import ChatType, Origin, Source, TurnRequest
+
+    @trace.instrument(
+        "session.turn", root=True, seed=semconv.turn_seed, on_open=semconv.turn_open, extract=semconv.turn
+    )
+    async def _process_message(req, session_key=None):
+        return None
+
+    src = Source(channel="web", chat_id="s1", sender_id="subagent", chat_type=ChatType.DM)
+    req = TurnRequest(origin=Origin.SUBAGENT, source=src, text="report", dispatch_link=dispatch_link)
+    return _process_message(req, session_key="web:s1")
+
+
+def test_a_turn_writes_its_requests_dispatch_link_on_both_records(trace_dir):
+    """The in-progress record carries the link too: a viewer reading a turn still
+    running must already know it is a dispatched one."""
+    asyncio.run(_turn_with(("trace-d", "span-d")))
+
+    records = [sp for sp in _spans_written(trace_dir) if sp["name"] == "session.turn"]
+    assert {sp["attributes"]["turn.in_progress"] for sp in records} == {True, False}
+    for sp in records:
+        assert sp["attributes"]["trace.dispatched_by_span_id"] == "span-d"
+        assert sp["attributes"]["trace.dispatched_in_trace_id"] == "trace-d"
+
+
+def test_a_turn_without_a_dispatch_link_carries_none(trace_dir):
+    asyncio.run(_turn_with(None))
+
+    records = [sp for sp in _spans_written(trace_dir) if sp["name"] == "session.turn"]
+    assert len(records) == 2
+    for sp in records:
+        assert "trace.dispatched_by_span_id" not in sp["attributes"]
+        assert "trace.dispatched_in_trace_id" not in sp["attributes"]

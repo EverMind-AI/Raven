@@ -32,6 +32,7 @@ from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.config.schema import ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
 from raven.contracts.memory import Memory
 from raven.contracts.tool import ToolResult
+from raven.tracing import trace
 
 #: How long a drain waits for a cancelled background run to finish. Generous
 #: against the work (a node's subprocess teardown is milliseconds) and short
@@ -11619,3 +11620,114 @@ async def test_branch_e2e_one_tool_call_classifies_runs_one_branch_and_merges(tm
     assert _block(body, "Design proposal") == MISSING_OUTPUT_TEXT
     assert body.count(MISSING_OUTPUT_TEXT) == 1
     assert note.count(MISSING_OUTPUT_TEXT) == 1
+
+
+# --- a run's reports name the span that dispatched its graph -------------------
+
+
+_ADDRESS = {"channel": "web", "chat_id": "default", "session_key": "web:sess1"}
+
+
+def _traced(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from raven.tracing import spans as _spans
+
+    monkeypatch.setenv("RAVEN_TRACING", "1")
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path / "traces"))
+    _spans._store = None
+
+
+def _echo_tool(tmp_path: Path, announce: Any) -> SubAgentDagTool:
+    tool = SubAgentDagTool(
+        workspace=tmp_path,
+        agents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")],
+        announce=announce,
+    )
+    tool.set_context("web", "default", "web:sess1")
+    return tool
+
+
+async def test_a_backgrounded_graph_s_result_links_to_the_span_that_dispatched_it(tmp_path, monkeypatch) -> None:
+    _traced(monkeypatch, tmp_path)
+    announces = _Announces()
+    async with draining_dag_runs():
+        tool = _echo_tool(tmp_path, announces)
+        with trace.span("tool.call") as dispatch:
+            await tool.execute(task_summary="one node", nodes=_SOLO)
+        ((_run_id, _summary, origin),) = await announces.wait()
+
+    assert trace.dispatch_link_of(origin) == (dispatch.trace_id, dispatch.span_id)
+
+
+async def test_a_graph_dispatched_outside_any_span_reports_with_no_link(tmp_path, monkeypatch) -> None:
+    from raven.agent.subagent.manager import SubagentManager
+
+    _traced(monkeypatch, tmp_path)
+    announces = _Announces()
+    async with draining_dag_runs():
+        tool = _echo_tool(tmp_path, announces)
+        await tool.execute(task_summary="one node", nodes=_SOLO)
+        ((run_id, summary, origin),) = await announces.wait()
+
+    assert origin == _ADDRESS, "no dispatching span, so no link keys on the origin"
+    manager = SubagentManager(provider=SimpleNamespace(get_default_model=lambda: "stub"), workspace=tmp_path)
+    submitted: list[Any] = []
+    manager.set_submit(submitted.append)
+    with trace.span("unrelated.op"):
+        await manager.announce_dag_result(run_id, summary, origin)
+    assert submitted[0].dispatch_link is None, "the span the report is sent from is not where the graph came from"
+
+
+async def test_a_released_foreground_graph_reports_with_the_link_of_the_span_that_dispatched_it(
+    tmp_path, monkeypatch
+) -> None:
+    """Released at its turn's end, after the dispatching span closed, and the reports still name it."""
+    from raven.config.raven import SubagentDagConfig
+
+    _traced(monkeypatch, tmp_path)
+    reports: list[dict] = []
+    finals: list[dict] = []
+
+    async def _announce_exception(run_id: str, node_id: str, report: str, origin: dict, **_kwargs: Any) -> None:
+        reports.append(origin)
+
+    async def _announce(run_id: str, summary: str, origin: dict) -> None:
+        finals.append(origin)
+
+    async with draining_dag_runs():
+        tool = _foreground_tool(
+            tmp_path,
+            [_falls_short("token a"), _falls_short("token b")],
+            announce=_announce,
+            announce_exception=_announce_exception,
+            verdict_config=SubagentDagConfig(adjudication_timeout_seconds=0.1),
+        )
+        with trace.span("tool.call") as dispatch:
+            await tool.execute(task_summary="fg", nodes=_PAIR, background=False)
+        (run_id,) = list(tool._runs)
+        run_task = tool._runs[run_id]
+        await _both_suspended(tool, run_id)
+
+        assert trace.dispatch_link() is None
+        await tool.release_turn("web:fg", flush=True)
+        await asyncio.wait_for(run_task, timeout=5)
+
+    expected = (dispatch.trace_id, dispatch.span_id)
+    assert reports and finals
+    assert [trace.dispatch_link_of(origin) for origin in reports + finals] == [expected] * (len(reports) + len(finals))
+
+
+async def test_a_stint_s_progress_line_links_to_the_span_it_is_said_from(tmp_path, monkeypatch) -> None:
+    _traced(monkeypatch, tmp_path)
+    announces = _Announces()
+    tool = _echo_tool(tmp_path, announces)
+    address = dict(_ADDRESS)
+
+    with trace.span("stint.round") as here:
+        await tool.say("r1", "round 1 finished", address)
+    await tool.say("r2", "round 2 finished", address)
+    with trace.span("stint.round"):
+        await tool.say("r3", "round 3 finished", {**address, **trace.dispatch_attrs(("trace-o", "span-o"))})
+
+    links = [trace.dispatch_link_of(origin) for _run, _text, origin in announces.calls]
+    assert links == [(here.trace_id, here.span_id), None, ("trace-o", "span-o")]
+    assert address == _ADDRESS, "the stint's own address is not written into"

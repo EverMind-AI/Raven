@@ -71,6 +71,9 @@ Read-only: `s.trace_id`, `s.span_id`, `s.name`.
 | `trace.enabled()` | whether recording is on (config/env) |
 | `trace.current()` | the active `TraceCtx` or `None` |
 | `trace.use_context(ctx)` | context manager: re-enter a context captured with `current()`, for a span opened outside the turn that scheduled the work (a queue drained by a long-lived worker) |
+| `trace.dispatch_link()` | `(trace_id, span_id)` of the active span, or `None` (tracing off, or outside any span): read where work is dispatched, carried on the request of the turn that later reports on it |
+| `trace.dispatch_attrs(link)` | the link as the two root-span attributes `trace.dispatched_by_span_id` / `trace.dispatched_in_trace_id`; `{}` for `None` |
+| `trace.dispatch_link_of(attrs)` | the link back out of a mapping carrying those two keys, or `None` unless both are there |
 
 ### Hard guarantees (why an adopter is safe)
 
