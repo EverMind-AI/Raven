@@ -68,11 +68,13 @@ All notable changes to Raven are documented here.
   and the capability record an acp row is measured with once it answers --
   and that call then refuses with `cancelled: true` in its error data. A
   Cancel that finds nothing left to stop is not said as a cancel: the form
-  says it is too late to cancel and waits for the connect's own answer. While the
+  says it is too late to cancel and waits for the connect's own answer, and
+  one whose stop gives no answer is said as not confirmed, since only the
+  stop's answer says whether anything was written. While the
   proof runs the row reports `test_running`, a Test on it is refused as a
   second test is, and a connect pressed during a Test is refused the same
   way, before anything is spent. A wait with no answer ends after five
-  minutes -- the server's own worst case -- with the run stopped and the
+  minutes -- the server's own worst case -- with the run asked to stop and the
   Agents page named as where to look, instead of one line that never changed
   (seen once on 2026-10-20, after the socket dropped without saying so). A
   machine nobody has reached yet reads *Not connected; the link opens when
