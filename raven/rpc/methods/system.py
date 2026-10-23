@@ -243,6 +243,10 @@ async def system_version(params: dict, *, send_frame: Any = None) -> dict:
 #: new one), so a metadata read failing here is an upgrade in flight, not a
 #: broken install -- naming it as one invites a second upgrade into the gap.
 _IN_PROGRESS_DETAIL = "An upgrade is already running; wait for it to finish."
+#: Passed to _refuse when the refusal itself proved no command can work: sent
+#: over the wire as an explicit null so the card hides the row per refusal,
+#: rather than the client re-encoding which reasons mean that.
+_NO_COMMAND = object()
 
 
 async def system_upgrade(params: dict) -> dict:
@@ -265,9 +269,15 @@ async def system_upgrade(params: dict) -> dict:
     # The dispatcher only lifts `detail` into error.data when no data dict is
     # given, so every refusal carries its own reason AND its human sentence --
     # the GUI shows that sentence verbatim next to the fallback command.
-    def _refuse(reason: str, detail: str, command: str | None = None) -> ConfigValidationError:
+    def _refuse(reason: str, detail: str, command: str | object | None = None) -> ConfigValidationError:
         data: dict[str, object] = {"reason": reason, "detail": detail}
-        if command is not None:
+        if command is _NO_COMMAND:
+            # Explicitly none, sent as null: this refusal proved no command
+            # works, and the card drops the row rather than fall back to its
+            # default `raven upgrade` -- a wrong suggestion is worse than none,
+            # and so is a dangling instruction to run one.
+            data["command"] = None
+        elif command is not None:
             # What the card copies instead of its default `raven upgrade`: the
             # recovery differs by reason, and a wrong suggestion is worse than
             # none.
@@ -294,7 +304,7 @@ async def system_upgrade(params: dict) -> dict:
         # Malformed direct_url.json reads the same as it does from the release
         # lookup below: the install is not upgradable from the page, and the
         # message says which file is at fault.
-        raise _refuse("not_upgradable", str(exc)) from exc
+        raise _refuse("not_upgradable", str(exc), command=_NO_COMMAND) from exc
     except Exception:
         # Anything else the probe can hit -- an undecodable metadata file, a
         # filesystem read racing the in-flight install -- must not escape as an

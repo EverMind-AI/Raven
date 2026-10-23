@@ -89,7 +89,7 @@ export function open(): UpgradeShade {
         ...get()!,
         text,
         failure: {
-          sub: detail ? `${detail}\n${t('gui.upg.manual')}` : t('gui.upg.manual'),
+          sub: command === null ? (detail ?? '') : detail ? `${detail}\n${t('gui.upg.manual')}` : t('gui.upg.manual'),
           copy: t('gui.dtl.copy'),
           close: t('gui.upg.close'),
           command

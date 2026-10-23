@@ -176,7 +176,7 @@ describe('an upgrade the server refused', () => {
           gateway: () => ({
             call: () =>
               Promise.reject({
-                data: { reason: 'not_upgradable', detail: 'Malformed Raven installation metadata' }
+                data: { reason: 'not_upgradable', detail: 'Malformed Raven installation metadata', command: null }
               })
           })
         }
@@ -189,6 +189,34 @@ describe('an upgrade the server refused', () => {
        fall back to `raven upgrade`, which this very refusal proved fails. */
     expect(calls.length).toBe(1)
     expect(calls[0]?.[2]).toBe(null)
+  })
+
+  it('keeps the default command for a refusal that only names why it refused', async () => {
+    /* The plan path's not_upgradable -- the raven executable is missing --
+       leaves command absent on purpose: the CLI upgrade does not need it, and
+       the card's default is the right suggestion. The null the probe sends is
+       per refusal, not per reason. */
+    const calls: unknown[][] = []
+    const shade = { say: () => {}, fail: (...args: unknown[]) => calls.push(args), close: vi.fn() }
+    const mod = (await loadPart(() => import('./updates'), {
+      fakes: {
+        'src/state/upgradeShade': { open: () => shade },
+        'src/state/confirm': { ask: () => {} },
+        'src/rpc/gateway': {
+          gateway: () => ({
+            call: () =>
+              Promise.reject({
+                data: { reason: 'not_upgradable', detail: 'Could not find the raven executable' }
+              })
+          })
+        }
+      }
+    })) as Updates
+
+    await mod.runUpgrade()
+
+    expect(calls.length).toBe(1)
+    expect(calls[0]?.[2]).toBeUndefined()
   })
 
   it('answers busy work it cannot see with a notice to wait, not the terminal command', async () => {

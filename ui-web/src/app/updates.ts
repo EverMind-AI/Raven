@@ -175,11 +175,6 @@ const REFUSALS: Record<string, string> = {
   editable: 'gui.upg.why.editable'
 }
 
-/* Reasons whose refusal already proved the default command cannot work: the
-   metadata the upgrade itself reads is what is broken. The card shows no
-   command rather than one that is known to fail. */
-const NO_COMMAND: ReadonlySet<string> = new Set(['not_upgradable'])
-
 export function refusalText(err: { data?: { reason?: string; detail?: string }; message?: string }): string {
   const key = err.data && err.data.reason ? REFUSALS[err.data.reason] : undefined
   if (key) return t(key)
@@ -215,9 +210,9 @@ export async function runUpgrade(): Promise<void> {
       return
     }
     upMarkClear()
-    const reason = err.data?.reason
-    const command = reason !== undefined && NO_COMMAND.has(reason) ? null : err.data?.command
-    shade.fail(t('gui.upg.failed'), refusalText(err), command)
+    /* The server says per refusal: a command to copy, an explicit null when it
+       proved none can work, or nothing when the default is still right. */
+    shade.fail(t('gui.upg.failed'), refusalText(err), err.data?.command)
     return
   }
   upMark(upLatest)

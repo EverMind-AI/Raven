@@ -62,12 +62,23 @@ describe('the upgrade shade writer', () => {
     expect(document.querySelector('.cmd code')!.innerHTML).toBe('git pull<br>./install.sh')
     ;(document.querySelector('.cmd button') as HTMLButtonElement).click()
     expect(writeText).toHaveBeenCalledWith('git pull\n./install.sh')
-    /* A refusal that proved no command can work: the row is gone rather than
-       offering the default the refusal just ruled out. */
-    shade.fail('Failed', 'malformed install metadata', null)
-    expect(document.querySelector('.cmd')).toBeNull()
+
     ;(document.querySelector('.foot button') as HTMLButtonElement).click()
     expect(document.querySelector('.upshade')).toBeNull()
+  })
+
+  it('drops the command row and the manual label when no command can work', () => {
+    wire()
+    const shade = open()
+    shade.fail('Failed', 'malformed install metadata', null)
+
+    /* The refusal proved the default cannot work, so the card offers nothing:
+       no command row, and no 'run this in a terminal instead' pointing at a
+       command that is not shown. */
+    const card = document.querySelector('.upcard')!.innerHTML
+    expect(card).toContain('malformed install metadata')
+    expect(document.querySelector('.cmd')).toBeNull()
+    expect(card).not.toContain('gui.upg.manual')
   })
 
   it('closes only the node represented by its handle', () => {
