@@ -44,6 +44,7 @@ from raven.contracts.subagent_backend import SubagentActionAbortedError
 from raven.providers.base import LLMResponse, ToolCallRequest
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.sandbox import ExecResult, SandboxExecutor
+from raven.spine.silence import SILENCE_INSTRUCTION
 from raven.tracing import trace
 from tests._everos_presence import everos_plugin_absent
 
@@ -5081,6 +5082,29 @@ async def test_an_unprompted_report_wakes_the_conversation_a_dag_announce_taught
     assert req.source.channel == "web"
     assert "seed runs finished" in req.text
     assert "Raven-Oncall" in req.text and "ar_ops" in req.text
+
+
+async def test_an_unprompted_report_teaches_the_silence_marker() -> None:
+    """A routine report needs no answer, and the model can only say so with the marker.
+
+    Telling it that "no reply to the user" is needed, without the word for it, got a
+    sentence about nothing delivered to the person. The lesson is the system's own
+    voice, so it sits outside the fence that holds the instance's words.
+    """
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list = []
+    mgr.set_submit(submitted.append)
+    mgr.remember_origin({"channel": "web", "chat_id": "d", "session_key": "web:s1"})
+
+    await mgr.announce_unprompted_turn("web:s1", "Raven-Oncall", "ar_ops", "still running, nothing new")
+
+    assert len(submitted) == 1
+    text = submitted[0].text
+    assert text.count(SILENCE_INSTRUCTION) == 1
+    assert text.endswith("\n\n" + SILENCE_INSTRUCTION)
+    assert text.rindex(SILENCE_INSTRUCTION) > text.rindex("END UNTRUSTED")
+    assert "no reply to the user are needed" not in text
+    assert "If it is routine progress only, no action is needed." in text
 
 
 async def test_a_direct_chat_instance_teaches_the_route_back(tmp_path, monkeypatch) -> None:
