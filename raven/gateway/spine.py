@@ -167,8 +167,10 @@ def _make_gateway_sink(
     agent_loop: AgentLoop,
     sources: dict[str, Source],
     cut_by_reload: Callable[[], bool] | None = None,
+    channels: Mapping[str, Channel] | None = None,
+    ending: set[asyncio.Task[None]] | None = None,
 ) -> Callable[[TurnEvent], Awaitable[None]]:
-    """Adapt the delivery hub into the gateway's EventSink, with the two
+    """Adapt the delivery hub into the gateway's EventSink, with the
     lifecycle side effects the plain hub sink does not carry: on TurnEnded or
     TurnFailed fire ``on_turn_complete`` (the WakeScheduler's parked-wake
     signal), and on a non-cancelled failure deliver a user-visible error reply
@@ -177,7 +179,11 @@ def _make_gateway_sink(
     one is waiting on it, and its job records the failure. A cancelled turn
     (/stop) fires the wake and sends no reply -- unless ``cut_by_reload`` says a
     generation swap did the cancelling, in which case the channel is told the
-    reply was cut.
+    reply was cut. A turn that ended with no reply tells its channel so
+    (``end_turn``), since only a send would otherwise stop what the channel
+    started for it. That runs as a task held in ``ending``, not inline: the
+    scheduler resolves a turn only after this sink returns, and stopping an
+    indicator can be a network call.
 
     notify fires on every origin (cron / sentinel / heartbeat / channel) rather
     than on user turns only -- benign and slightly more correct:
@@ -185,7 +191,13 @@ def _make_gateway_sink(
     just un-park any turn, and a wake parked during a proactive turn is never
     stranded."""
 
+    ending = set() if ending is None else ending
     cron_turns: set[str] = set()
+
+    def end_turn_in_background(source: Source) -> None:
+        task = asyncio.create_task(_end_turn((channels or {}).get(source.channel), source.chat_id))
+        ending.add(task)
+        task.add_done_callback(ending.discard)
 
     async def sink(event: TurnEvent) -> None:
         if isinstance(event, TurnStarted):
@@ -198,9 +210,12 @@ def _make_gateway_sink(
             cron_turns.discard(event.turn_id)
             if isinstance(event, TurnFailed) and source is not None:
                 if not event.cancelled:
-                    # A recurring run that hits this would put the same line in
-                    # the chat every time it fires.
-                    if not (was_cron and event.no_output):
+                    if was_cron and event.no_output:
+                        # A recurring run that hits this would put the same line
+                        # in the chat every time it fires. Nothing is sent, so
+                        # the turn ends the way a silent one does.
+                        end_turn_in_background(source)
+                    else:
                         await hub.dispatch(
                             Text(content=_failed_turn_reply(event.error, reported=event.reported), source=source)
                         )
@@ -208,11 +223,38 @@ def _make_gateway_sink(
                     # /stop is the user's own act and stays silent; a reload is
                     # not, so the reply it cut is owed at least a sentence.
                     await hub.dispatch(Text(content=_TURN_CUT_BY_RELOAD_REPLY, source=source))
+            elif isinstance(event, TurnEnded) and not event.explicit_reply and source is not None:
+                end_turn_in_background(source)
             agent_loop.notify_turn_complete()
             return
         await hub.dispatch(event)
 
     return sink
+
+
+async def _end_turn(channel: Channel | None, chat_id: str) -> None:
+    """Best-effort: the turn is already over, so a channel that cannot be told
+    so costs a log line, not the turn."""
+    end = getattr(channel, "end_turn", None)
+    if end is None:
+        return
+    try:
+        await end(chat_id)
+    except Exception as exc:
+        logger.warning("gateway: {} could not end a turn with no reply: {}", getattr(channel, "name", "?"), exc)
+
+
+async def _settle(tasks: set[asyncio.Task[None]], deadline: float) -> None:
+    """Let the turn ends still in flight run until ``deadline`` (loop time), then
+    cut them: a channel whose transport is gone costs its indicator, not the swap."""
+    if not tasks:
+        return
+    _, pending = await asyncio.wait(set(tasks), timeout=max(0.0, deadline - asyncio.get_running_loop().time()))
+    for task in pending:
+        task.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
+    if pending:
+        logger.warning("gateway: {} turn end(s) still running when the grace expired; cut", len(pending))
 
 
 #: Seconds ``teardown`` gives the outlets to deliver what is already queued.
@@ -252,30 +294,35 @@ def build_gateway(
         hub.register(ChannelOutletAdapter(channel))
     readback_texts: dict[str, str] = {}
     sources: dict[str, Source] = {}
+    ending: set[asyncio.Task[None]] = set()
     # user>1 is safe now that per-turn tool state (message routing, context) is
     # turn-local: concurrent user turns no longer clobber each other's reply
     # target. system>1 lets a cron and a heartbeat/sentinel turn overlap.
     scheduler = Scheduler(
         GatewayTurnRunner(agent_loop, readback_texts, sources),
         OriginPools(user=user_pool, system=system_pool),
-        _make_gateway_sink(hub, agent_loop, sources, cut_by_reload),
+        _make_gateway_sink(hub, agent_loop, sources, cut_by_reload, channels, ending),
     )
 
     async def teardown() -> None:
         await scheduler.shutdown(grace=shutdown_grace)
+        grace = max(shutdown_grace, _DELIVERY_GRACE)
+        deadline = asyncio.get_running_loop().time() + grace
         # shutdown resolves the turns it cut, and the sink enqueues the sentence
         # each cut turn is owed while that happens. ``aclose`` cancels the outlet
         # workers mid-flight, so without a barrier here the sentence is queued
         # and then dropped -- a reload would be silent for exactly the user whose
         # reply it interrupted. Bounded: a channel whose transport is already
-        # gone costs the sentence, not the swap.
+        # gone costs the sentence, not the swap. A turn end still in flight shares
+        # that one grace rather than adding its own.
         try:
             await asyncio.wait_for(
                 asyncio.gather(*(hub.wait_idle(name) for name in channels)),
-                timeout=max(shutdown_grace, _DELIVERY_GRACE),
+                timeout=grace,
             )
         except TimeoutError:
             logger.warning("gateway: delivery still queued when the grace expired; closing anyway")
+        await _settle(ending, deadline)
         await hub.aclose()
 
     return scheduler, hub, readback_texts, sources, teardown
