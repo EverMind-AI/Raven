@@ -98,6 +98,7 @@ from raven.agent.loop.recovery import (
     THINKING_ONLY_FAILURE,
     THINKING_ONLY_UNRETRIED_FAILURE,
     TRUNCATED_FAILURE,
+    TRUNCATED_UNCONTINUED_FAILURE,
     ContinuationGate,
     DraftGate,
     EmptyAttempt,
@@ -198,18 +199,21 @@ def _recovery_failure_text(kind: ReplyKind, response: LLMResponse, visible: str 
 
     Scrubbed here, ahead of the bounded copy the lane carries, because two of
     the four texts quote the model: its reasoning, or its own refusal.
-    ``spent`` is what recovery tried this turn, which the words must not
-    overstate.
+    ``spent`` is what recovery tried, which the words must not overstate: they
+    count only what was asked again about this reply -- its step's asks, of its
+    kind -- and not what the turn tried for other replies.
     """
+    asked = spent.step_asks[kind]
     if kind is ReplyKind.THINKING_ONLY:
-        head = THINKING_ONLY_FAILURE if spent.asked_again else THINKING_ONLY_UNRETRIED_FAILURE
+        head = THINKING_ONLY_FAILURE if asked else THINKING_ONLY_UNRETRIED_FAILURE
         excerpt = reasoning_excerpt(response)
         # Hermes appends the excerpt only when the reasoning left text; without
         # it the sentence would end on a colon that leads nowhere.
         text = f"{head}\n\n{excerpt}" if excerpt else head.partition(" Its last reasoning")[0]
     elif kind is ReplyKind.TRUNCATED:
-        tried = spent.ceiling_continuations
-        text = TRUNCATED_FAILURE.format(n=tried, s="" if tried == 1 else "s")
+        text = (
+            TRUNCATED_FAILURE.format(n=asked, s="" if asked == 1 else "s") if asked else TRUNCATED_UNCONTINUED_FAILURE
+        )
     elif kind is ReplyKind.REFUSAL:
         explanation = visible or reasoning_excerpt(response)
         text = REFUSAL_FAILURE + (
@@ -359,6 +363,18 @@ _NO_CONTENT_UNRECOVERED = "The model returned no content, and this turn's empty-
 # re-asks of the same step, and the failure that follows them.
 _GIVEN_UP_ONCE_ANSWERED = frozenset(
     {RecoveryAction.RETRY, RecoveryAction.STEP_DOWN, RecoveryAction.FALLBACK, RecoveryAction.FAIL}
+)
+
+# The moves that ask the model again about the reply in hand, counted per step and kind for the failure texts.
+_ASKS_AGAIN = frozenset(
+    {
+        RecoveryAction.PREFILL,
+        RecoveryAction.NUDGE,
+        RecoveryAction.RETRY,
+        RecoveryAction.STEP_DOWN,
+        RecoveryAction.CONTINUE,
+        RecoveryAction.FALLBACK,
+    }
 )
 
 
@@ -1603,7 +1619,7 @@ class TurnPathMixin:
                 # continuation of its own.
                 recovery.empty_streak.clear()
                 recovery.parts.clear()
-                recovery.ceiling_continuations = 0
+                recovery.step_asks.clear()
                 if hook_ctx is not None:
                     hook_ctx.messages = messages
                     hook_ctx.response = response
@@ -2182,6 +2198,8 @@ class TurnPathMixin:
                         action.name,
                     )
                     action = RecoveryAction.COMPLETE
+                if action in _ASKS_AGAIN:
+                    recovery.step_asks[kind] += 1
                 if action is RecoveryAction.PREFILL:
                     recovery.prefills += 1
                     logger.warning(
@@ -2305,7 +2323,6 @@ class TurnPathMixin:
                     # the one the first cut call carried; the provider clamps it
                     # to what the model accepts (``send_max_tokens``).
                     recovery.continuations += 1
-                    recovery.ceiling_continuations += 1
                     if recovery.max_tokens_base is None:
                         recovery.max_tokens_base = response.max_tokens
                     if recovery.max_tokens_base:

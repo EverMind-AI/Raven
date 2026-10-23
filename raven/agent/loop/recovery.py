@@ -63,6 +63,7 @@ from __future__ import annotations
 import random
 import re
 import unicodedata
+from collections import Counter
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -108,6 +109,11 @@ THINKING_ONLY_UNRETRIED_FAILURE = (
     "The model produced only internal reasoning and no final answer. Its last reasoning, which may contain the answer:"
 )
 TRUNCATED_FAILURE = "Processing stopped: the response remained truncated after {n} continuation attempt{s}. Try again."
+# For a cut that got no continuation of its own: earlier steps had spent the turn's.
+TRUNCATED_UNCONTINUED_FAILURE = (
+    "Processing stopped: the response was cut off at the output length limit, "
+    "and this turn has no continuation attempts left. Try again."
+)
 REFUSAL_FAILURE = "The model declined to respond to this request (a safety refusal, not a Raven failure)."
 REFUSAL_EXPLANATION = " The model's explanation: {text}"
 REFUSAL_NO_EXPLANATION = " The model returned no explanation."
@@ -260,16 +266,9 @@ class RecoveryState:
     refusal_fell_back: bool = False
     empty_streak: list[EmptyAttempt] = field(default_factory=list)
     parts: list[str] = field(default_factory=list)  # what a network-cut answer has streamed so far
-    # The output-ceiling continuations the current step has had: what a TRUNCATED failure reports, where
-    # ``continuations`` is the turn's budget for every kind.
-    ceiling_continuations: int = 0
-
-    @property
-    def asked_again(self) -> bool:
-        """Whether recovery has asked the model anything again this turn, by any move."""
-        return bool(
-            self.prefills or self.nudges or self.resends or self.continuations or self.fallbacks_used or self.rungs_used
-        )
+    # The times the model was asked again about each kind of reply in the current step (since the last
+    # tool call). The budgets above are the turn's; a failure reports what was tried for its own reply.
+    step_asks: Counter[ReplyKind] = field(default_factory=Counter)
 
 
 def _usage(response: LLMResponse) -> dict:

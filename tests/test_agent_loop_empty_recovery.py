@@ -43,6 +43,7 @@ from raven.agent.loop.recovery import (
     THINKING_ONLY_FAILURE,
     THINKING_ONLY_UNRETRIED_FAILURE,
     TRUNCATED_FAILURE,
+    TRUNCATED_UNCONTINUED_FAILURE,
     EmptyAttempt,
     RecoveryAction,
     RecoveryLimits,
@@ -547,6 +548,10 @@ def test_the_wording_is_copied_verbatim():
         TRUNCATED_FAILURE.format(n=MAX_CONTINUATIONS, s="s")
         == "Processing stopped: the response remained truncated after 3 continuation attempts. Try again."
     )
+    assert (
+        TRUNCATED_UNCONTINUED_FAILURE
+        == "Processing stopped: the response was cut off at the output length limit, and this turn has no continuation attempts left. Try again."
+    )
     assert REFUSAL_FAILURE == "The model declined to respond to this request (a safety refusal, not a Raven failure)."
     assert REFUSAL_EXPLANATION == " The model's explanation: {text}"
     assert REFUSAL_EXPLANATION.format(text="I can't.") == " The model's explanation: I can't."
@@ -1002,6 +1007,22 @@ async def test_a_truncation_failure_counts_the_continuations_its_answer_had(
     failed = await _fail(_litellm_agent(workspace), "write the report")
 
     assert str(failed) == f"Processing stopped: the response remained truncated after {attempts}. Try again."
+
+
+@pytest.mark.asyncio
+async def test_a_cut_after_the_turn_spent_its_continuations_says_none_were_left(workspace, monkeypatch):
+    """An earlier step spent every continuation the turn had, so the cut after the tool call got none:
+    the failure says so, rather than that the response stayed cut after zero attempts."""
+    cut = _reply("", finish="length")
+    calls = _served(monkeypatch, [cut, cut, cut, _tool_reply(), cut])
+
+    failed = await _fail(_litellm_agent(workspace), "write the report")
+
+    assert len(calls) == 5
+    assert str(failed) == (
+        "Processing stopped: the response was cut off at the output length limit, "
+        "and this turn has no continuation attempts left. Try again."
+    )
 
 
 @pytest.mark.asyncio
@@ -1756,7 +1777,8 @@ _BILLED = {"prompt_tokens": 5000, "completion_tokens": 40}
                 ChatDelta(content=None, reasoning_content="hmm, let me think"),
                 ChatDelta(content=None, finish_reason="stop", usage=_BILLED),
             ],
-            THINKING_ONLY_FAILURE + "\n\nhmm, let me think",
+            # The switch answered an error, so nothing was asked again about the thinking-only reply.
+            THINKING_ONLY_UNRETRIED_FAILURE + "\n\nhmm, let me think",
             id="thinking_only",
         ),
     ],
@@ -2998,6 +3020,25 @@ async def test_a_thinking_only_failure_with_nothing_to_ask_again_claims_no_retri
         "The model produced only internal reasoning and no final answer. "
         "Its last reasoning, which may contain the answer:\n\nlet me think"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_between", [False, True], ids=["same_step", "after_a_tool_call"])
+async def test_a_resend_of_another_empty_reply_is_not_a_retry_of_the_thinking_only_one(
+    workspace, monkeypatch, tool_between
+):
+    """The retries a thinking-only failure claims are the ones made for it. An empty reply earlier in
+    the turn was resent, and the thinking-only reply that ends the turn had nothing to ask again with
+    -- its reasoning is a bare count and the effort has no rung below it -- so none was made for it."""
+    hidden = _reply("", completion=4096, reasoning_tokens=4096)
+    calls = _served(monkeypatch, [_reply(""), *([_tool_reply()] if tool_between else []), hidden])
+    agent = _litellm_agent(workspace)
+    agent.set_session_policy("s1", reasoning_effort="low")
+
+    failed = await _fail(agent)
+
+    assert len(calls) == (3 if tool_between else 2)
+    assert str(failed) == "The model produced only internal reasoning and no final answer."
 
 
 class _AlwaysCutProvider(LLMProvider):
