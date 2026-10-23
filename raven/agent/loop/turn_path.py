@@ -1180,6 +1180,20 @@ class TurnPathMixin:
             )
             return True
 
+        def _switch_to_next_model() -> str | None:
+            """Put the rest of the turn on its next fallback model, and return the model it leaves.
+
+            The new model is asked the step as the turn first asked it: the prefill rows at the
+            end of ``messages`` are the thought of the model being left, and a request ending on
+            one is what a prefill-refusing model rejects. Whatever the reason for the switch --
+            an empty reply's FALLBACK or a streamed error -- the same holds.
+            """
+            nonlocal active_model
+            previous, active_model = active_model, fallbacks_left.pop(0)
+            recovery.fallbacks_used += 1
+            _drop_trailing_prefills(messages)
+            return previous
+
         while iteration < iteration_cap:
             # Checked here and not mid-generation: cancelling a call in flight
             # discards a finished generation and leaves no answer, and a deadline
@@ -2043,8 +2057,7 @@ class TurnPathMixin:
                     # ``[model, *fallbacks]`` inside the provider's own retry layer,
                     # and has already been through it by the time it comes back an error.
                     if streamed_call and fallbacks_left and verdict is not None and verdict.should_fallback:
-                        previous, active_model = active_model, fallbacks_left.pop(0)
-                        recovery.fallbacks_used += 1
+                        previous = _switch_to_next_model()
                         logger.warning(
                             "LLM error [{}] on {}; trying fallback model {}: {}",
                             verdict.category,
@@ -2217,19 +2230,14 @@ class TurnPathMixin:
                     await asyncio.sleep(delay)
                     continue
                 if action is RecoveryAction.FALLBACK:
-                    # The next model gets the step as the turn first asked it: the
-                    # prefills that belong to the model being left come off, so the
-                    # request does not end on an assistant message. It is the same
-                    # step asked again, so no iteration is billed.
-                    previous, active_model = active_model, fallbacks_left.pop(0)
-                    recovery.fallbacks_used += 1
+                    # The same step asked again, of the next model, so no iteration is billed.
+                    previous = _switch_to_next_model()
                     # A refusal is switched on once: the next model's own refusal is
                     # the upstream's verdict again, and ends the turn.
                     recovery.refusal_fell_back = recovery.refusal_fell_back or kind is ReplyKind.REFUSAL
                     logger.warning(
                         "empty-recovery: {} reply on {}; trying fallback model {}", kind.name, previous, active_model
                     )
-                    _drop_trailing_prefills(messages)
                     iteration -= 1
                     continue
                 if action is RecoveryAction.CONTINUE and kind is ReplyKind.NETWORK_CUT:

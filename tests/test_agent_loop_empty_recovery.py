@@ -1534,6 +1534,60 @@ async def test_an_upstream_error_on_a_stream_waits_when_no_fallback_is_left(work
     assert [detail for _kind, detail in sink.notices] == ["network"], "the ladder's one wait, announced"
 
 
+class _PrefilledCallErrors(LLMProvider):
+    """Thinks without answering, then fails the prefilled call with an error a fallback model can answer.
+
+    ``stub`` takes a prefill and ``fb`` refuses one, as an Anthropic model with thinking on does.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(api_key="test")
+        self.requests: list[tuple[str | None, list[dict]]] = []
+
+    def supports_assistant_prefill(self, model: str | None = None) -> bool:
+        return model != "fb"
+
+    async def chat(self, *args, **kwargs):  # pragma: no cover - the streaming path is under test
+        raise AssertionError("the streaming path is the one under test")
+
+    async def chat_stream(self, messages, tools=None, model=None, **_kw):
+        self.requests.append((model, [dict(m) for m in messages]))
+        if len(self.requests) == 1:
+            yield ChatDelta(content=None, reasoning_content="let me think about this at length")
+            yield ChatDelta(content=None, finish_reason="stop", usage={"prompt_tokens": 100, "completion_tokens": 50})
+            return
+        if model == "stub":
+            yield ChatDelta(
+                content="Error calling LLM (server@stub): overloaded",
+                finish_reason="error",
+                error_classification=ErrorClassification("server", retryable=True, should_fallback=True),
+            )
+            return
+        yield ChatDelta(content="fb's answer")
+        yield ChatDelta(content=None, finish_reason="stop")
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+@pytest.mark.asyncio
+async def test_a_switch_after_a_streamed_error_asks_the_fallback_the_original_question(workspace, monkeypatch):
+    """The prefill is the thought of the model being left. A streamed error switches models in the loop
+    as an empty reply's fallback does, and the model it moves to is asked what the turn first asked:
+    a request ending on the prefill is one a prefill-refusing model rejects."""
+    provider = _PrefilledCallErrors()
+    _recorded_sleeps(monkeypatch)
+
+    final, _used, _messages, outcome = await _make_agent(workspace, provider)._run_agent_loop(
+        _seed(), fallback_models=["fb"], on_token_delta=_Sink().delta
+    )
+
+    assert final == "fb's answer" and outcome.status == "completed"
+    asked = [(model, messages[-1]["role"]) for model, messages in provider.requests]
+    assert asked == [("stub", "user"), ("stub", "assistant"), ("fb", "user")]
+    assert provider.requests[2][1] == provider.requests[0][1]
+
+
 @pytest.mark.asyncio
 async def test_an_upstream_error_on_a_plain_call_is_left_to_the_providers_chain():
     """A non-streamed call already walks ``[model, *fallbacks]`` inside the provider, so the loop
