@@ -32,8 +32,10 @@ provider that refuses a trailing assistant message (its
 gets it, and goes straight to STEP_DOWN, so the request handed back never ends on
 an assistant message; so does a reply whose reasoning is known only by its token
 count (OpenAI and Azure hide the text), which leaves nothing to re-feed.
-STEP_DOWN asks the same step again at ``high`` and then at
-``low``, once each a turn -- never ``minimal``, which Codex refuses with a 400.
+STEP_DOWN asks the same step again at ``high`` and then at ``low``, whichever lie
+below the turn's effort (an unstated, ``max`` or ``xhigh`` effort gets both, ``high``
+or ``medium`` only ``low``, ``low`` or ``minimal`` neither), once each a turn --
+never ``minimal``, which Codex refuses with a 400.
 RETRY resends the request unchanged after a jittered backoff, because nothing in a
 plain empty reply says what to change; two zero-output replies of one model, or a
 reply whose reported cost is dear, cut the resends short. A fallback model gets
