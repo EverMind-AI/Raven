@@ -34,13 +34,14 @@ from typing import Any, Literal
 
 from loguru import logger
 
-from raven.acp_client import protocol, remote
+from raven.acp_client import npx_fetch, protocol, remote
 from raven.acp_client.client import AcpClient
 from raven.acp_client.permissions import auto_approver
 from raven.acp_client.protocol import (
     MENU_UNREAD_META,
     SESSION_MCP_CAPABILITY,
     STEER_CAPABILITY,
+    AcpConnectionError,
     AcpError,
     AcpRemoteError,
     reason_of,
@@ -855,8 +856,9 @@ def npx_fetch_failure(command: str, exc: BaseException, stderr: str | None = Non
     out of time while npx still had it, ``None`` for everything else.
 
     Needed because both look like something else from above. A fetch that
-    fails is a process that exits before the handshake, so it arrives as
-    "connection ended (exit 1)" with npm's stack trace under it; and npm spends
+    fails is an npx that exits before any handshake -- the fetch run ahead of
+    the launch (`npx_fetch`), or the launch itself when no fetch could run --
+    so it arrives as an exit with npm's stack trace under it; and npm spends
     about 70s retrying an unreachable registry before it says so (measured),
     which is past a budget that did not allow for it -- so what the reader saw
     was "it did not answer within 60s", about an agent that never started.
@@ -868,8 +870,15 @@ def npx_fetch_failure(command: str, exc: BaseException, stderr: str | None = Non
     (``AcpConnectionError.stderr``, or ``stderr`` for a caller that holds the
     client) because npm prints that line first. The timeout is the one reading
     without such a line, and it is kept to an ``initialize`` that ran out on an
-    ``npx`` command -- an agent that has not finished starting, where a first
-    download is the likeliest cause and the one the reader can act on.
+    ``npx`` command whose package was not fetched ahead of the handshake
+    (`npx_fetch.fetchable_package`) -- an agent that has not finished starting,
+    where a first download is the likeliest cause and the one the reader can act
+    on. One that was fetched ahead had its download over before the handshake
+    began, so running out there is the agent's own start. Every caller reads a
+    launch on this computer, where that fetch runs: an agent on a registered
+    machine, whose Raven node starts it with no fetch ahead, has its failure
+    reported as the machine gave it before any of them is reached
+    (`verify_agent`, `probe.ping_agent`).
     """
     if not launches_with_npx(command):
         return None
@@ -878,7 +887,7 @@ def npx_fetch_failure(command: str, exc: BaseException, stderr: str | None = Non
     while current is not None and id(current) not in seen:
         seen.add(id(current))
         if isinstance(current, protocol.AcpTimeoutError) and current.method == "initialize":
-            return "timeout"
+            return None if npx_fetch.fetchable_package(command_argv(command)) else "timeout"
         if isinstance(current, protocol.AcpConnectionError) and current.stderr:
             stderr = stderr or current.stderr
         current = current.__cause__
@@ -898,6 +907,14 @@ def npx_fetch_lead(verdict: str) -> str:
     if verdict == "timeout":
         return "it did not finish starting in time, and npx may still have been downloading it"
     return f"npx could not download it ({verdict}); check the network, the npm registry or the proxy"
+
+
+def npx_incomplete_lead(entry: npx_fetch.IncompleteEntry) -> str:
+    """The sentence an npx cache entry left without its package.json is reported with, and its fix."""
+    return (
+        "npx's copy of it is incomplete -- a download of it was cut off part-way -- and npx cannot start it "
+        f"until that copy ({entry.directory}) is removed; run `{entry.clear_command}` and connect again"
+    )
 
 
 class _NotThereError(Exception):
@@ -1028,9 +1045,23 @@ async def verify_agent(cfg: Any, *, env: dict[str, str] | None = None) -> Capabi
                 return done("attention", str(exc))
             client = AcpClient.over(endpoint, name=name, on_request=auto_approver(name))
         else:
-            client = await AcpClient.launch(
-                name=name, command=command, cwd=getattr(cfg, "cwd", None), env=agent_env, on_request=auto_approver(name)
-            )
+            try:
+                client = await AcpClient.launch(
+                    name=name,
+                    command=command,
+                    cwd=getattr(cfg, "cwd", None),
+                    env=agent_env,
+                    on_request=auto_approver(name),
+                )
+            except AcpConnectionError as exc:
+                # The npx fetch ahead of the agent fails here, before any handshake,
+                # and is read the way a handshake that died under npx is read below:
+                # neither is an install the roster's installer would bring.
+                if (entry := npx_fetch.incomplete_entry(str(exc))) is not None:
+                    return done("attention", f"{npx_incomplete_lead(entry)}; {exc}")
+                if (unfetched := npx_fetch_failure(command, exc)) is not None:
+                    return done("attention", f"{npx_fetch_lead(unfetched)}; {exc}", unfetched=True)
+                raise
         try:
             init = await client.request("initialize", protocol.initialize_params(), timeout=budget)
         except AcpRemoteError as exc:
@@ -1151,6 +1182,7 @@ __all__ = [
     "looks_like_auth",
     "npx_fetch_failure",
     "npx_fetch_lead",
+    "npx_incomplete_lead",
     "relearn_session_menus",
     "snapshot_fingerprint",
     "steer_offered",

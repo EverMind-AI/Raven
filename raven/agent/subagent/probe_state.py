@@ -103,7 +103,9 @@ class Remedy:
     one without a reason: the agent kept working past the connect's wait and
     said nothing, and ``command`` is what makes it say why. ``upgrade`` is an
     agent too old to know its own ACP flag; ``exited`` is one that quit and
-    left its reason on stderr, which the English detail already carries.
+    left its reason on stderr, which the English detail already carries, and
+    whose ``command``, when it has one, clears what that reason names: npm's
+    own command for an npx cache entry a cut-off download left incomplete.
 
     Two are about the agent's own account rather than a provider's answer:
     ``plan`` is an account signed in whose plan does not include the agent, with

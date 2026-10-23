@@ -404,9 +404,10 @@ def _provider_refusal(cfg: Any, said: str, answer: str) -> tuple[str, Remedy] | 
     return None
 
 
-_EXITED = re.compile(r"connection ended \(exit -?\d+\); stderr tail:\s*(?!<empty>)\S")
-"""A launch that quit and said why on its way out. One that quit without a word
-is left unnamed: pointing a reader at what it said would point at nothing."""
+_EXITED = re.compile(r"(?:connection ended|npx could not fetch \S+) \(exit -?\d+\); stderr tail:\s*(?!<empty>)\S")
+"""A launch that quit and said why on its way out, or the npx fetch ahead of it. One
+that quit without a word is left unnamed: pointing a reader at what it said would
+point at nothing."""
 
 _NO_ACP_FLAG = re.compile(
     r"(?:unknown|no such|unexpected) (?:argument|option|flag|command)s?:?\s*['\"]?-{0,2}acp\b",
@@ -445,7 +446,17 @@ def _process_refusal(cfg: Any, shown: str) -> tuple[str, Remedy | None] | None:
 
     Runs ``node --version`` for a Node.js agent that quit, so its callers keep it
     off the event loop.
+
+    An npx cache entry left without its package.json comes first: npm says so in
+    a line of its own, every later start of that spec fails the same way, and the
+    one fix is npm's own command for removing the entry
+    (`npx_fetch.incomplete_entry`).
     """
+    from raven.acp_client.capabilities import npx_incomplete_lead
+    from raven.acp_client.npx_fetch import incomplete_entry
+
+    if (entry := incomplete_entry(shown)) is not None:
+        return f"{npx_incomplete_lead(entry)}. It said: {shown}"[:_DETAIL_CAP], Remedy("exited", entry.clear_command)
     if _EXITED.search(shown):
         if _NO_ACP_FLAG.search(shown) or (getattr(cfg, "preset", None) == "grok" and _GROK_NO_AGENT.search(shown)):
             up = upgrade_hint_for(cfg)
@@ -915,13 +926,14 @@ def _ping_bounds(cfg: Any) -> tuple[int, int, float]:
     The answer is capped at `_ENABLE_PING_TIMEOUT_SECONDS`, the number a
     person waiting on a switch can stand. The handshake is not: an acp row
     starts within its own ``readyTimeoutMs``, the window every dispatch of it
-    gets (`AcpAgentBackend`), and for an ``npx`` command that window is where
-    the first download happens. Capping it too turned two things into "it did
-    not answer within 60s" -- a first download on a slow line (a cold fetch of
-    the Claude Code adapter is about 260 MB unpacked; 20s on a good line,
-    measured 2026-09-23), and npm's own "cannot reach the registry", which it
-    reports only after about 70s of retries (measured the same day), so the
-    reader never saw it.
+    gets (`AcpAgentBackend`). The first download of an ``npx`` row is in
+    neither: `ping_agent` has npx fetch the package before they start
+    (`npx_fetch`), because a cold fetch of the Claude Code adapter is 288 MB
+    (measured 2026-10-23), and a bound that ran out on one ended npx
+    half-installed. An ``npx`` command the fetch cannot repeat
+    (`npx_fetch.fetchable_package`) still downloads inside this window, and so
+    does a row on a registered machine, whose Raven node starts it with no fetch
+    ahead.
 
     The wait is the two added together, which keeps what the cap once kept:
     neither inner bound is ever cancelled from outside before the backend can
@@ -1061,6 +1073,7 @@ async def ping_agent(cfg: Any) -> PingResult:
     """
     # Function-level like the rest of this module's acp imports: the client family
     # is future shelf cargo and must not be named at import time.
+    from raven.acp_client import npx_fetch
     from raven.acp_client import pool as acp_pool
 
     ready_ms, answer_s, wait_s = _ping_bounds(cfg)
@@ -1089,6 +1102,16 @@ async def ping_agent(cfg: Any) -> PingResult:
         # handle; one shared by every check leaves one directory there
         # rather than one per press.
         checked = {"instance": remote_check_handle()} if machine else {}
+        if not machine and getattr(cfg, "kind", None) == "acp":
+            # Ahead of the bounds, not inside them: a first download is npx's
+            # work, not the handshake's, and one a bound ran out on was ended
+            # half-installed (`npx_fetch`). The launch below then finds it done.
+            await npx_fetch.ensure_fetched(
+                getattr(cfg, "name", "") or "",
+                getattr(cfg, "command", "") or "",
+                env=getattr(cfg, "env", None),
+                cwd=getattr(cfg, "cwd", None) or str(scratch.path),
+            )
         reply = await asyncio.wait_for(
             backend.run(
                 PROBE_PROMPT,

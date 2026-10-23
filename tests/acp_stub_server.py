@@ -32,6 +32,10 @@ Behaviour is chosen by ``ACP_STUB_MODE``:
 - ``npm_fetch_fails`` - dies before speaking with what npm 10 printed for an
                      unreachable registry, stack trace and all: the shape ``npx``
                      takes when it cannot fetch the adapter it was asked to run.
+- ``npm_npx_entry_incomplete`` - dies with exit 254 and what npm 11.18 printed for an
+                     exact-version spec whose npx cache entry holds the package and
+                     no package.json: a download ended part-way, which no later
+                     ``npx`` of that spec recovers from.
 - ``asks``         - requests something raven does not implement (``fs/read_text_file``,
                      declared unsupported in ``CLIENT_CAPABILITIES``) and, having been
                      refused, ends the turn with no content and nothing on stderr. This
@@ -140,6 +144,19 @@ npm error
 npm error If you are behind a proxy, please make sure that the
 npm error 'proxy' config is set properly.  See: 'npm help config'
 npm error A complete log of this run can be found in: /home/someone/.npm/_logs/2026-09-23T14_16_44_007Z-debug-0.log
+"""
+
+# What npm 11.18.0 printed on 2026-10-23 for an npx entry left holding the
+# package and no package.json, under the entry name of
+# `@agentclientprotocol/claude-agent-acp@0.79.0` -- the spec `_through_npx` runs.
+_NPM_NPX_ENTRY_INCOMPLETE = """npm error code ENOENT
+npm error syscall open
+npm error path /home/someone/.npm/_npx/523186a76b483a0d/package.json
+npm error errno -2
+npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open '/home/someone/.npm/_npx/523186a76b483a0d/package.json'
+npm error enoent This is related to npm not being able to find a file.
+npm error enoent
+npm error A complete log of this run can be found in: /home/someone/.npm/_logs/2026-10-23T06_48_20_359Z-debug-0.log
 """
 
 # A real server mints a distinct id per session; the counter keeps the stub from
@@ -704,6 +721,10 @@ def main() -> None:
         sys.stderr.write(_NPM_ECONNREFUSED)
         sys.stderr.flush()
         sys.exit(1)
+    if MODE == "npm_npx_entry_incomplete":
+        sys.stderr.write(_NPM_NPX_ENTRY_INCOMPLETE)
+        sys.stderr.flush()
+        sys.exit(254)
     if MODE == "noisy":
         sys.stdout.write("[plugins] stub diagnostics on stdout\n")
         sys.stdout.flush()

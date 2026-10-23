@@ -435,15 +435,35 @@ def _through_npx(tmp_path: Path, mode: str, **kw: Any) -> ThirdPartyAcpSubagentC
     """A row whose command is ``npx ...``, run by a stand-in ``npx`` that starts the stub.
 
     What is under test is how a command that fetches on first use is read, so the
-    launcher has to be named npx; nothing here goes near a registry.
+    launcher has to be named npx; nothing here goes near a registry. A fetch
+    (``--package=``) is answered the way npx answers one: the stub's ``npm_*``
+    modes fail it in npm's own words, and any other mode succeeds -- after
+    ``STAND_IN_DELAY`` seconds, writing ``STAND_IN_ENTRY``'s package.json when one
+    is named, the way a download that took that long ends. ``STAND_IN_LOG`` gets
+    every invocation's arguments, one line each. The npm cache is the test's own,
+    so whatever this machine's npx holds is never read.
     """
     npx = tmp_path / "npx"
-    npx.write_text(f"#!/bin/sh\nexec {shlex.quote(sys.executable)} {shlex.quote(str(_STUB))}\n")
+    npx.write_text(
+        "#!/bin/sh\n"
+        'echo "$*" >> "${STAND_IN_LOG:-/dev/null}"\n'
+        'case " $* " in\n'
+        '  *" --package="*)\n'
+        '    case "$ACP_STUB_MODE" in\n'
+        "      npm_*) ;;\n"
+        "      *)\n"
+        '        sleep "${STAND_IN_DELAY:-0}"\n'
+        '        if [ -n "$STAND_IN_ENTRY" ]; then mkdir -p "$STAND_IN_ENTRY" && echo "{}" > "$STAND_IN_ENTRY/package.json"; fi\n'
+        "        exit 0 ;;\n"
+        "    esac ;;\n"
+        "esac\n"
+        f"exec {shlex.quote(sys.executable)} {shlex.quote(str(_STUB))}\n"
+    )
     npx.chmod(0o755)
     return ThirdPartyAcpSubagentConfig(
         name=kw.pop("name", "Claude Code"),
         command=f"{shlex.quote(str(npx))} -y @agentclientprotocol/claude-agent-acp@0.79.0",
-        env={"ACP_STUB_MODE": mode},
+        env={"ACP_STUB_MODE": mode, "npm_config_cache": str(tmp_path / "npm-cache"), **kw.pop("env", {})},
         ready_timeout_ms=kw.pop("ready_timeout_ms", 15000),
         **kw,
     )
@@ -472,7 +492,9 @@ async def test_npx_that_cannot_reach_the_registry_is_a_download_failure_not_a_si
         "connect again, or run this agent's launch command once in a terminal"
     ), pinged.detail
     assert str(tmp_path) not in pinged.detail
-    assert "connection ended (exit 1)" in pinged.detail, "the original error is kept for the fold"
+    assert "npx could not fetch @agentclientprotocol/claude-agent-acp@0.79.0 (exit 1)" in pinged.detail, (
+        "the original error is kept for the fold"
+    )
 
     # The same death from a command that fetches nothing is not a download: it
     # is a launch that quit, and what it said on its way out is the reason.
@@ -481,8 +503,24 @@ async def test_npx_that_cannot_reach_the_registry_is_a_download_failure_not_a_si
     assert plain.remedy == Remedy("exited")
 
 
-async def test_a_start_that_runs_out_under_npx_is_named_a_download_that_may_still_be_running(tmp_path: Path) -> None:
-    """A first download on a slow line is a start that runs out, and says so.
+async def test_a_start_that_runs_out_after_its_fetch_is_not_called_a_download(tmp_path: Path) -> None:
+    """The fetch ran before the handshake and finished, so a start that then runs out is the agent's own.
+
+    Saying npx "may still have been downloading" would send the reader to the
+    network about an adapter that is already on disk.
+    """
+    from raven.agent.subagent.probe import ping_agent
+
+    pinged = await ping_agent(_through_npx(tmp_path, "silent", ready_timeout_ms=1000))
+    assert pinged.ok is False
+    assert pinged.remedy is None
+    assert "downloading" not in pinged.detail
+
+
+async def test_a_start_that_runs_out_under_an_npx_the_fetch_leaves_alone_may_still_be_downloading(
+    tmp_path: Path,
+) -> None:
+    """A launch the fetch cannot repeat exactly still downloads inside its handshake, and says so.
 
     Not proof of a download -- an adapter can hang on its own -- so the sentence
     says npx "may still have been downloading", and the fix is the same one: the
@@ -492,6 +530,13 @@ async def test_a_start_that_runs_out_under_npx_is_named_a_download_that_may_stil
     from raven.agent.subagent.probe_state import Remedy
 
     cfg = _through_npx(tmp_path, "silent", ready_timeout_ms=1000)
+    npx = shlex.split(cfg.command)[0]
+    cfg = cfg.model_copy(
+        update={
+            "command": f"{shlex.quote(npx)} --registry=https://registry.npmjs.org/ -y "
+            "@agentclientprotocol/claude-agent-acp@0.79.0"
+        }
+    )
     pinged = await ping_agent(cfg)
     assert pinged.ok is False
     assert pinged.remedy == Remedy("download")
@@ -534,6 +579,63 @@ async def test_a_handshake_npx_could_not_fetch_is_not_recorded_as_an_absent_inst
     other = await verify_agent(stub_config(mode="abort"))
     assert other.status == "missing"
     assert other.unfetched is False
+
+
+async def test_an_npx_entry_left_incomplete_is_named_with_the_command_that_clears_it(tmp_path: Path) -> None:
+    """A download ended part-way leaves npx's entry the package and no package.json, for good.
+
+    From npm 11.2 every later ``npx`` of an exact-version spec finds the package,
+    skips the install, fails to read that package.json and exits 254. Nothing
+    the network fixes, so it is not a download failure, and nothing is absent
+    that an installer brings: the fix is npm's own command for that one entry.
+    """
+    from raven.agent.subagent.probe import ping_agent
+    from raven.agent.subagent.probe_state import Remedy
+
+    cfg = _through_npx(tmp_path, "npm_npx_entry_incomplete")
+    clears = Remedy("exited", "npm cache npx rm 523186a76b483a0d")
+
+    pinged = await ping_agent(cfg)
+    assert pinged.ok is False
+    assert pinged.remedy == clears
+    assert "/home/someone/.npm/_npx/523186a76b483a0d" in pinged.detail
+
+    snapshot = await verify_agent(cfg)
+    assert snapshot.status == "attention"
+    assert snapshot.unfetched is False
+
+    tested = await run_test(cfg, source="config")
+    assert tested.ok is False
+    assert tested.remedy == clears
+
+
+async def test_a_first_fetch_longer_than_the_connect_s_bounds_still_connects(tmp_path: Path) -> None:
+    """The download is not the handshake's: a connect waits it out before its own bounds start.
+
+    Inside them, a slow line ran the bounds out mid-download and the teardown's
+    SIGKILL left npx's entry incomplete -- see the test above for what that
+    costs. Here the fetch takes longer than the handshake and the answer
+    together, and the connect still lands.
+    """
+    from raven.agent.subagent.probe import ping_agent
+
+    log = tmp_path / "npx.log"
+    entry = tmp_path / "npm-cache" / "_npx" / "523186a76b483a0d"
+    cfg = _through_npx(
+        tmp_path,
+        "ok",
+        ready_timeout_ms=1000,
+        timeout=1,
+        env={"STAND_IN_DELAY": "3", "STAND_IN_ENTRY": str(entry), "STAND_IN_LOG": str(log)},
+    )
+
+    pinged = await ping_agent(cfg)
+
+    assert pinged.ok is True, pinged.detail
+    invocations = log.read_text().splitlines()
+    assert invocations[0] == "-y --package=@agentclientprotocol/claude-agent-acp@0.79.0 -- node -e 0"
+    assert invocations[-1] == "-y @agentclientprotocol/claude-agent-acp@0.79.0"
+    assert (entry / "package.json").is_file()
 
 
 async def test_a_download_fix_names_only_the_preset_s_own_command(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -633,7 +735,10 @@ def test_only_a_command_that_fetches_and_only_a_start_that_ran_out_are_download_
     assert npx_fetch_failure("/usr/local/bin/npx -y a@1", died) == "ENOTFOUND", "npx wherever it lives"
 
     start = AcpTimeoutError("initialize timed out after 120s", method="initialize")
-    assert npx_fetch_failure("npx -y a@1", start) == "timeout"
+    assert npx_fetch_failure("npx --registry=https://registry.npmjs.org/ -y a@1", start) == "timeout", (
+        "an npx the fetch leaves alone still downloads inside its handshake"
+    )
+    assert npx_fetch_failure("npx -y a@1", start) is None, "fetched ahead, so the start that ran out is the agent's"
     later = AcpTimeoutError("session/prompt timed out after 60s", method="session/prompt")
     assert npx_fetch_failure("npx -y a@1", later) is None, "it started; whatever went quiet, it was not the fetch"
 

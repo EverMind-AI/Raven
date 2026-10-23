@@ -202,7 +202,9 @@ THIRD_PARTY_SUBAGENT_PRESETS: dict[str, dict[str, Any]] = {
         ),
         "command": _CLAUDE_ACP,
         # npx may have to download the adapter on the first connect, which is far
-        # slower than starting an installed binary.
+        # slower than starting an installed binary. On this computer that download
+        # runs before this window opens (`npx_fetch`); a registered machine's Raven
+        # node starts the adapter itself, so there it still runs inside it.
         "readyTimeoutMs": 120000,
     },
     "codex": {

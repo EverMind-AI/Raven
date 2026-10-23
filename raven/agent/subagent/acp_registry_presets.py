@@ -97,7 +97,9 @@ from typing import Any
 
 _SHIM_READY_TIMEOUT_MS = 120000
 """A shim is fetched on first connect, which is far slower than starting an
-installed binary. A local executable needs no such allowance and takes the
+installed binary. On this computer the fetch runs before this window opens
+(`npx_fetch`); a registered machine's Raven node starts the shim itself, so there
+the window still holds it. A local executable needs no such allowance and takes the
 schema default."""
 
 ACP_REGISTRY_SHIM_PRESETS = frozenset({"pi"})

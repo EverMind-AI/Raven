@@ -21,7 +21,7 @@ from typing import Any, NoReturn
 import pytest
 
 import raven.agent.subagent.probe as probe_mod
-from raven.acp_client import leftovers, windows
+from raven.acp_client import leftovers, npx_fetch, windows
 from raven.acp_client.client import AcpClient
 from raven.acp_client.protocol import AcpConnectionError
 from raven.agent.subagent.backends import env as backend_env
@@ -523,6 +523,10 @@ async def test_on_windows_an_acp_server_that_is_a_batch_file_starts_from_the_chi
     lets the batch file stand in, found on the child's PATH like any program.
     """
     npx = _executable(tmp_path / "npm", "npx.cmd")
+    # Fetched already, so the launch goes straight to the batch file (`npx_fetch`).
+    entry = tmp_path / "npm-cache" / "_npx" / npx_fetch.cache_key("@scope/server")
+    entry.mkdir(parents=True)
+    (entry / "package.json").write_text("{}")
     monkeypatch.setattr(backend_env, "_on_windows", lambda: True)
     monkeypatch.setattr(backend_env, "login_shell_env", lambda: {"PATH": str(npx.parent)})
     started: list[tuple[str, ...]] = []
@@ -530,7 +534,9 @@ async def test_on_windows_an_acp_server_that_is_a_batch_file_starts_from_the_chi
     monkeypatch.setattr(leftovers, "bind_to_host", _unbound)
 
     with pytest.raises(AcpConnectionError):
-        await AcpClient.launch(name="npm", command="npx -y @scope/server")
+        await AcpClient.launch(
+            name="npm", command="npx -y @scope/server", env={"npm_config_cache": str(tmp_path / "npm-cache")}
+        )
 
     assert started == [(str(npx), "-y", "@scope/server")]
 
