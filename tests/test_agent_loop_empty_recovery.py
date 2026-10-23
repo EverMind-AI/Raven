@@ -146,6 +146,20 @@ def test_has_thinking():
     assert has_thinking(LLMResponse(content=None)) is False
 
 
+def test_only_reasoning_text_or_thinking_blocks_give_a_prefill_something_to_refeed():
+    """A prefill re-feeds the reply's thought. An empty think block, a reasoning field of whitespace
+    and a bare token count all read as thinking, and none has anything in it to re-feed."""
+    from raven.agent.loop.recovery import has_thinking_to_refeed
+
+    assert has_thinking_to_refeed(LLMResponse(content=None, reasoning_content="hmm")) is True
+    assert has_thinking_to_refeed(LLMResponse(content="<think>let me see</think>")) is True
+    redacted = [{"type": "redacted_thinking", "data": "x"}]
+    assert has_thinking_to_refeed(LLMResponse(content=None, thinking_blocks=redacted)) is True
+    assert has_thinking_to_refeed(LLMResponse(content="<think>\n\n</think>")) is False
+    assert has_thinking_to_refeed(LLMResponse(content=None, reasoning_content=" \n")) is False
+    assert has_thinking_to_refeed(LLMResponse(content=None, usage={"reasoning_tokens": 300})) is False
+
+
 def test_limits_from_defaults_maps_fields():
     class _D:
         empty_recovery_enabled = False
@@ -820,6 +834,26 @@ async def test_a_thinking_only_reply_known_only_by_its_count_is_stepped_down_at_
     re-feed nothing -- an empty assistant row, billed at full price -- so the effort steps down at once."""
     hidden = _reply("", finish="length", completion=4096, reasoning_tokens=4096)
     calls = _served(monkeypatch, [hidden, hidden, _reply("the answer")])
+
+    final, _used, _messages, outcome = await _litellm_agent(workspace)._run_agent_loop(_seed())
+
+    assert final == "the answer" and outcome.status == "completed"
+    assert _efforts(calls) == [None, "high", "low"]
+    assert [call["messages"][-1]["role"] for call in calls] == ["user"] * 3, "no request ended on a prefill"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reply",
+    [
+        pytest.param({"content": "<think>\n\n</think>"}, id="empty_think_block"),
+        pytest.param({"content": None, "reasoning": " \n", "reasoning_tokens": 300}, id="blank_reasoning"),
+    ],
+)
+async def test_a_thinking_only_reply_with_nothing_in_its_thought_is_stepped_down_at_once(workspace, monkeypatch, reply):
+    """An empty think block, or a reasoning field of whitespace, is thinking with nothing in it: a
+    prefill would re-feed nothing and be billed in full, so the effort steps down at once."""
+    calls = _served(monkeypatch, [_reply(**reply), _reply(**reply), _reply("the answer")])
 
     final, _used, _messages, outcome = await _litellm_agent(workspace)._run_agent_loop(_seed())
 

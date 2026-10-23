@@ -30,8 +30,9 @@ PREFILL re-feeds the model its own reasoning so it continues into the answer. A
 provider that refuses a trailing assistant message (its
 ``supports_assistant_prefill`` answers False: Anthropic with thinking on) never
 gets it, and goes straight to STEP_DOWN, so the request handed back never ends on
-an assistant message; so does a reply whose reasoning is known only by its token
-count (OpenAI and Azure hide the text), which leaves nothing to re-feed.
+an assistant message; so does a reply that leaves nothing to re-feed: reasoning
+known only by its token count (OpenAI and Azure hide the text), an empty think block,
+or a reasoning field of whitespace.
 STEP_DOWN asks the same step again at ``high`` and then at ``low``, whichever lie
 below the turn's effort (an unstated, ``max`` or ``xhigh`` effort gets both, ``high``
 or ``medium`` only ``low``, ``low`` or ``minimal`` neither), once each a turn --
@@ -319,6 +320,15 @@ def has_thinking(response: LLMResponse) -> bool:
     return bool(response.reasoning_content or response.thinking_blocks or has_inline_thinking(response.content))
 
 
+def has_thinking_to_refeed(response: LLMResponse) -> bool:
+    """True when a prefill would hand the model back some thought: reasoning text, or thinking blocks.
+
+    An empty think block, a reasoning field of whitespace and a bare token count are thinking to
+    :func:`has_thinking` and leave a prefill nothing to carry.
+    """
+    return bool(response.thinking_blocks) or bool(_thinking_text(response))
+
+
 def reply_kind(
     response: LLMResponse,
     visible: str | None,
@@ -369,12 +379,12 @@ def decide(
     """The next move for a reply of ``kind``, given what the turn has already spent (``state``).
 
     The caller supplies what only it can see: whether the provider takes a prefill, whether the
-    reply carries thinking a prefill can re-feed (:func:`has_thinking`: a reasoning field, thinking
-    blocks or inline tags, not a bare token count), the rung :func:`next_step_down` offers, whether
-    a fallback model remains, and :func:`resend_budget`'s answer. A fallback model gets one try: on
-    one an empty or thinking-only reply is not resent, prefilled or stepped down again, so the next
-    move is another model or the end. A cut answer is still continued there, and a reply right
-    after tools still nudged.
+    reply carries thinking a prefill can re-feed (:func:`has_thinking_to_refeed`: reasoning text or
+    thinking blocks, not a bare token count or an empty think block), the rung
+    :func:`next_step_down` offers, whether a fallback model remains, and :func:`resend_budget`'s
+    answer. A fallback model gets one try: on one an empty or thinking-only reply is not resent,
+    prefilled or stepped down again, so the next move is another model or the end. A cut answer is
+    still continued there, and a reply right after tools still nudged.
     """
     if kind is ReplyKind.SILENT:
         return RecoveryAction.SILENT
