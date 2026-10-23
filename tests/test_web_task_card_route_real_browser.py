@@ -50,20 +50,38 @@ PAGE = """<!doctype html>
 <span class="tkrunrt">2.1s</span>
 </div></foreignObject></g></svg></div></div>
 <span id="floor" style="position:absolute;visibility:hidden;width:6ch"></span>
+<span id="floor2" style="position:absolute;visibility:hidden;width:2ch"></span>
 </body></html>"""
 
 MEASURE = """() => {
   const line = document.querySelector('.tkrunl2'), edge = line.getBoundingClientRect().right
   const ag = line.querySelector('.tkrunag'), sel = line.querySelector('.tkrunsel')
   const floor = document.getElementById('floor'), handle = line.querySelector('.tkrunhandle')
+  const chip = line.querySelector('.tkrunchip'), rest = line.querySelector('.tkrunselrest')
+  const floor2 = document.getElementById('floor2')
   floor.style.font = getComputedStyle(ag).font
-  const text = document.createRange()
-  text.selectNodeContents(ag)
+  floor2.style.font = getComputedStyle(sel).font
+  const textWidth = (el) => {
+    const range = document.createRange()
+    range.selectNodeContents(el)
+    return range.getBoundingClientRect().width
+  }
+  const contentWidth = (el) => {
+    const cs = getComputedStyle(el)
+    const sides = ['paddingLeft', 'paddingRight', 'borderLeftWidth', 'borderRightWidth']
+    return el.getBoundingClientRect().width - sides.reduce((sum, side) => sum + parseFloat(cs[side]), 0)
+  }
   return {
     line: line.clientWidth,
     floor: floor.getBoundingClientRect().width,
     agent: ag.getBoundingClientRect().width,
-    agentFull: text.getBoundingClientRect().width,
+    agentFull: textWidth(ag),
+    chip: chip ? contentWidth(chip) : null,
+    chipFull: chip ? textWidth(chip) : null,
+    rest: rest ? rest.getBoundingClientRect().width : null,
+    restFull: rest ? rest.scrollWidth : null,
+    restFloor: floor2.getBoundingClientRect().width,
+    restCut: rest ? [getComputedStyle(rest).overflowX, getComputedStyle(rest).textOverflow] : null,
     handle: handle ? handle.getBoundingClientRect().width : null,
     sel: sel.clientWidth,
     selFull: sel.scrollWidth,
@@ -150,6 +168,18 @@ def test_a_crowded_line_keeps_the_agent_name_and_ends_the_route_in_an_ellipsis(
     assert m["sel"] > 0, m
     assert m["selFull"] > m["sel"], m
     assert (m["selOverflow"], m["selTextOverflow"]) == ("hidden", "ellipsis"), m
+    assert m["chip"] >= m["chipFull"] - 0.5, m
+    if m["rest"] is not None:
+        assert m["rest"] == pytest.approx(m["restFloor"], abs=0.5), m
+        assert m["restCut"] == ["hidden", "ellipsis"], m
+    assert [name for name, past in m["past"] if past > 0.5] == [], m
+
+
+def test_the_routes_after_the_first_give_way_before_it(page: Page) -> None:
+    m = _measure(page, _line("triage", None, 3, ["bug", "feature_request", "needs_clarification"]))
+    assert m["sel"] == m["selFull"], m
+    assert m["restFloor"] - 0.5 <= m["rest"] < m["restFull"], m
+    assert m["restCut"] == ["hidden", "ellipsis"], m
     assert [name for name, past in m["past"] if past > 0.5] == [], m
 
 
