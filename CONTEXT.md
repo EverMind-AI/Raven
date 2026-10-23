@@ -835,11 +835,13 @@ a proactive origin, whose marker may close a report, holds the whole call instea
 stays in the history with the marker as its content, filed with `silent: true` so a reload does
 not read it as an answer, and it carries the turn's Response Meta. The turn reports itself as
 `TurnOutcome.silent` (copied onto `TurnEnded.silent`) and, for a surface drawing it live, as a
-closing `NoticeKind.SILENT_TURN` notice. The `after_send` hook chain still runs, with
-`outbound_content` None: a response modifier is left unasked, so a nudge it would pop stays
-queued for the next reply, and the personalizer learns nothing; text a hook composes there is
-delivered as the reply, and the turn is then not silent. A turn the message tool has already
-answered is not a Silent Turn whatever it ends on -- its answer reached the reader.
+closing `NoticeKind.SILENT_TURN` notice. The notice follows the stored row and the outcome follows
+the reader: a turn the message tool had already answered, and that ended on a marker anyway, files
+the same `silent: true` row and sends the same notice, so the live view and a reload agree, but it
+is not a Silent Turn -- its answer reached the reader, and `TurnOutcome.silent` stays false. The
+`after_send` hook chain still runs, with `outbound_content` None: a response modifier is left
+unasked, so a nudge it would pop stays queued for the next reply, and the personalizer learns
+nothing; text a hook composes there is delivered as the reply, and the turn is then not silent.
 Distinct from a `no_output` failure. A Silent Turn is the model saying nothing on purpose, so it
 succeeds; `no_output` is what a turn is failed with when the model gave nothing back at all after
 every retry (`AnswerlessTurnError`). `NO_REPLY` names a marker, never that failure.

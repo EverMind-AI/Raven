@@ -2558,8 +2558,10 @@ class TurnPathMixin:
         ``"appended"`` whatever the ``after_send`` chain added to the end of the
         reply: a streamed reply has already left as deltas by then, so the
         caller has to send that tail itself. ``silence``, when given, receives
-        ``"silent": True`` for the last of those: a turn the model ended on a
-        marker, and that nothing replaced with a reply of its own.
+        ``"silent": True`` for a turn whose last row is the model's marker and
+        that nothing replaced with a reply of its own -- including one the
+        message tool had already answered, whose row is filed as a marker all
+        the same.
         """
         from raven.agent.hook import AgentHookContext
 
@@ -3292,6 +3294,10 @@ class TurnPathMixin:
                     sender_id,
                     preview,
                 )
+            # The row the turn ends on is still the model's marker, which a reload draws as the muted
+            # line, so a client watching live is told it is one as well.
+            if silent and silence is not None:
+                silence["silent"] = True
             return None
 
         if silent:
@@ -4053,8 +4059,8 @@ class TurnPathMixin:
                 await emit(StreamDelta(delta=hook_sink["appended"]))
             if text_sink is not None and reply_content:
                 text_sink["text"] = reply_content
-        silent = silence.get("silent", False)
-        if silent:
+        marker = silence.get("silent", False)
+        if marker:
             await emit(Notice(kind=NoticeKind.SILENT_TURN))
 
         usage = Usage(
@@ -4065,4 +4071,9 @@ class TurnPathMixin:
         # A message-tool reply returns None from _process_message but did reply,
         # so it counts as an explicit reply too.
         replied_via_tool = isinstance(message_tool, MessageTool) and message_tool.sent_in_turn
-        return TurnOutcome(usage=usage, explicit_reply=out is not None or replied_via_tool, silent=silent)
+        return TurnOutcome(
+            usage=usage,
+            explicit_reply=out is not None or replied_via_tool,
+            # The notice follows the row; the outcome follows the reader, who has the tool's reply.
+            silent=marker and not replied_via_tool,
+        )
