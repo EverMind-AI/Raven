@@ -228,6 +228,23 @@ describe('the rail on a window under the fold', () => {
     expect(railState.get()).toBe(false)
   })
 
+  /* The session rows are the rail island's, rendered into #list by a root of
+     its own, so a row is stood in by hand: the press reaches the aside's
+     listener the way the island's would. */
+  it('folds when a session row in the list is pressed', async () => {
+    render()
+    railState.set(true)
+    const row = document.createElement('div')
+    row.className = 'sess'
+    const name = document.createElement('span')
+    row.append(name)
+    el('list').append(row)
+    await act(async () => {
+      name.click()
+    })
+    expect(railState.get()).toBe(false)
+  })
+
   it('keeps standing beside the page on a window that holds both', async () => {
     narrow = false
     render()
