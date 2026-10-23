@@ -163,10 +163,13 @@ class RecoveryLimits:
     )
     #: Whether a streamed call that failed after it had already produced output is
     #: asked again, whole: a person watching the stream has seen the words and would
-    #: see them twice. Off, the loop's answering call hands back what streamed and
-    #: asks the model to go on from it (``NETWORK_CUT``), while a call with nothing to
-    #: continue it -- an exhausted turn's wrap-up, the watch-work judgement, a
-    #: sub-agent's run -- fails (N-TURNFAILED). On, for an unattended agent whose
+    #: see them twice. Off, the loop's answering call hands back what streamed: with
+    #: recovery ``enabled`` the model is asked to go on from it (``NETWORK_CUT``), and
+    #: without it the words are delivered with ``PARTIAL_STREAM_NOTE`` and nothing
+    #: more is asked. Any other streamed call has no continuation, so the call fails
+    #: and its caller decides what follows: an exhausted turn's wrap-up ends on its
+    #: static line, the watch-work judgement leaves the turn unjudged, and a
+    #: sub-agent's run fails (N-TURNFAILED). On, for an unattended agent whose
     #: client is a machine: one measured deck build had two hours behind it when a
     #: mid-stream "Network connection lost" ended the turn with nothing published.
     llm_retry_after_output: bool = False

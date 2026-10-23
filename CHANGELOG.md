@@ -1308,11 +1308,13 @@ All notable changes to Raven are documented here.
   hosting uses, waits out the same ladder after its one reconnect instead of
   failing the turn on the second error. An unattended run may also ask, with
   `agents.defaults.llmRetryAfterOutput`, for a streamed call that failed after
-  it had produced output to be asked again (the deck launcher does); off, the
-  turn's answering call now hands back the words that streamed, and the turn
-  continues them (see the entry on empty and abnormal replies above), while a
-  sub-agent run and the turn's other model calls, such as the wrap-up of a
-  turn that ran out of steps, still treat the cut as before.
+  it had produced output to be asked again (the deck launcher does). Off, the
+  turn's answering call now hands back the words that streamed: with
+  empty-response recovery on the turn continues them (see the entry on empty
+  and abnormal replies above), and with it off they are delivered as they
+  stand with a note that the reply is partial. A sub-agent run and the turn's
+  other model calls, such as the wrap-up of a turn that ran out of steps,
+  still treat the cut as before.
 - The deck engine's second reader is bounded: one reading stops at 240 s and
   names the pages it did not get to, a deck's readings together stop at 15 min,
   a reading is recorded at the version of the pixels it read (the build's own
