@@ -13,6 +13,7 @@ failure path.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -299,6 +300,58 @@ async def test_a_cancelled_turn_says_it_was_cut_rather_than_that_it_failed():
     system_events.enqueue.assert_called_once()
     assert "cancelled before it completed" in system_events.enqueue.call_args.args[0].text
     wake.request_wake_now.assert_called_once_with("cron:job_f3:fail")
+
+
+async def test_a_no_output_failure_is_recorded_without_waking_heartbeat():
+    """The model gave nothing back on every attempt: the job still records a
+    failure (the handler raises), but heartbeat has nothing to follow up."""
+    system_events = MagicMock()
+    wake = MagicMock()
+
+    class _Handle:
+        async def result(self):
+            return TurnFailed(error="the model returned nothing", cancelled=False, reported=True, no_output=True)
+
+    handler = make_on_cron_job(
+        submit=lambda req: _Handle(),
+        readback_texts={},
+        system_events=system_events,
+        wake=wake,
+    )
+
+    with pytest.raises(RuntimeError, match="^the model returned nothing$"):
+        await handler(_make_job(name="n1"))
+
+    assert system_events.mock_calls == []
+    assert wake.mock_calls == []
+
+
+@pytest.mark.parametrize("reported", [True, False])
+async def test_other_failures_still_wake_heartbeat(reported: bool):
+    system_events = MagicMock()
+    wake = MagicMock()
+
+    class _Handle:
+        async def result(self):
+            return TurnFailed(
+                error="the model sent only reasoning", cancelled=False, reported=reported, no_output=False
+            )
+
+    handler = make_on_cron_job(
+        submit=lambda req: _Handle(),
+        readback_texts={},
+        system_events=system_events,
+        wake=wake,
+    )
+
+    with pytest.raises(RuntimeError, match="^the model sent only reasoning$"):
+        await handler(_make_job(name="o1"))
+
+    system_events.enqueue.assert_called_once()
+    event = system_events.enqueue.call_args.args[0]
+    assert "the model sent only reasoning" in event.text
+    assert event.context_key == "cron:job_o1:fail"
+    wake.request_wake_now.assert_called_once_with("cron:job_o1:fail")
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -794,3 +847,48 @@ async def test_a_failed_turn_reaches_the_job_record_through_the_real_scheduler(t
     stored = json.loads((tmp_path / "jobs.json").read_text(encoding="utf-8"))["jobs"][0]["state"]
     assert stored["lastStatus"] == "error"
     assert stored["lastError"] == "ValueError: the provider refused the call"
+
+
+@pytest.mark.asyncio
+async def test_a_no_output_failure_reaches_the_job_record_but_not_heartbeat(tmp_path):
+    """Through the real lane: the runner's report is flagged ``no_output`` on the
+    turn's failure, the job file keeps it as an error, and heartbeat is never told."""
+    from raven.proactive_engine.schedulers.cron.service import CronService
+    from raven.proactive_engine.system_events import SystemEventQueue
+    from raven.proactive_engine.wake import WakeScheduler
+    from raven.spine import AnswerlessTurnError, OriginPools, Scheduler
+
+    class _EmptyRunner:
+        async def run(self, req, emit, drain):
+            raise AnswerlessTurnError("the model returned nothing", no_output=True)
+
+    async def _sink(event) -> None:
+        pass
+
+    sched = Scheduler(_EmptyRunner(), OriginPools(user=1, system=1), _sink)
+    queue = SystemEventQueue()
+    wake = WakeScheduler(coalesce_s=0.01)
+    svc = CronService(
+        tmp_path / "jobs.json",
+        on_job=make_on_cron_job(submit=sched.submit, readback_texts={}, system_events=queue, wake=wake),
+    )
+    job = svc.add_job(
+        name="empty",
+        schedule=CronSchedule(kind="every", every_ms=3_600_000),
+        message="do the thing",
+        channel="tui",
+        to="direct",
+    )
+
+    try:
+        assert await svc.run_job(job.id, force=True) is True
+        await asyncio.sleep(0.05)
+    finally:
+        wake.stop()
+        await sched.shutdown(grace=1)
+
+    stored = json.loads((tmp_path / "jobs.json").read_text(encoding="utf-8"))["jobs"][0]["state"]
+    assert stored["lastStatus"] == "error"
+    assert stored["lastError"] == "the model returned nothing"
+    assert queue.peek_all() == []
+    assert not wake.wake_event.is_set()

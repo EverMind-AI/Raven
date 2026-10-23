@@ -173,10 +173,12 @@ def make_on_cron_job(
     a failed cron run, or a success that ended with neither a reply nor a
     silence marker, enqueues a system event and requests an early heartbeat
     tick, so the main heartbeat session learns what happened in the isolated
-    ``cron:<job_id>`` session and can decide on follow-ups. A run the model
-    ended with a silence marker is a success with nothing to report and never
-    reaches heartbeat. A successful turn that replied or stayed silent clears its
-    pending failure and completion events without waking heartbeat again.
+    ``cron:<job_id>`` session and can decide on follow-ups. Two outcomes never
+    reach heartbeat: a run the model ended with a silence marker (a success with
+    nothing to report) and a run it gave no output for at all
+    (``TurnFailed.no_output``, which the job still records as an error). A
+    successful turn that replied or stayed silent clears its pending failure and
+    completion events without waking heartbeat again.
     Only effective for jobs executed in this process — a CLI test-fire
     runs in its own process and cannot reach the gateway's queue.
 
@@ -273,15 +275,19 @@ def make_on_cron_job(
                 conversation=conversation,
             )
         failure_detail: str | None = None
+        tell_heartbeat = True
         try:
             outcome = await submit(req).result()
             if outcome is None or isinstance(outcome, TurnFailed):
                 # No answer reached anyone -- the turn failed, or a runtime reload
                 # cut it -- so the job records a failure, not a delivery.
                 failure_detail = _turn_failure_detail(outcome)
+                # Nobody is waiting on a run the model gave no output for, and the job
+                # records its failure; waking heartbeat would only relay it to the user.
+                tell_heartbeat = not (isinstance(outcome, TurnFailed) and outcome.no_output)
                 raise RuntimeError(failure_detail)
         except Exception as exc:
-            if system_events is not None and wake is not None:
+            if tell_heartbeat and system_events is not None and wake is not None:
                 # A turn that worded its own failure is quoted as it stands; only a
                 # crash on the way there needs its exception class to be legible.
                 detail = failure_detail or f"{type(exc).__name__}: {exc}"

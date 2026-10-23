@@ -519,10 +519,11 @@ nudge on the same topic within the dedup window, without dragging down the
 acceptance rate the Sentinel learns from (a cron is user-initiated, not the
 Sentinel's own proposal). A recurring job that fires repeatedly with no user
 response is automatically disabled when `silent_fire_count` reaches
-`silent_fire_limit` (default 12). Successful fires increment this count; user
-activity for the matching channel and recipient resets it. This counts fires
-without user activity, not execution failures, and contains runaway "every few
-minutes forever" jobs.
+`silent_fire_limit` (default 12). Successful fires increment this count, except
+a run the model ends on a silence marker, which sent the user nothing to respond
+to; user activity for the matching channel and recipient resets it. This counts
+fires without user activity, not execution failures, and contains runaway "every
+few minutes forever" jobs.
 
 ---
 

@@ -22,7 +22,7 @@ import pytest
 from raven.proactive_engine.schedulers.heartbeat.service import HeartbeatService
 from raven.proactive_engine.system_events import SystemEvent, SystemEventQueue
 from raven.proactive_engine.wake import WakeScheduler
-from raven.spine import TurnOutcome, Usage
+from raven.spine import TurnFailed, TurnOutcome, Usage
 
 # ---------------------------------------------------------------------------
 # SystemEventQueue
@@ -442,9 +442,10 @@ def _make_job():
 
 def _spine_submit(outcomes: list, *, explicit_reply: bool = True, silent: bool = False):
     """Spine submit mock + readback map. ``outcomes`` is consumed one per fire:
-    an Exception → result() raises (cron failure path); a str → stored in
-    readback under req.conversation (mimics the gateway capturing runner) so the
-    handler reads it back for the return value or silent completion event."""
+    an Exception → result() raises (cron failure path); a TurnFailed → result()
+    hands it back, as the lane does; a str → stored in readback under
+    req.conversation (mimics the gateway capturing runner) so the handler reads
+    it back for the return value or silent completion event."""
     readback: dict[str, str] = {}
     it = iter(outcomes)
 
@@ -455,6 +456,8 @@ def _spine_submit(outcomes: list, *, explicit_reply: bool = True, silent: bool =
             async def result(self_inner):
                 if isinstance(outcome, Exception):
                     raise outcome
+                if isinstance(outcome, TurnFailed):
+                    return outcome
                 if outcome is not None:
                     readback[req.conversation] = outcome
                 return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=explicit_reply, silent=silent)
@@ -674,6 +677,26 @@ async def test_a_silent_cron_run_clears_the_jobs_queued_events():
     assert await on_job(_make_job()) is None
 
     assert [event.context_key for event in queue.peek_all()] == ["manual:task"]
+    assert wake.consume_reasons() == []
+    wake.stop()
+
+
+async def test_a_cron_run_that_got_no_output_fails_without_waking_heartbeat():
+    from raven.core.cron_stack import make_on_cron_job
+
+    submit, readback = _spine_submit(
+        [TurnFailed(error="the model returned nothing", cancelled=False, reported=True, no_output=True)]
+    )
+    queue = SystemEventQueue()
+    wake = WakeScheduler(coalesce_s=0.01)
+    on_job = make_on_cron_job(submit=submit, readback_texts=readback, system_events=queue, wake=wake)
+
+    with pytest.raises(RuntimeError, match="^the model returned nothing$"):
+        await on_job(_make_job())
+
+    assert queue.peek_all() == []
+    await asyncio.sleep(0.05)
+    assert not wake.wake_event.is_set()
     assert wake.consume_reasons() == []
     wake.stop()
 
