@@ -64,8 +64,11 @@ All notable changes to Raven are documented here.
   counts the seconds, the hint says what the wait is for and its limit, and
   **Cancel** stops the run on the machine and writes nothing:
   `subagents.test_cancel` now reaches the proof prompt a `subagents.add`,
-  `subagents.toggle` or `subagents.update` sends, under the entry's name, and
-  that call then refuses with `cancelled: true` in its error data. While the
+  `subagents.toggle` or `subagents.update` sends, under the entry's name --
+  and the capability record an acp row is measured with once it answers --
+  and that call then refuses with `cancelled: true` in its error data. A
+  Cancel that finds nothing left to stop is not said as a cancel: the form
+  says it is too late to cancel and waits for the connect's own answer. While the
   proof runs the row reports `test_running`, a Test on it is refused as a
   second test is, and a connect pressed during a Test is refused the same
   way, before anything is spent. A wait with no answer ends after five

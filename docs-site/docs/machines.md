@@ -200,7 +200,9 @@ on the machine first, and refused the same way when the machine already has
 that preset. While it runs, the form counts the seconds and offers
 **Cancel**, which stops the run on the machine and writes nothing
 (`subagents.test_cancel` by the entry's name, the call that stops a test);
-after five minutes with no answer the form stops it itself and says to look
+a Cancel that finds nothing left to stop -- the agent has answered and the
+entry is being written -- is said as too late to cancel, and the form waits
+for the connect to finish; after five minutes with no answer the form stops it itself and says to look
 at the Agents page for whether it connected. The list has every preset a machine's node can start, including
 one already connected on this computer -- that is a second entry, on the
 machine, not a conflict. An entry on the machine that is switched off is shown

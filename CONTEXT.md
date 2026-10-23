@@ -425,7 +425,8 @@ preset is, with `machine` (and
 Hub, whose preset sheet picks the machine (*Runs on*) among those with this
 Raven's node — refused before anything is spent when
 the id is not usable or the preset is a built-in agent, and proved by the same
-readiness ping as a local add, run on that machine. That ping is one run held
+readiness ping as a local add, run on that machine. That ping, and the
+capability record an acp row is measured with once it answers, is one run held
 under the entry's name in `subagents._RUNNING`, the map a test's run is held in
 (`subagents._run_once`), so `subagents.test_cancel` stops it -- the hub's connect
 form counts the seconds, offers Cancel, and stops the run itself after five
