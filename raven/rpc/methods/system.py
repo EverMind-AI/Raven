@@ -295,6 +295,15 @@ async def system_upgrade(params: dict) -> dict:
         # lookup below: the install is not upgradable from the page, and the
         # message says which file is at fault.
         raise _refuse("not_upgradable", str(exc)) from exc
+    except Exception:
+        # Anything else the probe can hit -- an undecodable metadata file, a
+        # filesystem read racing the in-flight install -- must not escape as an
+        # internal error: its card falls back to the default `raven upgrade`
+        # this branch exists to withhold. The probe only classifies a
+        # checkout, so an unreadable probe is not a checkout. This clause
+        # comes last on purpose: `PackageNotFoundError` and `UpgradeError`
+        # are both `Exception` subclasses, and each has its own refusal.
+        editable_install = False
     if editable_install:
         # A checkout tracks upstream `main`, so no release is ever "newer" for
         # it in the sense the button means; and both `raven upgrade` and the
