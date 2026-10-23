@@ -1871,6 +1871,36 @@ async def test_three_cut_continuations_deliver_the_partial_with_the_note(workspa
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "streams,max_iterations",
+    [
+        pytest.param(("The answer is 4",), 1, id="cut_on_the_only_iteration"),
+        pytest.param(("The answer ", "is 4"), 2, id="continuation_cut_on_the_last_iteration"),
+    ],
+)
+async def test_a_stream_cut_on_the_last_iteration_ends_on_what_streamed_with_the_note(
+    workspace, monkeypatch, streams, max_iterations
+):
+    """A continuation is a step, and the turn's last iteration leaves none for it. Handed to the
+    exhaustion wrap-up instead, the cut answer had a summary streamed straight onto it and only the
+    summary filed. It ends as a spent continuation budget does: what streamed, then the note, as an
+    ``interrupted`` turn, with no wrap-up asked for."""
+    calls = _served(monkeypatch, [*(_DyingStream(text) for text in streams), _finished_stream("Wrap-up: here.")])
+    sink = _Sink()
+
+    final, _used, messages, outcome = await _litellm_agent(workspace, max_iterations=max_iterations)._run_agent_loop(
+        _seed(), on_token_delta=sink.delta
+    )
+
+    note = "\n\n" + PARTIAL_STREAM_NOTE
+    assert len(calls) == len(streams), "no wrap-up was asked for"
+    assert final == "The answer is 4" + note
+    assert outcome.status == "interrupted" and outcome.error is None
+    assert "".join(sink.text) == final
+    assert (messages[-1]["role"], messages[-1]["content"]) == ("assistant", final)
+
+
+@pytest.mark.asyncio
 async def test_a_cut_answer_is_called_partial_when_recovery_is_switched_off(workspace, monkeypatch):
     """With recovery off nothing asks the model to go on, which is the exhausted case with its
     continuations spent at zero: the reader gets what streamed and the note says it is not the whole

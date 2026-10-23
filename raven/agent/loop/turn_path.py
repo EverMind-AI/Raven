@@ -2148,6 +2148,15 @@ class TurnPathMixin:
                         action.name,
                     )
                     action = RecoveryAction.COMPLETE
+                if action is RecoveryAction.CONTINUE and kind is ReplyKind.NETWORK_CUT and iteration >= iteration_cap:
+                    # A continuation is a step, and this was the turn's last. Left to the
+                    # exhaustion wrap-up, the cut answer would have a summary streamed straight
+                    # onto it and only the summary filed, so it ends the turn as a spent
+                    # continuation budget does: what streamed, with the note, ``interrupted``.
+                    logger.warning(
+                        "empty-recovery: stream cut mid-answer on the turn's last iteration; ending on what streamed"
+                    )
+                    action = RecoveryAction.COMPLETE
                 if action is RecoveryAction.PREFILL:
                     recovery.prefills += 1
                     logger.warning(
