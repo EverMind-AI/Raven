@@ -242,7 +242,9 @@ def _convert_messages(
     vendor that answered minted. OpenAI's endpoints refuse a ``function_call``
     id outside their own shape, so under ``openai_item_ids`` another vendor's
     (DeepSeek mints UUIDs) is replaced the way a missing one always was. Other
-    vendors get the stored id back unchanged.
+    vendors get the stored id back unchanged. A replacement names the call's
+    place in its message as well as the message, so parallel calls keep
+    distinct ids; the first keeps the plain form a lone call always had.
     """
     system_prompt = ""
     input_items: list[dict[str, Any]] = []
@@ -276,12 +278,12 @@ def _convert_messages(
                     }
                 )
             # Then handle tool calls.
-            for tool_call in msg.get("tool_calls", []) or []:
+            for n, tool_call in enumerate(msg.get("tool_calls", []) or []):
                 fn = tool_call.get("function") or {}
                 call_id, item_id = _split_tool_call_id(tool_call.get("id"))
                 call_id = call_id or f"call_{idx}"
                 if not item_id or (openai_item_ids and not _OPENAI_ITEM_ID.fullmatch(item_id)):
-                    item_id = f"fc_{idx}"
+                    item_id = f"fc_{idx}_{n}" if n else f"fc_{idx}"
                 input_items.append(
                     {
                         "type": "function_call",

@@ -505,6 +505,53 @@ async def test_a_call_another_vendor_answered_is_replayed_under_an_id_codex_take
     assert call["call_id"] == output["call_id"] == "call_00_X7zvK6OV6d9sEe9g9NoD4128"
 
 
+@pytest.mark.parametrize(
+    "stored",
+    [
+        pytest.param(
+            (
+                "call_00_X7zvK6OV6d9sEe9g9NoD4128|485256fc-a47f-41be-b14f-2c4a662ddbaf",
+                "call_01_Q2mxR8ZpL4cVn1sTy6WdE903|c9b8a7d6-e5f4-4321-8a9b-0c1d2e3f4a5b",
+            ),
+            id="deepseek",
+        ),
+        pytest.param(("call_function_nnhnqu50o85f_1", "call_function_nnhnqu50o85f_2"), id="chat-route"),
+    ],
+)
+async def test_parallel_calls_are_replayed_under_distinct_item_ids(
+    monkeypatch: pytest.MonkeyPatch, stored: tuple[str, str]
+) -> None:
+    """Parallel calls share their message's index, so a replacement built
+    from the index alone named every one of them the same. The first keeps
+    the plain form a lone call has, so a lone call's request is as it was."""
+    bodies = _capture_body(monkeypatch)
+
+    await OpenAICodexProvider(default_model="openai-codex/gpt-6.1-sol").chat(
+        [
+            {"role": "user", "content": "read both files"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": stored_id, "type": "function", "function": {"name": "read_file", "arguments": "{}"}}
+                    for stored_id in stored
+                ],
+            },
+            *(
+                {"role": "tool", "tool_call_id": stored_id, "name": "read_file", "content": "text"}
+                for stored_id in stored
+            ),
+        ]
+    )
+
+    calls = [item for item in bodies[0]["input"] if item.get("type") == "function_call"]
+    outputs = [item for item in bodies[0]["input"] if item.get("type") == "function_call_output"]
+    assert len({call["id"] for call in calls}) == 2
+    assert calls[0]["id"] == "fc_1"
+    assert all(_CODEX_TAKES_ITEM_ID.fullmatch(call["id"]) for call in calls)
+    assert [call["call_id"] for call in calls] == [output["call_id"] for output in outputs]
+
+
 async def test_an_item_id_openai_minted_is_replayed_as_it_came(monkeypatch: pytest.MonkeyPatch) -> None:
     call, _ = await _replay_one_call(monkeypatch, "fc_09c4953cdc24b753016ad4d8fe2fa88191b26b197542b1c759")
 
