@@ -19,6 +19,7 @@ from raven.agent.loop._shared import (
     _NOTICE_KEY,
     _ORIGIN_KEY,
     _REASONING_MS_KEY,
+    _SILENT_KEY,
     _SKIP_AFTER_SEND_ORIGINS,
     _SKIP_USER_INBOUND_ORIGINS,
     _STALLED_STATIC_FALLBACK,
@@ -101,6 +102,7 @@ from raven.agent.loop.recovery import (
     EmptyAttempt,
     RecoveryState,
     ReplyKind,
+    SilenceGate,
     cut_reasoning_head,
     decide,
     empty_retry_delay,
@@ -355,6 +357,16 @@ _NO_CONTENT_UNRECOVERED = "The model returned no content, and this turn's empty-
 _GIVEN_UP_ONCE_ANSWERED = frozenset(
     {RecoveryAction.RETRY, RecoveryAction.STEP_DOWN, RecoveryAction.FALLBACK, RecoveryAction.FAIL}
 )
+
+
+async def _settle_silence(gate: SilenceGate | None, *, silent: bool) -> None:
+    """End the hold on a kept reply's start: dropped when the reply was a marker, shown otherwise."""
+    if gate is None:
+        return
+    if silent:
+        gate.discard()
+    else:
+        await gate.release()
 
 
 def _log_what_the_model_said(response: Any) -> None:
@@ -947,6 +959,9 @@ class TurnPathMixin:
         # reply with nothing in it: that is not running out of budget, so the wrap-up
         # that fills a turn which did is not asked for this one.
         ended_answered = False
+        # Set when the turn's last reply is a silence marker: the model's own choice to say
+        # nothing, which the caller does not deliver.
+        silent = False
 
         # The turn's window bookkeeping: the last billed context size, the retry
         # budgets every shrink draws on, and the picture window. Held here and
@@ -1352,20 +1367,26 @@ class TurnPathMixin:
                 reply_room := self._reply_room(call_messages, call_tools, call_model)
             ):
                 gen_overrides["max_tokens"] = reply_room
+            # A reply that is a silence marker is shown to no one, so the start of one is
+            # held until the loop has read the reply. A turn the runtime started holds the
+            # whole call, because its marker may close a report and only the end of the call
+            # shows that. The gates below deliver into this one.
+            silence_gate = (
+                SilenceGate(on_token_delta, hold_all=origin not in (Origin.USER, None))
+                if on_token_delta is not None
+                else None
+            )
+            downstream = silence_gate or on_token_delta
             # A hook can send this whole response back, and a rollback pops the
             # history the stream has already left -- so where hooks are installed
             # the deltas are held until something keeps the response. The draft
             # gate owns the continuation head cut in that case: holding the whole
             # text cuts it exactly, so the two gates never stack.
             draft = (
-                DraftGate(on_token_delta, cut_head=cut_continuation)
-                if on_token_delta is not None and holds_drafts
-                else None
+                DraftGate(downstream, cut_head=cut_continuation) if downstream is not None and holds_drafts else None
             )
             gate = (
-                ContinuationGate(on_token_delta)
-                if draft is None and cut_continuation and on_token_delta is not None
-                else None
+                ContinuationGate(downstream) if draft is None and cut_continuation and downstream is not None else None
             )
             # Every provider call ``decide`` makes reaches the provider seam, and
             # an Action may make more than one (best-of-n, a critic pass: see
@@ -1391,15 +1412,15 @@ class TurnPathMixin:
                         # wrap-up and the watch-work judgement call the same method
                         # and have nothing to follow them.
                         stream_call=functools.partial(self._llm_call_stream, hand_back_partial=True),
-                        # Spliced here rather than inside the module: both gates are
+                        # Spliced here rather than inside the module: the gates are
                         # the shell's own, and which sink a delta reaches is not a
                         # strategy decision. The module reads the field it is handed,
                         # so the stream/retry branch stays exactly the one the loop
-                        # took -- neither gate is built unless ``on_token_delta``
+                        # took -- no gate is built unless ``on_token_delta``
                         # already is, so the spliced value is None on exactly the
                         # turns the raw sink was, and a reasoning sink alone still
                         # streams.
-                        on_token_delta=draft or gate or on_token_delta,
+                        on_token_delta=draft or gate or downstream,
                         on_reasoning_delta=on_reasoning_delta,
                         generation_overrides=gen_overrides,
                     )
@@ -1427,10 +1448,14 @@ class TurnPathMixin:
                 if gate is not None:
                     await gate.finish()
                 response.content = cut_reasoning_head(response.content)
-            if draft is not None and response.tool_calls:
+            if response.tool_calls:
                 # A preamble beside tool calls is not the answer a hook holds back
-                # as final, and holding it would park it for the whole tool run.
-                await draft.release()
+                # as final, nor a reply a marker could be, and holding it would
+                # park it for the whole tool run.
+                if draft is not None:
+                    await draft.release()
+                if silence_gate is not None:
+                    await silence_gate.release()
             _log_what_the_model_said(response)
             # TokenWise after-hook: strategies observe the response for
             # usage tracking, budget enforcement, etc. Errors are swallowed.
@@ -2203,6 +2228,8 @@ class TurnPathMixin:
                     # were held back for a hook is shown it before the rest follows.
                     if draft is not None:
                         await draft.release()
+                    if silence_gate is not None:
+                        await silence_gate.release()
                     messages = self.context.add_assistant_message(messages, clean)
                     messages[-1]["_recovery_synthetic"] = True
                     messages.append({"role": "user", "content": NETWORK_CUT_CONTINUATION, "_recovery_synthetic": True})
@@ -2279,17 +2306,25 @@ class TurnPathMixin:
                         continue
                     if draft is not None:
                         await draft.release()
+                    await _settle_silence(silence_gate, silent=action is RecoveryAction.SILENT)
                     _land_hook_note(decision)
                     if decision.short_circuit_result is not None:
                         final_content = str(decision.short_circuit_result)
                         messages = self.context.add_assistant_message(messages, final_content)
                         _stamp_context_used(messages, response)
                         break
+                else:
+                    await _settle_silence(silence_gate, silent=action is RecoveryAction.SILENT)
 
                 if recovery.parts:
                     # The answer is what streamed across every call, joined: a
-                    # continuation that came back empty leaves the partial as it was.
-                    tail = strip_think_blocks(response.content or "", trim=False) if clean else ""
+                    # continuation that came back empty leaves the partial as it was,
+                    # and so does one that came back a marker, which has nothing to add.
+                    tail = (
+                        strip_think_blocks(response.content or "", trim=False)
+                        if clean and action is not RecoveryAction.SILENT
+                        else ""
+                    )
                     clean = ("".join(recovery.parts) + tail).strip()
                 if kind is ReplyKind.NETWORK_CUT and action is RecoveryAction.COMPLETE:
                     # Cut, and nothing will ask the model to go on: the continuations are
@@ -2311,6 +2346,12 @@ class TurnPathMixin:
                 )
                 _stamp_reasoning_ms(messages, response)
                 _stamp_context_used(messages, response)
+                # Kept in the history, as the row it is, and filed as a marker so a
+                # reload does not read it as an answer. After a cut answer the reader
+                # already has, a marker is not the whole reply, and the row is not one.
+                silent = action is RecoveryAction.SILENT and not recovery.parts
+                if silent:
+                    messages[-1][_SILENT_KEY] = True
                 final_content = clean
                 # Reachable with no text only when recovery is switched off, or
                 # when the message tool had already answered.
@@ -2446,7 +2487,9 @@ class TurnPathMixin:
         # run from ``_process_message``); ``outcome.status`` is surfaced so that
         # pipeline can gate on completion.
 
-        outcome = LoopOutcome(status=status, error=error_detail, error_full=error_full, no_output=no_output)
+        outcome = LoopOutcome(
+            status=status, error=error_detail, error_full=error_full, no_output=no_output, silent=silent
+        )
         checkpoint = self._turn_checkpoint()
         if checkpoint is not None:
             # Per-turn snapshot: one commit covering all of this turn's edits,
@@ -3543,6 +3586,10 @@ class TurnPathMixin:
                 # so the live view and the restored one disagree about who
                 # spoke.
                 entry["notice"] = notice
+            if entry.pop(_SILENT_KEY, None):
+                # Same rename as the notice above, for the same reason: without
+                # it a reload cannot tell a marker the model wrote from an answer.
+                entry["silent"] = True
             if tool_diff := entry.pop("_diff", None):
                 # Renamed for storage: the private spelling kept it out of the
                 # live provider payload, the plain one is what session.resume

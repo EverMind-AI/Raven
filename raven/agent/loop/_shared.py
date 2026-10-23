@@ -105,6 +105,11 @@ _ABORTED_ACTION_REPLY = (
 # underscore keeps it out of the provider payload while the turn is live.
 _NOTICE_KEY = "_notice"
 
+# Marks the stored assistant row that is a silence marker the model wrote, so a
+# reload can tell it from an answer. Same underscore-then-rename convention as
+# ``_notice``: ``_save_turn`` writes it as ``silent``.
+_SILENT_KEY = "_silent"
+
 # Marks the user entry of a turn the runtime opened on the agent's behalf, with
 # the origin that opened it. Same underscore-then-rename convention as
 # ``_notice``: ``_save_turn`` writes it as ``origin``, and the underscore keeps
@@ -269,12 +274,17 @@ class LoopOutcome:
     ``no_output`` is set when the model gave nothing back -- no text, no
     reasoning, no tool call -- on every attempt. A turn with recovery switched
     off that ended without text sets it too: nothing there says more than that.
+
+    ``silent`` is set when the turn's last reply is a silence marker. That is the
+    model's answer, not a failure and not an empty reply: the row stays in the
+    history and carries ``_silent``, and the reader is shown none of it.
     """
 
     status: str = "completed"  # "completed" | "interrupted" | "error"
     error: str | None = None
     error_full: str | None = None
     no_output: bool = False
+    silent: bool = False
     checkpoint_id: str | None = None
     edited_files: list[str] = field(default_factory=list)
 

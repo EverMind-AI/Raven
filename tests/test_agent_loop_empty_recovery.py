@@ -2699,3 +2699,238 @@ async def test_a_runtime_turn_holds_the_whole_call():
     await gate("[SILENT]")
     gate.discard()
     assert seen == []
+
+
+# --------------------------------------------------------------------------- #
+# loop: a reply that is a silence marker ends the turn without being shown     #
+# --------------------------------------------------------------------------- #
+
+
+def _chunked(text: str, size: int = 4) -> list[str]:
+    return [text[i : i + size] for i in range(0, len(text), size)]
+
+
+def _preamble_then_tool_stream(preamble: str) -> _Stream:
+    call = SimpleNamespace(index=0, id="c1", function=SimpleNamespace(name="list_dir", arguments='{"path": "."}'))
+    calling = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                delta=SimpleNamespace(content=None, tool_calls=[call], reasoning_content=None), finish_reason=None
+            )
+        ],
+        usage=None,
+    )
+    return _Stream([_chunk(preamble), calling, _chunk(finish_reason="tool_calls")], received_finish_reason="tool_calls")
+
+
+@pytest.mark.asyncio
+async def test_a_marker_reply_closes_the_loop_silent_and_never_streams(workspace, monkeypatch):
+    calls = _served(monkeypatch, [_finished_stream(*_chunked("[SILENT]"))])
+    sink = _Sink()
+
+    final, _used, messages, outcome = await _litellm_agent(workspace)._run_agent_loop(
+        _seed(), on_token_delta=sink.delta
+    )
+
+    assert len(calls) == 1, "a marker is the model's answer, so recovery has nothing to mend"
+    assert final == "[SILENT]" and outcome.silent is True
+    assert outcome.status == "completed" and outcome.error is None and outcome.no_output is False
+    last = messages[-1]
+    assert (last["role"], last["content"], last.get("_silent")) == ("assistant", "[SILENT]", True)
+    assert sink.text == [], "the marker is held back and then dropped, so no reader sees any of it"
+
+
+@pytest.mark.asyncio
+async def test_a_cron_turn_may_put_the_marker_on_its_last_line(workspace, monkeypatch):
+    _served(monkeypatch, [_finished_stream("2 deals ", "filtered\n\n", "[SILENT]")])
+    sink = _Sink()
+
+    final, _used, messages, outcome = await _litellm_agent(workspace)._run_agent_loop(
+        _seed(), on_token_delta=sink.delta, origin=Origin.CRON
+    )
+
+    assert outcome.silent is True and final == "2 deals filtered\n\n[SILENT]"
+    assert messages[-1].get("_silent") is True
+    assert sink.text == [], "the marker closed a report only the whole call could judge, so none of it went out"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reply",
+    [
+        pytest.param("[SILENT] nothing new here", id="marker_then_prose"),
+        pytest.param("Reply NO_REPLY if you agree", id="marker_in_a_sentence"),
+        pytest.param("2 deals filtered\n\n[SILENT]", id="the_cron_report_on_a_persons_turn"),
+    ],
+)
+async def test_a_user_reply_that_only_mentions_a_marker_is_delivered(workspace, monkeypatch, reply):
+    """The strict rule: a person is waiting, so anything the model said beside a marker is for them."""
+    _served(monkeypatch, [_finished_stream(*_chunked(reply))])
+    sink = _Sink()
+
+    final, _used, messages, outcome = await _litellm_agent(workspace)._run_agent_loop(
+        _seed(), on_token_delta=sink.delta
+    )
+
+    assert final == reply and outcome.silent is False
+    assert "_silent" not in messages[-1]
+    assert "".join(sink.text) == reply, "held while it could still be a marker, then shown whole and in order"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin", [Origin.USER, Origin.CRON])
+async def test_a_reply_that_is_no_marker_is_shown_whole(workspace, monkeypatch, origin):
+    _served(monkeypatch, [_finished_stream("2 deals ", "filtered")])
+    sink = _Sink()
+
+    final, _used, _messages, outcome = await _litellm_agent(workspace)._run_agent_loop(
+        _seed(), on_token_delta=sink.delta, origin=origin
+    )
+
+    assert final == "2 deals filtered" and outcome.silent is False
+    if origin is Origin.CRON:
+        assert sink.text == ["2 deals filtered"], "a runtime turn holds the call and shows it in one piece"
+    else:
+        assert sink.text == ["2 deals ", "filtered"], "a person's reply types out as it always did"
+
+
+@pytest.mark.asyncio
+async def test_an_error_whose_body_is_a_marker_is_still_a_failure(workspace):
+    """A marker is the model's own choice; an error has no model behind it to have made one."""
+
+    class _Provider:
+        async def chat_with_retry(self, messages, tools=None, model=None, fallback_models=None, **_kw):
+            return LLMResponse(
+                content="NO_REPLY",
+                finish_reason="error",
+                error_classification=ErrorClassification("auth", retryable=False, should_fallback=False),
+            )
+
+        def get_default_model(self):
+            return "stub"
+
+    agent = _make_agent(workspace, _Provider(), RecoveryLimits(llm_error_retry_delays=()))
+
+    _final, _used, messages, outcome = await agent._run_agent_loop(_seed())
+    failed = await _fail(agent)
+
+    assert outcome.status == "error" and outcome.error and outcome.silent is False
+    assert not any(m.get("_silent") for m in messages)
+    assert isinstance(failed, AnswerlessTurnError)
+
+
+@pytest.mark.asyncio
+async def test_a_marker_held_for_a_hook_is_still_never_shown(workspace, monkeypatch):
+    """With a hook that can send a reply back the loop holds the whole text for it; the marker
+    comes out of that hold into the silence gate, which is where it stops."""
+    _served(monkeypatch, [_finished_stream("[SILENT]")])
+    sink = _Sink()
+
+    _final, _used, _messages, outcome = await _litellm_agent(workspace, hooks=[_Holds()])._run_agent_loop(
+        _seed(), on_token_delta=sink.delta
+    )
+
+    assert outcome.silent is True and sink.text == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "origin,reply",
+    [
+        pytest.param(Origin.USER, "NO", id="user_a_marker_prefix_that_is_no_marker"),
+        pytest.param(Origin.CRON, "2 deals filtered", id="runtime_report"),
+    ],
+)
+async def test_a_reply_held_for_a_hook_is_shown_once_it_is_kept(workspace, monkeypatch, origin, reply):
+    """The hook's hold and the silence gate's hold are two, and a kept reply is let go of by both."""
+    _served(monkeypatch, [_finished_stream(reply)])
+    sink = _Sink()
+
+    final, _used, _messages, outcome = await _litellm_agent(workspace, hooks=[_Holds()])._run_agent_loop(
+        _seed(), on_token_delta=sink.delta, origin=origin
+    )
+
+    assert final == reply and outcome.silent is False
+    assert sink.text == [reply]
+
+
+class _Replaces(AgentHook):
+    @property
+    def name(self) -> str:
+        return "Replaces"
+
+    async def after_iteration(self, ctx):
+        from raven.agent.hook import HookDecision
+
+        return HookDecision(short_circuit_result="the hook's own words")
+
+
+@pytest.mark.asyncio
+async def test_a_hook_that_replaces_a_marker_reply_leaves_the_turn_not_silent(workspace, monkeypatch):
+    _served(monkeypatch, [_finished_stream("[SILENT]")])
+    sink = _Sink()
+
+    final, _used, messages, outcome = await _litellm_agent(workspace, hooks=[_Replaces()])._run_agent_loop(
+        _seed(), on_token_delta=sink.delta
+    )
+
+    assert final == "the hook's own words" and outcome.silent is False
+    assert sink.text == [], "the marker was the draft the hook replaced, and nobody saw a draft"
+    assert not any(m.get("_silent") for m in messages)
+
+
+@pytest.mark.asyncio
+async def test_a_marker_after_a_cut_answer_leaves_what_streamed_as_the_answer(workspace, monkeypatch):
+    """The reader already has the start of an answer, so a marker after it ends that answer; it does not take it back."""
+    calls = _served(monkeypatch, [_cut_stream("Hello "), _finished_stream("[SILENT]")])
+    sink = _Sink()
+
+    final, _used, messages, outcome = await _litellm_agent(workspace)._run_agent_loop(
+        _seed(), on_token_delta=sink.delta
+    )
+
+    assert len(calls) == 2
+    assert final == "Hello" and outcome.silent is False and outcome.status == "completed"
+    assert "".join(sink.text) == "Hello ", "the marker is held back and dropped all the same"
+    assert (messages[-1]["role"], messages[-1]["content"]) == ("assistant", "Hello")
+    assert "_silent" not in messages[-1]
+
+
+@pytest.mark.asyncio
+async def test_a_cut_reply_that_began_like_a_marker_still_shows_its_start(workspace, monkeypatch):
+    """A held start is the answer so far once the stream is cut, and the continuation follows it."""
+    _served(monkeypatch, [_cut_stream("NO"), _finished_stream(" problem at all.")])
+    sink = _Sink()
+
+    final, _used, _messages, outcome = await _litellm_agent(workspace)._run_agent_loop(
+        _seed(), on_token_delta=sink.delta
+    )
+
+    assert final == "NO problem at all." and outcome.silent is False
+    assert "".join(sink.text) == "NO problem at all."
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "origin,preamble,ending,seen",
+    [
+        pytest.param(
+            Origin.USER, "NO", "There is one file.", ["NO", "There is one file."], id="user_start_of_a_marker"
+        ),
+        pytest.param(
+            Origin.CRON, "Checking the inbox", "[SILENT]", ["Checking the inbox"], id="runtime_words_then_a_marker"
+        ),
+    ],
+)
+async def test_the_words_beside_a_tool_call_are_released_with_it(
+    workspace, monkeypatch, origin, preamble, ending, seen
+):
+    """Words said beside a tool call are not a reply a marker could be, so a hold on them ends with the call."""
+    _served(monkeypatch, [_preamble_then_tool_stream(preamble), _finished_stream(ending)])
+    sink = _Sink()
+
+    _final, _used, _messages, _outcome = await _litellm_agent(workspace)._run_agent_loop(
+        _seed(), on_token_delta=sink.delta, origin=origin
+    )
+
+    assert sink.text == seen
