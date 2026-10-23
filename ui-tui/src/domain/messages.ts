@@ -211,6 +211,33 @@ export const turnErrorLine = (payload: ErrorEvent['payload'], kept = false): str
   return `error: ${payload.message} (code=${payload.code})${detail ? `: ${detail}` : ''}`
 }
 
+const FENCE_OPEN = /^\s*\[BEGIN UNTRUSTED ([^ #]+) #([^ ]+) /
+
+/**
+ * A stored tool result as the call returned it. The runtime keeps a string
+ * result inside wrap_untrusted's fence, followed by any note of its own to the
+ * model; live previews draw the raw result, so a resumed one keeps only the
+ * fenced part. The fence ends only at the close marker carrying the opening
+ * line's source and nonce, as ui-web's `defence` reads it, and a result stored
+ * without a fence is kept whole. Nothing is trimmed: `previewLines` reads the
+ * indentation.
+ */
+const storedResult = (text: string): string => {
+  const lines = text.split('\n')
+  const start = lines.findIndex(line => FENCE_OPEN.test(line))
+  const open = start < 0 ? null : FENCE_OPEN.exec(lines[start]!)
+
+  if (!open) {
+    return text
+  }
+
+  const close = `[END UNTRUSTED ${open[1]} #${open[2]}]`
+  const rest = lines.slice(start + 1)
+  const end = rest.findIndex(line => line.trimStart().startsWith(close))
+
+  return (end < 0 ? rest : rest.slice(0, end)).join('\n')
+}
+
 /**
  * Rows as the transcript draws them, with each closed turn's artifact shelf
  * folded in at the boundary that closed it.
@@ -297,7 +324,7 @@ export const toTranscriptMessages = (rows: unknown, opts: { openTurn?: boolean }
       deliveryFiles(metadata).forEach(file => addUnique(artifacts.deliveries, file))
       folded.push({
         role: 'tool',
-        text: clampToolPreview(typeof text === 'string' ? text : ''),
+        text: clampToolPreview(storedResult(typeof text === 'string' ? text : '')),
         ...(durationMs != null ? { durationMs } : {}),
         ...(toolCallId ? { toolCallId } : {}),
         // Carried along so the core can stand up an episode on its own when no
