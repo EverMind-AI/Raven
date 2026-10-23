@@ -609,13 +609,15 @@ async def test_an_npx_entry_left_incomplete_is_named_with_the_command_that_clear
     assert tested.remedy == clears
 
 
+@pytest.mark.slow
 async def test_a_first_fetch_longer_than_the_connect_s_bounds_still_connects(tmp_path: Path) -> None:
     """The download is not the handshake's: a connect waits it out before its own bounds start.
 
     Inside them, a slow line ran the bounds out mid-download and the teardown's
     SIGKILL left npx's entry incomplete -- see the test above for what that
     costs. Here the fetch takes longer than the handshake and the answer
-    together, and the connect still lands.
+    together, and the connect still lands. Slow on purpose: the fetch has to
+    outlast those two seconds for real, so the test waits three.
     """
     from raven.agent.subagent.probe import ping_agent
 
