@@ -5,9 +5,9 @@
  * rules override declarations the sheet makes again further down -- the grid's
  * tracks (`.app`) and the module pages' inset (`.page`) -- and both base rules
  * come later at the same weight, so an override spelled with the same selector
- * is simply lost: the first spelling put the main pane back into the second
- * track beside an empty first one whenever the overlay rail stood, which is the
- * squeeze the block exists to end. No DOM test can see a cascade, so the weight
+ * is simply lost, and the main pane goes back into the second track beside an
+ * empty first one whenever the overlay rail stands, which is the squeeze the
+ * block exists to end. No DOM test can see a cascade, so the weight
  * is pinned here, computed rather than string-matched.
  *
  * The fold's width lives twice on purpose -- the stylesheet cannot read a
