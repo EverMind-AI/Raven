@@ -51,6 +51,10 @@ def _req(
     )
 
 
+def _user_req(chat_id="c7") -> TurnRequest:
+    return _req(channel="telegram", chat_id=chat_id, conversation=f"telegram:{chat_id}", origin=Origin.USER)
+
+
 class _FakeChannel:
     def __init__(self, name="telegram", *, file_attachments=False) -> None:
         self.name = name
@@ -372,13 +376,12 @@ async def test_gateway_sink_keeps_the_canned_reply_for_a_crash():
 
 async def test_a_cron_run_that_got_no_output_is_not_delivered():
     """A scheduled run has no reader waiting on it, and its job records the
-    failure; a chat message for every empty hourly check would be noise. The
-    turn still ends, so whatever the channel started for it stops."""
+    failure. It started no typing indicator either, so there is none to end."""
     ch = _EndsTurns("telegram")
     sent = await _reply_to_a_failed_turn(AnswerlessTurnError(EMPTY_REPLY_FAILURE, no_output=True), channel=ch)
 
     assert sent == []
-    assert ch.ended == ["c9"]
+    assert ch.ended == []
 
 
 async def test_a_user_turn_that_got_no_output_is_told_so():
@@ -440,23 +443,44 @@ async def test_a_no_output_failure_is_judged_by_its_own_turn():
     assert told == [("u1", bound_llm_detail(EMPTY_REPLY_FAILURE))]
 
 
+def _finish_of(how: str, conversation_id: str, turn_id: str) -> TurnEnded | TurnFailed:
+    """The three ways a turn leaves the sink: answered, failed, cancelled."""
+    if how == "ended":
+        return TurnEnded(
+            usage=Usage(0, 0, 0),
+            latency_ms=0.0,
+            explicit_reply=True,
+            conversation_id=conversation_id,
+            turn_id=turn_id,
+        )
+    return TurnFailed(
+        error="boom" if how == "failed" else "cancelled",
+        cancelled=how == "cancelled",
+        conversation_id=conversation_id,
+        turn_id=turn_id,
+    )
+
+
+def _silent_end(conversation_id: str, turn_id: str) -> TurnEnded:
+    return TurnEnded(
+        usage=Usage(0, 0, 0),
+        latency_ms=0.0,
+        explicit_reply=False,
+        conversation_id=conversation_id,
+        turn_id=turn_id,
+    )
+
+
 @pytest.mark.parametrize("how", ["ended", "failed", "cancelled"])
 async def test_a_finished_cron_turn_is_forgotten(how):
-    """The gateway runs for weeks, so the sink holds a cron run's id only while
+    """The gateway runs for weeks, so the sink holds a turn's origin only while
     it runs. The id is reused here to see whether it is still held: a no-output
     failure on a turn that is not a cron run is told."""
-    finish = {
-        "ended": TurnEnded(
-            usage=Usage(0, 0, 0), latency_ms=0.0, explicit_reply=True, conversation_id="cron:1", turn_id="t1"
-        ),
-        "failed": TurnFailed(error="boom", cancelled=False, conversation_id="cron:1", turn_id="t1"),
-        "cancelled": TurnFailed(error="cancelled", cancelled=True, conversation_id="cron:1", turn_id="t1"),
-    }[how]
     hub = _RecordingHub()
     sources = {"cron:1": _src(chat_id="c7")}
     sink = _make_gateway_sink(hub, _ReplyAgent(), sources)
     await sink(TurnStarted(origin=Origin.CRON, conversation_id="cron:1", turn_id="t1"))
-    await sink(finish)
+    await sink(_finish_of(how, "cron:1", "t1"))
     told_before = len(hub.dispatched)
 
     sources["cron:1"] = _src(chat_id="c7")
@@ -762,12 +786,13 @@ async def test_the_gateway_probes_the_asking_capability_not_the_class():
 
 
 async def test_a_turn_that_ended_without_a_reply_tells_the_channel_it_is_over():
-    """A typing indicator stops when the reply is sent. A turn the model ended
-    silently sends nothing, so the channel is told the turn is over instead."""
+    """A typing indicator stops when the reply is sent. A user's message the model
+    answered with silence sends nothing, so the channel is told the turn is over
+    instead."""
     ch = _EndsTurns("telegram")
     scheduler, hub, _rb, _sources, teardown = build_gateway(_SilentAgent(), {"telegram": ch})
     try:
-        await scheduler.submit(_req(channel="telegram", chat_id="c7")).result()
+        await scheduler.submit(_user_req()).result()
         await hub.wait_idle("telegram")
     finally:
         await teardown()
@@ -778,11 +803,11 @@ async def test_a_turn_that_ended_without_a_reply_tells_the_channel_it_is_over():
 
 async def test_a_turn_without_a_reply_that_was_not_marked_silent_is_ended_too():
     """What triggers the end is that nothing was sent, not that the model said
-    so: a heartbeat that decided to skip leaves no reply either."""
+    so."""
     ch = _EndsTurns("telegram")
     scheduler, _hub, _rb, _sources, teardown = build_gateway(_SilentAgent(silent=False), {"telegram": ch})
     try:
-        await scheduler.submit(_req(channel="telegram", chat_id="c7")).result()
+        await scheduler.submit(_user_req()).result()
     finally:
         await teardown()
 
@@ -795,7 +820,7 @@ async def test_a_turn_that_sent_a_reply_is_not_told_it_is_over():
     ch = _EndsTurns("telegram")
     scheduler, hub, _rb, _sources, teardown = build_gateway(_ReplyAgent([Text(content="done")]), {"telegram": ch})
     try:
-        await scheduler.submit(_req(channel="telegram", chat_id="c7")).result()
+        await scheduler.submit(_user_req()).result()
         await hub.wait_idle("telegram")
     finally:
         await teardown()
@@ -827,7 +852,7 @@ async def test_a_slow_channel_cannot_hold_a_turn_that_ended_without_a_reply():
     ch = _NeverEnds("telegram")
     scheduler, hub, _rb, _sources, teardown = build_gateway(_SilentAgent(), {"telegram": ch})
     try:
-        await asyncio.wait_for(scheduler.submit(_req(channel="telegram", chat_id="c7")).result(), timeout=2)
+        await asyncio.wait_for(scheduler.submit(_user_req()).result(), timeout=2)
     finally:
         ch.release.set()
         await teardown()
@@ -843,7 +868,7 @@ async def test_teardown_stops_an_end_turn_the_channel_never_finishes(monkeypatch
     monkeypatch.setattr(gateway_spine, "_DELIVERY_GRACE", 0.05)
     ch = _NeverEnds("telegram")
     scheduler, hub, _rb, _sources, teardown = build_gateway(_SilentAgent(), {"telegram": ch})
-    await asyncio.wait_for(scheduler.submit(_req(channel="telegram", chat_id="c7")).result(), timeout=2)
+    await asyncio.wait_for(scheduler.submit(_user_req()).result(), timeout=2)
 
     started = asyncio.get_running_loop().time()
     await asyncio.wait_for(teardown(), timeout=2)
@@ -854,21 +879,67 @@ async def test_teardown_stops_an_end_turn_the_channel_never_finishes(monkeypatch
 
 
 async def test_a_finished_turn_end_is_not_kept():
-    """The gateway runs for weeks, and a proactive turn may well end silently: a
-    turn end that has finished leaves the set teardown settles."""
+    """The gateway runs for weeks, and a user's message may well be answered with
+    silence: a turn end that has finished leaves the set teardown settles."""
     ending: set[asyncio.Task[None]] = set()
     ch = _EndsTurns("telegram")
     sink = _make_gateway_sink(
-        DeliveryHub(), _SilentAgent(), {"cron:1": _src(chat_id="c7")}, None, {"telegram": ch}, ending
+        DeliveryHub(), _SilentAgent(), {"telegram:c7": _src(chat_id="c7")}, None, {"telegram": ch}, ending
     )
 
-    await sink(TurnEnded(usage=Usage(0, 0, 0), latency_ms=0.0, explicit_reply=False, conversation_id="cron:1"))
+    await sink(TurnStarted(origin=Origin.USER, conversation_id="telegram:c7", turn_id="t1"))
+    await sink(_silent_end("telegram:c7", "t1"))
     (task,) = ending
     await task
     await asyncio.sleep(0)
 
     assert ch.ended == ["c7"]
     assert ending == set()
+
+
+@pytest.mark.parametrize(
+    ("origin", "told"),
+    [
+        (Origin.USER, True),
+        (Origin.HEARTBEAT, False),
+        (Origin.CRON, False),
+        (Origin.SENTINEL, False),
+        (Origin.SUBAGENT, False),
+    ],
+)
+async def test_only_a_turn_a_user_started_is_told_it_is_over(origin, told):
+    """Only a user's message starts a typing indicator. A silent heartbeat or cron
+    turn has none to end, and telling the chat would cancel the indicator of a
+    user turn running in it."""
+    ch = _EndsTurns("telegram")
+    scheduler, _hub, _rb, _sources, teardown = build_gateway(_SilentAgent(), {"telegram": ch})
+    try:
+        await scheduler.submit(
+            _req(channel="telegram", chat_id="c7", conversation=f"{origin.value}:1", origin=origin)
+        ).result()
+    finally:
+        await teardown()
+
+    assert ch.ended == (["c7"] if told else [])
+
+
+@pytest.mark.parametrize("how", ["ended", "failed", "cancelled"])
+async def test_a_finished_user_turn_is_forgotten(how):
+    """The sink holds a turn's origin only while it runs. The id is reused here to
+    see whether it is still held: a silent end on a turn that is not a user's
+    is not told."""
+    ending: set[asyncio.Task[None]] = set()
+    ch = _EndsTurns("telegram")
+    sources = {"telegram:c7": _src(chat_id="c7")}
+    sink = _make_gateway_sink(_RecordingHub(), _SilentAgent(), sources, None, {"telegram": ch}, ending)
+    await sink(TurnStarted(origin=Origin.USER, conversation_id="telegram:c7", turn_id="t1"))
+    await sink(_finish_of(how, "telegram:c7", "t1"))
+
+    sources["telegram:c7"] = _src(chat_id="c7")
+    await sink(_silent_end("telegram:c7", "t1"))
+    await asyncio.gather(*ending)
+
+    assert ch.ended == []
 
 
 class _RaisingEnd(_EndsTurns):
@@ -904,7 +975,7 @@ async def test_a_turn_ends_quietly_for_a_channel_that_has_no_end_turn(registered
     channels = {"telegram": _FakeChannel("telegram")} if registered else {}
     scheduler, _hub, _rb, _sources, teardown = build_gateway(_SilentAgent(), channels)
     try:
-        outcome = await scheduler.submit(_req(channel="telegram", chat_id="c7")).result()
+        outcome = await scheduler.submit(_user_req()).result()
     finally:
         await teardown()
 

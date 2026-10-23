@@ -175,15 +175,16 @@ def _make_gateway_sink(
     TurnFailed fire ``on_turn_complete`` (the WakeScheduler's parked-wake
     signal), and on a non-cancelled failure deliver a user-visible error reply
     to the originating channel -- the failure's category when a model call was
-    what failed. A cron turn the model gave no output for sends none either: no
-    one is waiting on it, and its job records the failure. A cancelled turn
-    (/stop) fires the wake and sends no reply -- unless ``cut_by_reload`` says a
+    what failed. A cron turn the model gave no output for gets none: no one is
+    waiting on it, and its job records the failure. A cancelled turn (/stop)
+    fires the wake and sends no reply -- unless ``cut_by_reload`` says a
     generation swap did the cancelling, in which case the channel is told the
-    reply was cut. A turn that ended with no reply tells its channel so
-    (``end_turn``), since only a send would otherwise stop what the channel
-    started for it. That runs as a task held in ``ending``, not inline: the
-    scheduler resolves a turn only after this sink returns, and stopping an
-    indicator can be a network call.
+    reply was cut. A turn a user started that ended with no reply tells its
+    channel so (``end_turn``): the typing indicator the user's message started
+    is otherwise stopped only by a send, and no other origin starts one. That
+    runs as a task held in ``ending``, not inline: the scheduler resolves a turn
+    only after this sink returns, and stopping an indicator can be a network
+    call.
 
     notify fires on every origin (cron / sentinel / heartbeat / channel) rather
     than on user turns only -- benign and slightly more correct:
@@ -192,30 +193,22 @@ def _make_gateway_sink(
     stranded."""
 
     ending = set() if ending is None else ending
-    cron_turns: set[str] = set()
-
-    def end_turn_in_background(source: Source) -> None:
-        task = asyncio.create_task(_end_turn((channels or {}).get(source.channel), source.chat_id))
-        ending.add(task)
-        task.add_done_callback(ending.discard)
+    # The origin of each live turn, from its TurnStarted until it ends, fails or
+    # is cancelled.
+    origins: dict[str, Origin | None] = {}
 
     async def sink(event: TurnEvent) -> None:
         if isinstance(event, TurnStarted):
-            if event.origin is Origin.CRON:
-                cron_turns.add(event.turn_id)
+            origins[event.turn_id] = event.origin
             return
         if isinstance(event, (TurnEnded, TurnFailed)):
             source = sources.pop(event.conversation_id, None)
-            was_cron = event.turn_id in cron_turns
-            cron_turns.discard(event.turn_id)
+            origin = origins.pop(event.turn_id, None)
             if isinstance(event, TurnFailed) and source is not None:
                 if not event.cancelled:
-                    if was_cron and event.no_output:
-                        # A recurring run that hits this would put the same line
-                        # in the chat every time it fires. Nothing is sent, so
-                        # the turn ends the way a silent one does.
-                        end_turn_in_background(source)
-                    else:
+                    # No one is waiting on a cron run, and its job records the
+                    # failure.
+                    if not (origin is Origin.CRON and event.no_output):
                         await hub.dispatch(
                             Text(content=_failed_turn_reply(event.error, reported=event.reported), source=source)
                         )
@@ -223,8 +216,18 @@ def _make_gateway_sink(
                     # /stop is the user's own act and stays silent; a reload is
                     # not, so the reply it cut is owed at least a sentence.
                     await hub.dispatch(Text(content=_TURN_CUT_BY_RELOAD_REPLY, source=source))
-            elif isinstance(event, TurnEnded) and not event.explicit_reply and source is not None:
-                end_turn_in_background(source)
+            elif (
+                isinstance(event, TurnEnded)
+                and not event.explicit_reply
+                and origin is Origin.USER
+                and source is not None
+            ):
+                # Only a user's message starts an indicator: ending a proactive
+                # turn here would cancel the one a user turn is running in the
+                # same chat.
+                task = asyncio.create_task(_end_turn((channels or {}).get(source.channel), source.chat_id))
+                ending.add(task)
+                task.add_done_callback(ending.discard)
             agent_loop.notify_turn_complete()
             return
         await hub.dispatch(event)
