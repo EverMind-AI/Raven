@@ -787,26 +787,34 @@ def test_one_function_builds_the_environment_that_hands_ssh_a_kept_password():
     assert found == ["raven/ops/transport.py"]
 
 
-def _owner_ssh(tmp_path_factory, monkeypatch):
-    """An ssh outside the test's own directory, first on PATH: the computer's own, as far as the guard can tell."""
-    owner_bin = tmp_path_factory.mktemp("owner-bin")
-    ran = owner_bin / "ran"
+def _ssh_in(directory: Path, monkeypatch) -> tuple[Path, Path]:
+    """An ssh in ``directory``, put first on PATH, that leaves a mark if it is ever started."""
+    ran = directory / "ran"
     if sys.platform == "win32":
-        ssh = owner_bin / "ssh.bat"
+        ssh = directory / "ssh.bat"
         ssh.write_text(f'@echo off\r\ntype nul > "{ran}"\r\n', encoding="utf-8")
     else:
-        ssh = owner_bin / "ssh"
+        ssh = directory / "ssh"
         ssh.write_text(f'#!/bin/sh\ntouch "{ran}"\n', encoding="utf-8")
         ssh.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{owner_bin}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("PATH", f"{directory}{os.pathsep}{os.environ.get('PATH', '')}")
     return ssh, ran
 
 
+def _owner_ssh(tmp_path_factory, monkeypatch):
+    """An ssh outside the test's own directory: the computer's own, as far as the guard can tell."""
+    return _ssh_in(tmp_path_factory.mktemp("owner-bin"), monkeypatch)
+
+
 @pytest.mark.parametrize("named", ["by-name", "by-path"])
-def test_the_guard_stops_an_ssh_g_that_is_not_the_test_s_own(tmp_path_factory, monkeypatch, named):
+def test_the_guard_stops_an_ssh_g_that_is_not_the_test_s_own(tmp_path, tmp_path_factory, monkeypatch, named):
     """The other direction of the guard the stand-in tests pass through: with no stand-in, the ``ssh -G`` a
-    resolution starts fails the test before anything runs."""
+    resolution starts fails the test before anything runs. Named by path, it is that file the guard judges,
+    though the test's own stand-in comes first on PATH."""
     ssh, ran = _owner_ssh(tmp_path_factory, monkeypatch)
+    if named == "by-path":
+        (tmp_path / "bin").mkdir()
+        _ssh_in(tmp_path / "bin", monkeypatch)
 
     with pytest.raises(AssertionError, match="the real ssh -G ran"):
         transport.resolve_with_ssh(["ssh" if named == "by-name" else str(ssh), "203.0.113.7"])
