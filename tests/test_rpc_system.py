@@ -541,6 +541,169 @@ async def test_upgrade_names_an_install_already_in_flight(monkeypatch: pytest.Mo
     assert excinfo.value.data["reason"] == "in_progress"
 
 
+async def test_an_install_replacement_window_answers_in_progress_without_stubbing_the_probe(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The real probe, not a stub of it.
+
+    `test_an_install_replacement_window_answers_in_progress_not_an_error`
+    replaces `_is_editable_install` itself, so it only proves the handler's
+    `except` clause names the right reason. This one replaces
+    the layer *under* the probe -- the `importlib.metadata` distribution
+    lookup -- so the genuine `_direct_url_data()` and `_is_editable_install()`
+    run and have to carry the failure all the way to the refusal. A chain
+    that only holds while the probe is stubbed is not a chain.
+
+    `importlib.metadata.version()` calls `distribution()` internally, so the
+    stub answers for `raven` only and forwards every other name to the real
+    implementation.
+    """
+    import asyncio
+    import importlib.metadata as md
+
+    from raven.cli.serve_commands import SERVE
+    from raven.updates import upgrade as upgrade_commands
+
+    real_distribution = md.distribution
+
+    def fake_distribution(name):
+        if name == "raven":
+            raise md.PackageNotFoundError(name)
+        return real_distribution(name)
+
+    monkeypatch.setattr(upgrade_commands.metadata, "distribution", fake_distribution)
+
+    dispatcher = Dispatcher()
+    register_system_methods(dispatcher)
+    SERVE.arm(18792, "tok", "cookie", asyncio.Event())
+    try:
+        resp = await dispatcher.dispatch(
+            {"jsonrpc": "2.0", "id": 21, "method": "system.upgrade", "params": {}}
+        )
+    finally:
+        SERVE.disarm()
+
+    assert "error" in resp, resp
+    assert resp["error"]["code"] == -32011, resp
+    assert resp["error"]["code"] != -32603, resp
+    assert resp["error"]["data"]["reason"] == "in_progress", resp
+
+
+async def test_malformed_install_metadata_answers_not_upgradable_without_stubbing_the_probe(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """One layer down again: the install wrote a `direct_url.json` nobody can
+    parse. The genuine `_direct_url_data()` turns that into
+    `UpgradeError("Malformed Raven installation metadata")`, and the handler
+    has to name it as the refusal it is rather than let it escape.
+    """
+    import asyncio
+    import importlib.metadata as md
+
+    from raven.cli.serve_commands import SERVE
+    from raven.updates import upgrade as upgrade_commands
+
+    real_distribution = md.distribution
+
+    class _MalformedMetadata:
+        """What the distribution lookup hands back for an install whose
+        `direct_url.json` cannot be decoded."""
+
+        def read_text(self, filename: str) -> str:
+            assert filename == "direct_url.json"
+            return "{ this is not json"
+
+    def fake_distribution(name):
+        if name == "raven":
+            return _MalformedMetadata()
+        return real_distribution(name)
+
+    monkeypatch.setattr(upgrade_commands.metadata, "distribution", fake_distribution)
+
+    dispatcher = Dispatcher()
+    register_system_methods(dispatcher)
+    SERVE.arm(18792, "tok", "cookie", asyncio.Event())
+    try:
+        resp = await dispatcher.dispatch(
+            {"jsonrpc": "2.0", "id": 22, "method": "system.upgrade", "params": {}}
+        )
+    finally:
+        SERVE.disarm()
+
+    assert "error" in resp, resp
+    assert resp["error"]["code"] == -32011, resp
+    assert resp["error"]["code"] != -32603, resp
+    assert resp["error"]["data"]["reason"] == "not_upgradable", resp
+    assert "Malformed" in resp["error"]["data"]["detail"], resp
+
+
+async def test_an_unreadable_probe_answers_as_an_ordinary_install_not_an_internal_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+):
+    """The failure the guard was missing.
+
+    `PackageNotFoundError` and `UpgradeError` are the two failures the probe
+    guard names, but a metadata read can hit anything else -- an OSError from
+    a filesystem racing the in-flight install, a metadata file that cannot be
+    decoded at all. Such a read used to escape the handler as
+    `internal_error` (-32603), whose card falls back to the default
+    `raven upgrade` this branch exists to withhold. The probe only classifies
+    a checkout, so an unreadable probe is not a checkout: it answers as an
+    ordinary install and the upgrade proceeds.
+    """
+    import asyncio
+    import importlib.metadata as md
+
+    from raven.cli.serve_commands import SERVE
+    from raven.updates import upgrade as upgrade_commands
+
+    real_distribution = md.distribution
+    probed: list[str] = []
+
+    def fake_distribution(name):
+        if name == "raven":
+            probed.append(name)
+            raise OSError("the metadata read raced the environment replacement")
+        return real_distribution(name)
+
+    monkeypatch.setattr(upgrade_commands.metadata, "distribution", fake_distribution)
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    plan = upgrade_commands.UpgradePlan(
+        current_version="0.1.3",
+        release=upgrade_commands.ReleaseInfo(version="0.1.4", wheel_url="https://example.invalid/x.whl"),
+        target=upgrade_commands.ToolInstallTarget(tool_dir=tmp_path / "tools", bin_dir=bin_dir),
+    )
+    monkeypatch.setattr(upgrade_commands, "plan_upgrade", lambda: plan)
+    spawned: dict[str, object] = {}
+    monkeypatch.setattr(
+        upgrade_commands,
+        "spawn_detached_upgrade",
+        lambda p, **kw: spawned.update({"plan": p, **kw}),
+    )
+
+    dispatcher = Dispatcher()
+    register_system_methods(dispatcher)
+    stop = asyncio.Event()
+    SERVE.arm(18792, "tok", "cookie", stop)
+    try:
+        resp = await dispatcher.dispatch(
+            {"jsonrpc": "2.0", "id": 23, "method": "system.upgrade", "params": {}}
+        )
+        # The handler schedules the shutdown; wait it out so the timer cannot
+        # land on the next test's stop event.
+        await asyncio.sleep(0.9)
+    finally:
+        SERVE.disarm()
+
+    assert resp.get("error", {}).get("code") != -32603, resp
+    assert "error" not in resp, resp
+    assert resp["result"]["status"] == "started", resp
+    assert spawned, resp
+    assert probed, "the OSError never reached the probe"
+
+
 async def test_upgrade_hands_off_then_stops_the_gateway(monkeypatch: pytest.MonkeyPatch, tmp_path):
     import asyncio
 
