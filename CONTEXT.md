@@ -910,8 +910,9 @@ Replaces the old `InboundMessage`.
 `dispatch_link` is the `(trace_id, span_id)` of the span that dispatched the work a turn reports on,
 set only by the submitter announcing a dispatched result; the kernel carries it to the runner
 uninterpreted, and the turn's `session.turn` span records it as `trace.dispatched_by_span_id` /
-`trace.dispatched_in_trace_id`. It is explicit because a turn no longer inherits its submitter's
-context.
+`trace.dispatched_in_trace_id` -- that link and no other: a turn opened inside an active span
+(a scheduler built inside one keeps it for every turn) drops the link the root span would take
+from it. It is explicit because a turn no longer inherits its submitter's context.
 
 **Deliverable** (= `RunnerEvent`):
 The union of all content-type events a runner can emit: `Text | MediaOut | StreamDelta |

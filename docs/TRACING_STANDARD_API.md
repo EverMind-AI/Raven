@@ -57,6 +57,7 @@ root of a turn is a `session.turn` span; everything else nests beneath it.
 | method | effect |
 |---|---|
 | `s.set(attributes=None, **kw)` | merge attributes onto the span (dotted-key mapping and/or bare kwargs) |
+| `s.set_dispatch_link(link)` | make the span's `trace.dispatched_by_span_id` / `trace.dispatched_in_trace_id` pair exactly `link`, removing it for `None` -- including the pair a root span takes on its own when opened inside an active span |
 | `s.artifact(key, payload, *, kind="json")` | persist a large payload out-of-line; attach `<key>.artifact_path/_sha1/_bytes` + a truncated `preview`. Use for prompts / tool IO / recall results. |
 | `_spans.address_items(items)` | content-address a list of messages under `audit-artifacts/_messages/`; returns `{"$msg": sha1}` references to embed in a payload. See `audit.artifact.v2` below. |
 | `s.event(name)` | append a timeline event `{time, name}` |

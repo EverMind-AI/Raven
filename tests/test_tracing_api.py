@@ -1285,3 +1285,36 @@ def test_a_turn_without_a_dispatch_link_carries_none(trace_dir):
     for sp in records:
         assert "trace.dispatched_by_span_id" not in sp["attributes"]
         assert "trace.dispatched_in_trace_id" not in sp["attributes"]
+
+
+def test_set_dispatch_link_replaces_or_removes_the_automatic_pair(trace_dir):
+    with trace.span("startup.build") as ambient:
+        with trace.span("session.turn", root=True) as turn:
+            turn.set_dispatch_link(("trace-r", "span-r"))
+        with trace.span("session.turn", root=True) as cleared:
+            cleared.set_dispatch_link(None)
+        with trace.span("session.turn", root=True) as kept:
+            pass
+
+    written = {sp["spanId"]: sp["attributes"] for sp in _spans_written(trace_dir)}
+    assert trace.dispatch_link_of(written[turn.span_id]) == ("trace-r", "span-r")
+    assert trace.dispatch_link_of(written[cleared.span_id]) is None
+    assert "trace.dispatched_by_span_id" not in written[cleared.span_id]
+    assert trace.dispatch_link_of(written[kept.span_id]) == (ambient.trace_id, ambient.span_id), (
+        "the root span's own rule is unchanged"
+    )
+
+
+@pytest.mark.parametrize("stated", [None, ("trace-d", "span-d")], ids=["no-link", "linked"])
+def test_a_turn_opened_inside_a_span_carries_only_the_link_its_request_states(trace_dir, stated):
+    """The span a turn happens to be opened under is not where it came from."""
+
+    async def _opened_under_a_span():
+        with trace.span("startup.build"):
+            await _turn_with(stated)
+
+    asyncio.run(_opened_under_a_span())
+
+    records = [sp for sp in _spans_written(trace_dir) if sp["name"] == "session.turn"]
+    assert {sp["attributes"]["turn.in_progress"] for sp in records} == {True, False}
+    assert [trace.dispatch_link_of(sp["attributes"]) for sp in records] == [stated, stated]

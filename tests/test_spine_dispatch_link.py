@@ -3,12 +3,14 @@
 A real scheduler runs the turns, a real sub-agent manager dispatches and reports
 back, the real tracer records them, and the trajectory projection and turn
 selection read the result. Each report turn must name the run that sent it,
-whenever and in whatever order it arrives; every other turn names nothing.
+whenever and in whatever order it arrives; every other turn names nothing --
+also when the host built its scheduler inside a span.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import re
 from collections import defaultdict
@@ -155,8 +157,8 @@ class _World:
         await asyncio.gather(*self.manager._running_tasks.values(), return_exceptions=True)
 
 
-@pytest.fixture
-async def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+@pytest.fixture(params=["built-untraced", "built-in-a-span"])
+async def world(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     trace_dir = tmp_path / "traces"
     monkeypatch.setenv("RAVEN_TRACING", "1")
     monkeypatch.setenv("RAVEN_TRACING_DIR", str(trace_dir))
@@ -171,7 +173,11 @@ async def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     async def _sink(_event) -> None:
         return None
 
-    scheduler = Scheduler(runner, OriginPools(user=4, system=4), _sink)
+    # A scheduler keeps the context it was built in for every turn, so one built
+    # inside a span must still give each turn no link but the one it states.
+    building = trace.span("startup.build") if request.param == "built-in-a-span" else contextlib.nullcontext()
+    with building:
+        scheduler = Scheduler(runner, OriginPools(user=4, system=4), _sink)
     manager.set_submit(scheduler.submit)
     runner.manager, runner.scheduler = manager, scheduler
     try:

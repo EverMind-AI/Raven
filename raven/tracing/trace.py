@@ -114,6 +114,19 @@ class Span:
             self._attrs.update(kw)
         return self
 
+    def set_dispatch_link(self, link: tuple[str, str] | None) -> "Span":
+        """Make the span's dispatch pair exactly ``link``: written when given, removed when None.
+
+        A root span opened inside an active span links back to it on its own
+        (see :func:`span`). A span whose origin is stated elsewhere -- a turn
+        names its dispatcher on its request -- has to drop that automatic pair
+        when the statement is "none", which merging attributes cannot do.
+        """
+        self._attrs.pop(DISPATCHED_BY, None)
+        self._attrs.pop(DISPATCHED_IN, None)
+        self._attrs.update(dispatch_attrs(link))
+        return self
+
     def artifact(self, key: str, payload: Any, *, kind: str = "json") -> "Span":
         """Persist a large payload out-of-line; attach ``<key>.artifact_*`` + preview."""
         try:
@@ -202,6 +215,9 @@ class _NoopSpan:
     invocation_source = None
 
     def set(self, *_a, **_k):
+        return self
+
+    def set_dispatch_link(self, *_a):
         return self
 
     def artifact(self, *_a, **_k):

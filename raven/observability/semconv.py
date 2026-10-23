@@ -15,7 +15,7 @@ from typing import Any
 
 from raven.observability import purpose as _purpose
 from raven.observability import usage as usage_mod
-from raven.tracing import artifact_v2, config, trace
+from raven.tracing import artifact_v2, config
 from raven.tracing import spans as _spans
 from raven.tracing.store import preview_text
 from raven.utils.images import inline_image_bytes, is_image_part
@@ -750,9 +750,12 @@ def turn_open(span, bound: dict[str, Any]) -> None:
         "turn.input",
         {"content": user_input, "channel": channel, "chat_id": chat_id, "media": getattr(req, "media", None)},
     )
-    # Before the checkpoint, so the in-progress record already says which span
-    # dispatched this turn; a scheduled turn has no ambient span to link from.
-    span.set(trace.dispatch_attrs(getattr(req, "dispatch_link", None)))
+    # A turn's origin is what its request states and nothing else: the root
+    # links on its own to whatever span the turn was opened under -- for a
+    # scheduled turn, whatever the scheduler was built in -- so a request that
+    # names no dispatcher clears that link. Before the checkpoint, so the
+    # in-progress record already says it.
+    span.set_dispatch_link(getattr(req, "dispatch_link", None))
     span.checkpoint()
 
 
