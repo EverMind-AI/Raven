@@ -397,6 +397,27 @@ class TestRuntimeMarks:
         ]
         assert "tool_call" not in _kinds(updates)
 
+    def test_a_runtime_turn_the_message_tool_answered_still_replays(self):
+        """A turn the message tool has already answered is not a Silent Turn whatever
+        it ends on: its reply reached the reader, so the marker that closed it does
+        not take the turn out of the replay. The marker's own text is still not sent
+        as an answer."""
+        said = json.dumps({"content": "The build finished with 3 failing tests."})
+        calls = [{"id": "m1", "type": "function", "function": {"name": "message", "arguments": said}}]
+        stored = [
+            {"role": "user", "content": "[Unprompted report from 'ci']\n\n3 tests failed", "origin": "subagent"},
+            {"role": "assistant", "content": "", "tool_calls": calls},
+            {"role": "tool", "content": "Message sent to acp:s1", "tool_call_id": "m1", "name": "message"},
+            {"role": "assistant", "content": "[SILENT]", "silent": True},
+        ]
+
+        updates = _valid(replay(_map_to_wire(stored, "acp:s1"), session_id="acp:s1"))
+
+        assert _kinds(updates) == ["user_message_chunk", "tool_call", "tool_call_update"]
+        assert updates[1]["toolCallId"] == updates[2]["toolCallId"] == "m1"
+        assert updates[1]["_meta"] == {"raven.toolName": "message"}
+        assert "[SILENT]" not in json.dumps(updates)
+
     def test_a_person_answered_with_silence_still_replays_their_message(self):
         """Only a turn the runtime opened is left out: a person's own message is
         conversation even when the model answers it with its marker."""
