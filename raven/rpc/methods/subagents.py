@@ -1161,16 +1161,6 @@ async def _refuse_unless_it_answers(entries: list[dict], name: str, *, refusal: 
         return
     result = await _run_once(cfg, name, refusal=refusal)
     if result.ok:
-        if getattr(cfg, "kind", None) == "acp" and capabilities_wanted(cfg):
-            # It answered, so it can be measured: the record its statefulness,
-            # menu and modes are read from is written now rather than left to
-            # the Test button or the next restart. Best effort -- the agent has
-            # already proved itself, and a handshake that fails afterwards is
-            # not a reason to refuse the connect.
-            try:
-                await record_capabilities(cfg)
-            except Exception as exc:  # noqa: BLE001 - the connect stands on the ping
-                logger.warning("subagents: {!r} answered but its capabilities could not be recorded: {}", name, exc)
         return
     # `detail` is repeated inside `data` deliberately: the dispatcher fills
     # `data` from `detail` only when a handler passed no `data` of its own, so a
@@ -1199,6 +1189,24 @@ async def _refuse_unless_it_answers(entries: list[dict], name: str, *, refusal: 
     raise SubagentNotReadyError(detail, data=data)
 
 
+async def _record_after_the_answer(cfg: Any, name: str) -> None:
+    """Measure an acp row that has just answered the gate's prompt, when its record wants it.
+
+    It answered, so it can be measured: the record its statefulness, menu and
+    modes are read from is written now rather than left to the Test button or
+    the next restart. Best effort -- the agent has already proved itself, and
+    a handshake that fails afterwards is not a reason to refuse the connect. A
+    cancel is not a failure of the handshake and is not caught here: it ends
+    the run, and the gate refuses as for a cancel during the prompt.
+    """
+    if getattr(cfg, "kind", None) != "acp" or not capabilities_wanted(cfg):
+        return
+    try:
+        await record_capabilities(cfg)
+    except Exception as exc:  # noqa: BLE001 - the connect stands on the ping
+        logger.warning("subagents: {!r} answered but its capabilities could not be recorded: {}", name, exc)
+
+
 async def _run_once(cfg: Any, name: str, *, refusal: str) -> PingResult:
     """The gate's one real prompt, held in `_RUNNING` under the entry's name while it runs.
 
@@ -1218,7 +1226,12 @@ async def _run_once(cfg: Any, name: str, *, refusal: str) -> PingResult:
     gone; the run is cancelled with it, since the call was awaiting it.
 
     The login shell's capture is inside the task, as it is for a test, so a
-    cancel pressed during it ends the wait too.
+    cancel pressed during it ends the wait too. So is the capability record an
+    acp row that answered is measured with (`_record_after_the_answer`): that
+    is a second launch and handshake, up to the preset's start window, and
+    outside the task it ran after the name had left `_RUNNING` -- a cancel then
+    answered `cancelled: false` and the caller went on to write. Inside it, the
+    whole stretch between the press and the write is one run a cancel reaches.
     """
     live = _RUNNING.get(name)
     if live is not None and not live.done():
@@ -1227,7 +1240,10 @@ async def _run_once(cfg: Any, name: str, *, refusal: str) -> PingResult:
 
     async def _run() -> PingResult:
         await _read_the_shell_again(cfg)
-        return await ping_agent(cfg)
+        result = await ping_agent(cfg)
+        if result.ok:
+            await _record_after_the_answer(cfg, name)
+        return result
 
     task = asyncio.ensure_future(_run())
     _RUNNING[name] = task

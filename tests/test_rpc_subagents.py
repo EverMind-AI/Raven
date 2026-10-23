@@ -2678,6 +2678,79 @@ async def test_cancel_stops_the_run_that_proves_an_add_and_the_add_writes_nothin
     assert _RUNNING == {}
 
 
+async def test_cancel_reaches_the_capability_record_after_the_answer_and_the_add_writes_nothing(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An acp row that answered is measured before the add writes, and that
+    record is a second launch and handshake of up to the preset's start window.
+    It is part of the same held run: during it the name is still in `_RUNNING`,
+    a cancel answers `cancelled: true` rather than finding nothing, and the add
+    refuses as for a cancel during the prompt -- where it used to answer
+    `cancelled: false` and the add went on to write the entry."""
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.rpc.methods.subagents import _RUNNING
+
+    recording = asyncio.Event()
+    seen: list[str] = []
+
+    async def _held_record(cfg):
+        recording.set()
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            seen.append("cancelled")
+            raise
+        pytest.fail("the record should have been cancelled")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _pings_ok)
+    monkeypatch.setattr(subagents_mod, "capabilities_wanted", lambda cfg: True)
+    monkeypatch.setattr(subagents_mod, "record_capabilities", _held_record)
+    before = _stored(config_path)
+
+    adding = asyncio.ensure_future(subagents_add({"preset": "opencode"}))
+    await asyncio.wait_for(recording.wait(), timeout=5)
+    assert "OpenCode" in _RUNNING, "the record is held under the name, as the prompt before it is"
+
+    assert await subagents_test_cancel({"name": "OpenCode"}) == {"cancelled": True}
+    with pytest.raises(SubagentNotReadyError) as caught:
+        await asyncio.wait_for(adding, timeout=5)
+
+    assert caught.value.data["cancelled"] is True
+    assert caught.value.data["detail"].endswith(", so it was not added")
+    assert seen == ["cancelled"], "the cancel ends the handshake, not only the wait"
+    assert _stored(config_path) == before, "a connect cancelled during its record writes nothing"
+    assert _RUNNING == {}
+
+
+async def test_a_test_is_refused_while_a_connect_records_the_capabilities_of_the_same_name(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One run per name covers the record too: a Test pressed while the connect
+    measures the row is refused as during its prompt, and the connect lands."""
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.rpc.methods.subagents import _RUNNING
+
+    recording = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _record_when_released(cfg):
+        recording.set()
+        await release.wait()
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _pings_ok)
+    monkeypatch.setattr(subagents_mod, "capabilities_wanted", lambda cfg: True)
+    monkeypatch.setattr(subagents_mod, "record_capabilities", _record_when_released)
+
+    adding = asyncio.ensure_future(subagents_add({"preset": "opencode"}))
+    await asyncio.wait_for(recording.wait(), timeout=5)
+    second = await subagents_test({"name": "OpenCode", "source": "config"})
+    assert second["ok"] is False and "already running" in second["detail"]
+
+    release.set()
+    assert await asyncio.wait_for(adding, timeout=5) == {"added": True, "name": "OpenCode"}
+    assert _RUNNING == {}
+
+
 async def test_cancel_stops_the_run_that_proves_a_switch_on_and_the_roster_says_it_is_running(
     config_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

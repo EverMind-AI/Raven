@@ -2667,7 +2667,7 @@
     },
     {
       "name": "subagents.test_cancel",
-      "summary": "Cancel the named sub-agent's run in flight: a subagents.test, which then answers cancelled: true, or the one proof prompt a subagents.add, subagents.toggle or subagents.update sends before writing, which then refuses with SubagentNotReady carrying cancelled: true in its data and writes nothing. The agent's process ends with the run, on this computer or through the machine's node.",
+      "summary": "Cancel the named sub-agent's run in flight: a subagents.test, which then answers cancelled: true, or the one proof prompt a subagents.add, subagents.toggle or subagents.update sends before writing, together with the capability record an acp row is measured with once it answers, which then refuses with SubagentNotReady carrying cancelled: true in its data and writes nothing. The agent's process ends with the run, on this computer or through the machine's node.",
       "params": [
         {
           "name": "name",
