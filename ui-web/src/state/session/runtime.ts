@@ -111,8 +111,9 @@ export class SessionRuntime {
   heldTurn: string | null = null
 
   /* Set by the notice that says the model chose not to reply, and read when the
-     turn lands: such a turn has no answer, so nothing it said is promoted into
-     one. Cleared with the rest of the turn by `reset`. */
+     turn lands, a stop or a failure included: such a turn has no answer, so
+     nothing it said is promoted into one. Cleared with the rest of the turn by
+     `reset`, and again where a turn opens, so the mark never outlives its turn. */
   silent = false
 
   /* Only read while off screen, same as `phase`. */
@@ -486,7 +487,7 @@ export function stop(): void {
    "done", under a note saying the output was kept. */
 export function softStop(keepCancelling?: boolean, rt: SessionRuntime = viewRuntime()): void {
   transcript.killStatus()
-  transcript.finishTurn(rt.st, rt.steps, duration(undefined, rt))
+  transcript.finishTurn(rt.st, rt.steps, duration(undefined, rt), rt.silent)
   if (!keepCancelling) turn.dispatch({ type: 'idle' })
   /* Only promise the output was kept when there is output above to keep. */
   noteRow(t(transcript.turnKept() ? 'gui.halted' : 'gui.halted_bare'), '',

@@ -181,6 +181,8 @@ async function harness({
       startedAt: number
       answerAt: number
       openedTurn: string | null
+      holding: boolean
+      heldTurn: string | null
       silent: boolean
     },
     did: (name: string) => log.filter((c) => c[0] === name),
@@ -496,6 +498,74 @@ describe('notice', () => {
 
       expect(h.did('dropSay')).toEqual([])
       expect(h.live.silent).toBe(false)
+    })
+
+    it('does not mark a turn this page is cancelling', async () => {
+      /* The stop already folded that turn, and its message.complete is dropped
+         while cancelling, so a mark set now would be read by the next turn. */
+      const h = await harness({ phase: 'cancelling' })
+
+      h.dispatch(silent)
+
+      expect(h.live.silent).toBe(false)
+    })
+
+    it.each([
+      ['a send', { type: 'message.start', payload: { turn_id: 't2', content: 'from the other window' } }],
+      ['the runtime', { type: 'turn.started', payload: { turn_id: 't2' } }],
+    ])('is cleared when %s opens the next turn', async (_who, opening) => {
+      const h = await harness({ rows: [{ id: 's1', title: 'a digest', last: 'before' }] })
+      h.live.silent = true
+
+      h.dispatch(opening)
+      h.dispatch({ type: 'token.delta', payload: { text: 'the next answer' } })
+      h.dispatch({ type: 'message.complete', payload: { usage: {}, duration_ms: 3000 } })
+
+      expect(h.did('finishTurn')).toEqual([['finishTurn', '3000ms']])
+      expect(h.did('notify')).toEqual([['notify', 'gui.set.ntf.done']])
+    })
+
+    it('lands a turn stopped after the notice flagged silent', async () => {
+      /* Stopped from another window, which is the frame this page receives; the
+         stop button folds the turn through the same call. */
+      const h = await harness({ busy: true })
+      h.dispatch({ type: 'token.delta', payload: { text: 'Checking the logs.' } })
+      h.dispatch(silent)
+
+      h.dispatch({ type: 'error', payload: { message: 'cancelled', reason: 'cancelled_by_client' } })
+
+      expect(h.did('softStop')).toHaveLength(1)
+      expect(h.did('finishTurn')).toEqual([['finishTurn', expect.any(String), true]])
+    })
+
+    it('lands a turn that failed after the notice flagged silent', async () => {
+      const h = await harness()
+      h.dispatch({ type: 'token.delta', payload: { text: 'Checking the logs.' } })
+      h.dispatch(silent)
+
+      h.dispatch({ type: 'error', payload: { message: 'turn_failed', reason: 'internal', detail: 'boom' } })
+
+      expect(h.did('finishTurn')).toEqual([['finishTurn', expect.any(String), true]])
+    })
+
+    it.each([
+      ['completion', { type: 'message.complete', payload: { turn_id: 't1', usage: {}, duration_ms: 2000 } }],
+      ['cancel from another client', { type: 'error', payload: { reason: 'cancelled_by_client', turn_id: 't1' } }],
+    ])('is dropped with the late %s of the turn a held stop folded', async (_end, ending) => {
+      /* A refusal that holds the lane lands before the stopped turn's own
+         frames, so its notice marks a page that is no longer cancelling. That
+         turn's end is dropped, and its mark with it: a turn that sends no
+         opening frame would otherwise land under it. */
+      const h = await harness({ phase: 'streaming' })
+      h.live.heldTurn = 't1'
+      h.live.holding = true
+      h.dispatch(silent)
+      expect(h.live.silent).toBe(true)
+
+      h.dispatch(ending)
+
+      expect(h.live.silent).toBe(false)
+      expect(h.did('finishTurn')).toEqual([])
     })
   })
 })
