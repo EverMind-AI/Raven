@@ -131,6 +131,18 @@ function wizardSets(property, ...parts) {
   return hits[0]
 }
 
+/* One declaration of the wizard's narrow block, by a selector it lists exactly. */
+function wizardRule(selector, property) {
+  const hits = []
+  for (const [head, body] of wizardBlock()) {
+    if (!head.split(',').map((x) => x.trim()).includes(selector)) continue
+    const value = new RegExp(`(?:^|;)\\s*${property}\\s*:\\s*([^;]+)`).exec(body)
+    if (value) hits.push(value[1].trim())
+  }
+  expect(hits.length, `the wizard's narrow block sets ${property} on ${selector}`).toBe(1)
+  return hits[0]
+}
+
 /* A settings rule's selectors and one declaration, by a selector it lists. */
 function settingsRule(selector, property) {
   for (const [head, body] of rules(null, settings)) {
@@ -187,6 +199,29 @@ describe('the first-run wizard under the body floor', () => {
     expect(decls(selector, onboard).get('min-width')).toBe('160px')
     expect(wizardSets('min-width', selector)).toEqual([selector, '0'])
     expect(onboard.indexOf(`@media ${LIFT} {`)).toBeGreaterThan(onboard.indexOf(`${selector} {`))
+  })
+
+  /* With the ends gone the strip is what gives: a label that will not wrap
+     has to shrink inside its item, or it runs under the language button. A
+     later step's item grows from a zero basis, so it would give first even
+     when it is the current step; it holds its content's width then, and the
+     current label never shrinks. */
+  it('lets the step labels other than the current one shrink to an ellipsis', () => {
+    expect(decls('.ob-sitem', onboard).get('white-space')).toBe('nowrap')
+    expect(decls('.ob-sitem + .ob-sitem', onboard).get('flex')).toBe('1')
+    expect(wizardRule('.ob-sitem', 'min-width')).toBe('0')
+    expect(wizardRule('.ob-sitem > span:last-child', 'overflow')).toBe('hidden')
+    expect(wizardRule('.ob-sitem > span:last-child', 'text-overflow')).toBe('ellipsis')
+    expect(wizardRule('.ob-sitem[data-state="current"] > span:last-child', 'flex')).toBe('none')
+    expect(wizardRule('.ob-sitem[data-state="current"] > span:last-child', 'overflow')).toBe('visible')
+    expect(wizardRule('.ob-sitem + .ob-sitem[data-state="current"]', 'min-width')).toBe('auto')
+    expect(weight('.ob-sitem + .ob-sitem[data-state="current"]')).toBeGreaterThan(weight('.ob-sitem + .ob-sitem'))
+    expect(wizardRule('.ob-dot', 'flex')).toBe('none')
+  })
+
+  it('shortens the connector below its desktop minimum', () => {
+    expect(decls('.ob-sitem + .ob-sitem::before', onboard).get('min-width')).toBe('34px')
+    expect(wizardRule('.ob-sitem + .ob-sitem::before', 'min-width')).toBe('16px')
   })
 
   it('leaves a stacked pill free to take the column rather than its 320px', () => {

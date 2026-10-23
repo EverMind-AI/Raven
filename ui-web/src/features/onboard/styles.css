@@ -94,7 +94,13 @@
    reach: the model step has no Skip and the frame no close, so a Next past
    the window's edge is a first run that cannot finish. The frame drops its
    own floor; the top bar's two 160px ends, which centre the strip on a
-   desktop, give way to the strip; and the step bodies -- the settings
+   desktop, give way to the strip, whose unwrapped labels then end in an
+   ellipsis rather than run under the language button (from about 350px
+   down, in English). The current step's label is the one kept whole: a
+   later step's item grows from nothing and would otherwise be the first to
+   give, so when it is current it holds its content's width and the steps
+   before it give instead, with the connector shortened to make room; and
+   the step bodies -- the settings
    dialog's, in a column narrower than the dialog -- put a label over its
    control wherever the control would not shrink: the add form's 132px label
    column and its 280px boxes, and the role rows' 320px pills. The settings
@@ -103,6 +109,12 @@
 @media (max-width: 779px) {
   .ob-app { min-width: 0; }
   .ob-brand, .ob-lang { min-width: 0; }
+  .ob-sitem { min-width: 0; }
+  .ob-sitem > span:last-child { overflow: hidden; text-overflow: ellipsis; }
+  .ob-sitem[data-state="current"] > span:last-child { flex: none; overflow: visible; }
+  .ob-sitem + .ob-sitem[data-state="current"] { min-width: auto; }
+  .ob-sitem + .ob-sitem::before { min-width: 16px; margin: 0 6px; }
+  .ob-dot { flex: none; }
   .ob-app .settings-row:has(> .settings-ctl > .settings-mpill) { grid-template-columns: minmax(0, 1fr); }
   .ob-app .settings-cfg.settings-padd .settings-row { grid-template-columns: minmax(0, 1fr); }
   .ob-app .settings-cfg.settings-padd .settings-row .settings-ctl { justify-self: stretch; }

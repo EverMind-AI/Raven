@@ -9,7 +9,8 @@ to reach them. happy-dom applies no stylesheet and lays nothing out, and
 ui-web/scripts/gates/narrow-fold-css.test.mjs reads the rules rather than the
 boxes they produce, so this file loads the built ui-web/dist/index.html over its canned
 `?stub=1&onboard=demo` transport and walks the wizard to its close, checking
-at every stage that no control lies outside the window.
+at every stage that no control lies outside the window, no step label runs
+under the language button, and the current step's label is not cut short.
 
 It needs that build: `npm run --prefix ui-web build && python
 ui-web/build.py`. Without it the module skips; with one older than the sources
@@ -50,6 +51,12 @@ MEASURE = """() => {
     outside: controls
       .filter((el) => { const b = el.getBoundingClientRect(); return b.left < -0.5 || b.right > vw + 0.5 })
       .map((el) => [el.className, (el.innerText || '').trim().slice(0, 24), box(el)]),
+    clipped: [...app.querySelectorAll('.ob-sitem[data-state=current] > span:last-child')]
+      .filter((el) => el.scrollWidth > el.clientWidth)
+      .map((el) => el.innerText),
+    collide: [...app.querySelectorAll('.ob-sitem > span:last-child')]
+      .filter((el) => box(el)[1] > box(app.querySelector('.ob-langbtn'))[0] + 0.5)
+      .map((el) => [el.innerText, box(el), box(app.querySelector('.ob-langbtn'))]),
   }
 }"""
 
@@ -109,6 +116,10 @@ def _inside(page: Page, stage: str) -> None:
     assert m is not None, f"{stage}: the wizard is not open"
     assert m["floor"] == "0px", f"{stage}: the frame kept its floor ({m['floor']}), app box {m['app']}"
     assert m["outside"] == [], f"{stage}: controls past the window's edge (class, text, [left, right]): {m['outside']}"
+    assert m["collide"] == [], (
+        f"{stage}: step labels running under the language button (label, box, button): {m['collide']}"
+    )
+    assert m["clipped"] == [], f"{stage}: the current step's label is cut short: {m['clipped']}"
 
 
 @pytest.mark.parametrize("wizard", [(390, 844), (360, 740), (320, 568)], indirect=True, ids=lambda v: f"{v[0]}x{v[1]}")
