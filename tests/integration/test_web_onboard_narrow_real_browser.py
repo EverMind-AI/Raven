@@ -7,13 +7,13 @@ model is picked from a pill in the roles list. On a desktop the frame keeps a
 button sit past the window's right edge, where a fixed frame offers no scroll
 to reach them. happy-dom applies no stylesheet and lays nothing out, and
 ui-web/scripts/gates/narrow-fold-css.test.mjs reads the rules rather than the
-boxes they produce, so this file loads the built page over its canned
+boxes they produce, so this file loads the built ui-web/dist/index.html over its canned
 `?stub=1&onboard=demo` transport and walks the wizard to its close, checking
 at every stage that no control lies outside the window.
 
-It needs the built page: `npm run --prefix ui-web build && python
+It needs that build: `npm run --prefix ui-web build && python
 ui-web/build.py`. Without it the module skips; with one older than the sources
-it fails, since a stale page would report on rules that are no longer there.
+it fails, since a stale build would report on rules that are no longer there.
 """
 
 from __future__ import annotations
@@ -72,7 +72,7 @@ def origin() -> Iterator[str]:
         pytest.skip("ui-web/dist/index.html not built (npm run --prefix ui-web build && python ui-web/build.py)")
     built = PAGE.stat().st_mtime
     newer = [p for root in SOURCES for p in root.rglob("*") if p.is_file() and p.stat().st_mtime > built]
-    assert not newer, f"ui-web/dist/index.html is older than {newer[0].relative_to(REPO)}; rebuild the page"
+    assert not newer, f"ui-web/dist/index.html is older than {newer[0].relative_to(REPO)}; rebuild it"
     server = ThreadingHTTPServer(("127.0.0.1", 0), partial(_QuietHandler, directory=str(DIST)))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
