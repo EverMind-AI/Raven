@@ -153,6 +153,54 @@ async def test_a_missing_param_is_a_gap_and_dispatches_nothing():
     assert tool.calls == []
 
 
+async def test_a_route_condition_is_filled_before_it_reaches_the_judge():
+    """A route condition is a prompt the judge reads in the model's place: an
+    unfilled ``${params.floor}`` in it asks the judge to compare against a
+    placeholder the run never substituted, so the decision hinges on text no
+    reader can evaluate."""
+    tool = FakeDagTool()
+    ex = PlaybookExecutor(dag_tool=tool)
+    spec = _dag_spec(
+        params={
+            "floor": ParamSpec(type="string", required=True, description="the deal floor"),
+            "DEAL_TOKEN": ParamSpec(type="secret", description="the signing token"),
+        },
+        nodes=[
+            NodeSpec(
+                id="triage",
+                subagent="data-raven",
+                node_summary="judge the the deal",
+                prompt_template="look at the deal",
+                routes={
+                    "approve": "the deal is above ${params.floor} and signed with ${params.DEAL_TOKEN}",
+                    "reject": "otherwise",
+                },
+            ),
+            NodeSpec(
+                id="act",
+                subagent="content-raven",
+                node_summary="act on the verdict",
+                prompt_template="act on it",
+                depends_on=["triage"],
+                when="triage.approve",
+            ),
+        ],
+    )
+
+    plan = await ex.execute(spec, params={"floor": "100", "DEAL_TOKEN": "s3cr3t-token"}, confirmed=True)
+
+    assert plan.kind != "gaps", plan.reply
+    triage = next(n for n in tool.calls[0]["nodes"] if n["id"].endswith("-triage"))
+    assert triage["routes"]["approve"] == "the deal is above 100 and signed with [secret DEAL_TOKEN withheld]"
+    assert triage["routes"]["reject"] == "otherwise"
+    # The route text reaches the judge, so the secret must be withheld from it
+    # exactly as from a prompt: a later fill that substitutes it would send the
+    # credential to a model, and this is the pin that turns red.
+    import json as _json
+
+    assert "s3cr3t-token" not in _json.dumps(tool.calls[0]["nodes"])
+
+
 async def test_a_secret_never_reaches_a_dispatched_work_order():
     """Through the executor, because that is where it would leave.
 

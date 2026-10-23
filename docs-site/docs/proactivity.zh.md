@@ -83,8 +83,8 @@ uv run raven sentinel enable
 
 ### 接收目标 { #delivery-targets }
 
-虽然名为 `sentinel.task_discovery_targets`，该字段也为指向内部 `sentinel:direct` 目标的
-普通提醒提供接收地址，例如日计划提醒。任务发现关闭时仍会使用它。
+`sentinel.task_discovery_targets` 为任务发现以及指向内部 `sentinel:direct` 目标的
+普通提醒提供接收地址，例如日计划提醒。任务发现关闭时，普通提醒仍使用这些地址。
 
 - `"channel:chat_id"`：指定接收方；一个渠道有多个会话时优先使用。
 - `"channel"`：触发时解析该渠道最近的接收方。

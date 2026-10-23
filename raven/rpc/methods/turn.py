@@ -722,11 +722,12 @@ async def turn_unsubscribe(
 
 
 def _cancel_payload(turn_id: str) -> dict[str, Any]:
-    """The cancelled-turn error's payload, carrying its turn when one is bound.
+    """The cancelled-turn error's payload, carrying the cancelled turn's id when there is one.
 
-    The lane's bound turn is the right source here and only here: the client
-    cancels its own session, so the turn ``turn.send`` bound to this lane is the
-    turn being cancelled. The key is omitted rather than sent empty, so that
+    The id is whatever identified the turn being cancelled: the one a named
+    cancel gave, a pending inject's own, or the turn ``turn.send`` bound to
+    this lane -- never the lane's slot read for a turn it does not hold. The
+    key is omitted rather than sent empty, so that
     "absent" has one representation on the wire -- a consumer that correlates a
     request to a turn treats both the same way, as not its own.
     """
@@ -750,17 +751,31 @@ async def turn_cancel(
     """``turn.cancel`` — cancel the in-flight turn + notify subscribers.
 
     Sequence:
-      1. Look up the active turn handle; if absent → ``{cancelled: False}``.
-      2. ``await handle.cancel()``.
+      1. Find the turn to cancel. With ``turn_id``: the lane's running turn,
+         and only when it carries that id -- whether ``turn.send`` bound it or
+         the runtime opened it (a delegated result re-entering, which binds no
+         handle). Without: the active turn handle, else the oldest pending
+         inject. Neither there → ``{cancelled: False}``.
+      2. Cancel what was found.
       3. ``emitter.emit(session_key, error(reason="cancelled_by_client"))`` — the
          client resets its UI off this event. This is the ONLY cancelled-turn
          error; the sink stays silent on a cancelled TurnFailed (avoiding a
          double error), so this emit is the one signal that clears the front-end
          turn slot — it must always fire.
-      4. Await the handle so the turn is provably unwound (the sink's TurnFailed
+      4. Await the turn so it is provably unwound (the sink's TurnFailed
          handler drops the active-turn slot) before returning, so the next
          ``turn.send`` cannot race a half-unwound turn into a phantom -32003.
       5. Return ``{cancelled: True}``.
+
+    A named cancel goes past pending injects to the running turn: an inject
+    already merged into it ends with it, as it does when a bound turn is
+    cancelled, and one still waiting in the lane's mailbox falls back to a turn
+    of its own once the cancelled turn unwinds -- the spine never drops it, so
+    the reader's correction runs rather than vanishing under the stop. An
+    unnamed cancel keeps its older reach on purpose: callers that send no id
+    (the terminal UI, the ACP adapter's ``session/cancel``) mean the turn they
+    started, and reaching for whatever the lane happens to be running would
+    stop a cron wake, or a delegated turn that began after the request left.
 
     The subscription is SESSION-scoped, not turn-scoped: a per-turn cancel ends
     only the turn and MUST leave the session's subscriptions open so the next
@@ -779,6 +794,26 @@ async def turn_cancel(
         if parsed.target is not None
         else parsed.session_key
     )
+
+    if parsed.turn_id is not None:
+        # Probed, not assumed, like ``_lane_in_flight``: a scheduler without
+        # the seam (a test fake) has no running turn to name.
+        probe = getattr(_scheduler, "running_turn", None)
+        running = probe(lane) if callable(probe) else None
+        if running is None or running[0] != parsed.turn_id:
+            return {"cancelled": False}
+        handle = running[1]
+        await handle.cancel()
+        if emitter is not None:
+            await emitter.emit(
+                parsed.session_key,
+                {
+                    "type": "error",
+                    "payload": _tag(_cancel_payload(parsed.turn_id), (direct_targets or {}).get(lane)),
+                },
+            )
+        await handle.result()
+        return {"cancelled": True}
 
     reach = _cancellable(lane)
     if reach is None:

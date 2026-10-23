@@ -93,6 +93,7 @@ export const STAGES: readonly Stage[] = [
       ask(p.content)
     }
     if (p.content) touchSession(sessionCurrent(), p.content)
+    rt.openedTurn = null
     rt.dispatch({ type: 'stream', cancellable: true }); goState(); drawMeter()
     advanceTurn()
   }),
@@ -146,7 +147,10 @@ export const STAGES: readonly Stage[] = [
        to timing it here, a stop being the one that always does. */
     rt.startedAt = Date.now()
     rt.answerAt = 0
-    rt.dispatch({ type: 'stream', cancellable: false }); goState(); drawMeter()
+    /* Cancellable by its id: nothing bound a handle to this turn, so the stop
+       button names it and turn.cancel reaches it as the lane's running turn. */
+    rt.openedTurn = p.turn_id
+    rt.dispatch({ type: 'stream', cancellable: true }); goState(); drawMeter()
   }),
 
   arm('episode.start', (rt) => {

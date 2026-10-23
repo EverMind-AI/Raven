@@ -296,12 +296,14 @@ async def test_the_live_dispatch_runs_no_turn_when_the_menu_lacks_its_model(
     assert host.frames("prompt") == []
 
 
+@pytest.mark.slow
 async def test_the_agents_mirasim_has_are_asked_of_the_adapter_in_the_login_shells_environment(
     host: FakeHost, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The question the boot's verification asks before handshaking a preset: the host's agent list.
 
     Asked where the presets' adapters look -- the login shell's environment -- not in raven's own.
+    The real adapter subprocess waits for the production listClis quiet window.
     """
     from raven.agent.subagent.backends import env as backends_env
     from raven.agent.subagent.mirasim_presets import installed_agents

@@ -805,6 +805,14 @@
           "schema": {
             "$ref": "#/components/schemas/DirectTarget"
           }
+        },
+        {
+          "name": "turn_id",
+          "description": "The turn to cancel, by the id its opening frame carried. Present, the lane's running turn is cancelled only when it has this id, whoever opened it -- the way to stop a turn the runtime opened, which binds no handle. Absent, only a turn.send turn or a pending inject is reached.",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "result": {

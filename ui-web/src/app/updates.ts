@@ -73,7 +73,8 @@ export function showUpNote(kind: UpKind, latest?: string | null): void {
 
 /* The row's line and its action word, per notice. */
 function wording(kind: UpKind): [string, string] {
-  if (kind === 'ver') return [upLatest ? t('gui.upg.note', { v: `v${upLatest}` }) : t('gui.upg.note_bare'), t('gui.upg.go')]
+  if (kind === 'ver')
+    return [upLatest ? t('gui.upg.note', { v: `v${upLatest}` }) : t('gui.upg.note_bare'), t('gui.upg.go')]
   if (kind === 'behind') return [t('gui.update.behind'), t('gui.update.behind_how')]
   return [t('gui.update.note'), t('gui.update.reload')]
 }
@@ -110,7 +111,11 @@ interface UpgradeMark {
 }
 
 export function upMark(to?: string | null): void {
-  try { localStorage.setItem(UPG_KEY, JSON.stringify({ to: to || null, t0: Date.now() })) } catch { /* private mode */ }
+  try {
+    localStorage.setItem(UPG_KEY, JSON.stringify({ to: to || null, t0: Date.now() }))
+  } catch {
+    /* private mode */
+  }
 }
 
 export function upMarkRead(): UpgradeMark | null {
@@ -118,25 +123,38 @@ export function upMarkRead(): UpgradeMark | null {
     const m = JSON.parse(localStorage.getItem(UPG_KEY) || 'null') as UpgradeMark | null
     if (!m || !m.t0 || Date.now() - m.t0 > UPG_CEILING_MS) return null
     return m
-  } catch { return null }
+  } catch {
+    return null
+  }
 }
 
 export function upMarkClear(): void {
-  try { localStorage.removeItem(UPG_KEY) } catch { /* private mode */ }
+  try {
+    localStorage.removeItem(UPG_KEY)
+  } catch {
+    /* private mode */
+  }
 }
 
 export function askUpgrade(): void {
   /* Already running: re-enter the progress dialog rather than offering to
      start it again. Closing that dialog must not strand the reader. */
   const running = upMarkRead()
-  if (running) { watchUpgrade(upShade(), running.t0); return }
+  if (running) {
+    watchUpgrade(upShade(), running.t0)
+    return
+  }
   if (turn.busy()) {
     confirmAsk(t('gui.upg.title'), t('gui.upg.body_busy'), t('gui.upg.close'), () => {}, 'notice')
     return
   }
-  confirmAsk(t('gui.upg.title'),
+  confirmAsk(
+    t('gui.upg.title'),
     t('gui.upg.body', { from: `v${APP_VERSION() || '?'}`, to: `v${upLatest || '?'}` }),
-    t('gui.upg.go'), runUpgrade, 'primary')
+    t('gui.upg.go'),
+    runUpgrade,
+    'primary'
+  )
 }
 
 /* Called at boot: a page that loads while an install is in flight re-attaches
@@ -154,6 +172,7 @@ export function resumeUpgrade(): void {
 const REFUSALS: Record<string, string> = {
   unsupervised: 'gui.upg.why.unsupervised',
   not_serving: 'gui.upg.why.not_serving',
+  editable: 'gui.upg.why.editable'
 }
 
 export function refusalText(err: { data?: { reason?: string; detail?: string }; message?: string }): string {
@@ -175,7 +194,7 @@ export async function runUpgrade(): Promise<void> {
   } catch (e) {
     /* The server saw an install already in flight. That is the dialog the
        reader wanted, not an error -- adopt the run instead of reporting it. */
-    const err = e as { data?: { reason?: string; detail?: string }; message?: string }
+    const err = e as { data?: { reason?: string; detail?: string; command?: string }; message?: string }
     if (err.data && err.data.reason === 'in_progress') {
       upMark(upLatest)
       watchUpgrade(shade)
@@ -191,7 +210,9 @@ export async function runUpgrade(): Promise<void> {
       return
     }
     upMarkClear()
-    shade.fail(t('gui.upg.failed'), refusalText(err))
+    /* The server says per refusal: a command to copy, an explicit null when it
+       proved none can work, or nothing when the default is still right. */
+    shade.fail(t('gui.upg.failed'), refusalText(err), err.data?.command)
     return
   }
   upMark(upLatest)
@@ -223,11 +244,14 @@ async function readStatus(): Promise<UpStatus | null> {
     if (!r.ok) return null
     const body = (await r.json()) as Partial<UpStatus> | null
     return body && body.upgrading === true ? (body as UpStatus) : null
-  } catch { return null }
+  } catch {
+    return null
+  }
 }
 
 const mib = (n: number): string => (n / 1048576).toFixed(1)
-const speed = (n: number): string => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB/s` : `${Math.round(n / 1024)} KB/s`)
+const speed = (n: number): string =>
+  n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB/s` : `${Math.round(n / 1024)} KB/s`
 
 /* The line and the bar for one report. Numbers and units are the same in every
    language, so only the frame around them comes from the catalogue. */
@@ -235,7 +259,10 @@ export function describeStatus(s: UpStatus): { text: string; fraction: number | 
   if (s.phase === 'downloading') {
     const amount = s.total > 0 ? `${mib(s.done)} / ${mib(s.total)} MiB` : `${mib(s.done)} MiB`
     const rate = s.rate > 0 ? ` · ${speed(s.rate)}` : ''
-    return { text: t('gui.upg.phase.download', { progress: amount + rate }), fraction: s.total > 0 ? s.done / s.total : null }
+    return {
+      text: t('gui.upg.phase.download', { progress: amount + rate }),
+      fraction: s.total > 0 ? s.done / s.total : null
+    }
   }
   if (s.phase === 'installing') return { text: t('gui.upg.phase.install'), fraction: null }
   return { text: t('gui.upg.working'), fraction: null }
@@ -290,8 +317,15 @@ export function watchUpgrade(shade: UpgradeShade, since?: number): void {
       setTimeout(tick, 1500)
       return
     }
-    if (r.status === 401 || r.status === 403) { upMarkClear(); shade.fail(t('gui.upg.reauth'), ''); return }
-    if (!r.ok) { setTimeout(tick, 1500); return }
+    if (r.status === 401 || r.status === 403) {
+      upMarkClear()
+      shade.fail(t('gui.upg.reauth'), '')
+      return
+    }
+    if (!r.ok) {
+      setTimeout(tick, 1500)
+      return
+    }
     upMarkClear()
     window.location.reload()
   }
@@ -309,7 +343,10 @@ let distBase: string | null = null
 /* One look at the served page: the validator of the build on disk, and
    whether the server judged that build older than the sources beside it (the
    X-Raven-Page-Behind header, which only a source checkout ever sends). */
-interface DistSeen { tag: string | null; behind: boolean }
+interface DistSeen {
+  tag: string | null
+  behind: boolean
+}
 
 const distProbe = async (): Promise<DistSeen | null> => {
   /* Only the built page has a dist to watch. Under `vite dev` the dev server
@@ -321,9 +358,11 @@ const distProbe = async (): Promise<DistSeen | null> => {
     if (!r.ok) return null
     return {
       tag: r.headers.get('etag') || r.headers.get('last-modified') || null,
-      behind: r.headers.has('x-raven-page-behind'),
+      behind: r.headers.has('x-raven-page-behind')
     }
-  } catch { return null }
+  } catch {
+    return null
+  }
 }
 
 /* True only when the build is known to have CHANGED. An unreachable server, a
@@ -348,7 +387,10 @@ const probe = async (): Promise<void> => {
   if (seen.behind) showUpNote('behind')
   else hideBehindNote()
   if (seen.tag === null) return
-  if (distBase === null) { distBase = seen.tag; return }
+  if (distBase === null) {
+    distBase = seen.tag
+    return
+  }
   if (seen.tag !== distBase) showUpNote('ui')
 }
 

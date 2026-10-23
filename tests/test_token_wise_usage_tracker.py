@@ -15,7 +15,40 @@ from raven.providers.base import LLMProvider, LLMResponse
 from raven.providers.lazy import LazyProvider
 from raven.token_wise import usage_context
 from raven.token_wise.registry import StrategyRegistry
-from raven.token_wise.usage_tracker import UsageTracker
+from raven.token_wise.usage_tracker import UsageTracker, read_usage_rows
+
+
+def test_usage_rows_are_read_incrementally_and_close_the_file(tmp_path, monkeypatch):
+    import io
+
+    first = b'{"model": "first"}\n'
+    stream = io.BytesIO(first + b'{"model": "second"}\n')
+    monkeypatch.setattr(Path, "open", lambda *args, **kwargs: stream)
+
+    rows = iter(read_usage_rows(tmp_path / "usage.jsonl"))
+    assert next(rows) == {"model": "first"}
+    assert stream.tell() == len(first)
+    assert list(rows) == [{"model": "second"}]
+    assert stream.closed
+
+
+def test_usage_rows_skip_invalid_records_and_keep_valid_neighbors(tmp_path):
+    path = tmp_path / "usage.jsonl"
+    path.write_bytes(b'{"model": "first"}\nnot-json\nnull\n[]\n\n\xff\n{"model": "second"}\n{"cut":')
+
+    assert list(read_usage_rows(path)) == [{"model": "first"}, {"model": "second"}]
+
+
+def test_usage_rows_tolerate_a_missing_file(tmp_path):
+    assert list(read_usage_rows(tmp_path / "missing.jsonl")) == []
+
+
+def test_usage_rows_tolerate_an_unreadable_file(tmp_path, monkeypatch):
+    def refuse_open(*args, **kwargs):
+        raise PermissionError("not readable")
+
+    monkeypatch.setattr(Path, "open", refuse_open)
+    assert list(read_usage_rows(tmp_path / "usage.jsonl")) == []
 
 
 def _snap(model="anthropic/claude-sonnet-4-5", session_key="sess1", **kwargs) -> UsageSnapshot:

@@ -425,7 +425,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         renames_models=True,
     ),
     # === Resale gateways reached through OpenAI's driver ===================
-    # Thirteen shelves that resell other vendors' models over an
+    # Fourteen shelves that resell other vendors' models over an
     # OpenAI-compatible endpoint. LiteLLM routes none of them, so each borrows
     # OpenAI's driver and states the address that distinguishes it -- the same
     # shape as SiliconFlow above, and a gateway for the same reason: a model id
@@ -622,6 +622,21 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         is_gateway=True,
         detect_by_base_keyword="amd.com.cn",
         default_api_base="https://developer.amd.com.cn/radeon/v1",
+        strip_model_prefix=False,
+    ),
+    # Opper: EU-hosted gateway. A bare id is a model pool it routes across
+    # providers; a "provider/model" id pins one route, so the prefix stays.
+    ProviderSpec(
+        name="opper",
+        key_url="https://platform.opper.ai",
+        keywords=("opper",),
+        env_key="OPENAI_API_KEY",
+        display_name="Opper",
+        homepage="https://opper.ai",
+        via_driver="openai",
+        is_gateway=True,
+        detect_by_base_keyword="opper.ai",
+        default_api_base="https://api.opper.ai/v3/compat",
         strip_model_prefix=False,
     ),
     # === CN vendors reached through OpenAI's driver ========================
@@ -1515,7 +1530,7 @@ def _tables() -> "tuple[dict[str, ProviderSpec], dict[str, str]]":
 
     Both used to scan every spec per call, and between them they were reached
     some 22,000 times while one ``model.options`` answered -- a fifth of that
-    answer's time went into normalizing the same fifty-five names over and
+    answer's time went into normalizing the same fifty-six names over and
     over. Keyed on the tuple's identity so a registry a test installs is read
     rather than remembered.
     """

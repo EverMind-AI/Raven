@@ -74,8 +74,10 @@ def _clear_active_turns():
     from raven.rpc.methods import turn as _turn_mod
 
     _turn_mod._active_turns.clear()
+    _turn_mod._pending_injects.clear()
     yield
     _turn_mod._active_turns.clear()
+    _turn_mod._pending_injects.clear()
 
 
 @pytest.fixture
@@ -727,4 +729,496 @@ async def test_two_concurrent_cancels_still_leave_exactly_one_reported_end(
         release.set()
         with contextlib.suppress(Exception):
             await blocker.result()
+        await teardown()
+
+
+# --- a runtime-opened turn (no bound handle) ---
+
+
+async def test_turn_cancel_reaches_a_runtime_opened_turn(
+    emitter: SubscriptionEmitter,
+    send_frame_capture: AsyncMock,
+) -> None:
+    """A delegated result re-entering the conversation is the lane's running turn
+    but binds no handle: turn.send never ran for it and no inject fell back. A
+    cancel naming it must still reach it -- through the scheduler -- emit the one
+    cancelled frame that clears the page, and leave the lane free afterwards."""
+    from raven.rpc.methods import turn as _turn_mod
+    from raven.rpc.spine import build_rpc_spine
+    from raven.spine import Origin, Source, TurnRequest
+    from raven.spine.message import ChatType
+
+    running = asyncio.Event()
+
+    class _DelegatedLoop:
+        tools: dict = {}
+
+        async def run_turn(self, req, emit, drain, **_kwargs):
+            running.set()
+            await asyncio.Event().wait()  # only a cancel ends this turn
+
+    loop = _DelegatedLoop()
+    scheduler, _hub, _turn_ids, teardown = build_rpc_spine(loop, emitter, on_turn_end=_turn_mod.clear_active)
+    _turn_mod.bind_scheduler(scheduler)
+    try:
+        await turn_subscribe({"session_key": "tui:default"}, emitter=emitter)
+        handle = scheduler.submit(
+            TurnRequest(
+                origin=Origin.SUBAGENT,
+                source=Source(channel="tui", chat_id="default", sender_id="subagent", chat_type=ChatType.DM),
+                text="the result",
+                conversation="tui:default",
+                turn_id="turn-reentry",
+                delegated={"kind": "spawn", "label": "worker", "status": "ok"},
+            )
+        )
+        await running.wait()
+        assert not _turn_mod.is_turn_active("tui:default"), (
+            "the runtime turn bound the active slot; the premise does not hold"
+        )
+
+        assert await turn_cancel({"session_key": "tui:default", "turn_id": "turn-reentry"}, emitter=emitter) == {
+            "cancelled": True
+        }
+
+        await asyncio.sleep(0.05)  # let the coalescer flush
+        cancelled = [
+            e
+            for e in _collect_events(send_frame_capture)
+            if e.get("type") == "error" and e.get("payload", {}).get("reason") == "cancelled_by_client"
+        ]
+        assert len(cancelled) == 1, f"expected exactly one cancelled frame; got {len(cancelled)}"
+        assert cancelled[0]["payload"]["turn_id"] == "turn-reentry", "the frame names the turn it ended"
+        assert not scheduler.has_inflight("tui:default"), "the cancel left the lane busy"
+        with contextlib.suppress(Exception):
+            await handle.result()
+    finally:
+        _turn_mod.bind_scheduler(None)
+        await teardown()
+
+
+async def test_cancelling_a_runtime_turn_leaves_queued_work_queued(
+    emitter: SubscriptionEmitter,
+) -> None:
+    """Only the running turn dies: a send queued behind the delegated re-entry
+    still runs once the lane frees, the way a bound handle's cancel leaves it."""
+    from raven.rpc.methods import turn as _turn_mod
+    from raven.rpc.spine import build_rpc_spine
+    from raven.spine import Origin, Source, Text, TurnOutcome, TurnRequest, Usage
+    from raven.spine.message import ChatType
+
+    reentry_running = asyncio.Event()
+
+    class _TwoOriginLoop:
+        tools: dict = {}
+
+        async def run_turn(self, req, emit, drain, **_kwargs):
+            if req.origin is Origin.SUBAGENT:
+                reentry_running.set()
+                await asyncio.Event().wait()  # only a cancel ends this turn
+            await emit(Text(content="done"))
+            return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
+
+    loop = _TwoOriginLoop()
+    scheduler, _hub, _turn_ids, teardown = build_rpc_spine(loop, emitter, on_turn_end=_turn_mod.clear_active)
+    _turn_mod.bind_scheduler(scheduler)
+    try:
+        reentry = scheduler.submit(
+            TurnRequest(
+                origin=Origin.SUBAGENT,
+                source=Source(channel="tui", chat_id="default", sender_id="subagent", chat_type=ChatType.DM),
+                text="the result",
+                conversation="tui:default",
+                turn_id="turn-reentry",
+                delegated={"kind": "spawn", "label": "worker", "status": "ok"},
+            )
+        )
+        await reentry_running.wait()
+        queued = scheduler.submit(
+            TurnRequest(
+                origin=Origin.USER,
+                source=Source(channel="tui", chat_id="default", sender_id="user", chat_type=ChatType.DM),
+                text="the follow-up",
+                conversation="tui:default",
+            )
+        )
+
+        assert await turn_cancel({"session_key": "tui:default", "turn_id": "turn-reentry"}, emitter=emitter) == {
+            "cancelled": True
+        }
+
+        out = await asyncio.wait_for(queued.result(), timeout=5)
+        assert isinstance(out, TurnOutcome), f"the queued turn did not survive the cancel: {out!r}"
+    finally:
+        _turn_mod.bind_scheduler(None)
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(reentry.result(), timeout=5)
+        await teardown()
+
+
+def _reentry(text: str = "the result", turn_id: str = "turn-reentry"):
+    """A delegated result re-entering ``tui:default``, submitted the way the
+    sub-agent announce submits it: no handle bound, the lane's own turn."""
+    from raven.spine import Origin, Source, TurnRequest
+    from raven.spine.message import ChatType
+
+    return TurnRequest(
+        origin=Origin.SUBAGENT,
+        source=Source(channel="tui", chat_id="default", sender_id="subagent", chat_type=ChatType.DM),
+        text=text,
+        conversation="tui:default",
+        turn_id=turn_id,
+        delegated={"kind": "spawn", "label": "worker", "status": "ok"},
+    )
+
+
+class _SteerableLoop:
+    """A turn whose text is in ``hold`` runs until cancelled, draining its
+    injects once when ``gap`` opens -- the real loop drains at the top of each
+    iteration. Any other turn answers at once and is recorded in ``answered``.
+    With ``unwind`` set, a cancelled hold turn takes until it opens to finish
+    unwinding, which is the window a waiter can be cancelled in."""
+
+    tools: dict = {}
+
+    def __init__(self, *hold: str, unwind: asyncio.Event | None = None) -> None:
+        self.hold = set(hold)
+        self.unwind = unwind
+        self.running = asyncio.Event()
+        self.gap = asyncio.Event()
+        self.merged = asyncio.Event()
+        self.hit = asyncio.Event()
+        self.drained: list[str] = []
+        self.answered: list[str] = []
+
+    async def run_turn(self, req, emit, drain, **_kwargs):
+        from raven.spine import Text, TurnOutcome, Usage
+
+        if req.text in self.hold:
+            self.running.set()
+            try:
+                await self.gap.wait()
+                self.drained.extend(r.text for r in drain())
+                self.merged.set()
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.hit.set()
+                if self.unwind is not None:
+                    await self.unwind.wait()
+                raise
+        self.answered.append(req.text)
+        await emit(Text(content="done"))
+        return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
+
+
+def _cancelled_frames(send_frame_capture: AsyncMock) -> list[dict]:
+    return [
+        e
+        for e in _collect_events(send_frame_capture)
+        if e.get("type") == "error" and e.get("payload", {}).get("reason") == "cancelled_by_client"
+    ]
+
+
+@pytest.mark.parametrize("wake", ["delegated", "cron"])
+async def test_an_unnamed_cancel_leaves_a_turn_it_did_not_bind_running(
+    emitter: SubscriptionEmitter,
+    send_frame_capture: AsyncMock,
+    wake: str,
+) -> None:
+    """A caller that names no turn means the one it started: the terminal UI,
+    and the ACP adapter, whose ``session/cancel`` fires whether or not a prompt
+    is still open. A delegated result or a cron wake running on the session's
+    lane was started by neither, so the cancel must leave it alone."""
+    from dataclasses import replace
+
+    from raven.rpc.methods import turn as _turn_mod
+    from raven.rpc.spine import build_rpc_spine
+    from raven.spine import Origin
+
+    loop = _SteerableLoop("the result")
+    scheduler, _hub, turn_ids, teardown = build_rpc_spine(loop, emitter, on_turn_end=_turn_mod.clear_active)
+    _turn_mod.bind_scheduler(scheduler)
+    try:
+        await turn_subscribe({"session_key": "tui:default"}, emitter=emitter)
+        req = _reentry()
+        if wake == "cron":
+            req = replace(req, origin=Origin.CRON, delegated=None)
+        handle = scheduler.submit(req)
+        await loop.running.wait()
+
+        assert await turn_cancel({"session_key": "tui:default"}, emitter=emitter, turn_ids=turn_ids) == {
+            "cancelled": False
+        }
+
+        await asyncio.sleep(0.05)
+        assert _cancelled_frames(send_frame_capture) == []
+        assert not loop.hit.is_set(), "the unnamed cancel reached a turn it did not bind"
+        assert scheduler.has_inflight("tui:default")
+        assert not handle._fut.done()
+    finally:
+        _turn_mod.bind_scheduler(None)
+        await teardown()
+
+
+async def test_a_cancel_naming_another_turn_leaves_the_running_one_alone(
+    emitter: SubscriptionEmitter,
+    send_frame_capture: AsyncMock,
+) -> None:
+    """A stop that left while one delegated result was running and arrives after
+    the next one started names the first: the second, which the reader has not
+    seen begin, keeps running."""
+    from raven.rpc.methods import turn as _turn_mod
+    from raven.rpc.spine import build_rpc_spine
+
+    loop = _SteerableLoop("the second result")
+    scheduler, _hub, turn_ids, teardown = build_rpc_spine(loop, emitter, on_turn_end=_turn_mod.clear_active)
+    _turn_mod.bind_scheduler(scheduler)
+    try:
+        await turn_subscribe({"session_key": "tui:default"}, emitter=emitter)
+        scheduler.submit(_reentry("the second result", turn_id="turn-second"))
+        await loop.running.wait()
+
+        assert await turn_cancel(
+            {"session_key": "tui:default", "turn_id": "turn-first"}, emitter=emitter, turn_ids=turn_ids
+        ) == {"cancelled": False}
+
+        await asyncio.sleep(0.05)
+        assert _cancelled_frames(send_frame_capture) == []
+        assert not loop.hit.is_set(), "a stale id cancelled the turn that replaced it"
+        assert scheduler.has_inflight("tui:default")
+    finally:
+        _turn_mod.bind_scheduler(None)
+        await teardown()
+
+
+async def test_a_named_cancel_reaches_a_sent_turn_as_well(emitter: SubscriptionEmitter) -> None:
+    """The id names the running turn whoever opened it, so a client that sends
+    one for a turn of its own is answered the same way."""
+    from raven.rpc.methods import turn as _turn_mod
+    from raven.rpc.spine import build_rpc_spine
+
+    loop = _SteerableLoop("go")
+    scheduler, _hub, turn_ids, teardown = build_rpc_spine(loop, emitter, on_turn_end=_turn_mod.clear_active)
+    _turn_mod.bind_scheduler(scheduler)
+    try:
+        sent = await turn_send(
+            {"session_key": "tui:default", "content": "go"}, emitter=emitter, scheduler=scheduler, turn_ids=turn_ids
+        )
+        await loop.running.wait()
+
+        assert await turn_cancel(
+            {"session_key": "tui:default", "turn_id": sent["turn_id"]}, emitter=emitter, turn_ids=turn_ids
+        ) == {"cancelled": True}
+        assert not _turn_mod.is_turn_active("tui:default") and not scheduler.has_inflight("tui:default")
+    finally:
+        _turn_mod.bind_scheduler(None)
+        await teardown()
+
+
+async def test_a_named_cancel_goes_past_an_inject_still_in_the_mailbox(
+    emitter: SubscriptionEmitter,
+    send_frame_capture: AsyncMock,
+) -> None:
+    """The reader slips a correction into a delegated result's turn and presses
+    stop before the turn's next gap. The stop ends the delegated turn -- not the
+    correction, which used to be what the cancel found first, leaving the turn
+    running -- and the correction runs next as a turn of its own, the way it
+    does when a sent turn is stopped."""
+    from raven.rpc.methods import turn as _turn_mod
+    from raven.rpc.spine import build_rpc_spine
+
+    loop = _SteerableLoop("the result")
+    scheduler, _hub, turn_ids, teardown = build_rpc_spine(
+        loop, emitter, on_turn_end=_turn_mod.clear_active, on_turn_start=_turn_mod.promote_pending_inject
+    )
+    _turn_mod.bind_scheduler(scheduler)
+    try:
+        await turn_subscribe({"session_key": "tui:default"}, emitter=emitter)
+        host = scheduler.submit(_reentry())
+        await loop.running.wait()
+        steer = await turn_send(
+            {"session_key": "tui:default", "content": "stop that", "busy": "inject"},
+            emitter=emitter,
+            scheduler=scheduler,
+            turn_ids=turn_ids,
+        )
+        assert len(scheduler._lanes["tui:default"]._inject_mailbox) == 1, "premise: the correction is not merged"
+
+        answer = await asyncio.wait_for(
+            turn_cancel({"session_key": "tui:default", "turn_id": "turn-reentry"}, emitter=emitter, turn_ids=turn_ids),
+            timeout=2,
+        )
+
+        assert answer == {"cancelled": True}
+        assert loop.hit.is_set(), "the delegated turn kept running"
+        assert await host.result() is None
+        for _ in range(20):
+            if loop.answered:
+                break
+            await asyncio.sleep(0.01)
+        assert loop.answered == ["stop that"], "the correction did not run as a turn of its own"
+        await asyncio.sleep(0.05)
+        events = _collect_events(send_frame_capture)
+        cancelled = _cancelled_frames(send_frame_capture)
+        assert [e["payload"].get("turn_id") for e in cancelled] == ["turn-reentry"]
+        starts = [e["payload"].get("turn_id") for e in events if e.get("type") == "message.start"]
+        assert starts == [steer["turn_id"]], "the correction's turn is opened on the wire"
+    finally:
+        _turn_mod.bind_scheduler(None)
+        await teardown()
+
+
+async def test_a_named_cancel_ends_an_inject_already_merged_with_its_host(
+    emitter: SubscriptionEmitter,
+    send_frame_capture: AsyncMock,
+) -> None:
+    """The correction already reached the delegated turn's gap and is part of
+    it. The stop ends that turn at once -- it used to wait for the turn to finish
+    on its own -- and the merged correction ends with it rather than running
+    again."""
+    from raven.rpc.methods import turn as _turn_mod
+    from raven.rpc.spine import build_rpc_spine
+
+    loop = _SteerableLoop("the result")
+    scheduler, _hub, turn_ids, teardown = build_rpc_spine(
+        loop, emitter, on_turn_end=_turn_mod.clear_active, on_turn_start=_turn_mod.promote_pending_inject
+    )
+    _turn_mod.bind_scheduler(scheduler)
+    try:
+        await turn_subscribe({"session_key": "tui:default"}, emitter=emitter)
+        host = scheduler.submit(_reentry())
+        await loop.running.wait()
+        await turn_send(
+            {"session_key": "tui:default", "content": "stop that", "busy": "inject"},
+            emitter=emitter,
+            scheduler=scheduler,
+            turn_ids=turn_ids,
+        )
+        loop.gap.set()
+        await loop.merged.wait()
+        assert loop.drained == ["stop that"], "premise: the correction merged"
+
+        answer = await asyncio.wait_for(
+            turn_cancel({"session_key": "tui:default", "turn_id": "turn-reentry"}, emitter=emitter, turn_ids=turn_ids),
+            timeout=2,
+        )
+
+        assert answer == {"cancelled": True}
+        assert await host.result() is None
+        await asyncio.sleep(0.05)
+        assert loop.answered == [], "the merged correction ran a second time"
+        assert "tui:default" not in _turn_mod._pending_injects
+        assert not scheduler.has_inflight("tui:default")
+        assert [e["payload"].get("turn_id") for e in _cancelled_frames(send_frame_capture)] == ["turn-reentry"]
+    finally:
+        _turn_mod.bind_scheduler(None)
+        await teardown()
+
+
+async def test_an_unnamed_cancel_of_a_sent_turn_with_a_merged_inject_is_unchanged(
+    emitter: SubscriptionEmitter,
+) -> None:
+    """The control: a sent turn with a correction merged into it was always
+    stoppable without an id, and still is."""
+    from raven.rpc.methods import turn as _turn_mod
+    from raven.rpc.spine import build_rpc_spine
+
+    loop = _SteerableLoop("go")
+    scheduler, _hub, turn_ids, teardown = build_rpc_spine(
+        loop, emitter, on_turn_end=_turn_mod.clear_active, on_turn_start=_turn_mod.promote_pending_inject
+    )
+    _turn_mod.bind_scheduler(scheduler)
+    try:
+        await turn_send(
+            {"session_key": "tui:default", "content": "go"}, emitter=emitter, scheduler=scheduler, turn_ids=turn_ids
+        )
+        await loop.running.wait()
+        await turn_send(
+            {"session_key": "tui:default", "content": "stop that", "busy": "inject"},
+            emitter=emitter,
+            scheduler=scheduler,
+            turn_ids=turn_ids,
+        )
+        loop.gap.set()
+        await loop.merged.wait()
+
+        answer = await asyncio.wait_for(
+            turn_cancel({"session_key": "tui:default"}, emitter=emitter, turn_ids=turn_ids), timeout=2
+        )
+
+        assert answer == {"cancelled": True}
+        assert loop.hit.is_set()
+        assert not _turn_mod.is_turn_active("tui:default") and not scheduler.has_inflight("tui:default")
+    finally:
+        _turn_mod.bind_scheduler(None)
+        await teardown()
+
+
+@pytest.mark.parametrize("caller", ["named turn.cancel", "bound turn.cancel", "session.interrupt"])
+async def test_a_waiter_cancelled_mid_unwind_does_not_wedge_the_lane(
+    emitter: SubscriptionEmitter,
+    caller: str,
+) -> None:
+    """Every cancel path waits for the turn to unwind before answering, and the
+    connection closing cancels the handler doing that waiting. The cancellation
+    used to reach the lane's own future through the wait, so the worker -- its
+    sole resolver -- raised on resolving it and died: the turn queued behind
+    never ran and the lane read as running for good."""
+    from raven.rpc.methods import turn as _turn_mod
+    from raven.rpc.spine import build_rpc_spine
+    from raven.spine import Origin, Source, TurnOutcome, TurnRequest
+    from raven.spine.message import ChatType
+
+    unwind = asyncio.Event()
+    loop = _SteerableLoop("go", "the result", unwind=unwind)
+    scheduler, _hub, turn_ids, teardown = build_rpc_spine(loop, emitter, on_turn_end=_turn_mod.clear_active)
+    _turn_mod.bind_scheduler(scheduler)
+    try:
+        if caller == "named turn.cancel":
+            scheduler.submit(_reentry())
+            call = turn_cancel({"session_key": "tui:default", "turn_id": "turn-reentry"}, emitter=emitter)
+        else:
+            await turn_send(
+                {"session_key": "tui:default", "content": "go"},
+                emitter=emitter,
+                scheduler=scheduler,
+                turn_ids=turn_ids,
+            )
+            if caller == "bound turn.cancel":
+                call = turn_cancel({"session_key": "tui:default"}, emitter=emitter, turn_ids=turn_ids)
+            else:
+                call = session_interrupt({"session_id": "tui:default"})
+        await loop.running.wait()
+        queued = scheduler.submit(
+            TurnRequest(
+                origin=Origin.USER,
+                source=Source(channel="tui", chat_id="default", sender_id="user", chat_type=ChatType.DM),
+                text="the follow-up",
+                conversation="tui:default",
+            )
+        )
+
+        waiter = asyncio.create_task(call)
+        await loop.hit.wait()
+        await asyncio.sleep(0.05)  # the waiter is parked on the unwind
+        assert not waiter.done()
+        waiter.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await waiter
+        unwind.set()
+
+        out = await asyncio.wait_for(queued.result(), timeout=2)
+        assert isinstance(out, TurnOutcome), f"the queued turn did not run: {out!r}"
+        worker = scheduler._lanes["tui:default"]._worker
+        assert worker is not None
+        if worker.done():
+            assert worker.exception() is None, f"the lane worker died: {worker.exception()!r}"
+        for _ in range(20):
+            if not scheduler.has_inflight("tui:default"):
+                break
+            await asyncio.sleep(0.01)
+        assert not scheduler.has_inflight("tui:default"), "the lane still reads as running"
+    finally:
+        unwind.set()
+        _turn_mod.bind_scheduler(None)
         await teardown()

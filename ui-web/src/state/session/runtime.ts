@@ -81,6 +81,13 @@ export class SessionRuntime {
   startedAt = 0
   answerAt = 0
 
+  /* The running turn's id when the runtime opened it (a delegated result
+     re-entering), from its `turn.started`; null for a turn a send opened. The
+     stop button names it, because no handle was bound for such a turn and
+     `turn.cancel` reaches it only by id -- and only while it is the one
+     running, so a stop that arrives late cannot land on the next turn. */
+  openedTurn: string | null = null
+
   /* Only read while off screen, same as `phase`. */
   queue: string[] = []
 
@@ -152,6 +159,7 @@ export const state = (): SessionRuntime => viewRuntime()
 export function reset(rt: SessionRuntime = viewRuntime()): void {
   transcript.stopStream()
   rt.st = null; rt.steps = []; rt.say = ''; rt.open.clear(); rt.sawEpisode = false
+  rt.openedTurn = null
   rt.startedAt = Date.now()
   rt.answerAt = 0
 }
@@ -376,17 +384,27 @@ function runsOn(sessionId: string | null | undefined): Recent | null {
 
 /* The stop button: cancel the turn the reader started. */
 export function stop(): void {
-  /* A runtime turn (a delegated result re-entering) is NOT cancellable:
-   turn.cancel resolves only handles turn.send registered, and the stop
-   button claiming the UI here would reset the stage while the delegated
-   deltas are still streaming into it. The reader's stop does nothing until
-   the turn is one they can stop. */
+  /* The machine's guard, not a statement about the turn: a send-bound turn and
+     a runtime-opened one (a delegated result re-entering) can both be stopped,
+     so what stops a second press here is the cancelling phase the first press
+     moved the machine into. The runtime-opened one is named by its id: the
+     server cancels it only while it is still the turn running, and goes past a
+     message the reader slipped into it -- that message runs next as a turn of
+     its own, as it does when a sent turn is stopped. */
   if (!turn.cancellable()) return
   const owner = sessionCurrent()
+  const opened = viewRuntime().openedTurn
   turn.dispatch({ type: 'cancel' })
-  gateway().call('turn.cancel', { session_key: owner as string })
-    .then(() => {
-      get(owner)?.dispatch({ type: 'idle' })
+  gateway().call('turn.cancel', { session_key: owner as string, ...(opened ? { turn_id: opened } : {}) })
+    .then((r) => {
+      const rt = get(owner)
+      /* Refused: the turn it named had already ended. A turn that opened since
+         took the phase off `cancelling` with its first frame -- `openedTurn`
+         cannot say so, the fold at the press cleared it and a turn a send
+         opened never sets it -- and that turn is the one running now: going
+         idle would take its stop button and release the queue into it. */
+      if (r.cancelled === false && rt && (isActiveRuntime(rt) ? turn.phase() : rt.phase.phase) !== 'cancelling') return
+      rt?.dispatch({ type: 'idle' })
       if (sessionCurrent() === owner) { drawMeter(); goState(); sessionDraw(); drain() }
     }, () => {
       get(owner)?.dispatch({ type: 'idle' })

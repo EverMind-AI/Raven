@@ -100,6 +100,20 @@ def test_param_refs_must_be_declared():
     )
 
 
+def test_route_condition_param_refs_must_be_declared():
+    errors = validate_structure(_spec([_node("a", routes={"go": "the deal is above ${params.ghost}"})]))
+    assert any("ghost" in e for e in errors), errors
+    assert (
+        validate_structure(
+            _spec(
+                [_node("a", routes={"go": "the deal is above ${params.floor}", "hold": "otherwise"})],
+                params={"floor": ParamSpec(description="the deal floor")},
+            )
+        )
+        == []
+    )
+
+
 def test_params_must_not_be_duplicated_into_node_inputs() -> None:
     params = {"project_path": ParamSpec(default=".", description="which project directory?")}
     duplicated = _node(

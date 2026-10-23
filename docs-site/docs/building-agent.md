@@ -151,11 +151,11 @@ The engine manifest lives inside its Python package, with an entry in the
 distribution; readiness stays false until that package is importable by the
 child interpreter.
 
-Manage dependencies with `uv` in the intended project/environment. Resolve
-Raven from your verified checkout or distribution; the unqualified `raven`
-name on a public package index can refer to a different project. Do not copy a
-bare package-install command from an older design note. See
-[Development](development.md) for repository environment setup.
+Manage dependencies with `uv` in the intended project/environment. Install
+Raven through [Quick Start](quick-start.md), or use the source-checkout setup in
+[Development](development.md). These paths select the EverMind Raven
+distribution; an unqualified `raven` package-index name can identify a different
+project.
 
 ## Verify, discover, and operate
 

@@ -177,6 +177,7 @@ async function harness({
       sawEpisode: boolean
       startedAt: number
       answerAt: number
+      openedTurn: string | null
     },
     did: (name: string) => log.filter((c) => c[0] === name),
     order: () => log.map((c) => c[0]),
@@ -293,7 +294,10 @@ describe('turn.started', () => {
 
     h.dispatch({
       type: 'turn.started',
-      payload: { delegated: { kind: 'dag', label: 'qc', status: 'ok', content: 'done', run_id: 'r1' } },
+      payload: {
+        turn_id: 't-reentry',
+        delegated: { kind: 'dag', label: 'qc', status: 'ok', content: 'done', run_id: 'r1' },
+      },
     })
 
     expect(h.did('advanceTurn')).toHaveLength(1)
@@ -305,8 +309,19 @@ describe('turn.started', () => {
     expect(h.live.startedAt).toBeGreaterThan(0)
     expect(h.live.answerAt).toBe(0)
     expect(h.park.turnOwner).toBe('s1')
-    /* A runtime turn is NOT cancellable. */
-    expect(h.did('dispatch')).toEqual([['dispatch', 'stream', false]])
+    /* Cancellable by its id: nothing bound a handle to this turn, so the stop
+       button has to name it. */
+    expect(h.did('dispatch')).toEqual([['dispatch', 'stream', true]])
+    expect(h.live.openedTurn).toBe('t-reentry')
+  })
+
+  it('forgets the id once a turn a send opened takes over', async () => {
+    const h = await harness({ rows: [{ id: 's1' }] })
+    h.dispatch({ type: 'turn.started', payload: { turn_id: 't-reentry' } })
+
+    h.dispatch({ type: 'message.start', payload: { turn_id: 't-sent', content: 'next' } })
+
+    expect(h.live.openedTurn).toBeNull()
   })
 
   it('hands the row what a node returned, beside the report the model was given', async () => {

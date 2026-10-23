@@ -1348,7 +1348,9 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
       'Raven is still working on a turn, a sub-agent or a question waiting for an answer, possibly in an IM channel. Upgrading restarts Raven and would cut that off, so let it finish first.',
     'gui.upg.why.not_serving': 'This page is not being served by a running Raven, so it has nothing here to upgrade.',
     'gui.upg.why.unsupervised':
-      'This Raven was started by hand in a terminal, so nothing would bring it back after an upgrade. Run raven upgrade there, then start Raven again.',
+      'This Raven was started by hand in a terminal, so nothing would bring it back after an upgrade. Stop this Raven first, then run raven upgrade there and start it again: the upgrade does not stop it for you, and a new raven web would only attach to the old one still running.',
+    'gui.upg.why.editable':
+      'This Raven is a source checkout, so released upgrades do not apply to it. Update it with git, then reinstall.',
     'gui.upg.working': 'Upgrading Raven...',
     'gui.wd.back': 'Back',
     'gui.wd.blocked': "Not a workspace: Raven's own data is here or beneath it. Its folders may still be.",
@@ -4728,7 +4730,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
       'Raven 还在处理回合、子智能体或待回答的问题（可能在 IM 渠道里）。升级会重启 Raven 并打断它们，请等它们结束再升级。',
     'gui.upg.why.not_serving': '这个页面当前没有正在运行的 Raven 在托管，这里没有可以升级的对象。',
     'gui.upg.why.unsupervised':
-      '这个 Raven 是在终端里手动启动的，升级后没有守护进程能把它重新拉起来。请在那个终端里运行 raven upgrade，然后重新启动 Raven。',
+      '这个 Raven 是在终端里手动启动的，升级后没有守护进程能把它重新拉起来。请先停掉这个 Raven，再在那个终端里运行 raven upgrade 并重新启动：升级不会替你停掉它，新起的 raven web 只会附着到仍在运行的旧进程上。',
+    'gui.upg.why.editable': '这个 Raven 是源码检出，发布的升级包对它不适用。请用 git 更新代码后重新安装。',
     'gui.upg.working': '正在升级 Raven…',
     'gui.wd.back': '返回',
     'gui.wd.blocked': '这里不能作为工作区：Raven 自己的数据在此处或其下；里面的文件夹可以',

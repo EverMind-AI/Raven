@@ -5,8 +5,7 @@
 检查失败任务、导出经审核报告或制作回放回归用例，请先读
 [轨迹调试与回放](trajectory-debugging.md)。本页介绍埋点契约。
 
-**raven**（以及任何其他接入方）与仓库内的 `raven.tracing` 实现之间的契约。
-`raven-tracing` 是计划中的独立发行包，不是当前 Raven 包的独立依赖。
+**raven**（以及任何其他接入方）与随 Raven 分发的 `raven.tracing` 实现之间的契约。
 
 原则：*标准由 tracing 拥有，应用负责接入。* `raven.tracing` 定义什么是 span、
 每种 span 携带哪些字段、以及如何渲染。应用（raven）通过在自己选定的位置调用一个
@@ -209,29 +208,15 @@ Raven 在自身源码中显式使用 `@trace.instrument` 和 `trace.span` 埋点
 
 ## 5. 版本与治理 { #5-versioning-governance }
 
-下列 API 版本规则是针对独立发行包的提案；当前实现仍随 Raven 一同发布，尚无独立包版本。
+追踪 API 随 Raven 一同发布，使用所安装 Raven 的版本。应用导入 `raven.tracing`
+门面；Raven 专用的属性与产物构造器位于 `raven.observability.semconv`。
 
-- API 与语义约定作为 `standard-api.v1` 一同版本化，独立于应用。
-- **新增性**变更（新的可选属性、新的 span 名称或类别）→ 次版本号递增，向后兼容。
-- **破坏性**变更（重命名或删除属性、改动 API 签名）→ 主版本号递增，并附迁移说明；
-  接入方应锁定受支持的版本范围，并在不匹配时发出警告（而不是静默降级）。
-- 应通过一致性快照测试（冻结的 span 名称与必填字段）在 CI 中守护独立包的契约，
-  并要求契约变更时同步提升版本号。
-- 磁盘记录格式单独版本化为 `audit.span.v1`（定义在 `raven/tracing/spans.py`）；
-  两者各自独立演进。
+磁盘记录携带格式版本 `audit.span.v1`，定义在 `raven/tracing/spans.py`。
+读取已保存轨迹时，应使用该字段识别记录格式。
 
 ## 现状 { #status }
 
-仓库内实现，已完整。每一个 span 家族（turn / llm / tool / memory / skill.inject /
-plugin.load / subagent）都通过 raven 自身方法上的 `@trace.instrument` 完成埋点；没有
-monkeypatch，也没有 `instrument.install()`——自动探测模块已被移除。
-Raven 专用的属性与产物构造器已位于 `raven.observability.semconv`，与追踪机制分离。
-
-留待独立开源阶段（P4）处理，均不阻塞仓库内使用：
-- 让导入变为可选：raven 核心在模块加载时硬导入 `raven.tracing`（装饰器在类定义时应用），
-  因此它必须随 raven 分发；要让追踪成为真正可选的 extra，需要先有一个空操作回退垫片。
-- 将 Raven 专用的提取器保留在 `raven.observability.semconv` 中；独立发行包只包含
-  通用 API、schema 与查看器。
-- 将 Raven 专用的默认值与路径解析（`FRAMEWORK`、`RAVEN_*` 环境变量、
-  `~/.raven` 路径）与独立包解耦。
-- 冻结 `standard-api.v1`；发布 `raven-tracing`；raven 默认依赖它。
+Raven 在自身方法中直接为 turn、llm、tool、memory、skill.inject、plugin.load 和
+subagent span 家族埋点。这些方法在定义时导入追踪装饰器，因此追踪模块随 Raven 分发。
+将 `tracing.enabled` 设为 `false` 或设置 `RAVEN_TRACING=0` 可关闭轨迹输出，
+调用方仍可使用同一门面。

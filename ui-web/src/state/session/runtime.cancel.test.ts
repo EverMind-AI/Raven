@@ -25,7 +25,7 @@ async function harness({ turnKept = true, rows = [{ id: 's1' }] as Row[] } = {})
   const log: unknown[][] = []
   const queue: string[] = []
   const asked: Array<[string, unknown]> = []
-  let settleCancel: { res: () => void; rej: (e: unknown) => void } | null = null
+  let settleCancel: { res: (reply: { cancelled: boolean }) => void; rej: (e: unknown) => void } | null = null
   document.body.innerHTML = '<h1 id="title"></h1><div id="stage"></div><div id="flash"></div>'
   /* The modules under test are imported deepest first, which is the order that
      keeps one module graph: the fakes are installed around the modules the
@@ -113,7 +113,7 @@ async function harness({ turnKept = true, rows = [{ id: 's1' }] as Row[] } = {})
   await fakeGateway((method: string, params: unknown) => {
     asked.push([method, params])
     if (method === 'turn.cancel') {
-      return new Promise<void>((res, rej) => { settleCancel = { res: () => res(), rej } })
+      return new Promise<{ cancelled: boolean }>((res, rej) => { settleCancel = { res, rej } })
     }
     return Promise.resolve({})
   })
@@ -134,7 +134,7 @@ async function harness({ turnKept = true, rows = [{ id: 's1' }] as Row[] } = {})
     asked,
     rows,
     sent: () => asked.filter(([m]) => m === 'turn.send').map(([, p]) => (p as { content: string }).content),
-    settle: () => { settleCancel!.res(); return tick() },
+    settle: (reply = { cancelled: true }) => { settleCancel!.res(reply); return tick() },
     refuse: () => { settleCancel!.rej(new Error('gone')); return tick() },
     did: (name: string) => log.filter((c) => c[0] === name),
     tick,
@@ -234,10 +234,84 @@ describe('the reply to turn.cancel', () => {
     expect(h.sent()).toEqual([])
   })
 
+  it('names a turn the runtime opened by the id its turn.started carried', async () => {
+    /* No handle was bound for a delegated result re-entering, so the server
+       reaches it only by id -- and only while it is still the turn running. */
+    const h = await harness()
+    h.pipeline.dispatch({ type: 'turn.started', payload: { turn_id: 't-reentry' } })
+
+    h.runtime.stop()
+
+    expect(h.asked[0]).toEqual(['turn.cancel', { session_key: 's1', turn_id: 't-reentry' }])
+    await h.settle()
+    /* The fold forgot it, so the next stop cannot name a turn that has ended. */
+    expect(h.runtime.state().openedTurn).toBeNull()
+  })
+
+  it('sends no id for a turn a send opened', async () => {
+    const h = await harness()
+    h.pipeline.dispatch({ type: 'turn.started', payload: { turn_id: 't-reentry' } })
+    h.pipeline.dispatch({ type: 'message.start', payload: { turn_id: 't-sent', content: 'next' } })
+
+    h.runtime.stop()
+
+    expect(h.asked[0]).toEqual(['turn.cancel', { session_key: 's1' }])
+  })
+
+  it('keeps a turn that opened after the press when the stale id is refused', async () => {
+    /* The named turn finished on its own before the server read the cancel, and
+       the next delegated result opened its own turn; the server refuses the
+       stale id and leaves that one running. */
+    const h = await harness()
+    h.pipeline.dispatch({ type: 'turn.started', payload: { turn_id: 't-a' } })
+    h.queue.push('the queued one')
+
+    h.runtime.stop()
+    h.pipeline.dispatch({ type: 'message.complete', payload: { usage: {} } })
+    h.pipeline.dispatch({ type: 'turn.started', payload: { turn_id: 't-b' } })
+    await h.settle({ cancelled: false })
+
+    expect(h.asked[0]).toEqual(['turn.cancel', { session_key: 's1', turn_id: 't-a' }])
+    expect(turn.phase()).toBe('streaming')
+    expect(turn.cancellable()).toBe(true)
+    expect(h.runtime.state().openedTurn).toBe('t-b')
+    expect(h.queue).toEqual(['the queued one'])
+    expect(h.sent()).toEqual([])
+  })
+
+  it('keeps a sent turn that opened after the press when the stale id is refused', async () => {
+    const h = await harness()
+    h.pipeline.dispatch({ type: 'turn.started', payload: { turn_id: 't-a' } })
+    h.queue.push('the queued one')
+
+    h.runtime.stop()
+    h.pipeline.dispatch({ type: 'message.start', payload: { turn_id: 't-sent', content: 'next' } })
+    await h.settle({ cancelled: false })
+
+    expect(turn.phase()).toBe('streaming')
+    expect(turn.cancellable()).toBe(true)
+    expect(h.sent()).toEqual([])
+  })
+
+  it('lets the page go when a refused id had nothing newer behind it', async () => {
+    /* Nothing was left to stop: the page must not sit in `cancelling`, and the
+       engine is free, so the queue goes out as after a finished turn. */
+    const h = await harness()
+    h.pipeline.dispatch({ type: 'turn.started', payload: { turn_id: 't-a' } })
+    h.queue.push('the queued one')
+
+    h.runtime.stop()
+    h.pipeline.dispatch({ type: 'message.complete', payload: { usage: {} } })
+    await h.settle({ cancelled: false })
+
+    expect(h.sent()).toEqual(['the queued one'])
+    expect(turn.phase()).toBe('sending')
+  })
+
   it('does nothing at all for a turn the reader cannot stop', async () => {
-    /* A runtime turn (a delegated result re-entering) is not cancellable, and
-       the stop button claiming the UI would reset the stage under a stream
-       still arriving. */
+    /* The machine's own guard, exercised with an uncancellable stream: while
+       the phase is not one stop can act on, the button must neither call the
+       server nor fold the stage under a stream still arriving. */
     const h = await harness()
     turn.dispatch({ type: 'stream', cancellable: false })
 

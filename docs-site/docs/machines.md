@@ -335,10 +335,14 @@ was copied. The agent uses it where the machine can read it -- the same path
 on a disk both mount, a copy already there -- or says in its reply that it
 could not be found on the machine, and goes on.
 
-**MCP servers are not lent.** The host's MCP servers are reached through a
-socket on this computer, which an agent elsewhere cannot open. A granted
-server is noted in the reply as not lent. Lending them across the link is
-coming, in pull request #947.
+**Remote ACP agents can use granted MCP servers through the Raven node.**
+The servers run on the host, which retains their definitions, credentials,
+tool restrictions, and sandbox rules. The node associates each bridge with
+its task, and the host checks calls against that task's grant. Lending requires
+a node with MCP bridge support and an agent configured for session MCP delivery;
+the reply reports servers that could not be lent. Remote CLI agents run without
+lent MCP. After a host restart, task results can be recovered, but previous MCP
+connections are not restored. See [Working with sub-agents](agent-collaboration.md#work-on-a-registered-machine).
 
 **Its files stay on the machine.** Nothing is brought back when the turn
 ends. The reply closes with a line that says where it worked:

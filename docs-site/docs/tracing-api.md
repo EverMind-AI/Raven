@@ -4,9 +4,8 @@ To inspect a failed task, export a reviewed report, or create a replay-based
 regression, start with [Trajectory debugging and replay](trajectory-debugging.md).
 This page is the instrumentation contract.
 
-The contract between **raven** (and any other adopter) and the in-tree
-`raven.tracing` implementation. `raven-tracing` is the planned standalone
-distribution, not a separate dependency of the current Raven package.
+The contract between **raven** (and any other adopter) and the
+`raven.tracing` implementation bundled with Raven.
 
 Principle: *tracing owns the standard, the app adopts it.* `raven.tracing` defines
 what a span is, which fields each span kind carries, and how it renders. An app
@@ -242,35 +241,18 @@ Keep instrumentation tests with the affected code when refactoring.
 
 ## 5. Versioning & governance
 
-The API versioning rules below are proposed for the standalone distribution;
-they do not describe an independently versioned package shipped by Raven today.
+The tracing API ships with Raven and follows the installed Raven version.
+Applications import the `raven.tracing` facade; Raven-specific attribute and
+artifact builders live in `raven.observability.semconv`.
 
-- The API + semantic conventions are versioned together as `standard-api.v1`,
-  independent of the app.
-- **Additive** changes (new optional attribute, new span name/kind) → minor bump,
-  backward compatible.
-- **Breaking** changes (rename/remove an attribute or the API signature) → major
-  bump + a migration note; adopters pin a supported range and warn (not silently
-  degrade) on mismatch.
-- A conformance snapshot test (frozen span names + required fields) should guard
-  the standalone contract in CI and require a version bump for contract changes.
-- On-disk record format is versioned separately as `audit.span.v1`
-  (defined in `raven/tracing/spans.py`); the two move independently.
+On-disk records carry the format version `audit.span.v1`, defined in
+`raven/tracing/spans.py`. Consumers should use that field to identify the record
+format when reading stored traces.
 
 ## Status
 
-In-tree, complete. Every span family (turn / llm / tool / memory / skill.inject /
-plugin.load / subagent) is instrumented with `@trace.instrument` on raven's own
-methods; there is no monkeypatch and no `instrument.install()` — the auto-probe
-module was removed. `raven.observability.semconv` already owns the Raven-specific
-attribute/artifact builders, separately from the tracing machinery.
-
-Remaining for the standalone-OSS phase (P4), none blocking in-tree use:
-- Make the import optional: raven core hard-imports `raven.tracing` at module load
-  (decorators applied at class-definition time), so it must ship with raven; a
-  no-op fallback shim is needed before tracing can be a truly optional extra.
-- Keep the Raven-specific extractors in `raven.observability.semconv`; package
-  only the generic API + schema + viewer in the standalone distribution.
-- Decouple Raven-specific defaults and path resolution (`FRAMEWORK`, `RAVEN_*`
-  env, `~/.raven` paths) from the standalone package.
-- Freeze `standard-api.v1`; publish `raven-tracing`; raven default-depends on it.
+Raven instruments the turn, llm, tool, memory, skill.inject, plugin.load, and
+subagent span families directly in its methods. The tracing module is bundled
+because these methods import its decorators at definition time. Setting
+`tracing.enabled` to `false` or `RAVEN_TRACING=0` disables trace emission while
+keeping the facade available to callers.

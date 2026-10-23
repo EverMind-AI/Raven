@@ -239,6 +239,16 @@ async def system_version(params: dict, *, send_frame: Any = None) -> dict:
     return result
 
 
+#: The install is mid-replacement (uv swaps the environment before writing the
+#: new one), so a metadata read failing here is an upgrade in flight, not a
+#: broken install -- naming it as one invites a second upgrade into the gap.
+_IN_PROGRESS_DETAIL = "An upgrade is already running; wait for it to finish."
+#: Passed to _refuse when the refusal itself proved no command can work: sent
+#: over the wire as an explicit null so the card hides the row per refusal,
+#: rather than the client re-encoding which reasons mean that.
+_NO_COMMAND = object()
+
+
 async def system_upgrade(params: dict) -> dict:
     """`system.upgrade` — install the latest release and restart what serves the page.
 
@@ -254,13 +264,66 @@ async def system_upgrade(params: dict) -> dict:
     import asyncio
 
     from raven.rpc.serve_control import SERVE
-    from raven.updates.upgrade import UpgradeError, plan_upgrade, spawn_detached_upgrade
+    from raven.updates.upgrade import UpgradeError, _is_editable_install, plan_upgrade, spawn_detached_upgrade
 
     # The dispatcher only lifts `detail` into error.data when no data dict is
     # given, so every refusal carries its own reason AND its human sentence --
     # the GUI shows that sentence verbatim next to the fallback command.
-    def _refuse(reason: str, detail: str) -> ConfigValidationError:
-        return ConfigValidationError(detail, data={"reason": reason, "detail": detail})
+    def _refuse(reason: str, detail: str, command: str | object | None = None) -> ConfigValidationError:
+        data: dict[str, object] = {"reason": reason, "detail": detail}
+        if command is _NO_COMMAND:
+            # Explicitly none, sent as null: this refusal proved no command
+            # works, and the card drops the row rather than fall back to its
+            # default `raven upgrade` -- a wrong suggestion is worse than none,
+            # and so is a dangling instruction to run one.
+            data["command"] = None
+        elif command is not None:
+            # What the card copies instead of its default `raven upgrade`: the
+            # recovery differs by reason, and a wrong suggestion is worse than
+            # none.
+            data["command"] = command
+        return ConfigValidationError(detail, data=data)
+
+    if not SERVE.running:
+        raise _refuse("not_serving", "system.upgrade is only available while `raven serve` is running")
+
+    # Classified before the gateway's process answers: no release upgrade
+    # applies to a checkout whatever supervises the process, and the
+    # unsupervised recovery's first command (`raven upgrade`) refuses a
+    # checkout, so offering it there hands the reader a step that cannot work.
+    # The probe is a metadata read in the same window the release lookup is
+    # refused from, so it answers in progress rather than escaping as an
+    # internal error whose card falls back to that withheld default.
+    try:
+        # A filesystem read (importlib.metadata walks candidate directories),
+        # off the event loop for the same reason the release lookup below is.
+        editable_install = await asyncio.to_thread(_is_editable_install)
+    except _md.PackageNotFoundError as exc:
+        raise _refuse("in_progress", _IN_PROGRESS_DETAIL) from exc
+    except UpgradeError as exc:
+        # Malformed direct_url.json reads the same as it does from the release
+        # lookup below: the install is not upgradable from the page, and the
+        # message says which file is at fault.
+        raise _refuse("not_upgradable", str(exc), command=_NO_COMMAND) from exc
+    except Exception:
+        # Anything else the probe can hit -- an undecodable metadata file, a
+        # filesystem read racing the in-flight install -- must not escape as an
+        # internal error: its card falls back to the default `raven upgrade`
+        # this branch exists to withhold. The probe only classifies a
+        # checkout, so an unreadable probe is not a checkout. This clause
+        # comes last on purpose: `PackageNotFoundError` and `UpgradeError`
+        # are both `Exception` subclasses, and each has its own refusal.
+        editable_install = False
+    if editable_install:
+        # A checkout tracks upstream `main`, so no release is ever "newer" for
+        # it in the sense the button means; and both `raven upgrade` and the
+        # page's default fallback refuse it. Name the two steps that do work.
+        raise _refuse(
+            "editable",
+            "This Raven is a source checkout, so released upgrades do not apply to it. "
+            "Update it with git, then reinstall.",
+            "git pull\n" + (r".\install.ps1" if os.name == "nt" else "./install.sh"),
+        )
 
     if SERVE.hosted_by_gateway:
         if SERVE.supervisor_pid is None:
@@ -270,7 +333,10 @@ async def system_upgrade(params: dict) -> dict:
             raise _refuse(
                 "unsupervised",
                 "This Raven was started by hand, so nothing would bring it back after an upgrade. "
-                "Run `raven upgrade` in a terminal, then start Raven again.",
+                "Stop this Raven, run `raven upgrade` in a terminal, then start Raven again: "
+                "the upgrade does not stop it for you, and a new `raven web` would only "
+                "attach to the old one still running.",
+                "raven upgrade\nraven web",
             )
         busy = SERVE.busy()
         if busy is not None:
@@ -281,9 +347,6 @@ async def system_upgrade(params: dict) -> dict:
                 "Raven is still working on a turn, a sub-agent or a pending question. "
                 "Upgrading restarts it and would cut that off; let it finish first.",
             )
-    if not SERVE.running:
-        raise _refuse("not_serving", "system.upgrade is only available while `raven serve` is running")
-
     try:
         # Network-bound and synchronous (httpx), so keep it off the event loop.
         plan = await asyncio.to_thread(plan_upgrade)
@@ -295,7 +358,7 @@ async def system_upgrade(params: dict) -> dict:
         # that gap for minutes while it byte-compiles. Reporting the raw lookup
         # failure reads as a broken install and invites a second upgrade into
         # the same gap, so name what is actually happening.
-        raise _refuse("in_progress", "An upgrade is already running; wait for it to finish.") from exc
+        raise _refuse("in_progress", _IN_PROGRESS_DETAIL) from exc
     except Exception as exc:
         raise _refuse("check_failed", f"Could not check for a newer Raven release: {exc}") from exc
 
