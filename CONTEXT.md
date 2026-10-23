@@ -920,7 +920,9 @@ call. The wait is announced as a `NoticeKind.LLM_RETRY` notice carrying the erro
 (Empty-Response Recovery's waits use the same notice), which is how a surface can say the
 runtime is still working rather than showing nothing for minutes. A streamed call whose error
 comes back as a response with a fallback-worthy verdict goes to the next fallback model before it
-waits, because only the plain path walks a model chain inside the provider; an error the provider
+waits, because only the plain path walks a model chain inside the provider. Every failure that
+arrives without an exception comes back as a response, and so does a raised stall (a first-byte or
+idle timeout) or `strip_images` verdict that came before any output; any other error the provider
 raises mid-stream is reconnected and waited out on this same ladder inside the stream, then ends
 the turn with no fallback model tried. A non-retryable verdict, or a spent ladder, ends the turn.
 _Avoid_: "retry" unqualified — Empty-Response Recovery's RETRY resends the same request after a
