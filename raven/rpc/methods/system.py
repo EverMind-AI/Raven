@@ -258,7 +258,11 @@ def _checkout_recovery(checkout: str, windows: bool) -> str:
     """Update and reinstall the checkout at ``checkout``, from inside it.
 
     A bare `git pull` updates whichever repository the terminal is in, so the
-    command moves into the checkout first.
+    command moves into the checkout first. On Windows the installer replaces
+    the environment this Raven runs from, and an executable that is still
+    running cannot be deleted there, so the serving Raven is stopped first.
+    POSIX replaces a running executable without complaint, and stopping the
+    page there would only take it down before the install needs to.
     """
     if windows:
         # PowerShell, which `.\install.ps1` needs anyway: -LiteralPath keeps
@@ -266,7 +270,7 @@ def _checkout_recovery(checkout: str, windows: bool) -> str:
         # escape a single-quoted string has -- for each of the four curly single
         # quotes PowerShell also reads as one, not only for the ASCII quote.
         literal = re.sub("(['\u2018\u2019\u201a\u201b])", r"\1\1", checkout)
-        return "Set-Location -LiteralPath '" + literal + "'\ngit pull\n.\\install.ps1"
+        return "raven web --stop\nSet-Location -LiteralPath '" + literal + "'\ngit pull\n.\\install.ps1"
     return f"cd {shlex.quote(checkout)}\ngit pull\n./install.sh"
 
 

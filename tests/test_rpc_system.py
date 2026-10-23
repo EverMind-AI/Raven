@@ -542,7 +542,7 @@ async def test_upgrade_refuses_when_the_install_cannot_self_upgrade(monkeypatch:
         (
             True,
             "C:\\Users\\o'neil\\Raven",
-            "Set-Location -LiteralPath 'C:\\Users\\o''neil\\Raven'\ngit pull\n.\\install.ps1",
+            "raven web --stop\nSet-Location -LiteralPath 'C:\\Users\\o''neil\\Raven'\ngit pull\n.\\install.ps1",
         ),
     ],
     ids=["posix", "windows"],
@@ -577,6 +577,28 @@ async def test_upgrade_names_a_checkouts_own_recovery_and_stops_there(
 
     assert excinfo.value.data["reason"] == "editable"
     assert excinfo.value.data["command"] == command
+
+
+def test_a_windows_checkout_recovery_stops_raven_before_it_reinstalls():
+    """Windows cannot delete a running executable, and `uv tool install --force`
+    replaces the environment this Raven runs from. The installer's own `--stop`
+    runs in `Start-Web`, after that install, so the recovery has to stop it
+    before the installer starts."""
+    from raven.rpc.methods.system import _checkout_recovery
+
+    lines = _checkout_recovery("C:\\Raven", True).splitlines()
+
+    assert lines[0] == "raven web --stop"
+    assert lines.index("raven web --stop") < lines.index(".\\install.ps1")
+
+
+def test_a_posix_checkout_recovery_leaves_the_running_page_alone():
+    """POSIX replaces a running executable in place, and `install.sh` stops and
+    restarts the gateway itself once the new install is in: stopping first
+    would only take the page down for the whole build."""
+    from raven.rpc.methods.system import _checkout_recovery
+
+    assert "raven web --stop" not in _checkout_recovery("/srv/raven", False)
 
 
 async def test_a_checkout_whose_path_cannot_be_read_gets_no_command(monkeypatch: pytest.MonkeyPatch):
@@ -618,7 +640,8 @@ def test_a_windows_checkout_path_cannot_close_its_quotes(quote):
 
     command = _checkout_recovery(f"C:\\Users\\O{quote}Neil\\Raven", True)
 
-    assert command.splitlines()[0] == f"Set-Location -LiteralPath 'C:\\Users\\O{quote}{quote}Neil\\Raven'"
+    literal = next(line for line in command.splitlines() if line.startswith("Set-Location"))
+    assert literal == f"Set-Location -LiteralPath 'C:\\Users\\O{quote}{quote}Neil\\Raven'"
 
 
 @pytest.mark.parametrize("windows", [False, True], ids=["posix", "windows"])
