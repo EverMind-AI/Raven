@@ -283,16 +283,22 @@ async def stream_llm_call(
     loop's own ladder, seconds to minutes, for a gateway that serves error pages
     for a while -- asking again after each wait. Once both are spent the exception
     propagates: a mid-turn provider error is the turn's failure (the lane emits
-    TurnFailed), not a text reply about one. Three outcomes come back as an error
-    response (``finish_reason="error"`` with its classification) instead of
-    raising, because their recovery belongs to the caller: a stream the upstream
-    closed before its terminal chunk with nothing deliverable in it, classified
-    as a network failure for the loop to wait out its own ladder on -- retryable
-    unless a thought had already reached the watcher; a stream whose normal end
-    carries the evidence of a request the upstream never processed, once the
-    reconnects are spent (``upstream_transport_failure``, retryable); and
-    ``strip_images``, whose recovery is a change to the messages that only the
-    loop can make.
+    TurnFailed), not a text reply about one. Whether a failure that is not handed
+    back comes back as an error response (``finish_reason="error"`` with its
+    classification) or raises follows from how it arrives. One that arrives
+    without an exception has nothing to raise and always comes back: the
+    provider's terminal error delta, its verdict spent when output had already
+    reached the reader; a stream the upstream closed before its terminal chunk
+    with nothing deliverable in it, a network failure for the loop to wait out on
+    its own ladder -- retryable unless a thought had already reached the watcher;
+    and a normal end that carries the evidence of a request the upstream never
+    processed, once the reconnects are spent (``upstream_transport_failure``,
+    retryable). One that is raised propagates, unless its recovery belongs to the
+    caller and nothing has reached the reader yet (or the caller asked to
+    ``retry_after_output``): a stall, which this function does not ask again
+    because the idle cap has already waited the full timeout, and a
+    ``strip_images`` verdict, whose recovery is a change to the messages that
+    only the loop can make.
 
     ``stream_kwargs`` reaches ``chat_stream`` unchanged. It exists because that
     signature carries *literal* generation defaults rather than the provider's
