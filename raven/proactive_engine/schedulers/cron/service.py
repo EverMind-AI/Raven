@@ -753,18 +753,21 @@ class CronService:
 
         3. **Same-schedule dedup**: an enabled job for the same (channel,
            to) whose schedule is identical (same ``cron`` expr + zone,
-           same ``every_ms``, or the same ``at`` instant) *and* that is
-           the same reminder (the byte-identical message, or the same
-           ``topic_tag``). The identity test is what keeps two adds that
-           land on one slot from replacing each other: two reminders can
-           genuinely share a slot, so the slot alone is not identity.
+           same ``every_ms``, or the same ``at`` instant) *and* whose
+           message is byte-identical. Layer 2 answers for such a job while
+           its fire is still ahead, so this layer is the one that reuses a
+           job whose fire has passed or was cleared. The message test is
+           what keeps two adds that land on one slot from replacing each
+           other: two reminders can genuinely share a slot, so the slot
+           alone is not identity. A shared ``topic_tag`` never gets this
+           far: layer 1 matches it first.
 
         Adding a job edits nothing but the job that layer matched. A
         distinct reminder is always stored as a new job, however close
-        its fire is to an existing one — a former 15-minute time-window
-        layer swallowed such adds silently (issue #161). A schedule that
-        differs from every existing job is likewise a new job even when
-        the message repeats: layer 2 already covered the same text.
+        its fire is to an existing one: no layer matches on fire time
+        alone, because nearness cannot tell a repeat from a second
+        reminder that falls due close by, and dropping that second one
+        would go unseen by the caller.
 
         ``job_id`` edits one named job rather than adding: if a job with that id
         exists it is updated in place, otherwise the id is used for the new job.
@@ -890,13 +893,11 @@ class CronService:
                 return j
 
             # Dedup: same schedule slot + same channel + recipient + the
-            # same reminder (message or topic_tag) → update in place rather
-            # than create a duplicate. A slot alone is not identity: two
-            # distinct reminders may legitimately share one fire time, and
-            # overwriting either would lose a task the caller asked for.
-            existing = self._find_duplicate_schedule(
-                store.jobs, schedule, channel, to, message=message, topic_tag=topic_tag
-            )
+            # same message → reuse that job rather than create a duplicate.
+            # A slot alone is not identity: two distinct reminders may
+            # legitimately share one fire time, and overwriting either would
+            # lose a reminder the caller asked for.
+            existing = self._find_duplicate_schedule(store.jobs, schedule, channel, to, message=message)
             if existing is not None:
                 existing.payload.message = message
                 existing.name = name
@@ -908,7 +909,7 @@ class CronService:
                     existing.state.next_run_at_ms = _compute_next_run(schedule, now)
                 self._save_store()
                 logger.info(
-                    "Cron: updated existing job '{}' ({}) with new message (dedup on schedule+channel+to)",
+                    "Cron: reused existing job '{}' ({}) for the same message on the same schedule",
                     existing.name,
                     existing.id,
                 )
@@ -948,16 +949,17 @@ class CronService:
         to: str | None,
         *,
         message: str,
-        topic_tag: str | None,
     ) -> CronJob | None:
         """Return an existing enabled job that is the *same reminder* as this
         add on the *same schedule slot*, or None.
 
         The slot alone does not make two adds the same: a repeated ``cron``
         expr + zone, ``every_ms``, or ``at`` instant is matched only when the
-        content says so too — a byte-identical message, or a shared
-        ``topic_tag``. Anything else is a distinct reminder that must be
-        stored beside the existing job rather than overwrite it.
+        message is byte-identical too. Anything else is a distinct reminder
+        that must be stored beside the existing job rather than overwrite
+        it. A shared ``topic_tag`` is not checked here: when the add carries
+        one, the topic_tag layer in ``add_job`` has already returned any
+        enabled job for the same (channel, to) that shares it.
 
         ``at`` jobs (one-shot) are matched only at the identical instant.
         """
@@ -966,9 +968,7 @@ class CronService:
                 continue
             if j.payload.channel != channel or j.payload.to != to:
                 continue
-            same_message = j.payload.message == message
-            same_topic = bool(topic_tag) and j.payload.topic_tag == topic_tag
-            if not (same_message or same_topic):
+            if j.payload.message != message:
                 continue
             s = j.schedule
             if s.kind != schedule.kind:

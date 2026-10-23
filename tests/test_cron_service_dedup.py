@@ -4,8 +4,9 @@ Three layers, applied in order at add time, first match wins:
   1. L7 topic_tag dedup — strictest, runs first when caller supplies tag.
   2. Message-equal dedup — byte-identical payload.message + same channel/to
      + a fire still ahead.
-  3. Schedule dedup — same recurring schedule + same channel/to + the same
-     reminder (byte-identical message or shared topic_tag).
+  3. Schedule dedup — same schedule slot + same channel/to + byte-identical
+     message, for a job whose fire has passed or was cleared (a shared
+     topic_tag is settled by layer 1).
 
 Dedup keys on explicit identity only. Nearby fire times are not identity:
 a former 15-minute time-window layer silently dropped a distinct reminder
@@ -199,8 +200,7 @@ def test_schedule_dedup_updates_in_place_once_the_job_has_fired(svc):
     a distinct reminder and now gets a job of its own.
 
     Kept when the flag it was originally written for was retired, because its
-    setup is the only thing in the suite that reaches this branch at all --
-    without it nothing covers the in-place update, the re-enable, or the
+    setup is the only thing in the suite that reaches the re-enable and the
     next_run recompute.
     """
     sched = CronSchedule(kind="every", every_ms=60_000)
@@ -321,7 +321,7 @@ def test_same_every_seconds_distinct_messages_are_kept(svc):
     assert {j.payload.message for j in stored} == {"check the deploy", "check the queue depth"}
 
 
-def test_same_slot_identical_message_updates_in_place(svc):
+def test_same_slot_identical_message_stays_one_job(svc):
     every = CronSchedule(kind="every", every_ms=600_000)
     first = _add(svc, "drink water", every)
     second = _add(svc, "drink water", every)
@@ -351,6 +351,24 @@ def test_same_slot_shared_topic_tag_updates_in_place(svc):
     stored = _stored(svc)
     assert len(stored) == 1
     assert stored[0].payload.message == "take the noon meds (double dose)"
+
+
+def test_same_slot_identical_message_reuses_an_overdue_job(svc):
+    """The message-equal layer only answers while a fire is still ahead, so an
+    overdue job is matched by the schedule layer: the re-add reuses it and
+    leaves its pending fire where it was."""
+    sched = CronSchedule(kind="cron", expr="0 8 * * *")
+    first = _add(svc, "take the morning meds", sched)
+    overdue = svc._now_ms() - 60_000
+    first.state.next_run_at_ms = overdue
+    svc._save_store()
+
+    again = _add(svc, "take the morning meds", sched)
+
+    assert again.id == first.id, "the same reminder on the same slot stays one job"
+    stored = _stored(svc)
+    assert len(stored) == 1
+    assert stored[0].state.next_run_at_ms == overdue, "the overdue fire must stay pending"
 
 
 @pytest.mark.parametrize("gap_minutes", [5, 10])
