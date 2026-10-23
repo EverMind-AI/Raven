@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 from typing import Any, AsyncGenerator
 
 import httpx
@@ -40,6 +41,10 @@ from raven.providers.usage import merge_usage, responses_usage
 
 DEFAULT_CODEX_URL = "https://chatgpt.com/backend-api/codex/responses"
 DEFAULT_ORIGINATOR = "raven"
+
+# The only replayed function_call id OpenAI's endpoints take: 64 characters at
+# most, and a 400 for anything else.
+_OPENAI_ITEM_ID = re.compile(r"fc_[A-Za-z0-9_-]{1,61}")
 
 
 def _convert_tool_choice(
@@ -228,7 +233,17 @@ def _convert_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return converted
 
 
-def _convert_messages(messages: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
+def _convert_messages(
+    messages: list[dict[str, Any]], *, openai_item_ids: bool = True
+) -> tuple[str, list[dict[str, Any]]]:
+    """History -> Responses ``instructions`` and ``input``.
+
+    A stored call's id is ``call_id|item_id``, and the item id is whatever the
+    vendor that answered minted. OpenAI's endpoints refuse a ``function_call``
+    id outside their own shape, so under ``openai_item_ids`` another vendor's
+    (DeepSeek mints UUIDs) is replaced the way a missing one always was. Other
+    vendors get the stored id back unchanged.
+    """
     system_prompt = ""
     input_items: list[dict[str, Any]] = []
 
@@ -265,7 +280,8 @@ def _convert_messages(messages: list[dict[str, Any]]) -> tuple[str, list[dict[st
                 fn = tool_call.get("function") or {}
                 call_id, item_id = _split_tool_call_id(tool_call.get("id"))
                 call_id = call_id or f"call_{idx}"
-                item_id = item_id or f"fc_{idx}"
+                if not item_id or (openai_item_ids and not _OPENAI_ITEM_ID.fullmatch(item_id)):
+                    item_id = f"fc_{idx}"
                 input_items.append(
                     {
                         "type": "function_call",

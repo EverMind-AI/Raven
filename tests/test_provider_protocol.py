@@ -881,6 +881,54 @@ async def test_responses_partial_usage_preserves_cost_and_cache():
     assert usage["cache_creation_input_tokens"] is None
 
 
+async def _replayed_deepseek_call(monkeypatch, provider_name: str) -> dict:
+    """The ``function_call`` item a Responses request carries for a call DeepSeek made."""
+    stored = "call_00_X7zvK6OV6d9sEe9g9NoD4128|485256fc-a47f-41be-b14f-2c4a662ddbaf"
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, content=_anthropic_sse({"type": "response.completed", "response": {}}))
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw))
+    provider = OpenAIResponsesProvider(
+        api_key="test", api_base="https://api.example/v1", provider_name=provider_name, default_model="test"
+    )
+    await provider.chat(
+        messages=[
+            {"role": "user", "content": "read the skill"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": stored, "type": "function", "function": {"name": "read_skill", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": stored, "name": "read_skill", "content": "the skill"},
+        ],
+        model="test",
+    )
+    [call] = [item for item in sent[0]["input"] if item.get("type") == "function_call"]
+    return call
+
+
+async def test_openai_responses_replays_another_vendors_call_under_an_id_it_accepts(monkeypatch) -> None:
+    """OpenAI's own endpoint polices the item id the way the Codex backend does."""
+    call = await _replayed_deepseek_call(monkeypatch, "openai")
+
+    assert call["id"].startswith("fc_")
+    assert call["call_id"] == "call_00_X7zvK6OV6d9sEe9g9NoD4128"
+
+
+async def test_deepseek_gets_its_own_item_id_back(monkeypatch) -> None:
+    """Nothing but OpenAI refused a foreign id, and DeepSeek took its own back on
+    every replay; what it does with them is its business, so they stay."""
+    call = await _replayed_deepseek_call(monkeypatch, "deepseek")
+
+    assert call["id"] == "485256fc-a47f-41be-b14f-2c4a662ddbaf"
+
+
 @pytest.mark.parametrize("model", ["claude-opus-5", "anthropic/claude-haiku-4-5"])
 def test_anthropic_model_defaults_preserve_manual_overrides(model):
     assert effective_protocol(None, model) == "anthropic"
