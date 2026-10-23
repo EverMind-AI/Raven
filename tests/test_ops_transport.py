@@ -785,3 +785,46 @@ def test_one_function_builds_the_environment_that_hands_ssh_a_kept_password():
     )
 
     assert found == ["raven/ops/transport.py"]
+
+
+def _owner_ssh(tmp_path_factory, monkeypatch):
+    """An ssh outside the test's own directory, first on PATH: the computer's own, as far as the guard can tell."""
+    owner_bin = tmp_path_factory.mktemp("owner-bin")
+    ran = owner_bin / "ran"
+    if sys.platform == "win32":
+        ssh = owner_bin / "ssh.bat"
+        ssh.write_text(f'@echo off\r\ntype nul > "{ran}"\r\n', encoding="utf-8")
+    else:
+        ssh = owner_bin / "ssh"
+        ssh.write_text(f'#!/bin/sh\ntouch "{ran}"\n', encoding="utf-8")
+        ssh.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{owner_bin}{os.pathsep}{os.environ.get('PATH', '')}")
+    return ssh, ran
+
+
+@pytest.mark.parametrize("named", ["by-name", "by-path"])
+def test_the_guard_stops_an_ssh_g_that_is_not_the_test_s_own(tmp_path_factory, monkeypatch, named):
+    """The other direction of the guard the stand-in tests pass through: with no stand-in, the ``ssh -G`` a
+    resolution starts fails the test before anything runs."""
+    ssh, ran = _owner_ssh(tmp_path_factory, monkeypatch)
+
+    with pytest.raises(AssertionError, match="the real ssh -G ran"):
+        transport.resolve_with_ssh(["ssh" if named == "by-name" else str(ssh), "203.0.113.7"])
+    assert not ran.exists()
+
+
+def test_the_guard_is_not_loosened_by_a_popen_wrapper_that_leaves_ssh_alone(tmp_path_factory, monkeypatch):
+    """A swapped ``Popen`` is no sign of a stand-in: only what the wrapper finally hands on is judged."""
+    ssh, ran = _owner_ssh(tmp_path_factory, monkeypatch)
+    popen = subprocess.Popen
+    seen = []
+
+    def start(argv, *args, **kwargs):
+        seen.append(argv)
+        return popen(argv, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", start)
+
+    with pytest.raises(AssertionError, match="the real ssh -G ran"):
+        transport.resolve_with_ssh(["ssh", "203.0.113.7"])
+    assert seen and not ran.exists()

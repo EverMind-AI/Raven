@@ -1238,16 +1238,26 @@ def no_real_ssh_g(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     naming the test's config, is what a test resolves with; with no ssh on
     PATH at all nothing runs, and the lookup's own error stands. Used by the
     modules whose code asks ``ssh -G`` (``transport.resolve_with_ssh``).
+
+    It judges the command line ``Popen`` is finally handed, the one that
+    execs: a test may swap ``Popen`` for a wrapper that starts its own
+    stand-in in place of ``ssh``, and what that wrapper passes on is what
+    runs. A subclass, so ``isinstance`` and ``Popen[bytes]`` keep working.
     """
     import subprocess
 
-    real = subprocess.run
+    class Popen(subprocess.Popen):
+        def __init__(self, argv, *args, **kwargs):
+            if (
+                isinstance(argv, (list, tuple))
+                and argv
+                and Path(str(argv[0])).stem.lower() == "ssh"
+                and "-G" in argv
+                and "-F" not in argv
+            ):
+                found = shutil.which(str(argv[0]), path=(kwargs.get("env") or os.environ).get("PATH"))
+                if found is not None and not Path(found).resolve().is_relative_to(tmp_path.resolve()):
+                    raise AssertionError(f"the real ssh -G ran against the owner's own config: {found}")
+            super().__init__(argv, *args, **kwargs)
 
-    def run(argv, *args, **kwargs):
-        if isinstance(argv, list) and argv[:1] == ["ssh"] and "-G" in argv and "-F" not in argv:
-            found = shutil.which("ssh", path=(kwargs.get("env") or os.environ).get("PATH"))
-            if found is not None and not Path(found).resolve().is_relative_to(tmp_path.resolve()):
-                raise AssertionError(f"the real ssh -G ran against the owner's own config: {found}")
-        return real(argv, *args, **kwargs)
-
-    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setattr(subprocess, "Popen", Popen)
