@@ -285,6 +285,86 @@ describe('the stream envelope', () => {
       expect(h.seen.refreshes, status).toBe(1)
     }
   })
+
+  /* A silent turn delivered nothing, so ending off screen is not news: the row
+     gets no unread mark and is not moved up the rail, though the badge that said
+     it was running does come off. The notice is read off the frames held while
+     the reader was away, or off the runtime when it ran before they left. */
+  describe('when a background turn ends silent', () => {
+    const silent = () => ({ type: 'notice', payload: { kind: 'silent_turn', detail: '' } })
+    const ends = () => ({ type: 'message.complete' })
+
+    const away = async () => {
+      const h = await harness({ rows: [{ id: 'away', status: 'run' }] })
+      h.subSession['sub:away'] = 'away'
+      h.parkedTurns.set('away', { events: [] })
+      const frame = (event: unknown) => h.pipeline.stream({ subscription_id: 'sub:away', event })
+      return { h, frame }
+    }
+
+    it('leaves the row unmarked and where it was', async () => {
+      const { h, frame } = await away()
+
+      frame(silent())
+      frame(ends())
+
+      expect(h.rows[0]!.status).toBeNull()
+      expect(h.seen.touched).toEqual([])
+      /* The list is still re-read: that is the server's own account of the row. */
+      expect(h.seen.refreshes).toBe(1)
+    })
+
+    it('reads the notice off the runtime when it ran on screen before the reader left', async () => {
+      const { h, frame } = await away()
+      const registry = await import('./registry')
+      registry.ensure('away').silent = true
+
+      frame(ends())
+
+      expect(h.rows[0]!.status).toBeNull()
+      expect(h.seen.touched).toEqual([])
+    })
+
+    it('does not carry it into the next turn the buffer holds', async () => {
+      const { h, frame } = await away()
+
+      frame(silent())
+      frame(ends())
+      frame({ type: 'token.delta', payload: { text: 'the next answer' } })
+      frame(ends())
+
+      expect(h.rows[0]!.status).toBe('done')
+      expect(h.seen.touched).toEqual(['away'])
+    })
+
+    it('does not let the runtime\'s flag outlive the turn it was raised for', async () => {
+      const { h, frame } = await away()
+      const registry = await import('./registry')
+      /* Raised on screen for the turn that was running when the reader left, and
+         still standing when a second turn ends in the same buffer. */
+      registry.ensure('away').silent = true
+
+      frame(ends())
+      expect(h.rows[0]!.status).toBeNull()
+      expect(h.seen.touched).toEqual([])
+
+      frame({ type: 'token.delta', payload: { text: 'the next answer' } })
+      frame(ends())
+
+      expect(h.rows[0]!.status).toBe('done')
+      expect(h.seen.touched).toEqual(['away'])
+    })
+
+    it('does not take a notice that names an instance for this turn\'s', async () => {
+      const { h, frame } = await away()
+
+      frame({ type: 'notice', payload: { kind: 'silent_turn', detail: '', target: { agent: 'raven', handle: 'w1' } } })
+      frame(ends())
+
+      expect(h.rows[0]!.status).toBe('done')
+      expect(h.seen.touched).toEqual(['away'])
+    })
+  })
 })
 
 /* N8: which conversation a side-channel request belongs to, and the wait it

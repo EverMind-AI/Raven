@@ -244,11 +244,16 @@ export function finishTurn(payload: unknown, rt: SessionRuntime = viewRuntime())
   /* The window fill is the turn's prompt, not the running total. */
   setCtx(usage.context_used || inTok, usage.context_max as number)
   const s = sess(sessionCurrent())
-  if (s && rt.say.trim()) s.last = rt.say.trim().split('\n')[0]!.slice(0, 60)
-  touchSession(sessionCurrent(), rt.say)
-  // OS notification when the answer lands while the window is in the
-  // background; ntfPush itself checks focus and the user's preference.
-  ntfPush(t('gui.set.ntf.done'), (s && s.title) || rt.say.trim().slice(0, 80))
+  /* A silent turn delivered nothing: it writes no preview, does not move its
+     row up the rail (the server's list skips it for its time too) and raises no
+     OS notification -- a ping is a delivery, which silence exists to avoid. */
+  if (!rt.silent) {
+    if (s && rt.say.trim()) s.last = rt.say.trim().split('\n')[0]!.slice(0, 60)
+    touchSession(sessionCurrent(), rt.say)
+    // OS notification when the answer lands while the window is in the
+    // background; ntfPush itself checks focus and the user's preference.
+    ntfPush(t('gui.set.ntf.done'), (s && s.title) || rt.say.trim().slice(0, 80))
+  }
   reset(rt)
   drawMeter(); goState(); sessionDraw(); scrollTranscriptDown()
   const nx = queueShift()

@@ -461,12 +461,31 @@ describe('notice', () => {
       expect(h.did('finishTurn')).toEqual([['finishTurn', '2000ms', true]])
       /* No preview: the rail keeps what it showed before the turn. */
       expect(h.rows[0]!.last).toBe('before')
+      /* Nothing was delivered, so nothing pings and the row is not moved up
+         the rail: the server's own list skips a silent row for its time too. */
+      expect(h.did('notify')).toEqual([])
+      expect(h.did('touch')).toEqual([])
       expect(h.live.silent).toBe(false)
 
       h.dispatch({ type: 'token.delta', payload: { text: 'the next answer' } })
       h.dispatch({ type: 'message.complete', payload: { usage: {}, duration_ms: 3000 } })
 
       expect(h.did('finishTurn')).toEqual([['finishTurn', '2000ms', true], ['finishTurn', '3000ms']])
+      /* The control: an ordinary turn still pings and re-stamps the row. */
+      expect(h.did('notify')).toEqual([['notify', 'gui.set.ntf.done']])
+      expect(h.did('touch')).toEqual([['touch', 's1', 'the next answer']])
+    })
+
+    it('keeps the rail quiet by its own rule, not because the notice emptied the say buffer', async () => {
+      const h = await harness({ rows: [{ id: 's1', title: 'a digest', last: 'before' }] })
+      h.dispatch(silent)
+      h.live.say = 'left behind'
+
+      h.dispatch({ type: 'message.complete', payload: { usage: {}, duration_ms: 2000 } })
+
+      expect(h.rows[0]!.last).toBe('before')
+      expect(h.did('touch')).toEqual([])
+      expect(h.did('notify')).toEqual([])
     })
 
     it('does not mark the turn for a notice of any other kind', async () => {

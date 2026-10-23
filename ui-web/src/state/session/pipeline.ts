@@ -27,6 +27,7 @@ import { sess } from './rows'
 import { dispatch } from './stages'
 
 import type { TurnEvent as PhaseEvent } from '../../features/composer/turn'
+import type { SessionRuntime } from './runtime'
 
 export { dispatch } from './stages'
 
@@ -57,7 +58,32 @@ export function notify(owner: string, event: PhaseEvent): void {
   void refreshList()
 }
 
-interface Envelope { subscription_id: string; event?: { type?: string; payload?: { reason?: string } } }
+/* The fields of a frame that the checks in this file read. */
+interface Frame {
+  type?: string
+  payload?: { reason?: string; kind?: string; transient?: boolean; target?: unknown }
+}
+
+interface Envelope { subscription_id: string; event?: Frame }
+
+/* Whether the turn a held `message.complete` ends was a silent one. Its notice
+   either ran on screen before the reader left, which `rt.silent` keeps, or sits
+   among the frames held since. The buffer outlives a turn, so the scan stops at
+   the end of the one before -- and the flag, which belongs to the turn that was
+   running when the reader left, is consulted only when no turn ended in between.
+   A frame that names an instance is that instance's lane's: neither this turn's
+   notice nor its boundary. */
+function endedSilent(rt: SessionRuntime, ending: Frame): boolean {
+  const held = (rt.events || []) as Frame[]
+  const last = held.length - 1
+  for (let i = held[last] === ending ? last - 1 : last; i >= 0; i -= 1) {
+    const f = held[i]!
+    if (f.payload?.target) continue
+    if (f.type === 'message.complete' || f.type === 'error') return false
+    if (f.type === 'notice' && f.payload?.kind === 'silent_turn' && !f.payload.transient) return true
+  }
+  return rt.silent
+}
 
 /** The `event` envelope: a turn event plus the subscription it arrived on. */
 export function stream(frame: unknown): void {
@@ -76,7 +102,11 @@ export function stream(frame: unknown): void {
       // it. The switch is what clears it. A cancel is a stop somebody chose,
       // not a failure -- no red dot for doing what was asked.
       const cancelled = ev.type === 'error' && (ev.payload || {}).reason === 'cancelled_by_client'
-      if (s) { s.status = ev.type === 'error' && !cancelled ? 'err' : 'done'; touchSession(rt.key) }
+      /* A silent turn delivered nothing, so ending is not news: no unread mark and
+         no move up the rail, only the badge that said it was running coming off. */
+      const silent = ev.type === 'message.complete' && !ev.payload?.target && endedSilent(rt, ev)
+      if (s && silent) { s.status = null; sessionDraw() }
+      else if (s) { s.status = ev.type === 'error' && !cancelled ? 'err' : 'done'; touchSession(rt.key) }
       void refreshList()
     }
     return
