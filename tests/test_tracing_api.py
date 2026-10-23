@@ -1234,8 +1234,9 @@ def test_dispatch_link_is_the_active_span_and_none_outside_one(trace_dir):
 
 def test_dispatch_link_is_none_with_tracing_off(monkeypatch):
     monkeypatch.setenv("RAVEN_TRACING", "0")
-    with trace.span("tool.call"):
+    with trace.span("tool.call") as s:
         assert trace.dispatch_link() is None
+        assert s.set_dispatch_link(("trace-x", "span-x")) is s, "the no-op span takes a link like any other call"
 
 
 def test_dispatch_attrs_and_dispatch_link_of_round_trip():
