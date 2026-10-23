@@ -145,11 +145,16 @@ export interface ExtAgentsState {
      waited; null when none is. */
   mconnectSince: number | null
   /* How the form's last wait ended without an answer: the reader's Cancel,
-     or the ceiling (`awaitRun`). Neither is the agent's refusal, and the form
-     says so in its own words; cleared by the next press and the next opening. */
-  mconnectStopped: '' | 'cancelled' | 'timeout'
+     the ceiling, or a stop that found nothing left to stop (`missed`), which
+     means the connect was past the point where it could be cancelled and may
+     have been written (`awaitRun`). None is the agent's refusal, and the form
+     says each in its own words; cleared by the next press and the next opening. */
+  mconnectStopped: '' | Stopped
   /* Cancel pressed, and the run not yet stopped: the button says so once. */
   mconnectCancelling: boolean
+  /* The stop answered that nothing was running, so the wait goes on for the
+     connect's own answer, and the form says it is too late to cancel. */
+  mconnectLate: boolean
 }
 
 const store = makeStore<ExtAgentsState>({
@@ -177,6 +182,7 @@ const store = makeStore<ExtAgentsState>({
   mconnectSince: null,
   mconnectStopped: '',
   mconnectCancelling: false,
+  mconnectLate: false,
 })
 
 export const { get, subscribe } = store
@@ -584,6 +590,7 @@ export function machineConnectOpen(id: string): void {
     mconnectFailed: '',
     mconnectStopped: '',
     mconnectCancelling: false,
+    mconnectLate: false,
     epoch: get().epoch + 1
   })
   void loadPresets()
@@ -613,8 +620,11 @@ async function loadPresets(): Promise<void> {
    drawer the caller may put the machine's sheet back into: closed or replaced
    meanwhile, the write's end changes nothing on screen. The busy mark is
    cleared only when it is still this write's. */
-type Stopped = 'cancelled' | 'timeout'
-type Outcome<T> = { got: T } | { stopped: Stopped }
+type Stopped = 'cancelled' | 'timeout' | 'missed'
+/* `missed` resolves true when the stop's answer, whenever it comes, is that
+   nothing was running: a wait that ended before that answer said `cancelled`
+   or `timeout`, and the form corrects it. */
+type Outcome<T> = { got: T } | { stopped: Stopped; missed: Promise<boolean> }
 
 /* The end of a form's wait other than the answer, by generation: the form's
    Cancel resolves it, and so does the ceiling's timer. */
@@ -633,23 +643,79 @@ const stops = new Map<number, (why: Stopped) => void>()
    timeout of its own, so on the socket that went silent -- the case the
    ceiling exists for -- awaiting it would hang the wait on a second call
    exactly as the first one hung it. The grace runs from the moment the stop
-   is sent, whatever becomes of that call. */
+   is sent, whatever becomes of that call.
+
+   Its answer is still read, alongside the grace: a stop that found nothing
+   running means the connect is past the point where it can be cancelled --
+   its run answered and it is writing, or its run had not started yet -- and
+   it may still land. Then the form does not say it was cancelled: it says it
+   is too late to, and goes on waiting for the connect's own answer, up to
+   the ceiling (and one more grace when the ceiling is what pressed the stop).
+   Unanswered by then, the wait ends as `missed`, which says it may have been
+   written. */
 async function awaitRun<T>(gen: number, name: string, write: Promise<T>): Promise<Outcome<T>> {
   const answered = write.then((got): Outcome<T> => ({ got }))
-  const stopped = new Promise<Outcome<T>>((resolve) => {
-    stops.set(gen, (why) => resolve({ stopped: why }))
+  const deadline = Date.now() + connectCeilingMs
+  let reason: Stopped = 'cancelled'
+  const stopped = new Promise<Stopped>((resolve) => {
+    stops.set(gen, (why) => {
+      reason = why
+      resolve(why)
+    })
   })
   const ceiling = setTimeout(() => stops.get(gen)?.('timeout'), connectCeilingMs)
+  const timers: ReturnType<typeof setTimeout>[] = []
+  const after = (ms: number): Promise<null> => new Promise((resolve) => timers.push(setTimeout(() => resolve(null), ms)))
   try {
-    const first = await Promise.race([answered, stopped])
-    if ('got' in first) return first
-    const grace = new Promise<null>((resolve) => setTimeout(() => resolve(null), stopGraceMs))
-    void source().cancelRun(name).catch(() => false)
-    return (await Promise.race([answered, grace])) ?? first
+    const first = await Promise.race([answered, stopped.then(() => null)])
+    if (first) return first
+    const missed = source()
+      .cancelRun(name)
+      .then(
+        (ok) => !ok,
+        () => false
+      )
+    const late = Symbol('late')
+    const second = await Promise.race([answered, after(stopGraceMs), missed.then((m) => (m ? late : new Promise<never>(() => {})))])
+    if (second === late) {
+      if (get().mconnectBusy === gen) set({ mconnectLate: true, mconnectCancelling: false })
+      const rest = Math.max(deadline - Date.now(), stopGraceMs)
+      return (await Promise.race([answered, after(rest)])) ?? { stopped: 'missed', missed }
+    }
+    return second ?? { stopped: reason, missed }
   } finally {
     clearTimeout(ceiling)
+    for (const timer of timers) clearTimeout(timer)
     stops.delete(gen)
   }
+}
+
+/* Each press of the form, counted: a stop's late answer or a late landing
+   corrects the note only while it is still the note of the press it belongs
+   to, on the form that press was made in. */
+let presses = 0
+
+/* The form after a wait that ended without the connect's answer: the note
+   for how it ended, then two corrections the note may need later. A stop that
+   answers, after the grace, that nothing was running turns a `cancelled` or
+   `timeout` note into `missed`; and a connect that lands after all takes the
+   note down -- it said, or allowed, that nothing was written -- and is told
+   in a toast. */
+function sayStopped(
+  outcome: { stopped: Stopped; missed: Promise<boolean> },
+  ours: () => boolean,
+  landing: Promise<string | null>,
+  machine: string
+): void {
+  if (ours()) set({ mconnectStopped: outcome.stopped })
+  void outcome.missed.then((missed) => {
+    if (missed && ours() && get().mconnectStopped !== '') set({ mconnectStopped: 'missed' })
+  })
+  void landing.then((name) => {
+    if (name === null) return
+    if (ours()) set({ mconnectStopped: '' })
+    landedLate(name, machine)
+  })
 }
 
 /* The form's Cancel: ends the wait of the write pressed in the form open now,
@@ -658,7 +724,7 @@ async function awaitRun<T>(gen: number, name: string, write: Promise<T>): Promis
    ends it. */
 export function cancelConnect(): void {
   const stop = stops.get(get().mconnectGen)
-  if (!stop) return
+  if (!stop || get().mconnectLate) return
   set({ mconnectCancelling: true })
   stop('cancelled')
 }
@@ -686,11 +752,14 @@ export async function connectOnMachine(
   const current = (): boolean =>
     get().mconnect === machine && get().mconnectGen === gen && detail.get().open && detail.get().owner === 'extAgents'
   const pending = `${choice.preset}@${machine}`
+  const press = ++presses
+  const ours = (): boolean => current() && presses === press
   set({
     mconnectBusy: gen,
     mconnectFailed: '',
     mconnectStopped: '',
     mconnectCancelling: false,
+    mconnectLate: false,
     mconnectSince: Date.now(),
     mconnectPending: [...get().mconnectPending, pending]
   })
@@ -699,17 +768,14 @@ export async function connectOnMachine(
     .connectOnMachine(choice, machine, remoteCwd)
     .catch((e): Answer => (cancelledFrom(e) ? { refused: failure(e), cancelled: true } : { refused: failure(e) }))
   const outcome = await awaitRun(gen, pending, write)
-  if (get().mconnectBusy === gen) set({ mconnectBusy: null, mconnectCancelling: false })
+  if (get().mconnectBusy === gen) set({ mconnectBusy: null, mconnectCancelling: false, mconnectLate: false })
   const settled = (): void => set({ mconnectPending: get().mconnectPending.filter(name => name !== pending) })
   if ('stopped' in outcome) {
     /* No answer: the wait is over and the form is the reader's again, the
        preset offered once more -- a second press while the first run still
        goes is refused server-side, before anything is spent. */
     settled()
-    if (current()) set({ mconnectStopped: outcome.stopped })
-    void write.then(got => {
-      if ('name' in got) landedLate(got.name, machine)
-    })
+    sayStopped(outcome, ours, write.then(got => ('name' in got ? got.name : null)), machine)
     return { landed: false, current: current(), name: pending }
   }
   const got = outcome.got
@@ -746,11 +812,14 @@ export async function reconnectOnMachine(
   const gen = get().mconnectGen
   const current = (): boolean =>
     get().mconnect === machine && get().mconnectGen === gen && detail.get().open && detail.get().owner === 'extAgents'
+  const press = ++presses
+  const ours = (): boolean => current() && presses === press
   set({
     mconnectBusy: gen,
     mconnectFailed: '',
     mconnectStopped: '',
     mconnectCancelling: false,
+    mconnectLate: false,
     mconnectSince: Date.now(),
     mconnectPending: [...get().mconnectPending, name]
   })
@@ -764,17 +833,14 @@ export async function reconnectOnMachine(
   const row = get().rows.find(r => r.name === name) ?? ({ name, kind: 'acp', configured: true, enabled: false } as ExtAgentRow)
   const write = attempt(row, 'toggle', { enabled: true })
   const outcome = await awaitRun(gen, name, write)
-  if (get().mconnectBusy === gen) set({ mconnectBusy: null, mconnectCancelling: false })
+  if (get().mconnectBusy === gen) set({ mconnectBusy: null, mconnectCancelling: false, mconnectLate: false })
   const settled = (): void => set({ mconnectPending: get().mconnectPending.filter(n => n !== name) })
   if ('stopped' in outcome) {
     settled()
     /* The row's own pending mark goes with the wait: `act` takes it off when
        the write answers, which a write with no answer never does. */
     set({ joining: without(get().joining, name) })
-    if (current()) set({ mconnectStopped: outcome.stopped })
-    void write.then(refused => {
-      if (refused === null) landedLate(name, machine)
-    })
+    sayStopped(outcome, ours, write.then(refused => (refused === null ? name : null)), machine)
     return { landed: false, current: current(), name }
   }
   const refused = outcome.got

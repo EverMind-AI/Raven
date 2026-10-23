@@ -48,6 +48,14 @@ const WHY: Record<Exclude<RegisterReason, ''>, string> = {
   registry: 'gui.machine.why_registry',
 }
 
+/* How the connect form's wait ended without the agent's answer, by
+   `mconnectStopped`: the head line and the note under the form. */
+const STOPPED: Record<Exclude<ExtAgentsState['mconnectStopped'], ''>, { head: string; said: string }> = {
+  cancelled: { head: 'gui.machine.connect_cancelled_head', said: 'gui.machine.connect_cancelled' },
+  timeout: { head: 'gui.machine.connect_timeout_head', said: 'gui.machine.connect_timeout' },
+  missed: { head: 'gui.machine.connect_missed_head', said: 'gui.machine.connect_missed' },
+}
+
 function MachineTile(): JSX.Element {
   return (
     <span className="extAgents-tile extAgents-mtile">
@@ -423,12 +431,16 @@ export function MachineConnectSheet({ row, s }: { row: MachineRow; s: ExtAgentsS
   }, [busy])
   const waited = busy && s.mconnectSince !== null ? Math.max(0, Math.floor((Date.now() - s.mconnectSince) / 1000)) : 0
   /* How the last wait ended without the agent's answer, when it did: the
-     reader's Cancel, said plainly, or the ceiling, said as a warning with
-     where to look. Neither is drawn while a new write runs. */
+     reader's Cancel, said plainly; the ceiling, or a stop that came too late
+     to stop anything, said as a warning with where to look. None is drawn
+     while a new write runs. */
   const stopped = busy ? '' : s.mconnectStopped
   const timedOut = stopped === 'timeout'
-  const headClass = 'extAgents-by' + ((s.mconnectFailed || timedOut) && !busy ? ' extAgents-by-bad' : '')
-  const stoppedClass = timedOut ? 'extAgents-note extAgents-note-warn' : 'extAgents-note extAgents-note-next'
+  const unsure = timedOut || stopped === 'missed'
+  /* The stop found nothing running: the wait goes on, with no Cancel left to offer. */
+  const late = busy && s.mconnectLate
+  const headClass = 'extAgents-by' + ((s.mconnectFailed || unsure) && !busy ? ' extAgents-by-bad' : '')
+  const stoppedClass = unsure ? 'extAgents-note extAgents-note-warn' : 'extAgents-note extAgents-note-next'
   const submit = async (): Promise<void> => {
     if (!chosen) return
     const { landed, current, name } = chosen.off
@@ -465,12 +477,10 @@ export function MachineConnectSheet({ row, s }: { row: MachineRow; s: ExtAgentsS
           <h3>{t('gui.machine.connect_title', { name: row.name })}</h3>
           <div className={headClass}>
             {busy
-              ? t('gui.machine.connecting_for', { s: String(waited) })
-              : stopped === 'cancelled'
-                ? t('gui.machine.connect_cancelled_head')
-                : timedOut
-                  ? t('gui.machine.connect_timeout_head')
-                  : s.mconnectFailed
+              ? t(late ? 'gui.machine.connect_late_for' : 'gui.machine.connecting_for', { s: String(waited) })
+              : stopped
+                ? t(STOPPED[stopped].head)
+                : s.mconnectFailed
                     ? t('gui.machine.connect_bad')
                     : chosen?.off
                       ? t('gui.machine.reconnect_hint')
@@ -491,7 +501,7 @@ export function MachineConnectSheet({ row, s }: { row: MachineRow; s: ExtAgentsS
                   {label(c)}
                 </div>
               ))}
-            <div className="extAgents-about">{t('gui.machine.connecting_hint')}</div>
+            <div className="extAgents-about">{t(late ? 'gui.machine.connect_late_hint' : 'gui.machine.connecting_hint')}</div>
           </>
         ) : s.presets === null && !s.presetsFailed ? (
           <div className="extAgents-about">{t('gui.machine.presets_loading')}</div>
@@ -546,13 +556,13 @@ export function MachineConnectSheet({ row, s }: { row: MachineRow; s: ExtAgentsS
         ) : null}
         {stopped ? (
           <div className={stoppedClass}>
-            <div className="extAgents-note-t">{t(timedOut ? 'gui.machine.connect_timeout_head' : 'gui.machine.connect_cancelled_head')}</div>
-            <div className="extAgents-note-said">{t(timedOut ? 'gui.machine.connect_timeout' : 'gui.machine.connect_cancelled')}</div>
+            <div className="extAgents-note-t">{t(STOPPED[stopped].head)}</div>
+            <div className="extAgents-note-said">{t(STOPPED[stopped].said)}</div>
           </div>
         ) : null}
       </div>
       <div className="extAgents-act">
-        {busy ? (
+        {busy && !late ? (
           /* The way out of the wait, left of the press that started it: the
              run is stopped on the machine and nothing is written. */
           <button className="mini danger" disabled={s.mconnectCancelling} onClick={() => store.cancelConnect()} type="button">

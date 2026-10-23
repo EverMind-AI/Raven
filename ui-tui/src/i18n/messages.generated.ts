@@ -1636,6 +1636,12 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.machine.connect_timeout_head': 'No answer',
     'gui.machine.connect_timeout':
       'No answer in five minutes, so the run was stopped. See the Agents page for whether it connected; if not, connect again.',
+    'gui.machine.connect_late_for': 'Too late to cancel; waiting for it to finish, {s}s so far',
+    'gui.machine.connect_late_hint':
+      'There was nothing left to stop: it had already answered, or had not started yet, so it may still be written. This form says how it ends.',
+    'gui.machine.connect_missed_head': 'Not stopped',
+    'gui.machine.connect_missed':
+      'It was past the point where it could be cancelled, so it may have been written. See the Agents page for whether it connected; if not, connect again.',
     'gui.machine.connected_said': '{name} is connected; it is on the Agents page.',
     'gui.machine.connect_bad': 'Not connected',
     'gui.machine.connect_bad_named': 'Not connected: {name}',
@@ -5018,6 +5024,12 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.machine.connect_cancelled': '已取消，没有写入。可以再接一次。',
     'gui.machine.connect_timeout_head': '没有等到答复',
     'gui.machine.connect_timeout': '等了 5 分钟没有答复，已停止。到「智能体」页看它有没有接上；没有的话再接一次。',
+    'gui.machine.connect_late_for': '已经来不及取消，正在等它收尾，已等 {s} 秒',
+    'gui.machine.connect_late_hint':
+      '已经没有可停的了：它要么已经答过，要么还没开始，所以仍可能写入。结束后这里会说结果。',
+    'gui.machine.connect_missed_head': '没能停下',
+    'gui.machine.connect_missed':
+      '已经过了能取消的时候，可能已经写入。到「智能体」页看它有没有接上；没有的话再接一次。',
     'gui.machine.connected_said': '已接入 {name}，到「智能体」页可以看到。',
     'gui.machine.connect_bad': '没有接入',
     'gui.machine.connect_bad_named': '没有接入 {name}',
