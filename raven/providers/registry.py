@@ -1530,7 +1530,7 @@ def _tables() -> "tuple[dict[str, ProviderSpec], dict[str, str]]":
 
     Both used to scan every spec per call, and between them they were reached
     some 22,000 times while one ``model.options`` answered -- a fifth of that
-    answer's time went into normalizing the same fifty-five names over and
+    answer's time went into normalizing the same fifty-six names over and
     over. Keyed on the tuple's identity so a registry a test installs is read
     rather than remembered.
     """
