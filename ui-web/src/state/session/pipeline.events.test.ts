@@ -18,6 +18,7 @@ type Pipeline = typeof import('./pipeline')
 interface Row { id: string; title?: string; status?: string | null; last?: string; naming?: boolean }
 interface Step {
   seal(): void
+  dropSay(): void
   thinkAppend(text: string): void
   sayDelta(text: string): void
   tool(name: string, args: unknown, display: unknown, callId: string): { done(...a: unknown[]): void }
@@ -37,6 +38,7 @@ async function harness({
   const step = (): Step => {
     const st: Step = {
       seal: () => log.push(['seal']),
+      dropSay: () => log.push(['dropSay']),
       thinkAppend: (text: string) => log.push(['thinkAppend', text]),
       sayDelta: (text: string) => log.push(['sayDelta', text]),
       tool: (name: string, args: unknown, display: unknown, callId: string) => {
@@ -116,7 +118,8 @@ async function harness({
         delivery: (turnNo: unknown, metadata: unknown, callId: unknown) =>
           log.push(['delivery', turnNo, metadata, callId]),
         spawnFeed: (p: unknown) => log.push(['spawnFeed', p]),
-        finishTurn: (_st: unknown, _steps: unknown, clock: unknown) => log.push(['finishTurn', clock]),
+        finishTurn: (_st: unknown, _steps: unknown, clock: unknown, silent?: boolean) =>
+          log.push(silent ? ['finishTurn', clock, true] : ['finishTurn', clock]),
         artifacts: (turnNo: unknown) => log.push(['artifacts', turnNo]),
         /* The fold a stop makes asks this first and nothing else does, so it is
            where "softStop ran" is visible from outside. */
@@ -178,6 +181,7 @@ async function harness({
       startedAt: number
       answerAt: number
       openedTurn: string | null
+      silent: boolean
     },
     did: (name: string) => log.filter((c) => c[0] === name),
     order: () => log.map((c) => c[0]),
@@ -416,6 +420,64 @@ describe('notice', () => {
     h.dispatch({ type: 'token.delta', payload: { text: 'the answer' } })
 
     expect(h.did('killStatus')).toHaveLength(1)
+  })
+
+  describe('that says the model chose not to reply', () => {
+    const silent = { type: 'notice', payload: { kind: 'silent_turn', detail: '' } }
+
+    it('takes back the open step\'s reply before the quiet row, and marks the turn', async () => {
+      const h = await harness()
+      h.dispatch({ type: 'token.delta', payload: { text: 'abc' } })
+
+      h.dispatch(silent)
+
+      /* Sealed, then taken back, then the row: the reply was never the turn's
+         answer, and nothing about the notice differs from any other closing
+         one in how its row is drawn. */
+      expect(h.order().slice(-4)).toEqual(['killStatus', 'seal', 'dropSay', 'noteRow'])
+      expect(h.did('noteRow')).toEqual([['noteRow', 'gui.notice.silent_turn', '', ['quiet']]])
+      expect(h.live.st).toBeNull()
+      expect(h.live.say).toBe('')
+      expect(h.live.silent).toBe(true)
+    })
+
+    it('marks the turn when no step was open, with nothing to take back', async () => {
+      const h = await harness()
+
+      h.dispatch(silent)
+
+      expect(h.did('dropSay')).toEqual([])
+      expect(h.did('noteRow')).toHaveLength(1)
+      expect(h.live.silent).toBe(true)
+    })
+
+    it('lands the turn flagged silent, and not the next one', async () => {
+      const h = await harness({ rows: [{ id: 's1', title: 'a digest', last: 'before' }] })
+      h.dispatch({ type: 'token.delta', payload: { text: 'abc' } })
+      h.dispatch(silent)
+
+      h.dispatch({ type: 'message.complete', payload: { usage: {}, duration_ms: 2000 } })
+
+      expect(h.did('finishTurn')).toEqual([['finishTurn', '2000ms', true]])
+      /* No preview: the rail keeps what it showed before the turn. */
+      expect(h.rows[0]!.last).toBe('before')
+      expect(h.live.silent).toBe(false)
+
+      h.dispatch({ type: 'token.delta', payload: { text: 'the next answer' } })
+      h.dispatch({ type: 'message.complete', payload: { usage: {}, duration_ms: 3000 } })
+
+      expect(h.did('finishTurn')).toEqual([['finishTurn', '2000ms', true], ['finishTurn', '3000ms']])
+    })
+
+    it('does not mark the turn for a notice of any other kind', async () => {
+      const h = await harness()
+      h.dispatch({ type: 'token.delta', payload: { text: 'abc' } })
+
+      h.dispatch({ type: 'notice', payload: { kind: 'action_blocked', detail: 'needs approval' } })
+
+      expect(h.did('dropSay')).toEqual([])
+      expect(h.live.silent).toBe(false)
+    })
   })
 })
 

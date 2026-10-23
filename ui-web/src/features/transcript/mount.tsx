@@ -166,9 +166,9 @@ export function foldRuns(steps: StepHandle[]): void {
   store.foldRuns(mainLane(), steps.map((h) => h.seg))
 }
 
-export function finishTurn(st: StepHandle | null, steps: StepHandle[], time?: string | null): void {
+export function finishTurn(st: StepHandle | null, steps: StepHandle[], time?: string | null, silent?: boolean): void {
   const segs = steps.map((h) => h.seg)
-  store.finishTurn(mainLane(), st, segs, time ?? null)
+  store.finishTurn(mainLane(), st, segs, time ?? null, silent ?? false)
 }
 
 /* The turn's products, as its closing line. The turn number is the workspace
