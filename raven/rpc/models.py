@@ -563,11 +563,17 @@ class EpisodeStartEvent(_Strict):
 class NoticePayload(_Strict):
     kind: str = Field(
         ...,
-        description="Which runtime decision this reports: `action_blocked`, `llm_retry` or `organ_degraded`.",
+        description=(
+            "Which runtime decision this reports: `action_blocked`, `llm_retry`, `organ_degraded` or `silent_turn`."
+        ),
     )
     detail: str = Field(
         "",
-        description="What `kind` says it is: the blocking tool's own first line, the failed call's error category, or the organ that dropped out.",
+        description=(
+            "What `kind` says it is: the blocking tool's own first line, the failed call's error category "
+            "(or `empty_reply` / `thinking_only` for the wait before an empty-reply resend or a reasoning "
+            "step-down), or the organ that dropped out. Empty for `silent_turn`."
+        ),
     )
     transient: bool = Field(
         False,
@@ -3987,6 +3993,15 @@ class TranscriptMessage(_Strict):
             "opened one. A reader draws it INSIDE the turn: no new turn number, no fold "
             "closed over the narration above it, and the text before it is still that "
             "turn's narration rather than its answer."
+        ),
+    )
+    silent: bool | None = Field(
+        default=None,
+        description=(
+            "Set on an assistant entry where the model chose not to reply: `text` is its silence "
+            "marker, not an answer. A reader draws one muted line and never treats `text` as the "
+            "answer. Distinct from `notice`, which marks a row the runtime wrote; this row is the "
+            "model's own."
         ),
     )
 

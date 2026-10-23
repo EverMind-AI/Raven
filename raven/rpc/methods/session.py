@@ -371,6 +371,8 @@ def _map_to_wire(
     * ``mid_turn`` — set on a user entry the runtime merged into a turn that was
       already running, so a reload draws it inside that turn rather than opening
       a new one around it.
+    * ``silent`` — set on an assistant entry that is the model's silence marker,
+      so a reload draws one muted line rather than the marker as an answer.
 
     ``deliveries_on_disk`` is false for a transcript recorded on another
     machine (an Imported Conversation): its delivered files are drawn as
@@ -409,6 +411,7 @@ def _map_to_wire(
             "origin",
             "delegated",
             "mid_turn",
+            "silent",
             "reasoning_ms",
             "duration_ms",
             "metadata",

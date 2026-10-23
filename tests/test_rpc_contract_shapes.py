@@ -367,6 +367,33 @@ async def test_session_resume(workspace: Path) -> None:
     assert len(out.messages) == 1
 
 
+async def test_a_silent_row_reaches_the_wire(workspace: Path) -> None:
+    """A reload is told which stored row is the model's silence marker.
+
+    The row's ``text`` is the marker itself, so a reader that cannot tell it from
+    an answer draws ``[SILENT]`` as what the model said. ``notice`` is the wrong
+    carrier: its contract is a row the runtime wrote, and this one the model did.
+    """
+    from raven.rpc.methods import session as session_mod
+    from raven.rpc.models import TranscriptMessage
+    from raven.session.manager import SessionManager
+
+    mgr = SessionManager(workspace)
+    stored = mgr.get_or_create("tui:quiet")
+    stored.add_message("user", "anything new?")
+    stored.add_message("assistant", "[SILENT]", silent=True)
+    stored.add_message("assistant", "all quiet")
+    mgr.save(stored)
+
+    payload = await session_mod.session_resume({"session_id": "tui:quiet"})
+    _check("session.resume", payload)
+
+    marker, spoken = payload["messages"][1], payload["messages"][2]
+    assert marker["text"] == "[SILENT]" and marker["silent"] is True
+    assert TranscriptMessage.model_validate(marker).silent is True
+    assert "silent" not in spoken, "an ordinary reply carries no flag"
+
+
 async def test_session_close(workspace: Path) -> None:
     from raven.rpc.methods import session as session_mod
 

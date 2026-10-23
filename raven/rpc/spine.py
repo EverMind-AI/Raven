@@ -282,6 +282,7 @@ _WIRE_NOTICE_KINDS = frozenset(
         NoticeKind.ACTION_BLOCKED,
         NoticeKind.LLM_RETRY,
         NoticeKind.ORGAN_DEGRADED,
+        NoticeKind.SILENT_TURN,
     }
 )
 
