@@ -245,7 +245,8 @@ const failure = (e: unknown): string => {
    `data.remedy` when the server could name a fix. */
 const remedyFrom = (e: unknown): Remedy | null => remedyOf((e as { data?: { remedy?: unknown } } | null)?.data?.remedy)
 
-/* Whether the refusal is that the row's run was stopped before it answered
+/* Whether the refusal is that the row's run was stopped -- before it
+   answered, or while its capabilities were recorded after it did
    (`data.cancelled`): the server writes nothing then, as for any refusal, and
    the row is left as it was rather than marked failed. */
 const cancelledFrom = (e: unknown): boolean => !!(e as { data?: { cancelled?: unknown } } | null)?.data?.cancelled

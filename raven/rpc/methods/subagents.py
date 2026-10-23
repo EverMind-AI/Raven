@@ -1239,10 +1239,14 @@ async def _run_once(cfg: Any, name: str, *, refusal: str) -> PingResult:
         detail = f"sub-agent {name!r} is already running (a test, or a connect proving it), {refusal}; wait for it to end, or stop it"
         raise SubagentNotReadyError(detail, data={"name": name, "field": "enabled", "detail": detail})
 
+    answered = False
+
     async def _run() -> PingResult:
+        nonlocal answered
         await _read_the_shell_again(cfg)
         result = await ping_agent(cfg)
         if result.ok:
+            answered = True
             await _record_after_the_answer(cfg, name)
         return result
 
@@ -1254,7 +1258,8 @@ async def _run_once(cfg: Any, name: str, *, refusal: str) -> PingResult:
         current = asyncio.current_task()
         if current is not None and current.cancelling():
             raise
-        detail = f"the run of sub-agent {name!r} was cancelled before it answered, {refusal}"
+        when = "after it answered, while its capabilities were being recorded" if answered else "before it answered"
+        detail = f"the run of sub-agent {name!r} was cancelled {when}, {refusal}"
         raise SubagentNotReadyError(
             detail, data={"name": name, "field": "enabled", "detail": detail, "cancelled": True}
         ) from None

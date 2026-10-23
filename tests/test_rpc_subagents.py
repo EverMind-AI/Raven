@@ -2716,7 +2716,10 @@ async def test_cancel_reaches_the_capability_record_after_the_answer_and_the_add
         await asyncio.wait_for(adding, timeout=5)
 
     assert caught.value.data["cancelled"] is True
-    assert caught.value.data["detail"].endswith(", so it was not added")
+    assert caught.value.data["detail"] == (
+        "the run of sub-agent 'OpenCode' was cancelled after it answered, while its capabilities "
+        "were being recorded, so it was not added"
+    ), "the agent had answered, so the refusal does not say it was cancelled before it did"
     assert seen == ["cancelled"], "the cancel ends the handshake, not only the wait"
     assert _stored(config_path) == before, "a connect cancelled during its record writes nothing"
     assert _RUNNING == {}
