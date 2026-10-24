@@ -369,6 +369,16 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- In the TUI on native Windows, typing with a Chinese IME no longer duplicates
+  characters. The console was told to re-encode keys through Kitty keyboard /
+  modifyOtherKeys, which doubles IME commits before they reach Raven's input
+  parser; native Windows now leaves input in the terminal's raw encoding.
+
+- Leaving the TUI with Ctrl+C on Windows conpty restores the primary screen
+  once. The final frame no longer overlaps the shell prompt because the Ink
+  instance and React's unmount cleanup now share one idempotent alternate-screen
+  exit, ordered before the remaining terminal resets.
+
 - A turn's sub-agent marking in the trajectory view, and whether the export
   and bug-report turn picker lists it, now depend on that turn alone. A
   message sent after a sub-agent had reported into an idle session was
