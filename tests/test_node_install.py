@@ -412,6 +412,30 @@ def test_raven_no_mirror_times_nothing_and_asks_no_mirror(registry, monkeypatch,
     assert "curl -K - " not in sent[0] and "SPEED=" not in sent[0]
 
 
+def test_the_switch_is_the_runtime_s_own(registry, monkeypatch):
+    """The install and the runtime's mirror fallback read one switch, in one
+    place: the name it names is the runtime's."""
+    from raven.utils import mirrors
+
+    assert install.NO_MIRROR_ENV == mirrors.OPT_OUT_ENV
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows keeps one name for a variable")
+@pytest.mark.parametrize("name", ["RAVEN_NO_MIRROR", "raven_no_mirror"])
+def test_the_switch_is_read_in_either_case(registry, monkeypatch, name):
+    """A name in another case turns the install off. Windows keeps one name
+    for a variable, so only another system can hold the switch in another
+    case, and there it is read."""
+    monkeypatch.delenv(install.NO_MIRROR_ENV, raising=False)
+    monkeypatch.setenv(name, "1")
+    sent, run = _says(_LOOK + "SPEED=7 000 0 5.000000\n")
+
+    p = install.plan("box", run=run)
+
+    assert (p.mirror, p.passed_over) == ("", "") and len(sent) == 1
+    assert "curl -K - " not in sent[0] and "SPEED=" not in sent[0]
+
+
 def test_a_machine_that_has_the_node_or_cannot_take_one_asks_no_mirror(registry, timed):
     for look in (
         "PRESENT=1\nUV=/usr/bin/uv\nSPEED=7 000 0 5.000000\n",

@@ -28,8 +28,11 @@ import time
 from pathlib import Path
 
 from raven.home import raven_home
+from raven.utils import mirrors
 
 DIST_TAGS_URL = "https://registry.npmjs.org/-/package/@openai/codex/dist-tags"
+#: The same tags from npm's mirror, asked only when npm cannot be reached.
+DIST_TAGS_MIRROR_URL = f"{mirrors.NPM_REGISTRY}/-/package/@openai/codex/dist-tags"
 
 #: The answer when npm has never been reached. A real release -- the backend may
 #: one day check -- and no older than the newest known generation-side gate:
@@ -98,7 +101,12 @@ def cache_path() -> Path:
 def _fetch_latest(*, timeout: float) -> object:
     import httpx
 
-    response = httpx.get(DIST_TAGS_URL, timeout=timeout)
+    try:
+        response = httpx.get(DIST_TAGS_URL, timeout=timeout)
+    except httpx.HTTPError as exc:
+        if not (mirrors.enabled() and mirrors.unreachable(exc)):
+            raise
+        response = httpx.get(DIST_TAGS_MIRROR_URL, timeout=timeout)
     response.raise_for_status()
     tags = response.json()
 

@@ -45,6 +45,7 @@ from raven.acp_client.protocol import (
     AcpRemoteError,
     AcpTimeoutError,
 )
+from raven.utils import mirrors
 from raven.utils.commands import command_argv
 
 _STDERR_LINES = 200
@@ -464,13 +465,25 @@ class AcpClient:
         # Before this launch starts its agent: a dead host's leftover of the same kind
         # may still hold what the new one needs, such as a lock or a port.
         await leftovers.sweep_before_first_launch()
-        await npx_fetch.ensure_fetched(name, argv, env=env, cwd=cwd)
 
         # The capture shells out and can block for real seconds on a slow
         # profile (nvm/conda init); to_thread keeps that off the event loop.
         # These agents need the login shell's PATH, not raven's -- the same
         # reason the cli transport does it.
         base_env = await asyncio.to_thread(login_shell_env)
+        # A ``uvx`` or ``npx`` launch fetches the agent on first run, so a
+        # registry that cannot be reached is a launch that never starts. Asked
+        # here rather than before the pool: the pool keys on the launch as
+        # configured, and a verdict that flips must not restart the agents
+        # already running. Asked before the fetch below, for the npx case:
+        # that fetch goes to the default registry, the very one this decides
+        # about, and would fail before this could answer.
+        argv = await mirrors.package_launch_async(argv, {**base_env, **(env or {})}, cwd)
+        # The fetch holds what npx would fetch, so that the handshake is not
+        # cut off by a download. It is given the answer above: an npx launch
+        # the mirror took over is started from what the mirror installed, and
+        # there is nothing left for npx to fetch.
+        await npx_fetch.ensure_fetched(name, argv, env=env, cwd=cwd)
         # The role goes on before the caller's own map, so a config ``env`` entry
         # is the way to hand one agent back its full registry. The mark goes on
         # last, so no entry can make an agent pass for another host's.

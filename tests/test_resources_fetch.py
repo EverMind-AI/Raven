@@ -9,6 +9,8 @@ which is the contract install.sh leans on.
 
 from __future__ import annotations
 
+import http.server
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -121,11 +123,11 @@ class _FakeClient:
     def __exit__(self, *_exc: object) -> None:
         return None
 
-    def head(self, url: str):
+    def head(self, url: str, *, timeout: object = None):
         self.urls.append(url)
         return SimpleNamespace(headers={"content-length": str(sum(len(c) for c in self.chunks))})
 
-    def stream(self, _method: str, url: str):
+    def stream(self, _method: str, url: str, *, timeout: object = None):
         self.urls.append(url)
         if self.fail:
             raise RuntimeError("the host is unreachable")
@@ -187,6 +189,165 @@ class TestFetchDictionary:
         assert any(url.endswith("/huqie.txt") for url in client.urls)
 
 
+class _RoutedClient:
+    """Stands in for httpx with one answer per host: the bytes it serves, or
+    the exception asking it raises."""
+
+    def __init__(self, answers: dict[str, bytes | Exception], **kwargs: object) -> None:
+        self.answers = answers
+        self.kwargs = kwargs
+        self.urls: list[str] = []
+        self.timeouts: list[tuple[str, object]] = []
+
+    def __call__(self, **kwargs: object) -> "_RoutedClient":
+        self.kwargs = kwargs
+        return self
+
+    def __enter__(self) -> "_RoutedClient":
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+    def _answer(self, url: str) -> bytes:
+        self.urls.append(url)
+        answer = next((value for host, value in self.answers.items() if url.startswith(host)), None)
+        assert answer is not None, f"nothing here serves {url}"
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    def head(self, url: str, *, timeout: object = None):
+        self.timeouts.append((url, timeout))
+        return SimpleNamespace(headers={"content-length": str(len(self._answer(url)))})
+
+    def stream(self, _method: str, url: str, *, timeout: object = None):
+        self.timeouts.append((url, timeout))
+        return _FakeResponse([self._answer(url)])
+
+
+class TestDictionaryMirror:
+    """raw.githubusercontent.com is the one host the dictionary lives on, and
+    from mainland China it times out more often than it answers. jsDelivr
+    serves the same file byte for byte, so a publisher that cannot be reached
+    at all is read through it instead -- and only then."""
+
+    @staticmethod
+    def _install(monkeypatch: pytest.MonkeyPatch, answers: dict[str, bytes | Exception]) -> _RoutedClient:
+        import httpx
+
+        client = _RoutedClient(answers)
+        monkeypatch.setattr(httpx, "Client", client)
+        monkeypatch.delenv("RAVEN_NO_MIRROR", raising=False)
+        return client
+
+    @staticmethod
+    def _item() -> "resources.Resource":
+        return resources.Resource("huqie.txt", resources.CORE_RES, "the word dictionary")
+
+    def test_an_unreachable_publisher_is_read_through_its_mirror(
+        self, res: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        import httpx
+
+        client = self._install(
+            monkeypatch,
+            {resources.DICTIONARY_REPO: httpx.ConnectTimeout("timed out"), resources.DICTIONARY_MIRROR: b"words"},
+        )
+        item = self._item()
+
+        assert resources.fetch_dictionary((item,), force=False) == 1
+        assert item.path.read_bytes() == b"words"
+        assert client.urls[-1] == f"{resources.DICTIONARY_MIRROR}/huqie.txt"
+        said = capsys.readouterr().out
+        assert "cdn.jsdelivr.net" in said and "RAVEN_NO_MIRROR" in said, "the switch is announced, with its way out"
+
+    def test_the_mirror_is_the_same_repository_through_jsdelivr(self) -> None:
+        assert resources.DICTIONARY_REPO == "https://raw.githubusercontent.com/infiniflow/resource/main/rag"
+        assert resources.DICTIONARY_MIRROR == "https://cdn.jsdelivr.net/gh/infiniflow/resource@main/rag"
+
+    def test_a_publisher_that_answers_is_not_swapped_for_the_mirror(
+        self, res: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An HTTP error is the publisher's answer. The mirror would only
+        repeat it, or worse, serve something the publisher has withdrawn."""
+        import httpx
+
+        request = httpx.Request("GET", f"{resources.DICTIONARY_REPO}/huqie.txt")
+        refused = httpx.HTTPStatusError("404 Not Found", request=request, response=httpx.Response(404, request=request))
+        client = self._install(monkeypatch, {resources.DICTIONARY_REPO: refused, resources.DICTIONARY_MIRROR: b"words"})
+
+        with pytest.raises(httpx.HTTPStatusError):
+            resources.fetch_dictionary((self._item(),), force=False)
+
+        assert not any(url.startswith(resources.DICTIONARY_MIRROR) for url in client.urls)
+
+    def test_the_opt_out_keeps_the_publisher_only(self, res: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import httpx
+
+        client = self._install(
+            monkeypatch,
+            {resources.DICTIONARY_REPO: httpx.ConnectError("refused"), resources.DICTIONARY_MIRROR: b"words"},
+        )
+        monkeypatch.setenv("RAVEN_NO_MIRROR", "1")
+
+        with pytest.raises(httpx.ConnectError):
+            resources.fetch_dictionary((self._item(),), force=False)
+
+        assert not any(url.startswith(resources.DICTIONARY_MIRROR) for url in client.urls)
+
+    def test_a_host_with_a_mirror_behind_it_is_given_up_on_promptly(
+        self, res: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A dropped SYN is not refused, it is waited on: Linux retries a
+        connect for about two minutes, which is how long the mirror would
+        otherwise sit unused."""
+        client = self._install(monkeypatch, {resources.DICTIONARY_REPO: b"words"})
+
+        resources.fetch_dictionary((self._item(),), force=False)
+
+        assert client.timeouts and all(timeout.connect <= 15 for _url, timeout in client.timeouts)
+
+    def test_a_host_with_nothing_behind_it_waits_as_long_as_it_always_did(
+        self, res: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The shorter wait only buys time for a mirror. The mirror itself, and
+        every download with the fallback turned off, keep the old one."""
+        import httpx
+
+        client = self._install(
+            monkeypatch,
+            {resources.DICTIONARY_REPO: httpx.ConnectTimeout("timed out"), resources.DICTIONARY_MIRROR: b"words"},
+        )
+        resources.fetch_dictionary((self._item(),), force=False)
+        on_the_mirror = [timeout for url, timeout in client.timeouts if url.startswith(resources.DICTIONARY_MIRROR)]
+        assert on_the_mirror and all(timeout.connect == 120 and timeout.read == 120 for timeout in on_the_mirror)
+
+        client = self._install(monkeypatch, {resources.DICTIONARY_REPO: b"words"})
+        monkeypatch.setenv("RAVEN_NO_MIRROR", "1")
+        resources.fetch_dictionary((self._item(),), force=True)
+        assert client.timeouts and all(t.connect == 120 and t.read == 120 for _url, t in client.timeouts)
+
+    def test_the_files_after_a_switch_go_straight_to_the_mirror(
+        self, res: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Each would otherwise wait out the same timeout on the publisher before
+        making the same switch."""
+        import httpx
+
+        client = self._install(
+            monkeypatch,
+            {resources.DICTIONARY_REPO: httpx.ConnectTimeout("timed out"), resources.DICTIONARY_MIRROR: b"words"},
+        )
+        items = (self._item(), resources.Resource("synonym.json", resources.CORE_RES, "the synonym table"))
+
+        assert resources.fetch_dictionary(items, force=False) == 2
+        assert [url for url in client.urls if url.startswith(resources.DICTIONARY_REPO)] == [
+            f"{resources.DICTIONARY_REPO}/huqie.txt"
+        ]
+        assert capsys.readouterr().out.count("could not be reached") == 1
+
+
 class TestFetchDeepdoc:
     @staticmethod
     def _install(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, sizes: dict[str, int] | None = None):
@@ -244,6 +405,197 @@ class TestFetchDeepdoc:
         item = resources.Resource("det.onnx", resources.KNOWLEDGE_RES, "text detection")
 
         assert resources.fetch_deepdoc((item,), force=False) == 1
+
+
+class TestDeepdocMirror:
+    """huggingface.co does not answer from mainland China: its name resolves to
+    an address that drops every packet. hf-mirror.com serves the same
+    repository, so a Hub that cannot be reached at all is read through it --
+    unless HF_ENDPOINT already names a Hub, which is the operator's choice."""
+
+    @staticmethod
+    def _install(
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        *,
+        hub_down: bool,
+        refusal: Exception | None = None,
+    ) -> list[tuple[str, str | None]]:
+        import httpx
+        import huggingface_hub
+        from huggingface_hub.errors import LocalEntryNotFoundError
+
+        cached = tmp_path / "hf-cache"
+        cached.mkdir(exist_ok=True)
+        asked: list[tuple[str, str | None]] = []
+
+        def unreachable() -> Exception:
+            # How hf_hub_download reports a Hub it could not connect to: its
+            # own error, raised from the transport's.
+            try:
+                raise httpx.ConnectTimeout("timed out")
+            except httpx.ConnectTimeout as cause:
+                try:
+                    raise LocalEntryNotFoundError("cannot find the requested files") from cause
+                except LocalEntryNotFoundError as error:
+                    return error
+
+        def fake_download(
+            *, repo_id: str, filename: str, endpoint: str | None = None, token: bool | str | None = None
+        ) -> str:
+            asked.append((filename, endpoint))
+            if endpoint is None and refusal is not None:
+                raise refusal
+            if endpoint is None and hub_down:
+                raise unreachable()
+            blob = cached / filename
+            blob.write_bytes(b"m" * 4)
+            return str(blob)
+
+        def fake_info(_repo: str, files_metadata: bool = False):
+            if hub_down:
+                raise httpx.ConnectTimeout("timed out")
+            return SimpleNamespace(siblings=[SimpleNamespace(rfilename="det.onnx", size=4)])
+
+        class FakeApi:
+            def __init__(self, endpoint: str | None = None, token: bool | str | None = None) -> None:
+                self.endpoint = endpoint
+
+            def model_info(self, _repo: str, files_metadata: bool = False):
+                asked.append(("model_info", self.endpoint))
+                return SimpleNamespace(siblings=[SimpleNamespace(rfilename="det.onnx", size=4)])
+
+        monkeypatch.setattr(huggingface_hub, "hf_hub_download", fake_download)
+        monkeypatch.setattr(huggingface_hub, "model_info", fake_info)
+        monkeypatch.setattr(huggingface_hub, "HfApi", FakeApi)
+        monkeypatch.delenv("HF_ENDPOINT", raising=False)
+        monkeypatch.delenv("RAVEN_NO_MIRROR", raising=False)
+        return asked
+
+    @staticmethod
+    def _items() -> "tuple[resources.Resource, ...]":
+        return (
+            resources.Resource("det.onnx", resources.KNOWLEDGE_RES, "text detection"),
+            resources.Resource("rec.onnx", resources.KNOWLEDGE_RES, "text recognition"),
+        )
+
+    def test_an_unreachable_hub_is_read_through_its_mirror(
+        self, res: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        asked = self._install(monkeypatch, res, hub_down=True)
+        items = self._items()
+
+        assert resources.fetch_deepdoc(items, force=False) == 2
+        said = capsys.readouterr().out
+        assert "hf-mirror.com" in said and "RAVEN_NO_MIRROR" in said, "the switch is announced, with its way out"
+        assert all(item.path.is_file() for item in items)
+        downloads = [endpoint for name, endpoint in asked if name.endswith(".onnx")]
+        assert downloads == [resources.DEEPDOC_MIRROR] * 2, "the index answered for the Hub, so no file waits on it"
+        assert ("model_info", resources.DEEPDOC_MIRROR) in asked, "the sizes come from the mirror too"
+
+    def test_a_hub_that_drops_a_download_hands_the_rest_to_the_mirror(
+        self, res: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The index can answer and a download still not connect: the file
+        that failed is asked of the mirror, and so is every one after it."""
+        import huggingface_hub
+
+        asked = self._install(monkeypatch, res, hub_down=True)
+        monkeypatch.setattr(
+            huggingface_hub,
+            "model_info",
+            lambda *_a, **_kw: SimpleNamespace(siblings=[SimpleNamespace(rfilename="det.onnx", size=4)]),
+        )
+
+        assert resources.fetch_deepdoc(self._items(), force=False) == 2
+        assert asked == [
+            ("det.onnx", None),
+            ("det.onnx", resources.DEEPDOC_MIRROR),
+            ("rec.onnx", resources.DEEPDOC_MIRROR),
+        ]
+
+    def test_the_mirror_is_hf_mirror(self) -> None:
+        assert resources.DEEPDOC_MIRROR == "https://hf-mirror.com"
+
+    def test_a_hub_the_operator_named_is_never_swapped(self, res: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from huggingface_hub.errors import LocalEntryNotFoundError
+
+        asked = self._install(monkeypatch, res, hub_down=True)
+        monkeypatch.setenv("HF_ENDPOINT", "https://hub.example.internal")
+
+        with pytest.raises(LocalEntryNotFoundError):
+            resources.fetch_deepdoc(self._items(), force=False)
+
+        assert all(endpoint is None for _name, endpoint in asked)
+
+    def test_the_opt_out_keeps_the_hub_only(self, res: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from huggingface_hub.errors import LocalEntryNotFoundError
+
+        asked = self._install(monkeypatch, res, hub_down=True)
+        monkeypatch.setenv("RAVEN_NO_MIRROR", "1")
+
+        with pytest.raises(LocalEntryNotFoundError):
+            resources.fetch_deepdoc(self._items(), force=False)
+
+        assert all(endpoint is None for _name, endpoint in asked)
+
+    def test_a_hub_that_refuses_is_not_swapped_for_the_mirror(self, res: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A refusal is the Hub's answer about the repository, not about the
+        network, and the mirror only relays the Hub."""
+        refusal = RuntimeError("401 Unauthorized")
+        asked = self._install(monkeypatch, res, hub_down=False, refusal=refusal)
+
+        with pytest.raises(RuntimeError, match="401"):
+            resources.fetch_deepdoc(self._items(), force=False)
+
+        assert all(endpoint is None for _name, endpoint in asked)
+
+    def test_the_mirror_is_never_handed_the_users_token(
+        self, res: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """huggingface_hub sends a logged-in user's token to whatever endpoint
+        it is given. The token is for huggingface.co, and these models are
+        public, so the mirror is asked without it. The real client, against a
+        stand-in mirror that records what arrives."""
+        import huggingface_hub
+        from huggingface_hub import constants
+
+        seen: list[str | None] = []
+
+        class _Mirror(http.server.BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # noqa: N802 - the name http.server dispatches on
+                seen.append(self.headers.get("authorization"))
+                self.send_response(404)
+                self.end_headers()
+
+            do_HEAD = do_GET  # noqa: N815 - the name http.server dispatches on
+
+            def log_message(self, *_args: object) -> None:
+                return None
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Mirror)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            real_api, real_download = huggingface_hub.HfApi, huggingface_hub.hf_hub_download
+            # huggingface.co cannot be reached; everything after that is the real client.
+            self._install(monkeypatch, res, hub_down=True)
+            monkeypatch.setattr(huggingface_hub, "HfApi", real_api)
+            monkeypatch.setattr(huggingface_hub, "hf_hub_download", real_download)
+            monkeypatch.setattr(resources, "DEEPDOC_MIRROR", f"http://127.0.0.1:{server.server_address[1]}")
+            monkeypatch.setattr(constants, "HF_HUB_OFFLINE", False)
+            monkeypatch.setenv("HF_TOKEN", "hf_a_token_for_huggingface_co")
+            monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hub"))
+            monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+            monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+
+            with pytest.raises(Exception):  # noqa: B017 - the stand-in serves nothing; what it was sent is the point
+                resources.fetch_deepdoc(self._items()[:1], force=False)
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        assert seen, "the mirror was asked"
+        assert seen == [None] * len(seen), "no request to the mirror carried the token"
 
 
 class TestMain:

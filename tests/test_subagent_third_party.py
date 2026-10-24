@@ -472,6 +472,52 @@ async def test_cli_backend_uses_login_env_and_per_agent_env_wins(
     assert out == "yes/agent"
 
 
+async def test_cli_backend_starts_the_way_the_mirror_fallback_says(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _clear_login_env_cache: None
+) -> None:
+    """A CLI agent started through ``uvx`` or ``npx`` fetches itself first,
+    like an ACP agent. The launch asks with the argv it starts, the environment
+    the agent gets and the directory it starts in, and starts the argv it is
+    answered with."""
+    from raven.utils import mirrors
+
+    captured = f"PATH={os.environ['PATH']}\0SYSTEMROOT={os.environ.get('SYSTEMROOT', '')}\0".encode()
+    monkeypatch.setattr(
+        env_mod.subprocess, "run", lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, captured, b"")
+    )
+    asked: list[tuple[list[str], dict[str, str], str | None]] = []
+
+    def package_launch(
+        argv: list[str],
+        env: dict[str, str],
+        cwd: str | None = None,
+        *,
+        local: bool = True,
+        deadline: float | None = None,
+        cache_root: Path | None = None,
+    ) -> list[str]:
+        asked.append((list(argv), dict(env), cwd))
+        return [*argv, "--as-the-answer-says"]
+
+    monkeypatch.setattr(mirrors, "package_launch", package_launch)
+    script = tmp_path / "show_args.py"
+    script.write_text("import sys\nprint(' '.join(sys.argv[1:]), end='')\n", encoding="utf-8")
+    be = CliAgentBackend(
+        name="envcheck",
+        command=f"{command_quote(sys.executable)} {command_quote(str(script))}",
+        env={"FROM_ENTRY": "yes"},
+        registry=InstanceRegistry(path=tmp_path / "inst.json"),
+    )
+
+    out = await be.run("task", task_id="t1", workspace=tmp_path, executor=None)
+
+    assert out == "--as-the-answer-says"
+    (argv, env, cwd), *_ = asked
+    assert argv[0] == sys.executable
+    assert env["FROM_ENTRY"] == "yes", "asked with the environment the agent gets"
+    assert cwd == str(tmp_path), "and where it starts"
+
+
 async def test_cli_backend_on_windows_starts_a_bare_program_from_the_childs_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

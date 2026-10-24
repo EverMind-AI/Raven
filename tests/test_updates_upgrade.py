@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import base64
 import ctypes
+import errno
 import io
 import json
 import os
+import ssl
 import stat
 import subprocess
 import sys
@@ -721,10 +723,20 @@ class _ReleaseDirectory:
         # this file keep observing the output they were written against.
         self.sizes: dict[str, int] = {}
         self.requests: list[urllib.request.Request] = []
+        # Hosts no connection reaches, by URL prefix.
+        self.unreachable: set[str] = set()
+        # Hosts whose certificate fails verification, by URL prefix.
+        self.untrusted: set[str] = set()
 
     def urlopen(self, request: urllib.request.Request, *args: object, **kwargs: object) -> io.BytesIO:
         self.requests.append(request)
         url = request.full_url
+        if any(url.startswith(prefix) for prefix in self.unreachable):
+            raise urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
+        if any(url.startswith(prefix) for prefix in self.untrusted):
+            raise urllib.error.URLError(
+                ssl.SSLCertVerificationError(1, "certificate verify failed: unable to get local issuer certificate")
+            )
         name = url.rsplit("/", 1)[1]
         if request.get_method() == "HEAD":
             if name not in self.sizes:
@@ -2646,6 +2658,282 @@ def test_upgrade_helper_does_not_sweep_on_posix(monkeypatch: pytest.MonkeyPatch)
 
     assert namespace["main"](["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "123"]) == 0
     assert "sweep" not in order
+
+
+class TestTheHelperFallsBackToAMirror:
+    """uv resolves an upgrade's dependencies from PyPI, and fetches a Python from
+    releases.astral.sh when the machine has none it can use. When either cannot
+    be reached at all, uv is pointed at the mirror instead -- only uv: the Raven
+    relaunched afterwards starts with the helper's own environment."""
+
+    @pytest.fixture(autouse=True)
+    def _fallbacks_on(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.delenv("RAVEN_NO_MIRROR", raising=False)
+        for name in (
+            "UV_DEFAULT_INDEX",
+            "UV_INDEX_URL",
+            "UV_INDEX",
+            "UV_PYTHON_INSTALL_MIRROR",
+            "UV_PYTHON_DOWNLOADS_JSON_URL",
+            "UV_ASTRAL_MIRROR_URL",
+            "UV_CONFIG_FILE",
+        ):
+            monkeypatch.delenv(name, raising=False)
+        # The user's uv.toml is looked for under these; none is there.
+        for name in ("APPDATA", "PROGRAMDATA", "XDG_CONFIG_HOME", "XDG_CONFIG_DIRS", "HOME", "USERPROFILE"):
+            monkeypatch.setenv(name, str(tmp_path / name.lower()))
+
+    @staticmethod
+    def _uv_environments(
+        monkeypatch: pytest.MonkeyPatch, first_attempt: int = 0
+    ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+        """Run the helper; return the environment of every uv install it made, and of the Raven it relaunched."""
+        uv: list[dict[str, str]] = []
+        relaunched: list[dict[str, str]] = []
+        outcomes = iter([first_attempt, 0, 0])
+
+        def run(argv, **kwargs):
+            if argv[1:] == ["--version"]:
+                return Mock(returncode=0, stdout="uv 0.13.0 (x86_64-unknown-linux-gnu)\n")
+            uv.append(kwargs.get("env") or {})
+            return Mock(returncode=next(outcomes))
+
+        monkeypatch.setattr(subprocess, "run", run)
+        helper_main, popen = _helper_with_relaunch(monkeypatch)
+        helper_main.__globals__["use_system_ca"] = lambda: None
+        popen.side_effect = lambda *_a, **_kw: relaunched.append(dict(os.environ))
+
+        assert helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "4321", RELAUNCH]) == 0
+        return uv, relaunched
+
+    @staticmethod
+    def _probes(directory: _ReleaseDirectory, prefix: str) -> int:
+        return sum(1 for request in directory.requests if request.full_url.startswith(prefix))
+
+    def test_an_unreachable_pypi_sends_uv_to_the_mirror(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        release_directory: _ReleaseDirectory,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from raven.utils import mirrors
+
+        release_directory.unreachable.add("https://pypi.org/")
+
+        uv, relaunched = self._uv_environments(monkeypatch)
+
+        assert uv and {env["UV_DEFAULT_INDEX"] for env in uv} == {mirrors.PYPI_INDEX}
+        (relaunch,) = relaunched
+        assert "UV_DEFAULT_INDEX" not in relaunch, "only uv is told"
+        said = capsys.readouterr().out
+        assert "pypi.tuna.tsinghua.edu.cn" in said and "RAVEN_NO_MIRROR" in said
+
+    def test_a_pypi_that_answers_leaves_uv_alone(
+        self, monkeypatch: pytest.MonkeyPatch, release_directory: _ReleaseDirectory
+    ) -> None:
+        uv, _relaunched = self._uv_environments(monkeypatch)
+
+        assert uv and not any("UV_DEFAULT_INDEX" in env for env in uv)
+
+    def test_pypi_is_asked_once_however_many_installs_it_takes(
+        self, monkeypatch: pytest.MonkeyPatch, release_directory: _ReleaseDirectory
+    ) -> None:
+        release_directory.unreachable.add("https://pypi.org/")
+
+        uv, _relaunched = self._uv_environments(monkeypatch, first_attempt=1)
+
+        assert len(uv) == 2, "the cheap install failed and the forced one ran"
+        assert self._probes(release_directory, "https://pypi.org/") == 1
+
+    def test_an_index_the_user_chose_is_kept(
+        self, monkeypatch: pytest.MonkeyPatch, release_directory: _ReleaseDirectory
+    ) -> None:
+        release_directory.unreachable.add("https://pypi.org/")
+        monkeypatch.setenv("UV_INDEX_URL", "https://pypi.example.internal/simple")
+
+        uv, _relaunched = self._uv_environments(monkeypatch)
+
+        assert not any("UV_DEFAULT_INDEX" in env for env in uv)
+        assert self._probes(release_directory, "https://pypi.org/") == 0, "a choice already made is not second-guessed"
+
+    def test_an_index_in_the_users_uv_toml_is_kept(
+        self, monkeypatch: pytest.MonkeyPatch, release_directory: _ReleaseDirectory, tmp_path: Path
+    ) -> None:
+        release_directory.unreachable.add("https://pypi.org/")
+        root = tmp_path / ("appdata" if os.name == "nt" else "xdg_config_home")
+        (root / "uv").mkdir(parents=True)
+        (root / "uv" / "uv.toml").write_text('index-url = "https://pypi.example.internal/simple"\n', encoding="utf-8")
+
+        uv, _relaunched = self._uv_environments(monkeypatch)
+
+        assert not any("UV_DEFAULT_INDEX" in env for env in uv)
+
+    def test_a_uv_toml_with_a_byte_order_mark_is_read(
+        self, monkeypatch: pytest.MonkeyPatch, release_directory: _ReleaseDirectory, tmp_path: Path
+    ) -> None:
+        """uv reads past the mark a Windows editor writes; a reader that does
+        not would call the file broken and take the user's index for none."""
+        release_directory.unreachable.add("https://pypi.org/")
+        root = tmp_path / ("appdata" if os.name == "nt" else "xdg_config_home")
+        (root / "uv").mkdir(parents=True)
+        (root / "uv" / "uv.toml").write_bytes(b"\xef\xbb\xbf" + b'index-url = "https://pypi.example.internal/simple"\n')
+
+        uv, _relaunched = self._uv_environments(monkeypatch)
+
+        assert not any("UV_DEFAULT_INDEX" in env for env in uv)
+
+    @pytest.mark.parametrize("default_in", ["machines", "users"])
+    def test_each_uv_toml_is_read_on_its_own(
+        self, monkeypatch: pytest.MonkeyPatch, release_directory: _ReleaseDirectory, tmp_path: Path, default_in: str
+    ) -> None:
+        """One file's list of indexes does not hide the other's default one."""
+        release_directory.unreachable.add("https://pypi.org/")
+        user = tmp_path / ("appdata" if os.name == "nt" else "xdg_config_home")
+        machine = tmp_path / ("programdata" if os.name == "nt" else "xdg_config_dirs")
+        extra = '[[index]]\nurl = "https://extra.example.internal/simple"\n'
+        default = '[[index]]\nurl = "https://pypi.example.internal/simple"\ndefault = true\n'
+        for root, text in (
+            (user, default if default_in == "users" else extra),
+            (machine, default if default_in == "machines" else extra),
+        ):
+            (root / "uv").mkdir(parents=True)
+            (root / "uv" / "uv.toml").write_text(text, encoding="utf-8")
+
+        uv, _relaunched = self._uv_environments(monkeypatch)
+
+        assert not any("UV_DEFAULT_INDEX" in env for env in uv)
+
+    def test_a_certificate_that_fails_verification_keeps_pypi(
+        self, monkeypatch: pytest.MonkeyPatch, release_directory: _ReleaseDirectory
+    ) -> None:
+        """Not a host that cannot be reached: whatever re-signs its traffic
+        re-signs the mirror's too, the rule the runtime and both installers keep."""
+        release_directory.untrusted.add("https://pypi.org/")
+
+        uv, _relaunched = self._uv_environments(monkeypatch)
+
+        assert uv and not any("UV_DEFAULT_INDEX" in env for env in uv)
+
+    def test_the_opt_out_keeps_pypi(
+        self, monkeypatch: pytest.MonkeyPatch, release_directory: _ReleaseDirectory
+    ) -> None:
+        release_directory.unreachable.add("https://pypi.org/")
+        monkeypatch.setenv("RAVEN_NO_MIRROR", "1")
+
+        uv, _relaunched = self._uv_environments(monkeypatch)
+
+        assert not any("UV_DEFAULT_INDEX" in env for env in uv)
+        assert self._probes(release_directory, "https://pypi.org/") == 0
+
+    def test_an_unreachable_python_host_sends_uv_to_the_python_mirror(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        release_directory: _ReleaseDirectory,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from raven.utils import mirrors
+
+        release_directory.unreachable.add("https://releases.astral.sh/")
+
+        uv, _relaunched = self._uv_environments(monkeypatch)
+
+        assert {env["UV_PYTHON_INSTALL_MIRROR"] for env in uv} == {mirrors.PYTHON_DOWNLOADS}
+        assert not any("UV_DEFAULT_INDEX" in env for env in uv)
+        said = capsys.readouterr().out
+        assert "releases.astral.sh could not be reached" in said and "RAVEN_NO_MIRROR" in said
+
+    @pytest.mark.parametrize(
+        ("variable", "uv_toml"),
+        [
+            ("UV_PYTHON_INSTALL_MIRROR", None),
+            ("UV_PYTHON_DOWNLOADS_JSON_URL", None),
+            ("UV_ASTRAL_MIRROR_URL", None),
+            (None, 'python-install-mirror = "https://python.example.internal"\n'),
+            (None, 'python-downloads-json-url = "https://python.example.internal/downloads.json"\n'),
+        ],
+        ids=["mirror", "downloads-list", "astral-copy", "uv-toml-mirror", "uv-toml-downloads-list"],
+    )
+    def test_a_python_source_the_user_chose_is_kept(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        release_directory: _ReleaseDirectory,
+        tmp_path: Path,
+        variable: str | None,
+        uv_toml: str | None,
+    ) -> None:
+        """uv puts a mirror it is given before a copy of releases.astral.sh, and
+        fails outright beside a list of downloads that live elsewhere."""
+        from raven.utils import mirrors
+
+        release_directory.unreachable.add("https://releases.astral.sh/")
+        if variable is not None:
+            monkeypatch.setenv(variable, "https://python.example.internal")
+        if uv_toml is not None:
+            root = tmp_path / ("appdata" if os.name == "nt" else "xdg_config_home")
+            (root / "uv").mkdir(parents=True)
+            (root / "uv" / "uv.toml").write_text(uv_toml, encoding="utf-8")
+
+        uv, _relaunched = self._uv_environments(monkeypatch)
+
+        assert uv and not any(env.get("UV_PYTHON_INSTALL_MIRROR") == mirrors.PYTHON_DOWNLOADS for env in uv)
+        assert self._probes(release_directory, "https://releases.astral.sh/") == 0, (
+            "a choice already made is not second-guessed"
+        )
+
+    def test_the_helper_names_the_hosts_the_runtime_does(self) -> None:
+        """The helper runs outside the environment it rewrites and cannot import
+        raven, so it carries its own copy; this holds the copies equal."""
+        from raven.utils import mirrors
+
+        namespace = _load_upgrade_helper_namespace()
+
+        assert namespace["PYPI_DEFAULT_INDEX"] == mirrors.PYPI_DEFAULT_INDEX
+        assert namespace["PYPI_MIRROR"] == mirrors.PYPI_INDEX
+        assert namespace["PYTHON_DEFAULT_DOWNLOADS"] == mirrors.PYTHON_DEFAULT_DOWNLOADS
+        assert namespace["PYTHON_MIRROR"] == mirrors.PYTHON_DOWNLOADS
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            urllib.error.URLError(ConnectionRefusedError(111, "Connection refused")),
+            urllib.error.URLError(TimeoutError("timed out")),
+            urllib.error.URLError(OSError(errno.EHOSTUNREACH, "No route to host")),
+            urllib.error.URLError(OSError(errno.EPERM, "Operation not permitted")),
+            urllib.error.URLError(OSError(errno.EACCES, "Permission denied")),
+            OSError(errno.ENETUNREACH, "Network is unreachable"),
+            OSError(errno.EACCES, "Permission denied"),
+            urllib.error.URLError(OSError("Tunnel connection failed: 403 Forbidden")),
+            urllib.error.URLError(OSError("Tunnel connection failed: 502 Bad Gateway")),
+            urllib.error.URLError(ssl.SSLCertVerificationError(1, "certificate verify failed")),
+            urllib.error.URLError(ssl.SSLEOFError(8, "EOF occurred in violation of protocol")),
+            OSError(errno.EMFILE, "Too many open files"),
+            ValueError("not a network problem"),
+        ],
+        ids=[
+            "refused",
+            "timed-out",
+            "no-route",
+            "refused-by-the-machine",
+            "refused-by-the-machine-again",
+            "no-network",
+            "a-file-of-our-own",
+            "tunnel-refused",
+            "tunnel-bad-gateway",
+            "certificate",
+            "tls",
+            "ours",
+            "not-the-network",
+        ],
+    )
+    def test_the_helper_draws_the_runtimes_line_where_no_test_host_can_take_it(self, error: BaseException) -> None:
+        """No loopback host can be made to have no route; the copies are held
+        equal on those failures by asking both about the same error."""
+        from raven.utils import mirrors
+
+        connection_failed = _load_upgrade_helper_namespace()["connection_failed"]
+        assert callable(connection_failed)
+
+        assert connection_failed(error) == mirrors.unreachable(error)
 
 
 class TestTheHelperVerifiesAgainstTheSystemStore:

@@ -230,11 +230,159 @@ def use_system_ca():
         shutil.rmtree(TRUSTSTORE_COPY, ignore_errors=True)
 
 
+# Where uv fetches from when its default host cannot be reached at all: PyPI's
+# mirror for the packages, and a copy of the Python builds uv downloads when no
+# interpreter on the machine will do. raven.utils.mirrors names the same hosts;
+# this copy exists because the helper cannot import raven.
+PYPI_DEFAULT_INDEX = "https://pypi.org/simple/"
+PYPI_MIRROR = "https://pypi.tuna.tsinghua.edu.cn/simple"
+PYTHON_DEFAULT_DOWNLOADS = "https://releases.astral.sh/"
+PYTHON_MIRROR = "https://registry.npmmirror.com/-/binary/python-build-standalone"
+MIRROR_PROBE_TIMEOUT_S = 5
+MIRROR_ENV = None
+
+
+def answers(url):
+    # Any HTTP answer, an error included, proves the host is there. Only a
+    # connection that never completed does not (connection_failed): a fault of
+    # ours must not move an install off the host it belongs to.
+    import urllib.error
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, method="HEAD"), timeout=MIRROR_PROBE_TIMEOUT_S):
+            return True
+    except urllib.error.HTTPError:
+        return True
+    except Exception as exc:
+        return not connection_failed(exc)
+
+
+def connection_failed(exc):
+    # The rule raven.utils.mirrors.unreachable keeps, and a test runs both
+    # against the same hosts and proxies: no name, no route, a connection
+    # refused, reset or left unanswered, or a TLS that never got going. A
+    # certificate that fails verification is an answer, since whatever
+    # re-signs this host re-signs the mirror too. A proxy's answer to the
+    # request for a tunnel speaks for the host: a 5xx says it could not reach
+    # it, any other refusal is final, as the host's own error is. A refusal of
+    # the machine's own counts too, where it came from the network: the socket
+    # was never opened, and the mirror would be refused the same way.
+    import errno
+    import re
+    import socket
+    import ssl
+
+    no_route = {getattr(errno, name) for name in ("ENETUNREACH", "EHOSTUNREACH", "ENETDOWN", "EHOSTDOWN") if hasattr(errno, name)}
+    refused_locally = {getattr(errno, name) for name in ("EACCES", "EPERM") if hasattr(errno, name)}
+    network = (ConnectionError, TimeoutError, socket.gaierror, ssl.SSLError)
+    # exc and every error it was raised from or wraps, the nearest first.
+    chain = []
+    seen = set()
+    pending = [exc]
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        chain.append(current)
+        pending += [e for e in (current.__cause__, current.__context__, getattr(current, "reason", None)) if isinstance(e, BaseException)]
+    if any(isinstance(error, ssl.SSLCertVerificationError) for error in chain):
+        return False
+    for error in chain:
+        refused = re.match(r"Tunnel connection failed: (\d{3})\b", str(error)) if type(error) is OSError else None
+        if refused:
+            return int(refused.group(1)) >= 500
+        if isinstance(error, network) or (isinstance(error, OSError) and error.errno in no_route):
+            return True
+        if isinstance(error, OSError) and error.errno in refused_locally and from_the_network(chain, error):
+            return True
+    return False
+
+
+def from_the_network(chain, error):
+    # Whether the error is the reason of a URL the network was asked for.
+    # urllib reports a refused connect as a URLError whose reason is the
+    # socket's error; a refusal of a local file is the OSError itself.
+    import urllib.error
+
+    for other in chain:
+        if other is error:
+            continue
+        if isinstance(other, urllib.error.URLError) and other.reason is error:
+            return True
+    return False
+
+
+def uv_configs():
+    # Each uv.toml a user who named none has uv read -- theirs, then the
+    # machine's -- on its own: one file's list of indexes hides no other's.
+    # Read with a byte-order mark if it has one, as uv reads it: a reader
+    # that does not would call the file broken and take the user's index for
+    # none.
+    import tomllib
+
+    if os.environ.get("UV_CONFIG_FILE"):
+        paths = [os.environ["UV_CONFIG_FILE"]]
+    elif sys.platform == "win32":
+        paths = [os.path.join(root, "uv", "uv.toml") for root in (os.environ.get("APPDATA"), os.environ.get("PROGRAMDATA")) if root]
+    else:
+        user = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+        system = (os.environ.get("XDG_CONFIG_DIRS") or "/etc/xdg").split(os.pathsep)
+        paths = [os.path.join(root, "uv", "uv.toml") for root in (user, *system, "/etc") if root]
+    configs = []
+    for path in paths:
+        try:
+            with open(path, encoding="utf-8-sig") as handle:
+                configs.append(tomllib.loads(handle.read()))
+        except (OSError, ValueError):
+            continue
+    return configs
+
+
+def names_a_default_index(config):
+    indexes = config.get("index") if isinstance(config.get("index"), list) else []
+    return bool(config.get("index-url")) or any(isinstance(entry, dict) and entry.get("default") for entry in indexes)
+
+
+def mirror_environment():
+    # Decided once per upgrade, since uv may run twice. A host the user chose,
+    # by variable or in uv.toml, is never replaced.
+    global MIRROR_ENV
+    if MIRROR_ENV is not None:
+        return MIRROR_ENV
+    MIRROR_ENV = {}
+    if os.environ.get("RAVEN_NO_MIRROR", "").strip().lower() in ("1", "true", "yes", "on"):
+        return MIRROR_ENV
+    configs = uv_configs()
+    index_chosen = any(os.environ.get(name) for name in ("UV_DEFAULT_INDEX", "UV_INDEX_URL", "UV_INDEX")) or any(
+        names_a_default_index(config) for config in configs
+    )
+    if not index_chosen and not answers(PYPI_DEFAULT_INDEX):
+        print(f"pypi.org could not be reached; installing from {PYPI_MIRROR} instead (RAVEN_NO_MIRROR=1 turns this off).")
+        MIRROR_ENV["UV_DEFAULT_INDEX"] = PYPI_MIRROR
+    # A Python source counts in each form uv reads: a mirror it is given
+    # outranks a copy of releases.astral.sh, and fails outright beside a list
+    # of downloads that live elsewhere.
+    python_chosen = any(
+        os.environ.get(name)
+        for name in ("UV_PYTHON_INSTALL_MIRROR", "UV_PYTHON_DOWNLOADS_JSON_URL", "UV_ASTRAL_MIRROR_URL")
+    ) or any(c.get("python-install-mirror") or c.get("python-downloads-json-url") for c in configs)
+    if not python_chosen and not answers(PYTHON_DEFAULT_DOWNLOADS):
+        print(
+            f"releases.astral.sh could not be reached; fetching any Python uv needs from {PYTHON_MIRROR} instead"
+            " (RAVEN_NO_MIRROR=1 turns this off)."
+        )
+        MIRROR_ENV["UV_PYTHON_INSTALL_MIRROR"] = PYTHON_MIRROR
+    return MIRROR_ENV
+
+
 def uv_environment(uv_path):
     # uv keeps its own bundled roots unless told otherwise. It is told when the
     # system store was handed over, and only uv is: the Raven relaunched after
-    # the install inherits this helper's own environment.
-    env = dict(os.environ)
+    # the install inherits this helper's own environment. A mirror reaches uv
+    # the same way, and only uv.
+    env = {**os.environ, **mirror_environment()}
     if TRUSTSTORE_COPY:
         env.setdefault("UV_SYSTEM_CERTS", "1")
         # The name uv read before 0.11. Later releases still honour it but call
