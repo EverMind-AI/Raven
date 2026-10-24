@@ -4,6 +4,7 @@ import json
 import os
 import re
 import stat
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -62,6 +63,7 @@ class LinkedChat:
         self.sources = sources
         self.active = {}
         self.stopping = False
+        self._question_turn: ContextVar[tuple[str, str] | None] = ContextVar("linked_chat_question_turn", default=None)
 
     def _authorized(self, req):
         s = req.source
@@ -91,6 +93,13 @@ class LinkedChat:
     def channel_active(self, cid):
         return cid in self.active
 
+    def question_route(self, cid):
+        turn = self._question_turn.get()
+        if turn is None:
+            return False
+        active = self.active.get(cid)
+        return True if active is not None and turn == (cid, active[0]) else None
+
     async def dispatch(self, req, scheduler, broker, subagents):
         """True means handled, including a refused Telegram request; never fall back."""
         if req.source.channel != "telegram":
@@ -109,10 +118,11 @@ class LinkedChat:
         if command == "/stop":
             self.stopping = True
             try:
-                stopped = await scheduler.cancel_conversation_reported(cid)
+                stopped = await scheduler.cancel_conversation_reported(
+                    cid, cancel_children=lambda: subagents.cancel_by_session(cid, reason="the user sent /stop")
+                )
             finally:
                 self.stopping = False
-            stopped += await subagents.cancel_by_session(cid, reason="the user sent /stop")
             await reply(f"Stopped {stopped} task(s)." if stopped else "No active task to stop.")
         elif command.startswith("/"):
             # Slash commands can clear history or alter runtime policy; use the page for those.
@@ -150,9 +160,13 @@ class LinkedChat:
                 owner.active[req.conversation] = (req.turn_id, req.source)
                 if not owner._target_exists():
                     raise ValueError("Linked project no longer exists")
-                await outlet.emit_start(req.conversation, req.turn_id, req.text)
-                # UI injects remain in the mailbox and fall back to their own native turn.
-                return await channel_runner.run(req, emit, lambda: [])
+                token = owner._question_turn.set((req.conversation, req.turn_id))
+                try:
+                    await outlet.emit_start(req.conversation, req.turn_id, req.text)
+                    # UI injects remain in the mailbox and fall back to their own native turn.
+                    return await channel_runner.run(req, emit, lambda: [])
+                finally:
+                    owner._question_turn.reset(token)
 
         return Runner()
 

@@ -27,7 +27,7 @@ Existing standalone Telegram history is left in place; the gateway does not merg
 
 A Telegram question and its reply stay on Telegram, and the resulting exchange belongs to the existing page conversation. New Telegram input queues behind an active page turn instead of being injected into that turn. Page input during a Telegram turn runs separately rather than inheriting the DM's reply address.
 
-Questions and approvals raised by a Telegram turn go to the linked DM. The link does not expose a credential-entry responder. `/stop` cancels work on the shared conversation, including queued page turns and associated subagents. Other slash commands are refused in the linked DM; use the page for resets and configuration changes.
+Questions and approvals raised by a Telegram turn go to the linked DM. A captured asker keeps its originating turn's route: page-origin questions stay on the page, and a finished DM turn cannot question a later turn. The link does not expose a credential-entry responder. `/stop` cancels work on the shared conversation, including queued page turns and associated subagents. New turns are refused during stop cleanup, so child cancellation reports cannot restart the host. Running work receives cancellation before the gateway waits for UI delivery. Other slash commands are refused in the linked DM; use the page for resets and configuration changes.
 
 Linking does not broadcast background worker output, tool chatter, progress notices or page replies. To send an explicit update from the project, the `message` tool must name both the channel and chat ID:
 
