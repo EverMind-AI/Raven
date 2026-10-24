@@ -593,6 +593,147 @@ def test_kinds_slots_and_owners_across_span_types(state):
     assert _one(entries, "read", "skill.read").meta == {"skill": "pdf"}
 
 
+_RUN_ATTRS = {
+    "subagent.task": "look around",
+    "subagent.label": "look",
+    "subagent.task_id": "k1",
+    "subagent.origin_session": "cli:s",
+    "subagent.agent": "researcher",
+    "subagent.instance": "scout",
+    "subagent.handle": "scout",
+    "subagent.dispatch": "spawn",
+}
+
+
+def _spawned_run(state, *run_records, with_run=True):
+    """A turn whose spawn call dispatched a sub-agent run with one model call of its own."""
+    spans = [
+        _span("t", "turn", "session.turn", start=0, end=2, attrs=_turn_attrs(state, "turn")),
+        _span(
+            "t", "spawn", "tool.call", parent="turn", start=1, end=2, attrs=_tool_attrs(state, "spawn", {}, "started")
+        ),
+        _span(
+            "t",
+            "child",
+            "llm.call",
+            parent="run",
+            start=3,
+            end=4,
+            attrs=_llm_attrs(state, "child", _messages("look around"), {"content": "seen"}),
+        ),
+    ]
+    if with_run:
+        spans[2:2] = list(run_records)
+    return spans
+
+
+def _run(*, start=2, end=3, **attrs):
+    return _span("t", "run", "subagent.run", parent="spawn", start=start, end=end, attrs={**_RUN_ATTRS, **attrs})
+
+
+def _checkpoint():
+    return _run(end=5, **{"subagent.in_progress": True})
+
+
+def _final(outcome="completed", end=9):
+    return _run(end=end, **{"subagent.in_progress": False, "subagent.outcome": outcome})
+
+
+def test_a_running_subagent_run_has_its_entry_and_its_steps_their_turn(state):
+    entries = tent.project_entries(_spawned_run(state, _checkpoint()), state=state, read=True).entries
+
+    run = _one(entries, "run", "subagent.run")
+    assert run.operation_status == "running"
+    assert run.status_evidence == ("subagent_in_progress",)
+    assert run.duration_ms is None
+    steps = [e for e in entries if e.span_id == "child"]
+    assert steps and all(e.turn_number == 1 and "turn_unknown" not in e.integrity for e in steps)
+
+    orphaned = tent.project_entries(_spawned_run(state, with_run=False), state=state, read=True).entries
+    assert all("turn_unknown" in e.integrity for e in orphaned if e.span_id == "child")
+
+
+@pytest.mark.parametrize("final_first", [False, True], ids=["checkpoint_then_final", "final_then_checkpoint"])
+def test_a_finished_subagent_run_replaces_its_checkpoint_in_either_order(state, final_first):
+    records = (_final(), _checkpoint()) if final_first else (_checkpoint(), _final())
+    entries = tent.project_entries(_spawned_run(state, *records), state=state, read=True).entries
+
+    run = _one(entries, "run", "subagent.run")
+    assert run.operation_status == "ok"
+    assert run.status_evidence == ()
+    assert run.duration_ms == 7000
+
+
+@pytest.mark.parametrize(
+    ("outcome", "status", "evidence", "fails"),
+    [
+        ("completed", "ok", (), False),
+        ("failed", "error", ("subagent_failed",), True),
+        ("aborted", "error", ("subagent_aborted",), True),
+        ("cancelled", "cancelled", ("subagent_cancelled",), False),
+        ("handed_off", "unknown", ("subagent_handed_off",), False),
+    ],
+)
+def test_a_subagent_run_s_outcome_sets_its_entry_status(state, outcome, status, evidence, fails):
+    entries = tent.project_entries(_spawned_run(state, _final(outcome)), state=state, read=True).entries
+
+    run = _one(entries, "run", "subagent.run")
+    assert (run.operation_status, run.status_evidence) == (status, evidence)
+    failures = [e for e in entries if e.span_id == "run" and e.failure_entry]
+    assert failures == ([run] if fails else [])
+
+
+def test_a_subagent_run_recorded_before_its_outcome_existed_projects_as_before(state):
+    old = _span(
+        "t",
+        "run",
+        "subagent.run",
+        parent="spawn",
+        start=2,
+        end=9,
+        attrs={
+            "subagent.task": "do",
+            "subagent.label": "helper",
+            "subagent.task_id": "k1",
+            "subagent.origin_session": "s",
+        },
+    )
+    entries = tent.project_entries(_spawned_run(state, old), state=state, read=True).entries
+
+    run = _one(entries, "run", "subagent.run")
+    assert (run.operation_status, run.status_evidence, run.duration_ms) == ("ok", (), 7000)
+    assert run.meta == {"label": "helper", "task_id": "k1"}
+
+
+def test_a_subagent_run_entry_names_the_run_in_its_meta(state):
+    entries = tent.project_entries(_spawned_run(state, _final()), state=state, read=True).entries
+
+    assert _one(entries, "run", "subagent.run").meta == {
+        "label": "look",
+        "task_id": "k1",
+        "agent": "researcher",
+        "instance": "scout",
+        "handle": "scout",
+        "dispatch": "spawn",
+        "outcome": "completed",
+    }
+
+
+@pytest.mark.parametrize("name", ["agent", "instance", "handle", "dispatch", "outcome"])
+@pytest.mark.parametrize("recorded", ["absent", "null"])
+def test_a_subagent_run_meta_leaves_out_a_name_it_has_no_value_for(state, name, recorded):
+    final = _final()
+    if recorded == "absent":
+        del final["attributes"][f"subagent.{name}"]
+    else:
+        final["attributes"][f"subagent.{name}"] = None
+    entries = tent.project_entries(_spawned_run(state, final), state=state, read=True).entries
+
+    meta = _one(entries, "run", "subagent.run").meta
+    assert name not in meta
+    assert {"label", "task_id", "agent", "instance", "handle", "dispatch", "outcome"} - {name} == set(meta)
+
+
 def test_generic_owner_prefers_output_phase_over_key_order(state):
     both = {
         "foo.output.artifact_path": _artifact(state, {"o": 1}, "g-out"),

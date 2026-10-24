@@ -87,6 +87,24 @@ _OUTER_ONLY_PREFIXES = ("memory.feedback", "memory.enqueue", "personalize.")
 _TOOL_RESULT_SPANS = ("tool.call", "skill.read")
 _TOOL_RESULT_SLOTS = ("tool.output", "skill.read")
 
+IN_PROGRESS_KEYS = ("turn.in_progress", "subagent.in_progress")
+# A sub-agent run reports its own failures and returns, so its span status is
+# OK whatever happened; how it ended is on `subagent.outcome`. `completed`, no
+# outcome, or one this table does not know reads the span status instead.
+_SUBAGENT_OUTCOMES = {
+    "failed": (STATUS_ERROR, ("subagent_failed",)),
+    "aborted": (STATUS_ERROR, ("subagent_aborted",)),
+    "cancelled": (STATUS_CANCELLED, ("subagent_cancelled",)),
+    "handed_off": (STATUS_UNKNOWN, ("subagent_handed_off",)),
+}
+_SUBAGENT_RUN_META = (
+    ("agent", "subagent.agent"),
+    ("instance", "subagent.instance"),
+    ("handle", "subagent.handle"),
+    ("dispatch", "subagent.dispatch"),
+    ("outcome", "subagent.outcome"),
+)
+
 _IO_PAIR_SPANS = ("skill.rewrite", "skill.gate", "context.curate")
 _COMPACT_KEYS = (
     "slot",
@@ -232,9 +250,13 @@ def preview_text(text: str) -> str:
     return flat
 
 
+def in_progress_attrs(attrs: Any) -> bool:
+    """Whether span attributes mark the record as an in-progress checkpoint rather than a final state."""
+    return isinstance(attrs, dict) and any(attrs.get(key) is True for key in IN_PROGRESS_KEYS)
+
+
 def _in_progress(span: dict[str, Any]) -> bool:
-    attrs = span.get("attributes")
-    return isinstance(attrs, dict) and attrs.get("turn.in_progress") is True
+    return in_progress_attrs(span.get("attributes"))
 
 
 def merge_snapshots(spans: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -333,6 +355,9 @@ def _meta_of(info: _conv._SpanInfo) -> dict[str, Any]:
         keys = (("tool", "tool.name"), ("skill", "skill.name"))
     elif info.name == "subagent.run":
         keys = (("label", "subagent.label"), ("task_id", "subagent.task_id"))
+        meta = {name: _scalar(attrs[key]) for name, key in keys if key in attrs}
+        meta.update((name, _scalar(attrs[key])) for name, key in _SUBAGENT_RUN_META if attrs.get(key) is not None)
+        return meta
     elif info.name == "session.turn":
         keys = (("tool_count", "turn.tool_count"), ("skill_count", "turn.skill_count"))
     return {name: _scalar(attrs[key]) for name, key in keys if key in attrs}
@@ -411,6 +436,13 @@ def _status_of(info: _conv._SpanInfo, records: list[dict[str, Any]]) -> tuple[st
         return STATUS_ERROR, tuple(evidence)
     if info.name == "session.turn" and info.attrs.get("turn.in_progress") is True:
         return STATUS_RUNNING, ("turn_in_progress",)
+    if info.name == "subagent.run":
+        if info.attrs.get("subagent.in_progress") is True:
+            return STATUS_RUNNING, ("subagent_in_progress",)
+        outcome = info.attrs.get("subagent.outcome")
+        settled = _SUBAGENT_OUTCOMES.get(outcome) if isinstance(outcome, str) else None
+        if settled is not None:
+            return settled
     status = info.raw.get("status") if isinstance(info.raw, dict) else None
     if isinstance(status, dict) and status.get("code") == "OK":
         outer = ("outer_only",) if info.name.startswith(_OUTER_ONLY_PREFIXES) else ()
@@ -488,14 +520,14 @@ def _timing(info: _conv._SpanInfo) -> tuple[int | None, list[str]]:
 
     An in-progress checkpoint's endTime is the snapshot time, not the end of
     the operation, so it never yields a duration -- whatever status the span
-    displays (an ERROR snapshot is still an unfinished turn).
+    displays (an ERROR snapshot is still unfinished).
     """
     codes: list[str] = []
     start = _parse_ts(info.start)
     end = _parse_ts(info.end)
     if (info.start and start is None) or (info.end and end is None):
         codes.append("bad_timestamp")
-    if start is None or end is None or info.attrs.get("turn.in_progress") is True:
+    if start is None or end is None or in_progress_attrs(info.attrs):
         return None, codes
     if end < start:
         codes.append("clock_skew")
@@ -1343,6 +1375,7 @@ def position_done(cache: SpanCache, info: _conv._SpanInfo, records: list[dict[st
 
 
 __all__ = [
+    "IN_PROGRESS_KEYS",
     "POSITION_KEY",
     "PREVIEW_LIMIT",
     "PREVIEW_READ_LIMIT",
@@ -1352,6 +1385,7 @@ __all__ = [
     "SpanCache",
     "TrajectoryEntry",
     "TurnInfo",
+    "in_progress_attrs",
     "merge_snapshots",
     "preview_failed",
     "preview_records",

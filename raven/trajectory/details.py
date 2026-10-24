@@ -272,7 +272,12 @@ _REGISTRY: dict[str, tuple[BlockSpec, ...]] = {
     ),
     "subagent.run": (
         _attrs("task", TEXT, "subagent.task"),
-        _attrs("agent", KEY_VALUES, "subagent.label,subagent.task_id,subagent.origin_session"),
+        _attrs(
+            "agent",
+            KEY_VALUES,
+            "subagent.label,subagent.task_id,subagent.origin_session,subagent.agent,subagent.instance,"
+            "subagent.handle,subagent.dispatch,subagent.outcome",
+        ),
     ),
     "memory.recall": (
         _attrs("query", TEXT, "memory.query"),
@@ -1635,7 +1640,7 @@ def describe(
     notes: list[str] = []
     if NOTE_OUTER_ONLY in entry.status_evidence:
         notes.append(NOTE_OUTER_ONLY)
-    if tstore._span_attrs(view.span or {}).get("turn.in_progress") is True:
+    if _entries.in_progress_attrs(tstore._span_attrs(view.span or {})):
         notes.append(NOTE_IN_PROGRESS)
     integrity = tuple(codes)
     if integrity:

@@ -82,7 +82,7 @@ _SKELETON_ATTRS = (
     "session.key",
     "trace.dispatched_by_span_id",
     "trace.dispatched_in_trace_id",
-    "turn.in_progress",
+    *_entries.IN_PROGRESS_KEYS,
 )
 _OUTPUT_SLOTS = ("turn.output", "llm.output", "tool.output", "io.output")
 
@@ -812,6 +812,10 @@ class SessionIndex:
         span_id = tstore._str_value(span.get("spanId")) or ""
         key: SpanKey = (trace, span_id) if trace and span_id else ("", str(span.get(_entries.POSITION_KEY)))
         existing = self.spans.get(key)
+        if existing is None:
+            # A trimmed final record lives on as its skeleton, which a late
+            # checkpoint must not displace either.
+            existing = self.skeletons.get(key)
         if existing is not None and _entries._in_progress(span) and not _entries._in_progress(existing):
             return
         self.spans[key] = span

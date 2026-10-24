@@ -712,6 +712,57 @@ async def test_an_outcome_is_marked_only_on_a_recorded_subagent_run(run_spans, m
     assert all("subagent.outcome" not in record["attributes"] for record in records)
 
 
+def _project(directory: Path) -> list[Any]:
+    from raven.trajectory.entries import project_entries
+
+    return list(project_entries(_recorded(directory), state=directory).entries)
+
+
+async def test_a_spawned_run_projects_running_with_its_steps_in_its_turn_then_finished(
+    run_spans, monkeypatch, tmp_path
+):
+    backend = _GatedBackend()
+    mgr = _traced_manager(monkeypatch, tmp_path, backend)
+    _, _, task = await _spawn_in_a_turn(mgr)
+    await asyncio.wait_for(backend.started.wait(), timeout=5)
+
+    entries = _project(run_spans)
+    (running,) = [e for e in entries if e.span_name == "subagent.run"]
+    assert running.operation_status == "running"
+    assert running.status_evidence == ("subagent_in_progress",)
+    assert running.duration_ms is None
+    steps = [e for e in entries if e.span_name == "llm.call"]
+    assert steps and all(e.turn_number == 1 and "turn_unknown" not in e.integrity for e in steps)
+
+    backend.release.set()
+    await asyncio.wait({task})
+    entries = _project(run_spans)
+    (finished,) = [e for e in entries if e.span_name == "subagent.run"]
+    assert finished.operation_status == "ok"
+    assert isinstance(finished.duration_ms, int)
+
+    def _shape(found: list[Any]) -> list[tuple[Any, ...]]:
+        return [(e.entry_id, e.turn_number, e.operation_status, e.preview) for e in found]
+
+    assert _shape([e for e in entries if e.span_name == "llm.call"]) == _shape(steps)
+    await mgr.cancel_all()
+
+
+async def test_a_failed_spawned_run_is_its_span_s_failure_entry(run_spans, monkeypatch, tmp_path):
+    backend = _GatedBackend(RuntimeError("the run failed"))
+    backend.release.set()
+    mgr = _traced_manager(monkeypatch, tmp_path, backend)
+    _, _, task = await _spawn_in_a_turn(mgr)
+    await asyncio.wait({task})
+
+    run_entries = [e for e in _project(run_spans) if e.span_name == "subagent.run"]
+    (failed,) = run_entries
+    assert failed.operation_status == "error"
+    assert failed.status_evidence == ("subagent_failed",)
+    assert [e for e in run_entries if e.failure_entry] == [failed]
+    await mgr.cancel_all()
+
+
 async def test_a_spawn_is_refused_when_the_shutdown_sweep_lands_while_it_is_starting(monkeypatch):
     """The sweep snapshots the running tasks once and then yields for up to
     five seconds while it drains them. A spawn that passed its first check

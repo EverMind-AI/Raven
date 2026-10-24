@@ -1087,6 +1087,51 @@ def test_info_notes_timing_and_relations(state):
 # ── errors and version consistency ────────────────────────────────────
 
 
+def _subagent_run(*, end, **attrs):
+    attrs = {
+        "subagent.task": "look around",
+        "subagent.label": "look",
+        "subagent.task_id": "k1",
+        "subagent.origin_session": SESSION,
+        "subagent.agent": "researcher",
+        "subagent.instance": "scout",
+        "subagent.handle": "scout",
+        "subagent.dispatch": "spawn",
+        **attrs,
+    }
+    return _span("t", "run", "subagent.run", parent="turn", start=1, end=end, attrs=attrs)
+
+
+def test_a_subagent_run_s_agent_block_names_the_run(state):
+    final = _subagent_run(end=9, **{"subagent.in_progress": False, "subagent.outcome": "failed"})
+    _append(state, [_turn(state, "t", "turn", start=0, end=10), final])
+    index = _ready(state)
+
+    body = _block(index, state, _entry(index, "run", "subagent.run"), "agent")
+    assert {item["key"]: item["value"] for item in body.data["items"]} == {
+        "subagent.label": "look",
+        "subagent.task_id": "k1",
+        "subagent.origin_session": SESSION,
+        "subagent.agent": "researcher",
+        "subagent.instance": "scout",
+        "subagent.handle": "scout",
+        "subagent.dispatch": "spawn",
+        "subagent.outcome": "failed",
+    }
+
+
+def test_a_running_subagent_run_is_described_as_a_snapshot_until_its_final_record(state):
+    _append(state, [_turn(state, "t", "turn", start=0, end=10), _subagent_run(end=2, **{"subagent.in_progress": True})])
+    index = _ready(state)
+    running = _describe(index, state, _entry(index, "run", "subagent.run"))
+    assert tdet.NOTE_IN_PROGRESS in running.notes and running.operation_status == "running"
+
+    _append(state, [_subagent_run(end=9, **{"subagent.in_progress": False, "subagent.outcome": "completed"})])
+    index.refresh_sync(None)
+    finished = _describe(index, state, _entry(index, "run", "subagent.run"))
+    assert tdet.NOTE_IN_PROGRESS not in finished.notes and finished.operation_status == "ok"
+
+
 def test_error_paths(state, tmp_path):
     link_target = tmp_path / "secret.json"
     link_target.write_text('{"content": "secret"}', encoding="utf-8")
