@@ -89,4 +89,38 @@ describe('alternate-screen exit', () => {
       instance.cleanup()
     }
   })
+
+  it('repaints the main screen on an ordinary leave, not while paused', () => {
+    const stdout = new PassThrough()
+    const stdin = new PassThrough()
+
+    Object.assign(stdout, { columns: 80, fd: 1, isTTY: true, rows: 24 })
+    Object.assign(stdin, { isTTY: true, ref: () => {}, setRawMode: () => {}, unref: () => {} })
+
+    const instance = renderSync(<Text>main</Text>, {
+      patchConsole: false,
+      stderr: stdout as never,
+      stdin: stdin as never,
+      stdout: stdout as never
+    })
+    const owner = instances.get(stdout)
+    expect(owner).toBeDefined()
+    const repaint = vi.spyOn(owner!, 'repaint')
+
+    try {
+      owner!.setAltScreenActive(true)
+      owner!.pause()
+      owner!.leaveAltScreen(() => {}, true)
+      expect(repaint).not.toHaveBeenCalled()
+
+      owner!.setAltScreenActive(true)
+      owner!.resume()
+      owner!.leaveAltScreen(() => {}, true)
+      expect(repaint).toHaveBeenCalledTimes(1)
+    } finally {
+      Object.assign(stdout, { isTTY: false })
+      instance.unmount()
+      instance.cleanup()
+    }
+  })
 })
