@@ -455,7 +455,6 @@ async def build_rpc_stack(
             system_pool=system_pool,
             on_turn_end=turn_module.clear_active,
             on_turn_start=turn_module.promote_pending_inject,
-            on_turn_bind=turn_module.bind_active,
             direct_targets=direct_targets,
             readback_texts=cron_readback,
             # The caller's transport when it brought one. The locally built
@@ -515,6 +514,7 @@ async def build_rpc_stack(
         default_channel=channel,
         ensure_stack=ensure_stack,
         live_usages=live_usages,
+        linked_turn_id=linked_chat.active_turn_id if linked_chat is not None else None,
     )
     if agent_loop is not None:
         _lend_settings_writers(agent_loop, dispatcher)
