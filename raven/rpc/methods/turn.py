@@ -214,6 +214,11 @@ def clear_active(session_key: str) -> None:
     _active_turns.pop(session_key, None)
 
 
+def bind_active(session_key: str, handle: TurnHandle) -> None:
+    """Bind a linked user turn to the page's normal cancellation slot."""
+    _active_turns[session_key] = handle
+
+
 # The ``busy: inject`` sends the running turn has not yet merged, per lane and
 # then per the id minted for each: (its handle, its text), in arrival order.
 # The handle is the one record of that text the surface holds, and it stays

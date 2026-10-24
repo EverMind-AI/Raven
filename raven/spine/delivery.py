@@ -15,6 +15,7 @@ channels.contract re-export), not the reverse.
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from functools import partial
 from typing import Protocol, runtime_checkable
 
 from loguru import logger
@@ -63,6 +64,14 @@ class Outlet(Protocol):
     capabilities: Capabilities
 
     async def deliver(self, out: Deliverable) -> None: ...
+
+
+class RetryDeliveryError(RuntimeError):
+    """Resume unacknowledged work under the hub's existing retry budget."""
+
+    def __init__(self, message: str, resume: Callable[[], Awaitable[None]]) -> None:
+        super().__init__(message)
+        self.resume = resume
 
 
 _SEND_MAX_RETRIES = 3
@@ -262,11 +271,14 @@ class DeliveryHub:
 
     async def _deliver_with_retry(self, outlet: Outlet, out: Deliverable) -> None:
         delay = _RETRY_BASE_DELAY
+        deliver: Callable[[], Awaitable[None]] = partial(outlet.deliver, out)
         for attempt in range(self._send_max_retries + 1):
             try:
-                await outlet.deliver(out)
+                await deliver()
                 return
             except Exception as exc:
+                if isinstance(exc, RetryDeliveryError):
+                    deliver = exc.resume
                 if attempt == self._send_max_retries:
                     self.dropped += 1
                     logger.error(
