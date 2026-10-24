@@ -407,3 +407,11 @@ raven web
   url           = {https://arxiv.org/abs/2609.33439}
 }
 ```
+
+## ❯❯ 贡献者
+
+感谢每一位帮助 Raven 变得更好的贡献者。
+
+<a href="https://github.com/EverMind-AI/Raven/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=EverMind-AI/Raven&max=500&columns=20&anon=1" alt="Raven 贡献者" />
+</a>

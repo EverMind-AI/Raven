@@ -426,3 +426,11 @@ If you use Raven in your research, please cite the [technical report](https://ar
   url           = {https://arxiv.org/abs/2609.33439}
 }
 ```
+
+## ❯❯ Contributors
+
+Thanks to everyone who has helped make Raven better.
+
+<a href="https://github.com/EverMind-AI/Raven/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=EverMind-AI/Raven&max=500&columns=20&anon=1" alt="Raven contributors" />
+</a>
