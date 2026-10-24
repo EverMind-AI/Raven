@@ -2536,7 +2536,8 @@ unreadable expected payload always yields a record.
 _Avoid_: confusing with the session's conversation history — a Conversation
 Record derives from trace spans, not from session messages.
 
-**Sub-agent Run Span** (`raven/observability/semconv.py`, `raven/agent/subagent/manager.py`):
+**Sub-agent Run Span** (`raven/observability/semconv.py`, `raven/agent/subagent/manager.py`,
+`raven/agent/subagent/dag_runner.py`):
 The `subagent.run` span of one sub-agent run, opened by `SubagentManager._run_subagent` under
 the tool call that dispatched the run, in that call's trace, so the run's own model and tool
 calls nest under it. It is written when it opens -- its attributes and an in-progress
@@ -2544,8 +2545,8 @@ checkpoint, as a turn's root is -- and again when it closes; both records share 
 and the same attributes: `subagent.task_id`, `subagent.task` (a 300-character preview),
 `subagent.label` (the Task summary), `subagent.origin_session`, `subagent.agent` (the
 canonical agent name), `subagent.instance` (the instance name, absent when the run has
-none), `subagent.handle` (the instance name, else the task id), `subagent.dispatch` (`spawn`;
-`dag` is reserved for a graph node's run) and `subagent.in_progress` (`true` in the
+none), `subagent.handle` (the instance name, else the task id), `subagent.dispatch` (`spawn`,
+or `dag` for a graph node's attempt, below) and `subagent.in_progress` (`true` in the
 checkpoint, `false` when it closes). The closing record also carries `subagent.outcome`:
 `completed`, `failed`, `aborted` (stopped on a terminal safety decision), `cancelled`, or
 `handed_off` (the process stopped and the run goes on on its registered machine). It is set
@@ -2558,8 +2559,23 @@ the checkpoint (evidence `subagent_in_progress`), `error` for `failed` / `aborte
 (`subagent_failed` / `subagent_aborted`, the entry being the span's failure entry),
 `cancelled` (`subagent_cancelled`), `unknown` for `handed_off` (`subagent_handed_off`), and
 the span status otherwise.
-_Avoid_: reading the span's `status.code` as the run's result -- the run reports its own
-failures and returns, so the span is `OK` whatever the outcome.
+A DAG node gets one such span per attempt, opened by `dag_runner._attempt_node` once the
+attempt holds a concurrency slot and closed after its terminal status event -- the time
+queued for the slot is outside it, where a spawned run's span includes its wait at the
+gate. Its parent is the span active where `run_dag` was called (the `run_subagent_dag` or
+`resolve_dag_node` tool call). A node continued, or sent its judge's own follow-up, runs
+again under a new span; a node never executed (its branch not selected, skipped behind a
+failed dependency, or still queued when the run stopped) has none. Its `subagent.task` is
+the node's prompt template, `subagent.label` the node summary (else the node id),
+`subagent.task_id` the node id, and it adds `subagent.dag_run_id`, `subagent.node_id` and
+`subagent.attempt` (the node's attempt number, from 1 -- not a trajectory **Attempt**). Its
+outcome is `completed`, `failed`, `exception` (waiting on the main agent's decision),
+`continued` (judged not accomplished and sent its judge's follow-up, so the node runs
+again) or `cancelled`; for `failed`, `exception` and `continued` the span status is `ERROR`
+with the reason as its message, never empty, so the trajectory shows the entry as `error`
+(evidence `span_error`).
+_Avoid_: reading a spawned run's `status.code` as its result -- the run reports its own
+failures and returns, so that span is `OK` whatever the outcome.
 
 **Trajectory Entry** (`raven/trajectory/entries.py`):
 One row of the trajectory view, projected by `project_entries` from a logical

@@ -64,7 +64,9 @@ from raven.agent.subagent_memory import (
 )
 from raven.context_engine.segments.render import dispatch_language_line
 from raven.contracts.subagent_backend import SubagentNoAnswerError
+from raven.observability import semconv
 from raven.providers.base import bound_llm_detail
+from raven.tracing import trace
 
 # In-context cap for terminal outputs returned to the main agent; the on-disk
 # .out.md always holds the full text.
@@ -1174,7 +1176,7 @@ async def _apply_verdict(
     control_reachable: "Callable[[], bool] | None" = None,
     control_advert: "Callable[[str], str | None] | None" = None,
     output_limited: bool = False,
-) -> None:
+) -> str | None:
     """Turn a finished node's verdict into a status, and report a bad one.
 
     The last attempt reports too: the agent learns this line of the graph is dead
@@ -1183,9 +1185,13 @@ async def _apply_verdict(
 
     A decision node's selection is recorded into ``branch`` here, before the node
     leaves ``unsettled``, so no guard naming it is ever read without it.
+
+    Returns what the attempt left undone when it was judged not accomplished --
+    never empty, and still known on the retry route, which clears ``errors`` --
+    and ``None`` otherwise.
     """
     if status[node.id] not in ("completed", "failed"):
-        return
+        return None
     crashed = status[node.id] == "failed"
     try:
         verdict = await judge_node(
@@ -1203,7 +1209,7 @@ async def _apply_verdict(
         logger.warning("DAG decision node {} could not settle a route: {}", node.id, exc)
         if not crashed:
             _fail_undetermined_route(node.id, str(exc), status=status, errors=errors, output_paths=output_paths)
-        return
+        return None
     except TypeError as exc:
         # Not fail-open, and not raised either: raising here is swallowed further
         # out and the node stays `completed`, which is the failure this guards
@@ -1223,11 +1229,11 @@ async def _apply_verdict(
                     errors=errors,
                     output_paths=output_paths,
                 )
-            return
+            return None
         status[node.id] = "failed"
         errors[node.id] = f"the DAG judge could not be called, so this node was never judged: {exc}"
         output_paths.pop(node.id, None)
-        return
+        return None
     except Exception as exc:  # noqa: BLE001 - as _verdict.judge: an ordinary node fails open, a decision node fails
         if node.routes:
             # The fail-open is an ordinary node's alone. Read as accomplished, a decision
@@ -1243,7 +1249,7 @@ async def _apply_verdict(
                     errors=errors,
                     output_paths=output_paths,
                 )
-            return
+            return None
         logger.opt(exception=True).warning("DAG node {} verdict call raised, judging it accomplished: {}", node.id, exc)
         verdict = Verdict(accomplished=True)
     if verdict.accomplished:
@@ -1262,7 +1268,7 @@ async def _apply_verdict(
                 branch.chosen[node.id] = tuple(verdict.routes)
                 if verdict.route_evidence:
                     branch.evidence[node.id] = verdict.route_evidence
-        return
+        return None
     # Read before `errors` is overwritten with the judge's reason: a node that raised
     # returned nothing but its error, and that error is its whole account.
     said = errors.get(node.id, "") if crashed else (node_output or "")
@@ -1283,7 +1289,7 @@ async def _apply_verdict(
         status[node.id] = "pending"
         errors.pop(node.id, None)
         logger.info("DAG node {} retries on its judge's own follow-up ({} left)", node.id, remaining - 1)
-        return
+        return reason
     answerable = _route_available(control_reachable)
     report = _exception_report(
         run_id=store.run_id,
@@ -1344,6 +1350,7 @@ async def _apply_verdict(
             errors[node.id] = (
                 f"The exception report could not be delivered in {REPORT_DELIVERY_ATTEMPTS} attempts: {failure}"
             )
+    return reason
 
 
 async def _record_outcome(store: DagRunStore, status: dict[str, str], *, cancelled: bool = False) -> None:
@@ -1900,7 +1907,7 @@ async def _run_node(
         if attempts is not None:
             attempts[node.id] = attempt
         follow_up = (continuations or {}).pop(node.id, None)
-        turn = await _attempt_node(
+        ended = await _attempt_node(
             node,
             agent_backend,
             attempt=attempt,
@@ -1946,10 +1953,51 @@ async def _run_node(
     scope = memory_for(node.subagent) if memory_for is not None else None
     if scope is not None:
         _schedule_node_memory(
-            node, store=store, scope=scope, session_key=session_key, record_tasks=record_tasks, turn=turn
+            node, store=store, scope=scope, session_key=session_key, record_tasks=record_tasks, turn=ended.turn
         )
 
 
+_NO_REASON = "This attempt recorded no reason."
+
+
+@dataclass(frozen=True)
+class _AttemptEnd:
+    """How one attempt of a node ended.
+
+    Attributes:
+        outcome (`str`):
+            ``completed``, ``failed``, ``exception`` (waiting on an adjudication) or
+            ``continued`` (judged short and sent its judge's own follow-up).
+        reason (`str | None`):
+            Why the attempt did not complete; ``None`` exactly when it did.
+        turn (`list[dict[str, Any]]`):
+            The turn the attempt added to its instance's log, for the node's memory record.
+    """
+
+    outcome: str
+    reason: str | None
+    turn: list[dict[str, Any]]
+
+
+def _attempt_outcome(
+    node_id: str, status: dict[str, str], errors: dict[str, str], shortfall: str | None
+) -> tuple[str, str | None]:
+    """An attempt's outcome and reason, read off the node's status once its verdict has landed.
+
+    The reason is never empty for an attempt that did not complete: it is what a
+    reader of the trace is shown in place of the work, and ``str(exc)`` of a bare
+    exception is ``""``. The fallback stays here and never reaches ``errors``.
+    """
+    state = status[node_id]
+    if state == "completed":
+        return "completed", None
+    if state == "pending":
+        return "continued", shortfall or errors.get(node_id) or _NO_REASON
+    outcome = "exception" if state == "exception" else "failed"
+    return outcome, errors.get(node_id) or shortfall or _NO_REASON
+
+
+@trace.instrument("subagent.run", on_open=semconv.dag_node_open, extract=semconv.dag_node)
 async def _attempt_node(
     node: DagNodeSpec,
     agent_backend: Any,
@@ -1990,11 +2038,13 @@ async def _attempt_node(
     control_advert: "Callable[[str], str | None] | None" = None,
     provider: Any = None,
     model: str | None = None,
-) -> list[dict[str, Any]]:
+) -> _AttemptEnd:
     """Run one attempt of a node: from the moment it holds a concurrency slot to its terminal event.
 
-    Returns the turn the attempt added to its instance's log, which the node's
-    memory record reads once the slot has been released.
+    Recorded as one ``subagent.run`` span, so the attempt's own steps -- its
+    model and tool calls, its judge, the reports it sends -- nest under it, apart
+    from a sibling attempt running beside it. The span closes on the outcome
+    returned here (see ``semconv.dag_node``).
     """
     started_at_ms = _now_ms()
     did = None
@@ -2208,8 +2258,9 @@ async def _attempt_node(
     # writing it later meant a first attempt was always judged with no
     # transcript, and a continuation's judge read the previous attempt's.
     await _write_node_transcript(store, node.id, did, attempt)
+    shortfall = None
     if judge_node is not None:
-        await _apply_verdict(
+        shortfall = await _apply_verdict(
             node,
             store=store,
             status=status,
@@ -2244,6 +2295,7 @@ async def _attempt_node(
             errors=errors,
             output_paths=output_paths,
         )
+    outcome, reason = _attempt_outcome(node.id, status, errors, shortfall)
     turn = await _add_node_to_instance_log(subagents_root, node, did, session_key, errors.get(node.id), node_output)
     ended_at_ms = _now_ms()
     node_ended_at[node.id] = ended_at_ms
@@ -2261,7 +2313,7 @@ async def _attempt_node(
         },
     )
     await _write_node_status(session_key, store.run_id, node.id, node.subagent, status[node.id], **selection)
-    return turn
+    return _AttemptEnd(outcome, reason, turn)
 
 
 def _memory_backend():
