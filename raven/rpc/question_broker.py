@@ -356,12 +356,22 @@ class RoutingQuestionBroker:
     the question is actually pending.
     """
 
-    def __init__(self, page: QuestionBroker, channel: QuestionBroker, *, page_prefix: str = "tui:") -> None:
+    def __init__(
+        self,
+        page: QuestionBroker,
+        channel: QuestionBroker,
+        *,
+        page_prefix: str = "tui:",
+        channel_active: Callable[[str], bool] | None = None,
+    ) -> None:
         self._page = page
         self._channel = channel
         self._page_prefix = page_prefix
+        self._channel_active = channel_active
 
     def _route(self, conversation_id: str) -> QuestionBroker:
+        if self._channel_active is not None and self._channel_active(conversation_id):
+            return self._channel
         return self._page if conversation_id.startswith(self._page_prefix) else self._channel
 
     def pending_count(self) -> int:
