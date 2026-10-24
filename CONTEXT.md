@@ -847,7 +847,10 @@ queued for the next reply, and the personalizer learns nothing; text a hook comp
 delivered as the reply, and the turn is then not silent. A turn the message tool has already
 answered is not a Silent Turn whatever it ends on -- its answer reached the reader, so no
 `SILENT_TURN` notice goes out; a marker it ends on is still filed `silent: true`, so a reload
-draws the muted line after the delivered reply where the live view drew none.
+draws the muted line after the delivered reply where the live view drew none. The rule is read
+from one place (`session/turn_shape.py`), so the two surfaces that read a stored turn -- the ACP
+replay, which draws it, and the session list, which orders sessions by it -- agree about which
+turn answered.
 Distinct from a `no_output` failure. A Silent Turn is the model saying nothing on purpose, so it
 succeeds; `no_output` is what a turn is failed with when its last reply was empty -- no text, no
 tool call, no reasoning -- once every retry was spent, or, with recovery switched off, when its

@@ -2984,6 +2984,49 @@ async def test_session_list_leaves_a_silent_turn_the_runtime_opened_out_of_the_p
     assert quiet["message_count"] == spoken["message_count"], "the rows are all still in the transcript"
 
 
+async def test_session_list_keeps_a_runtime_turn_the_message_tool_answered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A turn the message tool answered is not a Silent Turn whatever it ends on: the
+    reply reached the reader, so the turn stays the activity the session is ordered by
+    -- the rule the ACP replay reads the same turn with. The second session is the
+    same fixture without the message call, so only that call differs."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    mgr = SessionManager(tmp_path)
+    calls = [{"id": "m1", "type": "function", "function": {"name": "message", "arguments": "{}"}}]
+    for key, delivered in (
+        ("cron:answered", True),
+        ("cron:quiet", False),
+    ):
+        session = mgr.get_or_create(key)
+        session.add_message("user", "[Scheduled Task] check the mail", timestamp="2026-06-10T08:00:00", origin="cron")
+        session.add_message("assistant", "2 new mails", timestamp="2026-06-10T08:00:05")
+        session.add_message("user", "[Scheduled Task] check the mail", timestamp="2026-06-10T09:00:00", origin="cron")
+        if delivered:
+            session.add_message("assistant", "", timestamp="2026-06-10T09:00:02", tool_calls=calls)
+            session.add_message(
+                "tool", "Message sent", timestamp="2026-06-10T09:00:03", tool_call_id="m1", name="message"
+            )
+        session.add_message("assistant", "[SILENT]", timestamp="2026-06-10T09:00:05", silent=True)
+        mgr.save(session)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
+
+    rows = {row["id"]: row for row in (await session_list({"channels": ["cron"]}))["sessions"]}
+
+    answered, quiet = rows["cron:answered"], rows["cron:quiet"]
+    assert answered["updated_at"] == datetime.fromisoformat("2026-06-10T09:00:02").timestamp(), (
+        "the turn delivered a reply, so it is the activity the session is ordered by"
+    )
+    assert quiet["updated_at"] == datetime.fromisoformat("2026-06-10T08:00:05").timestamp(), (
+        "a turn that delivered nothing is taken back whole"
+    )
+    assert answered["last_message_preview"] == "[Scheduled Task] check the mail"
+    assert quiet["last_message_preview"] == "2 new mails"
+
+
 async def test_session_compress_hands_back_what_the_caller_must_redraw(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
