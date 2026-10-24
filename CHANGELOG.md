@@ -473,6 +473,26 @@ All notable changes to Raven are documented here.
   `subagent.dag_run_id`, `subagent.node_id` and `subagent.attempt`; graphs
   recorded before this keep the entries they had.
 
+- The trajectory view knows which sub-agent each entry belongs to. Every
+  entry names its Sub-agent Scope (`subagent_scope`): the `subagent.run` of
+  the spawned run or DAG node attempt it nests under or, for a graph recorded
+  before node attempts had spans of their own, the `run_subagent_dag` or
+  `resolve_dag_node` call it ran under; null for the main session. A run's
+  entry, and a graph call's while its scope holds steps, names the scope it
+  opens (`opens_subagent_scope`), and a turn a sub-agent's report started
+  names the scope that sent it (`dispatched_by_subagent_scope`) while staying
+  a turn of the main session. Attribution follows the span tree alone, so a
+  run still working through later turns keeps its steps, and they keep their
+  scope when the view trims the run's own entry. What a model input adds is
+  measured within its own scope: a report turn's first input continues the
+  main session rather than reading as a first call, and a busy sub-agent no
+  longer pushes the main session's previous input out of reach. A turn's end
+  is compared only with the main session's last model output, so a sub-agent
+  answering after the turn ended no longer keeps a repeated reply from being
+  hidden. A DAG node attempt's entry also carries `dag_run_id`, `node_id` and
+  `attempt`, and the detail's relations block lists the three fields;
+  `origin` is unchanged and still says only whether a trace was dispatched.
+
 - An empty reply from a model behind OpenRouter (`content: " "`,
   `finish_reason: stop`) is no longer reported as an upstream transport
   failure and retried for minutes before the verdict's own sentence is

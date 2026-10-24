@@ -812,6 +812,74 @@ def test_a_trimmed_checkpoint_still_takes_its_final_record(state, clock):
     assert all(e.operation_status == "ok" for e in index.entries() if e.span_id == "run")
 
 
+def test_a_step_written_before_its_run_moves_into_the_run_s_scope_under_a_new_revision(state, clock):
+    _append(state, [span for span in _spawned(_run_final()) if span["spanId"] != "run"])
+    index = _index(state, clock)
+    _refresh_until_ready(index, clock)
+    page = index.list_page(None, 500)
+    before = {e.entry_id: e for e in index.entries() if e.span_id == "step"}
+    assert before and all(e.subagent_scope is None for e in before.values())
+
+    _append(state, [_run_final()])
+    _refresh_until_ready(index, clock)
+
+    after = {e.entry_id: e for e in index.entries() if e.span_id == "step"}
+    assert after.keys() == before.keys()
+    assert all(e.subagent_scope == "t:run" and e.revision > before[e.entry_id].revision for e in after.values())
+    batch = index.changes(page.epoch, page.snapshot_revision, 500)
+    moved = {e.entry_id: e for e in batch.upserts if e.span_id == "step"}
+    assert moved.keys() == after.keys() and all(e.subagent_scope == "t:run" for e in moved.values())
+    assert index.entry("t:run:subagent.run").opens_subagent_scope == "t:run"
+
+
+def test_a_trimmed_run_leaves_its_steps_in_its_scope_with_no_entry_to_open_it(state, clock):
+    _append(state, _spawned(_run_final(), later=6))
+    index = _index(state, clock, entries=15)
+    _refresh_until_ready(index, clock)
+
+    assert ("t", "run") in index.skeletons and ("t", "run") not in index.spans
+    steps = [e for e in index.entries() if e.span_id == "step"]
+    assert steps and {e.subagent_scope for e in steps} == {"t:run"}
+    assert not any(e.span_id == "run" for e in index.entries())
+
+
+def test_trimmed_graph_calls_keep_their_tool_name_and_their_steps_scope(state, clock):
+    def graph(span_id, tool, start):
+        attrs = {"tool.name": tool, "tool.args_preview": "{}", "tool.result_preview": "started"}
+        return _span("t", span_id, "tool.call", parent="turn", start=start, end=start + 1, attrs=attrs)
+
+    spans = [
+        _turn("t", "turn", start=0, end=100),
+        graph("dag", "run_subagent_dag", 1),
+        graph("resolve", "resolve_dag_node", 3),
+        _tool("t", "work", "dag", start=50, end=51),
+        _tool("t", "again", "resolve", start=60, end=61),
+    ]
+    _append(state, spans + [_turn("t", f"later{i}", start=200 + i, end=200 + i) for i in range(6)])
+    index = _index(state, clock, entries=17)
+    _refresh_until_ready(index, clock)
+
+    assert {("t", "dag"), ("t", "resolve")} <= set(index.skeletons)
+    assert index.skeletons[("t", "dag")]["attributes"]["tool.name"] == "run_subagent_dag"
+    assert index.skeletons[("t", "resolve")]["attributes"]["tool.name"] == "resolve_dag_node"
+    scopes = {e.span_id: e.subagent_scope for e in index.entries() if e.span_id in ("work", "again")}
+    assert scopes == {"work": "t:dag", "again": "t:resolve"}
+
+
+def test_a_span_log_with_crlf_line_ends_gives_the_same_scopes(state, clock):
+    """The trace store writes its log in text mode, so on Windows every record ends in CRLF."""
+    _log(state).parent.mkdir(parents=True, exist_ok=True)
+    with _log(state).open("wb") as fh:
+        for span in _spawned(_run_final()):
+            fh.write(json.dumps(span).encode() + b"\r\n")
+    index = _index(state, clock)
+    _refresh_until_ready(index, clock)
+
+    fields = {(e.span_id, e.subagent_scope, e.opens_subagent_scope) for e in index.entries()}
+    assert {("run", None, "t:run"), ("step", "t:run", None)} <= fields
+    assert ("turn", None, None) in fields
+
+
 # ── eviction, restart, refresh ─────────────────────────────────────────
 
 

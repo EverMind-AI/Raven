@@ -425,7 +425,8 @@ def block_specs(kind: str, slot: str = "") -> tuple[BlockSpec, ...]:
     """The ordered block specs for an entry kind (own blocks, then the common tail)."""
     probe = _entries.TrajectoryEntry(
         entry_id="", kind=kind, span_name="", slot=slot, trace_id="", span_id="", parent_span_id=None,
-        turn_span_id=None, turn_number=None, turn_start=False, origin="main", sort_key=(), event_time="",
+        turn_span_id=None, turn_number=None, turn_start=False, origin="main", subagent_scope=None,
+        opens_subagent_scope=None, dispatched_by_subagent_scope=None, sort_key=(), event_time="",
         preview=None, operation_status="unknown", status_evidence=(), failure_entry=False, integrity=(),
         operation_start=None, operation_end=None, duration_ms=None, charged_ms=None, timing_basis="unknown",
         duration_owner=None, meta={},
@@ -938,6 +939,9 @@ def _d_relations(view: EntryView, attrs: dict[str, Any], loaded: _Loader) -> _De
         ("span_id", entry.span_id, "derived"),
         ("parent_span_id", entry.parent_span_id, "derived"),
         ("origin", entry.origin, "derived"),
+        ("subagent_scope", entry.subagent_scope, "derived"),
+        ("opens_subagent_scope", entry.opens_subagent_scope, "derived"),
+        ("dispatched_by_subagent_scope", entry.dispatched_by_subagent_scope, "derived"),
         ("sibling_entries", [sibling.entry_id for sibling in view.siblings], "derived"),
     ]
     items += _attr_pairs(attrs, ("trace.dispatched_by_span_id", "trace.dispatched_in_trace_id"))

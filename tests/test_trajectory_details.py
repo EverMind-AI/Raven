@@ -1123,6 +1123,36 @@ def test_info_notes_timing_and_relations(state):
     assert "result" not in json.dumps(raw.data["value"]["artifacts"])
 
 
+def test_relations_name_the_sub_agent_scope(state):
+    run = {"subagent.task": "look", "subagent.label": "look", "subagent.dispatch": "spawn"}
+    run.update({"subagent.in_progress": False, "subagent.outcome": "completed"})
+    link = {"trace.dispatched_in_trace_id": "t", "trace.dispatched_by_span_id": "run"}
+    _append(
+        state,
+        [
+            _turn(state, "t", "turn", start=0, end=100),
+            _tool(state, "t", "spawn", "turn", start=1, end=2, name="spawn"),
+            _span("t", "run", "subagent.run", parent="spawn", start=2, end=50, attrs=run),
+            _tool(state, "t", "step", "run", start=3, end=4, name="read_file"),
+            _turn(state, "r", "report", start=60, end=70, extra=link),
+        ],
+    )
+    index = _ready(state)
+    fields = ("subagent_scope", "opens_subagent_scope", "dispatched_by_subagent_scope")
+    expected = {
+        ("step", "tool.input"): ("t:run", None, None),
+        ("run", "subagent.run"): (None, "t:run", None),
+        ("report", "turn.input"): (None, None, "t:run"),
+    }
+    for (span_id, slot), values in expected.items():
+        items = _block(index, state, _entry(index, span_id, slot), "relations").data["items"]
+        keys = [item["key"] for item in items]
+        at = keys.index("origin") + 1
+        assert keys[at : at + 3] == list(fields), span_id
+        assert tuple(item["value"] for item in items[at : at + 3]) == values, span_id
+        assert {item["source"] for item in items[at : at + 3]} == {"derived"}, span_id
+
+
 # ── errors and version consistency ────────────────────────────────────
 
 

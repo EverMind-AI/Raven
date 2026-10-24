@@ -183,6 +183,10 @@ const UNSENT = new Set([
   // done the moment it is asked for, and an error is a failed export's alone.
   'trajectory.list.next_cursor', 'trajectory.list.index_state.failure', 'trajectory.changes.index_state.failure',
   'trajectory.block.next_cursor', 'trajectory.block.reason', 'trajectory.export_status.error',
+  // trajectory.list: 3 -- the recorded turn dispatched no sub-agent, so every row
+  // belongs to the main session and its three Sub-agent Scope fields are null.
+  'trajectory.list.entries[].dispatched_by_subagent_scope', 'trajectory.list.entries[].opens_subagent_scope',
+  'trajectory.list.entries[].subagent_scope',
   // bugreport.status: 5 -- probed while the demo report waits for decisions:
   // nothing has failed, been frozen, landed or uploaded yet, and the history
   // read cleanly, so it has no warning to give.

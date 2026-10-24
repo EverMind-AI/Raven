@@ -27,8 +27,8 @@ Protocol facts the readers rely on:
 - A list snapshot freezes entry objects, not ids, so paging returns one
   consistent picture while the index moves on.
 - Trimming to the entry limit keeps a lightweight skeleton of any removed
-  span that still has descendants, so survivors keep their turn, depth and
-  origin; turn numbering also remembers removed turn roots.
+  span that still has descendants, so survivors keep their turn, depth,
+  origin and Sub-agent Scope; turn numbering also remembers removed turn roots.
 """
 
 from __future__ import annotations
@@ -80,6 +80,7 @@ PHASE_FAILED = "failed"
 
 _SKELETON_ATTRS = (
     "session.key",
+    "tool.name",
     "trace.dispatched_by_span_id",
     "trace.dispatched_in_trace_id",
     *_entries.IN_PROGRESS_KEYS,

@@ -102,6 +102,9 @@ function entry(row: Row, base: number, revision: number): TrajectoryEntry {
     turn_number: 1,
     turn_start: row.id === 't:turn:turn.input',
     origin: 'main',
+    subagent_scope: null,
+    opens_subagent_scope: null,
+    dispatched_by_subagent_scope: null,
     sort_key: [eventTime, row.phase, row.parent ? (row.phase === 0 ? 1 : -1) : 0, start, 't', row.span, 0],
     event_time: eventTime,
     preview: row.preview,
@@ -121,7 +124,7 @@ function entry(row: Row, base: number, revision: number): TrajectoryEntry {
 
 const TAIL: TrajectoryBlockDescriptor[] = [
   { id: 'timing', renderer: 'key_values', availability: 'available', preview: null, total_items: 7, related_operation: null, reason: null },
-  { id: 'relations', renderer: 'key_values', availability: 'available', preview: null, total_items: 8, related_operation: null, reason: null },
+  { id: 'relations', renderer: 'key_values', availability: 'available', preview: null, total_items: 11, related_operation: null, reason: null },
   { id: 'raw', renderer: 'json', availability: 'available', preview: null, total_items: null, related_operation: null, reason: null },
 ]
 
@@ -270,6 +273,9 @@ function body(row: Row, descriptor: TrajectoryBlockDescriptor, base: number): Js
             { key: 'span_id', value: row.span, source: 'derived' },
             { key: 'parent_span_id', value: row.parent, source: 'derived' },
             { key: 'origin', value: 'main', source: 'derived' },
+            { key: 'subagent_scope', value: null, source: 'derived' },
+            { key: 'opens_subagent_scope', value: null, source: 'derived' },
+            { key: 'dispatched_by_subagent_scope', value: null, source: 'derived' },
             { key: 'sibling_entries', value: ROWS.filter((r) => r.span === row.span && r.id !== row.id).map((r) => r.id), source: 'derived' },
           ],
         }

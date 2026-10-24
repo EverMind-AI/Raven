@@ -2601,6 +2601,37 @@ its attempts' reports included, so those turns stay main-line (**Main-line Turn*
 _Avoid_: reading a spawned run's `status.code` as its result -- the run reports its own
 failures and returns, so that span is `OK` whatever the outcome.
 
+**Sub-agent Scope** (`raven/trajectory/entries.py`, `_span_scopes`):
+The part of a session's trajectory one sub-agent boundary owns, named by that boundary span's
+`trace_id:span_id`. A boundary is a **run** -- a Sub-agent Run Span (`subagent.run`), so a
+spawned run or one attempt of a DAG node -- or a **graph**: a `tool.call` whose `tool.name` is
+`run_subagent_dag` or `resolve_dag_node`, which owns a graph's steps where no node span holds
+them (records written before node spans existed) and, for `resolve_dag_node`, the round a
+replan it chose started under it. An entry belongs to the nearest boundary above its span in
+its own trace, its own span not counted; a boundary's own entries look only for a run above,
+so a node's entry and a graph's call stay where the graph was dispatched, and so does the
+permission reviewer's `llm.call` (`llm.purpose` `permission_judge`), which the gate records
+under the call it reviews; a graph's scope holds only what its rounds produced. A dispatched
+agent cannot dispatch again, so scopes do not nest past one run, and since a spawned run's steps
+share the trace of the turn that spawned it and run alongside later turns, the scope is read
+from span ancestry alone, never from time. Three Trajectory Entry fields carry it:
+`subagent_scope`, the scope the entry belongs to (null for the main session);
+`opens_subagent_scope`, on a boundary's own entries, the scope it opens -- always for a run,
+for a graph only while at least one entry belongs to its scope (a graph whose rounds all ran
+in node spans opens nothing); and `dispatched_by_subagent_scope`, on the root entries of a
+dispatched `session.turn` trace, the scope that dispatched it -- the dispatching span itself
+when it is a boundary, else that span's own scope, null when the span is unknown, in the
+main session, or a graph scope no entry belongs to (a graph's result, once its nodes have
+spans). The dispatched turn itself -- a report injected back -- belongs to the main session,
+as does a trace linked in from another session. A step whose parent is not on record yet
+has no scope until the parent arrives, when the index reprojects it under a new revision;
+a boundary trimmed to a skeleton loses its entries, so its scope has no entry to open it
+while its descendants keep the scope id (the skeleton keeps the span's name and `tool.name`,
+so it still counts as a boundary). These fields are the input the trajectory view's
+per-sub-agent tabs are built from.
+_Avoid_: "Lane" -- the scheduler's term; "sub-agent trace" -- a spawned run's steps live in the
+spawning turn's trace; `origin` for the boundary -- it says only whether a trace was dispatched.
+
 **Trajectory Entry** (`raven/trajectory/entries.py`):
 One row of the trajectory view, projected by `project_entries` from a logical
 span (`traceId + spanId`, checkpoints merged last-write-wins, an in-progress
@@ -2608,7 +2639,10 @@ snapshot -- a turn's or a Sub-agent Run Span's -- never overriding a terminal re
 nor the skeleton the index keeps of a trimmed one) at a stable slot (`llm.input`,
 `tool.output`, `artifact:<key>`, `summary`, `error`, …). Its id is
 `trace:span:slot` — never a sequence number, array index or text hash — so it
-survives re-reads, late inputs and checkpoint upgrades. It carries the owning
+survives re-reads, late inputs and checkpoint upgrades. It names the Sub-agent Scope it
+belongs to, opens or was dispatched by (`subagent_scope`, `opens_subagent_scope`,
+`dispatched_by_subagent_scope`), apart from `origin`, which says only whether its trace was
+dispatched from another (`subagent`) or not (`main`). It carries the owning
 operation's status (`running` / `ok` / `error` / `cancelled` / `unknown`) with the
 evidence codes that produced it, data-integrity codes kept separate from status,
 and the span's clock with a Timing Owner; an in-progress snapshot's entries have no
@@ -2623,7 +2657,9 @@ records around it: for a model input the Message Delta (`delta` ∈ `first` /
 `continued` / `independent` / `unknown`, `new_from`, `echo_at`,
 `message_count`) and the LLM Purpose (`purpose`); and `hidden` for a row the
 list need not show — `redundant_reply`, a turn's end that repeats the turn's
-last model output word for word; `empty_reply`, a turn's end of a turn that
+last model output in the main session word for word (a sub-agent's outputs, though
+they belong to the turn that dispatched it and may come after its end, are never
+compared); `empty_reply`, a turn's end of a turn that
 finished `ok` whose recorded content was read and is null or blank;
 `empty_internal`, an outer-only summary that recorded nothing. A hidden row
 stays in the index and keeps its clock. While the recorder writes the turn's
@@ -2631,20 +2667,25 @@ end as `{"content": null}` (`semconv.turn` reads `.content` off the tuple the
 turn returns), every ok turn end it records is `empty_reply` and
 `redundant_reply` cannot fire; the latter takes effect once that is fixed.
 A `subagent.run` entry's `meta` names the run: `label` and `task_id`, and `agent`,
-`instance`, `handle`, `dispatch` and `outcome` each only when recorded with a value.
+`instance`, `handle`, `dispatch`, `outcome`, `dag_run_id`, `node_id` and `attempt` each only
+when recorded with a value; these keys belong to the same input contract for the
+trajectory view's per-sub-agent tabs as the Sub-agent Scope fields.
 _Avoid_: calling a Conversation Record an entry — that is the CLI's text
 projection, without identity, structured status or timing.
 
 **Message Delta** (`raven/trajectory/entries.py`, `_apply_delta`):
 What one model input adds to the conversation before it, proven rather than
-assumed: an earlier input of the same chain (the main line, or one sub-agent
-trace) with a compatible LLM Purpose counts as the predecessor only when its
+assumed: an earlier input of the same chain (the main session, or one Sub-agent
+Scope) with a compatible LLM Purpose counts as the predecessor only when its
 message sequence — the content addresses of a v2 artifact's messages — is an
 ordered prefix of this one; then `new_from = len(prefix)`, one more when the
 message right after the prefix is an assistant one — the predecessor's own
 output written back into the history, already a row of its own (`echo_at`
 names it; the role of a referenced message is learnt by a bounded read, and
-until then the prefix alone counts). The chain's first
+until then the prefix alone counts). A turn reported back belongs to the main
+session, so its inputs continue the main agent's history; a sub-agent's inputs
+find a predecessor only within their own scope, so they neither take the main
+session's candidate places nor leave its inputs `unknown`. The chain's first
 input is `first` (all new); an input no candidate precedes is `independent`
 (all new); an input whose own or whose candidates' messages are not read yet is
 `unknown`, decided again when they are. Computed at projection time from the

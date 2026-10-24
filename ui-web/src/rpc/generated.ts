@@ -2612,9 +2612,21 @@ export interface TrajectoryEntry {
   turn_number?: number | null;
   turn_start: boolean;
   /**
-   * Whether the trace is the session's own or a dispatched sub-agent's.
+   * Whether the entry's trace was dispatched from another trace (a follow-up turn such as a sub-agent's report, or a trace linked in from another session). Not the sub-agent boundary: see subagent_scope.
    */
   origin: 'main' | 'subagent';
+  /**
+   * The Sub-agent Scope the entry belongs to: trace_id:span_id of the nearest sub-agent boundary above its span (a subagent.run span, or a run_subagent_dag / resolve_dag_node tool call; a boundary's own entries, and the permission reviewer's llm.call recorded under the call it reviews, look only for a subagent.run above). Null for the main session. Decided by span ancestry, never by time; kept when the boundary is trimmed to a skeleton.
+   */
+  subagent_scope?: string | null;
+  /**
+   * On a boundary's own entries, the Sub-agent Scope it opens: always for a subagent.run, for a graph tool call only while at least one entry belongs to that scope. Null otherwise.
+   */
+  opens_subagent_scope?: string | null;
+  /**
+   * On the root entries of a dispatched session.turn trace, the Sub-agent Scope that dispatched it: the dispatching span when it is a boundary, else that span's own subagent_scope. Null when the span is unknown or in the main session, or names a graph scope no entry belongs to. The turn itself belongs to the main session.
+   */
+  dispatched_by_subagent_scope?: string | null;
   sort_key: JsonValue[];
   event_time: string;
   /**

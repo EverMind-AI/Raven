@@ -22,7 +22,10 @@ that this module adds what the Web view needs and the text preview does not:
   ``end - start`` duration, so a span's time is counted at most once;
 - a summary entry for base spans that expand to nothing, and an error entry
   for a failed span that has no completion slot, so every attributable
-  record has a row and every failure has exactly one carrier.
+  record has a row and every failure has exactly one carrier;
+- the Sub-agent Scope of every entry (its nearest sub-agent boundary
+  ancestor), the scope a boundary's own entries open, and the scope that
+  dispatched a turn -- read from span ancestry alone, never from time.
 
 Two inputs let an index feed the projection without re-reading files:
 ``cached_records`` (compact per-span records produced by
@@ -76,6 +79,17 @@ HIDDEN_EMPTY_INTERNAL = "empty_internal"
 ORIGIN_MAIN = "main"
 ORIGIN_SUBAGENT = "subagent"
 
+_RUN_BOUNDARY_SPANS = ("subagent.run",)
+# Both tools start a round of a graph: a replan chosen through resolve_dag_node
+# runs its new round under that call, not under the first run_subagent_dag.
+_GRAPH_BOUNDARY_TOOLS = ("run_subagent_dag", "resolve_dag_node")
+_BOUNDARY_RUN = "run"
+_BOUNDARY_GRAPH = "graph"
+# The permission gate reviews a call inside that call's own span, so the
+# reviewer's model call sits under a graph's call without being a step of
+# the graph.
+_CALL_REVIEW_PURPOSES = ("permission_judge",)
+
 SLOT_SUMMARY = "summary"
 SLOT_ERROR = "error"
 SLOT_THINKING = "llm.thinking"
@@ -105,6 +119,9 @@ _SUBAGENT_RUN_META = (
     ("handle", "subagent.handle"),
     ("dispatch", "subagent.dispatch"),
     ("outcome", "subagent.outcome"),
+    ("dag_run_id", "subagent.dag_run_id"),
+    ("node_id", "subagent.node_id"),
+    ("attempt", "subagent.attempt"),
 )
 
 _IO_PAIR_SPANS = ("skill.rewrite", "skill.gate", "context.curate")
@@ -158,6 +175,9 @@ class TrajectoryEntry:
     turn_number: int | None
     turn_start: bool
     origin: str
+    subagent_scope: str | None
+    opens_subagent_scope: str | None
+    dispatched_by_subagent_scope: str | None
     sort_key: tuple[Any, ...]
     event_time: str
     preview: str | None
@@ -545,6 +565,100 @@ def _subagent_traces(infos: Sequence[_conv._SpanInfo]) -> set[str]:
     }
 
 
+def _scope_id(trace_id: str, span_id: str) -> str:
+    return f"{trace_id}:{span_id}"
+
+
+def _boundary_of(info: _conv._SpanInfo) -> str | None:
+    """Which sub-agent boundary a span is: a run, a graph's tool call, or neither."""
+    if info.name in _RUN_BOUNDARY_SPANS:
+        return _BOUNDARY_RUN
+    if info.name == "tool.call" and info.attrs.get("tool.name") in _GRAPH_BOUNDARY_TOOLS:
+        return _BOUNDARY_GRAPH
+    return None
+
+
+def _reviews_its_call(info: _conv._SpanInfo) -> bool:
+    """Whether a span is the main agent's review of the tool call it was recorded under."""
+    return info.name == "llm.call" and info.attrs.get("llm.purpose") in _CALL_REVIEW_PURPOSES
+
+
+def _nearest_boundary(
+    info: _conv._SpanInfo, by_key: Mapping[tuple[str, str], _conv._SpanInfo], *, runs_only: bool
+) -> str | None:
+    """The Sub-agent Scope above ``info``: its nearest boundary ancestor in its own trace, not itself.
+
+    ``runs_only`` passes over a graph's tool call, so a DAG node's own entry,
+    and the review of the graph's call recorded under it, land where the
+    graph was dispatched rather than in the graph. The walk stops,
+    unattributed, at a parent not on record yet, a repeated span or the
+    ancestry depth limit the turn lookup uses.
+    """
+    seen = {info.span_id}
+    parent = info.parent_id
+    for _ in range(_conv._DEPTH_LIMIT - 1):
+        if not parent or parent in seen:
+            return None
+        ancestor = by_key.get((info.trace_id, parent))
+        if ancestor is None:
+            return None
+        kind = _boundary_of(ancestor)
+        if kind == _BOUNDARY_RUN or (kind == _BOUNDARY_GRAPH and not runs_only):
+            return _scope_id(info.trace_id, parent)
+        seen.add(parent)
+        parent = ancestor.parent_id
+    return None
+
+
+def _span_scopes(
+    infos: Sequence[_conv._SpanInfo],
+) -> tuple[dict[tuple[str, str], _conv._SpanInfo], dict[tuple[str, str], str | None]]:
+    """Every identified span by key, and the Sub-agent Scope each one belongs to."""
+    by_key = {(info.trace_id, info.span_id): info for info in infos if not _broken(info)}
+    scopes = {
+        key: _nearest_boundary(info, by_key, runs_only=_boundary_of(info) is not None or _reviews_its_call(info))
+        for key, info in by_key.items()
+    }
+    return by_key, scopes
+
+
+def _dispatch_scope(
+    info: _conv._SpanInfo,
+    by_key: Mapping[tuple[str, str], _conv._SpanInfo],
+    scopes: Mapping[tuple[str, str], str | None],
+) -> str | None:
+    """The Sub-agent Scope that dispatched a turn, read on the root of a dispatched turn trace."""
+    if info.parent_id is not None or info.name != "session.turn":
+        return None
+    trace_id = _conv._str(info.attrs.get("trace.dispatched_in_trace_id"))
+    span_id = _conv._str(info.attrs.get("trace.dispatched_by_span_id"))
+    if trace_id is None or span_id is None:
+        return None
+    source = by_key.get((trace_id, span_id))
+    if source is None:
+        return None
+    if _boundary_of(source) is not None:
+        return _scope_id(trace_id, span_id)
+    return scopes.get((trace_id, span_id))
+
+
+def _withhold_empty_scopes(entries: list[TrajectoryEntry], graphs: set[str]) -> None:
+    """Take back a graph's scope id wherever it was handed out for a scope no entry belongs to.
+
+    A graph whose rounds ran in node spans keeps nothing outside them, so its
+    call opens nothing and a turn it dispatched names no scope; a run's scope
+    is always handed out, its own entry being the way in.
+    """
+    empty = graphs - {entry.subagent_scope for entry in entries}
+    if not empty:
+        return
+    for index, entry in enumerate(entries):
+        opens = None if entry.opens_subagent_scope in empty else entry.opens_subagent_scope
+        dispatched_by = None if entry.dispatched_by_subagent_scope in empty else entry.dispatched_by_subagent_scope
+        if opens != entry.opens_subagent_scope or dispatched_by != entry.dispatched_by_subagent_scope:
+            entries[index] = replace(entry, opens_subagent_scope=opens, dispatched_by_subagent_scope=dispatched_by)
+
+
 def _turns(
     infos: Sequence[_conv._SpanInfo], extra: Sequence[tuple[str, str, str]] | None = None
 ) -> tuple[TurnInfo, ...]:
@@ -593,22 +707,15 @@ def _row_preview(info: _conv._SpanInfo, record: dict[str, Any]) -> str | None:
     return preview
 
 
-def _span_entries(
-    info: _conv._SpanInfo,
-    records: list[dict[str, Any]],
-    *,
-    turn_numbers: dict[str, int],
-    subagent_traces: set[str],
-) -> list[TrajectoryEntry]:
-    return [entry for entry, _ in _span_rows(info, records, turn_numbers=turn_numbers, subagent_traces=subagent_traces)]
-
-
 def _span_rows(
     info: _conv._SpanInfo,
     records: list[dict[str, Any]],
     *,
     turn_numbers: dict[str, int],
     subagent_traces: set[str],
+    scope: str | None,
+    opens: str | None,
+    dispatched_by: str | None,
 ) -> list[tuple[TrajectoryEntry, dict[str, Any]]]:
     if not records:
         records = [_summary_record(info)]
@@ -662,6 +769,9 @@ def _span_rows(
                     turn_number=turn_number,
                     turn_start=False,
                     origin=origin,
+                    subagent_scope=scope,
+                    opens_subagent_scope=opens,
+                    dispatched_by_subagent_scope=dispatched_by,
                     sort_key=(
                         _utc(event_raw, event_dt),
                         record["phase"],
@@ -719,6 +829,7 @@ def project_entries(
     turns = _turns(infos, extra_turns)
     turn_numbers = {turn.turn_span_id: turn.number for turn in turns}
     subagent_traces = _subagent_traces(infos)
+    by_key, scopes = _span_scopes(infos)
     blob_cache: dict[str, tuple[Any, str]] = {}
     entries: list[TrajectoryEntry] = []
     record_of: dict[str, dict[str, Any]] = {}
@@ -730,9 +841,21 @@ def project_entries(
             records = [dict(record) for record in cached_records[key]]
         else:
             records = _conv.span_records(info, state, None, blob_cache, read=read, dedup=False)
-        for entry, record in _span_rows(info, records, turn_numbers=turn_numbers, subagent_traces=subagent_traces):
+        identified = not _broken(info)
+        rows = _span_rows(
+            info,
+            records,
+            turn_numbers=turn_numbers,
+            subagent_traces=subagent_traces,
+            scope=scopes.get(key) if identified else None,
+            opens=_scope_id(*key) if identified and _boundary_of(info) is not None else None,
+            dispatched_by=_dispatch_scope(info, by_key, scopes) if identified else None,
+        )
+        for entry, record in rows:
             entries.append(entry)
             record_of[entry.entry_id] = record
+    graphs = {_scope_id(*key) for key, info in by_key.items() if _boundary_of(info) == _BOUNDARY_GRAPH}
+    _withhold_empty_scopes(entries, graphs)
     entries.sort(key=lambda entry: entry.sort_key)
     seen_turns: set[str] = set()
     for index, entry in enumerate(entries):
@@ -776,7 +899,7 @@ def _is_prefix(shorter: Sequence[str], longer: Sequence[str]) -> bool:
 
 
 def _chain_of(entry: TrajectoryEntry) -> tuple[str, ...]:
-    return (ORIGIN_MAIN,) if entry.origin == ORIGIN_MAIN else (ORIGIN_SUBAGENT, entry.trace_id)
+    return (ORIGIN_MAIN,) if entry.subagent_scope is None else (entry.subagent_scope,)
 
 
 def preview_start(meta: Mapping[str, Any]) -> int | None:
@@ -894,11 +1017,11 @@ def _apply_delta(entries: list[TrajectoryEntry], record_of: Mapping[str, dict[st
     """Mark every model input with what it adds to the conversation before it.
 
     Continuity is proven, never assumed: an earlier input in the same chain
-    (the main line, or one sub-agent trace) and with a compatible purpose
-    counts as the predecessor only when its message sequence is an ordered
-    prefix of this one; what it adds starts after that prefix, and after the
-    predecessor's own output when the message there is an assistant one
-    (``echo_at``). The first input of a chain is all new; an input no
+    (the main session, report turns included, or one Sub-agent Scope) and
+    with a compatible purpose counts as the predecessor only when its message
+    sequence is an ordered prefix of this one; what it adds starts after that
+    prefix, and after the predecessor's own output when the message there is
+    an assistant one (``echo_at``). The first input of a chain is all new; an input no
     candidate precedes is independent and all new too; an input whose own
     messages or whose candidates' messages are not read yet is unknown, and
     is decided again once they are. A candidate whose messages were read and
@@ -991,11 +1114,13 @@ def _record_content_empty(record: dict[str, Any] | None) -> bool:
 
 def _apply_hidden(entries: list[TrajectoryEntry], record_of: Mapping[str, dict[str, Any]]) -> None:
     """Mark the rows the list need not show: a turn's end that repeats the
-    turn's last model output word for word, a turn's end that finished well
-    with nothing in it, and an internal step that recorded nothing."""
+    turn's last model output in the main session word for word, a turn's end
+    that finished well with nothing in it, and an internal step that recorded
+    nothing. A sub-agent's steps share the turn that dispatched them and may
+    write outputs after that turn has ended, so they are never its last word."""
     last_output: dict[str, str | None] = {}
     for entry in entries:
-        if entry.slot != "llm.output" or entry.turn_span_id is None:
+        if entry.slot != "llm.output" or entry.turn_span_id is None or entry.subagent_scope is not None:
             continue
         purpose = entry.meta.get("purpose")
         if purpose not in (None, "main"):

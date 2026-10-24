@@ -6470,6 +6470,9 @@ class TrajectoryEntry(_Strict):
     turn_number: int | None = None
     turn_start: bool
     origin: TrajectoryOrigin
+    subagent_scope: str | None = None
+    opens_subagent_scope: str | None = None
+    dispatched_by_subagent_scope: str | None = None
     sort_key: list[JsonValue]
     event_time: str
     preview: str | None = None
