@@ -31,6 +31,10 @@ Behaviour is chosen by ``ACP_STUB_MODE``:
                      and still reports ``stopReason: end_turn``, with the real
                      reason on stderr. This is the shape measured on a live
                      ``hermes acp`` whose provider rejected the credential.
+- ``empty_turn_no_tokens`` - like ``empty_turn``, but the answer also reports
+                     zero tokens and says nothing on stderr: the shape measured
+                     on a live ``opencode acp`` whose inference endpoint refused
+                     the call and whose agent swallowed the refusal.
 - ``failed_call``  - like ``ok``, but the tool call answers ``status: "failed"``
                      and the turn goes on to say something after it. A run that
                      failed a call and still finished, which is the shape a
@@ -333,6 +337,21 @@ def _permission_input() -> dict:
     """The command a ``permission`` request names, when the test set one."""
     command = os.environ.get("ACP_STUB_COMMAND")
     return {"rawInput": {"command": command}} if command else {}
+
+
+def _empty_answer(request_id) -> None:
+    """A turn that says nothing, in the shape the mode measures.
+
+    ``empty_turn`` is the credential refusal the agent reported on stderr;
+    ``empty_turn_no_tokens`` is the shape measured on a live opencode, where
+    the refusal was swallowed and only a zero token count says the model call
+    never ran.
+    """
+    if MODE == "empty_turn_no_tokens":
+        ok(request_id, {"stopReason": "end_turn", "usage": {"totalTokens": 0, "inputTokens": 0, "outputTokens": 0}})
+        return
+    print("provider rejected the credential: HTTP 401", file=sys.stderr, flush=True)
+    ok(request_id, {"stopReason": "end_turn"})
 
 
 _PROMPTS = 0
@@ -686,9 +705,8 @@ def handle_prompt(request_id, params) -> None:
         # A provider that takes its time: the prompt is answered after the delay
         # -- from the first prompt, or from the one ACP_STUB_PROMPT_DELAY_FROM names.
         time.sleep(float(delay))
-    if MODE == "empty_turn":
-        print("provider rejected the credential: HTTP 401", file=sys.stderr, flush=True)
-        ok(request_id, {"stopReason": "end_turn"})
+    if MODE in ("empty_turn", "empty_turn_no_tokens"):
+        _empty_answer(request_id)
         return
     update(session_id, {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "thinking"}})
     # The shape measured on claude-agent-acp and opencode alike: the opening

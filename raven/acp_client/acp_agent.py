@@ -42,6 +42,7 @@ from raven.acp_client.acp_dialects import AcpDialect, ToolCall, agent_version, d
 from raven.acp_client.ask_user import AskUserResponder, clarify_responder
 from raven.acp_client.capabilities import (
     CapabilitySnapshot,
+    handshake_of,
     read_session_current_model,
     relearn_session_menus,
     steer_offered,
@@ -143,7 +144,65 @@ class AcpEmptyTurnError(RuntimeError):
     one that ends on a failed tool call, having narrated only its plan to make
     the call. Same outcome for the caller -- nothing usable came back -- and
     without this it was reported as a completed run whose result was the plan.
+
+    ``tokens`` and ``agent_version`` are what the agent's own answer carried and
+    what the handshake reported: the first says whether a model call ran at all
+    (a turn that produced nothing and spent nothing never reached the model),
+    and the second is the build that was asked. Both are facts the protocol
+    does carry, where the reason does not -- and a caller that has to name a
+    cause reads them here rather than out of the sentence.
     """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        tokens: int | None = None,
+        agent_version: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.tokens = tokens
+        """The total tokens the agent's own answer reported, or None when it reported none."""
+        self.agent_version = agent_version
+        """The build that answered the handshake, as the agent spells its version."""
+
+
+def _tokens_reported(result: Any) -> int | None:
+    """The total tokens the agent's own answer reported, or ``None`` when it reported none.
+
+    Read off the prompt answer's ``usage``, in either spelling of the field the
+    contract and the adapters use. An agent that reports no usage is not read
+    as one that spent nothing: the absence of a number is not a number.
+    """
+    if not isinstance(result, dict):
+        return None
+    usage = result.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    for key in ("totalTokens", "total_tokens"):
+        if key in usage:
+            try:
+                return int(usage[key] or 0)
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def _agent_version(connection: Any) -> str:
+    """The build that answered the handshake on this connection.
+
+    The live one, not a stored snapshot: a snapshot describes the build that
+    was measured last, and a reader told "your agent is too old" out of a stale
+    copy would keep hearing it after the upgrade that closed the gap.
+
+    Never fatal, like the mode and the model beside it: a version is a fact to
+    add to the sentence, and a connection that cannot be read for one has no
+    version to give.
+    """
+    try:
+        return handshake_of(connection.initialize).agent_version
+    except Exception:  # noqa: BLE001 - a version is a fact to add, never a reason to fail a turn
+        return ""
 
 
 class AcpProviderRefusalError(AcpEmptyTurnError):
@@ -1885,9 +1944,18 @@ class AcpAgentBackend:
                         # Collapsed: one turn with three tool calls refuses the same
                         # method three times, and naming it three times says no more.
                         asked = f"; refused agent requests: {', '.join(sorted(set(refused)))}" if refused else ""
+                        # What the agent's own answer says it spent. A turn that
+                        # produced nothing and spent nothing never reached a model:
+                        # the turn is empty because the model call was refused, not
+                        # because the model had nothing to say. Said here because the
+                        # protocol carries it and the reason does not.
+                        spent = _tokens_reported(result)
+                        quiet = " and reported 0 tokens" if spent == 0 else ""
                         raise AcpEmptyTurnError(
-                            f"acp agent {self.name!r} ended its turn with no content "
-                            f"(stopReason={stop_reason!r}){asked}; stderr tail: {tail or '<empty>'}"
+                            f"acp agent {self.name!r} ended its turn with no content{quiet} "
+                            f"(stopReason={stop_reason!r}){asked}; stderr tail: {tail or '<empty>'}",
+                            tokens=spent,
+                            agent_version=_agent_version(connection),
                         )
 
                     if failed := collector.failed_call_without_answer:
