@@ -194,7 +194,7 @@ export async function runUpgrade(): Promise<void> {
   } catch (e) {
     /* The server saw an install already in flight. That is the dialog the
        reader wanted, not an error -- adopt the run instead of reporting it. */
-    const err = e as { data?: { reason?: string; detail?: string; command?: string }; message?: string }
+    const err = e as { data?: { reason?: string; detail?: string; command?: string | null }; message?: string }
     if (err.data && err.data.reason === 'in_progress') {
       upMark(upLatest)
       watchUpgrade(shade)

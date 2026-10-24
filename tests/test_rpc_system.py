@@ -522,7 +522,7 @@ async def test_upgrade_refuses_when_the_install_cannot_self_upgrade(monkeypatch:
     from raven.updates import upgrade as upgrade_commands
 
     def refuse() -> None:
-        raise upgrade_commands.UpgradeError("Editable Raven installations cannot be upgraded automatically")
+        raise upgrade_commands.UpgradeError("This Raven installation is not managed by uv")
 
     monkeypatch.setattr(upgrade_commands, "plan_upgrade", refuse)
     monkeypatch.setattr(upgrade_commands, "_is_editable_install", lambda: False)
@@ -691,6 +691,48 @@ def test_the_platform_switch_reads_os_name(monkeypatch: pytest.MonkeyPatch, name
         answer = _on_windows()
 
     assert answer is windows
+
+
+async def test_upgrade_names_a_checkouts_recovery_when_only_the_engine_read_finds_it(monkeypatch: pytest.MonkeyPatch):
+    """The pre-check takes an unreadable probe as "not a checkout" and lets the
+    upgrade go on; plan_upgrade reads the metadata again and refuses the
+    checkout. That second refusal must reach the page as the same `editable`
+    answer, or the card falls back to `raven upgrade`, which a checkout refuses."""
+    import asyncio
+    import os
+    from pathlib import Path
+
+    from raven.cli.serve_commands import SERVE
+    from raven.rpc.methods.system import system_upgrade
+    from raven.updates import upgrade as upgrade_commands
+
+    reads: list[str] = []
+
+    def probe() -> bool:
+        reads.append("read")
+        if len(reads) == 1:
+            raise OSError("metadata read raced the install")
+        return True
+
+    def tripwire(*_args, **_kwargs) -> None:
+        raise AssertionError("a checkout should be refused before the release lookup")
+
+    monkeypatch.setattr(upgrade_commands, "_is_editable_install", probe)
+    monkeypatch.setattr(upgrade_commands, "editable_checkout", lambda: Path("/srv/raven"))
+    monkeypatch.setattr(upgrade_commands, "fetch_latest_for_channel", tripwire)
+    monkeypatch.setattr(upgrade_commands, "spawn_detached_upgrade", tripwire)
+    SERVE.arm(18792, "tok", "cookie", asyncio.Event())
+    try:
+        with pytest.raises(ConfigValidationError) as excinfo:
+            await system_upgrade({})
+    finally:
+        SERVE.disarm()
+
+    assert len(reads) == 2
+    assert excinfo.value.data["reason"] == "editable"
+    command = excinfo.value.data["command"]
+    assert "git pull" in command
+    assert (".\\install.ps1" if os.name == "nt" else "./install.sh") in command
 
 
 async def test_upgrade_names_an_install_already_in_flight(monkeypatch: pytest.MonkeyPatch):

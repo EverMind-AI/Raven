@@ -311,6 +311,7 @@ async def system_upgrade(params: dict) -> dict:
 
     from raven.rpc.serve_control import SERVE
     from raven.updates.upgrade import (
+        EditableInstallError,
         UpgradeError,
         _is_editable_install,
         editable_checkout,
@@ -335,6 +336,23 @@ async def system_upgrade(params: dict) -> dict:
             # none.
             data["command"] = command
         return ConfigValidationError(detail, data=data)
+
+    async def _refuse_checkout() -> ConfigValidationError:
+        # A checkout tracks upstream `main`, so no release is ever "newer" for
+        # it in the sense the button means; and both `raven upgrade` and the
+        # page's default fallback refuse it. Name the steps that do work.
+        try:
+            command: str | object = _checkout_recovery(str(await asyncio.to_thread(editable_checkout)), _on_windows())
+        except Exception:
+            # Without the path, the only command left is a `git pull` in
+            # whatever repository the terminal happens to be in.
+            command = _NO_COMMAND
+        return _refuse(
+            "editable",
+            "This Raven is a source checkout, so released upgrades do not apply to it. "
+            "Update it with git, then reinstall.",
+            command,
+        )
 
     if not SERVE.running:
         raise _refuse("not_serving", "system.upgrade is only available while `raven serve` is running")
@@ -362,26 +380,13 @@ async def system_upgrade(params: dict) -> dict:
         # filesystem read racing the in-flight install -- must not escape as an
         # internal error: its card falls back to the default `raven upgrade`
         # this branch exists to withhold. The probe only classifies a
-        # checkout, so an unreadable probe is not a checkout. This clause
+        # checkout, so an unreadable probe is taken as none here; plan_upgrade
+        # reads again and still refuses a checkout it finds. This clause
         # comes last on purpose: `PackageNotFoundError` and `UpgradeError`
         # are both `Exception` subclasses, and each has its own refusal.
         editable_install = False
     if editable_install:
-        # A checkout tracks upstream `main`, so no release is ever "newer" for
-        # it in the sense the button means; and both `raven upgrade` and the
-        # page's default fallback refuse it. Name the steps that do work.
-        try:
-            command: str | object = _checkout_recovery(str(await asyncio.to_thread(editable_checkout)), _on_windows())
-        except Exception:
-            # Without the path, the only command left is a `git pull` in
-            # whatever repository the terminal happens to be in.
-            command = _NO_COMMAND
-        raise _refuse(
-            "editable",
-            "This Raven is a source checkout, so released upgrades do not apply to it. "
-            "Update it with git, then reinstall.",
-            command,
-        )
+        raise await _refuse_checkout()
 
     if SERVE.hosted_by_gateway:
         if SERVE.supervisor_pid is None:
@@ -401,6 +406,11 @@ async def system_upgrade(params: dict) -> dict:
     try:
         # Network-bound and synchronous (httpx), so keep it off the event loop.
         plan = await asyncio.to_thread(plan_upgrade)
+    except EditableInstallError as exc:
+        # Reached when the probe above failed and was taken as "not a
+        # checkout", and the engine's own read then found one: the same
+        # answer, not a bare refusal whose card falls back to `raven upgrade`.
+        raise await _refuse_checkout() from exc
     except UpgradeError as exc:
         raise _refuse("not_upgradable", str(exc)) from exc
     except _md.PackageNotFoundError as exc:
