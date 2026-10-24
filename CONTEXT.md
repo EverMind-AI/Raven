@@ -2519,6 +2519,26 @@ unreadable expected payload always yields a record.
 _Avoid_: confusing with the session's conversation history — a Conversation
 Record derives from trace spans, not from session messages.
 
+**Sub-agent Run Span** (`raven/observability/semconv.py`, `raven/agent/subagent/manager.py`):
+The `subagent.run` span of one sub-agent run, opened by `SubagentManager._run_subagent` under
+the tool call that dispatched the run, in that call's trace, so the run's own model and tool
+calls nest under it. It is written when it opens -- its attributes and an in-progress
+checkpoint, as a turn's root is -- and again when it closes; both records share the span id
+and the same attributes: `subagent.task_id`, `subagent.task` (a 300-character preview),
+`subagent.label` (the Task summary), `subagent.origin_session`, `subagent.agent` (the
+canonical agent name), `subagent.instance` (the instance name, absent when the run has
+none), `subagent.handle` (the instance name, else the task id), `subagent.dispatch` (`spawn`;
+`dag` is reserved for a graph node's run) and `subagent.in_progress` (`true` in the
+checkpoint, `false` when it closes). The closing record also carries `subagent.outcome`:
+`completed`, `failed`, `aborted` (stopped on a terminal safety decision), `cancelled`, or
+`handed_off` (the process stopped and the run goes on on its registered machine). It is set
+beside the run record's own outcome and, like it, the first decision stands; a run that
+closes by cancellation or by an escaping exception before any branch decided reads
+`cancelled` or `failed`. A run cancelled before its task first ran records no span. Records
+written before these attributes existed carry only the first four and no outcome.
+_Avoid_: reading the span's `status.code` as the run's result -- the run reports its own
+failures and returns, so the span is `OK` whatever the outcome.
+
 **Trajectory Entry** (`raven/trajectory/entries.py`):
 One row of the trajectory view, projected by `project_entries` from a logical
 span (`traceId + spanId`, checkpoints merged last-write-wins, an in-progress

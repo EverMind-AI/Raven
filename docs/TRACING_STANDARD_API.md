@@ -61,6 +61,7 @@ root of a turn is a `session.turn` span; everything else nests beneath it.
 | `_spans.address_items(items)` | content-address a list of messages under `audit-artifacts/_messages/`; returns `{"$msg": sha1}` references to embed in a payload. See `audit.artifact.v2` below. |
 | `s.event(name)` | append a timeline event `{time, name}` |
 | `s.error(exc)` | mark `status = ERROR` (done automatically if the block raises) |
+| `s.get(key, default=None)` | the attribute value merged so far, or `default` -- for a value written only once, such as `subagent.outcome` |
 
 Read-only: `s.trace_id`, `s.span_id`, `s.name`.
 
@@ -141,7 +142,7 @@ adds richer rendering.
 | `session.turn` | `session` | — | `turn.input_preview`, `turn.output_preview`, `turn.in_progress`, `turn.capabilities.{tools,plugins,skills}` |
 | `llm.call` | `model` | `llm.provider`, `llm.model` | `llm.provider_class`, `llm.finish_reason`, `llm.call_id`, `llm.invocation_source`, `llm.usage.{input,output,total,cache_read,cache_write}_tokens`, `llm.usage.cost_total`, `llm.request_{bytes,images,image_bytes}`, `llm.http_status`, `llm.served_by`, `llm.response_id`; artifacts `llm.input` (`audit.artifact.v2`: message references + tools, plus `request` = the messages+tools payload size and picture count, not the provider-final body, and `generation` = what the call asked the model for; see below), `llm.output` (plus `call` = the transport record) |
 | `tool.call` | `tool` | `tool.name` | `tool.call_id`, `tool.duration_ms`, `tool.error`; artifacts `tool.input` (params), `tool.output` (result) |
-| `subagent.run` / `subagent.call` | `subagent` | — | `subagent.id`, `subagent.label`, `subagent.task`, `subagent.session_id`, `subagent.parent_trace_id`, `subagent.parent_span_id`, `subagent.trace_id`, `subagent.status` |
+| `subagent.run` / `subagent.call` | `subagent` | — | `subagent.id`, `subagent.label`, `subagent.task`, `subagent.session_id`, `subagent.parent_trace_id`, `subagent.parent_span_id`, `subagent.trace_id`, `subagent.status`, `subagent.agent`, `subagent.instance`, `subagent.handle`, `subagent.dispatch` (`spawn` / `dag`), `subagent.in_progress` (checkpointed at open, like `turn.in_progress`), `subagent.outcome` (`completed` / `failed` / `aborted` / `cancelled` / `handed_off`) |
 | `skill.read` / `skill.inject` | `skill` | — | `skill.name`, `skill.id`, `skill.source`, `skill.path`, `skill.scripts_dir` (present => a runnable bundle was materialized, vs instructions-only), `skill.read.via_tool` (`use_skill`/`read_skill`/`read_file`), `skill.inject.{names,count,via}` |
 | `memory.recall` / `.store` / `.feedback` / `.extract` / `.consolidate` / `.profile_refresh` | `memory` | — | `memory.scope`, `memory.hits`, `memory.message_count`, `memory.kind`, `memory.deposit_summary`, `memory.deposit_status`, `memory.surface`, `memory.sections_rewritten`; artifacts per op |
 | `plugin.load` / `tracing.bootstrap` | `plugin` | — | `plugin.name`, `plugin.contribution`, `plugin.id` |

@@ -170,6 +170,22 @@ async def _write_spawn_status(session_key: str | None, agent: str, handle: str, 
         )
 
 
+def _mark_outcome(outcome: str) -> None:
+    """Record how this run ended on its ``subagent.run`` span.
+
+    Found through the current-span slot, which only an instrumented call sets:
+    with tracing off ``_run_subagent`` opens no span and the slot still holds
+    whatever the dispatching frame had -- for a nested spawn, the parent run's
+    own ``subagent.run`` -- so the switch is checked before the name. Called
+    beside each ``SpawnRecord.finish`` and, like it, the first call wins.
+    """
+    if not trace.enabled():
+        return
+    span = trace.current_span()
+    if isinstance(span, trace.Span) and span.name == "subagent.run":
+        semconv.subagent_outcome(span, outcome)
+
+
 async def write_memory_record_for(
     *,
     directory: Path,
@@ -1631,7 +1647,7 @@ class SubagentManager:
             return None
         return InstanceState(instance_state_path(self.session_dir_for(session_key), name, handle))
 
-    @trace.instrument("subagent.run", extract=semconv.subagent)
+    @trace.instrument("subagent.run", on_open=semconv.subagent_open, extract=semconv.subagent)
     async def _run_subagent(
         self,
         task_id: str,
@@ -1666,10 +1682,12 @@ class SubagentManager:
                     )
         except asyncio.CancelledError:
             if not dispatched:
+                _mark_outcome("cancelled")
                 reason = self._cancel_reasons.pop(task_id, UNEXPLAINED_CANCEL)
                 await self._report_undispatched_cancel(task_id, task_summary, task, origin, reason)
             raise
         except Exception as e:
+            _mark_outcome("failed")
             error_msg = f"Error: {str(e)}"
             logger.error("Subagent [{}] failed: {}", task_id, e)
             if not dispatched:
@@ -1898,6 +1916,7 @@ class SubagentManager:
                 self._emit_status(
                     origin, task_id, task_summary, "completed", call_id=call_id, ended_at=int(time.time() * 1000)
                 )
+                _mark_outcome("completed")
                 record.finish(status="completed", output=final_result, activity=did)
                 taken = await self._announce_result(
                     task_id,
@@ -1919,6 +1938,7 @@ class SubagentManager:
                     # the next process picks the run up and does both
                     # (raven.agent.subagent.resume_remote).
                     left = True
+                    _mark_outcome("handed_off")
                     # The record the backend wrote lacks what only this side
                     # knows and the announce after a restart shows: the
                     # dispatch's origin (instance, node, tool call) and summary.
@@ -1931,6 +1951,7 @@ class SubagentManager:
                 self._emit_status(
                     origin, task_id, task_summary, "cancelled", call_id=call_id, ended_at=int(time.time() * 1000)
                 )
+                _mark_outcome("cancelled")
                 record.finish(status="cancelled", error=f"Cancelled: {reason}", activity=did)
                 await self._announce_cancelled(
                     task_id,
@@ -1948,6 +1969,7 @@ class SubagentManager:
                     origin, task_id, task_summary, "failed", call_id=call_id, ended_at=int(time.time() * 1000)
                 )
                 logger.info("Subagent [{}] stopped on a terminal safety decision", task_id)
+                _mark_outcome("aborted")
                 record.finish(status="aborted", output=ABORTED_ACTION_RESULT, activity=did)
                 taken = await self._announce_result(
                     task_id,
@@ -1966,6 +1988,7 @@ class SubagentManager:
                 )
                 error_msg = f"Error: {str(e)}"
                 logger.error("Subagent [{}] failed: {}", task_id, e)
+                _mark_outcome("failed")
                 record.finish(status="failed", error=error_msg, activity=did)
                 # As for a reply: a failure the draining scheduler refused to
                 # announce keeps the run's record on its machine, when the

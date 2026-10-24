@@ -464,6 +464,254 @@ async def test_a_run_ending_while_the_host_drains_does_not_die_of_its_own_announ
     assert task.exception() is None
 
 
+@pytest.fixture
+def run_spans(tmp_path, monkeypatch):
+    """Spans recorded into this test's own directory; the directory."""
+    from raven.tracing import spans as _spans
+
+    directory = tmp_path / "spans"
+    monkeypatch.setenv("RAVEN_TRACING", "1")
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(directory))
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    _spans._store = None
+    yield directory
+    _spans._store = None
+
+
+def _recorded(directory: Path) -> list[dict[str, Any]]:
+    log = directory / "logs" / "audit-spans.log"
+    if not log.exists():
+        return []
+    return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def _run_records(directory: Path, task_id: str) -> list[dict[str, Any]]:
+    return [
+        span
+        for span in _recorded(directory)
+        if span["name"] == "subagent.run" and span["attributes"].get("subagent.task_id") == task_id
+    ]
+
+
+class _GatedBackend:
+    """Records one model call, then waits for ``release`` before replying or raising ``error``."""
+
+    streams = False
+
+    def __init__(self, error: BaseException | None = None) -> None:
+        self.error = error
+        self.calls = 0
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def run(self, task: str, **_: Any) -> str:
+        from raven.tracing import trace
+
+        self.calls += 1
+        with trace.span("llm.call", {"llm.provider": "stub", "llm.model": "m"}):
+            pass
+        self.started.set()
+        await self.release.wait()
+        if self.error is not None:
+            raise self.error
+        return "done"
+
+
+def _traced_manager(monkeypatch, tmp_path: Path, backend: _GatedBackend, *, max_concurrent: int = 8) -> SubagentManager:
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _DummyExecutor())
+    mgr = SubagentManager(provider=_StubProvider(), workspace=tmp_path, max_concurrent=max_concurrent)
+    monkeypatch.setattr(mgr, "_resolve_backend", lambda agent: backend)
+    mgr.set_submit(lambda _req: None)
+    return mgr
+
+
+async def _spawn_in_a_turn(mgr: SubagentManager, **kw: Any) -> tuple[str, str, asyncio.Task]:
+    """Spawn from a turn's tool call; the task id, the call's span id and the run's task.
+
+    Both spans close as soon as the spawn returns: the turn moves on while the
+    run goes on in the background.
+    """
+    from raven.tracing import trace
+
+    with trace.span("session.turn", root=True, session_key="cli:s"):
+        with trace.span("tool.call", {"tool.name": "spawn"}) as call:
+            receipt = await mgr.spawn(
+                task="look around",
+                task_summary="look",
+                session_key="cli:s",
+                origin_channel="cli",
+                origin_chat_id="s",
+                **kw,
+            )
+    match = re.search(r"\(id: ([0-9a-f]+)\)", receipt)
+    assert match, receipt
+    task_id = match.group(1)
+    return task_id, call.span_id, mgr._running_tasks[task_id]
+
+
+async def test_a_spawned_run_is_on_disk_while_it_runs_and_closes_completed(run_spans, monkeypatch, tmp_path):
+    from raven.config.agent_names import canonical_agent_name
+
+    backend = _GatedBackend()
+    mgr = _traced_manager(monkeypatch, tmp_path, backend)
+    task_id, call_span, task = await _spawn_in_a_turn(mgr, agent="researcher", instance="scout")
+    await asyncio.wait_for(backend.started.wait(), timeout=5)
+
+    (opened,) = _run_records(run_spans, task_id)
+    attrs = opened["attributes"]
+    assert opened["parentSpanId"] == call_span
+    assert attrs["subagent.in_progress"] is True
+    assert attrs["subagent.dispatch"] == "spawn"
+    assert (attrs["subagent.agent"], attrs["subagent.instance"], attrs["subagent.handle"]) == (
+        canonical_agent_name("researcher"),
+        "scout",
+        "scout",
+    )
+    assert "subagent.outcome" not in attrs
+    (model_call,) = [span for span in _recorded(run_spans) if span["name"] == "llm.call"]
+    assert model_call["parentSpanId"] == opened["spanId"]
+
+    backend.release.set()
+    await asyncio.wait({task})
+    _, closed = _run_records(run_spans, task_id)
+    assert closed["spanId"] == opened["spanId"]
+    assert closed["attributes"]["subagent.in_progress"] is False
+    assert closed["attributes"]["subagent.outcome"] == "completed"
+    await mgr.cancel_all()
+
+
+async def _cancel_the_session(mgr: SubagentManager, task_id: str, task: asyncio.Task) -> None:
+    await mgr.cancel_by_session("cli:s")
+
+
+async def _leave_it_on_its_machine(mgr: SubagentManager, task_id: str, task: asyncio.Task) -> None:
+    from raven.acp_client import remote_runs
+
+    remote_runs.mark_left(task_id)
+    task.cancel()
+
+
+@pytest.mark.parametrize(
+    ("error", "stop", "outcome"),
+    [
+        (RuntimeError("the run failed"), None, "failed"),
+        (SubagentActionAbortedError("stopped"), None, "aborted"),
+        (None, _cancel_the_session, "cancelled"),
+        (None, _leave_it_on_its_machine, "handed_off"),
+    ],
+    ids=["failed", "aborted", "cancelled", "handed_off"],
+)
+async def test_a_spawned_run_records_how_it_ended(run_spans, monkeypatch, tmp_path, error, stop, outcome):
+    backend = _GatedBackend(error)
+    mgr = _traced_manager(monkeypatch, tmp_path, backend)
+    task_id, _, task = await _spawn_in_a_turn(mgr)
+    await asyncio.wait_for(backend.started.wait(), timeout=5)
+    if stop is None:
+        backend.release.set()
+    else:
+        await stop(mgr, task_id, task)
+    await asyncio.wait({task})
+
+    assert _run_records(run_spans, task_id)[-1]["attributes"]["subagent.outcome"] == outcome
+    await mgr.cancel_all()
+
+
+class _RefusingExecutor:
+    async def __aenter__(self) -> "_RefusingExecutor":
+        raise RuntimeError("the sandbox did not start")
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+
+async def test_a_run_whose_sandbox_never_starts_records_failed(run_spans, monkeypatch, tmp_path):
+    backend = _GatedBackend()
+    mgr = _traced_manager(monkeypatch, tmp_path, backend)
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _RefusingExecutor())
+    task_id, _, task = await _spawn_in_a_turn(mgr)
+    await asyncio.wait({task})
+
+    assert _run_records(run_spans, task_id)[-1]["attributes"]["subagent.outcome"] == "failed"
+    assert backend.calls == 0
+    await mgr.cancel_all()
+
+
+async def test_a_run_cancelled_while_waiting_at_the_gate_records_cancelled(run_spans, monkeypatch, tmp_path):
+    backend = _GatedBackend()
+    mgr = _traced_manager(monkeypatch, tmp_path, backend, max_concurrent=1)
+    await mgr._gate.acquire()
+    try:
+        task_id, _, task = await _spawn_in_a_turn(mgr)
+        await _settle(lambda: task_id not in mgr._unstarted)
+        await mgr.cancel_by_session("cli:s")
+        await asyncio.wait({task})
+    finally:
+        mgr._gate.release()
+
+    assert _run_records(run_spans, task_id)[-1]["attributes"]["subagent.outcome"] == "cancelled"
+    assert backend.calls == 0
+    await mgr.cancel_all()
+
+
+async def test_a_run_failing_before_its_backend_is_reached_records_failed(run_spans, monkeypatch, tmp_path):
+    async def _unreadable_registry(*_a: Any, **_k: Any) -> None:
+        raise RuntimeError("the node registry is unreadable")
+
+    backend = _GatedBackend()
+    mgr = _traced_manager(monkeypatch, tmp_path, backend)
+    monkeypatch.setattr(manager_mod, "ensure_node_claimed", _unreadable_registry)
+    task_id, _, task = await _spawn_in_a_turn(mgr)
+    await asyncio.wait({task})
+
+    assert _run_records(run_spans, task_id)[-1]["attributes"]["subagent.outcome"] == "failed"
+    assert backend.calls == 0
+    await mgr.cancel_all()
+
+
+async def test_a_cancel_landing_while_a_completed_run_is_announced_keeps_it_completed(run_spans, monkeypatch, tmp_path):
+    backend = _GatedBackend()
+    backend.release.set()
+    mgr = _traced_manager(monkeypatch, tmp_path, backend)
+    announced: list[str] = []
+
+    async def _announce(*args: Any, **_k: Any) -> bool:
+        announced.append(args[5])
+        if len(announced) == 1:
+            raise asyncio.CancelledError
+        return True
+
+    monkeypatch.setattr(mgr, "_announce_result", _announce)
+    task_id, _, task = await _spawn_in_a_turn(mgr)
+    await asyncio.wait({task})
+
+    assert announced == ["ok", "cancelled"]
+    assert _run_records(run_spans, task_id)[-1]["attributes"]["subagent.outcome"] == "completed"
+    (meta,) = tmp_path.rglob(f"{task_id}.meta.json")
+    assert json.loads(meta.read_text(encoding="utf-8"))["status"] == "completed"
+    await mgr.cancel_all()
+
+
+async def test_an_outcome_is_marked_only_on_a_recorded_subagent_run(run_spans, monkeypatch):
+    from raven.tracing import trace
+
+    @trace.instrument("tool.call")
+    async def _tool() -> None:
+        manager_mod._mark_outcome("failed")
+
+    @trace.instrument("subagent.run")
+    async def _run_with_tracing_switched_off() -> None:
+        monkeypatch.setenv("RAVEN_TRACING", "0")
+        manager_mod._mark_outcome("failed")
+        monkeypatch.setenv("RAVEN_TRACING", "1")
+
+    await _tool()
+    await _run_with_tracing_switched_off()
+
+    records = _recorded(run_spans)
+    assert [record["name"] for record in records] == ["tool.call", "subagent.run"]
+    assert all("subagent.outcome" not in record["attributes"] for record in records)
+
+
 async def test_a_spawn_is_refused_when_the_shutdown_sweep_lands_while_it_is_starting(monkeypatch):
     """The sweep snapshots the running tasks once and then yields for up to
     five seconds while it drains them. A spawn that passed its first check

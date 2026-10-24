@@ -9,8 +9,10 @@ See ``docs/TRACING_STANDARD_API.md``.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections import Counter
+from collections.abc import Mapping
 from typing import Any
 
 from raven.observability import purpose as _purpose
@@ -446,26 +448,92 @@ __all__ = [
     "skill_inject_active",
     "skill_inject_skills",
     "subagent",
+    "subagent_attrs",
+    "subagent_open",
+    "subagent_outcome",
 ]
 
 
+def subagent_attrs(
+    *,
+    task_id: str | None,
+    task: Any,
+    label: str | None,
+    origin: Any,
+    dispatch: str,
+    in_progress: bool,
+) -> dict[str, Any]:
+    """The attributes of a ``subagent.run`` span, the same at open and at close.
+
+    One builder for both ends, so a run's checkpoint and its final record
+    describe the same run. ``dispatch`` names the route that started it
+    (``spawn``, or ``dag`` for a graph node). A value that is not known is left
+    out rather than written as null, and an empty instance name is no instance.
+    """
+    origin = origin if isinstance(origin, Mapping) else {}
+    attrs = {
+        "subagent.task_id": task_id,
+        "subagent.task": _preview(task, 300),
+        "subagent.label": label,
+        "subagent.origin_session": origin.get("session_key"),
+        "subagent.agent": origin.get("agent"),
+        "subagent.instance": origin.get("instance") or None,
+        "subagent.handle": origin.get("handle") or task_id,
+        "subagent.dispatch": dispatch,
+        "subagent.in_progress": in_progress,
+    }
+    return {key: value for key, value in attrs.items() if value is not None}
+
+
+def _spawn_attrs(bound: dict[str, Any], *, in_progress: bool) -> dict[str, Any]:
+    return subagent_attrs(
+        task_id=bound.get("task_id"),
+        task=bound.get("task"),
+        label=bound.get("task_summary"),
+        origin=bound.get("origin"),
+        dispatch="spawn",
+        in_progress=in_progress,
+    )
+
+
+def subagent_open(span, bound: dict[str, Any]) -> None:
+    """Describe a spawned run and checkpoint it before its first step.
+
+    A run can wait at the concurrency gate or work for hours before it closes;
+    written now, it already has its entry while it runs, and the steps it takes
+    meanwhile have their parent on disk.
+    """
+    span.set(_spawn_attrs(bound, in_progress=True))
+    span.checkpoint()
+
+
 def subagent(span, bound: dict[str, Any], result: Any, exc: BaseException | None) -> None:
-    """Extractor for ``SubagentManager._run_subagent``.
+    """Extractor for ``SubagentManager._run_subagent``: the run's final record.
 
     The subagent runs the same decorated primitives (``chat_with_retry`` /
     ``tools.execute``), so its llm/tool spans are captured automatically and — via
     the contextvars snapshot ``asyncio.create_task`` takes at spawn — nest under
-    this node under the spawning turn. This node just describes the spawn.
+    this node under the spawning turn. The run reports its own failures and
+    returns, so the outcome is set by the branch that decided it; a run that
+    ends by cancellation or an escaping exception before any branch did gets
+    one here.
     """
-    origin = bound.get("origin") or {}
-    span.set(
-        {
-            "subagent.task_id": bound.get("task_id"),
-            "subagent.task": _preview(bound.get("task"), 300),
-            "subagent.label": bound.get("task_summary"),
-            "subagent.origin_session": origin.get("session_key") if isinstance(origin, dict) else None,
-        }
-    )
+    span.set(_spawn_attrs(bound, in_progress=False))
+    if isinstance(exc, asyncio.CancelledError):
+        subagent_outcome(span, "cancelled")
+    elif exc is not None:
+        subagent_outcome(span, "failed")
+
+
+def subagent_outcome(span, outcome: str) -> None:
+    """Record how a sub-agent run ended; the first outcome recorded stands.
+
+    As in the run's own record: a cancel landing while a completed run is being
+    announced, or a sandbox failing on the way out of a run that already ended,
+    does not rewrite what the run did.
+    """
+    if span.get("subagent.outcome") is None:
+        span.set({"subagent.outcome": outcome})
 
 
 def plugin_load(contribution: str):

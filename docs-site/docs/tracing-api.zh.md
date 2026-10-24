@@ -57,6 +57,7 @@ with trace.span("llm.call", {"llm.provider": provider, "llm.model": model}) as s
 | `_spans.address_items(items)` | 把一组消息按内容寻址存放到 `audit-artifacts/_messages/` 下，返回可嵌入负载的 `{"$msg": sha1}` 引用。参见下文的 `audit.artifact.v2`。 |
 | `s.event(name)` | 追加一条时间线事件 `{time, name}` |
 | `s.error(exc)` | 标记 `status = ERROR`（若代码块抛出异常则自动完成） |
+| `s.get(key, default=None)` | 返回目前已合并的属性值，没有则返回 `default`——用于只写一次的值，例如 `subagent.outcome` |
 
 只读属性：`s.trace_id`、`s.span_id`、`s.name`。
 
@@ -127,7 +128,7 @@ async def chat_with_retry(self, ...): ...
 | `session.turn` | `session` | — | `turn.input_preview`、`turn.output_preview`、`turn.in_progress`、`turn.capabilities.{tools,plugins,skills}` |
 | `llm.call` | `model` | `llm.provider`、`llm.model` | `llm.provider_class`、`llm.finish_reason`、`llm.call_id`、`llm.invocation_source`、`llm.usage.{input,output,total,cache_read,cache_write}_tokens`、`llm.usage.cost_total`、`llm.request_{bytes,images,image_bytes}`、`llm.http_status`、`llm.served_by`、`llm.response_id`；产物 `llm.input`（`audit.artifact.v2`：消息引用与工具，另含 `request` = 消息加工具的负载大小与图片数量，而非服务商最终请求体，以及 `generation` = 本次调用向模型提出的要求；见下文）、`llm.output`（另含 `call` = 传输记录） |
 | `tool.call` | `tool` | `tool.name` | `tool.call_id`、`tool.duration_ms`、`tool.error`；产物 `tool.input`（参数）、`tool.output`（结果） |
-| `subagent.run` / `subagent.call` | `subagent` | — | `subagent.id`、`subagent.label`、`subagent.task`、`subagent.session_id`、`subagent.parent_trace_id`、`subagent.parent_span_id`、`subagent.trace_id`、`subagent.status` |
+| `subagent.run` / `subagent.call` | `subagent` | — | `subagent.id`、`subagent.label`、`subagent.task`、`subagent.session_id`、`subagent.parent_trace_id`、`subagent.parent_span_id`、`subagent.trace_id`、`subagent.status`、`subagent.agent`、`subagent.instance`、`subagent.handle`、`subagent.dispatch`（`spawn` / `dag`）、`subagent.in_progress`（打开时 checkpoint，同 `turn.in_progress`）、`subagent.outcome`（`completed` / `failed` / `aborted` / `cancelled` / `handed_off`） |
 | `skill.read` / `skill.inject` | `skill` | — | `skill.name`、`skill.id`、`skill.source`、`skill.path`、`skill.scripts_dir`（存在即表示物化了一个可运行的 bundle，而非仅有说明文本）、`skill.read.via_tool`（`use_skill`/`read_skill`/`read_file`）、`skill.inject.{names,count,via}` |
 | `memory.recall` / `.store` / `.feedback` / `.extract` / `.consolidate` / `.profile_refresh` | `memory` | — | `memory.scope`、`memory.hits`、`memory.message_count`、`memory.kind`、`memory.deposit_summary`、`memory.deposit_status`、`memory.surface`、`memory.sections_rewritten`；产物按操作类型各异 |
 | `plugin.load` / `tracing.bootstrap` | `plugin` | — | `plugin.name`、`plugin.contribution`、`plugin.id` |

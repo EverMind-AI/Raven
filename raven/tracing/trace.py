@@ -99,6 +99,10 @@ class Span:
         self._status_code = "OK"
         self._status_message = ""
 
+    def get(self, key: str, default: Any = None) -> Any:
+        """The attribute ``key`` as merged so far, or ``default``."""
+        return self._attrs.get(key, default)
+
     def set(self, attributes: dict[str, Any] | None = None, **kw) -> "Span":
         """Merge attributes onto the span.
 
@@ -199,6 +203,9 @@ class _NoopSpan:
     span_id = ""
     name = ""
     invocation_source = None
+
+    def get(self, _key, default=None):
+        return default
 
     def set(self, *_a, **_k):
         return self

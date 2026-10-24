@@ -370,6 +370,130 @@ def test_subagent_children_nest(trace_dir):
     assert inner_parent == sa_id  # inner llm.call nests under the subagent node
 
 
+def test_span_get_reads_back_merged_attributes(trace_dir):
+    with trace.span("tool.call", {"tool.name": "exec"}) as s:
+        s.set({"tool.call_id": "c1"})
+        assert s.get("tool.name") == "exec"
+        assert s.get("tool.call_id") == "c1"
+        assert s.get("tool.error") is None
+        assert s.get("tool.error", "none") == "none"
+    assert trace._NoopSpan().get("tool.name", 3) == 3
+
+
+_SUBAGENT_RUN_KEYS = {
+    "subagent.task_id",
+    "subagent.task",
+    "subagent.label",
+    "subagent.origin_session",
+    "subagent.agent",
+    "subagent.instance",
+    "subagent.handle",
+    "subagent.dispatch",
+    "subagent.in_progress",
+}
+
+
+async def _record_subagent_run(trace_dir, origin, body=None):
+    """Run a function instrumented the way ``SubagentManager._run_subagent`` is; its ``subagent.run`` records."""
+    from raven.observability import semconv
+
+    @trace.instrument("subagent.run", on_open=semconv.subagent_open, extract=semconv.subagent)
+    async def run(task_id, task, task_summary, origin, provider, model, mcp_grant=None):
+        if body is not None:
+            await body()
+
+    await run("t1", "inspect the repo", "inspect", origin, None, "m")
+    return [sp for sp in _spans_written(trace_dir) if sp["name"] == "subagent.run"]
+
+
+async def test_a_subagent_run_is_checkpointed_with_its_attributes_when_it_opens(trace_dir):
+    origin = {"session_key": "cli:p", "agent": "researcher", "instance": "scout", "handle": "scout"}
+    opened, closed = await _record_subagent_run(trace_dir, origin)
+
+    assert opened["spanId"] == closed["spanId"]
+    attrs = opened["attributes"]
+    assert {key for key in attrs if key.startswith("subagent.")} == _SUBAGENT_RUN_KEYS
+    assert attrs["subagent.task_id"] == "t1"
+    assert attrs["subagent.task"] == "inspect the repo"
+    assert attrs["subagent.label"] == "inspect"
+    assert attrs["subagent.origin_session"] == "cli:p"
+    assert attrs["subagent.agent"] == "researcher"
+    assert attrs["subagent.instance"] == "scout"
+    assert attrs["subagent.handle"] == "scout"
+    assert attrs["subagent.dispatch"] == "spawn"
+    assert attrs["subagent.in_progress"] is True
+    final = closed["attributes"]
+    assert {key for key in final if key.startswith("subagent.")} == _SUBAGENT_RUN_KEYS
+    assert final["subagent.in_progress"] is False
+    assert "subagent.outcome" not in final
+
+
+@pytest.mark.parametrize("instance", [None, ""])
+async def test_a_subagent_run_without_an_instance_writes_none_and_is_handled_by_task_id(trace_dir, instance):
+    records = await _record_subagent_run(trace_dir, {"session_key": "cli:p", "agent": "a", "instance": instance})
+    for record in records:
+        assert "subagent.instance" not in record["attributes"]
+        assert record["attributes"]["subagent.handle"] == "t1"
+
+
+async def _cancel():
+    raise asyncio.CancelledError
+
+
+async def _fail():
+    raise RuntimeError("boom")
+
+
+async def _hand_off_then_cancel():
+    from raven.observability import semconv
+
+    semconv.subagent_outcome(trace.current_span(), "handed_off")
+    raise asyncio.CancelledError
+
+
+async def _complete_then_fail():
+    from raven.observability import semconv
+
+    semconv.subagent_outcome(trace.current_span(), "completed")
+    semconv.subagent_outcome(trace.current_span(), "failed")
+
+
+@pytest.mark.parametrize(
+    ("body", "raised", "outcome"),
+    [
+        (_cancel, asyncio.CancelledError, "cancelled"),
+        (_fail, RuntimeError, "failed"),
+        (_hand_off_then_cancel, asyncio.CancelledError, "handed_off"),
+        (_complete_then_fail, None, "completed"),
+    ],
+    ids=["cancelled", "failed", "marked_before_cancel", "first_mark_stands"],
+)
+async def test_a_subagent_run_s_first_outcome_stands_and_an_unmarked_end_is_filled_in(trace_dir, body, raised, outcome):
+    origin = {"session_key": "cli:p", "agent": "a"}
+    if raised is None:
+        records = await _record_subagent_run(trace_dir, origin, body)
+    else:
+        with pytest.raises(raised):
+            await _record_subagent_run(trace_dir, origin, body)
+        records = [sp for sp in _spans_written(trace_dir) if sp["name"] == "subagent.run"]
+    assert records[-1]["attributes"]["subagent.outcome"] == outcome
+    assert "subagent.outcome" not in records[0]["attributes"]
+
+
+def test_subagent_attrs_name_a_graph_node_dispatch_and_leave_out_what_is_unknown():
+    from raven.observability import semconv
+
+    attrs = semconv.subagent_attrs(task_id="n1", task="t", label="node", origin={}, dispatch="dag", in_progress=True)
+    assert attrs == {
+        "subagent.task_id": "n1",
+        "subagent.task": "t",
+        "subagent.label": "node",
+        "subagent.handle": "n1",
+        "subagent.dispatch": "dag",
+        "subagent.in_progress": True,
+    }
+
+
 def test_a_mutated_artifact_does_not_corrupt_the_next_record(trace_dir):
     """An edit through one hard link must not follow the payload forward.
 
