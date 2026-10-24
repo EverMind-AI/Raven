@@ -23,12 +23,13 @@ file wins, and the load path says so once per shadowed name.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import os
 import re
 import tempfile
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 from loguru import logger
@@ -54,31 +55,42 @@ _FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
 _BLOCK_RE = re.compile(r"```yaml\s+playbook-spec\n(.*?)\n```", re.DOTALL)
 
 
-class _SpecBlockLoader(yaml.SafeLoader):
-    """``yaml.SafeLoader`` reading every mapping key as the text it is written as.
+class _KeyAsStringLoader(yaml.SafeLoader):
+    """Mapping keys read as the text they were written as.
 
-    Every mapping in the block is keyed by a name -- a route, a param, an input,
-    a server -- while YAML 1.1 reads a bare ``yes``, ``on``, ``true`` or ``1`` as a
-    boolean or a number, and a decision node's routes are naturally ``yes`` and ``no``.
-    ``save`` quotes such a key, so only a hand-written file meets this. Values
-    keep their YAML types.
+    YAML 1.1 resolves ``yes``, ``no``, ``on``, ``off``, ``true``, ``false``,
+    bare digits and bare dates into booleans, numbers and timestamps, and a
+    route named ``yes`` then arrives as a non-string key the spec refuses --
+    the runtime answers a load error by dropping the playbook out of the
+    library. Every scalar key node of a non-string tag is replaced with a copy
+    retagged to a string (a copy, because anchors can share one scalar between
+    a key here and a value elsewhere, and the value must keep its type), after
+    flattening so a key arriving through a ``<<:`` merge is retagged too. The
+    mapping itself is still built by PyYAML's own loop, which keeps its answer
+    for an unhashable key -- the yaml.YAMLError playbooks_validate catches to
+    answer with a finding. Values are untouched, so ``confirm: yes`` still
+    means true.
     """
 
+    _STR = "tag:yaml.org,2002:str"
+
     def construct_mapping(self, node, deep=False):
-        # Flattened first, so the keys a merge brings in are read as text too.
-        self.flatten_mapping(node)
-        for key, _ in node.value:
-            if isinstance(key, yaml.ScalarNode):
-                key.tag = "tag:yaml.org,2002:str"
+        if isinstance(node, yaml.MappingNode):
+            self.flatten_mapping(node)
+            pairs = []
+            for key_node, value_node in node.value:
+                if isinstance(key_node, yaml.ScalarNode) and key_node.tag != self._STR:
+                    retagged = copy.copy(key_node)
+                    retagged.tag = self._STR
+                    key_node = retagged
+                pairs.append((key_node, value_node))
+            node.value = pairs
         return super().construct_mapping(node, deep=deep)
 
 
-def _load_block(text: str) -> object:
-    loader = _SpecBlockLoader(text)
-    try:
-        return loader.get_single_data()
-    finally:
-        loader.dispose()
+def _load_yaml(text: str) -> Any:
+    """The store's one YAML read: keys as written, values as YAML resolves them."""
+    return yaml.load(text, Loader=_KeyAsStringLoader)  # noqa: S506 - SafeLoader subclass; only scalar key nodes are retagged
 
 
 class PlaybookExistsError(FileExistsError):
@@ -254,11 +266,15 @@ class PlaybookStore:
         fm_match = _FRONTMATTER_RE.match(text)
         if fm_match is None:
             raise ValueError(f"playbook {name!r}: no frontmatter in playbook.md")
-        front = yaml.safe_load(fm_match.group(1)) or {}
+        front = _load_yaml(fm_match.group(1))
+        if not isinstance(front, dict):
+            raise ValueError(f"playbook {name!r}: the frontmatter is not a mapping")
         block_match = _BLOCK_RE.search(text)
         if block_match is None:
             raise ValueError(f"playbook {name!r}: no '```yaml playbook-spec' block in playbook.md")
-        data = _load_block(block_match.group(1)) or {}
+        data = _load_yaml(block_match.group(1))
+        if not isinstance(data, dict):
+            raise ValueError(f"playbook {name!r}: the spec block is not a mapping")
         data["name"] = front.get("name")
         data["description"] = front.get("description")
         if data["name"] != name:
@@ -393,7 +409,7 @@ def _migrate_legacy_nodes(data: dict, *, name: str) -> dict:
 
 def _render(spec: StoredPlaybook, notes: list[str]) -> str:
     # Serialized, not interpolated: ``load`` parses this region with
-    # ``yaml.safe_load``, and ``description`` is model-written prose where a
+    # the key-preserving loader, and ``description`` is model-written prose where a
     # colon or a leading ``#`` is ordinary. Interpolating produced files that
     # could not be read back -- ``description: due diligence: scan first`` is
     # a YAML mapping error, and a leading ``#`` silently became a comment. The

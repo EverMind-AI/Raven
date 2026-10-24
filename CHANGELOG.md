@@ -500,7 +500,9 @@ All notable changes to Raven are documented here.
   `off`, `true`, `false` or a bare number loads. YAML 1.1 read such a key as a
   boolean or a number, the playbook failed to load, and the runtime dropped it
   from the library; every key in the spec block is now read as the text it is
-  written as. Values keep their YAML types.
+  written as. Values keep their YAML types. A spec block that is not a mapping
+  is a finding, and `raven playbook validate` answers a YAML syntax error as one
+  instead of a traceback.
 
 - Generating a dag playbook can produce a branch. The generator's instructions
   for dag mode called `dependsOn` the whole graph language and never named
