@@ -93,6 +93,10 @@ class LinkedChat:
     def channel_active(self, cid):
         return cid in self.active
 
+    def active_turn_id(self, cid: str) -> str | None:
+        active = self.active.get(cid)
+        return active[0] if active is not None else None
+
     def question_route(self, cid):
         turn = self._question_turn.get()
         if turn is None:
@@ -137,7 +141,7 @@ class LinkedChat:
                 await reply("Linked project is not accepting messages; please retry after maintenance.")
         return True
 
-    def wrap_runner(self, page_runner, outlet, bind_turn):
+    def wrap_runner(self, page_runner, outlet):
         from raven.gateway.spine import GatewayTurnRunner
 
         channel_runner = GatewayTurnRunner(self.agent, {}, self.sources)
@@ -162,7 +166,6 @@ class LinkedChat:
                     raise ValueError("Linked project no longer exists")
                 token = owner._question_turn.set((req.conversation, req.turn_id))
                 try:
-                    bind_turn(req.conversation, req.turn_id)
                     await outlet.emit_start(req.conversation, req.turn_id, req.text)
                     # UI injects remain in the mailbox and fall back to their own native turn.
                     return await channel_runner.run(req, emit, lambda: [])
