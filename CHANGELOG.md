@@ -382,6 +382,21 @@ All notable changes to Raven are documented here.
   running**, and a cancelled run **Stopped**, where both used to read
   **Finished**. Conversations stored before this keep the fold they had.
 
+- The trajectory view shows a spawned sub-agent while it runs. Its entry
+  appears as running as soon as the run starts -- including the time it
+  waits behind the concurrency gate -- instead of only once it has ended,
+  and the steps it has already taken carry the number of the turn that
+  dispatched it instead of being marked as belonging to no known turn. A
+  finished run's entry now says how it ended: a run that failed, or that
+  stopped on a terminal safety decision, is an error and gets the failure
+  dot; a cancelled run reads cancelled; a run left going on its registered
+  machine when the process stopped reads unknown. Every run used to read as
+  successful. The `subagent.run` span carries `subagent.agent`,
+  `subagent.instance`, `subagent.handle`, `subagent.dispatch`,
+  `subagent.in_progress` and `subagent.outcome`; runs recorded before this
+  keep the entries they had. A checkpoint read after the view trimmed the
+  finished record of its turn or run no longer turns it back into running.
+
 - An empty reply from a model behind OpenRouter (`content: " "`,
   `finish_reason: stop`) is no longer reported as an upstream transport
   failure and retried for minutes before the verdict's own sentence is
