@@ -12,7 +12,7 @@ from raven.channels.intake import Intake
 from raven.gateway.linked_chat import Binding, LinkedChat
 from raven.gateway.outlet import ChannelOutletAdapter
 from raven.rpc.dispatcher import Dispatcher
-from raven.rpc.methods import turn
+from raven.rpc.methods import register_aligned_methods_except_system, turn
 from raven.rpc.question_broker import QuestionBroker
 from raven.rpc.spine import build_rpc_spine
 from raven.session.manager import SessionManager
@@ -41,10 +41,11 @@ async def linked_page(tmp_path, monkeypatch):
         linked_chat=link,
         on_turn_end=turn.clear_active,
         on_turn_start=turn.promote_pending_inject,
-        on_turn_bind=turn.bind_active,
     )
     dispatcher = Dispatcher()
-    turn.register_turn_methods(dispatcher, emitter=emitter, scheduler=scheduler, turn_ids=turn_ids)
+    register_aligned_methods_except_system(
+        dispatcher, emitter=emitter, scheduler=scheduler, turn_ids=turn_ids, linked_turn_id=link.active_turn_id
+    )
     broker = QuestionBroker(AsyncMock(), timeout_s=2)
     subagents = SimpleNamespace(cancel_by_session=AsyncMock(return_value=0))
     tree = ast.parse((Path(__file__).resolve().parents[1] / "raven/cli/gateway_commands.py").read_text())
@@ -182,6 +183,47 @@ async def test_page_stop_reaches_linked_turn_and_preserves_pending_inject(linked
     await r.hub.wait_idle("telegram")
     r.telegram.send.assert_not_called()
     assert cancelled_ids(r) == [host.turn_id]
+    assert_cleared(r)
+
+
+@pytest.mark.parametrize("page_admission", ["pool-wait", "running"])
+@pytest.mark.parametrize("linked_exit", ["completed", "named-stop", "page-stop"])
+async def test_ordinary_page_binding_survives_preceding_linked_turn(linked_page, page_admission, linked_exit):
+    r = linked_page
+
+    async def keep_page_running(req):
+        if req.text == "queued ordinary page":
+            r.loop.release.clear()
+
+    r.loop.action = keep_page_running
+    if page_admission == "pool-wait":
+        gate = r.scheduler._pools._user
+        await gate.acquire()
+        try:
+            await inbound(r, "linked first")
+            sent = await rpc(r, "turn.send", session_key=KEY, content="queued ordinary page")
+        finally:
+            gate.release()
+        linked, linked_handle = await running(r)
+    else:
+        await inbound(r, "linked first")
+        linked, linked_handle = await running(r)
+        sent = await rpc(r, "turn.send", session_key=KEY, content="queued ordinary page")
+    assert sent["accepted"]
+    assert linked.text == "linked first"
+    if linked_exit == "completed":
+        r.loop.release.set()
+        assert await asyncio.wait_for(linked_handle.result(), 2) is not None
+    else:
+        params = {"session_key": KEY, "turn_id": linked.turn_id} if linked_exit == "named-stop" else page_stop_params(r)
+        assert await rpc(r, "turn.cancel", **params) == {"cancelled": True}
+        assert await linked_handle.result() is None
+        assert cancelled_ids(r) == [linked.turn_id]
+    page, page_handle = await running(r)
+    assert page.turn_id == sent["turn_id"]
+    assert await rpc(r, "turn.cancel", **page_stop_params(r)) == {"cancelled": True}
+    assert await asyncio.wait_for(page_handle.result(), 2) is None
+    assert cancelled_ids(r).count(page.turn_id) == 1
     assert_cleared(r)
 
 
