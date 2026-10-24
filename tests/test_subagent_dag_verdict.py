@@ -8,7 +8,9 @@ from types import SimpleNamespace
 import pytest
 
 from raven.agent.subagent.dag_verdict import (
+    _DESCRIBE_INSTRUCTION,
     _JUDGE_INSTRUCTION,
+    _OUTPUT_LIMIT_NOTE,
     _OUTPUT_LIMIT_RULE,
     CATEGORIES,
     RouteUndeterminedError,
@@ -798,6 +800,30 @@ async def test_describe_failure_reads_the_follow_ups_as_part_of_the_task():
     system, user = (message["content"] for message in provider.calls[0]["messages"])
     assert _fenced(user) == ["push the fix to PR 918", "open a replacement PR instead", "boom", "e"]
     assert "the later one stands" in system
+
+
+@pytest.mark.parametrize("output_limited", [False, True], ids=["whole", "cut"])
+@pytest.mark.parametrize("passed", [{}, {"follow_ups": ()}], ids=["omitted", "empty"])
+async def test_describe_failure_says_nothing_about_follow_ups_a_node_was_never_sent(output_limited, passed):
+    provider = _Provider(_not_accomplished())
+    await describe_failure(
+        provider,
+        prompt="p",
+        error="boom",
+        evidence="e",
+        evidence_complete=True,
+        output_limited=output_limited,
+        **passed,
+    )
+    system, user = (message["content"] for message in provider.calls[0]["messages"])
+    assert system == _DESCRIBE_INSTRUCTION + (_OUTPUT_LIMIT_RULE if output_limited else "")
+    assert _fenced(user) == ["p", "boom", "e"]
+    assert [line for line in _unfenced(user).splitlines() if line] == [
+        *([_OUTPUT_LIMIT_NOTE] if output_limited else []),
+        "The task the sub-agent was given:",
+        "The error it died with:",
+        "Tail of what the sub-agent did, one message per line:",
+    ]
 
 
 async def test_a_router_reads_its_follow_ups_before_its_routes():

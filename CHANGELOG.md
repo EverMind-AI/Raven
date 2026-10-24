@@ -511,7 +511,9 @@ All notable changes to Raven are documented here.
   continuations and failed. Each continue message is now recorded beside the
   node's prompt, oldest first (`<node>.follow_ups.json`), and the judge reads
   them as part of the task, the later one standing where two disagree. A node
-  that was never continued is judged exactly as before.
+  without a conversation of its own is sent every continue message so far on a
+  retry, not only the latest, so it works to the task its judge holds it to. A
+  node that was never continued is judged exactly as before.
 - The `<agent>-Mirasim` presets reach the Mirasim host again. The adapter sent
   the host's access token in a header, which a Mirasim host from 0.0.571 on
   answers with 401 (measured against 0.0.571, 0.0.576 and 0.0.585; the hosts

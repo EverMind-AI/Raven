@@ -6721,13 +6721,14 @@ async def test_a_continued_instance_node_is_sent_only_the_follow_up_and_keeps_it
     assert json.loads(await store.read_text(store.follow_ups_path("a"))) == ["use the staging token"]
 
 
-async def test_the_judge_of_each_attempt_finds_every_follow_up_sent_before_it(tmp_path):
-    """The judge reads a node's follow-ups off the run's store, so each one must
+async def test_each_attempt_finds_every_follow_up_sent_before_it_when_dispatched_and_when_judged(tmp_path):
+    """The judge reads a node's follow-ups off the run's store, and a stateless
 
-    be on disk before the attempt it started is judged, as the bare message
-    rather than the prompt a stateless node is sent, and none may replace an
-    earlier one: a change of plan in the first is still the task when the
-    second only adds a detail.
+    retry is built from the same record, so each follow-up must be on disk by
+    the time the attempt it started is dispatched -- not merely by the time it
+    is judged -- as the bare message rather than the prompt a stateless node is
+    sent, and none may replace an earlier one: a change of plan in the first is
+    still the task when the second only adds a detail.
     """
     from raven.agent.subagent.dag_adjudication import AdjudicationDesk
     from raven.agent.subagent.dag_verdict import Verdict
@@ -6735,6 +6736,20 @@ async def test_the_judge_of_each_attempt_finds_every_follow_up_sent_before_it(tm
     desk = AdjudicationDesk()
     messages = iter(["open a replacement PR instead", "name PR 918 in its description"])
     told = []
+    at_dispatch = []
+    observer = DagRunStore(
+        backend=LocalFileBackend(),
+        root=str(tmp_path / "runs"),
+        run_id="observer",
+        nodes_root=str(tmp_path / "nodes"),
+        registry_root=str(tmp_path),
+    )
+
+    class _Observing(_FakeExec):
+        async def run(self, task, *, task_id, **kwargs):
+            if task_id == "a":
+                at_dispatch.append(await observer.read_follow_ups("a"))
+            return await super().run(task, task_id=task_id, **kwargs)
 
     async def _announce(run_id, node_id, report, origin, **_):
         desk.resolve(node_id, "continue", next(messages))
@@ -6746,14 +6761,115 @@ async def test_the_judge_of_each_attempt_finds_every_follow_up_sent_before_it(tm
         told.append(json.loads(await store.read_text(path)) if os.path.exists(path) else None)
         return Verdict(accomplished=len(told) > 2)
 
-    result = await _run_two_node_dag(tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce)
+    result = await _run_two_node_dag(
+        tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce, exec_backend=_Observing()
+    )
 
     assert result.summary["completed"] == 2
+    assert at_dispatch == [
+        [],
+        ["open a replacement PR instead"],
+        ["open a replacement PR instead", "name PR 918 in its description"],
+    ]
     assert told == [
         None,
         ["open a replacement PR instead"],
         ["open a replacement PR instead", "name PR 918 in its description"],
     ]
+
+
+async def test_a_stateless_node_continued_twice_is_sent_every_follow_up_its_judge_reads(tmp_path):
+    """A stateless node keeps no conversation, and its previous answer need not repeat what it
+
+    was told: its retry prompt restates every follow-up so far, the same list its judge reads,
+    or the third attempt works to a task the judge no longer holds it to.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+
+    first, second = "open a replacement PR instead", "name PR 918 in its description"
+    messages = iter([first, second])
+    judged = []
+
+    class _Model:
+        async def chat_with_retry(self, **kwargs):
+            user = kwargs["messages"][-1]["content"]
+            if "do a" in user:
+                judged.append(user)
+            done = "do a" not in user or len(judged) > 2
+            report = (
+                {"outcome": "accomplished"}
+                if done
+                else {"outcome": "not_accomplished", "category": "other", "what_is_missing": "the deliverable"}
+            )
+            return SimpleNamespace(tool_calls=[SimpleNamespace(arguments=json.dumps(report))])
+
+    model = _Model()
+    desk = AdjudicationDesk()
+
+    async def _announce(run_id, node_id, report, origin, **_):
+        desk.resolve(node_id, "continue", next(messages))
+
+    tool = SubAgentDagTool(workspace=tmp_path, provider_for=lambda: model)
+    fake = _FakeExec(reply="The attempt ended without a deliverable.")
+    result = await _run_two_node_dag(
+        tmp_path, desk=desk, judge_node=tool._judge_node(), announce_exception=_announce, exec_backend=fake
+    )
+
+    assert result.summary["completed"] == 2
+    third = [call["prompt"] for call in fake.calls if call["task_id"] == "a"][2]
+    for sent in (third, judged[2]):
+        assert sent.count(first) == sent.count(second) == 1
+        assert sent.index(first) < sent.index(second)
+
+
+@pytest.mark.parametrize(
+    ("follow_ups", "earlier"),
+    [
+        (["now y"], ""),
+        (
+            ["one", "two"],
+            "Earlier follow-ups, oldest first; where a later one disagrees, the later one stands:\none\n\n",
+        ),
+    ],
+    ids=["one follow-up", "two follow-ups"],
+)
+def test_a_stateless_retry_lists_earlier_follow_ups_only_when_there_are_some(follow_ups, earlier):
+    """One follow-up keeps the shape a stateless retry always had; earlier ones go ahead of the latest."""
+    from raven.agent.subagent.dag_runner import _stateless_retry_prompt
+
+    assert _stateless_retry_prompt("do a", "it said x", follow_ups) == (
+        f"do a\n\nYour previous attempt returned:\nit said x\n\n{earlier}Now: {follow_ups[-1]}"
+    )
+
+
+async def test_a_reused_node_id_starts_with_none_of_an_earlier_nodes_follow_ups(tmp_path):
+    """Ids are unique per conversation only while the registry that claims them survives;
+
+    once it is lost, a new node can take an old id with that node's follow-ups still on disk.
+    The new node's first judge must not read them, and its own follow-ups start a fresh record.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    stale = tmp_path / "nodes" / "a.follow_ups.json"
+    stale.parent.mkdir(parents=True)
+    stale.write_text(json.dumps(["the earlier node's follow-up"]), encoding="utf-8")
+    desk = AdjudicationDesk()
+    told = []
+
+    async def _announce(run_id, node_id, report, origin, **_):
+        desk.resolve(node_id, "continue", "open a replacement PR instead")
+
+    async def _judge(*, node, store, **_):
+        if node.id != "a":
+            return Verdict(accomplished=True)
+        told.append(await store.read_follow_ups("a"))
+        return Verdict(accomplished=len(told) > 1)
+
+    result = await _run_two_node_dag(tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce)
+
+    assert result.summary["completed"] == 2
+    assert told == [[], ["open a replacement PR instead"]]
 
 
 async def test_a_continued_node_is_judged_against_the_follow_up_that_changed_its_task(tmp_path):

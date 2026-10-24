@@ -1801,6 +1801,25 @@ async def _previous_output(store: DagRunStore, node_id: str) -> str:
         return "(the previous attempt left no output)"
 
 
+def _stateless_retry_prompt(prompt: str, previous: str, follow_ups: list[str]) -> str:
+    """A stateless node's retry: its prompt, its previous answer, and every follow-up so far.
+
+    The previous answer shows what the last attempt did, not what it was told, so
+    an earlier follow-up left out here would be gone from this attempt while its
+    judge still holds the node to it. With a single follow-up this is the shape a
+    retry has always had.
+    """
+    *earlier, latest = follow_ups
+    told = (
+        "Earlier follow-ups, oldest first; where a later one disagrees, the later one stands:\n"
+        + "\n\n".join(earlier)
+        + "\n\n"
+        if earlier
+        else ""
+    )
+    return f"{prompt}\n\nYour previous attempt returned:\n{previous}\n\n{told}Now: {latest}"
+
+
 async def _add_node_to_instance_log(
     subagents_root: str | None,
     node: DagNodeSpec,
@@ -2102,29 +2121,27 @@ async def _attempt_node(
         )
         prompt = rendered_prompt
         if follow_up is not None:
+            # Recorded before the dispatch, since this attempt's judge reads the
+            # record, and as the message itself, not `prompt`: the judge reads the
+            # task from `prompt_path`, and a stateless node's prompt repeats it.
+            follow_ups = await store.record_follow_up(node.id, follow_up)
             # A node with an instance is resuming a conversation whose history
             # is already on disk, so restating the task would only compete with
             # it. A stateless one has no history at all, so the whole task has
-            # to travel with the follow-up or it starts from nothing.
+            # to travel with the follow-up or it starts from nothing -- every
+            # follow-up, too, since its previous answer need not repeat them.
             previous = await _previous_output(store, node.id)
-            prompt = (
-                follow_up
-                if node.instance
-                else f"{prompt}\n\nYour previous attempt returned:\n{previous}\n\nNow: {follow_up}"
-            )
+            prompt = follow_up if node.instance else _stateless_retry_prompt(prompt, previous, follow_ups)
         prompt_path = store.prompt_path(node.id)
         output_path = store.output_path(node.id)
         if attempt == 1:
             # `prompt_path` is the prompt as first rendered -- what
             # dag_status/read_node show, and what the judge reads ahead of the
-            # follow-ups recorded below -- so it must stay fixed at the original
+            # follow-ups recorded above -- so it must stay fixed at the original
             # render even once a later attempt substitutes a follow-up into `prompt`.
             await store.write_text(prompt_path, rendered_prompt)
+            await store.forget_follow_ups(node.id)
         await store.write_text(store.attempt_prompt_path(node.id, attempt), prompt)
-        if follow_up is not None:
-            # The message itself, not `prompt`: the judge reads the task from
-            # `prompt_path`, and a stateless node's prompt would repeat it.
-            await store.record_follow_up(node.id, follow_up)
         prompt_written.add(node.id)
         # The instance's message list, on the same terms as `spawn` and a
         # direct chat. A node that names an `instance` is asking to continue
