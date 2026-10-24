@@ -1997,6 +1997,20 @@ def _attempt_outcome(
     return outcome, errors.get(node_id) or shortfall or _NO_REASON
 
 
+def _reported_from_here(origin: dict | None) -> dict | None:
+    """``origin`` with its dispatch link moved to the span running now, for a report this attempt sends.
+
+    The run's ``origin`` names the span that dispatched the whole graph; a report
+    about one node belongs to the attempt that sent it, so the turn it starts links
+    there. A copy, because the run's own reports -- its result -- keep the graph's
+    link. Unchanged with tracing off or outside any span.
+    """
+    link = trace.dispatch_link()
+    if origin is None or link is None:
+        return origin
+    return {**origin, **trace.dispatch_attrs(link)}
+
+
 @trace.instrument("subagent.run", on_open=semconv.dag_node_open, extract=semconv.dag_node)
 async def _attempt_node(
     node: DagNodeSpec,
@@ -2046,6 +2060,7 @@ async def _attempt_node(
     from a sibling attempt running beside it. The span closes on the outcome
     returned here (see ``semconv.dag_node``).
     """
+    origin = _reported_from_here(origin)
     started_at_ms = _now_ms()
     did = None
     node_started_at[node.id] = started_at_ms

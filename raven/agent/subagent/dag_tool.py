@@ -927,15 +927,17 @@ class SubAgentDagTool(Tool):
             awaiting_decision: bool,
             informational: bool = False,
             output: str | None = None,
+            dispatch_link: tuple[str, str] | None = None,
         ) -> None:
             if self._announce_exception is None:
                 logger.info("DAG run {} node {} reported after release with no announcer wired", run_id, node_id)
                 return
+            address = origin if dispatch_link is None else replace(origin, dispatch_link=dispatch_link)
             await self._announce_exception(
                 run_id,
                 node_id,
                 text,
-                origin.as_dict(),
+                address.as_dict(),
                 awaiting_decision=awaiting_decision,
                 informational=informational,
                 output=output,
@@ -2509,7 +2511,7 @@ class SubAgentDagTool(Tool):
                 _run_id: str,
                 node_id: str,
                 report: str,
-                _origin: dict[str, str],
+                origin: dict[str, str],
                 *,
                 awaiting_decision: bool,
                 informational: bool = False,
@@ -2518,7 +2520,12 @@ class SubAgentDagTool(Tool):
                 # Whether a notification is dropped depends on whether a blocking call is
                 # still there to be handed the summary, which is the outbox's own state.
                 await outbox.put_report(
-                    node_id, report, awaiting_decision=awaiting_decision, informational=informational, output=output
+                    node_id,
+                    report,
+                    awaiting_decision=awaiting_decision,
+                    informational=informational,
+                    output=output,
+                    dispatch_link=trace.dispatch_link_of(origin),
                 )
 
             announce_exception = _to_outbox

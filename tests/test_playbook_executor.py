@@ -1587,3 +1587,55 @@ async def test_an_entry_that_already_asked_can_say_so_through_load(tmp_path: Pat
 
     await rt.load("weekly-feedback", {"week_of": "w32"}, confirmed=False)
     assert tool.calls[-1]["confirm"] is True, "and one that did not still meets the gate"
+
+
+async def test_a_playbook_run_s_node_attempts_nest_under_the_call_that_ran_it(tmp_path, monkeypatch):
+    """A playbook drives its own graph tool, not the model's, down the same runner: each
+    node still records its attempt under whatever span the playbook was run from."""
+    import asyncio
+
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+    from raven.tracing import spans as _spans
+    from raven.tracing import trace
+    from tests.test_subagent_dag_runner import draining_dag_runs
+
+    traces = tmp_path / "traces"
+    monkeypatch.setenv("RAVEN_TRACING", "1")
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(traces))
+    _spans._store = None
+    finished = asyncio.Event()
+
+    async def announce(run_id: str, text: str, origin: dict) -> None:
+        finished.set()
+
+    tool = SubAgentDagTool(
+        workspace=tmp_path, agents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")], announce=announce
+    )
+    tool.set_context("web", "default", "web:playbook")
+    spec = _dag_spec(
+        params={},
+        nodes=[
+            NodeSpec(id="pull", subagent="echo", node_summary="pull the feedback", prompt_template="pull it"),
+            NodeSpec(
+                id="report",
+                subagent="echo",
+                node_summary="write the report",
+                prompt_template="write it up",
+                depends_on=["pull"],
+            ),
+        ],
+    )
+
+    async with draining_dag_runs():
+        with trace.span("tool.call", {"tool.name": "load_playbook"}) as call:
+            plan = await PlaybookExecutor(dag_tool=tool, workspace=tmp_path).execute(spec, params={})
+        assert plan.kind == "dag"
+        await asyncio.wait_for(finished.wait(), timeout=10)
+
+    log = traces / "logs" / "audit-spans.log"
+    spans = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
+    finals = {s["spanId"]: s for s in spans if s["name"] == "subagent.run"}.values()
+    assert len(finals) == 2, "one attempt per node"
+    assert {s["attributes"]["subagent.dispatch"] for s in finals} == {"dag"}
+    assert {s["parentSpanId"] for s in finals} == {call.span_id}

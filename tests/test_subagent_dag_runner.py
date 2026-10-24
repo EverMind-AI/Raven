@@ -11677,18 +11677,19 @@ async def test_a_graph_dispatched_outside_any_span_reports_with_no_link(tmp_path
     assert submitted[0].dispatch_link is None, "the span the report is sent from is not where the graph came from"
 
 
-async def test_a_released_foreground_graph_reports_with_the_link_of_the_span_that_dispatched_it(
+async def test_a_released_foreground_graph_links_each_report_to_its_attempt_and_its_result_to_the_dispatch(
     tmp_path, monkeypatch
 ) -> None:
-    """Released at its turn's end, after the dispatching span closed, and the reports still name it."""
+    """Released at its turn's end, after every span involved has closed: a node's report
+    still names the attempt that sent it, and the graph's result the span that dispatched it."""
     from raven.config.raven import SubagentDagConfig
 
     _traced(monkeypatch, tmp_path)
-    reports: list[dict] = []
+    reports: list[tuple[str, dict]] = []
     finals: list[dict] = []
 
     async def _announce_exception(run_id: str, node_id: str, report: str, origin: dict, **_kwargs: Any) -> None:
-        reports.append(origin)
+        reports.append((node_id, origin))
 
     async def _announce(run_id: str, summary: str, origin: dict) -> None:
         finals.append(origin)
@@ -11711,9 +11712,14 @@ async def test_a_released_foreground_graph_reports_with_the_link_of_the_span_tha
         await tool.release_turn("web:fg", flush=True)
         await asyncio.wait_for(run_task, timeout=5)
 
+    spans = _recorded(tmp_path / "traces")
+    assert {node_id for node_id, _origin in reports} == {"a", "b"} and finals
+    for node_id, origin in reports:
+        (suspended,) = [a for a in _attempts(spans, node_id) if a["attributes"]["subagent.outcome"] == "exception"]
+        assert trace.dispatch_link_of(origin) == (suspended["traceId"], suspended["spanId"])
+        assert suspended["parentSpanId"] == dispatch.span_id
     expected = (dispatch.trace_id, dispatch.span_id)
-    assert reports and finals
-    assert [trace.dispatch_link_of(origin) for origin in reports + finals] == [expected] * (len(reports) + len(finals))
+    assert [trace.dispatch_link_of(origin) for origin in finals] == [expected] * len(finals)
 
 
 async def test_a_stint_s_progress_line_links_to_the_span_it_is_said_from(tmp_path, monkeypatch) -> None:
@@ -12169,3 +12175,132 @@ async def test_a_running_attempt_projects_running_with_its_steps_in_the_dispatch
     (finished,) = [e for e in _project_spans(tmp_path / "traces") if e.span_name == "subagent.run"]
     assert finished.operation_status == "ok"
     assert isinstance(finished.duration_ms, int)
+
+
+# --- a report an attempt sends links its turn to that attempt ----------------
+
+
+async def _suspend_and_abandon(tmp_path: Path, announce: Any, origin: dict) -> DagRunResult:
+    """One node judged short and suspended; ``announce`` hears the report and the node is abandoned."""
+    from raven.agent.subagent.dag_adjudication import ABANDON, AdjudicationDesk
+    from raven.agent.subagent.dag_verdict import Verdict
+
+    desk = AdjudicationDesk()
+
+    async def _announce(run_id, node_id, report, origin, **kwargs):
+        await announce(run_id, node_id, report, origin, **kwargs)
+        desk.resolve(node_id, ABANDON, None)
+
+    async def _judge(**_: Any) -> Verdict:
+        return Verdict(accomplished=False, category="missing_credential", what_is_missing="a token")
+
+    return await _run_traced(
+        tmp_path,
+        [_nd("a")],
+        _StepsExec(),
+        desk=desk,
+        judge_node=_judge,
+        announce_exception=_announce,
+        origin=origin,
+        adjudication_timeout_s=5,
+    )
+
+
+async def test_an_exception_report_links_its_turn_to_the_attempt_that_sent_it(tmp_path, monkeypatch) -> None:
+    _traced(monkeypatch, tmp_path)
+    heard: list[dict] = []
+    origin = {**_ADDRESS, **trace.dispatch_attrs(("trace-d", "span-d"))}
+    before = dict(origin)
+
+    async def _announce(run_id, node_id, report, origin, **_):
+        heard.append(origin)
+
+    await _suspend_and_abandon(tmp_path, _announce, origin)
+
+    (attempt,) = _attempts(_recorded(tmp_path / "traces"), "a")
+    assert [trace.dispatch_link_of(o) for o in heard] == [(attempt["traceId"], attempt["spanId"])]
+    assert origin == before, "the run's own origin keeps the graph's link for its result"
+
+
+async def test_a_stall_notice_links_its_turn_to_the_attempt_that_stalled(tmp_path, monkeypatch) -> None:
+    from raven.agent.subagent import dag_runner as runner_mod
+
+    _traced(monkeypatch, tmp_path)
+    monkeypatch.setattr(runner_mod, "STALL_NOTICE_S", 0.05)
+    exec_ = _StepsExec(gate={"a"})
+    notices: list[dict] = []
+
+    async def _announce(run_id, node_id, report, origin, *, awaiting_decision, informational=False, output=None):
+        if informational:
+            notices.append(origin)
+            exec_.release.set()
+
+    await asyncio.wait_for(
+        _run_traced(tmp_path, [_nd("a")], exec_, announce_exception=_announce, origin=dict(_ADDRESS)), 10
+    )
+
+    (attempt,) = _attempts(_recorded(tmp_path / "traces"), "a")
+    assert notices, "the gated node went quiet past the notice threshold"
+    assert {trace.dispatch_link_of(o) for o in notices} == {(attempt["traceId"], attempt["spanId"])}
+
+
+async def test_with_tracing_off_a_report_carries_the_origin_it_was_given(tmp_path, monkeypatch) -> None:
+    from raven.tracing import config as tracing_config
+
+    monkeypatch.setenv("RAVEN_TRACING", "0")
+    assert tracing_config.enabled() is False
+    heard: list[dict] = []
+    origin = {**_ADDRESS, **trace.dispatch_attrs(("trace-d", "span-d"))}
+
+    async def _announce(run_id, node_id, report, origin, **_):
+        heard.append(origin)
+
+    await _suspend_and_abandon(tmp_path, _announce, origin)
+
+    assert heard == [origin]
+
+
+async def test_the_turn_an_exception_report_starts_links_to_the_attempt(tmp_path, monkeypatch) -> None:
+    from raven.agent.subagent.manager import SubagentManager
+
+    _traced(monkeypatch, tmp_path)
+    manager = SubagentManager(provider=SimpleNamespace(get_default_model=lambda: "stub"), workspace=tmp_path)
+    submitted: list[Any] = []
+    manager.set_submit(submitted.append)
+
+    await _suspend_and_abandon(tmp_path, manager.announce_dag_exception, dict(_ADDRESS))
+
+    (attempt,) = _attempts(_recorded(tmp_path / "traces"), "a")
+    assert [request.dispatch_link for request in submitted] == [(attempt["traceId"], attempt["spanId"])]
+
+
+# --- every route into the runner nests its attempts under its caller ---------
+
+
+async def test_a_backgrounded_graph_s_attempts_nest_under_the_call_that_dispatched_it(tmp_path, monkeypatch) -> None:
+    _traced(monkeypatch, tmp_path)
+    announces = _Announces()
+    async with draining_dag_runs():
+        tool = _echo_tool(tmp_path, announces)
+        with trace.span("tool.call", {"tool.name": "run_subagent_dag"}) as dispatch:
+            await tool.execute(task_summary="two nodes", nodes=_PAIR)
+        await announces.wait()
+
+    spans = _recorded(tmp_path / "traces")
+    for nid in ("a", "b"):
+        (attempt,) = _attempts(spans, nid)
+        assert attempt["parentSpanId"] == dispatch.span_id
+        assert attempt["attributes"]["subagent.outcome"] == "completed"
+
+
+async def test_a_foreground_graph_s_attempts_nest_under_the_call_that_dispatched_it(tmp_path, monkeypatch) -> None:
+    _traced(monkeypatch, tmp_path)
+    async with draining_dag_runs():
+        tool = _foreground_tool(tmp_path, [])
+        with trace.span("tool.call", {"tool.name": "run_subagent_dag"}) as dispatch:
+            await tool.execute(task_summary="fg", nodes=_PAIR, background=False)
+
+    spans = _recorded(tmp_path / "traces")
+    for nid in ("a", "b"):
+        (attempt,) = _attempts(spans, nid)
+        assert attempt["parentSpanId"] == dispatch.span_id

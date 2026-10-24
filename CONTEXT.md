@@ -2573,7 +2573,10 @@ outcome is `completed`, `failed`, `exception` (waiting on the main agent's decis
 `continued` (judged not accomplished and sent its judge's follow-up, so the node runs
 again) or `cancelled`; for `failed`, `exception` and `continued` the span status is `ERROR`
 with the reason as its message, never empty, so the trajectory shows the entry as `error`
-(evidence `span_error`).
+(evidence `span_error`). A report an attempt sends -- its exception report or a stall notice,
+including one a blocking run injects only once released -- starts a turn whose dispatch link
+(`trace.dispatched_by_span_id`) names that attempt's span; the graph's result names the span
+that dispatched the graph.
 _Avoid_: reading a spawned run's `status.code` as its result -- the run reports its own
 failures and returns, so that span is `OK` whatever the outcome.
 

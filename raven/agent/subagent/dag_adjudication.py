@@ -176,11 +176,16 @@ class AdjudicationDesk:
 
 @dataclass(frozen=True)
 class Report:
-    """One node's exception report, exactly as the runner built it, and what the node returned."""
+    """One node's exception report, exactly as the runner built it, and what the node returned.
+
+    ``dispatch_link`` is the span of the attempt that sent it, which the turn the
+    report starts once the run is released links back to.
+    """
 
     node_id: str
     text: str
     output: str | None = None
+    dispatch_link: tuple[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -204,7 +209,8 @@ class AnnounceReport(Protocol):
 
     Carries ``awaiting_decision`` for the same reason the runner's announcer does:
     a released run announces notifications as readily as questions, and only the
-    caller knows which this is.
+    caller knows which this is. ``dispatch_link`` is the attempt the report came
+    from, ``None`` when it names none.
     """
 
     async def __call__(
@@ -215,6 +221,7 @@ class AnnounceReport(Protocol):
         awaiting_decision: bool,
         informational: bool = False,
         output: str | None = None,
+        dispatch_link: tuple[str, str] | None = None,
     ) -> None: ...
 
 
@@ -323,6 +330,7 @@ class Outbox:
         awaiting_decision: bool,
         informational: bool = False,
         output: str | None = None,
+        dispatch_link: tuple[str, str] | None = None,
     ) -> None:
         """Take one report. Where it goes depends on the lane, which only this object knows.
 
@@ -343,12 +351,17 @@ class Outbox:
             return
         if self.released.is_set():
             await self._announce_report(
-                node_id, text, awaiting_decision=awaiting_decision, informational=informational, output=output
+                node_id,
+                text,
+                awaiting_decision=awaiting_decision,
+                informational=informational,
+                output=output,
+                dispatch_link=dispatch_link,
             )
             return
         if not awaiting_decision:
             return
-        event = Report(node_id, text, output)
+        event = Report(node_id, text, output, dispatch_link)
         if not self._hand(event):
             self._buffer.append(event)
 
@@ -419,7 +432,12 @@ class Outbox:
         """
         if isinstance(event, Report):
             send = partial(
-                self._announce_report, event.node_id, event.text, awaiting_decision=True, output=event.output
+                self._announce_report,
+                event.node_id,
+                event.text,
+                awaiting_decision=True,
+                output=event.output,
+                dispatch_link=event.dispatch_link,
             )
         elif event.stopped:
             return
