@@ -369,6 +369,20 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- A turn's sub-agent marking in the trajectory view, and whether the export
+  and bug-report turn picker lists it, now depend on that turn alone. A
+  message sent after a sub-agent had reported into an idle session was
+  recorded as dispatched by that sub-agent -- drawn as a sub-agent turn and
+  missing from the picker -- and a second report queued behind the first was
+  attributed to the first sub-agent, while a report that arrived during a
+  running turn carried no attribution at all. Each report now names the run
+  that sent it, or the call that dispatched its graph, whether the session
+  was idle or busy, so a report that arrives during a running turn is now
+  exported with the turn that dispatched it instead of being listed on its
+  own. A report turn no longer acts in the finished sub-agent's browser tab
+  either. Turns recorded before this keep the attribution they were recorded
+  with.
+
 - In the web UI, the **What came back** fold of a DAG node that stopped on
   a decision no longer opens onto the brief written for the model -- the
   `resolve_dag_node` calls it may make and that tool's whole schema, all in

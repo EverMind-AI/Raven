@@ -818,6 +818,12 @@ def turn_open(span, bound: dict[str, Any]) -> None:
         "turn.input",
         {"content": user_input, "channel": channel, "chat_id": chat_id, "media": getattr(req, "media", None)},
     )
+    # A turn's origin is what its request states and nothing else: the root
+    # links on its own to whatever span the turn was opened under -- for a
+    # scheduled turn, whatever the scheduler was built in -- so a request that
+    # names no dispatcher clears that link. Before the checkpoint, so the
+    # in-progress record already says it.
+    span.set_dispatch_link(getattr(req, "dispatch_link", None))
     span.checkpoint()
 
 

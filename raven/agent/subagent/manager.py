@@ -365,8 +365,10 @@ class SubagentManager:
         # neither CancelledError handler in it can report the stop; the cancel
         # methods report it from this record instead. The run pops its own
         # entry as its first act, so an entry still here when the task is done
-        # means the body never ran.
-        self._unstarted: dict[str, tuple[str, str, dict[str, Any]]] = {}
+        # means the body never ran. The last field is the span that dispatched
+        # the run: such a run never opened a ``subagent.run``, so its report
+        # links back to the dispatch instead.
+        self._unstarted: dict[str, tuple[str, str, dict[str, Any], tuple[str, str] | None]] = {}
         # (session_key, agent, handle) -> {task_id, ...}, for one-instance
         # cancellation (a stop button) without touching the rest of the
         # session's spawns. A set, not a single id: the main agent can spawn
@@ -1072,6 +1074,7 @@ class SubagentManager:
             logger.info("Spawn refused: the host began shutting down while [{}] was starting", task_id)
             return _SHUTDOWN_REFUSAL
 
+        dispatched_by = trace.dispatch_link()
         # The last thing done to the task before it leaves. `origin` already
         # holds the undecorated wording, so the announcement quotes what was
         # asked rather than this line as well.
@@ -1086,7 +1089,7 @@ class SubagentManager:
                 **extra,
             )
         )
-        self._unstarted[task_id] = (task, display_summary, origin)
+        self._unstarted[task_id] = (task, display_summary, origin, dispatched_by)
         self._track(task_id, bg_task, session_key, instance_key)
 
         logger.info("Spawned subagent [{}]: {}", task_id, display_summary)
@@ -1662,6 +1665,7 @@ class SubagentManager:
         # First, before any await: from here on this frame reports the run's
         # end, including a cancellation, and the cancel methods must not.
         self._unstarted.pop(task_id, None)
+        link = trace.dispatch_link()
         logger.info("Subagent [{}] starting task: {}", task_id, task_summary)
 
         effective_workspace = origin.get("workspace") or self.workspace
@@ -1684,7 +1688,7 @@ class SubagentManager:
             if not dispatched:
                 _mark_outcome("cancelled")
                 reason = self._cancel_reasons.pop(task_id, UNEXPLAINED_CANCEL)
-                await self._report_undispatched_cancel(task_id, task_summary, task, origin, reason)
+                await self._report_undispatched_cancel(task_id, task_summary, task, origin, reason, dispatch_link=link)
             raise
         except Exception as e:
             _mark_outcome("failed")
@@ -1692,7 +1696,7 @@ class SubagentManager:
             logger.error("Subagent [{}] failed: {}", task_id, e)
             if not dispatched:
                 self._emit_status(origin, task_id, task_summary, "failed", ended_at=int(time.time() * 1000))
-            await self._announce_result(task_id, task_summary, task, error_msg, origin, "error")
+            await self._announce_result(task_id, task_summary, task, error_msg, origin, "error", dispatch_link=link)
 
     def _home_volume(self, mount_root: Path) -> tuple[tuple[str, str, str], ...]:
         """Mount agent home into the sub-agent's VM unless the run's own mount covers it.
@@ -1844,6 +1848,9 @@ class SubagentManager:
         # queued behind a direct chat to the same instance is not that
         # instance's turn yet, and registering it here took the slot from the
         # turn that was (see ``activity.collecting``).
+        # Read here, in this run's own ``subagent.run`` frame: each report below
+        # names it as the span that dispatched the turn the report starts.
+        link = trace.dispatch_link()
         with activity.collecting(live_key=spawn_live_key(record.dir, call_id), prompt=task) as did:
             try:
                 backend = self._resolve_backend(agent)
@@ -1927,6 +1934,7 @@ class SubagentManager:
                     "ok",
                     record_path=str(record.file("out.md")),
                     activity=did,
+                    dispatch_link=link,
                 )
                 announced = taken is not False
             except asyncio.CancelledError:
@@ -1961,6 +1969,7 @@ class SubagentManager:
                     reason,
                     record_path=str(record.file("out.md")) if record.file("out.md").is_file() else None,
                     activity=did,
+                    dispatch_link=link,
                 )
                 raise
             except SubagentActionAbortedError:
@@ -1979,6 +1988,7 @@ class SubagentManager:
                     origin,
                     "error",
                     record_path=str(record.file("out.md")),
+                    dispatch_link=link,
                 )
                 announced = taken is not False
             except Exception as e:
@@ -1994,7 +2004,14 @@ class SubagentManager:
                 # announce keeps the run's record on its machine, when the
                 # backend left one, for the next start to report.
                 taken = await self._announce_result(
-                    task_id, task_summary, task, error_msg, origin, "error", record_path=str(record.file("out.md"))
+                    task_id,
+                    task_summary,
+                    task,
+                    error_msg,
+                    origin,
+                    "error",
+                    record_path=str(record.file("out.md")),
+                    dispatch_link=link,
                 )
                 announced = taken is not False
             finally:
@@ -2154,6 +2171,7 @@ class SubagentManager:
         status: str,
         record_path: str | None = None,
         activity: Any = None,
+        dispatch_link: tuple[str, str] | None = None,
     ) -> bool:
         """Announce the subagent result to the main agent via the spine; whether a turn took it.
 
@@ -2251,7 +2269,7 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
             mark["node_id"] = origin["node_id"]
         # The delivered marker draws the seam where a result re-entered its
         # conversation; a refused inject re-entered nothing, so there is none.
-        if not self._inject(announce_content, origin, mark):
+        if not self._inject(announce_content, origin, mark, dispatch_link=dispatch_link):
             return False
         # `content` is the text that was injected, verbatim. A client draws the
         # reader-facing part of it by dropping everything outside the untrusted
@@ -2263,7 +2281,13 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
         return True
 
     async def _report_undispatched_cancel(
-        self, task_id: str, task_summary: str, task: str, origin: dict[str, Any], reason: str
+        self,
+        task_id: str,
+        task_summary: str,
+        task: str,
+        origin: dict[str, Any],
+        reason: str,
+        dispatch_link: tuple[str, str] | None = None,
     ) -> None:
         """Report a run cancelled before it was dispatched: registry row, status event, announcement.
 
@@ -2278,7 +2302,7 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
             "cancelled",
         )
         self._emit_status(origin, task_id, task_summary, "cancelled", ended_at=int(time.time() * 1000))
-        await self._announce_cancelled(task_id, task_summary, task, origin, reason)
+        await self._announce_cancelled(task_id, task_summary, task, origin, reason, dispatch_link=dispatch_link)
 
     async def _finish_unstarted(self, task_id: str, reason: str) -> None:
         """Report a run cancelled before its first step, which nothing inside it could.
@@ -2292,8 +2316,8 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
         pending = self._unstarted.pop(task_id, None)
         if pending is None:
             return
-        task, task_summary, origin = pending
-        await self._report_undispatched_cancel(task_id, task_summary, task, origin, reason)
+        task, task_summary, origin, dispatched_by = pending
+        await self._report_undispatched_cancel(task_id, task_summary, task, origin, reason, dispatched_by)
 
     async def _announce_cancelled(
         self,
@@ -2305,6 +2329,7 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
         *,
         record_path: str | None = None,
         activity: Any = None,
+        dispatch_link: tuple[str, str] | None = None,
     ) -> None:
         """Tell the parent conversation that a run it started was stopped, and why.
 
@@ -2324,7 +2349,15 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
         )
         try:
             await self._announce_result(
-                task_id, task_summary, task, result, origin, "cancelled", record_path=record_path, activity=activity
+                task_id,
+                task_summary,
+                task,
+                result,
+                origin,
+                "cancelled",
+                record_path=record_path,
+                activity=activity,
+                dispatch_link=dispatch_link,
             )
         except Exception:  # noqa: BLE001 - the cancellation must still propagate
             logger.opt(exception=True).warning("Subagent [{}] cancellation could not be announced", task_id)
@@ -2353,7 +2386,7 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
             return
         injected = wrap_untrusted(summary, source="subagent")
         mark = {"kind": "dag", "label": run_id, "status": "ok", "run_id": run_id}
-        if not self._inject(injected, origin, mark):
+        if not self._inject(injected, origin, mark, dispatch_link=trace.dispatch_link_of(origin)):
             return
         # The graph's own tally names the outcome; "ok" here only means the run
         # came back at all, and the marker's job is placement, not verdict.
@@ -2445,7 +2478,7 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
                 if len(output) <= _MARKED_OUTPUT_CHARS
                 else output[:_MARKED_OUTPUT_CHARS] + "\n... (output truncated)"
             )
-        if not self._inject(injected, origin, mark):
+        if not self._inject(injected, origin, mark, dispatch_link=trace.dispatch_link_of(origin)):
             return
         self._emit_delivered(origin, {**mark, "content": injected})
         logger.debug("DAG run [{}] node [{}] reported an exception to {}", run_id, node_id, origin["session_key"])
@@ -2559,12 +2592,21 @@ This instance acted on its own schedule -- an armed wake, a watch round -- and s
 
 Read it against the plan this instance serves. If it reports finished work, results ready to collect, or a decision point, continue that plan now -- dispatch the next round or collect what is ready; do not leave finished work waiting for the owner to notice. If it is routine progress only, no action and no reply to the user are needed."""
         mark = {"kind": "unprompted", "label": f"{agent}/{handle}", "status": "report"}
-        if not self._inject(content, origin, mark):
+        # No link: the span current here is whatever the ACP connection's read
+        # loop was created under, which has nothing to do with this report.
+        if not self._inject(content, origin, mark, dispatch_link=None):
             return
         self._emit_delivered(origin, {**mark, "content": content})
         logger.info("unprompted turn on {}/{} announced to {}", agent, handle, session_key)
 
-    def _inject(self, content: str, origin: dict[str, str], delegated: dict[str, str] | None = None) -> bool:
+    def _inject(
+        self,
+        content: str,
+        origin: dict[str, str],
+        delegated: dict[str, str] | None = None,
+        *,
+        dispatch_link: tuple[str, str] | None,
+    ) -> bool:
         """Re-inject ``content`` to trigger a main-agent turn in the originating session.
 
         The spine path routes by conversation (= originating session) with
@@ -2578,6 +2620,10 @@ Read it against the plan this instance serves. If it reports finished work, resu
         nothing awaits -- asyncio's "Task exception was never retrieved" was
         the only trace a finished run used to leave. A completed run's content
         names its record, so the result stays recoverable from disk as well.
+
+        ``dispatch_link`` is required so every caller decides it: the turn does
+        not inherit this frame's context, so the span that dispatched the work
+        reaches the turn only through the request.
         """
         from raven.spine import ChatType, Origin, Source, TurnRequest
         from raven.spine.scheduler import SchedulerDrainingError
@@ -2596,6 +2642,7 @@ Read it against the plan this instance serves. If it reports finished work, resu
             text=content,
             conversation=origin["session_key"],
             delegated=delegated,
+            dispatch_link=dispatch_link,
         )
         try:
             self._submit(request)

@@ -390,7 +390,7 @@ def test_what_a_sub_agent_says_is_preserved_where_it_is_kept_and_shown(tmp_path:
     manager.set_submit(lambda request: submitted.append(request.text))
     manager._emit_event = lambda key, event: emitted.append(event)  # type: ignore[method-assign]
     origin = {"channel": "web", "chat_id": "c", "session_key": "web:c"}
-    manager._inject(f"the agent said {_HELD}", origin)
+    manager._inject(f"the agent said {_HELD}", origin, dispatch_link=None)
     manager._emit_delivered(origin, {"content": f"the agent said {_HELD}"})
     assert submitted == [f"the agent said {_HELD}"]
     assert emitted[0]["payload"] == {"content": f"the agent said {_HELD}"}

@@ -1,6 +1,8 @@
 """The spine Scheduler's submit surface: outcomes, loop affinity, and conversation ids."""
 
 import asyncio
+import contextvars
+from contextvars import ContextVar
 
 import pytest
 from loguru import logger
@@ -775,3 +777,53 @@ def test_the_turn_entry_guard_bites(tmp_path):
     )
     strays = _turn_entry_strays(pkg)
     assert len(strays) == 2, strays
+
+
+# --- the scheduler's home context ---------------------------------------------
+
+_PROBE: ContextVar[str] = ContextVar("scheduler_test_probe", default="unset")
+
+
+class _ProbeRunner:
+    def __init__(self) -> None:
+        self.seen: list[str] = []
+
+    async def run(self, req, emit, drain) -> TurnOutcome:
+        self.seen.append(_PROBE.get())
+        return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=False)
+
+
+def _submit_as(sched: Scheduler, value: str, req: TurnRequest):
+    def _go():
+        _PROBE.set(value)
+        return sched.submit(req)
+
+    return contextvars.copy_context().run(_go)
+
+
+async def test_turns_start_from_the_context_the_scheduler_was_built_in():
+    """What a host set before building the scheduler reaches its turns; what a submitter set does not."""
+    runner = _ProbeRunner()
+
+    def _build() -> Scheduler:
+        _PROBE.set("home")
+        return _scheduler(runner)
+
+    sched = contextvars.copy_context().run(_build)
+    try:
+        await _submit_as(sched, "submitter", _req(text="t1")).result()
+    finally:
+        await sched.shutdown(grace=0)
+
+    assert runner.seen == ["home"]
+
+
+async def test_the_reaper_runs_in_the_home_context():
+    sched = _scheduler(_ProbeRunner())
+    handle = _submit_as(sched, "submitter", _req(text="t1"))
+    try:
+        assert sched._reaper is not None
+        assert sched._reaper.get_context().get(_PROBE, "unset") == "unset"
+        await handle.result()
+    finally:
+        await sched.shutdown(grace=0)

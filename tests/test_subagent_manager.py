@@ -44,6 +44,7 @@ from raven.contracts.subagent_backend import SubagentActionAbortedError
 from raven.providers.base import LLMResponse, ToolCallRequest
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.sandbox import ExecResult, SandboxExecutor
+from raven.tracing import trace
 from tests._everos_presence import everos_plugin_absent
 
 
@@ -5937,3 +5938,206 @@ async def test_a_failed_run_s_record_on_its_machine_stays_when_the_draining_sche
     )
 
     assert [run.task_id for run in remote_runs.pending()] == ["t1"], "announced: t2's record is gone"
+
+
+# --- each report names the span that dispatched the work it reports on ---------
+
+
+_LINK_ORIGIN = {"channel": "web", "chat_id": "s1", "session_key": "web:s1"}
+
+
+def _traced(monkeypatch, tmp_path: Path) -> Path:
+    from raven.tracing import spans as _spans
+
+    trace_dir = tmp_path / "traces"
+    monkeypatch.setenv("RAVEN_TRACING", "1")
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(trace_dir))
+    _spans._store = None
+    return trace_dir
+
+
+def _run_span(trace_dir: Path, task_id: str) -> tuple[str, str] | None:
+    """The ``subagent.run`` the tracer recorded for ``task_id``, as a dispatch link."""
+    log = trace_dir / "logs" / "audit-spans.log"
+    if not log.exists():
+        return None
+    for line in log.read_text(encoding="utf-8").splitlines():
+        record = json.loads(line)
+        if record["name"] == "subagent.run" and record["attributes"].get("subagent.task_id") == task_id:
+            return (record["traceId"], record["spanId"])
+    return None
+
+
+class _ControlledBackend:
+    """Counts its runs; can hold one open until released, then answer or raise."""
+
+    def __init__(self, *, raises: BaseException | None = None, hold: bool = False) -> None:
+        self.calls = 0
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+        self._raises = raises
+        self._hold = hold
+
+    async def run(self, task: str, **kwargs: Any) -> str:
+        self.calls += 1
+        self.entered.set()
+        if self._hold:
+            await self.release.wait()
+        if self._raises is not None:
+            raise self._raises
+        return "done"
+
+
+def _linked_manager(
+    monkeypatch, tmp_path: Path, backend: Any, *, max_concurrent: int = 4
+) -> tuple[SubagentManager, list[Any]]:
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _DummyExecutor())
+    manager = SubagentManager(provider=_StubProvider(), workspace=tmp_path, max_concurrent=max_concurrent)
+    manager._resolve_backend = lambda agent: backend
+    submitted: list[Any] = []
+    manager.set_submit(submitted.append)
+    return manager, submitted
+
+
+async def _spawn(manager: SubagentManager) -> str:
+    receipt = await manager.spawn(
+        task="do it",
+        task_summary="job",
+        origin_channel="web",
+        origin_chat_id="s1",
+        session_key="web:s1",
+        agent="raven",
+    )
+    found = re.search(r"\(id: ([^)]+)\)", receipt)
+    assert found is not None, receipt
+    return found.group(1)
+
+
+@pytest.mark.parametrize(
+    "raises",
+    [None, RuntimeError("the run failed"), SubagentActionAbortedError("stopped on a terminal decision")],
+    ids=["completed", "failed", "aborted"],
+)
+async def test_a_finished_run_s_report_links_to_its_own_subagent_run(monkeypatch, tmp_path, raises) -> None:
+    trace_dir = _traced(monkeypatch, tmp_path)
+    manager, submitted = _linked_manager(monkeypatch, tmp_path, _ControlledBackend(raises=raises))
+
+    task_id = await _spawn(manager)
+    await _drain(manager)
+
+    assert len(submitted) == 1
+    assert submitted[0].dispatch_link is not None
+    assert submitted[0].dispatch_link == _run_span(trace_dir, task_id)
+
+
+async def test_a_run_cancelled_mid_answer_links_to_its_own_subagent_run(monkeypatch, tmp_path) -> None:
+    trace_dir = _traced(monkeypatch, tmp_path)
+    backend = _ControlledBackend(hold=True)
+    manager, submitted = _linked_manager(monkeypatch, tmp_path, backend)
+
+    task_id = await _spawn(manager)
+    await backend.entered.wait()
+    with trace.span("unrelated.op") as other:
+        await manager.cancel_by_session("web:s1")
+
+    (report,) = submitted
+    assert "cancelled" in report.text.lower()
+    assert report.dispatch_link == _run_span(trace_dir, task_id)
+    assert report.dispatch_link != (other.trace_id, other.span_id)
+
+
+async def test_a_run_whose_sandbox_never_came_up_links_to_its_own_subagent_run(monkeypatch, tmp_path) -> None:
+    """The outer handler reports this one: the backend was never reached."""
+    trace_dir = _traced(monkeypatch, tmp_path)
+    backend = _ControlledBackend()
+    manager, submitted = _linked_manager(monkeypatch, tmp_path, backend)
+
+    class _BrokenExecutor:
+        async def __aenter__(self) -> "_BrokenExecutor":
+            raise RuntimeError("sandbox did not start")
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _BrokenExecutor())
+    task_id = await _spawn(manager)
+    await _drain(manager)
+
+    assert backend.calls == 0
+    (report,) = submitted
+    assert "sandbox did not start" in report.text
+    assert report.dispatch_link is not None
+    assert report.dispatch_link == _run_span(trace_dir, task_id)
+
+
+async def test_a_run_cancelled_while_waiting_on_the_gate_links_to_its_own_subagent_run(monkeypatch, tmp_path) -> None:
+    """It entered ``subagent.run`` and stopped before dispatch; the canceller's span is not its origin."""
+    trace_dir = _traced(monkeypatch, tmp_path)
+    backend = _ControlledBackend()
+    manager, submitted = _linked_manager(monkeypatch, tmp_path, backend, max_concurrent=1)
+
+    await manager._gate.acquire()
+    try:
+        task_id = await _spawn(manager)
+        await _settle(lambda: task_id not in manager._unstarted)
+        with trace.span("unrelated.op") as other:
+            await manager.cancel_by_session("web:s1")
+    finally:
+        manager._gate.release()
+
+    assert backend.calls == 0
+    (report,) = submitted
+    assert report.dispatch_link is not None
+    assert report.dispatch_link == _run_span(trace_dir, task_id)
+    assert report.dispatch_link != (other.trace_id, other.span_id)
+
+
+async def test_a_run_cancelled_before_it_started_links_to_the_span_that_spawned_it(monkeypatch, tmp_path) -> None:
+    """Such a run never opened a ``subagent.run``, so its report points at the dispatch, not at the canceller."""
+    trace_dir = _traced(monkeypatch, tmp_path)
+    backend = _ControlledBackend()
+    manager, submitted = _linked_manager(monkeypatch, tmp_path, backend)
+
+    with trace.span("tool.call") as dispatch:
+        task_id = await _spawn(manager)
+    assert task_id in manager._unstarted, "nothing yielded: the run has not taken its first step"
+    with trace.span("unrelated.op") as other:
+        await manager.cancel_by_session("web:s1")
+
+    assert backend.calls == 0
+    assert _run_span(trace_dir, task_id) is None
+    (report,) = submitted
+    assert report.dispatch_link == (dispatch.trace_id, dispatch.span_id)
+    assert report.dispatch_link != (other.trace_id, other.span_id)
+
+
+async def test_a_dag_report_takes_its_link_from_its_origin_and_never_from_where_it_is_sent(
+    monkeypatch, tmp_path
+) -> None:
+    _traced(monkeypatch, tmp_path)
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list[Any] = []
+    mgr.set_submit(submitted.append)
+    linked = {**_LINK_ORIGIN, **trace.dispatch_attrs(("trace-g", "span-g"))}
+
+    with trace.span("unrelated.op"):
+        await mgr.announce_dag_result("r1", "summary", linked)
+        await mgr.announce_dag_exception("r1", "n1", "report", linked, awaiting_decision=True)
+        await mgr.announce_dag_result("r2", "summary", dict(_LINK_ORIGIN))
+        await mgr.announce_dag_exception("r2", "n1", "report", dict(_LINK_ORIGIN), awaiting_decision=False)
+
+    assert [req.dispatch_link for req in submitted] == [("trace-g", "span-g"), ("trace-g", "span-g"), None, None]
+
+
+async def test_an_unprompted_report_carries_no_link_whatever_span_it_is_sent_from(monkeypatch, tmp_path) -> None:
+    _traced(monkeypatch, tmp_path)
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list[Any] = []
+    mgr.set_submit(submitted.append)
+    mgr.remember_origin(dict(_LINK_ORIGIN))
+
+    with trace.span("acp.read"):
+        await mgr.announce_unprompted_turn("web:s1", "watch", "h1", "the job finished")
+
+    (report,) = submitted
+    assert report.dispatch_link is None

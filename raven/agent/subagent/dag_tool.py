@@ -89,6 +89,7 @@ from raven.config.schema import MCPServerConfig
 from raven.contracts.tool import Tool, ToolResult
 from raven.security.trust import wrap_untrusted
 from raven.stint.record import STINTS_DIRNAME, StintRef
+from raven.tracing import trace
 
 if TYPE_CHECKING:
     from raven.agent.subagent.delegate import DelegateTable, Worker
@@ -197,10 +198,15 @@ class _DagOrigin:
     channel: str
     chat_id: str
     conversation: str
+    # The span that dispatched the run, set where the graph is dispatched; part
+    # of one run's origin, never of the address a stint writes down.
+    dispatch_link: tuple[str, str] | None = None
 
     def as_dict(self) -> dict[str, str]:
-        """The shape the announcers take: channel, chat, and session key."""
-        return {"channel": self.channel, "chat_id": self.chat_id, "session_key": self.conversation}
+        """The shape the announcers take: channel, chat, session key, and the dispatch link when there is one."""
+        out = {"channel": self.channel, "chat_id": self.chat_id, "session_key": self.conversation}
+        out.update(trace.dispatch_attrs(self.dispatch_link))
+        return out
 
     @classmethod
     def from_dict(cls, data: "Mapping[str, str]") -> "_DagOrigin":
@@ -1011,8 +1017,14 @@ class SubAgentDagTool(Tool):
         if self._announce is None:
             logger.debug("run {} had progress to report and no announcer wired", run_id)
             return
+        addressed = dict(origin or {})
+        if trace.dispatch_link_of(addressed) is None:
+            # A stint's address comes off disk with no link, and this is said from
+            # the finished round's own task, which still holds the context that
+            # round was dispatched in.
+            addressed.update(trace.dispatch_attrs(trace.dispatch_link()))
         try:
-            await self._announce(run_id, text, dict(origin or {}))
+            await self._announce(run_id, text, addressed)
         except Exception as exc:  # noqa: BLE001 - progress that cannot be said must not end the round
             logger.warning("run {} could not report progress: {}", run_id, exc)
 
@@ -1757,6 +1769,10 @@ class SubAgentDagTool(Tool):
         either parking on the first event or building the background message --
         is identical between a fresh submission and an applied replan.
         """
+        # Taken once, here: every report of this run starts from this origin, and
+        # several are sent where the dispatching span is no longer current -- a
+        # node's own task, or a released outbox drained after its turn closed.
+        origin = replace(origin, dispatch_link=trace.dispatch_link())
         cancel = asyncio.Event()
         self._cancels[run_id] = cancel
 
