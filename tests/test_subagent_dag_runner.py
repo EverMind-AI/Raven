@@ -2943,18 +2943,6 @@ async def _run(spec_nodes: list[dict], backend, root: str, history: str = "/hist
     )
 
 
-# A workdir reference that lands in the node root only reaches the node-root rule where it
-# passes confinement first.
-_POSIX_REFERENCE_PATHS = pytest.mark.skipif(
-    os.name == "nt",
-    reason=(
-        "check_confined resolves a workdir reference with POSIX path rules, so on Windows it refuses "
-        "every such reference as outside the roots before the node-root rule is reached"
-    ),
-)
-
-
-@_POSIX_REFERENCE_PATHS
 async def test_an_absolute_path_to_a_node_that_may_not_execute_is_refused_before_anything_runs() -> None:
     """Refused at submission, as its `@nodes/` spelling is. Accepted, the reader would run once
     the branch was left out and fail on the missing file, under an error naming the file
@@ -2988,7 +2976,6 @@ async def test_an_absolute_path_to_a_node_that_may_not_execute_is_refused_before
     assert [path for path in backend.files if path.endswith(".prompt.md")] == []
 
 
-@_POSIX_REFERENCE_PATHS
 async def test_the_tool_refuses_an_absolute_path_to_a_node_that_may_not_execute(tmp_path: Path) -> None:
     """Refused by the tool's own check, so even a background run -- the default -- is
     refused as the call's answer; past it, the run would start and the refusal from

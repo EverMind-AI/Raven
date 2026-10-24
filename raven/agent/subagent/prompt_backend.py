@@ -17,8 +17,8 @@ class LocalFileBackend:
         return os.path.join(*parts)
 
     def abspath(self, path: str, cwd: str | None = None) -> str:
-        if os.path.isabs(path):
-            return os.path.normpath(path)
+        # Joined even when absolute: a Windows path rooted without a drive then takes
+        # cwd's, as the confinement check resolved it, not the process's current one.
         return os.path.normpath(os.path.join(cwd or os.getcwd(), path))
 
     async def read_file(self, path: str) -> bytes:

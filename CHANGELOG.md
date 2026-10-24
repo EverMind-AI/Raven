@@ -398,6 +398,17 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- On native Windows a DAG node can read files by reference: `{{ ref:... }}`,
+  `{{ ref_path:... }}` and a `{"file": ...}` input naming a file in the
+  session's working directory or its sub-agent history. They were resolved by
+  POSIX path rules, so every one was refused as outside those directories, a
+  relative `notes.md` included; they now resolve by the host's rules. An
+  `@nodes/` reference that leaves this session's node artifacts by Windows
+  rules -- through `..\` or a drive -- is refused on every host: on Windows it
+  was accepted, and the read returned the file it named. On Python 3.12 a path
+  rooted without a drive (`\notes.md`) is read on the drive it was checked
+  against, not on the process's current one.
+
 - Installing the Raven node on a machine whose package index crawls there no
   longer stalls the install. The index pip is configured with (else PyPI) is
   timed from the machine first; when it cannot be reached there, or serves
