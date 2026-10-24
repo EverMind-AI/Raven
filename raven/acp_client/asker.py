@@ -17,7 +17,7 @@ import asyncio
 import weakref
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from contextvars import ContextVar
+from contextvars import ContextVar, copy_context
 from typing import Any
 
 from raven.contracts.asking import Asker, SupportsDirectAsk
@@ -35,6 +35,7 @@ class AskViaTool:
 
     def __init__(self, tool: SupportsDirectAsk) -> None:
         self._tool = tool
+        self._context = copy_context()
 
     async def ask(
         self,
@@ -46,7 +47,11 @@ class AskViaTool:
         total: int = 1,
         batch: list[dict[str, Any]] | None = None,
     ) -> str | None:
-        return await self._tool.ask_direct(prompt, choices, conversation_id, index=index, total=total, batch=batch)
+        # A pooled reader's task may belong to another turn or surface.
+        return await asyncio.create_task(
+            self._tool.ask_direct(prompt, choices, conversation_id, index=index, total=total, batch=batch),
+            context=self._context.copy(),
+        )
 
 
 class ApprovalViaAsk:

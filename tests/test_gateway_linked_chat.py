@@ -193,7 +193,7 @@ class NativeTests(unittest.IsolatedAsyncioTestCase):
 
         self.broker = QuestionBroker(question, timeout_s=0.1)
         self.page_broker = QuestionBroker(question, timeout_s=0.1)
-        self.routed = RoutingQuestionBroker(self.page_broker, self.broker, channel_active=self.link.channel_active)
+        self.routed = RoutingQuestionBroker(self.page_broker, self.broker, channel_route=self.link.question_route)
         self.loop.tools["ask_user"].set_broker(self.routed)
         self.subagents = SimpleNamespace(cancel_by_session=self.cancel_children)
         self.child_stops = []
