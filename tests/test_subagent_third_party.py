@@ -4723,10 +4723,19 @@ def test_a_credential_refusal_is_named_as_one_with_its_command() -> None:
     assert said in known, "the agent's own words stay as the evidence"
 
     # A row whose sign-in command this repo does not know still gets the fact.
-    unknown = _refusal_detail(SimpleNamespace(preset="opencode"), said)
+    unknown = _refusal_detail(SimpleNamespace(preset="openclaw"), said)
     assert "no usable credential" in unknown
     assert "sign in to it" in unknown
     assert "`" not in unknown, "no command is better than a guessed one"
+
+    # One whose command is known gets it, and the command is the point: an
+    # agent that names its own way in (measured 2026-10-24, OpenCode 1.14.31's
+    # handshake advertises "Run `opencode auth login` in the terminal") is told
+    # to run it rather than left to find it.
+    named = _refusal_detail(SimpleNamespace(preset="opencode"), said)
+    assert "no usable credential" in named
+    assert "opencode auth login" in named
+    assert said in named, "the agent's own words stay as the evidence"
 
 
 def test_the_shim_row_that_reported_this_gets_its_command(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -5164,7 +5173,8 @@ def test_each_agent_s_fix_is_named_as_data_from_the_one_decision(monkeypatch: py
         (SimpleNamespace(preset="hermes", kind="acp"), Remedy("setup", "hermes model")),
         (SimpleNamespace(preset="github_copilot", kind="acp"), Remedy("sign_in", "copilot login")),
         (SimpleNamespace(preset="grok", kind="acp"), Remedy("sign_in", "grok login")),
-        (SimpleNamespace(preset="opencode", kind="acp"), Remedy("sign_in")),
+        (SimpleNamespace(preset="opencode", kind="acp"), Remedy("sign_in", "opencode auth login")),
+        (SimpleNamespace(preset="openclaw", kind="acp"), Remedy("sign_in")),
         (SimpleNamespace(preset="mirothinker", kind="openai"), Remedy("api_key")),
     ]
     for cfg, expected in cases:
@@ -5428,6 +5438,114 @@ def test_an_empty_turn_from_openclaw_names_the_command_that_prints_why() -> None
     assert probe_mod._ping_refusal(codex, empty)[1] is None
 
 
+def test_an_empty_turn_from_opencode_names_the_command_that_prints_why() -> None:
+    """Seen live: OpenCode's inference endpoint refused the call with a 426 ("OpenCode
+    1.18.0 or newer is required to use the free tier"), and its ACP session relayed that
+    as an empty turn with no content and an empty stderr, so the connect reported nothing
+    a reader could act on."""
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.probe_state import Remedy
+
+    empty = RuntimeError(
+        "acp agent 'OpenCode' ended its turn with no content (stopReason='end_turn'); stderr tail: <empty>"
+    )
+    code = SimpleNamespace(name="OpenCode", preset="opencode", kind="acp", command="opencode acp")
+    text, remedy = probe_mod._ping_refusal(code, empty)
+    assert remedy == Remedy("silent", "opencode run hi")
+    assert "run `opencode run hi`" in text and "usually unrelated" in text
+    codex = SimpleNamespace(name="Codex", preset="codex", kind="acp", command="codex-acp")
+    assert probe_mod._ping_refusal(codex, empty)[1] is None
+
+
+def test_the_diagnose_command_runs_the_model_the_row_is_pinned_to() -> None:
+    """A command that runs the agent's default model answers a different question.
+
+    Measured 2026-10-24 on a live opencode: the default model answered 426 ("1.18.0
+    or newer is required to use the free tier") while the model the row was pinned to
+    answered "ProviderModelNotFound". A command that always runs the default answers
+    about a turn the row never made -- and on a machine where the default answers and
+    the pinned one does not, it hides the cause.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.presets import diagnose_hint_for
+
+    pinned = SimpleNamespace(name="OpenCode", preset="opencode", kind="acp", model="opencode/big-pickle")
+    assert diagnose_hint_for(pinned) == "opencode run --model opencode/big-pickle hi"
+    plain = SimpleNamespace(name="OpenCode", preset="opencode", kind="acp", model=None)
+    assert diagnose_hint_for(plain) == "opencode run hi"
+    # Another agent's command has no slot in it and is left as it was.
+    assert diagnose_hint_for(SimpleNamespace(name="Qwen Code", preset="qwen_code", model="x")) == "qwen hi"
+
+
+def test_a_row_under_a_version_floor_is_told_what_is_too_old() -> None:
+    """The build that answered the handshake is a fact, and the floor is a fact about it.
+
+    Measured 2026-10-24 on a live opencode 1.14.31: its inference endpoint answers 426
+    ("OpenCode 1.18.0 or newer is required to use the free tier") and the turn comes back
+    empty, so the reader is told which build they have and which one the free tier needs.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+
+    empty = RuntimeError(
+        "acp agent 'OpenCode' ended its turn with no content (stopReason='end_turn'); stderr tail: <empty>"
+    )
+    empty.agent_version = "1.14.31"
+    code = SimpleNamespace(name="OpenCode", preset="opencode", kind="acp", command="opencode acp")
+    text, _ = probe_mod._ping_refusal(code, empty)
+    assert "1.14.31" in text
+    assert "1.18.0" in text
+    assert "opencode upgrade" in text
+
+    # A build at the floor is not a gap: the sentence is about what refused the turn.
+    empty.agent_version = "1.18.0"
+    at_floor, _ = probe_mod._ping_refusal(code, empty)
+    assert "opencode upgrade" not in at_floor
+    # And a version nobody can read is not a gap either.
+    empty.agent_version = ""
+    unreadable, _ = probe_mod._ping_refusal(code, empty)
+    assert "opencode upgrade" not in unreadable
+
+
+def test_a_version_nobody_can_read_is_not_a_gap() -> None:
+    """A build raven cannot read is not evidence of an old one.
+
+    The floor is a fact about a build, and an answer that is not a version
+    says nothing about which build it is -- so it names no gap.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.presets import version_gap_for
+
+    code = SimpleNamespace(name="OpenCode", preset="opencode", kind="acp")
+    assert version_gap_for(code, "not-a-version") is None
+    assert version_gap_for(code, "1.14.31") is not None
+
+
+def test_the_empty_turn_names_the_credential_check_beside_the_command_that_prints_why() -> None:
+    """The one class Raven cannot classify is the credential, and the agent knows it.
+
+    An agent that defers its credential to the first model call opens a session
+    happily and fails afterwards, so nothing on the wire says which it was. The
+    agent's own command settles it, so the refusal names it.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+
+    empty = RuntimeError(
+        "acp agent 'OpenCode' ended its turn with no content (stopReason='end_turn'); stderr tail: <empty>"
+    )
+    code = SimpleNamespace(name="OpenCode", preset="opencode", kind="acp", command="opencode acp")
+    text, _ = probe_mod._ping_refusal(code, empty)
+    assert "opencode auth list" in text
+    assert "shows whether it is signed in" in text
+
+
 async def test_a_test_whose_launch_quit_names_it_the_way_the_connect_does(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test fails on the handshake first, and that verdict named no fix for a launch that quit.
 
@@ -5445,7 +5563,14 @@ async def test_a_test_whose_launch_quit_names_it_the_way_the_connect_does(monkey
     )
 
     async def _refused(cfg: object) -> object:
-        return SimpleNamespace(usable=False, needs_auth=False, unfetched=False, detail=detail, available_models=[])
+        return SimpleNamespace(
+            usable=False,
+            needs_auth=False,
+            unfetched=False,
+            detail=detail,
+            available_models=[],
+            agent_version="",
+        )
 
     monkeypatch.setattr(probe_mod, "record_capabilities", _refused)
     cfg = SimpleNamespace(name="Qwen Code", preset="qwen_code", kind="acp", command="qwen --acp")
