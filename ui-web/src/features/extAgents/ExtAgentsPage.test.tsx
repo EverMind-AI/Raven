@@ -2069,6 +2069,35 @@ describe('the model pill', () => {
     expect(acts).toEqual([['model', 'claude_code', { clear_model: true }]])
   })
 
+  /* A preset that is not on the roster has no entry of its own: the server
+     answers an update for a name it does not hold with "no configured
+     sub-agent named ...", so a pick made on one waits for the add that writes
+     the row -- the same way the family drawer's pick waits. */
+  it('holds the model picked on a preset that is not on the roster, for its connect to carry', async () => {
+    const { acts } = install([
+      row({
+        name: 'OpenCode',
+        preset: 'opencode',
+        configured: false,
+        enabled: false,
+        model_source: 'agent',
+        model_choices: choices,
+      }),
+    ])
+    await mount()
+    await openSheet('OpenCode')
+    await click(pill())
+    await click(modelButton('Sonnet'))
+    /* No write: there is no row of that name to update yet. */
+    expect(acts).toEqual([])
+    /* The pill shows the pick, so the reader sees where it went. */
+    expect(pill()!.querySelector('.extAgents-mid')!.textContent).toBe('Sonnet')
+    /* The connect carries it: one write that lands the agent and its model. */
+    const go = [...sheet()!.querySelectorAll<HTMLButtonElement>('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect')!
+    await click(go)
+    expect(acts).toEqual([['connect', 'OpenCode', { model: 'v/sonnet' }]])
+  })
+
   it("draws the built-in row on raven's own connected providers and sends the provider with the pick", async () => {
     hostModels.providers = [
       { id: 'openrouter', name: 'OpenRouter', models: ['anthropic/claude-sonnet-5'], on: true },
