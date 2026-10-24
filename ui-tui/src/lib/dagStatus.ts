@@ -229,7 +229,7 @@ export const dagNodeElapsed = (node: Pick<DagRunNode, 'endedAt' | 'startedAt' | 
     return 'queued'
   }
 
-  if (node.status === 'not_executed') {
+  if (node.status === 'not_executed' || node.status === 'skipped') {
     return ''
   }
 
@@ -249,12 +249,12 @@ export const dagNodeElapsed = (node: Pick<DagRunNode, 'endedAt' | 'startedAt' | 
  * `undefined` when nothing has started, which is also every run whose dir
  * predates the timestamps.
  *
- * Only the nodes that ran count: one a branch left out carries the stamp of the
- * sweep that decided against it, which must not widen the window of the nodes
- * that did.
+ * Only the nodes that ran count: one a branch left out or a cascade skipped
+ * carries the stamp of the sweep that decided against it, which must not
+ * widen the window of the nodes that did.
  */
 export const dagRunElapsedMs = (run: DagRunState, now: number): number | undefined => {
-  const ran = run.nodes.filter(node => node.status !== 'not_executed')
+  const ran = run.nodes.filter(node => node.status !== 'not_executed' && node.status !== 'skipped')
   const starts = ran.map(node => node.startedAt).filter((ms): ms is number => ms !== undefined)
 
   if (starts.length === 0) {
