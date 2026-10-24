@@ -371,7 +371,7 @@ class NativeTests(unittest.IsolatedAsyncioTestCase):
         resolver = WorkdirResolver(
             agent_home=self.base, policy=WorkdirPolicy.PER_CHANNEL, sessions=self.sessions, launch_dir=self.base
         )
-        self.assertEqual(str(resolver.resolve(KEY, create=False)), self.metadata["workdir"])
+        self.assertEqual(resolver.resolve(KEY, create=False).resolve(), Path(self.metadata["workdir"]).resolve())
 
     async def test_deleted_while_queued_fails_closed(self):
         ui = self.scheduler.submit(self.ui("holding"))

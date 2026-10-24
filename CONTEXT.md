@@ -947,6 +947,11 @@ Replaces the old `OutboundMessage`.
 _Avoid_: conflating Deliverable with lifecycle events (`TurnStarted`/`TurnFailed`/`TurnEnded`) —
 those are emitted by the Spine worker, not a runner.
 
+**RetryDeliveryError**:
+A transient outlet failure carrying a continuation for its unacknowledged work.
+The `DeliveryHub` retries that continuation under the original deliverable's retry budget;
+acknowledged parts need not be replayed. Defined in `raven/spine/delivery.py`.
+
 **AnswerlessTurnError**:
 The exception a runner raises to say the turn it ran ended with no answer and that its message is
 already the report a reader should see — the model call the loop gave up on, in the provider's words,
