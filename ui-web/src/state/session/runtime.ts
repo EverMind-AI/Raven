@@ -88,6 +88,28 @@ export class SessionRuntime {
      running, so a stop that arrives late cannot land on the next turn. */
   openedTurn: string | null = null
 
+  /* The id of the turn running in this conversation, from the frame that
+     opened it: `message.start` for a turn a send opened, `turn.started` for
+     one the runtime opened. It is what tells one frame apart from another --
+     a refusal that holds the lane busy has to know which turn's late
+     completion to drop, and only the page knows which turn the reader
+     pressed stop on. */
+  turnId: string | null = null
+
+  /* A refusal is holding the lane: the server said the lane still has a turn
+     to run whose first frame has not arrived, so the queue waits and no stop
+     is offered until a frame names it -- the turn's own opening frame, or the
+     frame that ends a turn which sent none. */
+  holding = false
+
+  /* The turn such a refusal is holding the lane for: the turn the reader
+     stopped. Its own late frames are dropped rather than folded -- the stop
+     already folded it, and a fold releases the queue into the turn that is
+     starting. Its end arrives as a completion, or as the notice a cancel
+     from another client sends in its place. Null when the page never saw that
+     turn's opening frame, and then no frame can be told from the next turn's. */
+  heldTurn: string | null = null
+
   /* Only read while off screen, same as `phase`. */
   queue: string[] = []
 
@@ -160,6 +182,9 @@ export function reset(rt: SessionRuntime = viewRuntime()): void {
   transcript.stopStream()
   rt.st = null; rt.steps = []; rt.say = ''; rt.open.clear(); rt.sawEpisode = false
   rt.openedTurn = null
+  rt.turnId = null
+  rt.holding = false
+  rt.heldTurn = null
   rt.startedAt = Date.now()
   rt.answerAt = 0
 }
@@ -394,6 +419,13 @@ export function stop(): void {
   if (!turn.cancellable()) return
   const owner = sessionCurrent()
   const opened = viewRuntime().openedTurn
+  /* The turn this stop is about: the one running here. Its id came from the
+     frame that opened it -- `message.start` for a turn a send opened,
+     `turn.started` for one the runtime opened -- and that is the id the
+     cancel names when it names one. It is read HERE, before the fold at the
+     press clears the runtime, because a refusal has to drop that turn's late
+     completion. */
+  const stopped = viewRuntime().turnId
   turn.dispatch({ type: 'cancel' })
   gateway().call('turn.cancel', { session_key: owner as string, ...(opened ? { turn_id: opened } : {}) })
     .then((r) => {
@@ -404,6 +436,26 @@ export function stop(): void {
          opened never sets it -- and that turn is the one running now: going
          idle would take its stop button and release the queue into it. */
       if (r.cancelled === false && rt && (isActiveRuntime(rt) ? turn.phase() : rt.phase.phase) !== 'cancelling') return
+      /* Refused, and the lane still has a turn to run whose first frame is not
+         here yet: the reply does not wait out the server's coalescing window,
+         and that frame does. Going idle would release the queue under that
+         turn, so the conversation stays busy, with no stop to offer until the
+         frame arrives and says which turn it is.
+
+         The hold remembers the turn that was stopped: the server read the
+         cancel after that turn had already ended, so its completion is still
+         on the way -- and behind this reply, because the reply is written
+         while the frames wait out the subscription's window. Folding it would
+         release the queue into the turn that is starting. */
+      if (r.cancelled === false && r.busy === true) {
+        if (rt) {
+          rt.heldTurn = stopped
+          rt.holding = true
+          rt.dispatch({ type: 'stream', cancellable: false })
+        }
+        if (sessionCurrent() === owner) { drawMeter(); goState() }
+        return
+      }
       rt?.dispatch({ type: 'idle' })
       if (sessionCurrent() === owner) { drawMeter(); goState(); sessionDraw(); drain() }
     }, () => {

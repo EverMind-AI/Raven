@@ -21,11 +21,13 @@ type Pipeline = typeof import('./pipeline')
 
 interface Row { id: string; title?: string; status?: string | null; last?: string }
 
+interface CancelReply { cancelled: boolean; busy?: boolean }
+
 async function harness({ turnKept = true, rows = [{ id: 's1' }] as Row[] } = {}) {
   const log: unknown[][] = []
   const queue: string[] = []
   const asked: Array<[string, unknown]> = []
-  let settleCancel: { res: (reply: { cancelled: boolean }) => void; rej: (e: unknown) => void } | null = null
+  let settleCancel: { res: (reply: CancelReply) => void; rej: (e: unknown) => void } | null = null
   document.body.innerHTML = '<h1 id="title"></h1><div id="stage"></div><div id="flash"></div>'
   /* The modules under test are imported deepest first, which is the order that
      keeps one module graph: the fakes are installed around the modules the
@@ -40,6 +42,7 @@ async function harness({ turnKept = true, rows = [{ id: 's1' }] as Row[] } = {})
       'src/state/ws': { setOpen: () => {}, reset: () => {} },
       'src/state/session/conversation': {
         ask: (text: string) => log.push(['ask', text]),
+        unask: (id: number) => log.push(['unask', id]),
         noteRow: (labelText: string) => log.push(['noteRow', labelText]),
         pitch: () => {},
         splitAtts: (t: string) => ({ text: t, atts: [] }),
@@ -113,7 +116,7 @@ async function harness({ turnKept = true, rows = [{ id: 's1' }] as Row[] } = {})
   await fakeGateway((method: string, params: unknown) => {
     asked.push([method, params])
     if (method === 'turn.cancel') {
-      return new Promise<{ cancelled: boolean }>((res, rej) => { settleCancel = { res, rej } })
+      return new Promise<CancelReply>((res, rej) => { settleCancel = { res, rej } })
     }
     return Promise.resolve({})
   })
@@ -134,7 +137,7 @@ async function harness({ turnKept = true, rows = [{ id: 's1' }] as Row[] } = {})
     asked,
     rows,
     sent: () => asked.filter(([m]) => m === 'turn.send').map(([, p]) => (p as { content: string }).content),
-    settle: (reply = { cancelled: true }) => { settleCancel!.res(reply); return tick() },
+    settle: (reply: CancelReply = { cancelled: true }) => { settleCancel!.res(reply); return tick() },
     refuse: () => { settleCancel!.rej(new Error('gone')); return tick() },
     did: (name: string) => log.filter((c) => c[0] === name),
     tick,
@@ -293,7 +296,201 @@ describe('the reply to turn.cancel', () => {
     expect(h.sent()).toEqual([])
   })
 
-  it('lets the page go when a refused id had nothing newer behind it', async () => {
+  it('stays busy for a newer turn whose opening frame the refusal outran', async () => {
+    /* The newer turn's first frame waits out the server's coalescing window and
+       the reply does not, so the refusal can land first. It says the lane is
+       still busy: going idle would release the queue under that turn. Nothing
+       here can name the turn until its frame arrives, so it cannot be stopped
+       before then. */
+    const h = await harness()
+    h.pipeline.dispatch({ type: 'turn.started', payload: { turn_id: 't-a' } })
+    h.queue.push('the queued one')
+
+    h.runtime.stop()
+    h.pipeline.dispatch({ type: 'message.complete', payload: { usage: {} } })
+    await h.settle({ cancelled: false, busy: true })
+
+    expect(turn.phase()).toBe('streaming')
+    expect(turn.cancellable()).toBe(false)
+    expect(h.queue).toEqual(['the queued one'])
+    expect(h.sent()).toEqual([])
+
+    h.pipeline.dispatch({ type: 'turn.started', payload: { turn_id: 't-b' } })
+
+    expect(turn.cancellable()).toBe(true)
+    expect(h.runtime.state().openedTurn).toBe('t-b')
+  })
+
+  it('lets a busy conversation go when the turn it waited for ends without ever opening', async () => {
+    /* A cron wake on the lane sends no opening frame, so nothing names it; the
+       frame that ends it is the one every turn sends, and the queue goes out
+       there. Every completion names the turn it belongs to, so the wake's
+       carries its own id and not the stopped turn's. */
+    const h = await harness()
+    h.pipeline.dispatch({ type: 'turn.started', payload: { turn_id: 't-a' } })
+    h.queue.push('the queued one')
+
+    h.runtime.stop()
+    h.pipeline.dispatch({ type: 'message.complete', payload: { turn_id: 't-a', usage: {} } })
+    await h.settle({ cancelled: false, busy: true })
+    expect(h.sent()).toEqual([])
+    h.pipeline.dispatch({ type: 'message.complete', payload: { turn_id: 't-wake', usage: {} } })
+
+    expect(h.sent()).toEqual(['the queued one'])
+    expect(turn.phase()).toBe('sending')
+  })
+
+  it('stays busy when the refusal lands before the turn it stopped completes', async () => {
+    /* The server read the cancel after the turn it named had already ended,
+       so that turn's completion is on the way -- behind the refusal, which is
+       written while the frames wait out the subscription's window. Folding it
+       would release the queue into the turn that is starting, and the stop
+       already folded the turn it stopped. */
+    const h = await harness()
+    h.pipeline.dispatch({ type: 'turn.started', payload: { turn_id: 't-a' } })
+    h.queue.push('the queued one')
+
+    h.runtime.stop()
+    await h.settle({ cancelled: false, busy: true })
+    expect(turn.phase()).toBe('streaming')
+    expect(turn.cancellable()).toBe(false)
+    const folds = h.did('foldTurn').length
+
+    h.pipeline.dispatch({ type: 'message.complete', payload: { turn_id: 't-a', usage: {} } })
+
+    expect(h.did('foldTurn')).toHaveLength(folds)
+    expect(h.queue).toEqual(['the queued one'])
+    expect(h.sent()).toEqual([])
+
+    /* The turn that is starting opens: it names itself, and the queue waits
+       for it. */
+    h.pipeline.dispatch({ type: 'turn.started', payload: { turn_id: 't-b' } })
+
+    expect(turn.cancellable()).toBe(true)
+    expect(h.sent()).toEqual([])
+  })
+
+  it('stays busy when a send opened the turn the refusal was about', async () => {
+    /* The stop names no turn for one a send opened -- the server reaches it
+       by the lane -- so the page has to know the id from the frame that
+       opened it, to drop that turn's late completion. */
+    const h = await harness()
+    h.pipeline.dispatch({ type: 'message.start', payload: { turn_id: 't-sent', content: 'next' } })
+    h.queue.push('the queued one')
+
+    h.runtime.stop()
+    expect(h.asked[0]).toEqual(['turn.cancel', { session_key: 's1' }])
+    await h.settle({ cancelled: false, busy: true })
+
+    h.pipeline.dispatch({ type: 'message.complete', payload: { turn_id: 't-sent', usage: {} } })
+
+    expect(h.queue).toEqual(['the queued one'])
+    expect(h.sent()).toEqual([])
+  })
+
+  it('drops the late unwind of the turn the hold was about', async () => {
+    /* The turn the reader stopped is still unwinding when the refusal says
+       the lane is busy: its notice is that turn's own news, and dropping it
+       keeps the queue held for the turn that is starting. */
+    const h = await harness()
+    h.pipeline.dispatch({ type: 'turn.started', payload: { turn_id: 't-a' } })
+    h.queue.push('the queued one')
+
+    h.runtime.stop()
+    await h.settle({ cancelled: false, busy: true })
+
+    /* Fake timers only from here: the reply needed the real clock to settle. */
+    vi.useFakeTimers()
+    h.pipeline.dispatch({ type: 'error', payload: { reason: 'cancelled_by_client', turn_id: 't-a' } })
+    await vi.advanceTimersByTimeAsync(400)
+
+    expect(turn.phase()).toBe('streaming')
+    expect(h.queue).toEqual(['the queued one'])
+    expect(h.sent()).toEqual([])
+  })
+
+  it('lets a busy conversation go when another turn is cancelled while the hold is on', async () => {
+    /* The turn the hold was waiting for was cancelled by another client: it
+       is not coming, so the lane is free and the queue goes out. */
+    const h = await harness()
+    h.pipeline.dispatch({ type: 'turn.started', payload: { turn_id: 't-a' } })
+    h.queue.push('the queued one')
+
+    h.runtime.stop()
+    await h.settle({ cancelled: false, busy: true })
+
+    vi.useFakeTimers()
+    h.pipeline.dispatch({ type: 'error', payload: { reason: 'cancelled_by_client', turn_id: 't-other' } })
+    await vi.advanceTimersByTimeAsync(400)
+
+    expect(h.sent()).toEqual(['the queued one'])
+  })
+
+  it('draws the question of the turn the hold was waiting for', async () => {
+    /* The hold made the machine busy without a turn running in it, so the
+       question that arrives belongs to the turn the hold was waiting for --
+       and is drawn. */
+    const h = await harness()
+    h.pipeline.dispatch({ type: 'turn.started', payload: { turn_id: 't-a' } })
+    h.queue.push('the queued one')
+
+    h.runtime.stop()
+    await h.settle({ cancelled: false, busy: true })
+
+    h.pipeline.dispatch({ type: 'message.start', payload: { turn_id: 't-b', content: 'the next question' } })
+
+    expect(h.did('ask')).toEqual([['ask', 'the next question']])
+  })
+
+  it('does not draw a question the machine already has once the hold is over', async () => {
+    /* The hold is over: the turn it was waiting for ended, and the reader's
+       queued message goes out under it. The machine is busy for that turn
+       now, and its question is the bubble the reader typed -- drawing it
+       again would double it. */
+    const h = await harness()
+    h.pipeline.dispatch({ type: 'turn.started', payload: { turn_id: 't-a' } })
+    h.queue.push('the queued one')
+
+    h.runtime.stop()
+    await h.settle({ cancelled: false, busy: true })
+
+    h.pipeline.dispatch({ type: 'message.complete', payload: { turn_id: 't-wake', usage: {} } })
+    expect(h.sent()).toEqual(['the queued one'])
+    expect(turn.phase()).toBe('sending')
+    /* The reader's own message is on screen: the send drew it. */
+    expect(h.did('ask')).toHaveLength(1)
+
+    h.pipeline.dispatch({ type: 'message.start', payload: { turn_id: 't-queued', content: 'the queued one' } })
+
+    expect(h.did('ask')).toHaveLength(1)
+  })
+
+  it('moves the bubble of a mid-turn message under the turn the hold was waiting for', async () => {
+    /* The message was drawn inside the turn that was stopped; the turn that
+       runs it as a turn of its own opens under the hold, and its bubble
+       belongs at that turn's head. */
+    const h = await harness()
+    h.pipeline.dispatch({ type: 'turn.started', payload: { turn_id: 't-a' } })
+    h.pipeline.dispatch({ type: 'message.injected', payload: { turn_id: 't-inj', content: 'steer' } })
+    h.queue.push('the queued one')
+
+    h.runtime.stop()
+    await h.settle({ cancelled: false, busy: true })
+
+    h.pipeline.dispatch({ type: 'message.start', payload: { turn_id: 't-inj', content: 'steer' } })
+
+    expect(h.did('unask')).toHaveLength(1)
+    expect(h.did('ask').map((c) => c[1])).toEqual(['steer', 'steer'])
+  })
+
+  /* A server older than the `busy` field says nothing about the lane, and that
+     has to read the way a refusal always did. */
+  const NOTHING_BEHIND: Array<[string, CancelReply]> = [
+    ['says the lane is free', { cancelled: false, busy: false }],
+    ['is older than the busy field', { cancelled: false }],
+  ]
+
+  it.each(NOTHING_BEHIND)('lets the conversation go when a refused id had nothing newer behind it: the server %s', async (_how, reply) => {
     /* Nothing was left to stop: the page must not sit in `cancelling`, and the
        engine is free, so the queue goes out as after a finished turn. */
     const h = await harness()
@@ -302,7 +499,7 @@ describe('the reply to turn.cancel', () => {
 
     h.runtime.stop()
     h.pipeline.dispatch({ type: 'message.complete', payload: { usage: {} } })
-    await h.settle({ cancelled: false })
+    await h.settle(reply)
 
     expect(h.sent()).toEqual(['the queued one'])
     expect(turn.phase()).toBe('sending')

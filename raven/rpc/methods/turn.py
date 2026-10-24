@@ -769,6 +769,18 @@ def _cancel_payload(turn_id: str) -> dict[str, Any]:
     return payload
 
 
+def _refused(lane: str) -> dict[str, Any]:
+    """``turn.cancel``'s answer when it reached nothing on ``lane``.
+
+    ``busy`` says whether the lane still has a turn to run. A client waiting on
+    this answer cannot tell from the frames: the answer is written the moment
+    the handler returns, while the frame opening a turn that has just started
+    can still be waiting out the subscription's coalescing window.
+    """
+    probe = getattr(_scheduler, "is_busy", None)
+    return {"cancelled": False, "busy": bool(probe(lane)) if callable(probe) else False}
+
+
 async def turn_cancel(
     params: dict[str, Any],
     *,
@@ -783,7 +795,8 @@ async def turn_cancel(
          and only when it carries that id -- whether ``turn.send`` bound it or
          the runtime opened it (a delegated result re-entering, which binds no
          handle). Without: the active turn handle, else the oldest pending
-         inject. Neither there → ``{cancelled: False}``.
+         inject. Neither there → ``{cancelled: False, busy: ...}``, ``busy``
+         saying whether the lane still has a turn to run (``_refused``).
       2. Cancel what was found.
       3. ``emitter.emit(session_key, error(reason="cancelled_by_client"))`` — the
          client resets its UI off this event. This is the ONLY cancelled-turn
@@ -829,7 +842,7 @@ async def turn_cancel(
         probe = getattr(_scheduler, "running_turn", None)
         running = probe(lane) if callable(probe) else None
         if running is None or running[0] != parsed.turn_id:
-            return {"cancelled": False}
+            return _refused(lane)
         handle = running[1]
         await handle.cancel()
         if emitter is not None:
@@ -845,7 +858,7 @@ async def turn_cancel(
 
     reach = _cancellable(lane)
     if reach is None:
-        return {"cancelled": False}
+        return _refused(lane)
     handle, inject_id = reach
 
     await handle.cancel()

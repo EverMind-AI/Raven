@@ -86,14 +86,21 @@ export const STAGES: readonly Stage[] = [
        a turn of its own, and the bubble that was drawn inside the ended turn
        belongs at the head of this one -- below that turn's answer, which is
        where a reload puts it. Taking it back and letting the ordinary path
-       draw it is what moves it. */
-    if (!turn.busy() && p.content) {
+       draw it is what moves it.
+
+       A hold made the machine busy without a turn running in it: the question
+       that arrives here belongs to the turn the hold was waiting for, so it
+       IS drawn, and the hold is over -- that turn is running now. */
+    const held = rt.holding
+    rt.holding = false
+    if ((!turn.busy() || held) && p.content) {
       const drawn = rt.injected.get(p.turn_id)
       if (drawn !== undefined) { unask(drawn); rt.injected.delete(p.turn_id) }
       ask(p.content)
     }
     if (p.content) touchSession(sessionCurrent(), p.content)
     rt.openedTurn = null
+    rt.turnId = p.turn_id
     rt.dispatch({ type: 'stream', cancellable: true }); goState(); drawMeter()
     advanceTurn()
   }),
@@ -150,6 +157,10 @@ export const STAGES: readonly Stage[] = [
     /* Cancellable by its id: nothing bound a handle to this turn, so the stop
        button names it and turn.cancel reaches it as the lane's running turn. */
     rt.openedTurn = p.turn_id
+    rt.turnId = p.turn_id
+    /* The hold was waiting for exactly this frame: the turn the lane was
+       holding the queue for has opened. */
+    rt.holding = false
     rt.dispatch({ type: 'stream', cancellable: true }); goState(); drawMeter()
   }),
 
@@ -239,19 +250,35 @@ export const STAGES: readonly Stage[] = [
      the queued send. */
   arm('message.complete', (rt, p) => {
     if (turn.phase() === 'cancelling') return
+    /* The turn the reader stopped is still owed its end: the server read the
+       cancel after that turn had already ended, so it is on the way -- behind
+       the refusal, which is written while the frames wait out the
+       subscription's window. Folding it here would release the queue into the
+       turn that is starting, and the stop already folded this one. */
+    if (rt.heldTurn !== null && p.turn_id === rt.heldTurn) return
+    /* Any other completion ends the hold: the lane has moved on, and the turn
+       that ended is not the one the hold was waiting for. */
+    rt.holding = false
     finishTurn(p, rt)
   }),
 
   arm('error', (rt, p) => {
     transcript.killStatus()
+    /* The turn the reader stopped, unwinding late: this is that turn's own
+       notice, and dropping it keeps the queue held for the turn that is
+       starting. */
+    if (rt.heldTurn !== null && p.turn_id === rt.heldTurn) return
     /* A cancelled turn is the one "error" a person asked for; the event still
        matters when the cancel came from ANOTHER client on the same session. */
     if (p.reason === 'cancelled_by_client') {
       if (turn.phase() === 'cancelling') return
+      /* Any other error ends the hold too: the lane has moved on. */
+      rt.holding = false
       if (turn.busy()) softStop(false, rt)
       setTimeout(drain, 400)
       return
     }
+    rt.holding = false
     /* The turn ends the way a stop ends it (softStop): the prose that streamed
        before the failure is promoted and its steps sealed, so the note lands
        under a finished turn rather than beside an open one; the runtime is

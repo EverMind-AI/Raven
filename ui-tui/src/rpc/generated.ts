@@ -3737,6 +3737,10 @@ export interface TurnCancelParams {
  */
 export interface TurnCancelResult {
   cancelled: boolean;
+  /**
+   * Only on a refusal: whether the lane still has a turn to run -- the one that replaced the turn named, one queued, or a message waiting to run as a turn of its own. A client cannot learn it from the frames in time: this reply goes out as soon as the handler returns, while the frame opening a turn that has just started can still be waiting out the subscription's coalescing window. Absent from an accepted cancel, and from an older server.
+   */
+  busy?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

@@ -332,6 +332,13 @@ class Lane:
             return None
         return self._running_turn_id or "", self._running_fut
 
+    def busy(self) -> bool:
+        """Whether a turn is still to run here: the running one while it can
+        still be cancelled, one queued, or an inject in the mailbox, which runs
+        as a turn of its own if the turn it was meant for ends first.
+        """
+        return self.running_turn() is not None or bool(self._pending) or bool(self._inject_mailbox)
+
     def drain_pending(self) -> int:
         """Resolve every not-yet-running turn (queued + mailboxed injects) as
         cancelled and return the count, leaving the running turn untouched.
@@ -686,6 +693,17 @@ class Scheduler:
         """
         lane = self._lanes.get(conversation_id)
         return lane is not None and lane.running_future() is not None
+
+    def is_busy(self, conversation_id: str) -> bool:
+        """True while a conversation's lane still has a turn to run: one running,
+        one queued, or an inject waiting to run as a turn of its own.
+
+        Not ``has_inflight`` at a turn's end: from the moment the running turn
+        stops until the worker resolves its future, that still reports the
+        finished turn, and this reports only what waits behind it.
+        """
+        lane = self._lanes.get(conversation_id)
+        return lane is not None and lane.busy()
 
     def has_running(self) -> bool:
         """True if any lane has a turn in flight, whatever its origin. The

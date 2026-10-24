@@ -1962,6 +1962,14 @@ class TurnCancelParams(_Strict):
 
 class TurnCancelResult(_Strict):
     cancelled: bool
+    # Only on a refusal: whether the lane still has a turn to run -- the one
+    # that replaced the turn named, one queued, or a message waiting to run as
+    # a turn of its own. A client cannot learn it from the frames in time: the
+    # reply goes out as soon as the handler returns, while the frame opening a
+    # turn that has just started can still be waiting out the subscription's
+    # coalescing window. Absent from an accepted cancel, and from an older
+    # server, which is why it is optional.
+    busy: bool | None = None
 
 
 # ---------------------------------------------------------------------------

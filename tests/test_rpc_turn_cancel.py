@@ -123,7 +123,7 @@ async def test_turn_cancel_no_active_turn_returns_cancelled_false(
     emitter: SubscriptionEmitter,
 ) -> None:
     result = await turn_cancel({"session_key": "tui:default"}, emitter=emitter)
-    assert result == {"cancelled": False}
+    assert result == {"cancelled": False, "busy": False}
 
 
 async def test_turn_cancel_cancels_the_handle(emitter: SubscriptionEmitter) -> None:
@@ -200,7 +200,7 @@ async def test_turn_cancel_dispatches_via_dispatcher_with_no_active_turn(
         }
     )
     assert "error" not in resp
-    assert resp["result"] == {"cancelled": False}
+    assert resp["result"] == {"cancelled": False, "busy": False}
 
 
 async def test_turn_cancel_dispatches_via_dispatcher_with_active_turn(
@@ -288,7 +288,7 @@ async def test_an_untargeted_cancel_leaves_a_direct_turn_running(
     result = await turn_cancel({"session_key": "tui:default"}, emitter=emitter, direct_targets=targets)
     await asyncio.sleep(0.05)  # let the coalescer flush
 
-    assert result == {"cancelled": False}
+    assert result == {"cancelled": False, "busy": False}
     assert [e for e in _collect_events(send_frame_capture) if e["type"] == "error"] == []
 
 
@@ -365,7 +365,7 @@ async def test_turn_cancel_for_an_idle_instance_is_not_an_error(emitter: Subscri
         {"session_key": "tui:default", "target": {"agent": "Raven-Code", "handle": "refactor-auth"}},
         emitter=emitter,
     )
-    assert result == {"cancelled": False}
+    assert result == {"cancelled": False, "busy": False}
 
 
 async def test_cancelling_a_main_turn_leaves_the_error_untagged(
@@ -947,7 +947,8 @@ async def test_an_unnamed_cancel_leaves_a_turn_it_did_not_bind_running(
         await loop.running.wait()
 
         assert await turn_cancel({"session_key": "tui:default"}, emitter=emitter, turn_ids=turn_ids) == {
-            "cancelled": False
+            "cancelled": False,
+            "busy": True,
         }
 
         await asyncio.sleep(0.05)
@@ -980,12 +981,32 @@ async def test_a_cancel_naming_another_turn_leaves_the_running_one_alone(
 
         assert await turn_cancel(
             {"session_key": "tui:default", "turn_id": "turn-first"}, emitter=emitter, turn_ids=turn_ids
-        ) == {"cancelled": False}
+        ) == {"cancelled": False, "busy": True}
 
         await asyncio.sleep(0.05)
         assert _cancelled_frames(send_frame_capture) == []
         assert not loop.hit.is_set(), "a stale id cancelled the turn that replaced it"
         assert scheduler.has_inflight("tui:default")
+    finally:
+        _turn_mod.bind_scheduler(None)
+        await teardown()
+
+
+async def test_a_refused_cancel_with_nothing_left_on_the_lane_says_so(emitter: SubscriptionEmitter) -> None:
+    """The named turn finished and nothing replaced it: the reply says the lane
+    is free, which is what lets a client waiting on it release what it queued."""
+    from raven.rpc.methods import turn as _turn_mod
+    from raven.rpc.spine import build_rpc_spine
+
+    loop = _SteerableLoop()
+    scheduler, _hub, turn_ids, teardown = build_rpc_spine(loop, emitter, on_turn_end=_turn_mod.clear_active)
+    _turn_mod.bind_scheduler(scheduler)
+    try:
+        await asyncio.wait_for(scheduler.submit(_reentry()).result(), timeout=5)
+
+        assert await turn_cancel(
+            {"session_key": "tui:default", "turn_id": "turn-reentry"}, emitter=emitter, turn_ids=turn_ids
+        ) == {"cancelled": False, "busy": False}
     finally:
         _turn_mod.bind_scheduler(None)
         await teardown()
@@ -1199,7 +1220,7 @@ async def test_a_waiter_cancelled_mid_unwind_does_not_wedge_the_lane(
         )
 
         waiter = asyncio.create_task(call)
-        await loop.hit.wait()
+        await asyncio.wait_for(loop.hit.wait(), timeout=5)
         await asyncio.sleep(0.05)  # the waiter is parked on the unwind
         assert not waiter.done()
         waiter.cancel()
