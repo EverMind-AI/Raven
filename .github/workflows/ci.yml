@@ -541,6 +541,34 @@ jobs:
           npm test
         working-directory: ui-web
 
+  web-browser:
+    name: web layout in a real browser
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      # The browser extra carries playwright; the runner's own Chrome is the
+      # browser measured with, so no browser download runs here. The dev group
+      # carries pytest-xdist, which the project's addopts require.
+      - name: Install the test environment
+        run: uv sync --frozen --extra browser --extra dev --dev --python 3.12
+
+      # A real-environment test, so it is wired to its own job: the unit shards
+      # leave tests/integration out, and happy-dom lays nothing out, so this is
+      # the only place the tasks board card's agent line is measured.
+      - name: Measure the tasks board card's agent line in Chromium
+        run: uv run --frozen --python 3.12 --no-sync pytest tests/integration/test_web_task_card_real_browser.py -m integration -q -n 0 --tb=short
+
   page:
     name: page checks
     runs-on: ubuntu-latest
