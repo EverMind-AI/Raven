@@ -470,7 +470,21 @@ class StintDriver:
         if problem := self._open_tree(spec, record, layout):
             return problem
         store.write(record)
-        receipt = await self._submit(spec, record, store, index=1, confirm=spec.confirm, layout=layout)
+        try:
+            receipt = await self._submit(spec, record, store, index=1, confirm=spec.confirm, layout=layout)
+        except BaseException:
+            # Out with no receipt -- the turn stopped, or a tool ceiling ran
+            # out, while the first round's approval was still on screen. Closed
+            # for the reason a refusal is: left running, the record blocked a
+            # second request for the same playbook, and once its stamp went
+            # stale the next request took it up through `resume`, which asks
+            # nobody, so a round nobody approved ran. A round already opened has
+            # its run and its beat, and is left to them.
+            if record.round(1) is None:
+                record.status = STOPPED
+                record.stop_reason = "the first round was stopped before it was approved"
+                store.write(record)
+            raise
         if receipt.startswith("Error"):
             # Closed, not left running: a denied round left the record open
             # with round one on it, and the next `resume` -- which asks nobody,

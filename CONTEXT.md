@@ -3086,9 +3086,10 @@ Registry** so the model has no interface for claiming it, and is written into th
 conversation at the loop's `drain` seam -- the one point where the turn's own task owns
 the message list with every tool result already in it.
 _Avoid_: reading it as a *default* for a question. The broker's `default` is what its
-fail-safe paths return (timeout, cancellation, an undeliverable question, connection EOF),
-and autofill never sets one, so a question it deferred and nobody answered is the same
-empty skip it always was.
+fail-safe paths return (timeout, an undeliverable question, connection EOF, the pending wait
+cancelled by someone else); cancelling the asking task itself raises instead, so a stopped
+turn ends rather than reading "no answer". Autofill never sets a default, so a question it
+deferred and nobody answered is the same empty skip it always was.
 
 **Frame Journal** (`raven/acp_client/journal.py`):
 Every frame of one ACP connection, both directions, in wire order, on disk. Distinct from

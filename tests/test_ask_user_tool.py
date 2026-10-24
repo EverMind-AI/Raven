@@ -1103,3 +1103,21 @@ async def test_kernel_options_with_unknown_metadata_are_rejected_before_the_brok
     assert "Invalid parameters" in result
     assert "options[0] should be string" in result and "id" in result
     assert broker.asked == []
+
+
+@pytest.mark.asyncio
+async def test_a_stopped_turn_ends_inside_the_question_instead_of_answering_it():
+    from raven.rpc.question_broker import QuestionBroker
+
+    asked = asyncio.Event()
+
+    async def send_frame(frame: dict) -> None:
+        asked.set()
+
+    tool = AskUserTool(broker=QuestionBroker(send_frame), conversation_id="tui:test")
+    task = asyncio.create_task(tool.execute(questions=[{"question": "A or B?", "options": ["A", "B"]}]))
+    await asyncio.wait_for(asked.wait(), 1.0)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task

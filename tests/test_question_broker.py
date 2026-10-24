@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from raven.rpc.methods.question import question_respond, register_question_methods
 from raven.rpc.question_broker import QuestionBroker, QuestionUndeliverableError, RoutingQuestionBroker
 
@@ -206,6 +208,43 @@ async def test_a_cancelled_question_closes_the_surface() -> None:
     task = asyncio.create_task(broker.await_question(CID, prompt="?", default="d"))
     await _wait_for_frame(frames)
     task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await _wait_for_method(frames, "clarify.closed")
+    assert broker.pending_req(CID) is None
+
+
+async def test_a_stopped_turn_does_not_go_on_with_the_default() -> None:
+    # Answering a stopped turn's question with the default ended the
+    # cancellation inside the broker: the turn read "the user did not answer"
+    # and kept working, even asking again, after the person pressed stop.
+    frames, send_frame = _frame_collector()
+    broker = QuestionBroker(send_frame)
+    after: list[str] = []
+
+    async def turn() -> None:
+        await broker.await_question(CID, prompt="A or B?", default="")
+        after.append("went on")
+
+    task = asyncio.create_task(turn())
+    await _wait_for_frame(frames)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert after == []
+
+
+async def test_a_question_whose_wait_is_cancelled_from_outside_still_answers_the_default() -> None:
+    # Only the caller's own cancellation propagates: the pending future being
+    # cancelled by someone else is a question that went unanswered.
+    frames, send_frame = _frame_collector()
+    broker = QuestionBroker(send_frame)
+
+    task = asyncio.create_task(broker.await_question(CID, prompt="?", default="d"))
+    await _wait_for_frame(frames)
+    broker._pending[CID].future.cancel()
 
     assert await task == "d"
     await _wait_for_method(frames, "clarify.closed")
