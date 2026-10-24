@@ -822,10 +822,9 @@ class WiringMixin:
         # is the behaviour it produced, and a charter that was dropped on the
         # way looks exactly like one that was never written.
         logger.info(
-            "agent playbook: charter staged for this session ({} tool(s), {} check(s){})",
+            "agent playbook: charter staged for this session ({} tool(s), {} function(s))",
             "all" if charter.tools is None else len(charter.tools),
-            len(charter.checks),
-            ", judge" if charter.code else "",
+            len(charter.functions),
         )
         self._session_charters[session_key] = charter
 

@@ -26,7 +26,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from loguru import logger
@@ -39,7 +39,6 @@ malformed or hostile payload cannot push the turn's own identity out of the
 window."""
 
 MAX_TOOLS = 64
-MAX_CHECKS = 32
 MAX_CODE_CHARS = 8000
 
 
@@ -53,19 +52,6 @@ def _function_enabled(module: str, kind: str, name: str) -> bool:
     from raven.agent.harness_capabilities import function_enabled
 
     return function_enabled(module, kind, name)
-
-
-@dataclass(frozen=True)
-class CheckRule:
-    """One judgement about a call the worker is about to make."""
-
-    tool: str
-    when: dict[str, str] = field(default_factory=dict)
-    path_prefix: str = ""
-    forbid: str = ""
-    requires_prior: str = ""
-    match_param: str = ""
-    message: str = ""
 
 
 @dataclass(frozen=True)
@@ -86,15 +72,14 @@ class Charter:
     and is preserved rather than folded into ``None``, which would turn it into
     its own opposite."""
 
-    checks: tuple[CheckRule, ...] = ()
-    code: str = ""
-    """A judgement the operators cannot say. Compiled behind the gate in
-    ``charter_code``, which admits an allow-listed subset and nothing else; a
-    source that does not pass never runs, and one that raises at run time has
-    said nothing rather than refused everything."""
-
     functions: tuple[tuple[str, str], ...] = ()
-    """Enabled generated participant sources, stored as immutable name-source pairs."""
+    """Enabled generated participant sources, stored as immutable name-source
+    pairs. ``judge`` is one of them: it was once a ``code`` field beside a
+    declarative rule table, and the table could say nothing ``judge`` cannot.
+    A table migrated from that era rides in the ``judge`` source as
+    ``rules_judge``; see ``charter_code.COMPANIONS``. Compiled behind the gate in ``charter_code``, which admits an allow-listed
+    subset and nothing else; a source that does not pass never runs, and one
+    that raises at run time has said nothing rather than refused everything."""
 
     timeout_s: int | None = None
     """A deadline for this dispatch, if the brief carried one. Tightening only:
@@ -114,8 +99,6 @@ class Charter:
             self.prompt
             or self.instruction_addendum
             or self.tools is not None
-            or self.checks
-            or self.code
             or self.functions
             or self.timeout_s
             or self.stop_when
@@ -150,35 +133,41 @@ def parse(payload: Any) -> Charter | None:
     raw_tools = payload.get("tools") if _parameter_enabled("capability", "tools") else None
     if isinstance(raw_tools, list):
         tools = tuple(str(name) for name in raw_tools[:MAX_TOOLS] if isinstance(name, str) and name)
-    checks: list[CheckRule] = []
-    # Type-guarded like ``tools`` above, and for a sharper reason: this arrives
-    # from another process, and a non-list here (a bare number, an object the
-    # sender meant as a single rule) is a ``TypeError`` raised inside the
-    # request handler rather than the log line this function promises.
-    raw_checks = payload.get("checks") if _parameter_enabled("action", "checks") else None
-    for raw in raw_checks[:MAX_CHECKS] if isinstance(raw_checks, list) else ():
-        if not isinstance(raw, dict) or not raw.get("tool"):
-            continue
-        when = raw.get("when")
-        checks.append(
-            CheckRule(
-                tool=str(raw["tool"]),
-                when={str(k): str(v) for k, v in when.items()} if isinstance(when, dict) else {},
-                path_prefix=str(raw.get("pathPrefix") or raw.get("path_prefix") or ""),
-                forbid=str(raw.get("forbid") or ""),
-                requires_prior=str(raw.get("requiresPrior") or raw.get("requires_prior") or ""),
-                match_param=str(raw.get("matchParam") or raw.get("match_param") or ""),
-                message=str(raw.get("message") or ""),
-            )
-        )
-    function_modules = {"intake": "memory", "advise": "planning", "salvage": "action"}
+    function_modules = {
+        "intake": "memory",
+        "system_addendum": "memory",
+        "archive": "memory",
+        "select_tools": "capability",
+        "advise": "planning",
+        "judge": "action",
+        "review": "action",
+        "salvage": "action",
+    }
     raw_functions = payload.get("functions")
     functions: list[tuple[str, str]] = []
     if isinstance(raw_functions, dict):
         for name, source in raw_functions.items():
             module = function_modules.get(name)
-            if module and isinstance(source, str) and source.strip() and _function_enabled(module, "participant", name):
-                functions.append((name, source[:MAX_CODE_CHARS]))
+            if not (module and isinstance(source, str) and source.strip()):
+                continue
+            if not _function_enabled(module, "participant", name):
+                continue
+            # Dropped whole rather than cut to fit. Half of a function is not a
+            # shorter function: the cut lands mid-token, the gate reports a
+            # syntax error, and the verb answers silence -- which for ``judge``
+            # turns every refusal it carried into permission. A source over the
+            # ceiling is a brief this process will not run, and saying so is
+            # the only honest answer.
+            if len(source) > MAX_CODE_CHARS:
+                logger.warning(
+                    "charter: its {} function is {} characters, over the {} ceiling; "
+                    "dropping it rather than cutting executable source",
+                    name,
+                    len(source),
+                    MAX_CODE_CHARS,
+                )
+                continue
+            functions.append((name, source))
     raw_timeout = payload.get("timeoutSeconds") or payload.get("timeout_s")
     timeout_s: int | None = None
     if isinstance(raw_timeout, (int, float)) and raw_timeout > 0:
@@ -187,12 +176,6 @@ def parse(payload: Any) -> Charter | None:
         prompt=prompt,
         instruction_addendum=instruction_addendum,
         tools=tools,
-        checks=tuple(checks),
-        code=(
-            str(payload.get("code") or "")[:MAX_CODE_CHARS]
-            if _function_enabled("action", "participant", "judge")
-            else ""
-        ),
         functions=tuple(functions),
         timeout_s=timeout_s,
         stop_when=stop_when,
@@ -288,32 +271,6 @@ def narrowed_tools(offered: Sequence[str]) -> frozenset[str]:
     return withheld
 
 
-def _matches(rule: CheckRule, name: str, params: Mapping[str, Any]) -> bool:
-    """Whether this rule has anything to say about this call."""
-    if rule.tool != name:
-        return False
-    return all(str(params.get(key, "")) == want for key, want in rule.when.items())
-
-
-def _prior_satisfied(
-    rule: CheckRule, params: Mapping[str, Any], prior: Sequence[tuple[str, Mapping[str, Any]]]
-) -> bool:
-    """Whether the call this rule requires has already run, successfully.
-
-    With ``match_param`` the earlier call must have carried the same value for
-    that argument, which is what separates "read the file you are about to
-    write" from "read something, anything".
-    """
-    for earlier_name, earlier_params in prior:
-        if earlier_name != rule.requires_prior:
-            continue
-        if not rule.match_param:
-            return True
-        if str(earlier_params.get(rule.match_param, "")) == str(params.get(rule.match_param, "")):
-            return True
-    return False
-
-
 def _pure_data(value: Any) -> Any:
     """Detach the JSON-like part of a StepView from host runtime objects."""
     if value is None or isinstance(value, (str, int, float, bool)):
@@ -373,8 +330,20 @@ class CharterParticipant(AgentParticipant):
     async def advise(self, step: StepView) -> Any:
         return _generated_answer("advise", _step_payload(step))
 
+    async def select_tools(self, offered: list[dict[str, Any]], step: StepView) -> Any:
+        return _generated_answer("select_tools", _pure_data(offered), _step_payload(step))
+
+    async def system_addendum(self, step: StepView) -> Any:
+        return _generated_answer("system_addendum", _step_payload(step))
+
+    async def review(self, step: StepView) -> Any:
+        return _generated_answer("review", _step_payload(step))
+
     async def salvage(self, step: StepView) -> Any:
         return _generated_answer("salvage", _step_payload(step))
+
+    async def archive(self, step: StepView, reply: str | None) -> Any:
+        return _generated_answer("archive", _step_payload(step), reply)
 
     def judge(
         self,
@@ -389,7 +358,7 @@ def charter_participants() -> tuple[CharterParticipant, ...]:
     """The participants this dispatch brings, or none when it brought no
     judgements. Asked after the plugins' own, so a product's rules speak first."""
     charter = current_charter()
-    if charter is None or not (charter.checks or charter.code or charter.functions):
+    if charter is None or not charter.functions:
         return ()
     return (CharterParticipant(),)
 
@@ -402,30 +371,35 @@ def judge(
     """Why this turn's charter refuses this call, or an empty list.
 
     A refusal is a sentence, not an exception: it reaches the model as the
-    call's result, so the next attempt can be right. Declarative for a reason
-    beyond taste -- this runs before every dispatch and ahead of the permission
-    gate, where an evaluator free to block on the network or spin would cost
-    the turn rather than the call.
+    call's result, so the next attempt can be right. One source rather than
+    two -- a declarative rule table used to run ahead of this, and everything
+    it could say ``judge`` can say. A table migrated from that era is carried
+    in the same source as ``rules_judge`` and still asked first, so what a
+    seat refuses is read from one place.
+
+    Cheap by contract: this runs before every dispatch and ahead of the
+    permission gate. The gate in ``charter_code`` is what keeps it so -- no
+    imports, no loops, and a call list that cannot reach the network or build
+    an unbounded sequence.
     """
-    charter = current_charter()
-    if charter is None or not (charter.checks or charter.code):
+    # Asked apart and joined here, the order the pre-merge runtime used: a
+    # migrated table and the hand-written judge beside it each run on their
+    # own, so a raise in one leaves the other's refusals standing.
+    params, prior = _pure_data(params), _pure_data(prior)
+    return _refusals(_generated_answer("rules_judge", name, params, prior)) + _refusals(
+        _generated_answer("judge", name, params, prior)
+    )
+
+
+def _refusals(answer: Any) -> list[str]:
+    # One sentence is as good as a list: a judge with a single thing to say
+    # writes the string, and reading that as silence would turn its refusal
+    # into permission. Carried over from the judge this verb replaced.
+    if isinstance(answer, str):
+        return [answer] if answer.strip() else []
+    if not isinstance(answer, (list, tuple)):
         return []
-    refusals: list[str] = []
-    for rule in charter.checks:
-        if not _matches(rule, name, params):
-            continue
-        if rule.path_prefix:
-            path = str(params.get("path") or params.get("file_path") or "")
-            if path and not path.startswith(rule.path_prefix):
-                refusals.append(rule.message or f"{name}: path must start with {rule.path_prefix}")
-        if rule.forbid:
-            haystack = " ".join(str(v) for v in params.values())
-            if rule.forbid in haystack:
-                refusals.append(rule.message or f"{name}: this call may not contain {rule.forbid!r}")
-        if rule.requires_prior and not _prior_satisfied(rule, params, prior):
-            refusals.append(rule.message or f"{name}: run {rule.requires_prior} first")
-    refusals.extend(_code_refusals(charter, name, params, prior))
-    return refusals
+    return [str(line) for line in answer if str(line).strip()]
 
 
 _COMPILED: dict[Any, Any] = {}
@@ -440,8 +414,11 @@ thing it manages."""
 
 
 def _generated_answer(name: str, *args: Any) -> Any:
+    from raven.agent.subagent.charter_code import COMPANIONS
+
     charter = current_charter()
-    source = dict(charter.functions).get(name) if charter is not None else None
+    verb = COMPANIONS.get(name, name)
+    source = dict(charter.functions).get(verb) if charter is not None else None
     if not source:
         return None
     key = (name, source)
@@ -452,7 +429,10 @@ def _generated_answer(name: str, *args: Any) -> Any:
 
             compiled = compile_function(source, name)
         except Exception as exc:  # noqa: BLE001 - refused generated code is silence
-            logger.warning("charter: its {} function was refused ({}); ignoring it", name, exc)
+            # A companion shares its verb's source: a refused source was
+            # already reported under the verb, and most define no companion.
+            if name == verb:
+                logger.warning("charter: its {} function was refused ({}); ignoring it", name, exc)
             compiled = False
         if len(_COMPILED) >= MAX_COMPILED:
             _COMPILED.clear()
@@ -462,48 +442,6 @@ def _generated_answer(name: str, *args: Any) -> Any:
     from raven.agent.subagent.charter_code import run_function
 
     return run_function(compiled, *args)
-
-
-def _code_refusals(
-    charter: Charter,
-    name: str,
-    params: Mapping[str, Any],
-    prior: Sequence[tuple[str, Mapping[str, Any]]],
-) -> list[str]:
-    """What this charter's own judge adds, if it carried one and it compiles.
-
-    Compiled once per source and cached: the gate walks a parse tree, and doing
-    that again on every tool call of a forty-iteration turn would be paid for
-    nothing. Keyed by the source itself, so a different brief is a different
-    entry rather than a stale hit.
-
-    A source that does not pass the gate is dropped with a line saying why. It
-    is not turned into a refusal: a brief whose code was rejected has said
-    nothing about this call, and refusing every call would be a far larger
-    claim than the author made.
-    """
-    if not charter.code:
-        return []
-    compiled = _COMPILED.get(charter.code)
-    if compiled is None:
-        try:
-            from raven.agent.subagent.charter_code import compile_judge
-
-            compiled = compile_judge(charter.code)
-        except Exception as exc:  # noqa: BLE001 - a refused judge is not a refusal
-            logger.warning("charter: its judge was refused ({}); ignoring it for this turn", exc)
-            if len(_COMPILED) >= MAX_COMPILED:
-                _COMPILED.clear()
-            _COMPILED[charter.code] = False
-            return []
-        if len(_COMPILED) >= MAX_COMPILED:
-            _COMPILED.clear()
-        _COMPILED[charter.code] = compiled
-    if compiled is False:
-        return []
-    from raven.agent.subagent.charter_code import run_judge
-
-    return run_judge(compiled, name, params, prior)
 
 
 def narrowed_timeout(configured: int | None) -> int | None:
@@ -526,7 +464,6 @@ def narrowed_timeout(configured: int | None) -> int | None:
 
 __all__ = [
     "Charter",
-    "CheckRule",
     "bind_charter_for_turn",
     "charter_scope",
     "current_charter",

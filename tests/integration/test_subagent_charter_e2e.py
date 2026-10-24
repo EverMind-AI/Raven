@@ -28,6 +28,7 @@ from raven.agent.subagent.charter import (
 from raven.agent.subagent.delegate import dispatch_charter, outbound_charter
 from raven.playbook.agent_generator import build_table
 from raven.playbook.agent_spec import AgentPlaybookSpec
+from raven.playbook.checks_migration import judge_from_rules
 from raven.providers.base import LLMProvider, LLMResponse
 
 BRIEF = "Only look at A. Leave B alone."
@@ -39,6 +40,14 @@ def judge(name, params, prior):
         return ["write under ./out/a/ only"]
     return []
 """
+
+
+def _ruled(*rules: dict) -> Charter:
+    """A charter holding a rule table the way a stored one now arrives: as the judge it translates to."""
+    return Charter(functions=(("judge", judge_from_rules(list(rules))),))
+
+
+READ_IT_FIRST = {"tool": "write_file", "requiresPrior": "read_file", "matchParam": "path", "message": "read it first"}
 
 
 class _Stub(LLMProvider):
@@ -294,10 +303,8 @@ def test_the_tool_array_is_narrowed_for_a_briefed_turn(workspace) -> None:
 async def test_a_call_the_charter_forbids_is_refused_by_the_registry(workspace) -> None:
     """The join that matters most: a rule returning a sentence is not the same
     as a tool call actually being stopped."""
-    from raven.agent.subagent.charter import CheckRule
-
     loop = _loop(workspace)
-    charter = Charter(checks=(CheckRule(tool="write_file", path_prefix="./out/", message="write under ./out/"),))
+    charter = _ruled({"tool": "write_file", "pathPrefix": "./out/", "message": "write under ./out/"})
     with charter_scope(charter):
         refused = await loop.tools.execute("write_file", {"path": "escape.txt", "content": "x"})
     assert "write under ./out/" in str(refused)
@@ -306,11 +313,9 @@ async def test_a_call_the_charter_forbids_is_refused_by_the_registry(workspace) 
 
 @pytest.mark.asyncio
 async def test_the_same_call_runs_when_the_charter_allows_it(workspace) -> None:
-    from raven.agent.subagent.charter import CheckRule
-
     loop = _loop(workspace)
     (workspace / "out").mkdir()
-    charter = Charter(checks=(CheckRule(tool="write_file", path_prefix="out/", message="write under out/"),))
+    charter = _ruled({"tool": "write_file", "pathPrefix": "out/", "message": "write under out/"})
     with charter_scope(charter):
         await loop.tools.execute("write_file", {"path": "out/kept.txt", "content": "x"})
     assert (workspace / "out" / "kept.txt").exists()
@@ -320,7 +325,7 @@ async def test_the_same_call_runs_when_the_charter_allows_it(workspace) -> None:
 async def test_a_charters_own_judge_can_refuse_a_call(workspace) -> None:
     """Code, not a rule, and reached the same way -- through the registry."""
     loop = _loop(workspace)
-    with charter_scope(Charter(code=JUDGE)):
+    with charter_scope(Charter(functions=(("judge", JUDGE),))):
         refused = await loop.tools.execute("write_file", {"path": "elsewhere.txt", "content": "x"})
     assert "write under ./out/a/ only" in str(refused)
     assert not (workspace / "elsewhere.txt").exists()
@@ -338,20 +343,11 @@ async def test_a_successful_call_is_remembered_for_the_next_rule(workspace) -> N
     """`requiresPrior` is only expressible because the registry records what
     ran. Recorded after dispatch and only on success, which is what stops a
     failed read from satisfying "read it first"."""
-    from raven.agent.subagent.charter import CheckRule, prior_calls
+    from raven.agent.subagent.charter import prior_calls
 
     loop = _loop(workspace)
     (workspace / "seed.txt").write_text("hello")
-    charter = Charter(
-        checks=(
-            CheckRule(
-                tool="write_file",
-                requires_prior="read_file",
-                match_param="path",
-                message="read it first",
-            ),
-        )
-    )
+    charter = _ruled(READ_IT_FIRST)
     with charter_scope(charter):
         refused = await loop.tools.execute("write_file", {"path": "seed.txt", "content": "x"})
         assert "read it first" in str(refused)
@@ -368,19 +364,8 @@ async def test_a_read_that_failed_does_not_satisfy_read_it_first(workspace) -> N
     """The whole point of recording after the verdict: a read that errored read
     nothing, and letting it count would hand the write the permission the rule
     exists to withhold."""
-    from raven.agent.subagent.charter import CheckRule
-
     loop = _loop(workspace)
-    charter = Charter(
-        checks=(
-            CheckRule(
-                tool="write_file",
-                requires_prior="read_file",
-                match_param="path",
-                message="read it first",
-            ),
-        )
-    )
+    charter = _ruled(READ_IT_FIRST)
     with charter_scope(charter):
         await loop.tools.execute("read_file", {"path": "does-not-exist.txt"})
         refused = await loop.tools.execute("write_file", {"path": "does-not-exist.txt", "content": "x"})
@@ -456,17 +441,19 @@ async def test_a_tool_that_reported_failure_without_the_word_error_is_not_rememb
         assert prior_calls() == (), "a call that reported ok=False is not a prior call"
 
 
-def test_a_checks_field_that_is_not_a_list_costs_a_log_line_not_the_dispatch() -> None:
+def test_a_functions_field_that_is_not_a_mapping_costs_a_log_line_not_the_dispatch() -> None:
     """``parse`` reads a payload another process wrote, inside the request
-    handler that accepts the dispatch. A sender that put a single rule object
-    where a list belongs must not be able to raise in there."""
+    handler that accepts the dispatch. A sender that put a single source where
+    a mapping belongs, or still sent the retired ``checks`` key, must not be
+    able to raise in there."""
     from raven.agent.subagent.charter import parse
 
-    for malformed in (5, "checks", {"tool": "write_file"}, True):
-        charter = parse({"prompt": BRIEF, "checks": malformed})
-        assert charter is not None
-        assert charter.checks == ()
-        assert charter.prompt == BRIEF
+    for malformed in (5, "def judge(name, params, prior):\n    return []", ["judge"], True):
+        for key in ("functions", "checks"):
+            charter = parse({"prompt": BRIEF, key: malformed})
+            assert charter is not None
+            assert charter.functions == ()
+            assert charter.prompt == BRIEF
 
 
 @pytest.mark.asyncio
@@ -633,7 +620,6 @@ def test_nothing_the_model_may_emit_is_quietly_dropped() -> None:
         "systemPrompt": BRIEF,
         "stopWhen": "it lands",
         "tools": ["grep"],
-        "checks": [{"tool": "write_file", "pathPrefix": "out/"}],
         "functions": {
             "intake": "def intake(text, step):\n    return {'text': text}",
             "advise": "def advise(step):\n    return None",
@@ -654,8 +640,6 @@ def test_nothing_the_model_may_emit_is_quietly_dropped() -> None:
         "prompt",
         "tools",
         "stopWhen",
-        "checks",
-        "code",
         "functions",
         "timeoutSeconds",
     }

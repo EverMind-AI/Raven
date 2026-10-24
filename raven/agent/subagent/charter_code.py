@@ -124,11 +124,23 @@ ALLOWED_METHODS: frozenset[str] = frozenset(
 ENTRY = "judge"
 SIGNATURES: dict[str, tuple[str, ...]] = {
     "intake": ("text", "step"),
+    "system_addendum": ("step",),
+    "archive": ("step", "reply"),
+    "select_tools": ("offered", "step"),
     "advise": ("step",),
-    "salvage": ("step",),
     "judge": ("name", "params", "prior"),
+    "review": ("step",),
+    "salvage": ("step",),
 }
 """Generated functions and the exact pure-data arguments the loop supplies."""
+
+COMPANIONS: dict[str, str] = {"rules_judge": "judge"}
+"""Functions a verb's source may define beside it, and the verb they belong to.
+
+Not verbs: nothing dispatches to them by name. ``rules_judge`` is a migrated
+rule table kept apart from the hand-written ``judge`` it sat beside, so a raise
+in either costs only its own refusals. The gate admits no call between the two,
+so they are asked separately and their answers joined by the caller."""
 
 
 class CharterCodeError(Exception):
@@ -170,7 +182,7 @@ def _safe_builtins() -> dict[str, Any]:
 
 def compile_function(source: str, entry: str) -> Any:
     """Compile one generated participant function behind the AST gate."""
-    expected = SIGNATURES.get(entry)
+    expected = SIGNATURES.get(COMPANIONS.get(entry, entry))
     if expected is None:
         raise CharterCodeError(f"unsupported charter function {entry!r}")
     if not source.strip():
@@ -229,8 +241,10 @@ def run_judge(
 
     A judge that raises has said nothing -- not "allow", not "refuse". Letting
     it refuse would let one bad line stop every call the worker makes; letting
-    the exception out would cost the dispatch. The declarative rules beside it
-    still apply, which is what makes silence here safe rather than a hole.
+    the exception out would cost the dispatch. Silence here lets the call run
+    unless another function asked beside it refuses -- the reason a migrated
+    ``rules_judge`` is asked apart -- so a judge's checks hold only as far as
+    it reaches them without raising.
 
     Copies go in. A judge that mutated the arguments it was shown would be
     editing the call it was asked to judge.
@@ -251,6 +265,7 @@ __all__ = [
     "ALLOWED_CALLS",
     "ALLOWED_METHODS",
     "ALLOWED_NODES",
+    "COMPANIONS",
     "ENTRY",
     "MAX_SOURCE_CHARS",
     "CharterCodeError",

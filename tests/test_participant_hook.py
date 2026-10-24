@@ -332,7 +332,7 @@ def test_the_registry_asks_judge_with_no_participants_at_all():
     docstrings would silently outlive. Here that change makes ``handed``
     non-empty and turns this red, which is the point."""
     from raven.agent.harness import DefaultAction
-    from raven.agent.subagent.charter import Charter, CheckRule, charter_scope
+    from raven.agent.subagent.charter import Charter, charter_scope
     from raven.agent.tools.registry import ToolRegistry
 
     handed: list[tuple] = []
@@ -343,7 +343,13 @@ def test_the_registry_asks_judge_with_no_participants_at_all():
             return super().ask_judge(name, params, prior, participants)
 
     registry = ToolRegistry(verifier_provider=Spy)
-    with charter_scope(Charter(checks=(CheckRule(tool="write_file", path_prefix="out/"),))):
+    source = (
+        "def judge(name, params, prior):\n"
+        "    if name == 'write_file' and not str(params.get('path', '')).startswith('out/'):\n"
+        "        return ['write under out/']\n"
+        "    return []"
+    )
+    with charter_scope(Charter(functions=(("judge", source),))):
         refusals = registry._verifier_refusals("write_file", {"path": "/etc/passwd"})
 
     assert handed == [()], f"the registry handed the role participants: {handed}"

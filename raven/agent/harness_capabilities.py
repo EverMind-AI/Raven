@@ -15,17 +15,23 @@ _CONNECTED_PARAMETERS = frozenset(
         ("memory", "systemPrompt"),
         ("memory", "stopWhen"),
         ("capability", "tools"),
-        ("action", "checks"),
     }
 )
 _CONNECTED_FUNCTIONS = frozenset(
     {
         ("memory", "participant", "intake"),
+        ("memory", "participant", "system_addendum"),
+        ("memory", "participant", "archive"),
+        ("capability", "participant", "select_tools"),
         ("planning", "participant", "advise"),
         ("action", "participant", "judge"),
+        ("action", "participant", "review"),
         ("action", "participant", "salvage"),
     }
 )
+"""The verbs ``CharterParticipant`` answers. ``outbound`` is absent on purpose:
+the contract names it the one verb a generated participant cannot be given,
+because no module seat owns it and there is nothing to vet it against."""
 _CACHE_KEY: tuple[Path, int, int] | None = None
 _CACHE_ROOT: dict[str, Any] | None = None
 

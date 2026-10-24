@@ -15,8 +15,9 @@ import pytest
 
 from raven.agent.subagent.charter import (
     Charter,
-    CheckRule,
+    CharterParticipant,
     bind_charter_for_turn,
+    charter_participants,
     charter_scope,
     current_charter,
     judge,
@@ -33,6 +34,7 @@ from raven.agent.subagent.charter_code import (
     run_function,
     run_judge,
 )
+from raven.contracts.participant import StepView
 
 OFFERED = ("read_file", "write_file", "web_search", "web_fetch", "exec")
 
@@ -48,14 +50,14 @@ def test_a_payload_becomes_a_charter() -> None:
             "prompt": "only look at A",
             "tools": ["web_search", "web_fetch"],
             "stopWhen": "both tables land",
-            "checks": [{"tool": "write_file", "pathPrefix": "./out/a/", "message": "out/a only"}],
+            "functions": {"judge": "def judge(name, params, prior):\n    return []"},
         }
     )
     assert charter is not None
     assert charter.prompt == "only look at A"
     assert charter.tools == ("web_search", "web_fetch")
     assert charter.stop_when == "both tables land"
-    assert charter.checks[0].path_prefix == "./out/a/"
+    assert dict(charter.functions)["judge"].startswith("def judge(")
 
 
 def test_nothing_in_means_nothing_out() -> None:
@@ -138,14 +140,27 @@ def test_the_scope_restores_on_an_exception() -> None:
 # --------------------------------------------------------------------------- #
 
 
+THREE_JUDGEMENTS = """
+def judge(name, params, prior):
+    refusals = []
+    if name == "write_file":
+        path = str(params.get("path", ""))
+        if path and not path.startswith("./out/"):
+            refusals = refusals + ["write under ./out/"]
+        if not [p for n, p in prior if n == "read_file" and p.get("path") == params.get("path")]:
+            refusals = refusals + ["read it first"]
+    if name == "exec":
+        if "rm -rf" in " ".join([str(v) for v in params.values()]):
+            refusals = refusals + ["no rm -rf"]
+    return refusals
+"""
+"""The three judgements a declarative rule table used to carry, as the one
+verb that replaced it. Kept whole rather than split across the tests below
+because the claim the merge rests on is that one judge says all of it."""
+
+
 def _rules() -> Charter:
-    return Charter(
-        checks=(
-            CheckRule(tool="write_file", path_prefix="./out/", message="write under ./out/"),
-            CheckRule(tool="write_file", requires_prior="read_file", match_param="path", message="read it first"),
-            CheckRule(tool="exec", forbid="rm -rf", message="no rm -rf"),
-        )
-    )
+    return Charter(functions=(("judge", THREE_JUDGEMENTS),))
 
 
 def test_a_path_outside_the_prefix_is_refused() -> None:
@@ -153,14 +168,14 @@ def test_a_path_outside_the_prefix_is_refused() -> None:
         assert "write under ./out/" in judge("write_file", {"path": "/etc/passwd"}, [])
 
 
-def test_reading_the_same_file_first_satisfies_the_rule() -> None:
+def test_reading_the_same_file_first_satisfies_the_judgement() -> None:
     with charter_scope(_rules()):
         assert judge("write_file", {"path": "./out/a"}, [("read_file", {"path": "./out/a"})]) == []
 
 
 def test_reading_a_different_file_does_not() -> None:
-    """`matchParam` is what separates "read the file you are about to write"
-    from "read something, anything"."""
+    """Matching on the argument is what separates "read the file you are about
+    to write" from "read something, anything"."""
     with charter_scope(_rules()):
         assert judge("write_file", {"path": "./out/a"}, [("read_file", {"path": "./elsewhere"})]) == ["read it first"]
 
@@ -170,21 +185,25 @@ def test_a_forbidden_fragment_is_caught_in_any_argument() -> None:
         assert judge("exec", {"command": "rm -rf /"}, []) == ["no rm -rf"]
 
 
-def test_a_rule_says_nothing_about_another_tool() -> None:
+def test_a_judgement_says_nothing_about_another_tool() -> None:
     with charter_scope(_rules()):
         assert judge("grep", {"pattern": "x"}, []) == []
 
 
-def test_when_narrows_a_rule_to_the_calls_it_is_about() -> None:
-    charter = Charter(
-        checks=(CheckRule(tool="spawn", when={"subagent": "deck"}, requires_prior="spawn", message="research first"),)
+def test_a_judge_can_narrow_itself_to_the_calls_it_is_about() -> None:
+    """What ``when`` did declaratively, an ``if`` says directly."""
+    source = (
+        "def judge(name, params, prior):\n"
+        "    if name == 'spawn' and params.get('subagent') == 'deck':\n"
+        "        return ['research first']\n"
+        "    return []"
     )
-    with charter_scope(charter):
+    with charter_scope(Charter(functions=(("judge", source),))):
         assert judge("spawn", {"subagent": "deck"}, []) == ["research first"]
         assert judge("spawn", {"subagent": "research"}, []) == []
 
 
-def test_no_checks_means_no_opinion() -> None:
+def test_no_judge_means_no_opinion() -> None:
     with charter_scope(Charter(prompt="x")):
         assert judge("write_file", {"path": "/etc/passwd"}, []) == []
 
@@ -269,7 +288,7 @@ def test_an_over_long_source_is_refused_before_parsing() -> None:
 
 def test_generic_function_compilation_rejects_unknown_verbs_and_runtime_errors_are_silence() -> None:
     with pytest.raises(CharterCodeError, match="unsupported charter function"):
-        compile_function("def archive(step):\n    return None", "archive")
+        compile_function("def outbound(reply, step):\n    return None", "outbound")
     assert run_function(lambda value: 1 / 0, {"detached": True}) is None
 
 
@@ -316,41 +335,27 @@ def test_the_judge_cannot_edit_the_call_it_judges() -> None:
 
 
 def test_a_charter_can_carry_its_own_judgement() -> None:
-    with charter_scope(Charter(code=GOOD_JUDGE)):
+    with charter_scope(Charter(functions=(("judge", GOOD_JUDGE),))):
         assert judge("write_file", {"path": "/etc/x"}, []) == ["write under ./out/"]
         assert judge("write_file", {"path": "./out/a"}, [("read_file", {"path": "./out/a"})]) == []
 
 
-def test_rules_and_code_both_speak() -> None:
-    """Neither replaces the other: the declarative half is what still applies
-    when the code half is refused or silent."""
-    charter = Charter(
-        checks=(CheckRule(tool="write_file", path_prefix="./out/", message="from the rule"),),
-        code=GOOD_JUDGE,
-    )
-    with charter_scope(charter):
-        refusals = judge("write_file", {"path": "/etc/x"}, [])
-    assert "from the rule" in refusals
-    assert "write under ./out/" in refusals
-
-
-def test_a_judge_the_gate_refused_leaves_the_rules_standing() -> None:
+def test_a_judge_the_gate_refused_has_said_nothing() -> None:
     """A brief whose code was rejected has said nothing about this call.
-    Refusing every call instead would be a far larger claim than its author made."""
-    charter = Charter(
-        checks=(CheckRule(tool="write_file", path_prefix="./out/", message="from the rule"),),
-        code="import os\ndef judge(n, p, q):\n    return ['never runs']",
-    )
+    Refusing every call instead would be a far larger claim than its author
+    made -- and with one judgement seat rather than two, silence is the whole
+    of what a refused source leaves behind."""
+    charter = Charter(functions=(("judge", "import os\ndef judge(n, p, q):\n    return ['never runs']"),))
     with charter_scope(charter):
-        assert judge("write_file", {"path": "/etc/x"}, []) == ["from the rule"]
+        assert judge("write_file", {"path": "/etc/x"}, []) == []
         assert judge("write_file", {"path": "./out/a"}, []) == []
 
 
-def test_the_wire_carries_code_and_a_deadline() -> None:
-    charter = parse({"code": GOOD_JUDGE, "timeoutSeconds": 90})
+def test_the_wire_carries_a_judge_and_a_deadline() -> None:
+    charter = parse({"functions": {"judge": GOOD_JUDGE}, "timeoutSeconds": 90})
     assert charter is not None
     assert charter.timeout_s == 90
-    assert "startswith" in charter.code
+    assert "startswith" in dict(charter.functions)["judge"]
 
 
 # --------------------------------------------------------------------------- #
@@ -398,7 +403,7 @@ def test_the_judge_cache_does_not_grow_without_a_ceiling() -> None:
     try:
         for n in range(MAX_COMPILED + 5):
             source = f"def judge(name, params, prior):\n    return [] if {n} else []\n"
-            with charter_scope(Charter(code=source)):
+            with charter_scope(Charter(functions=(("judge", source),))):
                 judge("write_file", {"path": "a"}, ())
             assert len(_COMPILED) <= MAX_COMPILED
     finally:
@@ -450,7 +455,6 @@ def test_a_dispatch_brings_its_judgements_as_a_participant() -> None:
     """The Charter answers the same verb a plugin answers, rather than being
     read by the role itself. That is what lets a judgement generated for one
     dispatch join the same list later."""
-    from raven.agent.subagent.charter import charter_participants
 
     assert charter_participants() == (), "no charter bound, no participant"
     with charter_scope(Charter(prompt="just a brief")):
@@ -623,3 +627,103 @@ def test_only_the_nodes_a_charter_names_are_wrapped() -> None:
     assert isinstance(bound["pb-r01x1-planner"], _CharteredBackend)
     assert bound["pb-r01x1-developer"] is backends["pb-r01x1-developer"]
     assert _chartered(backends, {}) is backends, "an ordinary run rebinds nothing"
+
+
+# --------------------------------------------------------------------------- #
+# Every verb a generated participant may answer                                 #
+# --------------------------------------------------------------------------- #
+
+EVERY_VERB = {
+    "intake": "def intake(text, step):\n    return {'text': text.upper(), 'reply': None, 'note': None}",
+    "system_addendum": "def system_addendum(step):\n    return {'text': 'house rule', 'reply': None, 'note': None}",
+    "archive": "def archive(step, reply):\n    return {'filed': reply}",
+    "select_tools": "def select_tools(offered, step):\n    return [t for t in offered if t.get('name') != 'drop_me']",
+    "advise": "def advise(step):\n    return 'keep it short'",
+    "judge": "def judge(name, params, prior):\n    return ['no writes'] if name == 'write_file' else []",
+    "review": "def review(step):\n    return {'verdict': 'resample', 'reason': 'too thin', 'inject': None, 'overrides': None, 'note': None}",
+    "salvage": "def salvage(step):\n    return 'here is the answer'",
+}
+
+
+def test_the_catalogue_the_gate_and_the_participant_agree_on_one_set() -> None:
+    """Four tables used to have to be edited together to add a verb, and three
+    of them could be edited without the fourth noticing. Asserted as one set so
+    a verb added to any of them has to reach the others."""
+    from raven.agent import harness_capabilities
+    from raven.agent.subagent.charter_code import SIGNATURES
+
+    wired = {name for _, kind, name in harness_capabilities._CONNECTED_FUNCTIONS if kind == "participant"}
+    implemented = {name for name, value in vars(CharterParticipant).items() if not name.startswith("_")}
+
+    assert wired == implemented == set(SIGNATURES) == set(EVERY_VERB)
+
+
+def test_outbound_is_the_one_verb_no_generated_participant_may_answer() -> None:
+    """Named in the contract rather than merely absent: no module seat owns what
+    a turn finally delivers, so there is nothing to compose it with."""
+    from raven.agent import harness_capabilities
+    from raven.agent.subagent.charter_code import SIGNATURES
+
+    assert "outbound" not in SIGNATURES
+    assert not any(name == "outbound" for _, _, name in harness_capabilities._CONNECTED_FUNCTIONS)
+    with pytest.raises(CharterCodeError, match="unsupported charter function"):
+        compile_function("def outbound(reply, step):\n    return None", "outbound")
+
+
+@pytest.mark.asyncio
+async def test_every_enabled_verb_runs_from_one_charter() -> None:
+    """The whole set in one scope, because a verb that only works alone is a
+    verb whose wiring was never asked to coexist with the others."""
+    charter = parse({"brief": "x", "functions": EVERY_VERB})
+    assert charter is not None
+    step = StepView(
+        session_key="s",
+        iteration=1,
+        response=None,
+        transcript=(),
+        history=(),
+        turn_base=0,
+        question="",
+        rollbacks=0,
+        mode=None,
+        mode_overlay=None,
+        phase="iteration",
+    )
+
+    with charter_scope(charter):
+        participant = charter_participants()[0]
+        assert (await participant.intake("hello", step))["text"] == "HELLO"
+        assert await participant.select_tools([{"name": "keep"}, {"name": "drop_me"}], step) == [{"name": "keep"}]
+        assert await participant.advise(step) == "keep it short"
+        assert (await participant.system_addendum(step))["text"] == "house rule"
+        assert (await participant.review(step))["verdict"] == "resample"
+        assert await participant.salvage(step) == "here is the answer"
+        assert await participant.archive(step, "final") == {"filed": "final"}
+        assert judge("write_file", {}, []) == ["no writes"]
+        assert judge("read_file", {}, []) == []
+
+
+def test_one_sentence_is_as_good_as_a_list_for_a_generated_judge() -> None:
+    """The judge this verb replaced accepted a bare string, and reading one as
+    silence would turn a refusal into permission."""
+    one = "def judge(name, params, prior):\n    return 'just the one'"
+    with charter_scope(Charter(functions=(("judge", one),))):
+        assert judge("write_file", {}, []) == ["just the one"]
+
+    empty = "def judge(name, params, prior):\n    return '   '"
+    with charter_scope(Charter(functions=(("judge", empty),))):
+        assert judge("write_file", {}, []) == []
+
+
+def test_a_source_over_the_ceiling_is_dropped_rather_than_cut() -> None:
+    """Half of a function is not a shorter function: the cut lands mid-token,
+    the gate reports a syntax error, and the verb answers silence -- which for
+    ``judge`` turns every refusal it carried into permission."""
+    from raven.agent.subagent.charter import MAX_CODE_CHARS
+
+    oversized = "def judge(name, params, prior):\n    return [" + ", ".join([repr("x" * 60)] * 200) + "]"
+    assert len(oversized) > MAX_CODE_CHARS
+
+    charter = parse({"functions": {"judge": oversized}})
+
+    assert charter is None, "a brief this process will not run carries no judge at all"

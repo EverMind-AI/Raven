@@ -20,8 +20,8 @@
         }},
         "participant": {"note": "Pure-data functions called through Memory participant seats.", "items": {
           "intake": {"enabled": true, "note": "May reshape inbound text or end before a model call."},
-          "system_addendum": {"enabled": false, "note": "May add text after the system prefix."},
-          "archive": {"enabled": false, "note": "May stamp data on the completed turn record."}
+          "system_addendum": {"enabled": true, "note": "May add text after the system prefix."},
+          "archive": {"enabled": true, "note": "May stamp data on the completed turn record."}
         }}
       }
     },
@@ -50,23 +50,20 @@
           "select": {"enabled": false, "note": "Builds the host CapabilitySelection."}
         }},
         "participant": {"note": "Pure-data functions called through Capability participant seats.", "items": {
-          "select_tools": {"enabled": false, "note": "May reshape the full tool-schema array."}
+          "select_tools": {"enabled": true, "note": "May reshape the full tool-schema array."}
         }}
       }
     },
     "action": {
       "note": "Controls model-call checks and generated judgements.",
-      "parameters": {"note": "Data-only Action settings.", "items": {
-        "checks": {"enabled": true, "note": "Adds declarative checks before worker tool calls."},
-        "checksImpl": {"enabled": false, "note": "Would select an installed check implementation."}
-      }},
+      "parameters": {"note": "Data-only Action settings. A judgement is stated as the judge function, not as a rule table.", "items": {}},
       "functions": {"note": "Action functions grouped by execution seat.",
         "self": {"note": "Host-owned functions performing the model decision.", "items": {
           "decide": {"enabled": false, "note": "Builds the host LLMResponse."}
         }},
         "participant": {"note": "Pure-data functions called through Action participant seats.", "items": {
           "judge": {"enabled": true, "note": "Returns refusal sentences before one tool call."},
-          "review": {"enabled": false, "note": "May accept, resample, or end a model step."},
+          "review": {"enabled": true, "note": "May accept, resample, or end a model step."},
           "salvage": {"enabled": true, "note": "May supply a missing final reply."}
         }}
       }
