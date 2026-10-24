@@ -979,17 +979,11 @@ def test_a_silent_runtime_turn_is_taken_back_after_a_turn_the_message_tool_answe
     session = mgr.get_or_create("cron:job01")
     session.add_message("user", "anything new?", timestamp="2026-06-10T10:00:00")
     session.add_message("assistant", "still compiling", timestamp="2026-06-10T10:00:05")
-    session.add_message(
-        "user", "[Scheduled Task] check the build", timestamp="2026-06-10T11:00:00", origin="cron"
-    )
+    session.add_message("user", "[Scheduled Task] check the build", timestamp="2026-06-10T11:00:00", origin="cron")
     session.add_message("assistant", "", timestamp="2026-06-10T11:00:02", tool_calls=calls)
-    session.add_message(
-        "tool", "Message sent", timestamp="2026-06-10T11:00:03", tool_call_id="m1", name="message"
-    )
+    session.add_message("tool", "Message sent", timestamp="2026-06-10T11:00:03", tool_call_id="m1", name="message")
     session.add_message("assistant", "[SILENT]", timestamp="2026-06-10T11:00:09", silent=True)
-    session.add_message(
-        "user", "[Scheduled Task] check the build", timestamp="2026-06-10T12:00:00", origin="cron"
-    )
+    session.add_message("user", "[Scheduled Task] check the build", timestamp="2026-06-10T12:00:00", origin="cron")
     session.add_message("assistant", "[SILENT]", timestamp="2026-06-10T12:00:05", silent=True)
     mgr.save(session)
 
