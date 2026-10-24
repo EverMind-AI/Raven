@@ -36,9 +36,10 @@ A machine without uv gets one under
 unmanaged install, which writes no receipt under the home directory and
 changes no PATH; with neither uv nor a way to fetch it, the install stops
 and says so. So does a machine whose uv is older than
-:data:`UV_INDEX_SINCE` when pip there is configured with an index: such a
-uv ignores ``UV_DEFAULT_INDEX`` and would install from PyPI behind a plan
-that names the mirror. A uv an earlier install fetched under ``node_dir/.uv``
+:data:`UV_INDEX_SINCE` when the steps would give it an index -- the one pip
+there is configured with, or a mirror chosen over it: such a uv ignores
+``UV_DEFAULT_INDEX`` and would install from PyPI behind a plan that names the
+mirror. A uv an earlier install fetched under ``node_dir/.uv``
 is used in its place when it is there, so the next install fetches nothing.
 
 Each step is one ssh call through :func:`raven.acp_client.remote.run`; a step
@@ -155,12 +156,14 @@ class Plan:
 
     @property
     def uv_too_old(self) -> bool:
-        """Whether the machine's uv would ignore the configured index: older than :data:`UV_INDEX_SINCE`, or silent.
+        """Whether the machine's uv would ignore the index the steps give it: older than :data:`UV_INDEX_SINCE`,
+        or silent.
 
-        Only with an index configured: without one, uv's default is what the
-        plan says, and an old uv installs from it as well as a new one.
+        Only when the steps are given an index -- the machine's own, or a mirror
+        chosen over it: without one, uv's default is what the plan says, and an
+        old uv installs from it as well as a new one.
         """
-        return bool(self.uv and self.index) and _version_of_uv(self.uv_version) < UV_INDEX_SINCE
+        return bool(self.uv and (self.index or self.mirror)) and _version_of_uv(self.uv_version) < UV_INDEX_SINCE
 
     @property
     def uv_from(self) -> str:
@@ -189,8 +192,7 @@ class Plan:
             else "a Python 3.12 made by uv, kept beside it"
         )
         why = (
-            f"the machine has {_uv_said(self)}, and only uv {_SINCE} or later installs from the index pip is "
-            "configured with"
+            f"the machine has {_uv_said(self)}, and only uv {_SINCE} or later installs from {_index_given(self)}"
             if self.uv_too_old
             else "the machine has none"
         )
@@ -341,11 +343,13 @@ def plan(machine_id: str, *, node_dir: str | None = None, run: Runner = _run) ->
 
     ``node_dir`` is where to keep nodes when it should differ from the
     machine's registry row; the caller records it once the install succeeds.
-    A uv an earlier install fetched under ``node_dir/.uv`` stands in for the
-    machine's own when that one would ignore the index pip is configured
-    with (older than :data:`UV_INDEX_SINCE`, or silent about its version).
     An install's own index, timed in the look, that is no place to install
-    from has the mirrors timed in a second look (:func:`_faster`).
+    from has the mirrors timed in a second look (:func:`_faster`), and only
+    then is the uv the steps use settled (:func:`_with_uv`): a uv an earlier
+    install fetched under ``node_dir/.uv`` stands in for the machine's own
+    when that one would ignore the index they feed -- the configured one, or
+    the mirror chosen over it (older than :data:`UV_INDEX_SINCE`, or silent
+    about its version).
     """
     try:
         target = remote.machine(machine_id)
@@ -373,14 +377,6 @@ def plan(machine_id: str, *, node_dir: str | None = None, run: Runner = _run) ->
             "SPEED",
         }:
             seen[key] = value.strip()
-    index = seen.get("INDEX", "")
-    uv, uv_version = seen.get("UV", ""), seen.get("UV_VERSION", "")
-    own, own_version = seen.get("NODE_UV", ""), seen.get("NODE_UV_VERSION", "")
-    if index and uv and own != uv and _version_of_uv(uv_version) < UV_INDEX_SINCE <= _version_of_uv(own_version):
-        # The machine's own uv comes first in the look and would ignore the
-        # index; the one an earlier install fetched under node_dir reads it,
-        # and is used rather than fetched again.
-        uv, uv_version = own, own_version
     free = seen.get("FREE_KB", "")
     found = Plan(
         target=target,
@@ -388,15 +384,15 @@ def plan(machine_id: str, *, node_dir: str | None = None, run: Runner = _run) ->
         install_name=install_name,
         present=seen.get("PRESENT") == "1",
         python=seen.get("PYTHON", ""),
-        uv=uv,
+        uv=seen.get("UV", ""),
         free_kb=int(free) if free.isdigit() else None,
         fetch=seen.get("FETCH", ""),
-        index=index,
-        uv_version=uv_version,
+        index=seen.get("INDEX", ""),
+        uv_version=seen.get("UV_VERSION", ""),
     )
-    if not timed or found.present or refusal(found) is not None:
-        return found
-    return _faster(found, _timing(seen.get("SPEED", "")), run)
+    if timed and not found.present and refusal(found) is None:
+        found = _faster(found, _timing(seen.get("SPEED", "")), run)
+    return _with_uv(found, seen.get("NODE_UV", ""), seen.get("NODE_UV_VERSION", ""))
 
 
 @dataclass(frozen=True)
@@ -476,6 +472,33 @@ def _faster(p: Plan, own: _Timing | None, run: Runner) -> Plan:
     return dataclasses.replace(p, passed_over=why)
 
 
+def _with_uv(p: Plan, own: str, own_version: str) -> Plan:
+    """``p`` with the uv its steps use: the machine's own, unless one an earlier install left under ``node_dir``
+    reads the index they feed and the machine's own would ignore it.
+
+    The index they feed is the machine's own or, when that one was passed over,
+    the mirror chosen instead; either reaches uv through ``UV_DEFAULT_INDEX``,
+    which only uv :data:`UV_INDEX_SINCE` and later read. Decided here, after
+    that choice, because a mirror chosen for a machine whose pip names none is
+    an index as surely as a configured one, and an old uv would install from
+    PyPI behind the plan's mirror without this.
+    """
+    if not (p.index or p.mirror) or not p.uv or own == p.uv:
+        return p
+    if _version_of_uv(p.uv_version) < UV_INDEX_SINCE <= _version_of_uv(own_version):
+        # The machine's own uv comes first in the look and would ignore the
+        # index; the one an earlier install fetched under node_dir reads it,
+        # and is used rather than fetched again.
+        return dataclasses.replace(p, uv=own, uv_version=own_version)
+    return p
+
+
+def _index_given(p: Plan) -> str:
+    """The index the steps feed uv, as a sentence names it: the one pip is configured with, or, when pip names
+    none, the one an install gives it (a mirror chosen over PyPI, or PyPI itself)."""
+    return "the index pip is configured with" if p.index else "the index an install gives it"
+
+
 def refusal(p: Plan) -> str | None:
     """Why ``p`` cannot go ahead, or ``None`` when it can.
 
@@ -495,8 +518,8 @@ def refusal(p: Plan) -> str | None:
             )
     if p.how == "" and p.uv_too_old:
         return (
-            f"machine {p.target.label} has {_uv_said(p)}, and only uv {_SINCE} or later installs from the package "
-            f"index pip is configured with there; with no curl or wget to fetch uv {UV_VERSION}, upgrade uv there "
+            f"machine {p.target.label} has {_uv_said(p)}, and only uv {_SINCE} or later installs from "
+            f"{_index_given(p)} there; with no curl or wget to fetch uv {UV_VERSION}, upgrade uv there "
             f"({UV_INSTALLER}), then run this again"
         )
     if p.how == "":

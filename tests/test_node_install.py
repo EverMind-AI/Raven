@@ -288,6 +288,58 @@ def test_a_mirror_that_answers_with_an_error_is_not_taken_however_quick(registry
     assert install.plan("box", run=run).mirror == _ALIYUN
 
 
+_OLD_UV = "PYTHON=/usr/bin/python3.12\nUV=/usr/bin/uv\nUV_VERSION=0.4.0\nFETCH=/usr/bin/curl\nFREE_KB=2097152\n"
+
+
+def test_a_mirror_is_never_the_index_a_uv_too_old_to_read_one_is_given(registry, timed):
+    """0xKT, 2026-10-23: with pip naming no index and PyPI passed over, the mirror reaches uv only through
+    UV_DEFAULT_INDEX, which a uv older than 0.4.23 ignores -- so the plan said the mirror while both tries went to
+    PyPI. The uv the steps use is settled after the mirror now, and such a uv is fetched first."""
+    _, run = _says(
+        _OLD_UV + "SPEED=7 000 0 5.001000\n",
+        f"MIRROR=0 200 1165206 0.760254 {_TUNA}\n",
+    )
+
+    p = install.plan("box", run=run)
+
+    assert (p.index, p.mirror, p.uv_too_old, p.uv_from) == ("", _TUNA, True, "fetched")
+    assert "the machine has uv 0.4.0, and only uv 0.4.23 or later installs from the index an install gives it" in (
+        p.describe()
+    )
+    commands = dict(install.steps(p))
+    assert "uv" in commands and 'uv="$dir/.uv/uv"; ' in commands["packages"], "the pinned uv runs the packages"
+    # A uv new enough reads the mirror as it is, and is not replaced.
+    _, run = _says(_LOOK + "SPEED=7 000 0 5.001000\n", f"MIRROR=0 200 1165206 0.760254 {_TUNA}\n")
+    new = install.plan("box", run=run)
+    assert (new.mirror, new.uv_too_old, new.uv_from) == (_TUNA, False, "machine")
+    assert "uv" not in dict(install.steps(new))
+
+
+def test_a_mirror_the_steps_give_an_old_uv_takes_the_one_an_earlier_install_fetched(registry, timed):
+    look = (
+        "PYTHON=/usr/bin/python3.12\nUV=/usr/local/bin/uv\nUV_VERSION=0.4.22\n"
+        "NODE_UV=/home/worker/.raven-node/.uv/uv\nNODE_UV_VERSION=0.13.0\nFETCH=/usr/bin/curl\n"
+        "FREE_KB=2097152\nSPEED=7 000 0 5.001000\n"
+    )
+    _, run = _says(look, f"MIRROR=0 200 1165206 0.760254 {_TUNA}\n")
+
+    p = install.plan("box", run=run)
+
+    assert (p.mirror, p.uv, p.uv_from) == (_TUNA, "/home/worker/.raven-node/.uv/uv", "machine")
+    assert "uv" not in dict(install.steps(p)), "nothing is fetched twice"
+    assert "uv=/home/worker/.raven-node/.uv/uv; " in dict(install.steps(p))["packages"]
+
+
+def test_a_mirror_for_an_old_uv_with_nothing_to_fetch_one_with_is_refused():
+    p = _plan(index="", mirror=_TUNA, uv="/usr/bin/uv", uv_version="0.4.0", fetch="")
+
+    assert install.refusal(p) == (
+        "machine 'Lab box' (box) has uv 0.4.0, and only uv 0.4.23 or later installs from the index an install "
+        f"gives it there; with no curl or wget to fetch uv {install.UV_VERSION}, upgrade uv there "
+        f"({install.UV_INSTALLER}), then run this again"
+    )
+
+
 @pytest.mark.parametrize(
     ("mirrors", "rc"),
     [
@@ -765,7 +817,7 @@ def test_a_machine_uv_that_would_ignore_the_configured_index_is_not_the_one_used
     if not uv_from:
         said = f"uv {version}" if version else "a uv that does not say which version it is"
         assert install.refusal(p) == (
-            f"machine 'Lab box' (box) has {said}, and only uv 0.4.23 or later installs from the package index pip is "
+            f"machine 'Lab box' (box) has {said}, and only uv 0.4.23 or later installs from the index pip is "
             f"configured with there; with no curl or wget to fetch uv {install.UV_VERSION}, upgrade uv there "
             f"({install.UV_INSTALLER}), then run this again"
         )
