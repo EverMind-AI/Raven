@@ -784,6 +784,45 @@ def test_schema_proven_only_inside_the_sequential_window(state):
     assert rootless.reason == tdet.REASON_SCHEMA_UNPROVEN
 
 
+def test_schema_is_proven_for_parallel_dag_nodes_once_each_has_its_own_span(state):
+    """Two nodes of one graph, each with a model call and the tool call it led to, the
+    two model calls overlapping. Siblings under the graph's tool call, neither tool call
+    can be tied to its schema; under a span per node attempt, both are."""
+    schema_a = {"name": "foo", "parameters": {"v": "a"}}
+    schema_b = {"name": "foo", "parameters": {"v": "b"}}
+
+    def _graph(trace: str, turn: str, parent_a: str, parent_b: str, *, attempts: bool) -> list[dict]:
+        spans = [
+            _turn(state, trace, turn, start=0, end=100),
+            _tool(state, trace, f"{trace}-dag", turn, start=1, end=99, name="run_subagent_dag"),
+        ]
+        if attempts:
+            spans += [
+                _span(trace, parent_a, "subagent.run", parent=f"{trace}-dag", start=2, end=20),
+                _span(trace, parent_b, "subagent.run", parent=f"{trace}-dag", start=2, end=20),
+            ]
+        return spans + [
+            _llm(state, trace, f"{trace}-la", parent_a, start=2, end=10, tools=[schema_a], tool_names=["foo"]),
+            _llm(state, trace, f"{trace}-lb", parent_b, start=3, end=11, tools=[schema_b], tool_names=["foo"]),
+            _tool(state, trace, f"{trace}-ta", parent_a, start=12, end=13, name="foo"),
+            _tool(state, trace, f"{trace}-tb", parent_b, start=14, end=15, name="foo"),
+        ]
+
+    _append(
+        state,
+        _graph("t", "turn", "t-dag", "t-dag", attempts=False) + _graph("u", "turn2", "u-na", "u-nb", attempts=True),
+    )
+    index = _ready(state)
+
+    for span_id in ("t-ta", "t-tb"):
+        body = _schema_block(index, state, span_id)
+        assert (body.availability, body.reason) == (tdet.NOT_RECORDED, tdet.REASON_SCHEMA_UNPROVEN), span_id
+    for span_id, schema, source in (("u-ta", schema_a, "u-la"), ("u-tb", schema_b, "u-lb")):
+        body = _schema_block(index, state, span_id)
+        assert body.availability == tdet.AVAILABLE, span_id
+        assert (body.data["value"], body.data["source_span_id"]) == (schema, source)
+
+
 def test_schema_unproven_when_parent_llm_calls_overlap_or_are_unparseable(state):
     schema = {"name": "foo", "parameters": {}}
     spans = [
@@ -1118,6 +1157,33 @@ def test_a_subagent_run_s_agent_block_names_the_run(state):
         "subagent.dispatch": "spawn",
         "subagent.outcome": "failed",
     }
+
+
+def test_a_dag_node_attempt_s_agent_block_names_its_run_node_and_attempt(state):
+    final = _subagent_run(
+        end=9,
+        **{
+            "subagent.task_id": "pull",
+            "subagent.handle": "pull",
+            "subagent.dispatch": "dag",
+            "subagent.dag_run_id": "run-1",
+            "subagent.node_id": "pull",
+            "subagent.attempt": 2,
+            "subagent.in_progress": False,
+            "subagent.outcome": "completed",
+        },
+    )
+    _append(state, [_turn(state, "t", "turn", start=0, end=10), final])
+    index = _ready(state)
+
+    body = _block(index, state, _entry(index, "run", "subagent.run"), "agent")
+    items = {item["key"]: item["value"] for item in body.data["items"]}
+    assert {key: items.get(key) for key in ("subagent.dag_run_id", "subagent.node_id", "subagent.attempt")} == {
+        "subagent.dag_run_id": "run-1",
+        "subagent.node_id": "pull",
+        "subagent.attempt": 2,
+    }
+    assert items["subagent.dispatch"] == "dag"
 
 
 def test_a_running_subagent_run_is_described_as_a_snapshot_until_its_final_record(state):

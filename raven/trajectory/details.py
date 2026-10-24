@@ -276,7 +276,8 @@ _REGISTRY: dict[str, tuple[BlockSpec, ...]] = {
             "agent",
             KEY_VALUES,
             "subagent.label,subagent.task_id,subagent.origin_session,subagent.agent,subagent.instance,"
-            "subagent.handle,subagent.dispatch,subagent.outcome",
+            "subagent.handle,subagent.dispatch,subagent.outcome,subagent.dag_run_id,subagent.node_id,"
+            "subagent.attempt",
         ),
     ),
     "memory.recall": (

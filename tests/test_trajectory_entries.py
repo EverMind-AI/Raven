@@ -734,6 +734,92 @@ def test_a_subagent_run_meta_leaves_out_a_name_it_has_no_value_for(state, name, 
     assert {"label", "task_id", "agent", "instance", "handle", "dispatch", "outcome"} - {name} == set(meta)
 
 
+_ATTEMPT_ATTRS = {
+    "subagent.task": "pull it",
+    "subagent.label": "pull the feedback",
+    "subagent.task_id": "pull",
+    "subagent.origin_session": "cli:s",
+    "subagent.agent": "researcher",
+    "subagent.handle": "pull",
+    "subagent.dispatch": "dag",
+    "subagent.dag_run_id": "run-1",
+    "subagent.node_id": "pull",
+    "subagent.attempt": 1,
+    "subagent.in_progress": False,
+}
+
+
+def _dag_attempt(state, outcome, reason=None):
+    """A turn's run_subagent_dag call, and one attempt of its node with a model call of its own."""
+    status = {"code": "ERROR", "message": reason} if reason else None
+    return [
+        _span("t", "turn", "session.turn", start=0, end=9, attrs=_turn_attrs(state, "turn")),
+        _span(
+            "t",
+            "dag",
+            "tool.call",
+            parent="turn",
+            start=1,
+            end=9,
+            attrs=_tool_attrs(state, "run_subagent_dag", {}, "started"),
+        ),
+        _span(
+            "t",
+            "attempt",
+            "subagent.run",
+            parent="dag",
+            start=2,
+            end=8,
+            attrs={**_ATTEMPT_ATTRS, "subagent.outcome": outcome},
+            status=status,
+        ),
+        _span(
+            "t",
+            "step",
+            "llm.call",
+            parent="attempt",
+            start=3,
+            end=4,
+            attrs=_llm_attrs(state, "step", _messages("pull it"), {"content": "pulled"}),
+        ),
+    ]
+
+
+def test_a_dag_node_attempt_entry_names_the_node_in_its_meta(state):
+    entries = tent.project_entries(_dag_attempt(state, "completed"), state=state, read=True).entries
+
+    meta = _one(entries, "attempt", "subagent.run").meta
+    assert {key: meta.get(key) for key in ("label", "task_id", "agent", "handle", "dispatch", "outcome")} == {
+        "label": "pull the feedback",
+        "task_id": "pull",
+        "agent": "researcher",
+        "handle": "pull",
+        "dispatch": "dag",
+        "outcome": "completed",
+    }
+    assert "instance" not in meta
+
+
+@pytest.mark.parametrize(
+    ("outcome", "reason", "status", "evidence", "fails"),
+    [
+        ("completed", None, "ok", (), False),
+        ("failed", "boom", "error", ("span_error",), True),
+        ("exception", "a token", "error", ("span_error",), True),
+        ("continued", "a token", "error", ("span_error",), True),
+        ("cancelled", None, "cancelled", ("subagent_cancelled",), False),
+    ],
+)
+def test_a_dag_node_attempt_s_outcome_sets_its_entry_status(state, outcome, reason, status, evidence, fails):
+    entries = tent.project_entries(_dag_attempt(state, outcome, reason), state=state, read=True).entries
+
+    run = _one(entries, "attempt", "subagent.run")
+    assert (run.operation_status, run.status_evidence) == (status, evidence)
+    assert len([e for e in entries if e.span_id == "attempt" and e.failure_entry]) == (1 if fails else 0)
+    steps = [e for e in entries if e.span_id == "step"]
+    assert steps and all(e.turn_number == 1 and "turn_unknown" not in e.integrity for e in steps)
+
+
 def test_generic_owner_prefers_output_phase_over_key_order(state):
     both = {
         "foo.output.artifact_path": _artifact(state, {"o": 1}, "g-out"),
