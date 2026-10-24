@@ -411,6 +411,23 @@ All notable changes to Raven are documented here.
   keep the entries they had. A checkpoint read after the view trimmed the
   finished record of its turn or run no longer turns it back into running.
 
+- The trajectory view gives each attempt of a DAG node an entry of its own,
+  as it does a spawned sub-agent. The node's model and tool calls, its
+  external agent's run and its judge's model calls nest under that entry,
+  where they used to sit as siblings under the graph's tool call and the
+  steps of nodes running side by side could not be told apart. The entry
+  reads running as soon as the node starts and then says how the attempt
+  ended: completed; failed, waiting on a decision, or sent back by its judge
+  with a follow-up -- each an error, with the reason -- or cancelled. A node
+  continued or sent back gets an entry per attempt, and a node that never
+  ran gets none. The tool schema of a node's tool call, which could not be
+  traced for any node of a graph, now names the model call that made it. A
+  report a node sends -- one that needs a decision, or a stall notice --
+  starts a turn that links to the attempt that sent it rather than to the
+  call that dispatched the graph. The attempt's `subagent.run` span carries
+  `subagent.dispatch` (`dag`), `subagent.dag_run_id`, `subagent.node_id` and
+  `subagent.attempt`; graphs recorded before this keep the entries they had.
+
 - An empty reply from a model behind OpenRouter (`content: " "`,
   `finish_reason: stop`) is no longer reported as an upstream transport
   failure and retried for minutes before the verdict's own sentence is
