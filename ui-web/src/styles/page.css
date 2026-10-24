@@ -1066,7 +1066,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 #plusPop { width: 220px; }
 #atPop { width: 240px; }
 #wdPop { width: 200px; }
-#wdPop[data-view="browse"] { width: 300px; }
+#wdPop[data-view="browse"], #wdPop[data-view="drives"] { width: 300px; }
 #permPop { width: 200px; }
 .pop .chrome-hr { height: 1px; background: var(--line-soft); margin: 4px 6px; }
 #plusPop .prow, #atPop .prow, #wdPop .prow, #permPop .prow { align-items: center; gap: 9px; padding: 7px 9px; border-radius: 8px; }
@@ -1102,8 +1102,18 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .chrome-wd-nav:hover:not(:disabled) { color: var(--text); background: var(--surface); }
 .chrome-wd-nav:disabled { opacity: .4; }
 .chrome-wd-nav svg { width: 14px; height: 14px; }
-.chrome-wd-p { flex: 1; min-width: 0; font-family: var(--mono); font-size: 11px; color: var(--text);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.chrome-wd-p { flex: 1; min-width: 0; font-family: var(--mono); font-size: 11px; color: var(--text); }
+/* The path is a field: a folder the walk cannot reach can still be typed in,
+   so the bar keeps the path's look and drops the form control's. Left to
+   right, as anything typed into must be: right to left would draw C:\ as \:C
+   and move the caret against the text. Showing a long path from its end is
+   the component's job (WorkdirPopover.tsx's showEnd). */
+.chrome-wd-typed { appearance: none; border: 0; border-radius: 6px; background: none; padding: 3px 4px;
+  outline: none; }
+.chrome-wd-typed:hover { background: var(--surface); }
+.chrome-wd-typed:focus { background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); }
+.chrome-wd-typed::placeholder { color: var(--faint); direction: ltr; }
+.chrome-wd-drives { color: var(--muted); }
 .chrome-wd-list { max-height: 236px; overflow-y: auto; padding: 4px 0; }
 #wdPop .chrome-wd-list .prow { padding: 5px 9px; }
 #wdPop .chrome-wd-list .prow .pico { width: 13px; height: 13px; flex: none; color: var(--faint); }
@@ -6776,7 +6786,6 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   display: block;
   text-decoration: none;
 }
-.sarow.task > .tkerr { margin-top: 3px; }
 /* The prototype's own three-state dot, shared with the task pane's status
    bar: moss running, clay only for a failure or an interruption, faint grey
    for everything else settled -- carried by `data-st` rather than a new

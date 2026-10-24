@@ -4459,6 +4459,10 @@ export interface FsDirsResult {
    */
   ok: boolean;
   /**
+   * The filesystem roots, listed only while the directory listed is one: a root has no parent, so on a host with several (Windows drives) they are reachable no other way. Every drive is listed, the one the browser stands on included, each judged as a folder row is.
+   */
+  roots?: FsDirEntry[];
+  /**
    * Subdirectories only, dotfiles omitted, sorted by name; at most the first 500 found.
    */
   entries: FsDirEntry[];

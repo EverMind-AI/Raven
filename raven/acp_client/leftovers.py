@@ -419,6 +419,11 @@ def launch_env() -> dict[str, str]:
     return {} if host is None else {_MARK: _stem(host["host_pid"], host["host_start"])}
 
 
+def unmarked(env: Mapping[str, str]) -> dict[str, str]:
+    """``env`` without any host's mark, for a process that has to outlive whichever host started it."""
+    return {key: value for key, value in env.items() if key != _MARK}
+
+
 def record(pgid: int, agent: str) -> None:
     """Note a group this host launched, so a later host can end it if this one dies first."""
     if _platform() is None:

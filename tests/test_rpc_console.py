@@ -11,7 +11,7 @@ import asyncio
 import shutil
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from types import SimpleNamespace
 
 import pytest
@@ -2416,6 +2416,92 @@ async def test_fs_dirs_marks_the_listed_directory_itself(tmp_path: Path, monkeyp
     assert beside["ok"] is True
 
 
+async def test_fs_dirs_hands_back_a_non_ascii_folder_unchanged(tmp_path: Path, monkeypatch) -> None:
+    """The walk is the whole Windows path now, so a folder whose name is not
+    ASCII has to survive it exactly. The native dialog read its answer off a
+    console stream whose code page the gateway did not share, and a name
+    outside ASCII came back as replacement characters that matched no
+    directory. Escapes, not literals, so this file stays English source."""
+    outer, inner = "\u9879\u76ee", "\u5de5\u4f5c"
+    (tmp_path / outer / inner).mkdir(parents=True)
+    _agent_home(monkeypatch, tmp_path / ".raven" / "workspace")
+
+    r = await console_module.fs_dirs({"path": str(tmp_path)})
+    entry = next(e for e in r["entries"] if e["name"] == outer)
+    assert entry["path"] == str((tmp_path / outer).resolve())
+    assert entry["ok"] is True
+    inside = await console_module.fs_dirs({"path": entry["path"]})
+    assert inside["path"] == entry["path"]
+    assert [e["name"] for e in inside["entries"]] == [inner]
+
+
+async def test_fs_dirs_at_a_root_offers_the_way_to_every_other_root(tmp_path: Path, monkeypatch) -> None:
+    """A root has no parent, so the upward walk stops there and every other
+    filesystem is unreachable: a project on D: cannot be picked by a browser
+    that started under C:. The other roots are offered as rows instead, and
+    only at a root -- further down they are siblings of nothing. A host with
+    one root (the POSIX ones) offers none: its parent walk reaches that root
+    already."""
+    _agent_home(monkeypatch, tmp_path / ".raven" / "workspace")
+    monkeypatch.setattr(console_module.sys, "platform", "linux")
+
+    r = await console_module.fs_dirs({"path": str(Path(tmp_path.anchor))})
+    assert r["parent"] is None
+    assert r["roots"] == []
+
+    below = await console_module.fs_dirs({"path": str(tmp_path)})
+    assert below["roots"] == []
+
+
+def test_fs_dirs_lists_the_drives_of_a_windows_host(monkeypatch) -> None:
+    """Every drive by its own name, while the browser stands on a root: a
+    project on another drive is reachable only from this list, since no folder
+    has it as a child. Empty anywhere below a root. Windows paths whatever host
+    runs the suite: on a POSIX one `Path("C:/")` is a relative path."""
+    monkeypatch.setattr(console_module.sys, "platform", "win32")
+    monkeypatch.setattr(console_module, "_windows_drives", lambda: ["C:\\", "D:\\", "E:\\"])
+
+    assert console_module._roots_at(PureWindowsPath("C:/")) == ["C:\\", "D:\\", "E:\\"]
+    assert console_module._roots_at(PureWindowsPath("D:/projects")) == []
+    monkeypatch.setattr(console_module.sys, "platform", "linux")
+    assert console_module._roots_at(PurePosixPath("/")) == []
+
+
+def test_windows_drives_reads_the_system_list_and_survives_its_absence(monkeypatch) -> None:
+    """The one call the drive list rests on, driven on any host: a Windows
+    interpreter answers with `os.listdrives`, and one that lacks it or fails
+    leaves the browser without the list rather than failing the listing."""
+    monkeypatch.setattr(console_module.os, "listdrives", lambda: ["C:\\", "D:\\"], raising=False)
+    assert console_module._windows_drives() == ["C:\\", "D:\\"]
+
+    def refuse() -> list[str]:
+        raise OSError("the drive table could not be read")
+
+    monkeypatch.setattr(console_module.os, "listdrives", refuse, raising=False)
+    assert console_module._windows_drives() == []
+    monkeypatch.delattr(console_module.os, "listdrives", raising=False)
+    assert console_module._windows_drives() == []
+
+
+async def test_fs_dirs_judges_every_root_it_offers(tmp_path: Path, monkeypatch) -> None:
+    """A root row carries the same `ok` as a folder row. The drive holding the
+    agent's own data is an ancestor of agent home, which `session.create`
+    refuses, so its row is greyed like any other ancestor -- and still a way
+    in, since its other folders may be fine working directories."""
+    home = tmp_path / "raven-drive" / ".raven" / "workspace"
+    home.mkdir(parents=True)
+    (tmp_path / "other-drive").mkdir()
+    _agent_home(monkeypatch, home)
+    held, other = str(tmp_path / "raven-drive"), str(tmp_path / "other-drive")
+    monkeypatch.setattr(console_module, "_roots_at", lambda target: [held, other])
+
+    r = await console_module.fs_dirs({"path": str(tmp_path)})
+    assert r["roots"] == [
+        {"name": held, "path": held, "ok": False},
+        {"name": other, "path": other, "ok": True},
+    ]
+
+
 # ---------------------------------------------------------------------------
 # fs.pick_dir -- the host's own folder dialog
 # ---------------------------------------------------------------------------
@@ -2512,18 +2598,35 @@ async def test_fs_pick_dir_reports_a_dialog_that_would_not_start(monkeypatch) ->
 
 
 def test_fs_pick_dir_knows_a_dialog_for_each_desktop(monkeypatch) -> None:
-    """One command per platform, the Linux one only where a tool is on PATH and
-    there is a display to show it on (see the next case)."""
+    """One command per desktop, the Linux one only where a tool is on PATH and
+    there is a display to show it on (see the next case). Windows has a dialog
+    to offer -- FolderBrowserDialog -- but it opens behind the browser, so it
+    answers None like a headless host: see the case below."""
     monkeypatch.setattr(folder_dialog.sys, "platform", "darwin")
     assert folder_dialog.pick_dir_argv()[0] == "osascript"
     monkeypatch.setattr(folder_dialog.sys, "platform", "win32")
-    assert folder_dialog.pick_dir_argv()[0] == "powershell"
+    assert folder_dialog.pick_dir_argv() is None
     monkeypatch.setattr(folder_dialog.sys, "platform", "linux")
     monkeypatch.setenv("DISPLAY", ":0")
     monkeypatch.setattr(folder_dialog.shutil, "which", lambda name: name == "kdialog")
     assert folder_dialog.pick_dir_argv()[0] == "kdialog"
     monkeypatch.setattr(folder_dialog.shutil, "which", lambda name: False)
     assert folder_dialog.pick_dir_argv() is None
+
+
+def test_fs_pick_dir_finds_no_dialog_on_windows(monkeypatch) -> None:
+    """Windows ships a folder dialog, but a gateway is a background process and
+    Windows will not let one take the foreground: the dialog is created behind
+    the browser and the click reads as nothing happening. So the host answers
+    as a hostless one does and the page walks the folders instead -- the
+    failure this replaces, measured with the gateway's own spawn on
+    2026-10-22. A display variable, which a Windows
+    host does not set, must not reach the Linux tools either."""
+    monkeypatch.setattr(folder_dialog.sys, "platform", "win32")
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setattr(folder_dialog.shutil, "which", lambda name: True)
+    assert folder_dialog.pick_dir_argv() is None
+    assert folder_dialog.folder_dialog_available() is False
 
 
 def test_fs_pick_dir_finds_no_dialog_on_a_linux_host_with_no_display(monkeypatch) -> None:
@@ -2570,7 +2673,7 @@ async def test_fs_dirs_reports_a_directory_it_cannot_read(tmp_path: Path, monkey
 async def test_fs_dirs_finds_a_directory_that_sorts_past_the_files(tmp_path: Path, monkeypatch) -> None:
     """The cap counts directories found, so the files a folder sits behind
     cannot hide it. Bounding the names examined instead would answer "no
-    subfolders" here, and the picker has no typed path to reach it by."""
+    subfolders" for a folder that plainly has one."""
     _agent_home(monkeypatch, tmp_path / "home")
     root = tmp_path / "root"
     root.mkdir()
