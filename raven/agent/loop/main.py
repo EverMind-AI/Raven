@@ -842,6 +842,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         stream: bool = True,
         usage_sink: dict[str, Any] | None = None,
         text_sink: dict[str, Any] | None = None,
+        reply_awaited: bool = False,
     ) -> "TurnOutcome":
         """Bind the turn to its session's model; see ``_run_turn`` for the turn.
 
@@ -981,6 +982,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                     stream=stream,
                     usage_sink=usage_sink,
                     text_sink=text_sink,
+                    reply_awaited=reply_awaited,
                 )
             if capture is not None:
                 await self._finish_playbook_turn(resolution, capture, binding)

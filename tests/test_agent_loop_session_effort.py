@@ -213,18 +213,16 @@ async def test_the_compaction_summary_opts_out_of_the_sessions_effort(tmp_path):
     final, _used, _messages, outcome = await loop._run_agent_loop(_seeded_transcript(), session_key="acp:s1")
 
     assert final == "answer after compaction" and outcome.status == "completed"
-    assert provider.summary_efforts == [compaction.SUMMARY_REASONING_EFFORT], (
-        "a max session must not spend the summary's budget on thinking"
-    )
+    assert provider.summary_efforts == ["low"], "a max session must not spend the summary's budget on thinking"
     assert set(provider.main_efforts) == {"max"}, "only the summary opts out"
 
 
 @pytest.mark.asyncio
-async def test_the_compaction_summary_names_the_floor_even_with_no_policy_effort(tmp_path):
+async def test_the_compaction_summary_names_its_effort_even_with_no_policy_effort(tmp_path):
     """Unstated is not the same as little. The run this fix comes from named no
     effort at all, so the backend picked -- and what it picked spent the whole
-    summary budget. The floor is stated outright rather than left open, which
-    does override a provider default configured for the turn's own calls.
+    summary budget. Low is stated outright rather than left open, which does
+    override a provider default configured for the turn's own calls.
     """
     provider = _CompactingProvider()
     loop = AgentLoop(
@@ -243,7 +241,7 @@ async def test_the_compaction_summary_names_the_floor_even_with_no_policy_effort
 
     await loop._run_agent_loop(_seeded_transcript(), session_key="acp:s1")
 
-    assert provider.summary_efforts == [compaction.SUMMARY_REASONING_EFFORT]
+    assert provider.summary_efforts == ["low"]
 
 
 @pytest.mark.asyncio

@@ -87,6 +87,10 @@ def _render_message(msg: dict[str, Any]) -> str:
         # trail, and a record that drops what it cannot attribute is worse than
         # one that attributes it correctly.
         heading = f"## ⚙️ Runtime ({origin})"
+    if role == "assistant" and msg.get("silent") is True:
+        # The model's silence marker, which no reader was sent. Kept for the same
+        # reason, and labelled so the record does not say someone got it as an answer.
+        heading = f"{heading} (silence marker, not delivered)"
     if role == "tool":
         name = msg.get("name") or msg.get("tool_call_id") or ""
         suffix = f": `{name}`" if name else ""

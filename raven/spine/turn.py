@@ -16,6 +16,13 @@ class Origin(StrEnum):
     SUBAGENT = "subagent"
 
 
+# The origins the runtime starts on its own: they share the system pool and read the loose silence
+# rule. SUBAGENT is the turn that re-injects a result; a sub-agent's own execution runs off the
+# scheduler behind a separate gate. An inbound A2A call runs as HEARTBEAT too, and its peer does wait
+# on the text, so that entrance runs its turn with ``reply_awaited``, outside the silence protocol.
+PROACTIVE_ORIGINS = frozenset({Origin.SENTINEL, Origin.CRON, Origin.HEARTBEAT, Origin.SUBAGENT})
+
+
 class AnswerlessTurnError(Exception):
     """A runner's own report that the turn it ran ended with no answer.
 
@@ -30,9 +37,13 @@ class AnswerlessTurnError(Exception):
     that with -- and the lane copies it onto ``TurnFailed.full_detail``.
     """
 
-    def __init__(self, *args: object, full_detail: str | None = None) -> None:
+    def __init__(self, *args: object, full_detail: str | None = None, no_output: bool = False) -> None:
         super().__init__(*args)
         self.full_detail = full_detail
+        # The last reply had no text, no tool call and nothing else to show (no reasoning, refusal or cut at the
+        # output ceiling) once recovery was spent; with recovery off, no text at all, a refusal excepted, which
+        # fails as a refusal either way. Earlier attempts are not covered.
+        self.no_output = no_output
 
 
 class BusyPolicy(StrEnum):

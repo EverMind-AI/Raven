@@ -20,6 +20,7 @@ from raven.agent.hook.adapters import DecisionConsumerAdapter
 from raven.agent.loop import AgentLoop
 from raven.agent.loop._shared import _MID_TURN_HEADER
 from raven.agent.loop.bundles import HostWiring
+from raven.agent.loop.recovery import NETWORK_CUT_CONTINUATION
 from raven.contracts.llm_provider import ChatDelta, LLMResponse, ToolCallRequest
 from raven.contracts.loop_hooks import AgentHook, HookDecision
 from raven.contracts.tool import Tool, ToolResult
@@ -137,7 +138,11 @@ class _FakeChatProvider:
 
 class _FakeStreamProvider:
     """Yields scripted stream chunks via ``chat_stream`` (the streaming path that
-    ``run(req, emit)`` takes when emitting ChatDelta tokens)."""
+    ``run(req, emit)`` takes when emitting ChatDelta tokens).
+
+    Every scripted stream in this module ends with the terminal chunk a real
+    provider sends. The loop continues a stream that dies after its words, as
+    the ones below that raise do, and not one that merely closes."""
 
     def __init__(self, chunks: list[ChatDelta]) -> None:
         self._chunks = chunks
@@ -145,6 +150,7 @@ class _FakeStreamProvider:
     async def chat_stream(self, **kwargs):
         for chunk in self._chunks:
             yield chunk
+        yield ChatDelta(content=None, finish_reason="stop")
 
     def get_default_model(self) -> str:
         return "fake/model"
@@ -164,6 +170,7 @@ class _FakeStreamToolProvider:
         self._i += 1
         for chunk in script:
             yield chunk
+        yield ChatDelta(content=None, finish_reason="stop")
 
     def get_default_model(self) -> str:
         return "fake/model"
@@ -585,6 +592,119 @@ async def test_run_emits_one_episode_start_per_model_call(tmp_path):
     assert first_ep < first_tool
 
 
+class _CutThenContinued:
+    """The first stream dies after its opening words and the second finishes the
+    answer, keeping the messages each call was sent."""
+
+    def __init__(self) -> None:
+        self.calls: list[list[dict]] = []
+
+    async def chat_stream(self, **kwargs):
+        self.calls.append(list(kwargs.get("messages") or []))
+        if len(self.calls) == 1:
+            yield ChatDelta(content="Hello ")
+            raise ConnectionError("connection reset by peer")
+        yield ChatDelta(content="world.")
+        yield ChatDelta(content=None, finish_reason="stop")
+
+    def get_default_model(self) -> str:
+        return "fake/model"
+
+
+async def test_a_cut_answer_is_continued_in_the_same_step(tmp_path):
+    # A stream that dies after "Hello " is continued instead of failing the turn, and
+    # the continuation streams into the step the cut call opened: one boundary, one
+    # unbroken run of deltas for the reader, and one saved answer.
+    provider = _CutThenContinued()
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    sink = _EmitCollector()
+
+    await loop.run_turn(_req("hi"), sink, _drain, stream=True)
+
+    assert len(provider.calls) == 2
+    assert provider.calls[1][-1]["content"] == NETWORK_CUT_CONTINUATION
+    assert len([e for e in sink.events if isinstance(e, EvEpisodeStart)]) == 1
+    assert "".join(e.delta for e in sink.events if isinstance(e, EvStreamDelta)) == "Hello world."
+    session = loop.sessions.get_or_create("cli:c")
+    assert session.messages[-1]["role"] == "assistant"
+    assert session.messages[-1]["content"] == "Hello world."
+
+
+class _CutThenActsThenAnswers:
+    """The first stream dies after its opening words, the continuation calls a tool,
+    and the call after the tool answers."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def chat_stream(self, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            yield ChatDelta(content="Hello ")
+            raise ConnectionError("connection reset by peer")
+        if self.calls == 2:
+            yield ChatDelta(
+                content=None,
+                tool_call_delta={
+                    "tool_calls": [{"index": 0, "id": "t1", "function": {"name": "faketool", "arguments": "{}"}}]
+                },
+            )
+        else:
+            yield ChatDelta(content="done")
+        yield ChatDelta(content=None, finish_reason="stop")
+
+    def get_default_model(self) -> str:
+        return "fake/model"
+
+
+async def test_the_step_after_a_continued_answer_opens_as_usual(tmp_path):
+    # The boundary is skipped once, for the continuation alone: the call after the
+    # tool the continuation made is a step of its own.
+    provider = _CutThenActsThenAnswers()
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_FakeTool())
+    sink = _EmitCollector()
+
+    await loop.run_turn(_req("hi"), sink, _drain, stream=True)
+
+    assert provider.calls == 3
+    assert [e.index for e in sink.events if isinstance(e, EvEpisodeStart)] == [0, 1]
+
+
+class _CutAtTheCeilingThenAnswers:
+    """An empty reply that stopped at the output ceiling, then the answer."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def chat_stream(self, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            yield ChatDelta(content=None, finish_reason="length", usage={"prompt_tokens": 3, "completion_tokens": 4096})
+            return
+        yield ChatDelta(content="done")
+        yield ChatDelta(content=None, finish_reason="stop")
+
+    def get_default_model(self) -> str:
+        return "fake/model"
+
+
+async def test_the_other_continuations_still_open_a_step_of_their_own(tmp_path):
+    # Only a cut answer is carried on in the step it opened: a call that is asked
+    # again because it produced nothing is a step of its own, as it always was.
+    provider = _CutAtTheCeilingThenAnswers()
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    sink = _EmitCollector()
+
+    await loop.run_turn(_req("hi"), sink, _drain, stream=True)
+
+    assert provider.calls == 2
+    assert [e.index for e in sink.events if isinstance(e, EvEpisodeStart)] == [0, 1]
+
+
 async def test_inject_message_merged_before_next_iteration(tmp_path):
     # BusyPolicy.INJECT: a message injected mid-turn is drained at the next
     # iteration's top and appended as a user message before that LLM call.
@@ -600,6 +720,7 @@ async def test_inject_message_merged_before_next_iteration(tmp_path):
             self._i += 1
             for chunk in script:
                 yield chunk
+            yield ChatDelta(content=None, finish_reason="stop")
 
         def get_default_model(self) -> str:
             return "fake/model"
@@ -653,6 +774,7 @@ class _RecordingStreamProvider:
         self._i += 1
         for chunk in script:
             yield chunk
+        yield ChatDelta(content=None, finish_reason="stop")
 
     def get_default_model(self) -> str:
         return "fake/model"
@@ -867,6 +989,7 @@ async def test_a_row_recorded_during_a_tool_call_reaches_the_next_llm_call(tmp_p
             self._i += 1
             for chunk in script:
                 yield chunk
+            yield ChatDelta(content=None, finish_reason="stop")
 
         def get_default_model(self) -> str:
             return "fake/model"
@@ -1732,3 +1855,129 @@ async def test_run_turn_hands_the_lane_the_long_account_of_a_crash(tmp_path):
         await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
 
     assert raised.value.full_detail == f"RuntimeError: {message}"
+
+
+# ── a turn the model ends on a silence marker ──
+
+
+class _ComposesOnSilence(AgentHook):
+    """An after_send hook that has something to add only when the model said nothing."""
+
+    async def after_send(self, ctx):
+        if ctx.outbound_content is None:
+            return HookDecision(modified_content="\n\nDeck: /out/deck.pptx")
+        return HookDecision()
+
+
+async def test_a_silent_turn_emits_its_notice_and_reports_itself_silent(tmp_path):
+    """Nothing streams, no Text follows, one notice says why, and the outcome carries it to the spine."""
+    chunks = [ChatDelta(content="[SIL"), ChatDelta(content="ENT]")]
+    loop = AgentLoop(provider=_FakeStreamProvider(chunks), workspace=tmp_path)
+    _stub_edges(loop)
+    sink = _EmitCollector()
+
+    outcome = await loop.run_turn(_req("anything new?"), sink, _drain)
+
+    assert not any(isinstance(e, EvStreamDelta) for e in sink.events), "no delta carried any of the marker"
+    assert not any(isinstance(e, EvText) for e in sink.events)
+    assert [e.kind for e in sink.events if isinstance(e, EvNotice)] == [NoticeKind.SILENT_TURN]
+    assert outcome.silent is True
+    assert outcome.explicit_reply is False
+
+
+async def test_a_turn_that_replied_emits_no_silent_notice(tmp_path):
+    loop = AgentLoop(provider=_FakeStreamProvider([ChatDelta(content="all quiet")]), workspace=tmp_path)
+    _stub_edges(loop)
+    sink = _EmitCollector()
+
+    outcome = await loop.run_turn(_req("anything new?"), sink, _drain)
+
+    assert not any(isinstance(e, EvNotice) and e.kind is NoticeKind.SILENT_TURN for e in sink.events)
+    assert outcome.silent is False and outcome.explicit_reply is True
+
+
+async def test_the_marker_is_not_streamed_to_a_person_that_prefixes_it(tmp_path):
+    """The strict rule's reader: what merely starts like a marker is held, and shown the moment it is no marker."""
+    chunks = [ChatDelta(content="NO"), ChatDelta(content="T yet")]
+    loop = AgentLoop(provider=_FakeStreamProvider(chunks), workspace=tmp_path)
+    _stub_edges(loop)
+    sink = _EmitCollector()
+
+    outcome = await loop.run_turn(_req("done?"), sink, _drain)
+
+    assert [e.delta for e in sink.events if isinstance(e, EvStreamDelta)] == ["NOT yet"]
+    assert outcome.silent is False
+
+
+@pytest.mark.parametrize("stream", [True, False])
+async def test_what_a_hook_composes_on_a_silent_turn_reaches_the_reader(tmp_path, stream):
+    """``after_send`` still runs on a silent turn, and text a hook composes there is the reply. Nothing
+    streamed, so it is sent whole and without the separator the hook put in front; the turn is not
+    silent, and nothing says otherwise."""
+    provider = (
+        _FakeStreamProvider([ChatDelta(content="[SILENT]")])
+        if stream
+        else _FakeChatProvider([LLMResponse(content="[SILENT]", finish_reason="stop")])
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path, host=HostWiring(hooks=[_ComposesOnSilence()]))
+    _stub_edges(loop)
+    sink = _EmitCollector()
+
+    outcome = await loop.run_turn(_req("anything new?"), sink, _drain, stream=stream)
+
+    assert [e.content for e in sink.events if isinstance(e, EvText)] == ["Deck: /out/deck.pptx"]
+    assert not any(isinstance(e, EvStreamDelta) for e in sink.events)
+    assert not any(isinstance(e, EvNotice) and e.kind is NoticeKind.SILENT_TURN for e in sink.events)
+    assert outcome.silent is False and outcome.explicit_reply is True
+
+
+async def test_a_hook_tail_after_words_that_already_streamed_keeps_its_separator(tmp_path):
+    """The model said something beside a tool call and then ended on a marker. Those words are on the
+    reader's screen, so the hook's text follows them as the tail it is, with the separator that sets it apart."""
+    provider = _FakeStreamToolProvider(
+        [
+            [
+                ChatDelta(content="Building it. "),
+                ChatDelta(
+                    content=None,
+                    tool_call_delta={
+                        "tool_calls": [{"index": 0, "id": "t1", "function": {"name": "faketool", "arguments": "{}"}}]
+                    },
+                ),
+            ],
+            [ChatDelta(content="[SILENT]")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path, host=HostWiring(hooks=[_ComposesOnSilence()]))
+    _stub_edges(loop)
+    loop.tools.register(_FakeTool())
+    sink = _EmitCollector()
+
+    outcome = await loop.run_turn(_req("build it"), sink, _drain)
+
+    assert [e.delta for e in sink.events if isinstance(e, EvStreamDelta)] == [
+        "Building it. ",
+        "\n\nDeck: /out/deck.pptx",
+    ]
+    assert not any(isinstance(e, EvText) for e in sink.events)
+    assert outcome.silent is False
+
+
+async def test_a_marker_after_the_message_tool_sent_does_not_make_the_turn_silent(tmp_path):
+    """The tool's text is the answer and it is on the reader's screen. A surface told the turn ended
+    silent would take that text away, so only the marker is held back and the turn stays an answered one."""
+    provider = _FakeStreamToolProvider(
+        [
+            [_message_tool_call('{"content": "here you go"}')],
+            [ChatDelta(content="NO_REPLY")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    sink = _EmitCollector()
+
+    outcome = await loop.run_turn(_req("send it"), sink, _drain)
+
+    assert [e.delta for e in sink.events if isinstance(e, EvStreamDelta)] == ["here you go"]
+    assert not any(isinstance(e, EvNotice) and e.kind is NoticeKind.SILENT_TURN for e in sink.events)
+    assert outcome.silent is False and outcome.explicit_reply is True

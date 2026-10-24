@@ -715,6 +715,9 @@ describe('transcript island, history', () => {
       '',
       'When you reply, mention when the reminder was originally set '
         + '(e.g. "the reminder you set at 17:05 ...") so the user remembers the context.',
+      '',
+      'SILENT: If there is genuinely nothing new to report, respond with exactly "[SILENT]" (nothing else) '
+        + 'to suppress delivery.',
     ].join('\n')
 
     const bubble = (): HTMLElement => $('.msg.me[data-auto]') as HTMLElement
@@ -733,6 +736,9 @@ describe('transcript island, history', () => {
       expect(said).not.toContain('Scheduled instruction:')
       expect(said).not.toContain('[Scheduled Task]')
       expect(said).not.toContain('When you reply')
+      /* The paragraph after the closing line, which teaches the model its
+         silence marker and is as much the prompt as the line above it. */
+      expect(said).not.toContain('SILENT')
     })
 
     /* Every other origin has a shape of its own that nothing here reads, so
@@ -2773,6 +2779,157 @@ describe('transcript island, streaming', () => {
     expect($('.answer .prose')?.textContent).toBe('the whole answer')
     expect($$('.step')).toHaveLength(0)
     expect($('.turn.ai > .ansfoot .turnmeta')?.textContent).toBeTruthy()
+  })
+})
+
+/* A turn the model ended on its silence marker has no answer. The reader gets
+   one quiet line saying so, drawn the same live and after a reload, and what
+   the turn said on the way stays narration under its fold instead of being
+   lifted into an answer. */
+describe('transcript island, a turn the model chose not to answer', () => {
+  const LABEL = 'en:gui.notice.silent_turn'
+  const quiet = (): HTMLElement[] => $$('.tnote:not(.bad)') as HTMLElement[]
+  const labels = (): Array<string | null | undefined> => quiet().map((n) => n.querySelector('.tx')?.textContent)
+
+  /* What the stage does on the notice, in its order: the open step is sealed
+     and its reply taken back, then the quiet row is drawn; the turn lands
+     flagged silent after. The notice has let go of the open step by then, so
+     finishTurn is handed none -- only the list of steps the turn ran. */
+  const hush = (open: ReturnType<typeof mount.step> | null): void => {
+    act(() => {
+      if (open) { open.seal(); open.dropSay() }
+      mount.note(LABEL, '', { quiet: true })
+    })
+  }
+
+  /* The frames a streaming step asks for, run by hand: the preview is only
+     on screen once its frame has fired. */
+  const rafQ: FrameRequestCallback[] = []
+  beforeEach(() => {
+    rafQ.length = 0
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { rafQ.push(cb); return rafQ.length })
+    vi.stubGlobal('cancelAnimationFrame', () => {})
+  })
+
+  it('renders one muted line and no answer for a silent turn', () => {
+    act(() => { mount.ask('anything new?') })
+    hush(null)
+    act(() => { mount.finishTurn(null, [], '3s', true) })
+
+    expect(labels()).toEqual([LABEL])
+    expect($$('.tnote.bad')).toHaveLength(0)
+    expect($$('.answer')).toHaveLength(0)
+    expect($$('.tfold')).toHaveLength(0)
+  })
+
+  it('a reloaded silent row renders the same muted line', async () => {
+    /* The row the offline library sends for a scheduled run that found nothing
+       to report, read through the same transport the page runs on offline. */
+    const { demoFixtures } = await import('../../rpc/fixtures')
+    const { FixtureTransport } = await import('../../rpc/fixtureTransport')
+    const { messages } = await new FixtureTransport(demoFixtures).call('session.resume', { session_id: 'k3' })
+    const firing = messages.slice(-2) as HistoryMessage[]
+    expect(firing[1]).toMatchObject({ role: 'assistant', silent: true })
+
+    act(() => { mount.history(firing) })
+
+    expect(labels()).toEqual([LABEL])
+    expect($$('.tnote.bad')).toHaveLength(0)
+    expect($$('.answer')).toHaveLength(0)
+    /* Neither the marker nor the reminder's own instruction to use it. */
+    expect(document.body.textContent).not.toContain('SILENT')
+  })
+
+  it('drops a preview that had already streamed when the turn ends silent', () => {
+    act(() => { mount.ask('anything new?') })
+    let st!: ReturnType<typeof mount.step>
+    act(() => { st = mount.step(); st.sayDelta('abc') })
+    act(() => { rafQ.forEach((cb) => cb(0)) })
+    expect($('.say')?.textContent).toContain('abc')
+
+    hush(st)
+    act(() => { mount.finishTurn(null, [st], '3s', true) })
+    openFolds()
+
+    expect(document.body.textContent).not.toContain('abc')
+    expect($$('.answer')).toHaveLength(0)
+    expect(labels()).toEqual([LABEL])
+  })
+
+  it('keeps what the turn said on the way as narration, never as its answer', () => {
+    act(() => { mount.ask('anything new?') })
+    let first!: ReturnType<typeof mount.step>
+    let last!: ReturnType<typeof mount.step>
+    act(() => {
+      first = mount.step()
+      first.setSay('Checking the logs.')
+      first.tool('read_file', { path: '/tmp/a.log' }, null).done(true, 'quiet', 9)
+      first.seal()
+      last = mount.step()
+    })
+
+    hush(last)
+    act(() => { mount.finishTurn(null, [first, last], '4s', true) })
+
+    /* Without the flag the last step that said something is the answer, and
+       that is this narration. */
+    expect($$('.answer')).toHaveLength(0)
+    openFolds()
+    expect($('.tfold')?.textContent).toContain('Checking the logs.')
+    expect(labels()).toEqual([LABEL])
+  })
+
+  it('reloads the same way: the narration stays in the fold and nothing is the answer', () => {
+    const t0 = Date.now() - 20000
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'anything new?', timestamp: iso(t0) },
+        {
+          role: 'assistant', text: 'Checking the logs.', timestamp: iso(t0 + 2000),
+          tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{"path":"/tmp/a.log"}' }],
+        },
+        { role: 'tool', tool_call_id: 'c1', name: 'read_file', text: 'quiet' },
+        { role: 'assistant', text: '[SILENT]', silent: true, timestamp: iso(t0 + 5000) },
+      ])
+    })
+
+    expect($$('.answer')).toHaveLength(0)
+    expect(document.body.textContent).not.toContain('[SILENT]')
+    openFolds()
+    expect($('.tfold')?.textContent).toContain('Checking the logs.')
+    const order = [...document.querySelectorAll('.turn.me, .tfold, .answer, .tnote')]
+      .map((n) => n.className.split(' ')[0])
+    expect(order).toEqual(['turn', 'tfold', 'tnote'])
+    expect(labels()).toEqual([LABEL])
+  })
+
+  it('keeps the thought the model had before it chose to say nothing', () => {
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'anything new?', timestamp: iso(Date.now() - 9000) },
+        {
+          role: 'assistant', text: '[SILENT]', silent: true, reasoning_content: 'Nothing changed since the last run.',
+          timestamp: iso(Date.now() - 3000),
+        },
+      ])
+    })
+
+    expect($$('.answer')).toHaveLength(0)
+    openFolds()
+    expect($('.tfold .cot')?.textContent).toContain('Nothing changed since the last run.')
+    expect(labels()).toEqual([LABEL])
+  })
+
+  it('leaves a row without the flag alone, whatever it says', () => {
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'what do I say when there is nothing to report?', timestamp: iso(Date.now() - 9000) },
+        { role: 'assistant', text: '[SILENT]', timestamp: iso(Date.now() - 3000) },
+      ])
+    })
+
+    expect($('.answer .prose')?.textContent).toBe('[SILENT]')
+    expect(quiet()).toHaveLength(0)
   })
 })
 

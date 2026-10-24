@@ -31,11 +31,9 @@ from raven.agent.loop.failure_streak import (
 )
 from raven.agent.loop.no_progress import NoProgressAction, NoProgressGuard
 from raven.agent.loop.recovery import (
-    OUTPUT_LIMIT_NUDGE,
     POST_TOOL_NUDGE,
     RecoveryAction,
     RecoveryLimits,
-    classify_empty_response,
     is_only_think_debris,
     strip_think_blocks,
 )
@@ -106,6 +104,11 @@ _ABORTED_ACTION_REPLY = (
 # to ``notice`` for storage, the same way ``_diff`` becomes ``diff``: the
 # underscore keeps it out of the provider payload while the turn is live.
 _NOTICE_KEY = "_notice"
+
+# Marks the stored assistant row that is a silence marker the model wrote, so a
+# reload can tell it from an answer. Same underscore-then-rename convention as
+# ``_notice``: ``_save_turn`` writes it as ``silent``.
+_SILENT_KEY = "_silent"
 
 # Marks the user entry of a turn the runtime opened on the agent's behalf, with
 # the origin that opened it. Same underscore-then-rename convention as
@@ -217,22 +220,39 @@ class LoopOutcome:
     next turn's recovery prompt.
 
     ``error`` is the loop's own account of why this turn has no answer, in the
-    words a reader is shown: a model call it gave up on, or an empty-response
-    recovery that spent every budget without a word coming back. None when the
-    turn produced an answer or a hook salvaged one, and also when the turn
-    returned no text at all with the recovery switched off, which the caller
-    fails on by itself. The caller fails the turn on it unless one of the
-    turn's tools has already put an answer in front of the reader.
+    words a reader is shown: a model call it gave up on, or a reply that
+    recovery could not mend (nothing, only thinking, a cut that stayed cut, a
+    refusal). None when the turn produced an answer or a hook salvaged one, and
+    also when the turn returned no text at all with the recovery switched off,
+    which the caller fails on by itself; a refusal is the exception, worded here
+    whether the recovery is on or off. The caller fails the turn on it unless
+    one of the turn's tools has already put an answer in front of the reader.
 
     ``error_full`` is the same failure at length: the failed call's content
     unbounded, then the body its call record kept. The caller raises it with
     the error so a reader who expands the row can read it, and the runner drops
     it when it says nothing more than ``error`` (``attach_full_detail``).
+
+    ``no_output`` is set when the turn ended on a last reply with no text, no tool
+    call and nothing else to show for it: no reasoning, no refusal, no cut at the
+    output ceiling. Recovery sets it once it has spent its moves on such a reply;
+    with recovery switched off, any last reply without text sets it, thinking
+    included, because nothing there says more than that -- except a refusal,
+    which fails as a refusal either way and leaves it unset. A turn the message
+    tool had already answered can carry it too, on a last reply with no text of
+    its own; nothing fails that turn, so nothing reads it. The attempts before
+    the last are not covered: they may have thought.
+
+    ``silent`` is set when the turn's last reply is a silence marker. That is the
+    model's answer, not a failure and not an empty reply: the row stays in the
+    history and carries ``_silent``, and the reader is shown none of it.
     """
 
     status: str = "completed"  # "completed" | "interrupted" | "error"
     error: str | None = None
     error_full: str | None = None
+    no_output: bool = False
+    silent: bool = False
     checkpoint_id: str | None = None
     edited_files: list[str] = field(default_factory=list)
 

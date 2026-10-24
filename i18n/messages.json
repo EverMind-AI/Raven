@@ -2519,6 +2519,10 @@
       "en": "A question went unanswered, so the turn continued without an answer.",
       "zh": "有提问没有得到回答，这一回合在没有答案的情况下继续了。"
     },
+    "gui.notice.silent_turn": {
+      "en": "Raven chose not to reply.",
+      "zh": "Raven 选择不回复。"
+    },
     "gui.hub.auto_use": {
       "zh": "技能由 Raven 按需自动使用，暂不支持单独停用",
       "en": "Skills are picked up by Raven on demand; per-skill toggling is not supported yet"

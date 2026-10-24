@@ -696,3 +696,152 @@ async def test_api_stream_usage_survives_sdk_reassembly(monkeypatch, name, cost)
     assert response.usage["prompt_tokens"] == 100
     assert response.usage["cache_read_input_tokens"] == 60
     assert response.usage["cache_creation_input_tokens"] == 10
+
+
+# ---------- how the upstream said the reply ended --------------------------------
+
+
+def _response_with(message: Any, *, finish_reason: str | None = "stop", usage: Any = None) -> Any:
+    """A real ``ModelResponse`` around ``message``.
+
+    ``Choices`` writes ``stop`` over a finish reason of None when it is built, so
+    a choice that never carried one has to be cleared after.
+    """
+    from litellm.types.utils import Choices, ModelResponse, Usage
+
+    response = ModelResponse(
+        choices=[Choices(finish_reason="stop", index=0, message=message)],
+        usage=usage or Usage(prompt_tokens=3, completion_tokens=2, total_tokens=5),
+    )
+    response.choices[0].finish_reason = finish_reason
+    return response
+
+
+def test_a_missing_finish_reason_reads_unknown() -> None:
+    """A reply that never said how it ended was reported as ``stop``, which made a
+    reply cut by the connection indistinguishable from a finished one."""
+    from litellm.types.utils import Message
+
+    parsed = _make_provider()._parse_response(
+        _response_with(Message(content="hi", role="assistant"), finish_reason=None)
+    )
+
+    assert parsed.content == "hi"
+    assert parsed.finish_reason == "unknown"
+
+
+def test_a_structured_refusal_is_a_refusal() -> None:
+    """OpenAI-shaped upstreams put a refusal in ``message.refusal`` and leave
+    ``content`` null, so the reply read as an empty response, whatever the
+    ``stop`` beside it said."""
+    from litellm.types.utils import Message
+
+    parsed = _make_provider()._parse_response(
+        _response_with(Message(content=None, role="assistant", refusal="I can't"))
+    )
+
+    assert parsed.content == "I can't"
+    assert parsed.finish_reason == "refusal"
+
+
+def test_a_refusal_is_an_answer_whatever_its_accounting_says() -> None:
+    """An empty reply whose prompt was billed as a token is judged a request the
+    upstream never processed. A refusal is the reply, so that judgment must not
+    reach it."""
+    from litellm.types.utils import Message, Usage
+
+    refused = _response_with(
+        Message(content=None, role="assistant", refusal="I can't"),
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    )
+
+    parsed = _make_provider()._parse_response(refused, sent_chars=12000)
+
+    assert parsed.finish_reason == "refusal"
+    assert parsed.error_classification is None
+
+
+@dataclass
+class _RefusingDelta(_FakeDelta):
+    refusal: str | None = None
+
+
+class _SdkLikeWrapper:
+    """A stream wrapper that keeps the SDK's finish bookkeeping: no reason is
+    received until a chunk carrying one has gone by, so everything before the final
+    chunk is read while both records are still empty."""
+
+    def __init__(self, chunks: list[Any]) -> None:
+        self._chunks = iter(chunks)
+        self.received_finish_reason: str | None = None
+        self.intermittent_finish_reason: str | None = None
+
+    def __aiter__(self) -> "_SdkLikeWrapper":
+        return self
+
+    async def __anext__(self) -> Any:
+        try:
+            chunk = next(self._chunks)
+        except StopIteration:
+            raise StopAsyncIteration from None
+        reason = chunk.choices[0].finish_reason if chunk.choices else None
+        if reason:
+            self.received_finish_reason = self.intermittent_finish_reason = reason
+        return chunk
+
+    async def aclose(self) -> None:
+        pass
+
+
+def _refusal_stream() -> _SdkLikeWrapper:
+    return _SdkLikeWrapper(
+        [
+            _FakeChunk(choices=[_FakeChoice(delta=_RefusingDelta(refusal="I can't"))]),
+            _FakeChunk(choices=[_FakeChoice(delta=_FakeDelta(content=None), finish_reason="stop")]),
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_refusal_keeps_its_finish(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A refusal streams as ``delta.refusal`` and the stream then closes on a plain
+    ``stop``. The refusal is the verdict; the stop only says the stream is over."""
+    from raven.providers.streaming import stream_llm_call
+
+    async def fake_acompletion(**_: Any):
+        return _refusal_stream()
+
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
+
+    response = await stream_llm_call(
+        _make_provider(), messages=[{"role": "user", "content": "hi"}], tools=None, model="openai/gpt-4o"
+    )
+
+    assert response.content == "I can't"
+    assert response.finish_reason == "refusal"
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_refusal_is_not_taken_for_a_made_up_stop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The wrapper has recorded no finish reason when a refusal goes by, which is
+    the very state that marks a stop as the library's own invention. A refusal is
+    read off a chunk the upstream sent, so it is never that."""
+
+    async def fake_acompletion(**_: Any):
+        return _refusal_stream()
+
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
+
+    deltas = [d async for d in _make_provider().chat_stream(messages=[{"role": "user", "content": "hi"}])]
+
+    assert (deltas[0].content, deltas[0].finish_reason) == ("I can't", "refusal")
+    assert deltas[0].finish_synthesized is False
+
+
+def test_a_delta_without_a_refusal_is_unchanged() -> None:
+    """The SDK's own delta type does not declare the field, so most chunks never
+    carry one."""
+    delta = _make_provider()._normalize_stream_chunk(_chunk("token"))
+
+    assert delta is not None
+    assert (delta.content, delta.finish_reason) == ("token", None)

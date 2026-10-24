@@ -39,6 +39,7 @@ from typing import Any
 from raven.acp.tool_kinds import locations, title_for, tool_kind
 from raven.acp.updates import notice_text, turn_failure_text
 from raven.security import redact
+from raven.session.turn_shape import turn_called_message_tool
 
 # A replayed transcript is bounded by what a client can draw, not by what is
 # stored: a session with two thousand messages would otherwise emit two thousand
@@ -61,7 +62,9 @@ def replay(messages: Any, *, session_id: str, cwd: str | None = None) -> list[di
     """
     if not isinstance(messages, list):
         return []
-    entries = [m for m in messages if isinstance(m, dict) and m.get("role")]
+    # Before the cap, which bounds what a client draws: a turn that is never
+    # drawn takes none of that room.
+    entries = _without_silent_runtime_turns([m for m in messages if isinstance(m, dict) and m.get("role")])
     dropped = max(0, len(entries) - MAX_REPLAYED_MESSAGES)
     if dropped:
         entries = entries[-MAX_REPLAYED_MESSAGES:]
@@ -81,6 +84,37 @@ def replay(messages: Any, *, session_id: str, cwd: str | None = None) -> list[di
     for entry in entries:
         updates.extend(_replay_entry(entry, cwd=cwd))
     return updates
+
+
+def _without_silent_runtime_turns(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The transcript less every turn the runtime opened and the model closed
+    with its silence marker.
+
+    The marker is sent as no text, so such a turn replayed as the runtime's prose
+    for the model, drawn as a user message, with no answer under it. The whole
+    turn goes, the narration and tool calls on the way included, by the rule the
+    session list reads a transcript with (``SessionManager._scan_file``): only a
+    user row carrying ``origin`` opens a turn that can be taken back, so a
+    person's own message stays when the model answers it with silence. A turn
+    that called the message tool stays too: the message tool answered it, so it
+    is not a Silent Turn whatever it ends on, and its reply reached the reader.
+    That rule is read from one place (``raven/session/turn_shape.py``), so the
+    session list and this replay cannot come to disagree about which turn
+    answered.
+    """
+    kept: list[dict[str, Any]] = []
+    opened_at: int | None = None
+    for entry in entries:
+        role = entry.get("role")
+        if role == "user":
+            opened_at = len(kept) if entry.get("origin") else None
+        elif role == "assistant" and entry.get("silent") is True and opened_at is not None:
+            start, opened_at = opened_at, None
+            if not turn_called_message_tool(kept[start:]):
+                del kept[start:]
+                continue
+        kept.append(entry)
+    return kept
 
 
 def _replay_entry(entry: dict[str, Any], *, cwd: str | None) -> list[dict[str, Any]]:
@@ -111,6 +145,10 @@ def _assistant(entry: dict[str, Any], *, cwd: str | None) -> list[dict[str, Any]
     it (that is what ``action_blocked`` means), and the text stored beside it is
     the runtime's instruction to the model, not an answer, so the notice is
     drawn in the text's position and the text itself is not sent.
+
+    A ``silent`` entry is the model's own silence marker, and the live turn sent
+    no text for it either, so its text is not replayed: a client would draw
+    ``[SILENT]`` as the agent's reply. What the model thought before it stays.
     """
     ended = entry.get("turn_ended")
     if isinstance(ended, dict):
@@ -123,7 +161,7 @@ def _assistant(entry: dict[str, Any], *, cwd: str | None) -> list[dict[str, Any]
     if isinstance(notice, dict):
         if said := notice_text(notice):
             out.append(_chunk("agent_message_chunk", _clip(said)))
-    elif text := _text_of(entry):
+    elif entry.get("silent") is not True and (text := _text_of(entry)):
         out.append(_chunk("agent_message_chunk", text))
     for call in entry.get("tool_calls") or ():
         announced = _tool_call(call, cwd=cwd)

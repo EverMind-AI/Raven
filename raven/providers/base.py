@@ -867,10 +867,10 @@ class LLMProvider(_LLMProviderPaper):
         """The reasoning keys a request for this effort would carry.
 
         Asked when a caller needs to know whether two efforts are the *same
-        request*, which is not answerable from the labels: the empty-response
-        retry only pays for itself if the request it re-sends differs, and on a
-        wire that collapses two rungs onto one value the second retry is the
-        first failure again at full price.
+        request*, which is not answerable from the labels: the step-down that
+        asks a thinking-only reply again at a lower effort only pays for itself
+        if the request it sends differs, and on a wire that collapses two rungs
+        onto one value the lower rung is the first failure again at full price.
 
         Here the effort travels as the label the caller named, so the label is
         the shape and every rung is its own request. An adapter that translates

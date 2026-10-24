@@ -202,9 +202,10 @@ check-and-reserve transaction:
 - The task-discovery menu is policy-gated. A user-selected option is a separate
   execution path, not a second pass through ProactiveSpawn for every action.
 - Cron is explicitly user-scheduled and bypasses `check()`. With a Sentinel
-  runner wired, successful fires update its shared counters and topic ledger.
-  This helps suppress overlapping Sentinel reminders; it is not a guarantee
-  of semantic deduplication across all messages.
+  runner wired, successful fires update its shared counters and topic ledger,
+  except a run the model ends with `[SILENT]`: it nudged no one, so it records
+  nothing. This helps suppress overlapping Sentinel reminders; it is not a
+  guarantee of semantic deduplication across all messages.
 
 ## State and feedback
 
@@ -282,10 +283,12 @@ broadcast. `raven/core/cron_stack.py` submits the work as a `CRON` turn in
 
 Successful recurring fires increase `silent_fire_count`; matching user
 activity resets it. Reaching `silent_fire_limit` (default `12`) disables the
-job. This counts fires without user activity, not failures. Cron's feedback
-record is marked neutral so it does not lower Sentinel's learned acceptance
-rate. Fixed-delay `every` schedules compute their next run from completion,
-not from the previous due time.
+job. This counts fires without user activity, not failures. A run the model
+ends with `[SILENT]` is not counted either: it sent the user nothing to
+respond to, so a check that mostly stays quiet is not disabled for it. Cron's
+feedback record is marked neutral so it does not lower Sentinel's learned
+acceptance rate. Fixed-delay `every` schedules compute their next run from
+completion, not from the previous due time.
 
 HeartbeatService (`schedulers/heartbeat/service.py`) checks `HEARTBEAT.md`
 with a structured model decision and runs agent work only on a `run` result.
@@ -294,10 +297,17 @@ while user work is busy. Wake drives Heartbeat, not Sentinel's tick loop.
 
 A successful Cron turn that explicitly replies uses the Spine's delivery
 path and does not enqueue a completion event or wake Heartbeat to repeat the
-reminder. Silent completions and failures still wake Heartbeat, as do missed
-reminders and automatic disabling. A successful retry clears its pending
-failure event; an explicit reply also clears any earlier silent completion.
-Unrelated events stay queued.
+reminder. The reminder also teaches the `[SILENT]` marker. Cron is a
+proactive origin, so a marker alone on the first or last line, or `[SILENT]`
+opening the reply, counts too, and a note on why the model stayed quiet does
+not defeat it. A run that ends this way is recorded as a success and delivers
+nothing: it enqueues no event and wakes no Heartbeat. A run in which the model
+produced no output after every retry is recorded as failed, delivers nothing,
+and does not wake Heartbeat either. Every other failure still wakes
+Heartbeat, as do a success that ends with neither a reply nor a marker,
+missed reminders and automatic disabling. A successful retry clears its
+pending failure event; an explicit reply or a `[SILENT]` run also clears any
+earlier completion event. Unrelated events stay queued.
 
 The Spine's Scheduler routes turns into per-conversation Lanes and origin
 concurrency pools; DeliveryHub routes output to outlets. User-inbound and

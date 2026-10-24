@@ -57,8 +57,10 @@ def _emit_cron_event(
     remains in the cron service's error log (a successful retry resets
     ``last_error``).
 
-    An explicit reply already used the spine's delivery path and clears any
-    earlier silent completion. Only silent successes need a completion event;
+    ``explicit_reply`` says the run left nothing for heartbeat to follow up:
+    its reply already used the spine's delivery path, or the model ended on a
+    silence marker and chose to deliver nothing. Either clears any earlier
+    completion event. Only a success with neither needs a completion event;
     otherwise heartbeat can send the same reminder again.
 
     Best-effort like the ledger write: an emit failure must neither
@@ -146,7 +148,7 @@ def make_on_cron_job(
     trigger-time resolution, forwarding, or broadcast.
 
     ``readback_texts`` is build_gateway's per-conversation reply-text map, the
-    spine read-back channel for the return value and silent completion event:
+    spine read-back channel for the return value and the completion event:
     a CRON turn submits, then this reads back its reply from
     ``readback_texts[cron:<job_id>]`` (the runner stored
     it before result() resolved) and pops it. The submitter cannot pass run_turn's
@@ -165,14 +167,19 @@ def make_on_cron_job(
     nudges on the same topic within the dedup window. Without this,
     Sentinel and Cron are blind to each other and the user gets double-
     nudged on the same subject (e.g. user-asked "5/25 birthday cron"
-    fires AND Sentinel proactively reminds at 5/22).
+    fires AND Sentinel proactively reminds at 5/22). A silent run (the
+    model ended on a silence marker) nudged no one, so it writes nothing.
 
     ``system_events`` / ``wake`` are optional. When wired (gateway path),
-    each silent completion or failed cron run enqueues a system event and
-    requests an early heartbeat tick, so the main heartbeat session learns what
-    happened in the isolated ``cron:<job_id>`` session and can decide on
-    follow-ups. A successful turn that explicitly replied clears its pending
-    failure and completion events without waking heartbeat again.
+    a failed cron run, or a success that ended with neither a reply nor a
+    silence marker, enqueues a system event and requests an early heartbeat
+    tick, so the main heartbeat session learns what happened in the isolated
+    ``cron:<job_id>`` session and can decide on follow-ups. Two outcomes never
+    reach heartbeat: a run the model ended with a silence marker (a success with
+    nothing to report) and a run it gave no output for at all
+    (``TurnFailed.no_output``, which the job still records as an error). A
+    successful turn that replied or stayed silent clears its pending failure and
+    completion events without waking heartbeat again.
     Only effective for jobs executed in this process — a CLI test-fire
     runs in its own process and cannot reach the gateway's queue.
 
@@ -180,14 +187,16 @@ def make_on_cron_job(
     fire ('every'/'cron' kinds; one-shots can't run away) is counted via
     ``record_fire`` — the anti-runaway guard that auto-disables a job
     after ``silent_fire_limit`` consecutive fires with no user activity
-    on its (channel, to). Failed turns are not counted: a job that never
-    delivers is a different problem than one that spams. On auto-disable
-    the in-memory job is flipped too, so the service's post-run writeback
-    persists the disable instead of recomputing a next run.
+    on its (channel, to). Failed turns are not counted, and neither are
+    silent ones: a job that never delivers is a different problem than one
+    that spams, and a silent run gave the user nothing to respond to. On
+    auto-disable the in-memory job is flipped too, so the service's post-run
+    writeback persists the disable instead of recomputing a next run.
     """
 
     async def on_cron_job(job: "CronJob") -> str | None:
         from raven.spine import ChatType, Origin, Source, TurnFailed, TurnRequest
+        from raven.spine.silence import SILENCE_INSTRUCTION
 
         # Include the originally-scheduled time so the reminder text can
         # echo "set at 17:05" back to the user — otherwise the agent only
@@ -199,7 +208,8 @@ def make_on_cron_job(
             f"Scheduled instruction: {job.payload.message}\n\n"
             "When you reply, mention when the reminder was originally set "
             '(e.g. "the reminder you set at 17:05 ...") so the user remembers the '
-            "context."
+            "context.\n\n"
+            f"{SILENCE_INSTRUCTION}"
         )
 
         channel = job.payload.channel or default_channel
@@ -266,15 +276,19 @@ def make_on_cron_job(
                 conversation=conversation,
             )
         failure_detail: str | None = None
+        tell_heartbeat = True
         try:
             outcome = await submit(req).result()
             if outcome is None or isinstance(outcome, TurnFailed):
                 # No answer reached anyone -- the turn failed, or a runtime reload
                 # cut it -- so the job records a failure, not a delivery.
                 failure_detail = _turn_failure_detail(outcome)
+                # Nobody is waiting on a run the model gave no output for, and the job
+                # records its failure; waking heartbeat would only relay it to the user.
+                tell_heartbeat = not (isinstance(outcome, TurnFailed) and outcome.no_output)
                 raise RuntimeError(failure_detail)
         except Exception as exc:
-            if system_events is not None and wake is not None:
+            if tell_heartbeat and system_events is not None and wake is not None:
                 # A turn that worded its own failure is quoted as it stands; only a
                 # crash on the way there needs its exception class to be legible.
                 detail = failure_detail or f"{type(exc).__name__}: {exc}"
@@ -288,8 +302,10 @@ def make_on_cron_job(
 
         # Anti-runaway: count this successful recurring fire. Best-effort —
         # a store I/O failure must not turn a delivered reminder into an
-        # error status.
-        if cron_service is not None and job.schedule.kind in _RECURRING_KINDS:
+        # error status. A silent run sent the user nothing to respond to, so it
+        # is not counted: an hourly check that mostly answers [SILENT] would
+        # otherwise be disabled at its twelfth fire.
+        if cron_service is not None and job.schedule.kind in _RECURRING_KINDS and not outcome.silent:
             try:
                 if cron_service.record_fire(job.id):
                     # Flip the in-flight job too: _writeback_after_run patches
@@ -326,11 +342,14 @@ def make_on_cron_job(
         # + record_dispatched), so its next tick on the same topic skips via
         # topic_quota. Bypasses policy.check(): the user scheduled this cron, so a
         # self-imposed DND / quota must only INFORM, not veto. No-op without sentinel.
-        if sentinel_runner is not None:
+        # A silent run nudged no one, so it leaves no record, for the same reason it
+        # is not counted above.
+        if sentinel_runner is not None and not outcome.silent:
             _record_cron_dispatch_to_ledger(sentinel_runner, job)
 
-        # An explicit reply is already on the delivery path; only a silent
-        # completion needs heartbeat to decide whether to notify the user.
+        # A reply is already on the delivery path and a silent run chose to deliver
+        # nothing; only a completion with neither needs heartbeat to decide whether
+        # to notify the user.
         if system_events is not None and wake is not None:
             _emit_cron_event(
                 system_events,
@@ -338,7 +357,7 @@ def make_on_cron_job(
                 job,
                 (response or "(no response)").strip(),
                 failed=False,
-                explicit_reply=outcome.explicit_reply,
+                explicit_reply=outcome.explicit_reply or outcome.silent,
             )
 
         return response

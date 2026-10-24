@@ -21,7 +21,7 @@ import pytest
 from raven.agent.hook import AgentHook, HookDecision
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import HostWiring, ToolWiring, TurnPolicy
-from raven.agent.loop.recovery import RecoveryLimits
+from raven.agent.loop.recovery import EMPTY_REPLY_FAILURE, RecoveryLimits
 from raven.contracts.llm_provider import CallRecord
 from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, ToolCallRequest
 from raven.spine.message import ChatType, Source
@@ -156,12 +156,14 @@ async def test_a_finished_turn_writes_no_marker(workspace):
 
 class _StreamingThenDying(LLMProvider):
     """Streams ``chunks``, then raises -- the shape a stop or a dropped
-    connection takes while the answer is already on the reader's screen."""
+    connection takes while the answer is already on the reader's screen.
+    ``mid_call`` has the model part-way through a tool call when it goes."""
 
-    def __init__(self, chunks: list[str], death: BaseException):
+    def __init__(self, chunks: list[str], death: BaseException, *, mid_call: bool = False):
         super().__init__(api_key="test")
         self._chunks = chunks
         self._death = death
+        self._mid_call = mid_call
 
     async def chat(self, messages, **kwargs: Any):
         raise AssertionError("the streaming path is the one under test")
@@ -171,14 +173,21 @@ class _StreamingThenDying(LLMProvider):
 
         for chunk in self._chunks:
             yield ChatDelta(content=chunk)
+        if self._mid_call:
+            yield ChatDelta(
+                content=None,
+                tool_call_delta={
+                    "tool_calls": [{"index": 0, "id": "c1", "function": {"name": "write_file", "arguments": '{"pa'}}]
+                },
+            )
         raise self._death
 
     def get_default_model(self) -> str:
         return "stub"
 
 
-async def _streamed_turn(workspace: Path, death: BaseException) -> None:
-    agent = _agent(workspace, _StreamingThenDying(["half an ", "answer"], death))
+async def _streamed_turn(workspace: Path, death: BaseException, *, mid_call: bool = False) -> None:
+    agent = _agent(workspace, _StreamingThenDying(["half an ", "answer"], death, mid_call=mid_call))
 
     async def _sink(_text: str) -> None:
         return None
@@ -204,8 +213,11 @@ async def test_a_cancelled_turn_files_its_question_once_with_what_had_streamed(w
 
 @pytest.mark.asyncio
 async def test_a_failed_turn_files_its_question_once_with_what_had_streamed(workspace):
+    """Words alone are handed back and continued when the stream dies, so the turn that
+    still fails here is one whose model was part-way through a tool call: there is no
+    answer to go on from, and the failure stands."""
     with pytest.raises(RuntimeError):
-        await _streamed_turn(workspace, RuntimeError("the socket went away"))
+        await _streamed_turn(workspace, RuntimeError("the socket went away"), mid_call=True)
 
     msgs = _persisted(workspace)
     users = [m for m in msgs if m.get("role") == "user"]
@@ -213,6 +225,56 @@ async def test_a_failed_turn_files_its_question_once_with_what_had_streamed(work
     assert any("half an answer" in str(m.get("content")) for m in msgs), "what streamed was lost"
     assert msgs[-1]["turn_ended"]["status"] == "failed"
     assert "the socket went away" in msgs[-1]["content"]
+
+
+class _CutThenDies(LLMProvider):
+    """Streams "half an " and loses the connection; the call that follows dies before it says a word."""
+
+    def __init__(self, death: BaseException):
+        super().__init__(api_key="test")
+        self._death = death
+        self.calls = 0
+
+    async def chat(self, messages, **kwargs: Any):
+        raise AssertionError("the streaming path is the one under test")
+
+    async def chat_stream(self, **kwargs: Any):
+        from raven.providers.base import ChatDelta
+
+        self.calls += 1
+        if self.calls == 1:
+            yield ChatDelta(content="half an ")
+            raise ConnectionError("connection reset by peer")
+        raise self._death
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+class _Refused(Exception):
+    status_code = 400  # fatal: neither reconnected nor waited out
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("death", "status"), [(_Refused("invalid request"), "failed"), (asyncio.CancelledError(), "cancelled")]
+)
+async def test_the_words_of_a_cut_answer_are_filed_when_its_continuation_dies_unheard(workspace, death, status):
+    """The cut answer's words sit in the loop's list as a recovery row that is never
+    persisted, and a continuation that dies before saying anything leaves the reader's
+    words as exactly that row's text. The rescue must not take them for committed, or
+    the answer the reader watched is gone on the next reload."""
+    agent = _agent(workspace, _CutThenDies(death))
+
+    async def _sink(_text: str) -> None:
+        return None
+
+    with pytest.raises(type(death)):
+        await agent._process_message(_make_msg("hello"), on_token_delta=_sink)
+
+    msgs = _persisted(workspace)
+    assert [(m["role"], m["content"]) for m in msgs[:-1]] == [("user", "hello"), ("assistant", "half an ")]
+    assert msgs[-1]["turn_ended"]["status"] == status
 
 
 # --- the other way a turn dies: an error response the ladder could not wait out ---
@@ -289,7 +351,7 @@ async def test_an_exhausted_empty_response_recovery_leaves_the_same_marker(works
         await agent._process_message(_make_msg("hello"))
 
     reason = str(failed.value)
-    assert reason == "The model returned no content on 3 attempt(s) (prefill 0, post-tool nudge 0, plain retry 2)."
+    assert reason == EMPTY_REPLY_FAILURE
     msgs = _persisted(workspace)
     assert [m["role"] for m in msgs] == ["user", "assistant"]
     assert msgs[-1]["turn_ended"] == {"status": "failed", "reason": reason}

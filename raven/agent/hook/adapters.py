@@ -126,7 +126,10 @@ class ResponseModifierAdapter(AgentHook):
 
     The modifier is called even when ``outbound_content`` is empty
     (matching the legacy code path), since callers may want to inject
-    content into an empty reply.
+    content into an empty reply. It is not called on a silent turn
+    (``outbound_content`` is None): what it adds would be sent as the whole
+    message, and a nudge it pops there is spent on a message the model never
+    wrote, so it stays queued for the next reply.
     """
 
     def __init__(self, callback: _ResponseModifierCallable) -> None:
@@ -137,7 +140,9 @@ class ResponseModifierAdapter(AgentHook):
         return "callback(response_modifier)"
 
     async def after_send(self, ctx: AgentHookContext) -> HookDecision:
-        original = ctx.outbound_content or ""
+        if ctx.outbound_content is None:
+            return HookDecision()
+        original = ctx.outbound_content
         try:
             modified = self._callback(ctx.session_key, original)
         except Exception as exc:  # noqa: BLE001

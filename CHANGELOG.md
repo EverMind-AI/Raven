@@ -188,6 +188,24 @@ All notable changes to Raven are documented here.
 
 ### Changed
 
+- Empty and abnormal model replies are handled the way Hermes Agent handles
+  them. A reply that is only a silence marker (`[SILENT]`, `SILENT`,
+  `NO_REPLY` or `NO REPLY`; a scheduled run, a sub-agent's report or a
+  Sentinel notice may wrap it in a note) ends the turn with nothing sent (an
+  A2A peer, which waits on the text, still gets the reply as written), and
+  the TUI and web UI draw one muted line, "Raven chose not to reply."; every
+  cron reminder teaches the marker, and a silent run counts as a success. An
+  empty reply is recovered by its kind: a plain one is resent unchanged up to
+  three times after a backoff (once when the call cost at least
+  `agents.defaults.emptyRetryCostThresholdUsd`, default 0.25 USD); one that
+  only thought is asked again and then at a lower reasoning effort; one cut
+  at the output limit is continued with more room; a refusal is never resent
+  but goes to a fallback model or fails with the model's explanation; and a
+  turn left with nothing fails in words that name what happened. A streamed
+  answer whose connection dies is continued where it stopped, then delivered
+  marked as partial if it stays cut. A compaction summary asks for reasoning
+  effort `low` instead of `minimal`, which Codex refuses.
+
 - A complete install now carries the `everos-cloud-memory` plugin, so the
   hosted EverOS is a memory backend a user can pick rather than a wheel
   attached to the release with no install path: the one-line installer,
@@ -1094,8 +1112,13 @@ All notable changes to Raven are documented here.
   hosting uses, waits out the same ladder after its one reconnect instead of
   failing the turn on the second error. An unattended run may also ask, with
   `agents.defaults.llmRetryAfterOutput`, for a streamed call that failed after
-  it had produced output to be asked again (the deck launcher does); off, the
-  turn fails as before.
+  it had produced output to be asked again (the deck launcher does). Off, the
+  turn's answering call now hands back the words that streamed: with
+  empty-response recovery on the turn continues them (see the entry on empty
+  and abnormal replies above), and with it off they are delivered as they
+  stand with a note that the reply is partial. A sub-agent run and the turn's
+  other model calls, such as the wrap-up of a turn that ran out of steps,
+  still treat the cut as before.
 - The deck engine's second reader is bounded: one reading stops at 240 s and
   names the pages it did not get to, a deck's readings together stop at 15 min,
   a reading is recorded at the version of the pixels it read (the build's own

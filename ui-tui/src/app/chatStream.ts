@@ -414,6 +414,11 @@ const dispatch = (
         showTransientNotice(event.payload.kind)
         return
       }
+      // The model ended the turn on its silence marker: the line below is all
+      // the turn has to say, and any preview already streamed is taken back.
+      if (event.payload.kind === 'silent_turn') {
+        turnController.recordSilentTurn()
+      }
       // Runtime prose, not the model's: never merged into the streamed answer.
       // Handed to the turn rather than appended here, because it arrives mid-turn
       // and this turn's steps reach the transcript only at `message.complete` --

@@ -122,6 +122,14 @@ export const noticeLine = (notice?: null | TranscriptNotice): string => {
 }
 
 /**
+ * What a silent entry is read as: the notice a live silent turn closes with. A
+ * marker after a message-tool reply is filed silent too, though the server sent
+ * no notice for that turn live, so a reload draws this line under the call that
+ * carried the reply.
+ */
+const SILENT_TURN_NOTICE: TranscriptNotice = { kind: 'silent_turn' }
+
+/**
  * The line a turn that died reads by, live or replayed -- one wording, for the
  * same reason `noticeLine` is one. With no reason the label stands alone.
  */
@@ -301,6 +309,7 @@ export const toTranscriptMessages = (rows: unknown, opts: { openTurn?: boolean }
       reasoning_content: reasoning,
       reasoning_ms: reasoningMs,
       role,
+      silent,
       text,
       tool_call_id: toolCallId,
       tool_calls: toolCalls,
@@ -402,7 +411,12 @@ export const toTranscriptMessages = (rows: unknown, opts: { openTurn?: boolean }
     // reader's language, as a system row: that closes the turn it belongs to
     // (see `foldRowsIntoEpisodes`), which lands it where the live path commits
     // it too -- after the turn's steps, before the artifact shelf.
-    const runtimeNotice = role === 'assistant' ? noticeLine(notice) : ''
+    //
+    // A silent entry is the model's own marker rather than runtime prose, but a
+    // reader is shown it the same way: its text is never drawn, and the line in
+    // its place is the one the live path closes a silent turn with. Any
+    // reasoning it carries is the model's work, and the branch below keeps it.
+    const runtimeNotice = role === 'assistant' ? noticeLine(notice ?? (silent ? SILENT_TURN_NOTICE : null)) : ''
 
     if (runtimeNotice) {
       if (calls.length || reasoning) {
@@ -625,6 +639,8 @@ interface TranscriptRow {
   reasoning_content?: string
   reasoning_ms?: number
   role?: string
+  /** See `TranscriptMessage.silent`: the model's silence marker, drawn as one muted line and never as an answer. */
+  silent?: boolean
   text?: string
   tool_call_id?: string
   tool_calls?: TranscriptToolCallRow[]

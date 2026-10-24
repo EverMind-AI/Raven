@@ -722,13 +722,15 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
 
         return
       case 'message.complete': {
-        const { finalMessages, finalText, wasInterrupted } = turnController.recordMessageComplete(ev.payload ?? {})
+        const { finalMessages, finalText, silent, wasInterrupted } = turnController.recordMessageComplete(
+          ev.payload ?? {}
+        )
 
         if (!wasInterrupted) {
-          const msgs: Msg[] = finalMessages.length ? finalMessages : [{ role: 'assistant', text: finalText }]
+          const msgs: Msg[] = finalMessages.length || silent ? finalMessages : [{ role: 'assistant', text: finalText }]
           msgs.forEach(appendMessage)
 
-          if (bellOnComplete && stdout?.isTTY) {
+          if (bellOnComplete && !silent && stdout?.isTTY) {
             stdout.write('\x07')
           }
         }

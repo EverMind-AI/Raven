@@ -842,6 +842,23 @@ async def test_a_degraded_organ_reaches_the_page_as_a_closing_notice():
     ]
 
 
+async def test_a_silent_turn_notice_reaches_clients():
+    """A silent turn sends no text, so without this frame a client sees a turn
+    that ended with nothing at all, which is also what a stalled one looks like.
+    It closes the turn, so it is a row that stays and not a status."""
+    from pydantic import TypeAdapter
+
+    from raven.rpc.models import TurnEvent
+
+    emitter = FakeEmitter()
+    outlet = RpcOutlet("tui", emitter)
+    await outlet.deliver(Notice(kind=NoticeKind.SILENT_TURN, conversation_id="tui:c1"))
+    assert emitter.emitted == [
+        ("tui:c1", {"type": "notice", "payload": {"kind": "silent_turn", "detail": "", "transient": False}})
+    ]
+    TypeAdapter(TurnEvent).validate_python(emitter.emitted[0][1])
+
+
 async def test_a_retry_wait_rides_notice_marked_transient_and_tagged_with_its_lane():
     """The other notice the runtime raises about a turn, and the opposite of a
     blocked action: the turn is still running, so a client must draw it where the

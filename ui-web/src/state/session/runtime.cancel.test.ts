@@ -8,6 +8,7 @@
  * page's turn layer. Characterisation, so the rewrite has a baseline.
  */
 
+import { act } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { fakeGateway, loadPart, looseQuery } from '../../../scripts/module-harness.mjs'
@@ -410,5 +411,97 @@ describe('the send queue', () => {
     h.registry.switchToDraft()
 
     expect(h.queue).toEqual([])
+  })
+})
+
+/* The page around a stop, whole: frames go through the pipeline, the stages and
+   the runtime into the real transcript island, so what a turn lands as is read
+   off the stage. Only what leaves the page is stood in for -- the OS
+   notification, the rail's writers and the page switch. */
+async function page() {
+  ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+  const pinged: unknown[][] = []
+  const rows = [{ id: 's1', title: 'a chat' }]
+  let settleCancel: ((reply: { cancelled: boolean }) => void) | null = null
+  document.body.innerHTML = '<h1 id="title"></h1><div id="scroll"><div class="col" id="stage"></div></div><div id="flash"></div>'
+  await loadPart(async () => {
+    await import('./runtime'); await import('./stages')
+    return import('./pipeline')
+  }, {
+    fakes: {
+      'src/lib/notifications': { show: (...a: unknown[]) => { pinged.push(a) } },
+      'src/features/rail/source': { touchSession: () => {}, rowPreview: (t: string) => t },
+      'src/features/rail/store': { draw: () => {}, markNew: () => {}, endRename: () => {} },
+      'src/state/page': { show: () => {} },
+    },
+  })
+  const { setTranslator } = await import('../../i18n/t')
+  setTranslator((key) => key)
+  const { setSources } = await import('../sources')
+  setSources({
+    transcript: { clean: (t: unknown) => String(t == null ? '' : t).trim(), okOf: () => true },
+    rail: { snapshot: () => ({ rows }), replace: () => {}, open: () => {} },
+    workspace: { shortPath: (p: string) => p, openPath: () => {} },
+    prose: { pathOf: () => null, linkTargetOf: () => null },
+    composer: { slash: [] },
+  } as unknown as Partial<Sources>)
+  const { installWsPane } = await import('../../test/wsPaneHarness')
+  installWsPane()
+  const { setCurrent } = await import('../../lib/session')
+  setCurrent('s1')
+  const registry = (await import('./registry')) as Registry
+  registry.adopt('s1')
+  registry.record('s1', 'sub-1')
+  const pipeline = (await import('./pipeline')) as Pipeline
+  const runtime = (await import('./runtime')) as Runtime
+  const composer = await import('../../features/composer/mount')
+  await fakeGateway((method: string) => {
+    if (method === 'turn.cancel') return new Promise((res) => { settleCancel = res })
+    return Promise.resolve({})
+  })
+  const tick = () => new Promise((r) => setTimeout(r, 0))
+  return {
+    runtime,
+    phase: composer.turn.phase,
+    pinged,
+    frame: (event: unknown) => { act(() => { pipeline.stream({ subscription_id: 'sub-1', event }) }) },
+    settle: async (reply: { cancelled: boolean }) => { act(() => { settleCancel!(reply) }); await tick(); await tick() },
+    answers: () => [...document.querySelectorAll('.answer')].map((n) => n.textContent),
+  }
+}
+
+/* The server had already finished the turn when the cancel reached it, so the
+   turn's own closing frames arrive while the page is cancelling, and the
+   message.complete among them is dropped. A turn that ended on the model's
+   silence marker closes with a notice as well, and nothing of that turn may
+   decide how the next one lands. */
+describe('a stop that crosses the end of a turn', () => {
+  const START = (id: string, content: string) => ({ type: 'message.start', payload: { turn_id: id, content } })
+  const EPISODE = { type: 'episode.start', payload: { index: 0 } }
+  const DONE = (id: string) => ({ type: 'message.complete', payload: { turn_id: id, usage: {}, duration_ms: 2000 } })
+  const SILENT = { type: 'notice', payload: { kind: 'silent_turn', detail: '', transient: false } }
+
+  it.each<[string, unknown[]]>([
+    ['ended silent', [SILENT]],
+    ['ended with no notice (the control)', []],
+  ])('leaves the next turn its answer and its ping when the stopped one %s', async (_how, closing) => {
+    const h = await page()
+    h.frame(START('t1', 'first question'))
+    h.frame(EPISODE)
+    act(() => { h.runtime.stop() })
+    expect(h.phase()).toBe('cancelling')
+
+    closing.forEach((ev) => h.frame(ev))
+    h.frame(DONE('t1'))
+    await h.settle({ cancelled: false })
+
+    /* A turn this page did not send: another window's, on the same conversation. */
+    h.frame(START('t2', 'asked from the other window'))
+    h.frame(EPISODE)
+    h.frame({ type: 'token.delta', payload: { text: 'the next answer' } })
+    h.frame(DONE('t2'))
+
+    expect(h.answers()).toEqual(['the next answer'])
+    expect(h.pinged).toEqual([['gui.set.ntf.done', 'a chat']])
   })
 })

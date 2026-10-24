@@ -824,6 +824,9 @@ class WeixinChannel(ChannelBase):
             return
         await self._typing.start(chat_id, context_token)
 
+    async def end_turn(self, chat_id: str) -> None:
+        await self._stop_typing(chat_id, clear_remote=True)
+
     async def _stop_typing(self, chat_id: str, *, clear_remote: bool) -> None:
         await self._typing.stop(chat_id, clear_remote=clear_remote)
 

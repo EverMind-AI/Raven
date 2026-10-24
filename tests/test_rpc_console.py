@@ -600,6 +600,36 @@ async def test_cron_runs_still_reads_a_delivered_run_as_ok(tmp_path: Path, monke
     assert [(r["ok"], r["preview"]) for r in runs] == [(True, "reminder delivered")]
 
 
+@pytest.mark.asyncio
+async def test_cron_runs_reads_a_silent_run_as_ok_with_no_reply_to_preview(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A run that ended on the model's silence marker succeeded and delivered
+    nothing, so neither the marker with its note nor the narration before the
+    tool call is a reply to show. The later run is the control: the same shape
+    without the flag previews its answer."""
+    loop = _cron_loop(tmp_path)
+    job = _cron_job(loop)
+    calls = [{"id": "c1", "type": "function", "function": {"name": "web_fetch", "arguments": "{}"}}]
+    _cron_session(
+        monkeypatch,
+        [
+            {"role": "user", "content": "ping", "timestamp": "2026-09-22T09:00:00"},
+            {"role": "assistant", "content": "Checking the feed.", "tool_calls": calls},
+            {"role": "tool", "content": "no new posts", "tool_call_id": "c1", "name": "web_fetch"},
+            {"role": "assistant", "content": "Nothing new since 08:00.\n[SILENT]", "silent": True},
+            {"role": "user", "content": "ping", "timestamp": "2026-09-22T10:00:00"},
+            {"role": "assistant", "content": "Checking the feed.", "tool_calls": calls},
+            {"role": "tool", "content": "one new post", "tool_call_id": "c1", "name": "web_fetch"},
+            {"role": "assistant", "content": "One new post at 09:12."},
+        ],
+    )
+
+    runs = (await console_module.cron_runs({"id": job.id}, agent_loop_factory=lambda: loop))["runs"]
+
+    assert [(r["ok"], r["preview"]) for r in runs] == [(True, "One new post at 09:12."), (True, "")]
+
+
 # ---------------------------------------------------------------------------
 # ext.list reports MCP from what this branch actually knows
 # ---------------------------------------------------------------------------

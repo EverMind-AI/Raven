@@ -19,7 +19,7 @@ from loguru import logger
 
 from raven.spine.events import RunnerEvent, TurnEnded, TurnEvent, TurnFailed, TurnStarted, bound_failure_text
 from raven.spine.runner import Emit, TurnOutcome, TurnRunner
-from raven.spine.turn import AnswerlessTurnError, BusyPolicy, Origin, TurnRequest, direct_lane
+from raven.spine.turn import PROACTIVE_ORIGINS, AnswerlessTurnError, BusyPolicy, Origin, TurnRequest, direct_lane
 
 
 def describe_failure(exc: BaseException) -> str:
@@ -99,10 +99,6 @@ EventSink = Callable[[TurnEvent], Awaitable[None]]
 # unreachable and invite deleting it — it is the only lifecycle-emit enforcement.
 _RUNNER_EVENT_TYPES = get_args(RunnerEvent)
 
-# Proactive origins share the system pool. SUBAGENT here is the result-reinjection
-# turn; a subagent's own execution runs off the scheduler behind a separate gate.
-_SYSTEM_ORIGINS = (Origin.SENTINEL, Origin.CRON, Origin.HEARTBEAT, Origin.SUBAGENT)
-
 _DEFAULT_IDLE_TTL = 300.0  # seconds a lane may sit idle before the reaper reclaims it
 _SWEEP_INTERVAL = 60.0  # seconds between reaper sweeps
 _DEPTH_WARN_THRESHOLD = 50  # warn once when a lane's pending queue reaches this depth
@@ -163,7 +159,7 @@ class OriginPools:
     def _for_origin(self, origin: Origin) -> "asyncio.Semaphore | _Unbounded":
         if origin is Origin.USER:
             return self._user
-        if origin in _SYSTEM_ORIGINS:
+        if origin in PROACTIVE_ORIGINS:
             return self._system
         # fail-loud: a new origin must consciously choose a pool, not be
         # silently funnelled into the system pool by a fallback.
@@ -569,6 +565,7 @@ class Lane:
                 # hosts and paths.
                 reported=isinstance(exc, AnswerlessTurnError),
                 full_detail=full_detail_of(exc),
+                no_output=isinstance(exc, AnswerlessTurnError) and exc.no_output,
             )
             await self._sink(failed)
             self._payload_reported = True
@@ -587,6 +584,7 @@ class Lane:
                 explicit_reply=outcome.explicit_reply,
                 conversation_id=self._conversation_id,
                 turn_id=turn_id,
+                silent=outcome.silent,
             )
         )
         return outcome

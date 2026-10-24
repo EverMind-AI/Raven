@@ -12,20 +12,23 @@
 // `rpc(method, params)` and `subscribe(method, params, handler)`) so we
 // don't have to stand up a unix socket per case.
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { TurnEvent, TurnSendParams, TurnSendResult, TurnSubscribeParams } from '../rpc/index.js'
+import type { Msg } from '../types.js'
 
 import { createChatStream, type ChatStreamRpcClient } from '../app/chatStream.js'
 import { turnController } from '../app/turnController.js'
 import { getTurnState, resetTurnState } from '../app/turnStore.js'
-import { getUiState, resetUiState } from '../app/uiStore.js'
+import { getUiState, patchUiState, resetUiState } from '../app/uiStore.js'
+import { STREAM_IDLE_BATCH_MS } from '../config/timing.js'
 
 type FakeUnsubscribe = () => Promise<void>
 
 // The catalogue sentence, spelled out rather than read back through the helper
 // the code under test uses.
 const STOPPED_BARE = 'Stopped by user'
+const SILENT_LINE = 'Raven chose not to reply.'
 
 interface FakeRpc extends ChatStreamRpcClient {
   __pushEvent: (event: TurnEvent) => void
@@ -291,5 +294,132 @@ describe('createChatStream', () => {
     const subscribeSpy = vi.spyOn(fake, 'subscribe')
     await stream.attach()
     expect(subscribeSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('a turn the model chose not to answer', () => {
+  const USAGE = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+
+  beforeEach(() => {
+    resetTurnState()
+    resetUiState()
+    turnController.fullReset()
+  })
+
+  afterEach(() => vi.useRealTimers())
+
+  const open = async () => {
+    const fake = makeFakeRpc()
+    const appended: Msg[] = []
+    const stream = createChatStream({
+      appendMessage: msg => appended.push(msg),
+      rpcClient: fake,
+      sessionKey: 'tui:default'
+    })
+
+    await stream.attach()
+    await stream.send('anything new?')
+
+    return { appended, fake }
+  }
+
+  const complete = (fake: FakeRpc) =>
+    fake.__pushEvent({ type: 'message.complete', payload: { turn_id: 'turn-1', usage: USAGE } })
+
+  it('renders one muted line and no answer for a silent turn', async () => {
+    const { appended, fake } = await open()
+
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-1' } })
+    fake.__pushEvent({ type: 'notice', payload: { kind: 'silent_turn' } })
+
+    // Held on the turn like any closing notice: drawn under the live turn, and
+    // committed as its last row once the turn lands.
+    expect(getTurnState().notice).toBe(SILENT_LINE)
+    expect(appended).toEqual([])
+
+    complete(fake)
+
+    expect(appended).toEqual([{ role: 'system', text: SILENT_LINE }])
+    expect(getTurnState().notice).toBe('')
+    expect(getUiState().busy).toBe(false)
+  })
+
+  it('drops a preview that had already streamed when the turn ends silent', async () => {
+    vi.useFakeTimers()
+    const { appended, fake } = await open()
+
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-1' } })
+    fake.__pushEvent({ type: 'episode.start', payload: { index: 0 } })
+    fake.__pushEvent({ type: 'token.delta', payload: { text: 'abc' } })
+    vi.advanceTimersByTime(STREAM_IDLE_BATCH_MS)
+    expect(getTurnState().streaming).toBe('abc')
+
+    fake.__pushEvent({ type: 'notice', payload: { kind: 'silent_turn' } })
+
+    // Taken off the screen when the signal arrives, not when the turn lands.
+    expect(getTurnState().streaming).toBe('')
+    expect(turnController.bufRef).toBe('')
+
+    complete(fake)
+
+    expect(appended).toEqual([{ role: 'system', text: SILENT_LINE }])
+    expect(JSON.stringify(appended)).not.toContain('abc')
+  })
+
+  it('drops the preview in legacy mode too', async () => {
+    patchUiState({ transcript: 'legacy' })
+    const { appended, fake } = await open()
+
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-1' } })
+    fake.__pushEvent({ type: 'token.delta', payload: { text: 'abc' } })
+    fake.__pushEvent({ type: 'notice', payload: { kind: 'silent_turn' } })
+    complete(fake)
+
+    expect(appended).toEqual([{ role: 'system', text: SILENT_LINE }])
+  })
+
+  it('keeps the steps the turn ran and what it said between them', async () => {
+    const { appended, fake } = await open()
+
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-1' } })
+    fake.__pushEvent({ type: 'episode.start', payload: { index: 0 } })
+    fake.__pushEvent({ type: 'token.delta', payload: { text: 'Checking the logs.' } })
+    fake.__pushEvent({
+      type: 'tool.start',
+      payload: { tool_call_id: 'call-1', name: 'terminal', arguments: { command: 'tail app.log' } }
+    })
+    fake.__pushEvent({
+      type: 'tool.complete',
+      payload: { tool_call_id: 'call-1', result_preview: 'quiet', truncated: false, ok: true }
+    })
+    fake.__pushEvent({ type: 'episode.start', payload: { index: 1 } })
+    fake.__pushEvent({ type: 'token.delta', payload: { text: 'abc' } })
+    fake.__pushEvent({ type: 'notice', payload: { kind: 'silent_turn' } })
+    complete(fake)
+
+    // The work stays; there is no answer under it, and what was said on the way
+    // is narration rather than the reply.
+    expect(appended.map(msg => [msg.role, msg.kind ?? '', msg.text])).toEqual([
+      ['assistant', 'episodes', ''],
+      ['system', '', SILENT_LINE]
+    ])
+    expect(appended[0]!.episodes?.[0]).toMatchObject({ narration: 'Checking the logs.' })
+    expect(appended[0]!.episodes?.[0]?.tools[0]).toMatchObject({ id: 'call-1', ok: true })
+    expect(JSON.stringify(appended)).not.toContain('abc')
+  })
+
+  it('does not carry the mark into the next turn', async () => {
+    const { appended, fake } = await open()
+
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-1' } })
+    fake.__pushEvent({ type: 'notice', payload: { kind: 'silent_turn' } })
+    complete(fake)
+    appended.length = 0
+
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-2' } })
+    fake.__pushEvent({ type: 'token.delta', payload: { text: 'Two deals closed.' } })
+    complete(fake)
+
+    expect(appended).toEqual([{ role: 'assistant', text: 'Two deals closed.' }])
   })
 })

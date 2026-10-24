@@ -12,7 +12,7 @@ import json
 
 import pytest
 
-from raven.agent.loop._shared import _ORIGIN_KEY
+from raven.agent.loop._shared import _ORIGIN_KEY, _SILENT_KEY
 from raven.rpc.methods.session import _map_to_wire
 from raven.spine.turn import Origin
 
@@ -212,3 +212,48 @@ def test_the_markdown_export_still_signs_a_person() -> None:
     from raven.session.export import _render_message
 
     assert "🧑 User" in _render_message({"role": "user", "content": "hi"})
+
+
+# ── a silence marker the model wrote ──────────────────────────────
+
+
+def test_the_silent_key_is_renamed_for_storage() -> None:
+    """Same underscore-then-rename convention as ``_notice``: the underscore keeps it
+    out of the live provider payload, storage gets the plain name -- and a stored
+    marker row is the only way a reload can tell it from an answer."""
+    from raven.agent.loop.main import AgentLoop
+
+    class _Session:
+        def __init__(self):
+            self.entries = []
+
+        def record(self, entry):
+            self.entries.append(entry)
+
+    loop = object.__new__(AgentLoop)
+    loop._now_fn = lambda: __import__("datetime").datetime(2026, 10, 23, 9, 0)
+    session = _Session()
+    messages = [{"role": "assistant", "content": "[SILENT]", _SILENT_KEY: True}]
+    AgentLoop._save_turn(loop, session, messages, 0)
+
+    [stored] = session.entries
+    assert stored["silent"] is True and stored["content"] == "[SILENT]"
+    assert _SILENT_KEY not in stored
+
+
+def test_an_ordinary_assistant_row_stores_no_silent_flag() -> None:
+    from raven.agent.loop.main import AgentLoop
+
+    class _Session:
+        def __init__(self):
+            self.entries = []
+
+        def record(self, entry):
+            self.entries.append(entry)
+
+    loop = object.__new__(AgentLoop)
+    loop._now_fn = lambda: __import__("datetime").datetime(2026, 10, 23, 9, 0)
+    session = _Session()
+    AgentLoop._save_turn(loop, session, [{"role": "assistant", "content": "all done"}], 0)
+
+    assert "silent" not in session.entries[0] and _SILENT_KEY not in session.entries[0]

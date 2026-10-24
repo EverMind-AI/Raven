@@ -20,6 +20,7 @@ from raven.providers.base import (
     format_llm_error,
 )
 from raven.providers.tool_names import normalized_tool_name
+from raven.providers.usage import token_count
 
 _AZURE_MSG_KEYS = frozenset({"role", "content", "tool_calls", "tool_call_id", "name"})
 
@@ -247,13 +248,22 @@ class AzureOpenAIProvider(LLMProvider):
                     "completion_tokens": usage_data.get("completion_tokens", 0),
                     "total_tokens": usage_data.get("total_tokens", 0),
                 }
+                # Part of completion_tokens, and the one count that says a turn
+                # which returned nothing still thought. Left out when unreported:
+                # written as 0 it would read as a turn that did not think.
+                details = usage_data.get("completion_tokens_details")
+                reasoning = token_count(details.get("reasoning_tokens")) if isinstance(details, dict) else None
+                if reasoning is not None:
+                    usage["reasoning_tokens"] = reasoning
 
             reasoning_content = message.get("reasoning_content") or None
 
             return LLMResponse(
                 content=message.get("content"),
                 tool_calls=tool_calls,
-                finish_reason=choice.get("finish_reason", "stop"),
+                # A choice that names none never said how it ended; ``stop`` here
+                # made a cut reply read as a finished one.
+                finish_reason=choice.get("finish_reason") or "unknown",
                 usage=usage,
                 reasoning_content=reasoning_content,
             )

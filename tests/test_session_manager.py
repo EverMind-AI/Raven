@@ -966,6 +966,31 @@ def test_list_sessions_message_count_excludes_metadata_lines(tmp_path: Path):
     assert entries[0]["message_count"] == 2
 
 
+def test_a_silent_runtime_turn_is_taken_back_after_a_turn_the_message_tool_answered(tmp_path: Path):
+    """A turn the message tool answered does not make the next turn's silence count.
+
+    The scanner remembers that a turn delivered its reply, so that turn stays the
+    activity the session is ordered by. A later turn the runtime opened and the model
+    closed with silence delivered nothing, so it is taken back whole: the delivered
+    reply remains the answer, and the silent turn after it does not take its place.
+    """
+    mgr = SessionManager(tmp_path)
+    calls = [{"id": "m1", "type": "function", "function": {"name": "message", "arguments": "{}"}}]
+    session = mgr.get_or_create("cron:job01")
+    session.add_message("user", "anything new?", timestamp="2026-06-10T10:00:00")
+    session.add_message("assistant", "still compiling", timestamp="2026-06-10T10:00:05")
+    session.add_message("user", "[Scheduled Task] check the build", timestamp="2026-06-10T11:00:00", origin="cron")
+    session.add_message("assistant", "", timestamp="2026-06-10T11:00:02", tool_calls=calls)
+    session.add_message("tool", "Message sent", timestamp="2026-06-10T11:00:03", tool_call_id="m1", name="message")
+    session.add_message("assistant", "[SILENT]", timestamp="2026-06-10T11:00:09", silent=True)
+    session.add_message("user", "[Scheduled Task] check the build", timestamp="2026-06-10T12:00:00", origin="cron")
+    session.add_message("assistant", "[SILENT]", timestamp="2026-06-10T12:00:05", silent=True)
+    mgr.save(session)
+
+    [row] = mgr.list_sessions()
+    assert row["last_message_at"] == "2026-06-10T11:00:02"
+
+
 def _msg(role, content):
     return {"role": role, "content": content}
 

@@ -47,12 +47,16 @@ def test_notice_kind_is_closed_enum_with_progress_and_tool_hint():
     # llm_retry says the Model-Error Ladder is waiting before asking again --
     # the turn is still running, so it is the one kind the next frame of real
     # output is expected to overwrite.
+    # silent_turn closes a turn the model ended on purpose with nothing to say:
+    # an outlet that draws the turn's result draws a quiet row, a channel sends
+    # nothing.
     assert {k.value for k in NoticeKind} == {
         "progress",
         "tool_hint",
         "action_blocked",
         "organ_degraded",
         "llm_retry",
+        "silent_turn",
     }
     assert str(NoticeKind.PROGRESS) == "progress"
     assert str(NoticeKind.TOOL_HINT) == "tool_hint"
@@ -70,6 +74,7 @@ def test_only_the_retry_notice_is_transient():
     """
     assert TRANSIENT_NOTICE_KINDS == {NoticeKind.LLM_RETRY}
     assert NoticeKind.ACTION_BLOCKED not in TRANSIENT_NOTICE_KINDS
+    assert NoticeKind.SILENT_TURN not in TRANSIENT_NOTICE_KINDS
     assert TRANSIENT_NOTICE_KINDS <= set(NoticeKind)
 
 
@@ -95,10 +100,12 @@ def test_turn_failed_has_no_usage():
     # No usage; ``reported`` is the in-process flag saying the runner worded
     # ``error`` itself rather than it being whatever a crash carried, and
     # ``full_detail`` is the runner's long account of the failure, which the
-    # lane copies off the exception it let out.
-    assert fields == {"error", "cancelled", "conversation_id", "turn_id", "reported", "full_detail"}
+    # lane copies off the exception it let out, and ``no_output`` says the model
+    # produced nothing at all on every attempt.
+    assert fields == {"error", "cancelled", "conversation_id", "turn_id", "reported", "full_detail", "no_output"}
     assert TurnFailed(error="boom", cancelled=False).reported is False
     assert TurnFailed(error="boom", cancelled=False).full_detail is None
+    assert TurnFailed(error="boom", cancelled=False).no_output is False
 
 
 def test_a_failure_text_is_bounded_and_says_it_was_cut():
@@ -125,7 +132,8 @@ def test_the_kernel_and_the_providers_layer_cap_a_failure_at_one_number():
 
 def test_turn_ended_carries_usage_latency_and_explicit_reply():
     fields = {f.name for f in dataclasses.fields(TurnEnded)}
-    assert fields == {"usage", "latency_ms", "explicit_reply", "conversation_id", "turn_id"}
+    assert fields == {"usage", "latency_ms", "explicit_reply", "conversation_id", "turn_id", "silent"}
+    assert TurnEnded(usage=Usage(0, 0, 0), latency_ms=1.0, explicit_reply=False).silent is False
 
 
 def test_every_deliverable_defaults_source_to_none():

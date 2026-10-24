@@ -258,6 +258,9 @@ class AgentDefaults(Base):
     post_tool_empty_max_nudges: int = 1
     thinking_prefill_max_retries: int = 2
     empty_content_max_retries: int = 3
+    # An empty reply whose call reported at least this cost (USD) is resent once instead of
+    # empty_content_max_retries times: every resend bills the whole prompt again for no answer.
+    empty_retry_cost_threshold_usd: float = Field(default=0.25, gt=0)
     # Seconds to wait before asking the model again when a call fails with a
     # retryable error the provider's own short ladder could not clear; one entry per
     # further attempt, per turn. Empty disables it. A long autonomous run wants a

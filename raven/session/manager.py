@@ -14,6 +14,7 @@ from typing import Any
 from loguru import logger
 
 from raven.session.title import TITLE_STORAGE_MAX, collapse_to_line
+from raven.session.turn_shape import calls_message_tool
 from raven.utils.atomic_io import atomic_replace, locked_append, write_transaction
 from raven.utils.paths import ensure_dir, safe_filename, safe_path_segment
 
@@ -733,6 +734,22 @@ class SessionManager:
         cannot serve either -- it only moves when a save writes metadata and
         can lag the transcript by a whole turn.
 
+        A ``silent`` assistant row is left out of the timestamp and the preview
+        alike: the model chose to say nothing, so its marker is neither
+        activity to order by nor a line to show. When the runtime opened the
+        turn it closes (a user row carrying ``origin``), the whole turn is left
+        out: that row is prose for the model rather than conversation, and the
+        tool calls the run made on the way delivered nothing either. A person's
+        own message still counts when the model answers it with silence.
+
+        A turn that called the message tool is the exception: the tool is what
+        delivers a reply to the reader, so a turn that called it answered
+        whatever the model ended it on, and it stays the activity the session
+        is ordered by. The rule is read from one
+        place (``raven/session/turn_shape.py``), the same one the ACP replay reads
+        the turn with, so the two surfaces cannot come to disagree about which
+        turn answered.
+
         The first user message is what session pickers title an untitled
         session with, so its text (flattened to one line, capped) rides along.
         The latest non-empty user or assistant message is a separate display
@@ -744,6 +761,12 @@ class SessionManager:
         last_ts = ""
         first_user = ""
         latest_preview = ""
+        # The preview and the clock as they stood before the runtime-opened turn now under way, for a
+        # turn that ends silent to be taken back whole.
+        before_runtime_turn: tuple[str, str] | None = None
+        # Whether the turn now under way delivered its reply through the message tool. Such a turn
+        # answered, so a marker closing it does not take the turn back.
+        answered = False
         try:
             with path.open(encoding="utf-8") as f:
                 for line in f:
@@ -760,16 +783,25 @@ class SessionManager:
                         count += 1
                         if isinstance(data, dict):
                             role = data.get("role")
-                            if role in {"user", "assistant"}:
-                                text = _message_text(data.get("content"))
-                                if text:
-                                    latest_preview = text
-                                ts = data.get("timestamp")
-                                if isinstance(ts, str) and ts > last_ts:
-                                    last_ts = ts
                             if role == "user":
+                                # Only a turn the runtime opened can be taken back: a person's message
+                                # counts even when the model answers it with silence.
+                                before_runtime_turn = (latest_preview, last_ts) if data.get("origin") else None
+                                answered = False
                                 if not first_user:
                                     first_user = _message_text(data.get("content"))
+                            if role in {"user", "assistant"}:
+                                if data.get("silent") is not True:
+                                    text = _message_text(data.get("content"))
+                                    if text:
+                                        latest_preview = text
+                                    ts = data.get("timestamp")
+                                    if isinstance(ts, str) and ts > last_ts:
+                                        last_ts = ts
+                                elif before_runtime_turn is not None and not answered:
+                                    latest_preview, last_ts = before_runtime_turn
+                            if role == "assistant" and not answered:
+                                answered = calls_message_tool(data)
         except OSError:
             return None, 0, "", "", ""
         return meta, count, last_ts, first_user, latest_preview
@@ -1163,7 +1195,8 @@ class SessionManager:
                     "created_at": data.get("created_at"),
                     "updated_at": data.get("updated_at"),
                     # The newest visible conversation entry. Runtime-origin
-                    # and delegated rows count because they change the Session.
+                    # and delegated rows count because they change the Session,
+                    # unless the turn they opened ended silent.
                     "last_message_at": last_ts,
                     "path": str(path),
                     "message_count": message_count,

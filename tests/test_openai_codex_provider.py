@@ -25,6 +25,7 @@ from raven.providers.openai_codex_provider import (
     _convert_tool_output,
     _friendly_error,
     _iter_sse,
+    _map_finish_reason,
 )
 from tests._tls import https_endpoint, private_ca
 
@@ -306,6 +307,139 @@ def test_a_failed_stream_still_reports_what_it_used(monkeypatch):
 
     assert resp.finish_reason == "error"
     assert resp.usage["prompt_tokens"] == 1200
+
+
+def _chat_over(monkeypatch, events: list[dict]):
+    """One Codex call answered by ``events``, as the account would stream them."""
+    _stream_codex_events(monkeypatch, events)
+    return asyncio.run(
+        OpenAICodexProvider(default_model="openai-codex/gpt-5.6-sol").chat([{"role": "user", "content": "hi"}])
+    )
+
+
+def test_a_stream_without_a_terminal_event_reads_unknown(monkeypatch):
+    """A stream that ends before ``response.completed`` never said how the response
+    ended. ``stop`` was the value the consumer started from, so a reply cut by the
+    connection read as a finished one."""
+    resp = _chat_over(monkeypatch, [{"type": "response.output_text.delta", "delta": "half an answ"}])
+
+    assert (resp.content, resp.finish_reason) == ("half an answ", "unknown")
+
+
+def test_response_incomplete_on_max_output_tokens_is_length(monkeypatch):
+    """``response.incomplete`` is its own terminal event, not a ``completed`` with a
+    status. It was ignored, so an answer cut at the output ceiling read as ``stop``
+    and was never recognised as truncated."""
+    resp = _chat_over(
+        monkeypatch,
+        [
+            {"type": "response.output_text.delta", "delta": "cut off"},
+            {
+                "type": "response.incomplete",
+                "response": {
+                    "status": "incomplete",
+                    "incomplete_details": {"reason": "max_output_tokens"},
+                    "usage": _COMPLETED_USAGE,
+                },
+            },
+        ],
+    )
+
+    assert (resp.content, resp.finish_reason) == ("cut off", "length")
+    assert resp.usage["completion_tokens"] == 9
+
+
+def test_response_incomplete_on_content_filter_is_content_filter(monkeypatch):
+    resp = _chat_over(
+        monkeypatch,
+        [
+            {
+                "type": "response.incomplete",
+                "response": {"status": "incomplete", "incomplete_details": {"reason": "content_filter"}},
+            },
+        ],
+    )
+
+    assert resp.finish_reason == "content_filter"
+
+
+def test_response_incomplete_for_any_other_reason_reads_unknown(monkeypatch):
+    """Only the two reasons the loop can act on are named; a reason nobody has seen
+    is not guessed into one of them."""
+    resp = _chat_over(
+        monkeypatch,
+        [
+            {"type": "response.output_text.delta", "delta": "partial"},
+            {
+                "type": "response.incomplete",
+                "response": {"status": "incomplete", "incomplete_details": {"reason": "some_new_reason"}},
+            },
+        ],
+    )
+
+    assert resp.finish_reason == "unknown"
+
+
+def test_a_refusal_part_is_kept_as_a_refusal(monkeypatch):
+    """A refusal arrives as its own part, not as output text. Dropped, the reply read
+    as an empty response, with the ``completed`` that follows as its finish."""
+    resp = _chat_over(
+        monkeypatch,
+        [
+            {"type": "response.refusal.delta", "delta": "I can't help with that"},
+            {"type": "response.completed", "response": {"status": "completed"}},
+        ],
+    )
+
+    assert resp.content == "I can't help with that"
+    assert resp.finish_reason == "refusal"
+
+
+def test_a_refusal_done_event_replaces_its_deltas_instead_of_repeating_them(monkeypatch):
+    resp = _chat_over(
+        monkeypatch,
+        [
+            {"type": "response.refusal.delta", "delta": "I can't "},
+            {"type": "response.refusal.delta", "delta": "help"},
+            {"type": "response.refusal.done", "refusal": "I can't help"},
+            {"type": "response.completed", "response": {"status": "completed"}},
+        ],
+    )
+
+    assert (resp.content, resp.finish_reason) == ("I can't help", "refusal")
+
+
+def test_a_refusal_beside_a_reply_keeps_the_reply_and_the_verdict(monkeypatch):
+    resp = _chat_over(
+        monkeypatch,
+        [
+            {"type": "response.output_text.delta", "delta": "Here is what I can do."},
+            {"type": "response.refusal.delta", "delta": "I can't do the rest."},
+            {"type": "response.completed", "response": {"status": "completed"}},
+        ],
+    )
+
+    assert (resp.content, resp.finish_reason) == ("Here is what I can do.", "refusal")
+
+
+def test_a_refusal_does_not_hide_a_failed_status(monkeypatch):
+    resp = _chat_over(
+        monkeypatch,
+        [
+            {"type": "response.refusal.delta", "delta": "I can't help with that"},
+            {"type": "response.completed", "response": {"status": "failed"}},
+        ],
+    )
+
+    assert resp.finish_reason == "error"
+
+
+def test_an_unrecognised_response_status_reads_unknown():
+    assert _map_finish_reason("completed") == "stop"
+    assert _map_finish_reason("in_progress") == "unknown"
+    # A ``response.completed`` event that names no status is still the upstream
+    # saying the response completed.
+    assert _map_finish_reason(None) == "stop"
 
 
 _TINY_PNG_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="

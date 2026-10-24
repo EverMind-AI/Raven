@@ -250,6 +250,10 @@ export interface TranscriptMessage {
    * Set on a user entry merged into a turn already running, not the prompt that opened one. A reader draws it INSIDE the turn: no new turn number, no fold closed over the narration above it, and the text before it is still that turn's narration rather than its answer.
    */
   mid_turn?: boolean;
+  /**
+   * Set on an assistant entry whose text, the model's last word in its turn, is its silence marker (from a turn the runtime opened, possibly with a note around it), not an answer. A reader draws one muted line and never treats `text` as the answer. A turn the message tool had already answered can still carry it: that reply reached the reader, and a reload draws the muted line after it. Distinct from `notice`, which marks a row the runtime wrote; this row is the model's own.
+   */
+  silent?: boolean;
 }
 export interface TranscriptToolCall {
   id: string;
@@ -1359,11 +1363,11 @@ export interface NoticeEvent {
   type: 'notice';
   payload: {
     /**
-     * Which runtime decision this reports: `action_blocked`, `llm_retry` or `organ_degraded`.
+     * Which runtime decision this reports: `action_blocked`, `llm_retry`, `organ_degraded` or `silent_turn`.
      */
     kind: string;
     /**
-     * What `kind` says it is: the blocking tool's own first line, the failed call's error category, or the organ that dropped out.
+     * What `kind` says it is: the blocking tool's own first line, the failed call's error category (or `empty_reply` / `thinking_only` for the wait before an empty-reply resend or a reasoning step-down), or the organ that dropped out. Empty for `silent_turn`.
      */
     detail?: string;
     /**

@@ -371,13 +371,15 @@ export function dropSeg(lane: Lane, id: number): boolean {
 
    The entry's text as a whole is runtime prose -- the contract's `origin` says
    so and raven/agent/loop/_shared.py says why -- but it is not prose all the
-   way down. `raven/core/cron_stack.py` writes four parts, and two of them were
+   way down. `raven/core/cron_stack.py` writes five parts, and two of them were
    written FOR the reader: the parenthetical, whose own docstring says it
    describes when the reminder was set "for the user", and the instruction,
    which is the sentence the reader wrote when they made the job (the same
-   string the schedules section edits). The two that were not are the header
-   and the closing "when you reply, mention ..." -- wording aimed at the model,
-   and a reader shown those is a reader shown the prompt. */
+   string the schedules section edits). The three that were not are the header,
+   the closing "when you reply, mention ..." and the paragraph after it that
+   teaches the model to answer `[SILENT]` -- wording aimed at the model, and a
+   reader shown those is a reader shown the prompt. That last paragraph follows
+   the closing line, so the instruction's run to that line already leaves it out. */
 const CRON_HEAD = /^\[Scheduled Task\]/
 const CRON_WHEN = /^Task '.*' \((.+)\) has been triggered\.$/
 const CRON_SAID = /^Scheduled instruction: /
@@ -1167,6 +1169,13 @@ export function newStep(lane: Lane): StepHandle {
       seg.sayCaret = true
       scheduleFlush(lane, seg)
     },
+    dropSay() {
+      seg.say = ''
+      seg.hasSay = false
+      seg.sayCaret = false
+      if (!seg.hasThink && !seg.calls.length && !seg.hasQA && replaceStep(lane, seg, null)) bumpList(lane)
+      else bump(lane, seg)
+    },
     tool(name: string, args: unknown, display?: string | null, callId?: string | null): CallHandle {
       thinkDone()
       const id = actId(name || 'tool', args)
@@ -1393,8 +1402,14 @@ function mergeRun(lane: Lane, group: StepData[]): void {
 }
 
 /* The render half of the turn's landing: promote the streamed prose into the
-   answer block where the prose stood, merge the silent stretches, fold. */
-export function finishTurn(lane: Lane, st: StepHandle | null, steps: StepData[], time?: string | null): void {
+   answer block where the prose stood, merge the silent stretches, fold.
+
+   A `silent` turn ended on the model's own silence marker and has no answer, so
+   nothing it said on the way is promoted into one: it stays narration under the
+   fold, which is what a reload of the same turn draws. */
+export function finishTurn(
+  lane: Lane, st: StepHandle | null, steps: StepData[], time?: string | null, silent = false,
+): void {
   stopFlush(lane)
   if (st) st.seal()
   /* The last step that said something, which is usually the open one -- but a
@@ -1403,9 +1418,11 @@ export function finishTurn(lane: Lane, st: StepHandle | null, steps: StepData[],
      one. Promoting only the open step left that prose as narration for the
      fold to close over, while a reload of the same turn showed it as the
      answer: the two halves disagreeing again, one case over. */
-  const said = st && st.seg.say.trim()
-    ? st.seg
-    : [...steps].reverse().find((g) => g.say.trim()) || null
+  const said = silent
+    ? null
+    : st && st.seg.say.trim()
+      ? st.seg
+      : [...steps].reverse().find((g) => g.say.trim()) || null
   if (said) {
     const seg = said
     const text = seg.say
@@ -1524,6 +1541,14 @@ const callParts = (raw: unknown): { name: string; display: string } => {
    the two views of one turn cannot drift apart. */
 export const failedTurnLabel = (): string => t('gui.turn_died', { e: '' }).replace(/\s*[-·]\s*$/, '')
 
+/* The notice kind the runtime raises when a turn ends on the model's silence
+   marker. A stored silent row reads as the same kind, so the replayed line is
+   the live one -- except after a message-tool reply: that turn's marker is
+   filed silent too, but the server sent no notice live, where the turn landed
+   with the reply as its answer. A reload draws this line there instead, with
+   the reply inside the message call's row. */
+const SILENT_KIND = 'silent_turn'
+
 export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMessage[] = []): void {
   /* A different conversation, so a different roster -- but only on the lane that
      IS one.
@@ -1575,6 +1600,10 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
      them -- under a note promising the output above was kept. */
   const spoken = (m: HistoryMessage | undefined): boolean =>
     !!m && m.role === 'assistant' && !m.turn_ended && !m.notice && !!m.text && !!m.text.trim()
+  /* A silent row is deliberately not left out of `spoken`: it is the model's
+     last word, and a turn that ends on it has no answer. Counting it keeps what
+     the model said on the way narration -- the turn's fold -- as the live turn
+     does; leaving it out would lift that narration into the answer. */
   /* Scanned over what FOLLOWS as well, which is not always drawn. The agent
      stage paints a run in slices -- each poll hands over only what arrived
      since the last one -- and "is anything still to be said" cannot be answered
@@ -1737,6 +1766,27 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
       closeTurn(msOf(m.timestamp))
       note(lane, t('gui.notice.' + (m.notice.kind || ''), undefined, m.notice.kind || ''),
         m.notice.detail || '', { quiet: true })
+      return
+    }
+    if (m.role === 'assistant' && m.silent) {
+      /* The model's own silence marker: the row is kept because the model reads
+         it next turn, and a reader is shown one quiet line in its place -- the
+         one a live silent turn closes with (a marker after a message-tool reply
+         is the exception, see SILENT_KIND). Its reasoning is the model's work
+         and is drawn like any other step's, so the fold has the thought the live
+         turn showed. */
+      const thought = String(m.reasoning_content || '').trim()
+      if (thought) {
+        sealTools()
+        toolRun = newStep(lane)
+        toolRun.seg.hasThink = true
+        toolRun.seg.think = thought
+        toolRun.reveal()
+        toolRun.thinkDone()
+      }
+      sealTools()
+      closeTurn(msOf(m.timestamp))
+      note(lane, t('gui.notice.' + SILENT_KIND, undefined, SILENT_KIND), '', { quiet: true })
       return
     }
     if (m.role === 'assistant' && m.turn_ended) {

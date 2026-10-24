@@ -429,6 +429,28 @@ def test_the_hook_stages_rewrites_and_announces(tmp_path: Path) -> None:
     assert f"Published a 3-slide deck.\nDeck: {deck}\nMEDIA: {deck}" in outbound.modified_content
 
 
+def test_a_deck_published_on_a_silent_turn_is_still_announced(tmp_path: Path) -> None:
+    """The model built the deck and then said nothing but a marker. The loop hands ``after_send``
+    no reply on such a turn and delivers what the hooks compose, so the deck lines are the whole
+    reply -- the deck is delivered, not left on disk unannounced."""
+    hook = plugin_module.make_hook(_ctx(dict(ENABLED), tmp_path / "ws"))
+    wd = tmp_path / "session"
+    wd.mkdir()
+    ctx = AgentHookContext(session_key="s1", inbound_content="build a deck")
+
+    async def run() -> tuple:
+        with workdir.bind(wd):
+            await hook.before_user_inbound(ctx)
+            own = Path(workdir.current())
+            deck = _pptx(own / "out" / "deck.pptx", slides=3)
+            _published(own, deck)
+            ctx.outbound_content = None
+            return await hook.after_send(ctx), deck
+
+    outbound, deck = asyncio.run(run())
+    assert outbound.modified_content.strip() == f"Published a 3-slide deck.\nDeck: {deck}\nMEDIA: {deck}"
+
+
 def test_a_renamed_copy_of_the_published_deck_is_announced_without_a_preview(tmp_path: Path) -> None:
     """The PDF follows the deck the reply names, not the stem the publish wrote.
 

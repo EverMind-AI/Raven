@@ -347,6 +347,10 @@ export interface StepHandle {
   setThinkOpen(open: boolean): void
   setSay(text: string): void
   sayDelta(text: string): void
+  /* Take back what the step has said: the model ended the turn on its silence
+     marker, so a reply that began streaming before that was known is not an
+     answer. A step left with nothing else on it is removed. */
+  dropSay(): void
   tool(name: string, args: unknown, display?: string | null, callId?: string | null): CallHandle
   seal(): void
 }
@@ -387,6 +391,10 @@ export interface HistoryMessage {
   /* Set on a user entry the runtime merged into a turn already running. It is
      drawn inside that turn -- see the mid-turn branch in history(). */
   mid_turn?: boolean
+  /* Set on an assistant entry that is the model's own silence marker: `text` is
+     the marker, never an answer. It is drawn as one quiet line -- see the silent
+     branch in history(). */
+  silent?: boolean
 }
 
 /* The pull half of the seam. Event pushes arrive through this island's own

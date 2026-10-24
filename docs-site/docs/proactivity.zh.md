@@ -118,7 +118,8 @@ uv run raven sentinel config set --max-nudges-per-hour 1 --max-nudges-per-day 4
 ```
 
 修改后需重启。这些是 Sentinel 的策略限制，不是账户级费用上限。用户安排的 Cron 任务绕过
-策略检查；接入共享账本时，它们的触发仍会消耗 Sentinel 看到的计数。
+策略检查；接入共享账本时，它们的触发仍会消耗 Sentinel 看到的计数，
+模型以 `[SILENT]` 结束的运行除外。
 
 对于已入队消息，策略并不是严格的发送时刻限制。追加提醒在入队时检查并计入配额；延迟提醒
 在登记时检查，但目前缺少发送时重新检查和记录配额的回调。若要让 Sentinel 提醒避开免打扰

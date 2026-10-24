@@ -475,6 +475,38 @@ class TestSessionLoad:
         for frame in rig.written:
             validate_outbound(frame)
 
+    async def test_a_reloaded_silent_turn_replays_no_answer(self, rig):
+        """The live turn sent no text for a marker row, only what the model
+        thought, so a load that replayed ``[SILENT]`` would show the marker as
+        the agent's reply. The last row is the control: the same shape without
+        the flag still speaks, so the absence above is the flag's doing."""
+        rig.stack.stored["acp:old"] = [
+            {"role": "user", "text": "anything new?"},
+            {"role": "assistant", "text": "[SILENT]", "silent": True, "reasoning_content": "nothing has changed"},
+            {"role": "user", "text": "and now?"},
+            {"role": "assistant", "text": "all quiet"},
+        ]
+        await rig.handshake()
+
+        await rig.call(
+            "session/load",
+            {"sessionId": "acp:old", "cwd": str(rig.tmp_path / "project"), "mcpServers": []},
+        )
+
+        replayed = [
+            (u["sessionUpdate"], u["content"]["text"])
+            for u in rig.updates()
+            if "content" in u and "text" in u["content"]
+        ]
+        assert replayed == [
+            ("user_message_chunk", "anything new?"),
+            ("agent_thought_chunk", "nothing has changed"),
+            ("user_message_chunk", "and now?"),
+            ("agent_message_chunk", "all quiet"),
+        ]
+        for frame in rig.written:
+            validate_outbound(frame)
+
     async def test_the_session_becomes_promptable(self, rig):
         """A load that did not register the session would replay a history the
         client then cannot continue."""
@@ -1851,6 +1883,169 @@ class TestPromptMeta:
         response = await self._prompt(rig, session_id, turn_runs)
 
         assert response["result"] == {"stopReason": "end_turn"}
+
+
+class _ScriptedStream:
+    """LiteLLM's stream wrapper as far as the adapter reads it: the chunks, then the upstream's own ``stop``."""
+
+    def __init__(self, *texts: str) -> None:
+        from types import SimpleNamespace
+
+        def chunk(content=None, finish=None):
+            delta = SimpleNamespace(content=content, tool_calls=None, reasoning_content=None)
+            return SimpleNamespace(choices=[SimpleNamespace(delta=delta, finish_reason=finish)], usage=None)
+
+        self._chunks = iter([*(chunk(text) for text in texts), chunk(finish="stop")])
+        self.received_finish_reason = "stop"
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._chunks)
+        except StopIteration:
+            raise StopAsyncIteration from None
+
+    async def aclose(self):
+        return None
+
+
+class _SpineStack(_Stack):
+    """The stub stack, except that ``turn.subscribe`` and ``turn.send`` are the real handlers over a real spine."""
+
+    def __init__(self, emitter, scheduler, turn_ids) -> None:
+        self._emitter, self._scheduler, self._turn_ids = emitter, scheduler, turn_ids
+        super().__init__()
+
+    async def _subscribe(self, params: dict) -> dict:
+        from raven.rpc.methods.turn import turn_subscribe
+
+        self.calls.append(("turn.subscribe", params))
+        return await turn_subscribe(params, emitter=self._emitter)
+
+    async def _send(self, params: dict) -> dict:
+        from raven.rpc.methods.turn import turn_send
+
+        self.calls.append(("turn.send", params))
+        return await turn_send(
+            params,
+            emitter=self._emitter,
+            scheduler=self._scheduler,
+            turn_ids=self._turn_ids,
+            default_channel="acp",
+        )
+
+
+class TestSilentTurn:
+    """A turn the model ends on a silence marker, over the real loop, spine, outlet and translator.
+
+    The prompt must still be answered ``end_turn``, no chunk of the answer may carry any of the
+    marker, and the response meta a hook filed has to be read back off the marker row -- the only
+    assistant row this turn has."""
+
+    @pytest.fixture
+    async def silent_rig(self, tmp_path, monkeypatch):
+        from raven.agent.hook import AgentHook, HookDecision
+        from raven.agent.loop import AgentLoop
+        from raven.agent.loop.bundles import HostWiring, ToolWiring, TurnPolicy
+        from raven.config import load_config
+        from raven.providers.litellm_provider import LiteLLMProvider
+        from raven.rpc.methods import turn as turn_methods
+        from raven.rpc.spine import build_rpc_spine
+        from raven.rpc.subscriptions import SubscriptionEmitter
+
+        config = load_config()
+        monkeypatch.setattr(type(config), "workspace_path", property(lambda self: tmp_path / "ws"))
+        monkeypatch.setattr("raven.acp.methods.load_config", lambda: config, raising=False)
+        turn_methods._active_turns.clear()
+        (tmp_path / "project").mkdir()
+
+        class _FilesMeta(AgentHook):
+            """What an engine's hook does at the send: stash a response meta for the ACP client."""
+
+            @property
+            def name(self) -> str:
+                return "FilesMeta"
+
+            async def after_send(self, ctx):
+                ctx.metadata.setdefault("observers", {})["acp_meta"] = {"vendor.x": {"sent": ctx.outbound_content}}
+                return HookDecision()
+
+        scripts: list[_ScriptedStream] = []
+
+        async def acompletion(**_kwargs):
+            return scripts.pop(0)
+
+        monkeypatch.setattr("raven.providers.litellm_provider.acompletion", acompletion)
+        agent = AgentLoop(
+            provider=LiteLLMProvider(api_key=None, default_model="stub"),
+            workspace=tmp_path / "ws",
+            model="stub",
+            policy=TurnPolicy(max_iterations=4),
+            host=HostWiring(hooks=[_FilesMeta()]),
+            tools=ToolWiring(restrict_to_workspace=True),
+        )
+
+        async def _noop(**_kw) -> None:
+            return None
+
+        agent._start_executor = _noop
+        agent._connect_mcp = _noop
+
+        written: list[dict] = []
+        translator = UpdateTranslator(emit=written.append)
+        emitter = SubscriptionEmitter(send_frame=translator.send_frame)
+        scheduler, _hub, turn_ids, teardown = build_rpc_spine(
+            agent, emitter, channel="acp", on_turn_end=turn_methods.clear_active
+        )
+        stack = _SpineStack(emitter, scheduler, turn_ids)
+        methods = AcpMethods(dispatcher=stack.dispatcher, translator=translator, emit=written.append, agent_loop=agent)
+        rig = SimpleRig(
+            methods=methods,
+            stack=stack,
+            translator=translator,
+            written=written,
+            tmp_path=tmp_path,
+            engine=agent,
+            scripts=scripts,
+        )
+        try:
+            yield rig
+        finally:
+            await teardown()
+            turn_methods._active_turns.clear()
+
+    async def _ask(self, rig, session_id: str, text: str) -> dict:
+        response = await asyncio.wait_for(
+            rig.call("session/prompt", {"sessionId": session_id, "prompt": [{"type": "text", "text": text}]}), 10
+        )
+        assert "result" in response, response
+        return response["result"]
+
+    async def test_an_acp_silent_turn_ends_end_turn_with_its_meta(self, silent_rig):
+        rig = silent_rig
+        await rig.handshake()
+        session_id = await rig.new_session()
+        rig.scripts.extend([_ScriptedStream("[SIL", "ENT]"), _ScriptedStream("all quiet")])
+
+        silent = await self._ask(rig, session_id, "anything new?")
+
+        assert silent["stopReason"] == "end_turn"
+        assert silent["_meta"] == {"vendor.x": {"sent": None}}, "the hook ran, and was told there was nothing to send"
+        validate_def("PromptResponse", silent)
+        chunks = [u for u in rig.updates() if u.get("sessionUpdate") == "agent_message_chunk"]
+        assert not any(ch in u["content"]["text"] for u in chunks for ch in "[SILENT]"), chunks
+        marker = [m for m in rig.engine.sessions.get_or_create(session_id).messages if m["role"] == "assistant"]
+        assert [(m["content"], m.get("silent")) for m in marker] == [("[SILENT]", True)]
+        assert marker[0]["observers"]["acp_meta"] == silent["_meta"], "read off the marker row"
+
+        # The control: this stack does carry an ordinary reply as chunks, so the absence above is the gate's.
+        spoken = await self._ask(rig, session_id, "and now?")
+
+        assert spoken["stopReason"] == "end_turn" and spoken["_meta"] == {"vendor.x": {"sent": "all quiet"}}
+        chunks = [u for u in rig.updates() if u.get("sessionUpdate") == "agent_message_chunk"]
+        assert [u["content"]["text"] for u in chunks] == ["all quiet"]
 
 
 async def test_prompt_usage_owner_is_persisted_per_session(rig):

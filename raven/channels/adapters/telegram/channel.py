@@ -563,6 +563,9 @@ class TelegramChannel(ChannelBase):
         self._stop_typing(chat_id)
         self._typing[chat_id] = asyncio.create_task(self._typing_loop(chat_id))
 
+    async def end_turn(self, chat_id: str) -> None:
+        self._stop_typing(chat_id)
+
     def _stop_typing(self, chat_id: str) -> None:
         task = self._typing.pop(chat_id, None)
         if task and not task.done():

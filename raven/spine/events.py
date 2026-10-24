@@ -30,10 +30,14 @@ class NoticeKind(StrEnum):
     # this one replaces the answer rather than accompanying it, so an outlet
     # that renders nothing else should still render this.
     ACTION_BLOCKED = "action_blocked"
-    # A model call failed and the Model-Error Ladder is waiting before asking
-    # again. The turn is still running: the detail is the error category, never
-    # the vendor's own body.
+    # The loop is waiting before it asks the model again: after a call that
+    # failed (the Model-Error Ladder), or after a reply that said nothing
+    # (Empty-Response Recovery's resend and step-down). The turn is still
+    # running: the detail is the error category, or `empty_reply` /
+    # `thinking_only`, never the vendor's own body.
     LLM_RETRY = "llm_retry"
+    # The turn ended on a silence marker: an outlet draws one faint line, a channel sends nothing.
+    SILENT_TURN = "silent_turn"
 
 
 # Which notices pass with the turn and which stand in for its answer. An outlet
@@ -129,6 +133,10 @@ class TurnFailed:
     turn_id: str = ""
     reported: bool = False
     full_detail: str | None = None
+    # The last reply had no text, no tool call and nothing else to show (no reasoning, refusal or cut at the
+    # output ceiling) once recovery was spent; with recovery off, no text at all, a refusal excepted, which
+    # fails as a refusal either way. Earlier attempts are not covered.
+    no_output: bool = False
 
 
 @dataclass(frozen=True)
@@ -138,6 +146,8 @@ class TurnEnded:
     explicit_reply: bool
     conversation_id: str | None = None
     turn_id: str = ""
+    # The turn ended on a silence marker, not on an answer.
+    silent: bool = False
 
 
 # Deliverable events — emitted by the runner, routed to outlets.

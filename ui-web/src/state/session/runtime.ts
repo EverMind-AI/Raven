@@ -88,6 +88,12 @@ export class SessionRuntime {
      running, so a stop that arrives late cannot land on the next turn. */
   openedTurn: string | null = null
 
+  /* Set by the notice that says the model chose not to reply, and read when the
+     turn lands, a stop or a failure included: such a turn has no answer, so
+     nothing it said is promoted into one. Cleared with the rest of the turn by
+     `reset`, and again where a turn opens, so the mark never outlives its turn. */
+  silent = false
+
   /* Only read while off screen, same as `phase`. */
   queue: string[] = []
 
@@ -158,7 +164,7 @@ export const state = (): SessionRuntime => viewRuntime()
 /** Back to a conversation with no turn running. */
 export function reset(rt: SessionRuntime = viewRuntime()): void {
   transcript.stopStream()
-  rt.st = null; rt.steps = []; rt.say = ''; rt.open.clear(); rt.sawEpisode = false
+  rt.st = null; rt.steps = []; rt.say = ''; rt.open.clear(); rt.sawEpisode = false; rt.silent = false
   rt.openedTurn = null
   rt.startedAt = Date.now()
   rt.answerAt = 0
@@ -204,7 +210,7 @@ export function finishTurn(payload: unknown, rt: SessionRuntime = viewRuntime())
   transcript.killStatus()
   /* The island promotes the streamed prose into the answer block where the
      prose stood, merges the silent stretches and folds the turn. */
-  transcript.finishTurn(rt.st, rt.steps, duration(p.duration_ms, rt))
+  transcript.finishTurn(rt.st, rt.steps, duration(p.duration_ms, rt), rt.silent)
   /* The turn's products close it, after the answer and after any note: the
      bar is the last line of a turn, and it is only drawn once the turn is
      over -- nothing grows it mid-flight. */
@@ -214,11 +220,16 @@ export function finishTurn(payload: unknown, rt: SessionRuntime = viewRuntime())
   /* The window fill is the turn's prompt, not the running total. */
   setCtx(usage.context_used || inTok, usage.context_max as number)
   const s = sess(sessionCurrent())
-  if (s && rt.say.trim()) s.last = rt.say.trim().split('\n')[0]!.slice(0, 60)
-  touchSession(sessionCurrent(), rt.say)
-  // OS notification when the answer lands while the window is in the
-  // background; ntfPush itself checks focus and the user's preference.
-  ntfPush(t('gui.set.ntf.done'), (s && s.title) || rt.say.trim().slice(0, 80))
+  /* A silent turn delivered nothing: it writes no preview, does not move its
+     row up the rail (the server's list skips it for its time too) and raises no
+     OS notification -- a ping is a delivery, which silence exists to avoid. */
+  if (!rt.silent) {
+    if (s && rt.say.trim()) s.last = rt.say.trim().split('\n')[0]!.slice(0, 60)
+    touchSession(sessionCurrent(), rt.say)
+    // OS notification when the answer lands while the window is in the
+    // background; ntfPush itself checks focus and the user's preference.
+    ntfPush(t('gui.set.ntf.done'), (s && s.title) || rt.say.trim().slice(0, 80))
+  }
   reset(rt)
   drawMeter(); goState(); sessionDraw(); scrollTranscriptDown()
   const nx = queueShift()
@@ -424,7 +435,7 @@ export function stop(): void {
    "done", under a note saying the output was kept. */
 export function softStop(keepCancelling?: boolean, rt: SessionRuntime = viewRuntime()): void {
   transcript.killStatus()
-  transcript.finishTurn(rt.st, rt.steps, duration(undefined, rt))
+  transcript.finishTurn(rt.st, rt.steps, duration(undefined, rt), rt.silent)
   if (!keepCancelling) turn.dispatch({ type: 'idle' })
   /* Only promise the output was kept when there is output above to keep. */
   noteRow(t(transcript.turnKept() ? 'gui.halted' : 'gui.halted_bare'), '',
