@@ -18,6 +18,7 @@ single-argument dispatcher handlers.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -212,11 +213,6 @@ def clear_active(session_key: str) -> None:
     """Drop a session's active-turn slot. Wired into build_rpc_spine as ``on_turn_end``
     so the slot clears at the end of the turn that owns it (alongside turn_ids)."""
     _active_turns.pop(session_key, None)
-
-
-def bind_active(session_key: str, handle: TurnHandle) -> None:
-    """Bind a linked user turn to the page's normal cancellation slot."""
-    _active_turns[session_key] = handle
 
 
 # The ``busy: inject`` sends the running turn has not yet merged, per lane and
@@ -780,6 +776,7 @@ async def turn_cancel(
     emitter: SubscriptionEmitter | None = None,
     direct_targets: dict[str, dict[str, str]] | None = None,
     turn_ids: dict[str, str] | None = None,
+    linked_turn_id: Callable[[str], str | None] | None = None,
 ) -> dict[str, Any]:
     """``turn.cancel`` — cancel the in-flight turn + notify subscribers.
 
@@ -810,6 +807,9 @@ async def turn_cancel(
     started, and reaching for whatever the lane happens to be running would
     stop a cron wake, or a delegated turn that began after the request left.
 
+    A linked Telegram turn supplies its id through ``linked_turn_id`` without
+    replacing the cancellation binding of an ordinary page turn queued behind it.
+
     The subscription is SESSION-scoped, not turn-scoped: a per-turn cancel ends
     only the turn and MUST leave the session's subscriptions open so the next
     turn's events still reach the client.
@@ -828,12 +828,15 @@ async def turn_cancel(
         else parsed.session_key
     )
 
-    if parsed.turn_id is not None:
+    turn_id = parsed.turn_id
+    if turn_id is None and linked_turn_id is not None:
+        turn_id = linked_turn_id(lane)
+    if turn_id is not None:
         # Probed, not assumed, like ``_lane_in_flight``: a scheduler without
         # the seam (a test fake) has no running turn to name.
         probe = getattr(_scheduler, "running_turn", None)
         running = probe(lane) if callable(probe) else None
-        if running is None or running[0] != parsed.turn_id:
+        if running is None or running[0] != turn_id:
             return {"cancelled": False}
         handle = running[1]
         await handle.cancel()
@@ -842,7 +845,7 @@ async def turn_cancel(
                 parsed.session_key,
                 {
                     "type": "error",
-                    "payload": _tag(_cancel_payload(parsed.turn_id), (direct_targets or {}).get(lane)),
+                    "payload": _tag(_cancel_payload(turn_id), (direct_targets or {}).get(lane)),
                 },
             )
         await handle.result()
@@ -929,6 +932,7 @@ def register_turn_methods(
     default_channel: str = "tui",
     agent_loop_factory: "AgentLoopFactory | None" = None,
     question_broker: "QuestionBroker | None" = None,
+    linked_turn_id: Callable[[str], str | None] | None = None,
 ) -> None:
     """Register ``turn.{send,subscribe,unsubscribe,cancel}`` on a dispatcher.
 
@@ -965,7 +969,9 @@ def register_turn_methods(
         return await turn_unsubscribe(params, emitter=emitter)
 
     async def _cancel(params: dict[str, Any]) -> dict[str, Any]:
-        return await turn_cancel(params, emitter=emitter, direct_targets=direct_targets, turn_ids=turn_ids)
+        return await turn_cancel(
+            params, emitter=emitter, direct_targets=direct_targets, turn_ids=turn_ids, linked_turn_id=linked_turn_id
+        )
 
     dispatcher.register("turn.send", _send)
     dispatcher.register("turn.subscribe", _subscribe)

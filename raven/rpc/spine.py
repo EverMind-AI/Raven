@@ -52,7 +52,6 @@ from raven.spine import (
 from raven.spine.delivery import Capabilities, DeliveryHub
 from raven.spine.events import TurnEvent
 from raven.spine.runner import Drain, Emit
-from raven.spine.scheduler import TurnHandle
 from raven.spine.turn import session_of
 
 _TURN_FAILED_CODE = -32099
@@ -694,7 +693,6 @@ def build_rpc_spine(
     channel: str = "tui",
     on_turn_end: Callable[[str], None] | None = None,
     on_turn_start: Callable[[str, str], str | None] | None = None,
-    on_turn_bind: Callable[[str, TurnHandle], None] | None = None,
     direct_targets: dict[str, dict[str, str]] | None = None,
     readback_texts: dict[str, str] | None = None,
     approval_responder: ApprovalResponder | None = None,
@@ -751,15 +749,8 @@ def build_rpc_spine(
     )
     sink = _make_rpc_sink(hub, outlet, channel, turn_ids, usages, direct_targets, on_turn_end, on_turn_start)
 
-    def bind_linked_turn(conversation_id: str, turn_id: str) -> None:
-        running = scheduler.running_turn(conversation_id)
-        if running is not None and running[0] == turn_id:
-            turn_ids[conversation_id] = turn_id
-            if on_turn_bind is not None:
-                on_turn_bind(conversation_id, running[1])
-
     scheduler = Scheduler(
-        linked_chat.wrap_runner(runner, outlet, bind_linked_turn) if linked_chat is not None else runner,
+        linked_chat.wrap_runner(runner, outlet) if linked_chat is not None else runner,
         OriginPools(user=user_pool, system=system_pool, direct=direct_pool),
         linked_chat.wrap_sink(sink, outlet) if linked_chat is not None else sink,
     )
