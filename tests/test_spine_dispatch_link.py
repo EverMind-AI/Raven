@@ -131,13 +131,14 @@ class _World:
         return trace.dispatch_link_of(final["attributes"])
 
     def run_of(self, name: str) -> tuple[str, str]:
+        """The ``subagent.run`` span of ``name``'s run, which its checkpoint and its final record share."""
         task_id = self.runner.task_ids[name]
-        (record,) = [
-            r
+        (span,) = {
+            (r["traceId"], r["spanId"])
             for r in self.records()
             if r["name"] == "subagent.run" and r["attributes"].get("subagent.task_id") == task_id
-        ]
-        return (record["traceId"], record["spanId"])
+        }
+        return span
 
     def origins(self) -> dict[str, set[str]]:
         """Each turn's trajectory origins, keyed by the turn's label."""
