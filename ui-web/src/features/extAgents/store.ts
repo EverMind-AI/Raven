@@ -107,7 +107,8 @@ export interface ExtAgentsState {
      picker open in it -- that a reload after another row's write must not
      throw away. */
   picking: string | null
-  /* The model the reader picked in the family picker, by row name. A preset has
+  /* The model the reader picked for an agent that is not on the roster yet, by
+     row name -- in the family picker or in the agent's own sheet. A preset has
      no row to hold it until `subagents.add`, so -- like `drafts` -- the pick
      waits here and travels with the add, which is what makes an agent and its
      model one write. Here rather than in the row's component, which a reload
@@ -401,11 +402,18 @@ export function retry(row: ExtAgentRow): void {
    one switched off has its flag put back, a stale one -- its preset moved to
    another transport -- is removed and re-added. The page confirms the stale
    case before calling this; the key case never reaches here, since the
-   credential is typed in the sheet and saved from there. */
-export function connectRow(row: ExtAgentRow, model?: string): Promise<void> {
+   credential is typed in the sheet and saved from there.
+
+   The model the reader picked for the agent travels with that add: a preset has
+   no row to hold it until then, and the add is the one write that lands the
+   agent and its model together. An update would be refused -- there is no row
+   of that name to update yet -- and the agent would run on its own default
+   instead of the one that was picked. */
+export function connectRow(row: ExtAgentRow): Promise<void> {
   const stage = stageOf(row)
   if (stage === 'add') {
     const description = get().drafts[row.name]
+    const model = get().picked[row.name]
     return act(row, 'connect', { ...(description ? { description } : {}), ...(model ? { model } : {}), ...whereArgs(row.name) })
   }
   if (stage === 'stale') return act(row, 'migrate')
@@ -895,6 +903,15 @@ export function pickModel(row: ExtAgentRow, model: string): void {
   set({ picked: { ...get().picked, [row.name]: model } })
 }
 
+/* That pick, put back to the agent's own default. There is no row to clear it
+   from -- the agent is not on the roster yet -- so what is dropped is the pick
+   itself, and the add that follows runs the agent on its own default. */
+export function clearPicked(name: string): void {
+  const picked = { ...get().picked }
+  delete picked[name]
+  set({ picked })
+}
+
 export function pickerClose(): void {
   detail.close()
 }
@@ -914,7 +931,7 @@ export function pickerClose(): void {
 export async function pickAndConnect(row: ExtAgentRow): Promise<void> {
   const gen = detail.get().gen
   const family = familyOf(row)
-  await connectRow(row, get().picked[row.name])
+  await connectRow(row)
   const drawer = detail.get()
   if (get().failed[row.name] || !drawer.open || drawer.gen !== gen || get().picking !== family) return
   if (get().rows.some((other) => familyOf(other) === family && get().joining[other.name])) return

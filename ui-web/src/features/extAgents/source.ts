@@ -128,6 +128,17 @@ export function stageOf(row: ExtAgentRow): Stage {
    whose engine wheel is not installed -- is connected from here, and is one
    section. */
 export type Section = 'on' | 'avail' | 'missing'
+
+/* Whether this row has an entry of its own to write to. A preset that is not
+   on the roster has none: the server answers an update for a name it does not
+   hold with "no configured sub-agent named ...", so a model picked on one waits
+   for the add that writes it. A folder found on disk and Raven's own loop both
+   have somewhere to land -- the server writes the first from its manifest and
+   the second from the seed -- so only a preset waits. */
+export function hasEntry(row: ExtAgentRow): boolean {
+  return row.configured || !!row.builtin || !!row.vendored
+}
+
 export function sectionOf(row: ExtAgentRow): Section {
   const stage = stageOf(row)
   if (stage === 'live' || stage === 'builtin') return 'on'

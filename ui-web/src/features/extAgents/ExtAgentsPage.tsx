@@ -15,7 +15,7 @@ import { badOf, healthOf, kindOf, ledClass, pendingLabel, refusedWrite, shownOf 
 import { MachineConnectSheet, MachineSheet, MachinesGrid, RegisterSheet, WhereField } from './MachineCards'
 import * as machines from './machines'
 import { CardGrid, Spin, Tile, WaitGrid, ago, connect, oneLine, ordered, refusedLabel, whyOf } from './Rows'
-import { gridEntries, sectionOf, stageOf } from './source'
+import { gridEntries, hasEntry, sectionOf, stageOf } from './source'
 import * as store from './store'
 
 import type { PickerProvider } from '../../components/ModelPicker'
@@ -237,8 +237,12 @@ function asAsked(row: ExtAgentRow, s: ExtAgentsState): ExtAgentRow {
    says the same, unless it is Raven's own, which really does follow; a model
    such a row still carries is shown with its clear control, since the clear is
    the one write left. A server that predates the model field draws no pill:
-   it has no model write. */
-function ModelPill({ row, busy }: { row: ExtAgentRow; busy: boolean }): JSX.Element | null {
+   it has no model write.
+
+   A row that is not on the roster has no entry to update -- the server answers
+   such a name with "no configured sub-agent named ..." -- so its pick waits for
+   the add that writes the row, the way the family drawer's pick waits. */
+function ModelPill({ row, busy, held }: { row: ExtAgentRow; busy: boolean; held?: string }): JSX.Element | null {
   const pill = useRef<HTMLButtonElement>(null)
   const [open, setOpen] = useState(false)
   if (!row.model_source) return null
@@ -247,7 +251,12 @@ function ModelPill({ row, busy }: { row: ExtAgentRow; busy: boolean }): JSX.Elem
   const fixed = row.model_source === 'fixed'
   /* The built-in row's list may simply not have landed yet; its click loads it. */
   const menuless = fixed || (row.model_source === 'agent' && !provs.length)
-  const shown = fixed ? null : shownModel(row)
+  /* A preset not yet added has no entry of its own to write to, so its pick
+     waits for the add; a folder found on disk and Raven's own loop both have
+     somewhere to land. */
+  const pending = !hasEntry(row)
+  const shown = fixed ? null : shownModel(pending && held ? { ...row, model: held } : row)
+  const value = pending ? (held ?? '') : (row.model ?? '')
   /* `fixed` outranks ownership: one of raven's own whose folder carries its own
      chat credential runs on that key and the model beside it, so "follows the
      main Raven" was the one thing it does not do. */
@@ -294,7 +303,10 @@ function ModelPill({ row, busy }: { row: ExtAgentRow; busy: boolean }): JSX.Elem
             aria-label={t('gui.agent.model_clear')}
             className="extAgents-mx"
             disabled={busy}
-            onClick={() => void store.clearModel(row)}
+            onClick={() => {
+              if (pending) store.clearPicked(row.name)
+              else void store.clearModel(row)
+            }}
             type="button"
           >
             {'×'}
@@ -304,11 +316,15 @@ function ModelPill({ row, busy }: { row: ExtAgentRow; busy: boolean }): JSX.Elem
       {open ? (
         <ModelPicker
           anchor={pill.current}
-          current={shown ? { model: row.model_source === 'agent' ? row.model || '' : shown.id, provider: shown.provider } : null}
+          current={shown ? { model: row.model_source === 'agent' ? value : shown.id, provider: shown.provider } : null}
           emptyNote={t(row.model_source === 'raven' ? 'gui.agent.model_no_provider' : 'gui.agent.model_managed')}
           onClose={() => setOpen(false)}
           onPick={(model, provider) => {
             setOpen(false)
+            if (pending) {
+              store.pickModel(row, model)
+              return
+            }
             void store.setModel(row, model, row.model_source === 'raven' ? provider : undefined)
           }}
           providers={provs}
@@ -715,7 +731,7 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
               row={row}
               saved={(!row.configured && !row.vendored && store.draftOf(row.name)) || row.description || ''}
             />
-            <ModelPill busy={shown === 'pending'} row={asAsked(row, s)} />
+            <ModelPill busy={shown === 'pending'} held={s.picked[row.name]} row={asAsked(row, s)} />
             {/* Only a preset not yet on the roster picks where it runs -- at
                 the add stage, or at the key stage an openai preset waits in
                 until its key is typed: the machine is written with the add,
