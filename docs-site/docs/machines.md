@@ -157,7 +157,7 @@ What lands on the machine:
 | --- | --- |
 | The node | `<node_dir>/<version>-<digest>/`, with `node_dir` from the registry row, `~/.raven-node` by default |
 | Its runtime state | `run/` (the socket), `tasks/<task>/` (each agent's record, owner-only) and `log/` under `node_dir` |
-| `uv`, when the machine had none, or when its own is older than 0.4.23 while pip there is configured with an index (such a `uv` ignores the index) | `<node_dir>/.uv`, version 0.13.0, fetched with the machine's `curl` or `wget`; the next install uses it |
+| `uv`, when the machine had none, or when its own is older than 0.4.23 while an install would give it an index, pip's own or a mirror chosen over it (such a `uv` ignores the index) | `<node_dir>/.uv`, version 0.13.0, fetched with the machine's `curl` or `wget`; the next install uses it |
 | A Python 3.12, when the machine had none | beside the node, kept by `uv` |
 
 Nothing else changes: no system package, no shell rc file, no environment
@@ -512,7 +512,7 @@ to an owner-only log under the Raven home (`logs/ssh/`).
 | *is not installed on machine …; install it with `raven ops connection install-node …`* | No node there | Run the install |
 | *runs different code from this Raven; update it with …* | The node is from another Raven version | Run `install-node` again |
 | *has no uv, and no curl or wget to fetch one with* | The installer needs `uv`, and the machine has neither it nor a way to fetch it; a Python there does not change this | Install `uv` on the machine (the sentence names its installer), or `curl` or `wget`, then retry |
-| *has uv 0.4.22, and only uv 0.4.23 or later installs from the package index pip is configured with there; with no curl or wget to fetch uv 0.13.0, upgrade uv there* | pip on the machine is configured with an index, its `uv` is too old to read one (or does not say its version), and the installer has no way to fetch a newer one | Upgrade `uv` on the machine, or install `curl` or `wget` so the installer fetches one under `node_dir`, then retry |
+| *has uv 0.4.22, and only uv 0.4.23 or later installs from the index pip is configured with there; with no curl or wget to fetch uv 0.13.0, upgrade uv there* | pip on the machine is configured with an index, its `uv` is too old to read one (or does not say its version), and the installer has no way to fetch a newer one | Upgrade `uv` on the machine, or install `curl` or `wget` so the installer fetches one under `node_dir`, then retry |
 | *failed at the packages step: it did not finish within 15 minutes, installing packages from …* | Downloads from that index crawl on the machine, and no mirror did better (or `RAVEN_NO_MIRROR` is set, or the machine has no `curl` to time it with) | Point pip there at a nearer index (`index-url` in pip's configuration, or `PIP_INDEX_URL`), then retry |
 | *the agent's command was not found on machine …* | The agent is not installed there for that user | Install and sign in on the machine |
 | *already runs 8 agents; wait for one to finish* | The machine is at its limit | Wait, or use another machine |
