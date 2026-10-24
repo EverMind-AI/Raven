@@ -900,7 +900,7 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     routed_broker = RoutingQuestionBroker(
                         page=page_mount.question_broker,
                         channel=question_broker,
-                        channel_active=linked_chat.channel_active if linked_chat is not None else None,
+                        channel_route=linked_chat.question_route if linked_chat is not None else None,
                     )
                     if callable(getattr(ask_tool := agent.tools.get("ask_user"), "set_broker", None)):
                         ask_tool.set_broker(routed_broker)
