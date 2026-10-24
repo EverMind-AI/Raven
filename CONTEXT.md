@@ -2218,7 +2218,8 @@ is the session's latest, its record is still only a checkpoint, and the session 
 answering right now; a checkpoint left behind by a process that died is selectable.
 A turn reporting a dispatched result carries that link whenever this process knows the span
 that dispatched the work: the `subagent.run` of a spawn that started, the spawning call of one
-cancelled before it started, the span a DAG was dispatched under. A report with no such span --
+cancelled before it started, the `subagent.run` of the DAG node attempt that sent a node's report,
+and for a graph's result the span the DAG was dispatched under. A report with no such span --
 a run picked up after a restart, a graph dispatched outside any span -- carries none and is
 therefore main-line, as is an unprompted report from an external agent. A turn never inherits a
 link from earlier work in its session.
@@ -2562,8 +2563,9 @@ the span status otherwise.
 A DAG node gets one such span per attempt, opened by `dag_runner._attempt_node` once the
 attempt holds a concurrency slot and closed after its terminal status event -- the time
 queued for the slot is outside it, where a spawned run's span includes its wait at the
-gate. Its parent is the span active where `run_dag` was called (the `run_subagent_dag` or
-`resolve_dag_node` tool call). A node continued, or sent its judge's own follow-up, runs
+gate. Its parent is the span active where the graph was dispatched (the `run_subagent_dag` or
+`resolve_dag_node` tool call); a graph dispatched outside any span -- a stint round resumed or
+swept outside a turn -- roots each attempt in a trace of its own. A node continued, or sent its judge's own follow-up, runs
 again under a new span; a node never executed (its branch not selected, skipped behind a
 failed dependency, or still queued when the run stopped) has none. Its `subagent.task` is
 the node's prompt template, `subagent.label` the node summary (else the node id),
@@ -2576,7 +2578,8 @@ with the reason as its message, never empty, so the trajectory shows the entry a
 (evidence `span_error`). A report an attempt sends -- its exception report or a stall notice,
 including one a blocking run injects only once released -- starts a turn whose dispatch link
 (`trace.dispatched_by_span_id`) names that attempt's span; the graph's result names the span
-that dispatched the graph.
+that dispatched the graph. A graph dispatched outside any span reports with no link at all,
+its attempts' reports included, so those turns stay main-line (**Main-line Turn**).
 _Avoid_: reading a spawned run's `status.code` as its result -- the run reports its own
 failures and returns, so that span is `OK` whatever the outcome.
 

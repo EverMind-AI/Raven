@@ -2003,10 +2003,12 @@ def _reported_from_here(origin: dict | None) -> dict | None:
     The run's ``origin`` names the span that dispatched the whole graph; a report
     about one node belongs to the attempt that sent it, so the turn it starts links
     there. A copy, because the run's own reports -- its result -- keep the graph's
-    link. Unchanged with tracing off or outside any span.
+    link. Unchanged with tracing off, and for a graph dispatched outside any span:
+    its attempts root traces no turn dispatched, so a turn linked to one could be
+    reached from no main-line turn, where a report with no link is one itself.
     """
     link = trace.dispatch_link()
-    if origin is None or link is None:
+    if origin is None or link is None or trace.dispatch_link_of(origin) is None:
         return origin
     return {**origin, **trace.dispatch_attrs(link)}
 

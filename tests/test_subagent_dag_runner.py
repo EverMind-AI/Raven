@@ -12235,11 +12235,14 @@ async def test_a_stall_notice_links_its_turn_to_the_attempt_that_stalled(tmp_pat
             notices.append(origin)
             exec_.release.set()
 
-    await asyncio.wait_for(
-        _run_traced(tmp_path, [_nd("a")], exec_, announce_exception=_announce, origin=dict(_ADDRESS)), 10
-    )
+    with trace.span("tool.call", {"tool.name": "run_subagent_dag"}) as dispatch:
+        origin = {**_ADDRESS, **trace.dispatch_attrs(trace.dispatch_link())}
+        await asyncio.wait_for(
+            _run_traced(tmp_path, [_nd("a")], exec_, announce_exception=_announce, origin=origin), 10
+        )
 
     (attempt,) = _attempts(_recorded(tmp_path / "traces"), "a")
+    assert attempt["parentSpanId"] == dispatch.span_id
     assert notices, "the gated node went quiet past the notice threshold"
     assert {trace.dispatch_link_of(o) for o in notices} == {(attempt["traceId"], attempt["spanId"])}
 
@@ -12268,10 +12271,31 @@ async def test_the_turn_an_exception_report_starts_links_to_the_attempt(tmp_path
     submitted: list[Any] = []
     manager.set_submit(submitted.append)
 
+    with trace.span("tool.call", {"tool.name": "run_subagent_dag"}) as dispatch:
+        origin = {**_ADDRESS, **trace.dispatch_attrs(trace.dispatch_link())}
+        await _suspend_and_abandon(tmp_path, manager.announce_dag_exception, origin)
+
+    (attempt,) = _attempts(_recorded(tmp_path / "traces"), "a")
+    assert attempt["parentSpanId"] == dispatch.span_id
+    assert [request.dispatch_link for request in submitted] == [(attempt["traceId"], attempt["spanId"])]
+
+
+async def test_a_node_report_from_a_graph_dispatched_outside_any_span_carries_no_link(tmp_path, monkeypatch) -> None:
+    """A stint round resumed outside any turn, say. Its attempt roots a trace no turn
+    dispatched, so a report linked there would be reachable from no main-line turn;
+    with no link the report's turn is a main-line turn of its own."""
+    from raven.agent.subagent.manager import SubagentManager
+
+    _traced(monkeypatch, tmp_path)
+    manager = SubagentManager(provider=SimpleNamespace(get_default_model=lambda: "stub"), workspace=tmp_path)
+    submitted: list[Any] = []
+    manager.set_submit(submitted.append)
+
     await _suspend_and_abandon(tmp_path, manager.announce_dag_exception, dict(_ADDRESS))
 
     (attempt,) = _attempts(_recorded(tmp_path / "traces"), "a")
-    assert [request.dispatch_link for request in submitted] == [(attempt["traceId"], attempt["spanId"])]
+    assert attempt["parentSpanId"] is None, "the attempt is still recorded, as the root of its own trace"
+    assert [request.dispatch_link for request in submitted] == [None]
 
 
 # --- every route into the runner nests its attempts under its caller ---------
