@@ -65,6 +65,7 @@ EXPECTED_PROVIDER_NAMES = {
     "xirang",
     "ph8",
     "aionly",
+    "atlascloud",
     "radeon_cloud",
     "opper",
     "gpustack",

@@ -656,6 +656,7 @@ class ProvidersConfig(Base):
     xirang: ProviderConfig = Field(default_factory=ProviderConfig)
     ph8: ProviderConfig = Field(default_factory=ProviderConfig)
     aionly: ProviderConfig = Field(default_factory=ProviderConfig)
+    atlascloud: ProviderConfig = Field(default_factory=ProviderConfig)
     radeon_cloud: ProviderConfig = Field(default_factory=ProviderConfig)
     opper: ProviderConfig = Field(default_factory=ProviderConfig)
     # Self-hosted servers, reached by address like the three above.

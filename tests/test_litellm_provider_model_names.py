@@ -66,6 +66,7 @@ BARE_MODEL = {
     "xirang": "deepseek-v3",
     "ph8": "gpt-5.5",
     "aionly": "gpt-5.5",
+    "atlascloud": "deepseek-ai/deepseek-v4-flash",
     "radeon_cloud": "deepseek-v3",
     "opper": "claude-sonnet-4-6",
     "gpustack": "qwen3-8b",
@@ -139,6 +140,7 @@ QUALIFIED_RESOLUTION = {
     "xirang": "openai/deepseek-v3",
     "ph8": "openai/gpt-5.5",
     "aionly": "openai/gpt-5.5",
+    "atlascloud": "openai/deepseek-ai/deepseek-v4-flash",
     "radeon_cloud": "openai/deepseek-v3",
     "opper": "openai/claude-sonnet-4-6",
     # Two self-hosted servers with no LiteLLM driver, so the same borrowed
@@ -224,6 +226,7 @@ BARE_RESOLUTION = {
     "xirang": "openai/deepseek-v3",
     "ph8": "openai/gpt-5.5",
     "aionly": "openai/gpt-5.5",
+    "atlascloud": "openai/deepseek-ai/deepseek-v4-flash",
     "radeon_cloud": "openai/deepseek-v3",
     "opper": "openai/claude-sonnet-4-6",
     "gpustack": "openai/qwen3-8b",
