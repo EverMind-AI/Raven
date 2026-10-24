@@ -115,16 +115,18 @@ def test_send_media_reaches_sdk(tmp_path):
     ch._app.bot.send_message.assert_not_awaited()  # empty content -> no text send
 
 
-def test_send_invalid_chat_id_is_dropped():
+def test_send_invalid_chat_id_reaches_the_delivery_failure_path():
     ch = _running_channel()
-    asyncio.run(ch.send("not-an-int", "hi"))
+    with pytest.raises(ValueError, match="Invalid Telegram chat_id"):
+        asyncio.run(ch.send("not-an-int", "hi"))
     ch._app.bot.send_message.assert_not_awaited()
 
 
-def test_send_when_not_running_is_noop():
+def test_send_when_not_running_reaches_the_delivery_failure_path():
     ch = _channel()
     ch._app = None
-    asyncio.run(ch.send("42", "hi"))  # must not raise
+    with pytest.raises(RuntimeError, match="Telegram bot not running"):
+        asyncio.run(ch.send("42", "hi"))
 
 
 # ── media extension resolution ────────────────────────────────────────

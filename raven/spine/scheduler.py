@@ -663,6 +663,21 @@ class Scheduler:
         lane = self._lanes.get(conversation_id)
         return lane.cancel() if lane is not None else 0
 
+    async def cancel_conversation_reported(self, conversation_id: str) -> int:
+        """Stop a shared lane, reporting queued cancellations to release UI slots."""
+        lane = self._lanes.get(conversation_id)
+        if lane is None:
+            return 0
+        futures = [fut for _req, fut in (*lane._pending, *lane._inject_mailbox)]
+        if lane._running_fut is not None:
+            futures.append(lane._running_fut)
+        pending = [fut for fut in futures if not fut.done()]
+        for fut in pending:
+            await lane.cancel_turn(fut)
+        if pending:
+            await asyncio.gather(*(asyncio.shield(fut) for fut in pending))
+        return len(pending)
+
     def running_turn(self, conversation_id: str) -> tuple[str, TurnHandle] | None:
         """The turn running on a conversation's lane, as its id and a handle,
         whoever submitted it; None when nothing there can still be cancelled.

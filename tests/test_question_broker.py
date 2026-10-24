@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from raven.rpc.methods.question import question_respond, register_question_methods
 from raven.rpc.question_broker import QuestionBroker, QuestionUndeliverableError, RoutingQuestionBroker
 
@@ -207,7 +209,9 @@ async def test_a_cancelled_question_closes_the_surface() -> None:
     await _wait_for_frame(frames)
     task.cancel()
 
-    assert await task == "d"
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert broker.pending_req(CID) is None
     await _wait_for_method(frames, "clarify.closed")
 
 

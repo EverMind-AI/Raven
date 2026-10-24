@@ -16,13 +16,14 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from raven.agent.spine_runner import AgentTurnRunner
+from raven.agent.tools.message import MessageTool
 from raven.contracts.asking import SupportsDirectAsk
 from raven.gateway.outlet import ChannelOutletAdapter
 from raven.providers.base import bound_llm_detail, llm_error_summary, parse_llm_error
 from raven.spine import OriginPools, Scheduler, session_key_for
 from raven.spine.delivery import DeliveryHub
-from raven.spine.events import Text, TurnEnded, TurnFailed, TurnStarted
-from raven.spine.message import Source
+from raven.spine.events import MediaOut, Text, TurnEnded, TurnFailed, TurnStarted
+from raven.spine.message import ChatType, Media, Source
 from raven.spine.turn import Origin
 
 if TYPE_CHECKING:
@@ -239,6 +240,37 @@ def build_gateway(
     hub = DeliveryHub(send_max_retries=send_max_retries)
     for channel in channels.values():
         hub.register(ChannelOutletAdapter(channel))
+
+    async def queue_target(channel_name: str, chat_id: str, content: str, media: list[str]) -> str:
+        target = channels.get(channel_name)
+        # Cross-target delivery is limited to an explicitly admitted private user.
+        if (
+            target is None
+            or not target.is_running
+            or chat_id not in getattr(target.config, "allow_from", ())
+            or not target.intake.is_allowed(chat_id)
+        ):
+            raise ValueError("Destination unavailable or not authorized")
+        if not content.strip() and not media:
+            raise ValueError("Empty message")
+        source = Source(channel=channel_name, chat_id=chat_id, sender_id="raven", chat_type=ChatType.DM)
+        if media:
+            accepted = await hub.post(
+                MediaOut(
+                    source=source,
+                    media=tuple(Media(path=p, mime="application/octet-stream", kind="file") for p in media),
+                )
+            )
+            if not accepted:
+                raise RuntimeError("Channel outlet unavailable")
+        if content:
+            if not await hub.post(Text(content=content, source=source)):
+                raise RuntimeError("Channel outlet unavailable")
+        return f"Message queued to {channel_name}:{chat_id} (transport delivery pending)"
+
+    message_tool = getattr(agent_loop, "tools", {}).get("message")
+    if isinstance(message_tool, MessageTool):
+        message_tool.set_target_sender(queue_target)
     readback_texts: dict[str, str] = {}
     sources: dict[str, Source] = {}
     # user>1 is safe now that per-turn tool state (message routing, context) is

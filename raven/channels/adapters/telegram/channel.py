@@ -281,14 +281,12 @@ class TelegramChannel(ChannelBase):
 
     async def send(self, chat_id: str, content: str, media: list[str] | None = None) -> None:
         if not self._app:
-            logger.warning("Telegram bot not running")
-            return
+            raise RuntimeError("Telegram bot not running")
         self._stop_typing(chat_id)
         try:
             chat_id_int = int(chat_id)
         except ValueError:
-            logger.error("Invalid chat_id: {}", chat_id)
-            return
+            raise ValueError("Invalid Telegram chat_id") from None
 
         for path in media or []:
             await self._send_media(chat_id_int, path)
@@ -308,27 +306,24 @@ class TelegramChannel(ChannelBase):
         arg = kind if kind in ("photo", "voice", "audio") else "document"
         try:
             with open(path, "rb") as fh:
-                await send(chat_id=chat_id, **{arg: fh})
-        except Exception as e:
-            logger.error("Failed to send media {}: {}", path, e)
-            await self._app.bot.send_message(
-                chat_id=chat_id,
-                text=f"[Failed to send: {path.rsplit('/', 1)[-1]}]",
-            )
+                receipt = await send(chat_id=chat_id, **{arg: fh})
+        except Exception:
+            raise RuntimeError("Telegram media delivery failed") from None
+        logger.info("Telegram delivered chat_id={} message_id={}", chat_id, receipt.message_id)
 
     async def _send_text(self, chat_id, text) -> None:
         try:
-            await self._app.bot.send_message(
+            receipt = await self._app.bot.send_message(
                 chat_id=chat_id,
                 text=_markdown_to_html(text),
                 parse_mode="HTML",
             )
-        except Exception as e:
-            logger.warning("HTML send failed, retrying as plain text: {}", e)
+        except Exception:
             try:
-                await self._app.bot.send_message(chat_id=chat_id, text=text)
-            except Exception as e2:
-                logger.error("Error sending Telegram message: {}", e2)
+                receipt = await self._app.bot.send_message(chat_id=chat_id, text=text)
+            except Exception:
+                raise RuntimeError("Telegram text delivery failed") from None
+        logger.info("Telegram delivered chat_id={} message_id={}", chat_id, receipt.message_id)
 
     async def _send_streamed(self, chat_id, text) -> None:
         """Animate the reply via the draft API, then persist the final text."""

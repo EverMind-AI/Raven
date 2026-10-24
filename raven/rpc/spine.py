@@ -701,6 +701,7 @@ def build_rpc_spine(
     system_pool: int = 1,
     direct_pool: int = 8,
     shutdown_grace: float = 0.0,
+    linked_chat: Any = None,
 ) -> tuple[Scheduler, DeliveryHub, dict[str, str], Callable[[], Awaitable[None]]]:
     """Wire the spine pieces a client turn flows through: a hub with the channel's
     RpcOutlet, and a Scheduler whose runner streams the agent loop and whose sink
@@ -738,17 +739,19 @@ def build_rpc_spine(
     usages: dict[str, dict[str, Any]] = {}
     if readback_texts is None:
         readback_texts = {}
+    runner = RpcTurnRunner(
+        agent_loop,
+        emitter,
+        usages,
+        readback_texts,
+        approval_responder=approval_responder,
+        credential_asker=credential_asker,
+    )
+    sink = _make_rpc_sink(hub, outlet, channel, turn_ids, usages, direct_targets, on_turn_end, on_turn_start)
     scheduler = Scheduler(
-        RpcTurnRunner(
-            agent_loop,
-            emitter,
-            usages,
-            readback_texts,
-            approval_responder=approval_responder,
-            credential_asker=credential_asker,
-        ),
+        linked_chat.wrap_runner(runner, outlet) if linked_chat is not None else runner,
         OriginPools(user=user_pool, system=system_pool, direct=direct_pool),
-        _make_rpc_sink(hub, outlet, channel, turn_ids, usages, direct_targets, on_turn_end, on_turn_start),
+        linked_chat.wrap_sink(sink, outlet) if linked_chat is not None else sink,
     )
 
     async def teardown() -> None:

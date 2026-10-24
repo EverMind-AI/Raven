@@ -46,6 +46,11 @@ class MessageTool(Tool):
             send_callback=send_callback,
         )
         self._turn: ContextVar[_MsgTurn] = ContextVar("message_tool_turn")
+        self._target_sender: Callable[[str, str, str, list[str]], Awaitable[str]] | None = None
+
+    def set_target_sender(self, sender: Callable[[str, str, str, list[str]], Awaitable[str]]) -> None:
+        """Wire explicit cross-target delivery; same-target replies keep streaming."""
+        self._target_sender = sender
 
     def _cur(self) -> _MsgTurn:
         return self._turn.get(None) or self._default
@@ -108,20 +113,31 @@ class MessageTool(Tool):
         **kwargs: Any,
     ) -> str:
         st = self._cur()
+        if any(value is not None and (not isinstance(value, str) or not value.strip()) for value in (channel, chat_id)):
+            return "Error: Invalid target channel/chat"
+        if (channel is not None and channel != st.channel and chat_id is None) or (
+            chat_id is not None and chat_id != st.chat_id and channel is None
+        ):
+            return "Error: Explicit channel and chat_id are required when changing destination"
         channel = channel or st.channel
         chat_id = chat_id or st.chat_id
 
         if not channel or not chat_id:
             return "Error: No target channel/chat specified"
 
-        if not st.send_callback:
-            return "Error: Message sending not configured"
+        cross_target = (channel, chat_id) != (st.channel, st.chat_id)
 
         try:
+            if cross_target:
+                if self._target_sender is None:
+                    return "Error: Cross-channel message sending not configured"
+                return await self._target_sender(channel, chat_id, content, media or [])
+            if not st.send_callback:
+                return "Error: Message sending not configured"
             await st.send_callback(content, media or [])
             if channel == st.channel and chat_id == st.chat_id:
                 self._turn.set(replace(st, sent=True))
             media_info = f" with {len(media)} attachments" if media else ""
             return f"Message sent to {channel}:{chat_id}{media_info}"
-        except Exception as e:
-            return f"Error sending message: {str(e)}"
+        except Exception:
+            return "Error: Message delivery failed; check channel availability and destination authorization"
