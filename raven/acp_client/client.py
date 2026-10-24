@@ -35,7 +35,7 @@ from typing import Any, Protocol
 
 from loguru import logger
 
-from raven.acp_client import leftovers, protocol, windows
+from raven.acp_client import leftovers, npx_fetch, protocol, windows
 from raven.acp_client.journal import FrameJournal, redact_acp_frame
 from raven.acp_client.protocol import (
     CANCEL_REQUEST_METHOD,
@@ -440,6 +440,10 @@ class AcpClient:
         Raises :class:`AcpConnectionError` if the process cannot be started; a
         server that starts but never speaks is a per-request timeout, not a
         launch failure, because the two need different operator action.
+
+        An ``npx`` launch first has npx fetch the package it names
+        (:func:`npx_fetch.ensure_fetched`), so a caller's handshake budget starts
+        once the agent itself does; a fetch npm refuses raises here, in npm's words.
         """
         # Imported here rather than at module level: backends/__init__ pulls in
         # the acp backend, which pulls in this module, so a module-level import
@@ -460,6 +464,7 @@ class AcpClient:
         # Before this launch starts its agent: a dead host's leftover of the same kind
         # may still hold what the new one needs, such as a lock or a port.
         await leftovers.sweep_before_first_launch()
+        await npx_fetch.ensure_fetched(name, argv, env=env, cwd=cwd)
 
         # The capture shells out and can block for real seconds on a slow
         # profile (nvm/conda init); to_thread keeps that off the event loop.

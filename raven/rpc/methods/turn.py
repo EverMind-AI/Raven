@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     from raven.providers.binding import ModelBinding
     from raven.rpc.dispatcher import Dispatcher
     from raven.rpc.methods.session import AgentLoopFactory
+    from raven.rpc.question_broker import QuestionBroker
 
 _TURN_FAILED_CODE = -32099
 
@@ -444,6 +445,7 @@ async def turn_send(
     build_error: RpcError | None = None,
     default_channel: str = "tui",
     agent_loop_factory: "AgentLoopFactory | None" = None,
+    question_broker: "QuestionBroker | None" = None,
 ) -> dict[str, Any]:
     """``turn.send`` — submit a turn onto the spine, return ``{turn_id, accepted}``.
 
@@ -502,6 +504,32 @@ async def turn_send(
     # Both paths below resolve the same attachments; the root is only looked
     # up when there is something to resolve.
     media_root = _media_root(agent_loop_factory, parsed.session_key) if parsed.media else None
+
+    # A turn blocked on an ask_user question is waiting for this very text. The
+    # page sends a message typed into the main composer as an inject whenever a
+    # turn is running, and the turn drains injects only between model calls --
+    # which it never reaches while the question waits -- so the question ran out
+    # its budget as unanswered and the agent went on with its own
+    # recommendation, the person's answer arriving after as a side note. The
+    # channel path checks the broker first (``gateway_commands``); this mirrors
+    # it: the text answers the question, and no turn or inject is made of it.
+    if (
+        parsed.busy == "inject"
+        and question_broker is not None
+        and question_broker.pending_req(lane) is not None
+        and not parsed.media
+        and question_broker.reply(lane, parsed.content, close=True)
+    ):
+        if emitter is not None:
+            # Still a message the person sent, and every window draws the
+            # sender's own bubble from this frame rather than from the call --
+            # without it the answer was nowhere on the page, only inside the
+            # asking tool's folded row.
+            await emitter.emit(
+                parsed.session_key,
+                {"type": "message.injected", "payload": _tag({"turn_id": turn_id, "content": parsed.content}, target)},
+            )
+        return {"turn_id": (turn_ids or {}).get(lane, ""), "accepted": True, "naming": False}
 
     if parsed.busy == "inject" and (is_turn_active(lane) or _lane_in_flight(scheduler, lane)):
         # Two records of "a turn is running here", and both count: this map
@@ -895,6 +923,7 @@ def register_turn_methods(
     build_error: RpcError | None = None,
     default_channel: str = "tui",
     agent_loop_factory: "AgentLoopFactory | None" = None,
+    question_broker: "QuestionBroker | None" = None,
 ) -> None:
     """Register ``turn.{send,subscribe,unsubscribe,cancel}`` on a dispatcher.
 
@@ -921,6 +950,7 @@ def register_turn_methods(
             build_error=build_error,
             agent_loop_factory=agent_loop_factory,
             default_channel=default_channel,
+            question_broker=question_broker,
         )
 
     async def _subscribe(params: dict[str, Any]) -> dict[str, Any]:

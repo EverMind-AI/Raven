@@ -55,6 +55,9 @@ export function createFs(_env: FixtureEnv): FsFixture {
           parent,
           home,
           ok: !REFUSED.has(at),
+          /* One root, as on a POSIX machine: the walk reaches it by its
+             parent chain, so the list of drives is never offered. */
+          roots: [],
           entries: children.map((name) => ({ name, path: `${at}/${name}`, ok: !REFUSED.has(`${at}/${name}`) })),
         }
       },

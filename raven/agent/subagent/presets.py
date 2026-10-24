@@ -135,8 +135,8 @@ from raven.utils.commands import resolve_subagent_command
 # configured only through the config migration that carries the previous stock
 # command forward (``_RETIRED_SHIM_COMMANDS`` in raven/config/loader.py), since
 # ``subagents.add`` copies this string into the row.
-_CLAUDE_ACP = "npx -y @agentclientprotocol/claude-agent-acp@0.81.1"
-_CODEX_ACP = "npx -y @agentclientprotocol/codex-acp@1.13.1"
+_CLAUDE_ACP = "npx -y @agentclientprotocol/claude-agent-acp@0.94.0"
+_CODEX_ACP = "npx -y @agentclientprotocol/codex-acp@2.2.2"
 
 SHIM_LAUNCHED_PRESETS = frozenset({"claude_code", "codex"}) | ACP_REGISTRY_SHIM_PRESETS | MIRASIM_SHIM_PRESETS
 """Presets whose command starts an ACP shim rather than naming a local agent.
@@ -176,18 +176,22 @@ puts its own CLI on no PATH -- so ``_probe_acp`` asks
 launcher under Mirasim's home, instead. The
 other two shims bring their agent along -- ``codex-acp`` ships it as its own binary, and ``claude-agent-acp``
 runs the CLI its ``@anthropic-ai/claude-agent-sdk`` pin carries as a
-per-platform optional dependency (read from the 0.66.0, 0.79.0 and 0.81.1
-packages on 2026-09-20/21/23), so a ``claude`` on PATH is neither needed nor the
+per-platform optional dependency (read from the 0.66.0, 0.79.0, 0.81.1 and
+0.94.0 packages on 2026-09-20/21/23 and 2026-10-23), so a ``claude`` on PATH is neither needed nor the
 one that answers -- and what either wants is a login, not an install. The pin is
 also what decides which Claude models the row can reach: 0.66.0 bundled CLI
 2.1.220, which refuses a model newer than it knows ("version 2.1.251 or newer is
 required"), so an account whose Claude settings name a recent model could not
 connect at all, and its menu offers ``claude-fable-5[1m]`` where 0.79.0 and
-0.81.1 offer ``claude-fable-5-1[1m]``; 0.79.0 bundles 2.1.274 and 0.81.1
-bundles 2.1.280. The codex pin decides its menu the same
+0.81.1 offer ``claude-fable-5-1[1m]``; 0.79.0 bundles 2.1.274, 0.81.1
+bundles 2.1.280, and 0.94.0 bundles 2.1.303, past 2.1.284 and 2.1.293, the
+first CLIs that name Sonnet 5.5 and Haiku 5.5 (Claude Code's changelog). The
+codex pin decides its menu the same
 way, because ``codex-acp`` builds the model choices from its bundled codex's
 ``model/list``: 1.1.14 bundles codex 0.147.0, whose list stops at GPT-5.6, and
-1.13.1 bundles 0.156.1, which lists the GPT-6 family (measured 2026-09-23).
+1.13.1 bundles 0.156.1, which lists the GPT-6 family (measured 2026-09-23);
+2.2.2 bundles 0.160.1 (read 2026-10-23), past 0.159, the client version below
+which the model list Codex serves leaves out gpt-6.1-sol (measured 2026-10-16).
 """
 
 
@@ -202,7 +206,9 @@ THIRD_PARTY_SUBAGENT_PRESETS: dict[str, dict[str, Any]] = {
         ),
         "command": _CLAUDE_ACP,
         # npx may have to download the adapter on the first connect, which is far
-        # slower than starting an installed binary.
+        # slower than starting an installed binary. On this computer that download
+        # runs before this window opens (`npx_fetch`); a registered machine's Raven
+        # node starts the adapter itself, so there it still runs inside it.
         "readyTimeoutMs": 120000,
     },
     "codex": {
@@ -218,7 +224,7 @@ THIRD_PARTY_SUBAGENT_PRESETS: dict[str, dict[str, Any]] = {
         # an ACP agent asks for anyway (raven/acp_client/permissions.py), so
         # asking buys nothing but a round trip per tool call -- and the mode is
         # also what restores network access, which no per-call approval does.
-        # Measured in codex-acp 1.1.14 and re-read in 1.13.1: AgentMode.AgentFullAccess
+        # Measured in codex-acp 1.1.14 and re-read in 1.13.1 and 2.2.2: AgentMode.AgentFullAccess
         # is approval policy "never", and INITIAL_AGENT_MODE still selects it.
         "env": {"INITIAL_AGENT_MODE": "agent-full-access"},
     },
@@ -627,9 +633,11 @@ def upgrade_hint_for(cfg: Any) -> str | None:
     of a bare package name installs whatever is newest only when nothing is
     installed yet, so over an old copy the plain hint can leave it where it is.
     Only for an ``npm i -g <package>`` hint, the one shape whose version is known
-    to go on the package's own word.
+    to go on the package's own word. For a shim row the agent is the one the shim
+    drives (:func:`shim_requirement_for`), whose release is the user's to move.
     """
-    hint = install_hint_for(cfg)
+    requirement = shim_requirement_for(cfg)
+    hint = install_hint_for(cfg) or (requirement[1] if requirement else None)
     if not hint:
         return None
     words = hint.split()

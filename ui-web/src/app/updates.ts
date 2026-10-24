@@ -211,7 +211,7 @@ export async function runUpgrade(): Promise<void> {
     }
     upMarkClear()
     /* The server says per refusal: a command to copy, an explicit null when it
-       proved none can work, or nothing when the default is still right. */
+       has none it can stand behind, or nothing when the default is still right. */
     shade.fail(t('gui.upg.failed'), refusalText(err), err.data?.command)
     return
   }
