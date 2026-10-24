@@ -2,7 +2,9 @@
 
 The gateway can bind one Telegram private chat to an existing page conversation. The page keeps its session key, history and working directory. Telegram turns use the same serial lane as page turns, so they cannot run concurrently against that conversation.
 
-This is an opt-in, single-owner setup. Without the binding file, channel routing is unchanged. With it, other Telegram senders, groups and topics are refused. This initial implementation requires POSIX file ownership checks; configuring a binding on an unsupported platform fails closed, while an absent file leaves the gateway unchanged.
+This is an opt-in, single-owner setup. Without the binding file, inbound Telegram conversations remain separate from page conversations. With it, other Telegram senders, groups and topics are refused. This initial implementation requires POSIX file ownership checks; configuring a binding on an unsupported platform fails closed.
+
+Explicit cross-target `message` sends are a gateway-wide change, available with or without a link. They still require both destination fields and an explicitly allowlisted destination.
 
 ## Configure the link
 
@@ -25,7 +27,7 @@ Existing standalone Telegram history is left in place; the gateway does not merg
 
 ## Replies and explicit updates
 
-A Telegram question and its reply stay on Telegram, and the resulting exchange belongs to the existing page conversation. New Telegram input queues behind an active page turn instead of being injected into that turn. Page input during a Telegram turn runs separately rather than inheriting the DM's reply address.
+A Telegram question and its reply stay on Telegram, and the resulting exchange belongs to the existing page conversation. New Telegram input queues behind an active page turn instead of being injected into that turn. Page input during a Telegram turn runs separately rather than inheriting the DM's reply address. The page's Stop button cancels the active linked turn while preserving pending page corrections.
 
 Questions and approvals raised by a Telegram turn go to the linked DM. A captured asker keeps its originating turn's route: page-origin questions stay on the page, and a finished DM turn cannot question a later turn. The link does not expose a credential-entry responder. `/stop` cancels work on the shared conversation, including queued page turns and associated subagents. New turns are refused during stop cleanup, so child cancellation reports cannot restart the host. Running work receives cancellation before the gateway waits for UI delivery. Other slash commands are refused in the linked DM; use the page for resets and configuration changes.
 
@@ -41,7 +43,9 @@ Linking does not broadcast background worker output, tool chatter, progress noti
 
 Changing only one destination field is rejected rather than completed from the current reply address. The destination must be explicitly admitted and its adapter must be running. Same-target messages retain the existing streaming behavior.
 
-`Message queued ... (transport delivery pending)` means that the native delivery hub accepted the message, not that Telegram delivered it. Successful Telegram text and media sends log the returned message ID. Final transport failures reach the delivery hub with sanitized errors. Receipt logs contain chat/message identifiers, so treat them as private operational data.
+`Message queued ... (transport delivery pending)` means that the native delivery hub accepted the message, not that Telegram delivered it. Successful Telegram text and media sends log the returned message ID. Receipt logs contain chat/message identifiers, so treat them as private operational data.
+
+Permanent Telegram failures are logged without retrying. A failed attachment gets a basename-only notice when the destination remains usable, and the remaining reply can continue. Transient failures reach the delivery hub as sanitized errors and resume at the unacknowledged part under the same bounded retry budget. Previously acknowledged attachments and text chunks are not sent again. A lost acknowledgement remains ambiguous; this is not an exactly-once delivery guarantee.
 
 ## Disable the link
 
