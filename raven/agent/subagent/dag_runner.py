@@ -294,7 +294,7 @@ class DagRunResult:
 WHEN_FALSE = "when_false"
 """Why a node was not executed: its guard is false, so its branch was not selected."""
 WHEN_UNKNOWN = "when_unknown"
-"""Why a node was not executed: its guard is unknown, because a decision it names was never made."""
+"""Why a node was not executed: its guard is unknown, because a decision node it names never chose."""
 UPSTREAM_NOT_EXECUTED = "upstream_not_executed"
 """Why a node was not executed: no dependency it has in the graph was executed."""
 
@@ -634,7 +634,7 @@ async def run_dag(
                 break
             # Below the stop and the replan, not beside the cascade: a decision node
             # either one cut off mid-judgement reads `completed` with no route, and
-            # deciding its branches now would record a decision nobody made where the
+            # deciding its branches now would record a selection nobody made where the
             # stop or the replan is why they never ran. Ahead of the sweep, so the
             # sweep announces in this same pass what this pass decides -- the run's
             # last decisions included, which no later pass would announce.
@@ -1180,8 +1180,8 @@ async def _apply_verdict(
     """Turn a finished node's verdict into a status, and report a bad one.
 
     The last attempt reports too: the agent learns this line of the graph is dead
-    while other branches are still running, rather than at the closing announce an
-    hour later.
+    while the rest of the graph is still running, rather than at the closing announce
+    an hour later.
 
     A decision node's selection is recorded into ``branch`` here, before the node
     leaves ``unsettled``, so no guard naming it is ever read without it.

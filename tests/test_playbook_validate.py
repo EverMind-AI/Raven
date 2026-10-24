@@ -114,6 +114,20 @@ def test_route_condition_param_refs_must_be_declared():
     )
 
 
+def test_a_route_condition_may_name_only_a_declared_param():
+    """A condition is filled like the prompt beside it, so it is held to the same rule: a
+    reference to no declared param reached the judge as written."""
+
+    def decision_node(condition: str) -> list[NodeSpec]:
+        return [_node("a", routes={"high": condition, "low": "anything else"})]
+
+    errors = validate_structure(_spec(decision_node("the deal is above ${params.nobody}")))
+    assert errors == ["node 'a': params.nobody in route 'high' names no declared param"]
+    declared = {"threshold": ParamSpec(description="above what value is a deal high?")}
+    for spelling in ("${params.threshold}", "{{ params.threshold }}"):
+        assert validate_structure(_spec(decision_node(f"the deal is above {spelling}"), params=declared)) == []
+
+
 def test_params_must_not_be_duplicated_into_node_inputs() -> None:
     params = {"project_path": ParamSpec(default=".", description="which project directory?")}
     duplicated = _node(

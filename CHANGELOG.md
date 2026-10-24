@@ -426,6 +426,27 @@ All notable changes to Raven are documented here.
   either. Turns recorded before this keep the attribution they were recorded
   with.
 
+- A playbook's route conditions are filled the way its prompts are. A
+  `${params.<key>}` in a decision node's condition reached the judge as
+  written, and one naming no declared param passed validation; now it reaches
+  the judge as its value, a secret param in one is withheld as it is from a
+  prompt, and a reference to no declared param is refused when the playbook is
+  saved or loaded.
+
+- A hand-written playbook whose decision node names a route `yes`, `no`, `on`,
+  `off`, `true`, `false` or a bare number loads. YAML 1.1 read such a key as a
+  boolean or a number, the playbook failed to load, and the runtime dropped it
+  from the library; every key in the spec block is now read as the text it is
+  written as. Values keep their YAML types. A spec block that is not a mapping
+  is a finding, and `raven playbook validate` answers a YAML syntax error as one
+  instead of a traceback.
+
+- Generating a dag playbook can produce a branch. The generator's instructions
+  for dag mode called `dependsOn` the whole graph language and never named
+  `routes`, `select` or `when`, though the schema it fills offers them; they
+  now describe a decision node and the rule that a node depending on one names
+  it in its `when`.
+
 - In the web UI, the **What came back** fold of a DAG node that stopped on
   a decision no longer opens onto the brief written for the model -- the
   `resolve_dag_node` calls it may make and that tool's whole schema, all in
@@ -472,6 +493,13 @@ All notable changes to Raven are documented here.
   `subagent.run` span carries `subagent.dispatch` (`dag`),
   `subagent.dag_run_id`, `subagent.node_id` and `subagent.attempt`; graphs
   recorded before this keep the entries they had.
+
+- A decision node's card on the tasks board cuts its first selected route
+  last. The agent line gave the selection all of its overflow, so a long agent
+  name and a tool count cut it down to its arrow; now the instance handle and
+  any further routes give way first, then the agent's name down to its first
+  few letters, and only then the route, which ends in an ellipsis inside the
+  card.
 
 - An empty reply from a model behind OpenRouter (`content: " "`,
   `finish_reason: stop`) is no longer reported as an upstream transport

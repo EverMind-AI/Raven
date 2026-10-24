@@ -737,15 +737,36 @@
   -webkit-box-orient: vertical;
 }
 /* The agent line (`.l2`, proto.css:1507-1518): the agent's own name, its
-   `@instance` handle when it has one, and the tool-count chip when the lane
-   reported one. */
-.tkrunl2 { display: flex; align-items: center; gap: 6px; overflow: hidden; white-space: nowrap; }
-.tkrunag { font-size: 12px; color: var(--text-3); }
+   `@instance` handle when it has one, the tool-count chip when the lane
+   reported one, and a decision node's selection. When they do not fit, the
+   handle and the routes after a selection's first give way first: each starts
+   from nothing and grows into the room the others leave, up to its own width.
+   The agent's name gives way next, but only down to its first few letters: it
+   starts from 6ch (or its own width, if narrower) and claims the room left over
+   ahead of the handle and the later routes. The first route gives way last,
+   to an ellipsis, so nothing on the line is drawn past its edge. The chip
+   never gives way. */
+.tkrunl2 { display: flex; align-items: center; gap: 0; overflow: hidden; white-space: nowrap; }
+/* Space the fields, not the two parts of one selection. */
+.tkrunl2 > * + :not(.tkrunselrest) { margin-left: 6px; }
+/* Grow 1000 against the handle's and the later routes' 1: the name fills to its
+   own width before they take more than a fraction of a pixel. No shrink: below
+   6ch it is the first route that yields. */
+.tkrunag {
+  flex: 1000 0 6ch;
+  max-width: max-content;
+  font-size: 12px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .tkrunhandle {
+  flex: 1 1 0;
+  max-width: max-content;
   font-family: var(--mono);
   font-size: 10.5px;
   color: var(--sky);
-  /* A minted handle can be long; it gives way before the tool-count chip does. */
+  /* A minted handle can be long. */
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -759,17 +780,22 @@
   border-radius: 5px;
   padding: 0 5px;
 }
-/* What a decision node selected, at the end of the agent line. It clips rather than pushing the
-   card's edge out, and its title holds the whole selection. */
-.tkrunsel {
-  flex: 0 1 auto;
-  min-width: 0;
+/* What a decision node selected, at the end of the agent line, each part titled with the whole
+   selection. The arrow and the first route keep their width until the agent's name is down to
+   its floor, then shrink to an ellipsis inside the line; route names have no length cap. The
+   routes after it shrink to a letter and an ellipsis: narrower, a line's first letter is clipped
+   rather than replaced by one, so they would end in a cut letter that says nothing follows.
+   Keep the separator's space with the first route, outside the text that may be cut. */
+.tkrunsel,
+.tkrunselrest {
   overflow: hidden;
   text-overflow: ellipsis;
   font-family: var(--mono);
   font-size: 10.5px;
   color: var(--moss);
 }
+.tkrunsel { flex: 0 1 auto; min-width: 0; white-space: pre; }
+.tkrunselrest { flex: 1 1 0; max-width: max-content; min-width: 2ch; }
 
 /* The top-right status cluster (`.rt`, proto.css:1083-1091): icon-or-word
    plus duration, coloured per status. */
