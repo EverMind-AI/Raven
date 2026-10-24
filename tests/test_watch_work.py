@@ -102,6 +102,33 @@ def test_asked_for_takes_the_last_user_message_and_strips_the_metadata_block():
     assert watch_work.asked_for(messages) == "run a case, 25 min budget"
 
 
+def test_asked_for_leaves_the_turn_scratch_out_of_the_request():
+    """Recalled memory and routed skills ride at the end of the envelope; read as
+    the owner's words they would hand the judge paths the owner never named."""
+    from raven.context_engine.scratch import mark_turn_scratch, render_turn_scratch
+
+    scratch = render_turn_scratch(["# Memory\n\nrecalled: tail -f /var/log/job.log"])
+    plain = mark_turn_scratch({"role": "user", "content": "[Runtime Context]\nnow=12:00\n\ncheck the status"}, scratch)
+    blocks = mark_turn_scratch(
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "[Runtime Context]"}, {"type": "text", "text": "and now?"}],
+        },
+        scratch,
+    )
+
+    assert watch_work.asked_for([plain]) == "check the status"
+    assert watch_work.asked_for([blocks]).endswith("and now?")
+    assert "recalled" not in watch_work.asked_for([blocks])
+
+
+def test_asked_for_keeps_a_pasted_tag_the_assembler_did_not_append():
+    from raven.context_engine.scratch import TURN_SCRATCH_TAG
+
+    pasted = f"why does the log say\n\n{TURN_SCRATCH_TAG}\n\nhere?"
+    assert watch_work.asked_for([{"role": "user", "content": pasted}]) == pasted
+
+
 def test_asked_for_handles_block_content_and_empty_history():
     messages = [{"role": "user", "content": [{"type": "text", "text": "watch this"}]}]
     assert watch_work.asked_for(messages) == "watch this"

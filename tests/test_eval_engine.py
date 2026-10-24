@@ -44,6 +44,7 @@ def ctx_with_messages():
     return AgentHookContext(
         session_key="cli:test",
         iteration=1,
+        turn_question="summarize this",
         messages=[
             {"role": "user", "content": "summarize this"},
             {"role": "assistant", "content": "ok, summary: foo"},
@@ -306,6 +307,31 @@ class TestAfterIterationHook:
         assert "summarize" in kwargs["user_goal"]
         # Hook never short-circuits — evaluator must not interrupt the reply.
         assert decision.short_circuit_result is None
+
+    async def test_the_goal_is_the_turn_question_not_the_first_user_message(self, cfg_enabled, fake_judge, adapter):
+        """The first user message is the oldest history entry, or on a first turn
+        the envelope with the turn scratch (recalled memory) appended to it."""
+        from raven.context_engine.scratch import mark_turn_scratch, render_turn_scratch
+
+        envelope = mark_turn_scratch(
+            {"role": "user", "content": "[Runtime Context]\n\nfix the build"},
+            render_turn_scratch(["# Memory\n\nrecalled: an old path"]),
+        )
+        ctx = AgentHookContext(
+            session_key="cli:test",
+            iteration=1,
+            turn_question="fix the build",
+            messages=[
+                {"role": "user", "content": "an earlier question"},
+                envelope,
+                {"role": "assistant", "content": "done"},
+            ],
+        )
+        hook = AfterIterationHook(cfg_enabled, fake_judge, adapter)
+        await hook.after_iteration(ctx)
+
+        assert fake_judge.judge.call_args.kwargs["user_goal"] == "fix the build"
+        assert adapter.record_task_completion.call_args.kwargs["user_goal"] == "fix the build"
 
     async def test_unknown_verdict_skips_adapter(self, cfg_enabled, adapter, ctx_with_messages):
         judge = MagicMock()

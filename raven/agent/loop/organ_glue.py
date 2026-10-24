@@ -20,6 +20,7 @@ from raven.agent.loop._shared import (
 )
 from raven.memory_engine import DrainOutcome
 from raven.observability.purpose import purpose as _llm_purpose
+from raven.session.refs import tool_result_view
 
 
 class OrganGlueMixin:
@@ -241,6 +242,7 @@ class OrganGlueMixin:
                 chat_id=chat_id,
                 surface=surface,
                 selected_skills=selected_skills,
+                session_revision=session.revision if isinstance(session, Session) else None,
             ),
         )
         # Stash the engine's injected_skill_ids so the after-turn
@@ -326,8 +328,22 @@ class OrganGlueMixin:
 
         Synchronous by contract: the turn hands the slice over and returns.
         What happens to it after that is :class:`StorePipeline`'s.
+
+        Tool results go over as :func:`~raven.session.refs.tool_result_view`
+        copies: the session files them whole for ``context_retrieve``, but a
+        backend may drop a single message larger than it accepts (the cloud one
+        skips anything over 250,000 bytes and still reports success), so it
+        is handed what main always filed.
         """
-        self._store_pipeline.enqueue(session_key, messages_slice)
+        self._store_pipeline.enqueue(
+            session_key,
+            [
+                {**m, "content": tool_result_view(m["content"])}
+                if m.get("role") == "tool" and isinstance(m.get("content"), str)
+                else m
+                for m in messages_slice
+            ],
+        )
 
     async def drain_backend_stores(self, timeout: float = _STORE_DRAIN_BUDGET_S) -> DrainOutcome:
         """Let queued writes finish before the process goes away and return what

@@ -627,7 +627,7 @@ def load_bootstrap_files(workspace: Path, bootstrap_files: list[str] | None = No
 
 
 def render_recalled_memory(memories: "list[Memory] | None") -> str:
-    """Render recall hits as bullet lines (segment 3, EverOS half).
+    """Render recall hits as bullet lines (segment 4, EverOS half).
 
     Skips hits whose ``text`` is empty after stripping so noisy backends
     can't insert blank bullets. Recalled memory can carry content distilled

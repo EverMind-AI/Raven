@@ -148,6 +148,20 @@ def cache_control() -> dict[str, str]:
 STABLE_PREFIX_KEY = "cache_stable_prefix_chars"
 
 
+#: Key a history message carries when it is the last one the next summarising
+#: request is expected to replay.
+#:
+#: The compacting history strategy writes a summary by replaying an earlier
+#: request as a prefix, cut where the removed span ends -- deep inside the
+#: history, behind every rolling mark, so a summary with no breakpoint of its own
+#: there reads back only the system head and pays for the conversation again.
+#: Which message that is belongs to the strategy, and how many marks a request
+#: may spend belongs to the placer, so it is said with a key rather than an
+#: import. Ours, like :data:`STABLE_PREFIX_KEY`: the sanitizer's allow-list
+#: drops it before the request goes out.
+COMPACTION_BOUNDARY_KEY = "cache_compaction_boundary"
+
+
 def split_stable_prefix(content: Any, chars: int) -> list[dict[str, Any]] | None:
     """Split ``content`` into [stable, rest] text blocks, or None if it cannot be.
 
@@ -315,10 +329,10 @@ def is_rejection(error: object) -> bool:
 
 
 #: Keys that ride beside a message for a placer's benefit and must not outlive
-#: it. ``cache_control`` is the wire field; the other two are ours, and a
-#: request that has just been stripped of its breakpoints is no longer one whose
-#: marks are placed.
-_OUT_OF_BAND_KEYS = frozenset({"cache_control", MARKS_PLACED_KEY, STABLE_PREFIX_KEY})
+#: it. ``cache_control`` is the wire field; the others are ours, and a request
+#: that has just been stripped of its breakpoints is no longer one whose marks
+#: are placed.
+_OUT_OF_BAND_KEYS = frozenset({"cache_control", MARKS_PLACED_KEY, STABLE_PREFIX_KEY, COMPACTION_BOUNDARY_KEY})
 
 
 def strip(

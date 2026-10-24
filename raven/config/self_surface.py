@@ -573,14 +573,20 @@ SECTIONS: tuple[Section, ...] = (
         (
             Setting(
                 "context",
-                "Model that curates long history",
+                "Model that curates long history (curator strategy only)",
                 "pin",
                 _E.NEXT_TURN,
                 writer="settings",
                 note='value is {"curatorModel": "<model>", "curatorProvider": "<provider>"}',
                 keys=("curatorModel", "curatorProvider"),
             ),
-            Setting("context.protectFirstN", "Leading messages never archived", "int", _E.RELOAD, low=0),
+            Setting(
+                "context.protectFirstN",
+                "Leading messages never archived (curator strategy only)",
+                "int",
+                _E.RELOAD,
+                low=0,
+            ),
             Setting("context.pinnedSkillIds", "Skills kept in context once read", "list", _E.RELOAD),
         ),
     ),

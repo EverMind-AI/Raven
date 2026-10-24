@@ -4,9 +4,12 @@ Assembles a uniform list of :class:`SegmentBuilder` into the turn's
 message array. Two phases:
 
 - **Phase A (parallel)** — every builder with ``needs_prefix=False``
-  (seg1–5: identity / bootstrap / memory / active-skills / skills) runs
+  (seg1–5: identity / bootstrap / active-skills / memory / skills) runs
   concurrently. Their ``text`` joins into the system prefix; their
-  ``meta`` merges into the assembled metadata.
+  ``meta`` merges into the assembled metadata. Under turn scratch (the
+  default) the text of a builder that declares ``stable = False`` goes to
+  the end of the turn's user message instead (:mod:`.scratch`), so the
+  system prompt holds nothing that moves with the query.
 - **Phase B (serial)** — builders with ``needs_prefix=True`` (the
   Curator) run with ``ctx.prefix`` populated (the assembled prefix +
   user message + tool defs), so they size ``*history`` against the exact
@@ -30,13 +33,14 @@ from typing import TYPE_CHECKING, Any, Callable
 from loguru import logger
 
 from raven.context_engine.scent import ScentMenu
+from raven.context_engine.scratch import mark_turn_scratch, render_turn_scratch
 from raven.context_engine.segments import render
 from raven.contracts.assembled import AssembledContext, TokenBudget
 from raven.contracts.context import AssembledPrefix, AssemblyContext, ContextEngine, SegmentBuilder
 from raven.providers.prompt_cache import STABLE_PREFIX_KEY
 
 if TYPE_CHECKING:
-    from raven.contracts.context import TurnContext
+    from raven.contracts.context import OverflowOutcome, TurnContext
     from raven.contracts.llm_provider import LLMProvider
 
 
@@ -92,7 +96,16 @@ class ContextAssembler(ContextEngine):
         now_fn: Callable[[], datetime] | None = None,
         get_tool_notices: Callable[[], list[str]] | None = None,
         scent: "ScentMenu | None" = None,
+        *,
+        owns_compaction: bool = True,
+        mints_source_refs: bool = False,
+        turn_scratch: bool = True,
     ) -> None:
+        # The two are the history strategy's, declared in its registry entry;
+        # the defaults are the Curator's, which is what an assembler built
+        # without a registry entry (a test, an embedder) has always meant.
+        self._owns_compaction = owns_compaction
+        self._mints_source_refs = mints_source_refs
         self._scent = scent
         self.skills_router = None
         """Set by the factory: the SkillForgeRouter behind find_skill."""
@@ -101,6 +114,7 @@ class ContextAssembler(ContextEngine):
         self._phase_b = [b for b in self._builders if b.needs_prefix]
         self.get_tool_definitions = get_tool_definitions
         self.get_tool_notices = get_tool_notices
+        self._turn_scratch = turn_scratch
         self._now_fn = now_fn or datetime.now
 
     @property
@@ -109,9 +123,11 @@ class ContextAssembler(ContextEngine):
 
     @property
     def owns_compaction(self) -> bool:
-        # The Curator lane archives history itself, so AgentLoop hands it
-        # the full append-only log and skips the host MemoryConsolidator.
-        return True
+        return self._owns_compaction
+
+    @property
+    def mints_source_refs(self) -> bool:
+        return self._mints_source_refs
 
     def set_provider(self, provider: "LLMProvider", model: str) -> None:
         # Duck-typed on purpose: only the builders that actually call an LLM
@@ -143,6 +159,7 @@ class ContextAssembler(ContextEngine):
             task_done_when=turn.task_done_when,
             session_messages=session_messages,
             budget=budget,
+            session_revision=turn.session_revision,
         )
 
         # ── Phase A — independent segment builders, concurrent ──────
@@ -156,13 +173,19 @@ class ContextAssembler(ContextEngine):
                 logger.opt(exception=seg).error("segment builder {} failed; assembling without it", builder.name)
         meta: dict[str, Any] = {}
         prefix_parts: list[tuple[int, str, bool]] = []
+        scratch_parts: list[tuple[int, str]] = []
         for builder, seg in zip(self._phase_a, a_segs):
             if seg is None or isinstance(seg, Exception):
                 continue
             meta |= seg.meta
-            if seg.text:
+            if not seg.text:
+                continue
+            if self._turn_scratch and self._is_turn_scoped(builder):
+                scratch_parts.append((builder.order, seg.text))
+            else:
                 prefix_parts.append((builder.order, seg.text, bool(getattr(builder, "stable", False))))
         prefix_parts.sort(key=lambda t: t[0])
+        scratch_parts.sort(key=lambda t: t[0])
         system_prefix = _SEG_SEP.join(text for _, text, _ in prefix_parts)
 
         if self._scent is not None:
@@ -173,7 +196,10 @@ class ContextAssembler(ContextEngine):
                 # only writer of this key: the after-turn backend feedback
                 # keeps receiving the skills the model was offered.
                 meta |= {"injected_skill_ids": list(scent.skill_ids)}
-        user_msg = self._build_user(ctx)
+        scratch = render_turn_scratch([text for _, text in scratch_parts])
+        # Appended after the envelope is built, and recorded on it: what the
+        # session write and every other reader strip is exactly this text.
+        user_msg = mark_turn_scratch(self._build_user(ctx), scratch)
 
         # ── Phase B — prefix-dependent builders (Curator), serial ───
         ctx_b = replace(
@@ -221,8 +247,18 @@ class ContextAssembler(ContextEngine):
         messages = [system_msg, *_coalesce_assistant(history), user_msg]
         return AssembledContext(
             messages=messages,
-            metadata=meta | {"engine": self.name},
+            metadata=meta | {"engine": self.name, "turn_scratch": bool(scratch)},
         )
+
+    @staticmethod
+    def _is_turn_scoped(builder: SegmentBuilder) -> bool:
+        """Whether this builder's text is kept out of the system prompt.
+
+        Only a builder that declares ``stable = False`` moves. An undeclared one
+        stays where it has always been: the flag is for new contributors, and
+        silently relocating a plugin's segment would change what the model reads.
+        """
+        return getattr(builder, "stable", None) is False
 
     async def after_turn(
         self,
@@ -235,6 +271,54 @@ class ContextAssembler(ContextEngine):
             hook = getattr(builder, "after_turn", None)
             if hook is not None:
                 await hook(session_key, outcome, usage)
+
+    def note_request(
+        self,
+        session_key: str,
+        messages: list[dict[str, Any]],
+        *,
+        model: str,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> None:
+        # Duck-typed like ``set_provider``: only a history builder that replays
+        # requests keeps them.
+        for builder in self._phase_b:
+            hook = getattr(builder, "note_request", None)
+            if hook is None:
+                continue
+            try:
+                hook(session_key, messages, model=model, tools=tools)
+            except Exception:
+                # Bookkeeping for a later summary; a failure here must not undo
+                # a call that was already answered.
+                logger.opt(exception=True).error("{} failed to note a request", builder.name)
+
+    async def on_context_overflow(
+        self,
+        session_key: str,
+        messages: list[dict[str, Any]],
+        *,
+        attempt: int,
+        window: int,
+    ) -> "OverflowOutcome | None":
+        # Asked of the history builder: it is the one that knows which part of
+        # the refused prompt it put there and what it can give back. The first
+        # builder that answers decides; none answering leaves the loop's own
+        # shrink to run.
+        for builder in self._phase_b:
+            hook = getattr(builder, "on_context_overflow", None)
+            if hook is None:
+                continue
+            try:
+                outcome = await hook(session_key, messages, attempt=attempt, window=window)
+            except Exception:
+                # The assemble rule: a failing builder loses its say, never the
+                # turn. The loop's own shrink is what answers instead.
+                logger.opt(exception=True).error("{} failed on a refused prompt; leaving it to the loop", builder.name)
+                continue
+            if outcome is not None:
+                return outcome
+        return None
 
     def set_context_window(self, tokens: int) -> None:
         # Delegate to any builder that sized itself against the window at

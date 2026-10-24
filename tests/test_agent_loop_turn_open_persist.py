@@ -167,3 +167,67 @@ async def test_the_slice_handed_to_the_memory_backend_still_opens_on_the_questio
     roles = [m.get("role") for m in backend.slices[0]]
     assert roles[0] == "user", f"the turn's slice does not open on the question: {roles}"
     assert backend.slices[0][0]["content"] == "read the repo and summarise it"
+
+
+class _RecordingBackend:
+    def __init__(self) -> None:
+        self.slices: list[list[dict[str, Any]]] = []
+
+    async def start(self) -> None:
+        pass
+
+    async def stop(self) -> None:
+        pass
+
+    async def feedback(self, signals):
+        pass
+
+    async def recall(self, query, *, user_id=None, agent_id=None, top_k):
+        return []
+
+    async def store(self, session_id, messages, *, metadata=None):
+        self.slices.append([dict(m) for m in messages])
+
+
+@pytest.mark.asyncio
+async def test_another_writer_on_the_same_key_does_not_leak_into_this_turn(workspace):
+    """A second process saving the same session around this turn's saves lands
+    its messages ahead of this turn's in the merged log. The turn still hands
+    the backend only its own question and answer, and the file keeps both
+    writers' messages once each."""
+    from raven.session.manager import SessionManager
+
+    class _Interleaving(WatchingProvider):
+        async def chat(self, messages, **kwargs):
+            other = SessionManager(workspace)
+            theirs = other.get_or_create("tui:chat1")
+            theirs.add_message("assistant", "B mid-turn")
+            other.save(theirs)
+            return await super().chat(messages, **kwargs)
+
+    backend = _RecordingBackend()
+    provider = _Interleaving("tui:chat1", content="A answer")
+    agent = _agent(workspace, provider, backend=backend)
+    live = agent.sessions.get_or_create("tui:chat1")
+    live.add_message("user", "earlier")
+    live.add_message("assistant", "earlier reply")
+    agent.sessions.save(live)
+    other = SessionManager(workspace)
+    theirs = other.get_or_create("tui:chat1")
+    theirs.add_message("user", "B question")
+    other.save(theirs)
+
+    await agent._process_message(_make_msg("A question"))
+    await agent.drain_backend_stores(timeout=5.0)
+
+    assert [m["content"] for m in _persisted(workspace)] == [
+        "earlier",
+        "earlier reply",
+        "B question",
+        "A question",
+        "B mid-turn",
+        "A answer",
+    ]
+    assert [m["content"] for m in backend.slices[0]] == ["A question", "A answer"]
+    session = agent.sessions.get_or_create("tui:chat1")
+    assert [m["content"] for m in session.messages] == [m["content"] for m in _persisted(workspace)]

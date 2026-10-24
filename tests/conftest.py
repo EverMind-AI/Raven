@@ -520,6 +520,18 @@ def _no_leaked_skill_watchers() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
+def _forget_learned_reply_headroom() -> Iterator[None]:
+    """The reply headroom a refusal teaches is process state, keyed by model id:
+    a test whose provider refuses one prompt would otherwise move the trigger
+    of every later test on the same stub model."""
+    from raven.context_engine import headroom
+
+    headroom.reset()
+    yield
+    headroom.reset()
+
+
+@pytest.fixture(autouse=True)
 def no_discovered_products(monkeypatch):
     """Pin agent-table discovery off, so the suite sees the same table everywhere.
 

@@ -1073,7 +1073,12 @@ rolls token counts and USD cost up into per-session, per-day, and lifetime aggre
 **CacheOptimizer**:
 The shipped TokenStrategy (`"cache_optimizer"`) that places Anthropic's ≤4 ephemeral
 `cache_control` breakpoints adaptively (tools tail + system tail + a rolling message-tail
-window). A Hermes-faithful `SystemAndTailCacheStrategy` ships alongside as an A/B reference.
+window). When the compacting History Strategy flags the message its next summary is
+expected to end on (`cache_compaction_boundary`, opt-in through `context.cache.compactionBreakpoint`),
+that mark takes the rolling window's oldest slot: the summary replays an earlier request as
+a byte prefix that stops behind every rolling mark, so it is the only breakpoint the
+summary can read back past the system head. A Hermes-faithful `SystemAndTailCacheStrategy`
+ships alongside as an A/B reference.
 
 **UsageSnapshot**:
 The token/cost accounting unit for a single LLM or built-in image-generation API call: input / output / cache-read /
@@ -1251,9 +1256,9 @@ The layer that assembles each turn's LLM window. One unified engine —
 SegmentBuilders in two phases: Phase A builds the system prefix in parallel, Phase B
 budgets history serially against that fixed overhead. The historical
 `legacy` / `curator` / `default` engine split was collapsed into this one engine;
-`engine:` survives only as a backward-compat config alias.
-_Avoid_: describing "legacy" and "Curator" as two separate engines — there is one
-engine and the Curator is its Segment 6.
+which builder fills the history slot is the History Strategy.
+_Avoid_: describing "compacting" and "Curator" as two engines — there is one
+engine, and they are two History Strategies for its Segment 6.
 
 **SegmentBuilder**:
 A pluggable contributor to the prompt; each builder produces one Segment for a fixed
@@ -1262,14 +1267,71 @@ defer into Phase B.
 
 **Segment**:
 A SegmentBuilder's uniform output: system-slot text, optional history (only the
-Curator sets this), and metadata merged into the assembled context.
+History Strategy's builder sets this), and metadata merged into the assembled context.
+
+**History Strategy** (`context_engine/history/`):
+The scheme that fills the history slot, named by `context.history.strategy` and
+resolved through the registry in `context_engine/history/__init__.py`, which is
+the only importer of a strategy and refuses an unknown name at startup.
+`compacting` (default) hands history over verbatim until the window nears its
+trigger, then prunes large tool results to a one-line record and a Source Ref,
+drops whole groups behind a fold, and past that writes a History Checkpoint;
+`curator` is the Curator. Each registry entry declares `owns_compaction` and
+`mints_source_refs`, which the host reads before any turn.
+_Avoid_: calling it an engine; it is one builder inside the one engine.
+
+**History Checkpoint** (`context_engine/history/compacting/checkpoint.py`):
+The user-role message the compacting strategy puts where the history it removed
+used to be: either a fold (counts and a ref, no model) or an eight-section
+summary (Goal, User Constraints, Decisions, Artifacts, Findings, Open Threads,
+Next Step, Pointers) written by the turn's model. Its chain is stored under
+`memory/.context/checkpoints/` and restored per Session Revision, so a new
+process resumes without compacting again; a later one `supersedes` the earlier.
+It carries `_history_checkpoint` in the window so the in-turn head summary never
+re-summarises it.
+_Avoid_: confusing it with the in-turn head summary (`agent/window`), which is
+written mid-turn for the working transcript and is never filed.
+
+**Source Ref** (`utils/refs.py`, `session/refs.py`):
+A `[[ref store/scope#lo-hi]]` token naming verbatim entries of an append-only
+store; for the session log the scope is the Session Revision's
+`<log_id>@<generation>`. A rendered ref is a promise that `context_retrieve`
+returns the stored original byte for byte, which is why that tool is registered
+only beside a strategy that mints refs.
+_Avoid_: treating a ref as a citation the model may paraphrase; it is an address.
+
+**Session Revision** (`contracts/context.py`):
+The identity of one append-only view of a session log: `log_id` (new on `/new`)
+and `generation` (bumped by an undo, or by a save that finds another writer
+changed messages this copy had already filed; another writer that only appended
+leaves it alone). Saves merge it across processes, taking the most recent
+clear's id and the larger generation, so a ref minted before an undo or a `/new`
+misses instead of naming a different message.
+
+**Turn Scratch** (`context_engine/scratch.py`):
+The tagged block appended to the end of the turn's user message carrying the
+phase-A segments whose builder declares `stable = False`, which today is
+`# Memory` and `# Skills`. It reaches the model but never `session.messages`:
+the assembler records on the envelope exactly what it appended (`_turn_scratch`),
+and the loop's `_save_turn`, the hooks' turn question, the watched-work judge and
+replay remove that recorded text, never whatever merely contains the tag. It
+keeps the system prompt byte-identical across turns, so the tools and system
+cache marks are read back on the next turn; the history behind it is not, since
+the envelope is filed in its stripped form, and reads back only through a
+provider's look-back over earlier breakpoints. The trade-off: recalled memory now
+sits in a user-role message rather than the system prompt; its untrusted-data
+fence and the scratch tag still say what it is.
+`context.cache.turnScratch = false` puts those segments back in the system prompt.
+_Avoid_: calling it "injected memory" — it is a slot, and what occupies it is
+whatever the builders declared too volatile for the system prompt.
 
 **Prompt Segments**:
 The ordered blocks `ContextAssembler` renders into the system prompt, one per
-SegmentBuilder: `# Raven` (identity), the Bootstrap Files block, `# Memory`
-(host `user.md` ⊕ EverOS recall), `# Active Skills` (always-on) and `# Skills`
+SegmentBuilder: `# Raven` (identity), the Bootstrap Files block, `# Active Skills`
+(always-on), `# Memory` (host `user.md` ⊕ EverOS recall) and `# Skills`
 (SkillForge-routed candidates — see SkillForge), and `# Curator Working State`
-(Segment 6). `context.dropSegments` names, by builder name, the host segments an agent does
+(Segment 6). Under Turn Scratch, `# Memory` and `# Skills` ride in the user
+message instead. `context.dropSegments` names, by builder name, the host segments an agent does
 without — an agent whose bootstrap files carry its own identity drops `identity`.
 _Avoid_: treating the system prompt as one opaque blob — each segment has an owner and order.
 

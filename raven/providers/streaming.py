@@ -393,12 +393,14 @@ async def stream_llm_call(
                     exc,
                 )
                 reset_attempt()
-            if classification.strip_images:
-                # The one recovery this function cannot make: the picture has to
-                # come out of the messages it only reads. Handed back as the error
-                # response the loop's strip-and-retry acts on; raising ended a
-                # deck build on the first render an endpoint refused for its size,
-                # and waiting would not have shrunk the bytes.
+            if classification.strip_images or (classification.should_compress and not emitted):
+                # The recoveries this function cannot make: the picture has to
+                # come out of the messages it only reads, and so does the history
+                # a too-long prompt carries. Handed back as the error response the
+                # loop's shrink-and-retry acts on; raising ended a deck build on
+                # the first render an endpoint refused for its size, and ended a
+                # long streamed turn on its first context overflow, and waiting
+                # would have shrunk neither.
                 return LLMResponse(
                     content=canonical_llm_error(classification.category, None, str(exc)),
                     finish_reason="error",

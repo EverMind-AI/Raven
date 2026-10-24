@@ -88,7 +88,15 @@ from raven.agent.tools.registry import call_failed
 from raven.agent.tools.removals import RemovalWatch
 from raven.agent.window import shrink
 from raven.agent.window.images import ATTACHED_IMAGE_KEY, IMAGE_SOURCES_KEY, filed_image_note, image_sources
-from raven.contracts.harness import ActionRequest, CapabilityRequest, PlanningRequest, WindowPressure, WindowState
+from raven.agent.window.turn_log import TURN_LOG_KEY, TurnLog
+from raven.contracts.harness import (
+    ActionRequest,
+    CapabilityRequest,
+    PlanningRequest,
+    ShrinkResult,
+    WindowPressure,
+    WindowState,
+)
 from raven.contracts.loop_hooks import HookDecision
 from raven.observability.purpose import purpose as _llm_purpose
 from raven.permissions.turn import set_current_tool_call_id
@@ -96,12 +104,13 @@ from raven.providers import usage_record
 from raven.providers.base import bound_llm_detail, canonical_llm_error, llm_error_summary, parse_llm_error
 from raven.providers.first_byte import first_byte_budget
 from raven.providers.tool_calls import openai_tool_call
+from raven.session.refs import TOOL_RESULT_TRUNCATION_MARKER, tool_result_view
 from raven.spine.events import bound_failure_text
 from raven.spine.turn import AnswerlessTurnError
 from raven.token_wise import usage_context
 from raven.token_wise.turn_spend import TurnSpend
 from raven.tracing import config as tracing_config
-from raven.utils.tokens import estimate_message_tokens
+from raven.utils.tokens import estimate_message_tokens, estimate_prompt_tokens
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -176,9 +185,10 @@ def _first_turns_within(messages: list[dict[str, Any]], budget: int) -> tuple[li
     The path this step replaces bounded its input by a token budget; without
     one a declined annotation is retried next turn with the tail one turn
     longer, so a tail that was refused for its size is refused larger every
-    time and the log stops being written for that session. A tool result is
-    kept at up to 16k characters, so a handful of tool-heavy turns reaches
-    that point.
+    time and the log stops being written for that session. A tool result
+    reaches the annotator as at most a 16k-character view
+    (``tool_result_view``), and is counted here as that view, so a handful of
+    tool-heavy turns reaches that point.
 
     Cuts only where a turn ends -- the next ``role == "user"`` -- so the
     annotator still sees whole exchanges. A first turn that alone exceeds the
@@ -197,7 +207,10 @@ def _first_turns_within(messages: list[dict[str, Any]], budget: int) -> tuple[li
             if spent > budget:
                 return (messages[:cut], False) if cut else (messages[:i], True)
             cut = i
-        spent += estimate_message_tokens(m)
+        if m.get("role") == "tool" and isinstance(m.get("content"), str):
+            spent += estimate_message_tokens({**m, "content": tool_result_view(m["content"])})
+        else:
+            spent += estimate_message_tokens(m)
     if spent <= budget:
         return messages, False
     return (messages[:cut], False) if cut else (messages, True)
@@ -225,6 +238,19 @@ def _turns_a_person_opened(messages: list[dict[str, Any]]) -> list[dict[str, Any
             keep = not m.get("origin")
         if keep:
             out.append(m)
+    return out
+
+
+def _without_scratch(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The turn as the after-turn pipeline should read it: its envelope without
+    the recall the assembler appended, which is this turn's input, not its record."""
+    from raven.context_engine.scratch import TURN_SCRATCH_KEY, strip_turn_scratch
+
+    out = []
+    for m in messages:
+        if m.get(TURN_SCRATCH_KEY):
+            m = {k: v for k, v in m.items() if k != TURN_SCRATCH_KEY} | {"content": strip_turn_scratch(m) or ""}
+        out.append(m)
     return out
 
 
@@ -518,6 +544,21 @@ class TurnPathMixin:
         usage.pop("total_tokens")
         return UsageSnapshot(model=model, session_key=session_key or None, **usage)
 
+    def _reply_room(self, messages: list[dict], tools: list[dict] | None, model: str | None) -> int | None:
+        """The ``max_tokens`` this request carries, or None to send it as before.
+
+        None while the model's whole output ceiling still fits beside the
+        prompt; see ``headroom.request_max_tokens`` for the arithmetic.
+        """
+        from raven.context_engine.headroom import request_max_tokens
+
+        return request_max_tokens(
+            window=self.context_window_tokens,
+            prompt_tokens=estimate_prompt_tokens(messages, tools),
+            ceiling=self._wire_output_ceiling(model),
+            floor=self.context_config.headroom.min_tokens,
+        )
+
     @trace.instrument("llm.call", extract=semconv.llm_call_stream)
     async def _llm_call_stream(
         self,
@@ -598,7 +639,11 @@ class TurnPathMixin:
         synth_messages = messages + [{"role": "user", "content": prompt}]
         # The wrap-up is a model call of the same turn, so it pays the turn's
         # effort; absent, the provider's configured default stands.
-        effort_kwargs: dict[str, str] = {} if reasoning_effort is None else {"reasoning_effort": reasoning_effort}
+        effort_kwargs: dict[str, Any] = {} if reasoning_effort is None else {"reasoning_effort": reasoning_effort}
+        # The wrap-up is asked for at the cliff edge, where the transcript is
+        # longest, so it is sized to the room beside it like any other call.
+        if reply_room := self._reply_room(synth_messages, None, model):
+            effort_kwargs["max_tokens"] = reply_room
         if synthesis_policy is not None:
 
             async def _call(rows: list[dict]) -> str:
@@ -743,6 +788,7 @@ class TurnPathMixin:
         attempt: int = 1,
         rerun_pending: "Callable[[str | None, list[dict], str], bool] | None" = None,
         spend: TurnSpend | None = None,
+        turn_log: TurnLog | None = None,
     ) -> tuple[str | None, list[str], list[dict], LoopOutcome]:
         """Run the agent iteration loop.
 
@@ -786,9 +832,17 @@ class TurnPathMixin:
         clock above does: a rerun is a second attempt at one turn and bills
         into the same scope. A caller that opened no scope gets one for this
         loop alone, which bills its own calls and takes no delegated ones.
+
+        ``turn_log`` is the record the caller persists this attempt from. The
+        returned list is the window as the last call saw it, which the window
+        passes may have summarised or elided; the log follows every list they
+        hand back and keeps what the turn actually said. A caller that passes
+        none gets one opened here, so the rerun question below is still asked of
+        the turn rather than of the window.
         """
         spend = spend if spend is not None else TurnSpend(session_key)
         messages = initial_messages
+        log = turn_log if turn_log is not None else TurnLog(initial_messages, len(initial_messages))
         iteration = 0
         final_content = None
         tools_used: list[str] = []
@@ -814,7 +868,18 @@ class TurnPathMixin:
         window = WindowState(
             image_window=shrink.IMAGE_WINDOW_RECENT_MESSAGES,
             image_budget=self._recovery_limits.image_window_budget_bytes or None,
+            session_key=session_key or "",
         )
+
+        async def _shrink(pressure: WindowPressure, at_model: str | None) -> ShrinkResult:
+            # The log reads the list on both sides of the pass: before, so the
+            # pass's copies of this turn's messages carry the log's stamp; after,
+            # so the list it hands back is the one the log follows.
+            log.follow(messages)
+            result = await self.harness.memory.shrink(messages, pressure=pressure, state=window, model=at_model)
+            log.follow(result.messages)
+            return result
+
         # Retryable model errors that outlasted the provider's own ladder: how many
         # of the loop's longer waits this turn has spent.
         error_waits = 0
@@ -964,9 +1029,13 @@ class TurnPathMixin:
                 # turn boundary (ask_user) needs to know the iteration number it
                 # sees is a re-sample, and only the loop knows that.
                 hook_ctx.metadata["hook_rollbacks"] = hook_rollbacks
+            log.drop(messages[iter_msg_base:])
             del messages[iter_msg_base:]
             for m in decision.rollback_inject or ():
                 entry = dict(m)
+                # A hook may hand back a copy of a message this turn already
+                # wrote; it is a new message, not a rewrite of that one.
+                entry.pop(TURN_LOG_KEY, None)
                 entry.setdefault("timestamp", self._now_fn().isoformat())
                 entry[_HOOK_INJECTED_KEY] = True
                 messages.append(entry)
@@ -1057,15 +1126,11 @@ class TurnPathMixin:
             # Compaction rebinds ``messages``, which is why it sits above the
             # autofill publish: a snapshot published before the rebind would go
             # quietly stale.
-            ahead = await self.harness.memory.shrink(
-                messages, pressure=WindowPressure.PROACTIVE, state=window, model=effective_model
-            )
+            ahead = await _shrink(WindowPressure.PROACTIVE, effective_model)
             messages = ahead.messages
             # The standing image window: the notes it writes are the transcript
             # from here on rather than a per-request rewrite.
-            standing = await self.harness.memory.shrink(
-                messages, pressure=WindowPressure.STANDING, state=window, model=effective_model
-            )
+            standing = await _shrink(WindowPressure.STANDING, effective_model)
             messages = standing.messages
 
             # Same seam and the same reason as the drain above: only the loop's
@@ -1157,6 +1222,15 @@ class TurnPathMixin:
             # the shape the messages arrived in, and the prompt-cache prefix
             # stays stable because the same arrivals always fold the same way.
             call_messages = merge_mid_turn(call_messages)
+            # Sized to the prompt it goes out beside, which is the room the
+            # history strategy's trigger holds back: near that line the model's
+            # whole ceiling no longer fits, and a provider that checks
+            # ``prompt + max_tokens <= window`` refuses the request outright. A
+            # hook's own ``max_tokens`` override stands.
+            if "max_tokens" not in gen_overrides and (
+                reply_room := self._reply_room(call_messages, call_tools, call_model)
+            ):
+                gen_overrides["max_tokens"] = reply_room
             # A hook can send this whole response back, and a rollback pops the
             # history the stream has already left -- so where hooks are installed
             # the deltas are held until something keeps the response. The draft
@@ -1207,6 +1281,13 @@ class TurnPathMixin:
                 )
                 # Read inside the bind: the count belongs to it and ends with it.
                 recorded_at_seam = usage_record.recorded_inbound()
+            if response.finish_reason != "error" and (note := getattr(self.context_engine, "note_request", None)):
+                # What went out and was answered, for a history strategy that
+                # summarises by replaying it (its prefix is what is cached).
+                try:
+                    note(session_key or "", call_messages, model=call_model or effective_model, tools=call_tools)
+                except Exception:
+                    logger.opt(exception=True).error("the context engine failed to note a request")
             # Assigned, not latched: the fact this carries is that the turn's
             # own last word was cut, so a call that recovers clears it. Latching
             # would report a cut to a reader whose question is what the turn
@@ -1310,17 +1391,13 @@ class TurnPathMixin:
             refused = response.finish_reason == "error" and cls_ is not None
             retry_model = call_model or effective_model
             if refused and cls_.should_compress:
-                shrunk = await self.harness.memory.shrink(
-                    messages, pressure=WindowPressure.OVERFLOW, state=window, model=retry_model
-                )
+                shrunk = await _shrink(WindowPressure.OVERFLOW, retry_model)
                 messages = shrunk.messages
                 if shrunk.changed:
                     iteration -= 1
                     continue
             if refused and cls_.should_drop_tool_images:
-                demoted = await self.harness.memory.shrink(
-                    messages, pressure=WindowPressure.TOOL_IMAGES_REFUSED, state=window, model=retry_model
-                )
+                demoted = await _shrink(WindowPressure.TOOL_IMAGES_REFUSED, retry_model)
                 messages = demoted.messages
                 if demoted.changed:
                     # Cached so the rest of the process stops paying for the
@@ -1330,9 +1407,7 @@ class TurnPathMixin:
                     iteration -= 1
                     continue
             if refused and cls_.strip_images:
-                withdrawn = await self.harness.memory.shrink(
-                    messages, pressure=WindowPressure.IMAGES_TOO_LARGE, state=window, model=retry_model
-                )
+                withdrawn = await _shrink(WindowPressure.IMAGES_TOO_LARGE, retry_model)
                 messages = withdrawn.messages
                 if withdrawn.changed:
                     iteration -= 1
@@ -2122,7 +2197,7 @@ class TurnPathMixin:
         # can come back differently the second time -- the checkpoint and the persist
         # between here and there are seconds a clock can cross. A loop nobody
         # budgeted a rerun for asks no one and salvages as it always did.
-        rerun_coming = rerun_pending is not None and rerun_pending(final_content, messages, status)
+        rerun_coming = rerun_pending is not None and rerun_pending(final_content, log.messages(), status)
         if hook_ctx is not None and answerless and not rerun_coming:
             hook_ctx.messages = messages
             hook_ctx.response = None
@@ -2520,9 +2595,11 @@ class TurnPathMixin:
         # A session whose first turn is still running had nothing on disk at
         # all, so it was absent from every listing, and a reader who left the
         # page could not find their way back to the turn still running in it.
-        # Read prev_len first: everything below that slices "what this turn
-        # added" off the session counts from before this write.
-        prev_len = len(session.messages)
+        # Everything below that slices "what this turn added" off the session
+        # counts from this turn's own first entry. Counted after the save, not
+        # before it: a save can merge another writer's messages in ahead of the
+        # question, which it leaves last.
+        question_at = len(session.messages)
         self._save_turn(
             session,
             initial_messages,
@@ -2531,7 +2608,18 @@ class TurnPathMixin:
             inbound_original=inbound_original,
             trace_id=turn_trace_id,
         )
+        question = session.messages[question_at:]
         self.sessions.save(session)
+        prev_len = len(session.messages) - len(question)
+
+        def _turn_start() -> int:
+            """Where this turn's entries start now; a later save may have merged more in ahead of them."""
+            if question:
+                for index in range(len(session.messages) - 1, -1, -1):
+                    if session.messages[index] is question[0]:
+                        return index
+            return min(prev_len, len(session.messages))
+
         # Where the three writes that close the turn start from. The question is
         # already filed, and filing it again would both double it and stamp the
         # turn's arrival clock onto the first message injected mid-turn.
@@ -2579,11 +2667,13 @@ class TurnPathMixin:
 
         async def _attempt(seed: list[dict], attempt: int):
             pending.update(rerun=False, reasons=[])
-            # The list this attempt appends to, for the rescue paths below. A rerun
-            # runs on a list of its own, and a turn cancelled during one used to be
-            # saved from the first attempt's -- so a tool the reader watched run in
-            # the rerun, and its result, were not in what the cancel filed.
-            live["messages"] = seed
+            # The record this attempt persists from, for the rescue paths below as
+            # well as the healthy one. A rerun keeps a record of its own, and a turn
+            # cancelled during one used to be saved from the first attempt's -- so a
+            # tool the reader watched run in the rerun, and its result, were not in
+            # what the cancel filed. A record rather than the list the attempt
+            # appends to, because the window passes replace that list mid-turn.
+            live["log"] = TurnLog(seed, persist_from)
             return await self._run_agent_loop(
                 seed,
                 on_progress=on_progress,
@@ -2599,12 +2689,13 @@ class TurnPathMixin:
                 usage_sink=usage_sink,
                 drain=drain,
                 hook_metadata=turn_hook_meta,
-                session_history=session.messages[:prev_len],
+                session_history=session.messages[: _turn_start()],
                 origin=req.origin,
                 turn_started_at=turn_t0,
                 attempt=attempt,
                 rerun_pending=_rerun_pending,
                 spend=spend,
+                turn_log=live["log"],
             )
 
         # Taken BEFORE the first attempt, because the loop appends to the list it is
@@ -2617,7 +2708,7 @@ class TurnPathMixin:
         retry_seed = [dict(m) for m in initial_messages] if retries_left else None
         turn_t0 = monotonic()
         pending: dict[str, Any] = {"rerun": False, "reasons": []}
-        live: dict[str, list[dict]] = {"messages": initial_messages}
+        live: dict[str, TurnLog] = {"log": TurnLog(initial_messages, persist_from)}
 
         def _seed_for_the_rerun(msgs: list[dict]) -> list[dict]:
             """The question again, plus whatever the reader said while the attempt ran.
@@ -2625,9 +2716,9 @@ class TurnPathMixin:
             The rerun exists to discard an attempt's research, and a correction typed
             mid-turn is not research: the loop took it off the inject queue, which will
             not offer it twice, so a seed rebuilt from the question alone silently
-            un-asks it. Read off the whole finished list rather than its tail, because
-            compaction may have moved the tail, and rebuilt from the untouched snapshot
-            each time, so carrying one forward twice cannot double it.
+            un-asks it. Read off the attempt's record rather than its window, because
+            compaction may have summarised the correction away, and rebuilt from the
+            untouched snapshot each time, so carrying one forward twice cannot double it.
             """
             return [dict(m) for m in retry_seed] + [dict(m) for m in msgs if m.get(_MID_TURN_USER_KEY)]
 
@@ -2670,7 +2761,7 @@ class TurnPathMixin:
             # file the user attached is handing it over, one that names any other
             # .pptx is not, and only the turn knows which is which.
             with turn_tier(self.session_tier(key)), turn_attachments(req.media), spend.collecting():
-                final_content, _, all_msgs, outcome = await _attempt(initial_messages, attempt_no)
+                final_content, _, _, outcome = await _attempt(initial_messages, attempt_no)
                 # The conditional rerun. A dead turn has no answer to damage -- "empty
                 # implies wrong" is a scoring rule, so the count of right answers among
                 # dead turns starts at zero and a second attempt can only raise it. It
@@ -2696,7 +2787,9 @@ class TurnPathMixin:
                         # attempt this is: the loop serves every agent, and the
                         # budget allows more reruns than the one.
                         await on_progress("That attempt produced no answer; running the turn again.")
-                    final_content, _, all_msgs, outcome = await _attempt(_seed_for_the_rerun(all_msgs), attempt_no)
+                    final_content, _, _, outcome = await _attempt(
+                        _seed_for_the_rerun(live["log"].messages()), attempt_no
+                    )
                 # Session-level because this turn may persist no assistant row at
                 # all -- a turn whose whole budget went to reasoning has no
                 # message to hang a record on. Stamped with the index this turn's
@@ -2719,7 +2812,7 @@ class TurnPathMixin:
                 # standing -- which is exactly the reading ACP's ``max_tokens``
                 # refinement makes.
                 if turn_hook_meta.get("output_limited"):
-                    session.metadata["output_limit_turn_at"] = prev_len
+                    session.metadata["output_limit_turn_at"] = _turn_start()
                 else:
                     # None rather than dropping the key: a save merges its
                     # metadata over the record on disk, so a key left unsaid is
@@ -2748,7 +2841,7 @@ class TurnPathMixin:
             # note saying a person ended the turn. Then the cancel proceeds.
             self._save_broken_turn(
                 session,
-                live["messages"],
+                live["log"].messages(),
                 persist_from,
                 None,
                 streamed,
@@ -2756,13 +2849,12 @@ class TurnPathMixin:
             )
             raise
         except AnswerlessTurnError as exc:
-            # The attempt's own list rather than `live["messages"]`: a window pass
-            # that rebound `messages` mid-turn leaves `live` on the seed, and the
-            # marker would then be filed with none of this turn's work between the
-            # question and itself. `all_msgs` is what the healthy path persists.
+            # The attempt's record, which follows every list a window pass rebound
+            # `messages` to, so the marker is filed after this turn's work rather
+            # than straight after the question.
             self._save_broken_turn(
                 session,
-                all_msgs,
+                live["log"].messages(),
                 persist_from,
                 None,
                 streamed,
@@ -2774,7 +2866,7 @@ class TurnPathMixin:
         except Exception as exc:
             self._save_broken_turn(
                 session,
-                live["messages"],
+                live["log"].messages(),
                 persist_from,
                 None,
                 streamed,
@@ -2807,7 +2899,7 @@ class TurnPathMixin:
             _send_ctx = AgentHookContext(
                 session_key=key,
                 outbound_content=final_content,
-                session_history=session.messages[:prev_len],
+                session_history=session.messages[: _turn_start()],
                 metadata=turn_hook_meta,
             )
             _send_decision = await self.hooks.after_send(_send_ctx)
@@ -2820,20 +2912,26 @@ class TurnPathMixin:
         # substantive assistant message at persist time -- after the send fire,
         # so a stash from any phase, ``after_send`` included, reaches the filed
         # record. Per turn, on the turn -- not a session-wide last write.
+        # The record, not the window the last call saw: a summary, an elided
+        # body or a dropped stretch of the turn is the window's business, and
+        # filing it would replay it to every later turn as what happened.
+        turn_msgs = live["log"].messages(_TURN_TRANSIENT_KEYS)
         if len(self.hooks) > 0:
-            _stamp_turn_observers(all_msgs, turn_hook_meta, turn_start_idx)
+            _stamp_turn_observers(turn_msgs, turn_hook_meta, turn_start_idx)
 
-        self._save_turn(session, all_msgs, persist_from)
+        self._save_turn(session, turn_msgs, persist_from)
+        # Taken before the save, which may merge another writer's messages in.
+        turn_entries = session.messages[_turn_start() :]
         self.sessions.save(session)
         await self.harness.memory.after_turn(
             key,
             {
                 "final_content": final_content,
-                "messages": all_msgs[turn_start_idx:],
+                "messages": _without_scratch(turn_msgs[turn_start_idx:]),
             },
         )
         # Plugin-side indexing (third peer step in the after-turn pipeline).
-        self._dispatch_backend_store(key, session.messages[prev_len:])
+        self._dispatch_backend_store(key, turn_entries)
         # Forward source-qualified skill-usage feedback. Only
         # ``everos/`` prefix is forwarded to the plugin; static-library
         # sources (``local`` / ``mass``) have no feedback channel.
@@ -2861,7 +2959,7 @@ class TurnPathMixin:
         # ── End Step 4 ──────────────────────────────────────────────────────
 
         if origin is Origin.USER:
-            self._maybe_annotate_tail(session, prev_len)
+            self._maybe_annotate_tail(session, _turn_start())
 
         if (mt := self.tools.get("message")) and isinstance(mt, MessageTool) and mt.sent_in_turn:
             # Defensive fingerprint. A silent return None would leave no
@@ -3134,6 +3232,9 @@ class TurnPathMixin:
         duration. ``trace_id`` travels with it and marks the same entry, so a
         selection of turns can find each turn's messages in the record.
         """
+        # Deferred: ``raven.context_engine`` imports back out of this tier.
+        from raven.context_engine.scratch import TURN_SCRATCH_KEY, cut_turn_scratch
+
         # Both exits that persist a turn come through here, so a question noted
         # on the turn is filed once whichever exit runs. The early inbound write
         # also comes through, before any question, and files nothing.
@@ -3153,6 +3254,18 @@ class TurnPathMixin:
                 if trace_id:
                     entry["trace_id"] = trace_id
                 first_user_pending = False
+            entry.pop(TURN_LOG_KEY, None)
+            if (scratch := entry.pop(TURN_SCRATCH_KEY, None)) and role == "user":
+                # The turn scratch (recalled memory, routed skills) is rebuilt
+                # from the query every turn. Recording it would turn the log
+                # from append-only into rewritten -- next turn's request would
+                # carry this turn's recall in its history -- and the recalled
+                # text would pile up in history forever. Cut before the rewrites
+                # below, which compare against the exact text that was appended.
+                content = cut_turn_scratch(content, scratch)
+                if content is None:
+                    continue
+                entry["content"] = content
             if entry.get("_recovery_synthetic"):
                 continue  # #1a synthetic recovery nudge — never persist scaffolding
             if entry.get(ATTACHED_IMAGE_KEY):
@@ -3229,8 +3342,11 @@ class TurnPathMixin:
                 # it either — it guards `str` content only.
                 content = _strip_inline_images(content)
                 entry["content"] = content
-            if role == "tool" and isinstance(content, str) and len(content) > self._TOOL_RESULT_MAX_CHARS:
-                entry["content"] = content[: self._TOOL_RESULT_MAX_CHARS] + "\n... (truncated)"
+            cap = self._TOOL_RESULT_MAX_CHARS
+            if role == "tool" and isinstance(content, str) and cap and len(content) > cap:
+                # The marker is what retrieval reads to say a span was cut on the
+                # way to disk rather than pass a prefix off as the whole.
+                entry["content"] = content[:cap] + TOOL_RESULT_TRUNCATION_MARKER
             elif role == "user":
                 if isinstance(content, str) and content.startswith(ContextBuilder._RUNTIME_CONTEXT_TAG):
                     # Strip the runtime-context prefix, keep only the user text.
@@ -3400,8 +3516,9 @@ class TurnPathMixin:
             msg = {"role": "assistant", "content": req.deliver_text}
             prev_len = len(session.messages)
             self._save_turn(session, [msg], 0)
+            added = session.messages[prev_len:]
             self.sessions.save(session)
-            self._dispatch_backend_store(cid, session.messages[prev_len:])
+            self._dispatch_backend_store(cid, added)
             await emit(Text(content=req.deliver_text))
             return TurnOutcome(
                 usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),

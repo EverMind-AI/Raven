@@ -40,6 +40,9 @@ VENDORED_TOOL_FACE = {
     "web_search",
     "web_fetch",
     "ask_user",
+    # Trunk serves it beside the default compacting history strategy, so the
+    # refs that strategy leaves in the window can be read back.
+    "context_retrieve",
     "tool_call",
     "tool_search",
 }

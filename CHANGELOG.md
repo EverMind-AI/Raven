@@ -6,6 +6,26 @@ All notable changes to Raven are documented here.
 
 ### Added
 
+- The history slot is filled by a **history strategy**, `context.history.strategy`:
+  `compacting` (the new default) or `curator` (the previous behaviour, one
+  setting away). Compacting keeps the conversation verbatim until the window
+  nears a trigger that scales with its size, then replaces large tool results
+  with a one-line record and a `[[ref ...]]` the model can read back with the
+  new `context_retrieve` tool, folds what it drops, and past that writes an
+  eight-section checkpoint that survives a restart. An opt-in
+  `context.cache.compactionBreakpoint` (off by default) marks, on a
+  breakpoint-style prompt cache (Anthropic), where the next summary is expected
+  to end; it costs a cache write of the history on every turn past the target
+  (1.07x to 2.0x the cost in review), so it stays off. Memory and routed skills
+  move from the system prompt to the end of the turn's user message
+  (`context.cache.turnScratch`), tool results are filed up to
+  `context.toolResultMaxChars` (1,000,000 characters) instead of 16,000, and a
+  request near the window asks for no more reply than fits beside its prompt.
+  Sessions carry a revision (`log_id` and generation) so a ref minted before an
+  undo or `/new` never names another message. A turn is now filed from its own
+  record, so an in-turn summary or an elided tool body no longer reaches the
+  session file. `CONTRACTS_VERSION` moves to 39.
+
 - The Agent Hub has a **Machines** tab: the registered machines with the state
   of each one's link and Raven node, a form that registers one (it reaches the
   machine first, like `raven ops connection add`, and explains a refusal by

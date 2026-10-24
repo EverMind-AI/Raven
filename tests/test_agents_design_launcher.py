@@ -61,7 +61,11 @@ ENGINE_TOOLS = {"preview_file", "render_file", "update_task_state"}
 UNGATED = {"ask_user", "find_skill", "tool_call", "tool_search"}
 
 #: The host image section makes image_generate available in the grounded render.
-VENDORED_TOOL_FACE = FORK_CONFIG_INTENT | ENGINE_TOOLS | UNGATED | {"image_generate"}
+#: Trunk serves ``context_retrieve`` beside the default compacting history
+#: strategy, so the refs that strategy leaves in the window can be read back.
+TRUNK_HISTORY = {"context_retrieve"}
+
+VENDORED_TOOL_FACE = FORK_CONFIG_INTENT | ENGINE_TOOLS | UNGATED | {"image_generate"} | TRUNK_HISTORY
 #: Both ride the same vendor key: `image_search` is what a real logo, product
 #: shot or photograph of a real place is found with, and the lane registers it
 #: exactly when it registers `web_search`.

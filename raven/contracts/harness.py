@@ -113,6 +113,9 @@ class WindowState:
     """Bytes the standing pictures may occupy on the wire, or None for no standing pass."""
     image_demote_retries: int = 0
     image_strip_retries: int = 0
+    session_key: str = ""
+    """The conversation this turn belongs to, for an engine asked about a refused
+    prompt (``ContextEngine.on_context_overflow``); empty outside one."""
 
 
 @dataclass(frozen=True)
@@ -187,6 +190,12 @@ class MemoryModule(Protocol):
         iteration on a ``changed`` reactive answer, so the hooks and the standing
         passes see a retry exactly as they saw the attempt -- and this role keeps
         the policy, which is the half a generation may replace.
+
+        The shell files the turn from its own record, not from the list handed
+        back, and tells the two apart by copy: a message this turn wrote is
+        rewritten as a ``dict(m)`` copy that keeps every key it had, and a copy
+        that replaces what the message said rather than restating it carries
+        ``_window_stand_in`` (see ``raven.agent.window.turn_log``).
         """
         ...
 
