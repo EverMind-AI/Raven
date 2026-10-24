@@ -24,6 +24,13 @@ The bare `chat_id` value shown to and accepted from users (the channel prefix is
 stripped for display, re-prepended to form the session key). Presentation term; in
 code the value lives in the `chat_id` field and the composite is the `session_key`.
 
+**Telegram project link**:
+An opt-in mapping of one Telegram private chat and sender to an existing page
+session key (`gateway/linked_chat.py`). The page scheduler serializes both
+surfaces' turns; the source still determines where replies and questions go.
+It leaves both stored transcripts in place and does not broadcast background
+output. See [configuration and limits](docs/telegram-project-link.md).
+
 **Model binding**:
 A model id together with the provider whose credential serves it, as one value
 (`raven/providers/binding.py`). The pairing is the point: a model id alone does
