@@ -521,10 +521,20 @@ def subagent(span, bound: dict[str, Any], result: Any, exc: BaseException | None
     one here.
     """
     span.set(_spawn_attrs(bound, in_progress=False))
+    _mark_escape(span, exc)
+
+
+def _mark_escape(span, exc: BaseException | None) -> bool:
+    """Record how an exception escaping a sub-agent run ended it; whether one did.
+
+    A cancellation is ``cancelled``, anything else ``failed``. Like any outcome it
+    stands only if the run recorded none first.
+    """
     if isinstance(exc, asyncio.CancelledError):
         subagent_outcome(span, "cancelled")
     elif exc is not None:
         subagent_outcome(span, "failed")
+    return exc is not None
 
 
 def subagent_outcome(span, outcome: str) -> None:
@@ -590,11 +600,7 @@ def dag_node(span, bound: dict[str, Any], result: Any, exc: BaseException | None
     outcome here.
     """
     span.set(_dag_node_attrs(bound, in_progress=False))
-    if isinstance(exc, asyncio.CancelledError):
-        subagent_outcome(span, "cancelled")
-    elif exc is not None:
-        subagent_outcome(span, "failed")
-    elif result is not None:
+    if not _mark_escape(span, exc) and result is not None:
         subagent_outcome(span, result.outcome)
         if result.outcome in _DAG_UNFINISHED:
             span.error(result.reason or result.outcome)
