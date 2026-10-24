@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Any
 
 from raven.spine.message import Media, Source
 
@@ -97,7 +98,7 @@ class TurnRequest:
     # delivery row instead. Shape: ``{"kind": "spawn"|"dag", "label": ...,
     # "status": ..., "run_id": ...}``, the same identity the
     # ``subagent.delivered`` event carries.
-    delegated: dict[str, str] | None = None
+    delegated: dict[str, Any] | None = None
     # Direct sub-agent delivery: when set to ``(agent, handle)`` the turn skips
     # the model and runs against that instance instead, streaming its reply back
     # to this conversation. Runs on that instance's own lane (``direct_lane``),

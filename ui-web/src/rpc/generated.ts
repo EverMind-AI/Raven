@@ -345,6 +345,10 @@ export interface TranscriptDelegated {
    * What a dag node itself returned on the attempt its report is about -- its error, when it raised -- carried for the reader beside the report the model was given. Set only on a node's own report, and present even when empty: an empty string is a node that said nothing, an absent one a report about no attempt (a stall notice) or a server that never sent it.
    */
   output?: string;
+  /**
+   * Whether output is limited to the first 20,000 characters. Separate from the node's text; absent on older records and reports without output.
+   */
+  output_truncated?: boolean | null;
 }
 export interface ExtPluginRow {
   id: string;
@@ -1296,6 +1300,10 @@ export interface TurnStartedEvent {
        * What a dag node itself returned on the attempt its report is about -- its error, when it raised -- carried for the reader beside the report the model was given. Set only on a node's own report, and present even when empty: an empty string is a node that said nothing, an absent one a report about no attempt (a stall notice) or a server that never sent it.
        */
       output?: string;
+      /**
+       * Whether output is limited to the first 20,000 characters. Separate from the node's text; absent on older records and reports without output.
+       */
+      output_truncated?: boolean | null;
     };
     target?: DirectTarget;
   };
@@ -1564,6 +1572,10 @@ export interface SubagentDeliveredEvent {
      * What a dag node itself returned on the attempt its report is about -- its error, when it raised -- carried for the reader beside the report the model was given. Set only on a node's own report, and present even when empty: an empty string is a node that said nothing, an absent one a report about no attempt (a stall notice) or a server that never sent it.
      */
     output?: string;
+    /**
+     * Whether output is limited to the first 20,000 characters. Separate from the node's text; absent on older records and reports without output.
+     */
+    output_truncated?: boolean | null;
   };
 }
 /**

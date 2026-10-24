@@ -253,6 +253,7 @@ export interface DeliveredData {
   body: string
   /* That `body` is a node's own output rather than the injected text. */
   said: boolean
+  outputTruncated: boolean
   /* Whether that fold is open. */
   shown: boolean
 }
@@ -382,7 +383,7 @@ export interface HistoryMessage {
      back. The model reads `text`, a reader must not -- see the note on the
      delivery branch in history(). */
   delegated?: {
-    kind?: string; label?: string; status?: string; run_id?: string; node_id?: string; output?: string
+    kind?: string; label?: string; status?: string; run_id?: string; node_id?: string; output?: string; output_truncated?: boolean | null
   }
   /* Set on a user entry the runtime merged into a turn already running. It is
      drawn inside that turn -- see the mid-turn branch in history(). */

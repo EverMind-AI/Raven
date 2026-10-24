@@ -1868,6 +1868,45 @@ describe('a delegated result coming back', () => {
     }
   })
 
+  it.each([true, false, undefined])('keeps the cut notice outside node text, live and replayed (%s)', (cut) => {
+    wireDelivery()
+    const said = 'The node wrote this suffix itself.\n... (output truncated)'
+    const check = (): string => {
+      act(() => { (($('.sdlv .sdcv')) as HTMLElement).click() })
+      const body = $('.sdlv .sdbd') as HTMLElement
+      expect(body.querySelector('.prose')?.textContent).toContain('(output truncated)')
+      expect(body.querySelector('.prose .transcript-cut')).toBeNull()
+      expect(body.querySelector('.transcript-cut')?.textContent ?? null).toBe(cut ? 'en:gui.deleg.body_truncated' : null)
+      expect(body.tabIndex).toBe(0)
+      expect(body.getAttribute('role')).toBe('region')
+      expect(body.getAttribute('aria-label')).toBe('en:gui.deleg.body_cap_node')
+      return body.textContent ?? ''
+    }
+    act(() => {
+      mount.delivered({ label: 'run-7', isDag: true, status: 'exception', output: said, outputTruncated: cut, open: () => {} })
+    })
+    const live = check()
+    store._resetForTests()
+    wireDelivery()
+    act(() => {
+      mount.history([{
+        role: 'user', text: fenced('model brief'), timestamp: iso(Date.now() - 9000),
+        delegated: { kind: 'dag', label: 'run-7', status: 'exception', output: said, output_truncated: cut },
+      }])
+    })
+    expect(check()).toBe(live)
+  })
+
+  it('keeps the truncation notice reachable when the visible prefix is whitespace', () => {
+    wireDelivery()
+    act(() => {
+      mount.delivered({ label: 'run-7', isDag: true, status: 'exception', output: ' \n\t', outputTruncated: true, open: () => {} })
+    })
+    expect($('.sdlv .sdcv')).not.toBeNull()
+    act(() => { (($('.sdlv .sdcv')) as HTMLElement).click() })
+    expect($('.sdlv .sdbd .transcript-cut')?.textContent).toBe('en:gui.deleg.body_truncated')
+  })
+
   it('draws a node report the same live and after a reload', () => {
     wireDelivery()
     const injected = fenced('node did not accomplish its task.')

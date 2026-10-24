@@ -245,6 +245,19 @@ describe('toTranscriptMessages: resumed tool calls', () => {
     expect(msgs[0]!.text).toBe('↩ stuck-node — Waiting on a decision')
   })
 
+  it('replays a notice as still running', () => {
+    const msgs = toTranscriptMessages([
+      {
+        delegated: { kind: 'dag', label: 'working-node', status: 'notice' },
+        origin: 'subagent',
+        role: 'user',
+        text: 'internal'
+      }
+    ])
+
+    expect(msgs[0]!.text).toBe('↩ working-node — Still running')
+  })
+
   it('restores delivered and changed files after a restart', () => {
     const rows = [
       { role: 'user', text: 'build it' },

@@ -547,6 +547,10 @@
       "en": "Still running",
       "zh": "仍在运行"
     },
+    "gui.deleg.body_truncated": {
+      "en": "Showing the first 20,000 characters. Open the run to read the full output.",
+      "zh": "仅显示前 20,000 个字符。打开运行记录可查看完整输出。"
+    },
     "gui.deleg.body_aria": {
       "en": "Show what the delegated run delivered",
       "zh": "展开子智能体交付的内容"

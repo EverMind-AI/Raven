@@ -159,7 +159,7 @@ function scheduled(env: FixtureEnv): Record<string, ResultOf<'session.resume'>['
       { role: 'assistant', text: '2 \u7c7b\u9519\u8bef\uff0c\u90fd\u6324\u5728 02:00-03:00\u3002\u7b80\u62a5\u5728 reports/errors-2026-09-19.md\u3002', timestamp: at(D1E + 5 * MIN) },
       { role: 'user', text: DAG_ASKS, timestamp: at(D1E + MIN),
         delegated: { kind: 'dag', label: '20260919T080600Z-2f60c3', status: 'exception', run_id: '20260919T080600Z-2f60c3',
-          node_id: 'trace_401', output: DAG_ASKS_SAID } },
+          node_id: 'trace_401', output: DAG_ASKS_SAID, output_truncated: false } },
       { role: 'assistant', text: '\u8ddf\u5230\u4e00\u534a\u505c\u4e86\uff1a\u65e5\u5fd7\u91cc\u6709\u4e00\u6761\u5e26\u4e86\u6d3b\u7684 Authorization \u5934\uff0c\u5b83\u5728\u7b49\u4f60\u8bf4\u8981\u4e0d\u8981\u628a\u5b83\u5199\u8fdb\u62a5\u544a\u3002', timestamp: at(D1E) },
     ],
   }

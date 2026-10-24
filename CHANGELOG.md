@@ -433,11 +433,15 @@ All notable changes to Raven are documented here.
   error, when it crashed), under the caption *What the node returned*. The
   model's text is unchanged: the node's output travels beside it as `output`
   on the delivery mark (`subagent.delivered`, `turn.started`, and a stored
-  entry's `delegated`), cut at 20,000 characters. A node that has already
+  entry's `delegated`), cut at 20,000 characters with a separate
+  `output_truncated` flag. The web fold shows the truncation notice outside
+  the node's words and limits its height, with keyboard-accessible scrolling.
+  A node that has already
   failed is marked `error` and reads **Failed** instead of **Waiting on a
   decision**; a stall notice about a node still running reads **Still
   running**, and a cancelled run **Stopped**, where both used to read
-  **Finished**. Conversations stored before this keep the fold they had.
+  **Finished**. The TUI also labels a stall notice **Still running** in live
+  and replayed rows. Conversations stored before this keep the fold they had.
 
 - The trajectory view shows a spawned sub-agent while it runs. Its entry
   appears as running as soon as the run starts -- including the time it

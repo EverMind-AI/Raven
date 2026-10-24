@@ -1491,7 +1491,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .sdlv .sdbd {
   margin: 8px 0 4px 21px; padding: 10px 14px 12px; border-radius: 10px;
   background: var(--surface); box-shadow: inset 0 0 0 1px var(--ring);
-  min-width: 0; overflow-x: auto;
+  min-width: 0; max-height: min(50vh, 32rem); overflow: auto;
 }
 .sdlv .sdbd .cap {
   font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase;

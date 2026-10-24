@@ -8067,17 +8067,26 @@ async def test_the_no_route_failure_keeps_the_judge_s_reason(tmp_path) -> None:
 
 
 def _foreground_tool(tmp_path: Path, verdicts: list[Any], **kwargs: Any) -> SubAgentDagTool:
-    """A graph tool over the real ``cat`` sub-agent, judged by a scripted verdict list.
+    """A graph tool over a Python echo process, judged by a scripted verdict list.
 
     Each judge call pops the next verdict; once the list is spent every node is
-    accomplished. ``cat`` echoes the prompt, so a node finishes in milliseconds
+    accomplished. The process echoes the prompt, so a node finishes quickly
     and the test spends its time on the handoff, which is what is under test.
     """
+    import sys
+
     from raven.agent.subagent.dag_verdict import Verdict
+    from raven.utils.commands import command_quote
+
+    echo = tmp_path / "echo agent.py"
+    echo.write_text(
+        '"""Echo the foreground test prompt."""\nimport sys\nsys.stdout.write(sys.stdin.read())\n', encoding="utf-8"
+    )
+    command = f"{command_quote(sys.executable)} {command_quote(str(echo))}"
 
     tool = SubAgentDagTool(
         workspace=tmp_path,
-        agents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")],
+        agents=[ThirdPartyCliSubagentConfig(name="echo", command=command)],
         **kwargs,
     )
     tool.set_context("web", "default", "web:fg")
@@ -8312,7 +8321,7 @@ async def test_release_re_sends_the_unanswered_report_and_clocks_the_run(tmp_pat
         )
 
 
-async def test_a_re_sent_report_still_carries_what_the_node_returned(tmp_path: Path) -> None:
+async def test_a_re_sent_report_still_carries_what_the_node_returned(tmp_path: Path, monkeypatch) -> None:
     """The outbox holds a report across the turn; the node's output is held with it.
 
     Re-sent without it, a released foreground run's row would fold open onto the
@@ -8320,6 +8329,14 @@ async def test_a_re_sent_report_still_carries_what_the_node_returned(tmp_path: P
     """
     from raven.config.raven import SubagentDagConfig
 
+    spawn = asyncio.create_subprocess_exec
+
+    async def without_cat(*args, **kwargs):
+        if Path(args[0]).name == "cat":
+            raise FileNotFoundError("cat is not installed")
+        return await spawn(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", without_cat)
     re_sent: list[dict] = []
 
     async def _announce_exception(run_id: str, node_id: str, report: str, origin: dict, **kwargs: Any) -> None:
@@ -8342,7 +8359,7 @@ async def test_a_re_sent_report_still_carries_what_the_node_returned(tmp_path: P
 
         await tool.release_turn("web:fg", flush=True)
 
-        assert re_sent and "do a" in re_sent[0]["output"], "cat echoes the prompt, so that is what came back"
+        assert re_sent and "do a" in re_sent[0]["output"], "the process echoes the prompt, so that is what came back"
         await asyncio.wait_for(run_task, timeout=5)
 
 

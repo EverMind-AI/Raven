@@ -520,6 +520,13 @@ class TurnStartedDelegated(_Strict):
             "or a server that never sent it."
         ),
     )
+    output_truncated: bool | None = Field(
+        default=None,
+        description=(
+            "Whether output is limited to the first 20,000 characters. "
+            "Separate from the node's text; absent on older records and reports without output."
+        ),
+    )
 
 
 class TurnStartedPayload(_Strict):
@@ -879,6 +886,13 @@ class SubagentDeliveredPayload(_Strict):
             "Set only on a node's own report, and present even when empty: an empty string is "
             "a node that said nothing, an absent one a report about no attempt (a stall notice) "
             "or a server that never sent it."
+        ),
+    )
+    output_truncated: bool | None = Field(
+        default=None,
+        description=(
+            "Whether output is limited to the first 20,000 characters. "
+            "Separate from the node's text; absent on older records and reports without output."
         ),
     )
 
@@ -3837,6 +3851,13 @@ class TranscriptDelegated(_Strict):
             "Set only on a node's own report, and present even when empty: an empty string is "
             "a node that said nothing, an absent one a report about no attempt (a stall notice) "
             "or a server that never sent it."
+        ),
+    )
+    output_truncated: bool | None = Field(
+        default=None,
+        description=(
+            "Whether output is limited to the first 20,000 characters. "
+            "Separate from the node's text; absent on older records and reports without output."
         ),
     )
 

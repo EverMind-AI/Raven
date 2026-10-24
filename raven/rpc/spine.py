@@ -319,7 +319,7 @@ class RpcOutlet:
         self,
         conversation_id: str | None,
         turn_id: str,
-        delegated: dict[str, str] | None = None,
+        delegated: dict[str, Any] | None = None,
         content: str | None = None,
     ) -> None:
         """A turn the runtime opened has begun: the client's live bookkeeping

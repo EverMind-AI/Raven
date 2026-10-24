@@ -95,6 +95,9 @@ export const deliveredMessageKey = (status: TranscriptDelegated['status']): stri
   if (status === 'cancelled') {
     return 'gui.deleg.delivered_cancelled'
   }
+  if (status === 'notice') {
+    return 'gui.deleg.dlv_notice'
+  }
   return 'gui.deleg.delivered'
 }
 

@@ -332,13 +332,13 @@ describe('turn.started', () => {
       payload: {
         delegated: {
           kind: 'dag', label: 'r1', status: 'exception', run_id: 'r1', node_id: 'push',
-          content: 'the brief', output: 'the fork is read-only',
+          content: 'the brief', output: 'the fork is read-only', output_truncated: true,
         },
       },
     })
 
     const delivered = h.did('delivered') as Array<[string, Record<string, unknown>]>
-    expect(delivered[0]![1]).toMatchObject({ body: 'the brief', output: 'the fork is read-only' })
+    expect(delivered[0]![1]).toMatchObject({ body: 'the brief', output: 'the fork is read-only', outputTruncated: true })
   })
 })
 

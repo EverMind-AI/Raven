@@ -472,13 +472,14 @@ const deliveredStatus = (v: unknown): DeliveredData['status'] =>
    empty one, wins over the fenced brief: empty is a node that said nothing, and
    then there is nothing to fold open. Absent is a server that never sent it. */
 export function delivered(lane: Lane, p: {
-  label: string; isDag: boolean; status?: string; open: () => void; body?: string; output?: string
+  label: string; isDag: boolean; status?: string; open: () => void; body?: string; output?: string; outputTruncated?: boolean | null
 }): void {
   const said = typeof p.output === 'string'
   push(lane, {
     v: 0, id: nextId(), kind: 'sdlv',
     label: p.label, isDag: p.isDag, status: deliveredStatus(p.status), open: p.open,
     body: said ? (p.output as string).trim() : defence(p.body || ''), said, shown: false,
+    outputTruncated: said && p.outputTruncated === true,
   } satisfies DeliveredData)
 }
 
@@ -1689,6 +1690,7 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
           status: d.status,
           body: m.text || '',
           output: d.output,
+          outputTruncated: d.output_truncated,
           open: () => {
             const src = source()
             if (isDag) src.openDagRun?.(String(d.run_id || d.label || ''))

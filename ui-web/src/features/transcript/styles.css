@@ -1,0 +1,2 @@
+/* System annotations displayed separately from delegated output. */
+.transcript-cut { margin-top: 10px; color: var(--muted); font-size: 12px; }

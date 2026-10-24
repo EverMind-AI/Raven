@@ -4801,15 +4801,18 @@ async def test_a_node_report_marks_an_empty_return_as_empty_not_absent() -> None
     assert submitted[0].delegated["output"] == ""
 
 
-async def test_a_node_report_bounds_the_output_it_marks() -> None:
+@pytest.mark.parametrize("length", [0, 20_000, 20_001, 40_000])
+async def test_a_node_report_bounds_the_output_it_marks(length: int) -> None:
     """The mark is stored with the conversation and sent on every replay; the run
     dir keeps the whole text, and the row opens the run."""
     from raven.agent.subagent.manager import _MARKED_OUTPUT_CHARS
+    from raven.rpc.models import SubagentDeliveredPayload, TranscriptDelegated, TurnStartedDelegated
 
     mgr = _make_manager(max_concurrent=1)
     submitted: list = []
     mgr.set_submit(submitted.append)
-    mgr._emit_delivered = lambda _origin, _mark: None
+    delivered: list[dict] = []
+    mgr._emit_delivered = lambda _origin, mark: delivered.append(mark)
 
     await mgr.announce_dag_exception(
         "r1",
@@ -4817,24 +4820,22 @@ async def test_a_node_report_bounds_the_output_it_marks() -> None:
         "did not accomplish",
         {"channel": "web", "chat_id": "d", "session_key": "web:s"},
         awaiting_decision=True,
-        output="x" * (_MARKED_OUTPUT_CHARS * 2),
+        output="x" * length,
     )
 
-    marked = submitted[0].delegated["output"]
-    assert marked.startswith("x" * _MARKED_OUTPUT_CHARS)
-    assert len(marked) < _MARKED_OUTPUT_CHARS + 100
-    assert marked.endswith("(output truncated)")
-
-    submitted.clear()
-    await mgr.announce_dag_exception(
-        "r1",
-        "n",
-        "did not accomplish",
-        {"channel": "web", "chat_id": "d", "session_key": "web:s"},
-        awaiting_decision=True,
-        output="y" * _MARKED_OUTPUT_CHARS,
-    )
-    assert submitted[0].delegated["output"] == "y" * _MARKED_OUTPUT_CHARS, "an output that fits is marked whole"
+    stored = submitted[0].delegated
+    expected = "x" * min(length, _MARKED_OUTPUT_CHARS)
+    truncated = length > _MARKED_OUTPUT_CHARS
+    for mark in (stored, delivered[0]):
+        assert mark["output"] == expected
+        assert mark["output_truncated"] is truncated
+    for model in (
+        TranscriptDelegated(**stored),
+        TurnStartedDelegated(**stored, content=submitted[0].text),
+        SubagentDeliveredPayload(**delivered[0]),
+    ):
+        assert model.output == expected
+        assert model.output_truncated is truncated
 
 
 async def test_a_stall_notice_marks_no_output() -> None:
@@ -4854,6 +4855,7 @@ async def test_a_stall_notice_marks_no_output() -> None:
     )
 
     assert "output" not in submitted[0].delegated
+    assert "output_truncated" not in submitted[0].delegated
 
 
 # --- unprompted-turn wakes ----------------------------------------------------

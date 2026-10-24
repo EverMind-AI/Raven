@@ -1,3 +1,5 @@
+import './styles.css'
+
 import {
   AiSearch02Icon, AlertCircleIcon, ArrowUpRight01Icon, BookOpen02Icon, DocumentCodeIcon, Download04Icon,
   File01Icon, InternetIcon, PencilEdit01Icon, Wrench01Icon,
@@ -1301,6 +1303,7 @@ function DeliveredBody({ seg }: { seg: DeliveredData }): ReactElement {
       <>
         {caption}
         <div className="prose" dangerouslySetInnerHTML={{ __html: store.mdHtml(seg.body) }} />
+        {seg.outputTruncated ? <div className="transcript-cut">{t('gui.deleg.body_truncated')}</div> : null}
       </>
     )
   }
@@ -1345,7 +1348,7 @@ const DeliveredView = memo(function DeliveredView({ lane, seg }: { lane: Lane; s
             the word that says how it went out of sight. */}
         <button className="nm" title={name} onClick={seg.open}>{name}</button>
         <span className="st"><i className="dot" />{t(key)}</span>
-        {seg.body ? (
+        {seg.body || seg.outputTruncated ? (
           <button ref={headRef} className="sdcv" onClick={flip}
             aria-label={t('gui.deleg.body_aria')}
             aria-expanded={String(seg.shown) as 'true' | 'false'}>
@@ -1354,8 +1357,9 @@ const DeliveredView = memo(function DeliveredView({ lane, seg }: { lane: Lane; s
           </button>
         ) : null}
       </div>
-      {seg.body ? (
-        <div className="sdbd" hidden={!seg.shown}>
+      {seg.body || seg.outputTruncated ? (
+        <div className="sdbd" hidden={!seg.shown} tabIndex={0} role="region"
+          aria-label={t(seg.said ? 'gui.deleg.body_cap_node' : 'gui.deleg.body_cap')}>
           <DeliveredBody seg={seg} />
         </div>
       ) : null}
