@@ -455,6 +455,7 @@ async def build_rpc_stack(
             system_pool=system_pool,
             on_turn_end=turn_module.clear_active,
             on_turn_start=turn_module.promote_pending_inject,
+            on_turn_bind=turn_module.bind_active,
             direct_targets=direct_targets,
             readback_texts=cron_readback,
             # The caller's transport when it brought one. The locally built

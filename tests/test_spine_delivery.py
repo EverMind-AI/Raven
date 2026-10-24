@@ -20,7 +20,64 @@ from raven.spine import (
     ToolPhase,
 )
 from raven.spine import delivery as delivery_mod
-from raven.spine.delivery import Capabilities, DeliveryHub, Outlet, SupportsStreaming
+from raven.spine.delivery import Capabilities, DeliveryHub, Outlet, RetryDeliveryError, SupportsStreaming
+
+
+@pytest.mark.parametrize("retries", [0, 1, 2])
+async def test_delivery_continuations_share_the_original_retry_budget(monkeypatch, retries):
+    monkeypatch.setattr(delivery_mod, "_RETRY_BASE_DELAY", 0)
+    calls = []
+
+    async def last():
+        calls.append("last")
+
+    async def next_part():
+        calls.append("next")
+        raise RetryDeliveryError("next part failed", last)
+
+    async def initial(out):
+        calls.append("initial")
+        raise RetryDeliveryError("initial part failed", next_part)
+
+    outlet = FakeOutlet("tg")
+    outlet.deliver = initial
+    h = DeliveryHub(send_max_retries=retries)
+    h.register(outlet)
+    try:
+        await h.post(Text("message", source=_src("tg")))
+        await h.wait_idle("tg")
+        assert calls == ["initial", "next", "last"][: retries + 1]
+        assert h.dropped == int(retries < 2)
+    finally:
+        await h.aclose()
+
+
+async def test_delivery_continuation_is_cancelled_with_its_worker(monkeypatch):
+    monkeypatch.setattr(delivery_mod, "_RETRY_BASE_DELAY", 0)
+    entered, cancelled = asyncio.Event(), asyncio.Event()
+
+    async def pending():
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    async def initial(out):
+        raise RetryDeliveryError("retry pending", pending)
+
+    outlet = FakeOutlet("tg")
+    outlet.deliver = initial
+    h = DeliveryHub()
+    h.register(outlet)
+    try:
+        await h.post(Text("message", source=_src("tg")))
+        await asyncio.wait_for(entered.wait(), 2)
+    finally:
+        await h.aclose()
+    assert cancelled.is_set()
+    assert h.dropped == 0
+    await h.wait_idle("tg")
 
 
 def test_capabilities_default_to_all_off():

@@ -5,10 +5,10 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, mock_open, patch
 
+import pytest
 from loguru import logger
 
 from raven.agent.tools.message import MessageTool
-from raven.channels.adapters.telegram.channel import TelegramChannel
 from raven.channels.intake import Intake
 from raven.gateway.spine import build_gateway
 from raven.spine.delivery import Capabilities
@@ -136,6 +136,9 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
 
 class TelegramTests(unittest.IsolatedAsyncioTestCase):
     def adapter(self):
+        pytest.importorskip("telegram")
+        from raven.channels.adapters.telegram.channel import TelegramChannel
+
         ch = object.__new__(TelegramChannel)
         ch._typing = {}
         ch._app = SimpleNamespace(
@@ -143,26 +146,28 @@ class TelegramTests(unittest.IsolatedAsyncioTestCase):
         )
         return ch
 
-    async def test_final_send_failure_raises_without_secret_in_message(self):
+    async def test_retryable_send_failure_raises_without_secret_in_message(self):
         ch = self.adapter()
-        ch._app.bot.send_message.side_effect = RuntimeError("SECRET-TOKEN")
-        with self.assertRaisesRegex(RuntimeError, "^Telegram text delivery failed$"):
-            await ch._send_text(123456789, "test")
-        self.assertEqual(ch._app.bot.send_message.await_count, 2)
+        from telegram.error import TimedOut
+
+        ch._app.bot.send_message.side_effect = TimedOut("SECRET-TOKEN")
+        with self.assertRaisesRegex(RuntimeError, r"^Telegram text delivery failed \(TimedOut\)$"):
+            await ch.send(OWNER, "test")
+        self.assertEqual(ch._app.bot.send_message.await_count, 1)
 
     async def test_html_fallback_succeeds(self):
         ch = self.adapter()
-        ch._app.bot.send_message.side_effect = [RuntimeError("markup"), SimpleNamespace(message_id=124)]
+        from telegram.error import BadRequest
+
+        ch._app.bot.send_message.side_effect = [BadRequest("Can't parse entities"), SimpleNamespace(message_id=124)]
         await ch._send_text(123456789, "test")
         self.assertEqual(ch._app.bot.send_message.await_count, 2)
 
-    async def test_stopped_or_malformed_target_raises(self):
+    async def test_stopped_or_malformed_target_is_not_retried(self):
         ch = self.adapter()
-        with self.assertRaises(ValueError):
-            await ch.send("bad", "test")
+        await ch.send("bad", "test")
         ch._app = None
-        with self.assertRaises(RuntimeError):
-            await ch.send(OWNER, "test")
+        await ch.send(OWNER, "test")
 
     async def test_successful_text_has_transport_receipt(self):
         ch = self.adapter()
