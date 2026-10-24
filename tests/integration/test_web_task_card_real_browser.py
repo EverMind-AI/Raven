@@ -11,10 +11,10 @@ read the declarations; this file renders `BoardCard`'s markup inside the
 `foreignObject` `DagGraph` gives it, under the real `page.css` and
 `features/tasks/styles.css`, and compares the boxes Chromium draws.
 
-It sits in the default selection, not under `tests/integration`, because the
-unit job is the one CI job that runs it: that job's runner ships a system
-Chrome. Without a browser it skips with the reason, except under `CI`, where a
-skip would leave the line unmeasured on every push and so fails instead.
+It is an integration test because it drives a real browser, and it is wired to
+the `web-browser` CI job, whose runner ships a system Chrome. Without a browser
+it skips with the reason, except under `CI`, where a skip would leave the line
+unmeasured on every push and so fails instead.
 """
 
 from __future__ import annotations
@@ -31,9 +31,9 @@ import pytest
 pytest.importorskip("playwright.sync_api")
 from playwright.sync_api import Browser, Page, sync_playwright  # noqa: E402
 
-pytestmark = pytest.mark.slow(reason="Launches a real Chromium.")
+pytestmark = [pytest.mark.integration, pytest.mark.slow(reason="Launches a real Chromium.")]
 
-REPO = Path(__file__).resolve().parents[1]
+REPO = Path(__file__).resolve().parents[2]
 SHEETS = (
     REPO / "ui-web" / "src" / "styles" / "page.css",
     REPO / "ui-web" / "src" / "features" / "tasks" / "styles.css",
