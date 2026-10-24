@@ -853,11 +853,15 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 #
                 # Which port, and whether at all, is `page_target` above.
                 page_on = page_target(config.gateway.page, page_port)
+                from raven.gateway.linked_chat import LinkedChat, load_binding
+
+                binding = load_binding(config.workspace_path / "telegram-project-link.json")
+                linked_chat = LinkedChat(binding, agent, gw_hub, gw_sources) if binding is not None else None
                 if page_on is not None:
                     from raven.cli._gateway_page import mount_page
 
                     try:
-                        page_mount = await mount_page(agent, page_on)
+                        page_mount = await mount_page(agent, page_on, linked_chat=linked_chat)
                     except OSError as exc:
                         logger.warning("page mount failed ({}); gateway continues without the page", exc)
                 if page_mount is not None:
@@ -893,7 +897,11 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     # the channel broker.
                     from raven.rpc.question_broker import RoutingQuestionBroker
 
-                    routed_broker = RoutingQuestionBroker(page=page_mount.question_broker, channel=question_broker)
+                    routed_broker = RoutingQuestionBroker(
+                        page=page_mount.question_broker,
+                        channel=question_broker,
+                        channel_active=linked_chat.channel_active if linked_chat is not None else None,
+                    )
                     if callable(getattr(ask_tool := agent.tools.get("ask_user"), "set_broker", None)):
                         ask_tool.set_broker(routed_broker)
                     # Route channel="tui" outbounds from the gateway's own
@@ -944,6 +952,10 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 from raven.spine.turn import BusyPolicy
 
                 async def _inbound_dispatch(req) -> None:
+                    if linked_chat is not None and await linked_chat.dispatch(
+                        req, page_mount.scheduler if page_mount is not None else None, question_broker, agent.subagents
+                    ):
+                        return
                     cmd = req.text.strip().lower()
                     cid = req.conversation or f"{req.source.channel}:{req.source.chat_id}"
                     if cmd == "/stop":
