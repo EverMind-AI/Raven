@@ -67,13 +67,21 @@ class TestTheOptOut:
 
         assert not mirrors.enabled({name: "1"})
 
-    @pytest.mark.parametrize("name", ["RAVEN_NO_MIRROR", "raven_no_mirror"])
-    def test_our_own_environment_is_read_whatever_its_case(self, monkeypatch: pytest.MonkeyPatch, name: str) -> None:
-        """The switch set where Raven runs is read in either case too, so it
-        turns the fallback off here and travels to a node that runs the
-        launch."""
+    def test_our_own_environment_is_read(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The switch set where Raven runs is read, so it turns the fallback
+        off here and travels to a node that runs the launch."""
         monkeypatch.delenv("RAVEN_NO_MIRROR", raising=False)
-        monkeypatch.setenv(name, "1")
+        monkeypatch.setenv("RAVEN_NO_MIRROR", "1")
+
+        assert not mirrors.enabled()
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows keeps one name for a variable")
+    def test_our_own_environment_is_read_in_another_case(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Another case of the name is read too. Windows keeps one name for a
+        variable, so only another system can hold the switch in another case,
+        and there it turns the fallback off as well."""
+        monkeypatch.delenv("RAVEN_NO_MIRROR", raising=False)
+        monkeypatch.setenv("raven_no_mirror", "1")
 
         assert not mirrors.enabled()
 
