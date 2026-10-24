@@ -550,6 +550,22 @@ All notable changes to Raven are documented here.
   or its socket behind, so neither alone counts as a running host, and a blank
   token file is no token, as the adapter reads it.
 
+- The web UI's shell folds under 640px instead of scrolling sideways. A phone
+  was shown the 780px shell in a 390px window: the rail on the left half, every
+  module squeezed into what was left (the Agent Hub's three tabs stacked, 200px
+  cards, a drawer wider than the window) and a horizontal scroll to reach any
+  of it. Below 780px the body has no width floor; below 640px the window holds
+  one column, the boot starts the rail folded, a rail opened from its twin lies
+  over the content and folds again when a row in it is pressed, shrinking a
+  window under 640px folds a standing rail, the agent, machine and channel
+  drawers are capped to the window less a gutter, and the agent and machine
+  drawer's action bar wraps. The first-run wizard drops its own 780px floor
+  below 780px too, so its Next stays inside a phone's window, its provider
+  form and model role rows put each label over its control instead of running
+  past the edge, and its step labels other than the current one end in an
+  ellipsis rather than run under the language button -- or, with too little
+  room for one, leave their numbered dot alone rather than half a letter.
+
 - What an agent on a registered machine writes on stderr reaches Raven even
   when no link held the agent at the time. The node kept those lines but, when
   a link attached, replayed only the agent's output: a run picked up after a

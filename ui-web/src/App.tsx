@@ -297,10 +297,12 @@ function Toasts(): JSX.Element {
    Skills / Plugins / Memory then covered the only control that brings it back,
    with no way left to reach another module page.
 
-   Collapsing the rail is the reader's call, never the window's: it holds the
-   session list, and having it vanish on resize loses your place. This is the
-   twin that brings it back; `hidden` is state/rail.ts's, and it shows exactly
-   while the rail does not. */
+   Collapsing the rail is the reader's call wherever it fits beside the
+   content: it holds the session list, and having it vanish on resize loses
+   your place. Under the fold (state/rail.ts, `FOLDS`) it cannot fit, so there
+   the boot starts it folded and a shrinking window takes it down. This is the
+   twin that brings it back either way; `hidden` is state/rail.ts's, and it
+   shows exactly while the rail does not. */
 function RailShow(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
   return (

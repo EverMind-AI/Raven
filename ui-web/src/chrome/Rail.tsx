@@ -226,13 +226,33 @@ function RailFoot(): JSX.Element {
   )
 }
 
+/* On a window under the fold the rail lies over the page (styles/page.css,
+   state/rail.ts `FOLDS`), so a press that goes somewhere -- a module, a
+   session, the draft row, the import, the settings -- folds it, the way a drawer
+   closes on the choice made in it. The rail's own controls keep it open: its
+   toggle, the search and its box, a group's head, the grip. A native listener
+   on the aside rather than React handlers on each row, because the session
+   rows are the rail island's, a root of its own under #list. In the bubble
+   phase, which runs it after a session row's handler (that root is inside
+   the aside) but before the module and settings buttons' (App is a portal,
+   so React hears those above the aside); chrome/Rail.test.tsx presses both
+   kinds under the fold. */
+const PICKS = '.navi, .sess, .me'
+
+function foldOnPick(aside: HTMLElement | null): void {
+  aside?.addEventListener('click', (e) => {
+    if (rail.stands()) return
+    if ((e.target as Element | null)?.closest(PICKS)) rail.set(false)
+  })
+}
+
 /* The column and its six children, in the order page.html had them. #list is
    handed over empty: the rail island roots itself in it (src/main.tsx), so
    React must not own that child list. */
 export function Rail(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
   return (
-    <aside className="rail">
+    <aside className="rail" ref={foldOnPick}>
       <RailTop />
       <RailNav />
       <FindRow />

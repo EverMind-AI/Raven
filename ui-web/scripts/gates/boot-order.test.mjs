@@ -55,7 +55,9 @@ async function harness(rows = [], { connected = false, selectionOnly = true } = 
       'src/state/failureBar': {
         bootError: (where, error) => { throw new Error(`${where}: ${error}`) },
       },
-      'src/state/rail': { set: step('setRail') },
+      /* `stands` answers the width the step asks about; the harness has no
+         window worth measuring, so the rail stands as it does on a desktop. */
+      'src/state/rail': { set: step('setRail'), stands: () => true },
       'src/state/envChip': { setRuntime: step('setRuntime') },
       'src/state/session/rows': { open: step('sessionOpen'), rows: () => rows },
       'src/state/ws': { bump: step('bumpWs') },
