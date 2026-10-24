@@ -414,6 +414,11 @@ All notable changes to Raven are documented here.
   modifyOtherKeys, which doubles IME commits before they reach Raven's input
   parser; native Windows now leaves input in the terminal's raw encoding.
 
+- Leaving the TUI with Ctrl+C on Windows conpty restores the primary screen
+  once. The final frame no longer overlaps the shell prompt because the Ink
+  instance and React's unmount cleanup now share one idempotent alternate-screen
+  exit, ordered before the remaining terminal resets.
+
 - Installing the Raven node on a machine whose package index crawls there no
   longer stalls the install. The index pip is configured with (else PyPI) is
   timed from the machine first; when it cannot be reached there, or serves

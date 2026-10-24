@@ -1255,11 +1255,11 @@ export default class Ink {
   }
 
   /**
-   * Called by the <AlternateScreen> component on mount/unmount.
-   * Controls cursor.y clamping in the renderer and gates alt-screen-aware
-   * behavior in SIGCONT/resize/unmount handlers. Repaints on change so
-   * the first alt-screen frame (and first main-screen frame on exit) is
-   * a full redraw with no stale diff state.
+   * Called by the <AlternateScreen> component on mount. Entering repaints so
+   * the first alt-screen frame is a full redraw with no stale diff state;
+   * leaveAltScreen() owns the exit. Controls cursor.y clamping in the
+   * renderer and gates alt-screen-aware behavior in SIGCONT/resize/unmount
+   * handlers.
    */
   setAltScreenActive(active: boolean, mouseTracking = false): void {
     if (this.altScreenActive === active) {
@@ -1294,6 +1294,28 @@ export default class Ink {
   }
   get isAltScreenActive(): boolean {
     return this.altScreenActive
+  }
+
+  /**
+   * Leave the alternate screen once. Shutdown writes synchronously and
+   * React's unmount cleanup also asks, while overlays use the stream writer
+   * and repaint the main screen.
+   */
+  leaveAltScreen(write: (data: string) => void, repaint = true): boolean {
+    if (!this.altScreenActive) {
+      return false
+    }
+
+    const mouseTracking = this.altScreenMouseTracking
+    this.altScreenActive = false
+    this.altScreenMouseTracking = false
+    write((mouseTracking ? DISABLE_MOUSE_TRACKING : '') + EXIT_ALT_SCREEN)
+
+    if (repaint && !this.isUnmounted && !this.isPaused) {
+      this.repaint()
+    }
+
+    return true
   }
 
   /**
@@ -2256,11 +2278,9 @@ export default class Ink {
     // terminals that don't support them.
 
     if (this.options.stdout.isTTY) {
-      if (this.altScreenActive) {
-        // <AlternateScreen>'s unmount effect won't run during signal-exit.
-        // Exit alt screen FIRST so other cleanup sequences go to the main screen.
-        writeSync(1, EXIT_ALT_SCREEN)
-      }
+      // Exit alt screen FIRST so other cleanup sequences go to the main screen.
+      // React's cleanup asks through the same guard and therefore writes nothing.
+      this.leaveAltScreen(write => writeSync(1, write), false)
 
       // Disable mouse tracking — unconditional because altScreenActive can be
       // stale if AlternateScreen's unmount (which flips the flag) raced a
