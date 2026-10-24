@@ -421,12 +421,14 @@ All notable changes to Raven are documented here.
   with a follow-up -- each an error, with the reason -- or cancelled. A node
   continued or sent back gets an entry per attempt, and a node that never
   ran gets none. The tool schema of a node's tool call, which could not be
-  traced for any node of a graph, now names the model call that made it. A
-  report a node sends -- one that needs a decision, or a stall notice --
-  starts a turn that links to the attempt that sent it rather than to the
-  call that dispatched the graph. The attempt's `subagent.run` span carries
-  `subagent.dispatch` (`dag`), `subagent.dag_run_id`, `subagent.node_id` and
-  `subagent.attempt`; graphs recorded before this keep the entries they had.
+  traced while another node's model calls overlapped its own, now names the
+  model call that made it. A report a node sends -- one that needs a
+  decision, or a stall notice -- starts a turn that links to the attempt
+  that sent it rather than to the call that dispatched the graph; a graph
+  dispatched outside any turn still reports with no link. The attempt's
+  `subagent.run` span carries `subagent.dispatch` (`dag`),
+  `subagent.dag_run_id`, `subagent.node_id` and `subagent.attempt`; graphs
+  recorded before this keep the entries they had.
 
 - An empty reply from a model behind OpenRouter (`content: " "`,
   `finish_reason: stop`) is no longer reported as an upstream transport

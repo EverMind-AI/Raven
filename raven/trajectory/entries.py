@@ -88,9 +88,11 @@ _TOOL_RESULT_SPANS = ("tool.call", "skill.read")
 _TOOL_RESULT_SLOTS = ("tool.output", "skill.read")
 
 IN_PROGRESS_KEYS = ("turn.in_progress", "subagent.in_progress")
-# A sub-agent run reports its own failures and returns, so its span status is
-# OK whatever happened; how it ended is on `subagent.outcome`. `completed`, no
-# outcome, or one this table does not know reads the span status instead.
+# A spawned run reports its own failures and returns, so its span status is OK
+# whatever happened; how it ended is on `subagent.outcome`. A DAG node attempt
+# that did not complete is an ERROR span instead, which the status check above
+# already reads. `completed`, no outcome, or one this table does not know reads
+# the span status instead.
 _SUBAGENT_OUTCOMES = {
     "failed": (STATUS_ERROR, ("subagent_failed",)),
     "aborted": (STATUS_ERROR, ("subagent_aborted",)),
