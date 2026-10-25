@@ -200,6 +200,14 @@ export function ensureStep(rt: SessionRuntime = viewRuntime()) {
   return rt.st
 }
 
+/* A step opened after the last fold belongs to a turn that is gone: a stopped
+   turn's late delta still calls `ensureStep` and opens one. A turn that opens
+   next has to start from a clean boundary, so its opening events drop it. */
+export function dropStaleSteps(rt: SessionRuntime = viewRuntime()): void {
+  rt.st = null
+  rt.steps = []
+}
+
 /** Only the local buffer resets; the step keeps its streamed narration. */
 export function flushSay(rt: SessionRuntime = viewRuntime()): void {
   rt.say = ''

@@ -26,6 +26,7 @@ interface CancelReply { cancelled: boolean; busy?: boolean }
 
 async function harness({ turnKept = true, rows = [{ id: 's1' }] as Row[] } = {}) {
   const log: unknown[][] = []
+  const made: Array<{ text: string }> = []
   const queue: string[] = []
   const asked: Array<[string, unknown]> = []
   let settleCancel: { res: (reply: CancelReply) => void; rej: (e: unknown) => void } | null = null
@@ -95,13 +96,18 @@ async function harness({ turnKept = true, rows = [{ id: 's1' }] as Row[] } = {})
         artifacts: () => log.push(['artifacts']),
         turnKept: () => turnKept,
         killStatus: () => log.push(['killStatus']),
-        step: () => ({ seal: () => {}, sayDelta: () => {}, thinkAppend: () => {} }),
+        step: () => {
+          const s = { text: '', seal: () => {}, sayDelta: (t: string) => { s.text += t }, thinkAppend: () => {} }
+          made.push(s)
+          return s
+        },
         status: () => {},
       },
       'src/features/transcript/tail': {
         down: () => {},
       },
       'src/features/workspace/store': {
+        advanceTurn: () => {},
         currentTurn: () => 1,
         loadDeliveries: () => {},
       },
@@ -141,6 +147,7 @@ async function harness({ turnKept = true, rows = [{ id: 's1' }] as Row[] } = {})
     settle: (reply: CancelReply = { cancelled: true }) => { settleCancel!.res(reply); return tick() },
     refuse: () => { settleCancel!.rej(new Error('gone')); return tick() },
     did: (name: string) => log.filter((c) => c[0] === name),
+    steps: made,
     tick,
   }
 }
@@ -199,6 +206,27 @@ describe('a cancel in flight', () => {
 
     expect(h.queue).toEqual([])
     expect(h.sent()).toEqual(['the queued one'])
+  })
+})
+
+/* A delta of the stopped turn can still be in flight when the cancel lands, and
+   it opens a step of its own (`ensureStep`). The next turn must not write into
+   that step. */
+describe('the turn after a stop', () => {
+  it('starts on a clean step even when a stopped delta arrives late', async () => {
+    const h = await harness()
+    h.pipeline.dispatch({ type: 'message.start', payload: { content: 'ask A', turn_id: 'A' } })
+    h.pipeline.dispatch({ type: 'token.delta', payload: { text: 'a1' } })
+
+    h.runtime.stop()
+    h.pipeline.dispatch({ type: 'token.delta', payload: { text: 'a-tail' } })
+    h.pipeline.dispatch({ type: 'message.complete', payload: { usage: {} } })
+    await h.settle()
+
+    h.pipeline.dispatch({ type: 'turn.started', payload: { turn_id: 'B' } })
+    h.pipeline.dispatch({ type: 'token.delta', payload: { text: 'b1' } })
+
+    expect(h.steps.map((s) => s.text)).toEqual(['a1', 'a-tail', 'b1'])
   })
 })
 
