@@ -93,12 +93,12 @@ def _missing_required_fields(name: str) -> list[str]:
 
 
 def _gate_open_allow_from(name: str, fields: dict) -> None:
-    """Confirm gate for an enable whose resolved ``allow_from`` contains ``'*'``.
+    """Confirm gate for an enable or set whose resolved ``allow_from`` contains ``'*'``.
 
     ``'*'`` means anyone who can reach the channel can command the agent on
     this host, so it must never be adopted silently: interactive runs confirm
     (default No), non-interactive runs demand the wildcard be passed
-    explicitly. Raises ``typer.Exit`` to block the enable; returns to allow it.
+    explicitly. Raises ``typer.Exit`` to block the write; returns to allow it.
     """
     raw = fields.get("allow_from")
     if raw is not None:
@@ -324,6 +324,8 @@ def _register_config_commands(channels_app: typer.Typer) -> None:
             _print_schema_table(name)
             console.print("  [dim]Tip: re-run with one or more --flag value pairs to update.[/dim]")
             raise typer.Exit(0)
+        if "allow_from" in fields:
+            _gate_open_allow_from(name, fields)
         try:
             prev = set_channel_fields(name, fields)
         except KeyError as exc:

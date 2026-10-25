@@ -33,7 +33,6 @@ already written.
 
 from __future__ import annotations
 
-import sys
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 import typer
@@ -57,6 +56,7 @@ from raven.cli._onboard_shared import (  # noqa: F401  (re-exports: tests and
     _step_header,
     console,
 )
+from raven.cli._tty_guard import die_if_not_tty
 from raven.core.provider_stack import DEFAULT_PROBE_MESSAGE, send_probe
 from raven.i18n import t
 from raven.providers.registry import (
@@ -251,16 +251,10 @@ def _pick_language() -> None:
 
 
 def _check_tty_or_die(non_interactive: bool) -> None:
-    """Bail when stdout isn't a TTY and the user didn't opt into headless mode."""
+    """Bail when the terminal isn't interactive and the user didn't opt into headless mode."""
     if non_interactive:
         return
-    if not sys.stdout.isatty():
-        console.print(
-            "[red]Non-interactive terminal detected.[/red]\n"
-            "Re-run with: "
-            "[accent]raven onboard --non-interactive --provider <name> --api-key <key>[/accent]"
-        )
-        raise typer.Exit(2)
+    die_if_not_tty("raven onboard --non-interactive --provider <name> --api-key <key>")
 
 
 def _configured_providers() -> list[str]:

@@ -694,6 +694,54 @@ def test_enable_star_item_in_list_triggers_gate(tmp_config: Path) -> None:
     assert section["allowFrom"] == ["a", "*"]
 
 
+def test_set_open_allowfrom_requires_confirm(tmp_config: Path, tty_mock, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``set --allow-from '*'`` runs the same confirm gate as enable."""
+    seed = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "alice"])
+    assert seed.exit_code == 0, seed.stdout
+    calls: list[dict] = []
+
+    def fake_confirm(prompt, *args, **kwargs):
+        calls.append({"prompt": prompt, "default": kwargs.get("default", args[0] if args else None)})
+        return False
+
+    monkeypatch.setattr("raven.cli.channel_commands.typer.confirm", fake_confirm)
+    r = runner.invoke(app, ["channels", "set", "telegram", "--allow-from", "*"])
+    assert calls, "typer.confirm must be invoked when set resolves allow_from to '*'"
+    assert calls[0]["default"] is False
+    assert r.exit_code != 0
+    assert _read(tmp_config)["channels"]["telegram"]["allowFrom"] == ["alice"]
+
+
+def test_set_open_allowfrom_nontty_warns(tmp_config: Path) -> None:
+    """A non-TTY set to the wildcard prints the same risk warning enable does."""
+    seed = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "alice"])
+    assert seed.exit_code == 0, seed.stdout
+    r = runner.invoke(app, ["channels", "set", "telegram", "--allow-from", "*"])
+    assert r.exit_code == 0, r.stdout
+    assert "anyone" in r.stdout
+    assert _read(tmp_config)["channels"]["telegram"]["allowFrom"] == ["*"]
+
+
+def test_set_restricted_allowfrom_skips_gate(tmp_config: Path) -> None:
+    """Restricting senders needs no confirmation in any terminal mode."""
+    seed = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "alice"])
+    assert seed.exit_code == 0, seed.stdout
+    r = runner.invoke(app, ["channels", "set", "telegram", "--allow-from", "bob"])
+    assert r.exit_code == 0, r.stdout
+    assert "anyone" not in r.stdout
+    assert _read(tmp_config)["channels"]["telegram"]["allowFrom"] == ["bob"]
+
+
+def test_set_without_allowfrom_skips_gate(tmp_config: Path) -> None:
+    """Updating another field must not re-confirm an already accepted wildcard."""
+    seed = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "*"])
+    assert seed.exit_code == 0, seed.stdout
+    r = runner.invoke(app, ["channels", "set", "telegram", "--token", "def"])
+    assert r.exit_code == 0, r.stdout
+    assert "anyone" not in r.stdout
+    assert _read(tmp_config)["channels"]["telegram"]["allowFrom"] == ["*"]
+
+
 def test_enable_missing_token_exits_nonzero(tmp_config: Path) -> None:
     """Bare ``enable telegram`` (required --token unset) must error on the first
     line and exit non-zero; the schema table stays as follow-up detail."""

@@ -27,7 +27,7 @@ import typer
 from typer.testing import CliRunner
 
 from raven import i18n
-from raven.cli import _onboard_shared, onboard_channels, onboard_commands, onboard_web
+from raven.cli import _onboard_shared, _tty_guard, onboard_channels, onboard_commands, onboard_web
 from raven.cli.commands import app
 from raven.config.loader import set_config_path
 from raven.i18n import t
@@ -558,6 +558,25 @@ def test_onboard_non_tty_no_flag_fails(tmp_env: Path) -> None:
     r = runner.invoke(app, ["onboard"])
     assert r.exit_code == 2
     assert "Non-interactive terminal detected" in r.stdout
+
+
+def test_check_tty_or_die_rejects_redirected_stdin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A piped stdin is as fatal as a piped stdout: the wizard prompts read stdin."""
+
+    class _Stream:
+        def __init__(self, tty: bool) -> None:
+            self._tty = tty
+
+        def isatty(self) -> bool:
+            return self._tty
+
+    fake_sys = SimpleNamespace(stdin=_Stream(False), stdout=_Stream(True))
+    # raising=False: the module only re-exports ``sys`` on the unfixed code path.
+    monkeypatch.setattr(onboard_commands, "sys", fake_sys, raising=False)
+    monkeypatch.setattr(_tty_guard, "sys", fake_sys)
+    with pytest.raises(typer.Exit) as excinfo:
+        onboard_commands._check_tty_or_die(False)
+    assert excinfo.value.exit_code == 2
 
 
 # --------------------------------------------------------------------------- existing-config handling
