@@ -5,10 +5,9 @@ presence of output is not enough. The marker also fingerprints the harness
 that produced the rollout, so a rollout from a different configuration is
 never reused.
 
-Ported from Harness² (``harness2/core/runmark.py``) so Raven's evolver can
-share the same trial-identity discipline: a rollout is only considered
-finished when the runner that observed it records a completion marker, and
-the marker carries a digest of the harness tree that produced it.
+A rollout is only considered finished when the runner that observed it
+records a completion marker, and the marker carries a digest of the harness
+tree that produced it.
 """
 
 from __future__ import annotations

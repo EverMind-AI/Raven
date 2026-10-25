@@ -1,8 +1,8 @@
 """Unit tests for the evolver trial-identity markers (runmark).
 
-Mirrors Harness²'s ``harness2/core/runmark.py`` discipline: a rollout is only
-considered finished when the runner that observed it records a completion
-marker, and the marker carries a digest of the harness tree that produced it.
+A rollout is only considered finished when the runner that observed it
+records a completion marker, and the marker carries a digest of the harness
+tree that produced it.
 """
 
 from __future__ import annotations
