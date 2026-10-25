@@ -855,6 +855,34 @@ def test_doctor_flags_a_capability_registered_without_a_key(tmp_config: Path, tm
     assert image["configured"] is True and image["has_credential"] is False
 
 
+def test_doctor_tells_a_keyless_search_vendor_from_a_missing_key(
+    tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Keenable searches without a key, so web_search on it is configured with
+    no credential. The JSON says exactly that rather than claiming a key, and
+    the human row is not the media family's "calls will fail" warning."""
+    monkeypatch.delenv("KEENABLE_API_KEY", raising=False)
+    cfg = Config()
+    cfg.agents.defaults.model = "anthropic/claude-sonnet-4-5"
+    cfg.agents.defaults.workspace = str(tmp_path / "workspace")
+    cfg.providers.anthropic.api_key = "sk-fake"
+    cfg.tools.web.search.provider = "keenable"
+    save_config(cfg)
+
+    payload = json.loads(runner.invoke(app, ["doctor", "--json"]).stdout)
+    row = next(c for c in payload["tools"]["capabilities"] if c["tool"] == "web_search")
+    assert (row["configured"], row["has_credential"], row["keyless"], row["source"]) == (True, False, True, "")
+
+    lines = [" ".join(line.split()) for line in runner.invoke(app, ["doctor"]).stdout.splitlines()]
+    start = next(i for i, line in enumerate(lines) if line.startswith("web_search:"))
+    assert lines[start].startswith("web_search: ✓")
+    assert not any("no key resolves" in line for line in lines[start : start + 4])
+    # The row says why the tick is there: nothing to set, and the key that
+    # would lift the rate limit.
+    assert any("no key needed" in line for line in lines[start : start + 4])
+    assert any("a key lifts the limit" in line for line in lines[start : start + 4])
+
+
 def test_doctor_names_the_key_of_the_provider_a_section_runs_on(tmp_config: Path, tmp_path: Path) -> None:
     """A video section on MiniMax with no MiniMax key: the row names the key the
     section runs on, and no OpenRouter variable, which would never reach it."""

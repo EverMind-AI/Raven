@@ -28,12 +28,18 @@ from raven.security.network import guarded_fetch, validate_url_target
 
 @dataclass(frozen=True)
 class SearchProviderSpec:
-    """One ``web_search`` backend: its name, its bare env var, its sign-up page."""
+    """One ``web_search`` backend: its name, its bare env var, its sign-up page.
+
+    ``needs_key`` decides whether ``web_search`` is withheld while no key
+    resolves: Keenable searches unauthenticated at a lower rate limit, so it is
+    offered without one; the others refuse without a key.
+    """
 
     vendor: str
     label: str
     env_var: str
     signup: str
+    needs_key: bool = True
 
     @property
     def config_path(self) -> str:
@@ -44,11 +50,11 @@ class SearchProviderSpec:
 class FetchProviderSpec:
     """One ``web_fetch`` backend.
 
-    ``needs_key`` decides whether the backend can be offered at all: Jina reads
-    pages unauthenticated at a lower rate limit, the others refuse without a
-    key. ``extractor`` is what the fetch envelope reports as having served the
-    page; the backends are not interchangeable, so it is a measurement, not a
-    label.
+    ``needs_key`` decides whether the backend can be offered at all: Jina and
+    Keenable read pages unauthenticated at a lower rate limit, the others refuse
+    without a key. ``extractor`` is what the fetch envelope reports as having
+    served the page; the backends are not interchangeable, so it is a
+    measurement, not a label.
     """
 
     vendor: str
@@ -81,6 +87,9 @@ SEARCH_PROVIDERS: dict[str, SearchProviderSpec] = {
         "firecrawl", "Firecrawl", WEB_VENDOR_ENV_VARS["firecrawl"], "https://firecrawl.dev"
     ),
     "serply": SearchProviderSpec("serply", "Serply", WEB_VENDOR_ENV_VARS["serply"], "https://serply.io"),
+    "keenable": SearchProviderSpec(
+        "keenable", "Keenable", WEB_VENDOR_ENV_VARS["keenable"], "https://keenable.ai", needs_key=False
+    ),
 }
 
 FETCH_PROVIDERS: dict[str, FetchProviderSpec] = {
@@ -96,6 +105,9 @@ FETCH_PROVIDERS: dict[str, FetchProviderSpec] = {
     "exa": FetchProviderSpec("exa", "Exa", WEB_VENDOR_ENV_VARS["exa"], "https://exa.ai", "exa-contents", True),
     "firecrawl": FetchProviderSpec(
         "firecrawl", "Firecrawl", WEB_VENDOR_ENV_VARS["firecrawl"], "https://firecrawl.dev", "firecrawl-scrape", True
+    ),
+    "keenable": FetchProviderSpec(
+        "keenable", "Keenable", WEB_VENDOR_ENV_VARS["keenable"], "https://keenable.ai", "keenable-fetch", False
     ),
 }
 
@@ -305,15 +317,32 @@ class WebSearchTool(Tool):
         configured = self._api_key_source() if self._api_key_source is not None else self._init_api_key
         return vendor, configured or os.environ.get(SEARCH_PROVIDERS[vendor].env_var, "")
 
+    @property
+    def ready(self) -> bool:
+        """Whether a call can run: a key resolves, or the selected vendor needs none."""
+        vendor, key = self._resolve()
+        return bool(key) or not SEARCH_PROVIDERS[vendor].needs_key
+
     @classmethod
     def is_configured(cls, config_key: str | None, provider: str = DEFAULT_SEARCH_PROVIDER) -> bool:
         """Whether a search key resolves, from the config value or the
-        environment.
+        environment, or the vendor needs none.
 
         Asked of the tool rather than of the config because those are two
         sources and only the tool consults both: a deployment that exports the
         vendor's env var and configures nothing is configured, and a caller
         reading the config slot alone would say otherwise.
+        """
+        return cls(api_key=config_key or None, provider=provider).ready
+
+    @classmethod
+    def has_key(cls, config_key: str | None, provider: str = DEFAULT_SEARCH_PROVIDER) -> bool:
+        """Whether a search key actually resolves, from the config value or the
+        environment.
+
+        A different question from :meth:`is_configured` for a vendor that needs
+        no key: Keenable is configured without one, and a report asking whether
+        a credential exists must not read that readiness as a key.
         """
         return bool(cls(api_key=config_key or None, provider=provider).api_key)
 
@@ -324,7 +353,7 @@ class WebSearchTool(Tool):
         # unsent, and a vendor switched under the tool starts afresh.
         vendor, key = self._resolve()
         spec = SEARCH_PROVIDERS[vendor]
-        if not key:
+        if not key and spec.needs_key:
             # Reachable only if the key goes away after registration, since the
             # loops withhold this tool when there is none. Name the file actually
             # in force: hard-coding ~/.raven/config.json sent anyone running with
@@ -489,6 +518,18 @@ class WebSearchTool(Tool):
                 headers={"Accept": "application/json", "X-Api-Key": key},
                 timeout=10.0,
             )
+        if vendor == "keenable":
+            # The public path answers without a key at a lower rate limit and
+            # wants the app named; a key moves the same request to the keyed path.
+            headers = {"Accept": "application/json", "Content-Type": "application/json", "X-Keenable-Title": "Raven"}
+            if key:
+                headers["x-api-key"] = key
+            return await client.post(
+                "https://api.keenable.ai/v1/search" if key else "https://api.keenable.ai/v1/search/public",
+                json={"query": query, "max_results": n},
+                headers=headers,
+                timeout=10.0,
+            )
         return await client.post(
             "https://api.anysearch.com/v1/search",
             json={"query": query, "max_results": n},
@@ -548,6 +589,16 @@ class WebSearchTool(Tool):
         if vendor == "serply":
             # Google SERP rows under ``results``; the snippet is ``description``.
             return {"organic": _rows(data.get("results"), url="link", snippet="description")}
+        if vendor == "keenable":
+            # ``snippet`` is the page's own text, line breaks and all and often
+            # thousands of characters; ``description`` is empty. Collapsed and
+            # cut to the 300 characters Exa's highlights are bounded to.
+            return {
+                "organic": [
+                    {**row, "snippet": " ".join(str(row["snippet"]).split())[:300]}
+                    for row in _rows(data.get("results"), url="url", snippet="snippet")
+                ]
+            }
         # AnySearch publishes the request shape but not the response: results may
         # sit at the top level or inside a ``{code, message, data}`` envelope, and
         # an item spells the URL ``url`` or ``link``, the text ``snippet`` or
@@ -1233,6 +1284,24 @@ class WebFetchTool(Tool):
                 raise _ProviderPageError("Firecrawl returned no page content")
             metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
             return text, r.status_code, {"title": str(metadata["title"])} if metadata.get("title") else {}
+
+        if vendor == "keenable":
+            # Keyless on the public path, as for search; a key moves it to the keyed one.
+            headers = {"Accept": "application/json", "X-Keenable-Title": "Raven"}
+            if key:
+                headers["x-api-key"] = key
+            async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
+                r = await client.get(
+                    "https://api.keenable.ai/v1/fetch" if key else "https://api.keenable.ai/v1/fetch/public",
+                    params={"url": url},
+                    headers=headers,
+                )
+                r.raise_for_status()
+            data = r.json()
+            text = str(data.get("content") or "") if isinstance(data, dict) else ""
+            if not text:
+                raise _ProviderPageError("Keenable returned no page content")
+            return text, r.status_code, {"title": str(data["title"])} if data.get("title") else {}
 
         # AnySearch: a 200 whose envelope reports the failure is the other shape
         # a refusal takes, so ``code`` is read as well as the HTTP status.

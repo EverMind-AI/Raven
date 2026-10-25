@@ -186,6 +186,9 @@ def test_the_subagent_loop_applies_the_same_rule(workspace, monkeypatch: pytest.
 
     without = asyncio.run(_names())
     with_key = asyncio.run(_names(search_api_key="sk-serper"))
+    # An exported Keenable key would register the tool on its own.
+    monkeypatch.delenv("KEENABLE_API_KEY", raising=False)
+    keyless_vendor = asyncio.run(_names(web_search_provider="keenable"))
 
     # Baselines first: an empty list would satisfy the "not in" assertion below
     # without proving anything about the gate.
@@ -193,6 +196,8 @@ def test_the_subagent_loop_applies_the_same_rule(workspace, monkeypatch: pytest.
     assert "read_file" in with_key and "web_fetch" in with_key, with_key
     assert "web_search" not in without
     assert "web_search" in with_key
+    # A vendor that searches without a key needs none to be registered.
+    assert "web_search" in keyless_vendor
 
 
 def test_the_selected_vendors_key_is_what_offers_web_search(workspace, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -215,6 +220,18 @@ def test_the_selected_vendors_key_is_what_offers_web_search(workspace, monkeypat
 
     monkeypatch.setenv("TAVILY_API_KEY", "tv-env")
     assert _loop(workspace, web_search_provider="tavily").tools.offers_by_name("web_search")
+
+
+def test_a_vendor_that_needs_no_key_offers_web_search_without_one(workspace, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keenable searches unauthenticated at a lower rate limit, so selecting it
+    is all the offer needs; a key is still read when one is set."""
+    monkeypatch.delenv("KEENABLE_API_KEY", raising=False)
+    keyless = _loop(workspace, web_search_provider="keenable")
+    assert keyless.tools.offers_by_name("web_search")
+    assert keyless.tools.get("web_search").api_key == ""
+
+    keyed = _loop(workspace, web_search_provider="keenable", web_provider_keys={"keenable": "kn"})
+    assert keyed.tools.get("web_search").api_key == "kn"
 
 
 def test_a_keyed_reader_without_a_key_registers_jina_instead(workspace, monkeypatch: pytest.MonkeyPatch) -> None:

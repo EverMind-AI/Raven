@@ -149,9 +149,9 @@ class Section:
 
 
 _REASONING = ("minimal", "low", "medium", "high")
-_WEB_SEARCH = ("serper", "anysearch", "serpapi", "tavily", "exa", "brave", "firecrawl", "serply")
-_WEB_FETCH = ("jina", "anysearch", "tavily", "exa", "firecrawl")
-_WEB_VENDORS = ("serper", "anysearch", "serpapi", "jina", "tavily", "exa", "brave", "firecrawl", "serply")
+_WEB_SEARCH = ("serper", "anysearch", "serpapi", "tavily", "exa", "brave", "firecrawl", "serply", "keenable")
+_WEB_FETCH = ("jina", "anysearch", "tavily", "exa", "firecrawl", "keenable")
+_WEB_VENDORS = ("serper", "anysearch", "serpapi", "jina", "tavily", "exa", "brave", "firecrawl", "serply", "keenable")
 
 _E = Effect
 
@@ -304,7 +304,7 @@ SECTIONS: tuple[Section, ...] = (
             Setting("tools.exec.pathAppend", "Directories appended to PATH for shell commands", "str", _E.RELOAD),
             Setting(
                 "tools.web.search.provider",
-                "Web search vendor; web_search runs only once this vendor's key is set",
+                "Web search vendor; web_search runs only once this vendor's key is set (keenable needs none)",
                 "enum",
                 _E.NEXT_TURN,
                 writer="settings",
@@ -312,7 +312,7 @@ SECTIONS: tuple[Section, ...] = (
             ),
             Setting(
                 "tools.web.fetch.provider",
-                "Web page fetch vendor; a keyless vendor (jina) works without one",
+                "Web page fetch vendor; a keyless vendor (jina, keenable) works without one",
                 "enum",
                 _E.NEXT_TURN,
                 writer="settings",
@@ -1251,6 +1251,7 @@ _VENDOR_NAMES = {
     "brave": "Brave",
     "firecrawl": "Firecrawl",
     "serply": "Serply",
+    "keenable": "Keenable",
 }
 
 
