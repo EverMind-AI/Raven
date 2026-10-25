@@ -57,8 +57,10 @@ class Outlet(Protocol):
     """A channel's send surface. ``deliver`` either renders the deliverable or, if
     the channel can't express it, eats it with a normal return (logging its own
     skip). Only a real failure — transport error, bug — raises, which the hub
-    retries. Eating is not failure. Lifecycle (connect/teardown) stays on the
-    channel; an outlet is just the send seam."""
+    retries. ``RetryDeliveryError`` supplies a continuation for unacknowledged
+    parts without resetting the deliverable's retry budget. Eating is not
+    failure. Lifecycle (connect/teardown) stays on the channel; an outlet is just
+    the send seam."""
 
     name: str
     capabilities: Capabilities
