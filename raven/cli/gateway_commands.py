@@ -853,9 +853,18 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 #
                 # Which port, and whether at all, is `page_target` above.
                 page_on = page_target(config.gateway.page, page_port)
-                from raven.gateway.linked_chat import LinkedChat, load_binding
+                from raven.gateway.linked_chat import LinkedChat, UnsupportedBindingPlatformError, load_binding
 
-                binding = load_binding(config.workspace_path / "telegram-project-link.json")
+                link_unavailable = False
+                try:
+                    binding = load_binding(config.workspace_path / "telegram-project-link.json")
+                except UnsupportedBindingPlatformError:
+                    binding = None
+                    link_unavailable = True
+                    logger.warning(
+                        "Telegram project linking requires POSIX ownership checks; inbound Telegram messages "
+                        "are refused. Remove telegram-project-link.json and restart to restore standalone chats."
+                    )
                 linked_chat = LinkedChat(binding, agent, gw_hub, gw_sources) if binding is not None else None
                 if page_on is not None:
                     from raven.cli._gateway_page import mount_page
@@ -952,6 +961,8 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 from raven.spine.turn import BusyPolicy
 
                 async def _inbound_dispatch(req) -> None:
+                    if link_unavailable and req.source.channel == "telegram":
+                        return
                     if linked_chat is not None and await linked_chat.dispatch(
                         req, page_mount.scheduler if page_mount is not None else None, question_broker, agent.subagents
                     ):
