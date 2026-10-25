@@ -413,6 +413,9 @@ All notable changes to Raven are documented here.
   characters. The console was told to re-encode keys through Kitty keyboard /
   modifyOtherKeys, which doubles IME commits before they reach Raven's input
   parser; native Windows now leaves input in the terminal's raw encoding.
+  Shift+Enter no longer inserts a newline on native Windows, because the
+  console no longer reports the modifier; Alt+Enter, Ctrl+Enter and Ctrl+J
+  still do.
 
 - Leaving the TUI with Ctrl+C on Windows conpty restores the primary screen
   once. The final frame no longer overlaps the shell prompt because the Ink
