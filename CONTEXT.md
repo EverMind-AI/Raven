@@ -1767,6 +1767,20 @@ factory returning `None`. The wheel carries its own shelf of such plugins,
 `RuntimeHandles.playbook_runtime` funnel, so the loop keeps one dispatch gate, one quota and
 one announce path while the tools ride the plugin contract.
 
+**Agent Plugin Package** (`agent_plugins/`):
+A directory whose root holds a `plugin.json` that validates against the Agent Plugins 1.0.0
+manifest schema, with optional `skills/` and `mcp.json` components -- the portable package
+format of Agent Plugins 1.0 (`https://agent-plugins.org/specification`). It is data only: it
+contributes skills and MCP servers, never code, and it is not a **Plugin** (the kernel kind,
+which ships Python factories in `raven-plugin.toml` and runs inside the host). Phase 1 imports
+a package's skills into the workspace skill tree under `<workspace>/skills/<package name>/`,
+one directory per package, so the pool mints one source label per package rather than one
+per skill; the copy is recorded in the package ledger (`<home>/agent-plugins.json`), which is
+what makes removal safe. An imported skill carries no unconditional-injection flag: `always`
+is dropped from the copy, so a third-party package cannot put text into every turn.
+_Avoid_: "portable plugin", "third-party plugin", "plugin package" unqualified, "Agent
+Plugin" unqualified.
+
 **Plugin Registry** (`plugins/registry.py`):
 The `PluginRegistry` discovers manifests, activates those not in `plugins.disabled`,
 resolves each `module:callable` factory by dynamic import, and registers
