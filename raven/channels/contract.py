@@ -7,7 +7,7 @@ protocol agree -- a proof the per-channel tests run, not a shape.
 """
 
 from raven.contracts.channel import Channel, ChannelSpec, SupportsLogin  # noqa: F401
-from raven.spine.delivery import Capabilities, SupportsStreaming  # noqa: F401
+from raven.spine.delivery import Capabilities, RetryDeliveryError, SupportsStreaming  # noqa: F401
 
 # Each capability flag must agree with its matching opt-in protocol. Adding a
 # capability = add one row; the check below covers both directions for it.
@@ -36,4 +36,12 @@ def capability_violations(channel: object, caps: Capabilities | None = None) -> 
     return out
 
 
-__all__ = ["Capabilities", "SupportsStreaming", "Channel", "ChannelSpec", "SupportsLogin", "capability_violations"]
+__all__ = [
+    "Capabilities",
+    "RetryDeliveryError",
+    "SupportsStreaming",
+    "Channel",
+    "ChannelSpec",
+    "SupportsLogin",
+    "capability_violations",
+]

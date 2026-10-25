@@ -29,6 +29,8 @@ Existing standalone Telegram history is left in place; the gateway does not merg
 
 A Telegram question and its reply stay on Telegram, and the resulting exchange belongs to the existing page conversation. New Telegram input queues behind an active page turn instead of being injected into that turn. Page input during a Telegram turn runs separately rather than inheriting the DM's reply address. The page's Stop button cancels the active linked turn while preserving pending page corrections.
 
+Cancelling a linked turn from the page, or during a runtime reload, does not send a separate cancellation message to Telegram. Telegram `/stop` sends its own acknowledgement.
+
 Questions and approvals raised by a Telegram turn go to the linked DM. A captured asker keeps its originating turn's route: page-origin questions stay on the page, and a finished DM turn cannot question a later turn. The link does not expose a credential-entry responder. `/stop` cancels work on the shared conversation, including queued page turns and associated subagents. New turns are refused during stop cleanup, so child cancellation reports cannot restart the host. Running work receives cancellation before the gateway waits for UI delivery. Other slash commands are refused in the linked DM; use the page for resets and configuration changes.
 
 Linking does not broadcast background worker output, tool chatter, progress notices or page replies. To send an explicit update from the project, the `message` tool must name both the channel and chat ID:
@@ -45,7 +47,7 @@ Changing only one destination field is rejected rather than completed from the c
 
 `Message queued ... (transport delivery pending)` means that the native delivery hub accepted the message, not that Telegram delivered it. Successful Telegram text and media sends log the returned message ID. Receipt logs contain chat/message identifiers, so treat them as private operational data.
 
-Permanent Telegram failures are logged without retrying. A failed attachment gets a basename-only notice when the destination remains usable, and the remaining reply can continue. Transient failures reach the delivery hub as sanitized errors and resume at the unacknowledged part under the same bounded retry budget. Previously acknowledged attachments and text chunks are not sent again. A lost acknowledgement remains ambiguous; this is not an exactly-once delivery guarantee.
+Permanent Telegram failures, including oversized uploads (HTTP 413), are logged without hub retries. A failed attachment gets a basename-only notice when the destination remains usable, and the remaining reply can continue. An HTML message rejected with `BadRequest` is attempted once as the original plain text, including when table padding makes the rendered message too long. Transient failures reach the delivery hub as sanitized errors and resume at the unacknowledged part under the same bounded retry budget. Previously acknowledged attachments and text chunks are not sent again. A lost acknowledgement remains ambiguous; this is not an exactly-once delivery guarantee.
 
 ## Disable the link
 
