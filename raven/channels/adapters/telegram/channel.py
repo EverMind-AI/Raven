@@ -24,15 +24,28 @@ from telegram.ext import (
 from telegram.request import HTTPXRequest
 
 from raven.channels.base import ChannelBase
-from raven.channels.contract import Capabilities
+from raven.channels.contract import Capabilities, RetryDeliveryError
 from raven.channels.errors import retryable_http, transient_network
 from raven.channels.transcribe import transcribe_audio
 from raven.config.paths import get_media_dir
-from raven.spine.delivery import RetryDeliveryError
 from raven.utils.messages import split_message
 
 MAX_MESSAGE_LEN = 4000
 _ALBUM_WINDOW_S = 0.6
+
+
+def _retryable_send_error(exc: Exception) -> bool:
+    if isinstance(exc, BadRequest):
+        return False
+    if isinstance(exc, NetworkError):
+        # PTB folds HTTP failures into NetworkError and keeps only their message.
+        message = str(exc)
+        if status := re.search(r"\(([45]\d{2})\)", message):
+            code = int(status[1])
+            return code == 429 or code >= 500
+        return message.lower() not in {"request entity too large", "payload too large"}
+    return isinstance(exc, RetryAfter) or transient_network(exc) or retryable_http(exc)
+
 
 # Telegram media APIs keyed by the kind we resolve from a file extension.
 _EXT_KIND = {
@@ -309,10 +322,7 @@ class TelegramChannel(ChannelBase):
                     else:
                         await self._send_text(chat_id_int, value)
                 except Exception as exc:
-                    # BadRequest inherits NetworkError but is a permanent rejection.
-                    if not isinstance(exc, BadRequest) and (
-                        isinstance(exc, NetworkError | RetryAfter) or transient_network(exc) or retryable_http(exc)
-                    ):
+                    if _retryable_send_error(exc):
                         raise RetryDeliveryError(
                             f"Telegram {kind} delivery failed ({type(exc).__name__})", resume
                         ) from None
@@ -347,9 +357,7 @@ class TelegramChannel(ChannelBase):
                 text=_markdown_to_html(text),
                 parse_mode="HTML",
             )
-        except BadRequest as exc:
-            if "parse entities" not in str(exc).lower():
-                raise
+        except BadRequest:
             receipt = await self._app.bot.send_message(chat_id=chat_id, text=text)
         logger.info("Telegram delivered chat_id={} message_id={}", chat_id, receipt.message_id)
 
