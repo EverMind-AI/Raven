@@ -433,15 +433,18 @@ class McpGlueMixin:
         """The host's servers with the packages' servers added.
 
         ``None`` stays ``None``: that is the "no answer" the live reader
-        returns, and the caller keeps the set the process already has.
+        returns for an absent or torn ``tools.mcpServers``, and the caller
+        keeps the set the process already has. Turning it into a real answer
+        here would make the next reconcile detach every host server.
+
+        A host server always wins a name collision: the operator configured
+        it, and a package may not replace it.
         """
         packages = getattr(self, "_package_mcp_servers", None)
-        if not packages:
+        if not packages or servers is None:
             return servers
-        if servers is None:
-            return dict(packages)
-        merged = dict(servers)
-        merged.update(packages)
+        merged = dict(packages)
+        merged.update(servers)
         return merged
 
     def mcp_config_changed(self, cfg_servers: dict) -> bool:
