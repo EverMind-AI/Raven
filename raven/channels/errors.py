@@ -5,6 +5,8 @@ reached through ``gateway.outlet.ChannelOutletAdapter``) backs off only on
 raised exceptions, so adapters re-raise TRANSIENT failures (network drop,
 timeout, 5xx) and keep swallowing permanent ones (4xx, bad payloads, auth) --
 retrying those would only repeat the failure or duplicate side effects.
+Multipart adapters can raise ``channels.contract.RetryDeliveryError`` with a
+continuation to resume unacknowledged parts under the same hub retry budget.
 """
 
 from __future__ import annotations
