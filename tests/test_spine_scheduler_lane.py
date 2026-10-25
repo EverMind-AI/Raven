@@ -632,6 +632,52 @@ async def test_scheduler_has_inflight_tracks_running_turn():
     await sched.shutdown(grace=0.0)
 
 
+async def test_reported_stop_uses_lane_cancel_and_drains_before_reporting(monkeypatch):
+    from dataclasses import replace
+    from unittest.mock import Mock
+
+    import pytest
+
+    from raven.spine.scheduler import Scheduler, SchedulerDrainingError
+
+    runner = HangingRunner()
+    reporting, release = asyncio.Event(), asyncio.Event()
+    events = []
+
+    async def sink(event):
+        if isinstance(event, TurnFailed):
+            reporting.set()
+            await release.wait()
+        events.append(event)
+
+    sched = Scheduler(runner, OriginPools(user=1, system=1), sink)
+    running = sched.submit(_req())
+    await runner.started.wait()
+    queued = sched.submit(_req("queued"))
+    injected = sched.submit(replace(_req("injected"), busy=BusyPolicy.INJECT))
+    lane = sched._lanes["t:c"]
+    cancel = Mock(wraps=lane.cancel)
+    monkeypatch.setattr(lane, "cancel", cancel)
+    stopping = asyncio.create_task(sched.cancel_conversation_reported("t:c"))
+    try:
+        await asyncio.wait_for(reporting.wait(), 1)
+        cancel.assert_called_once()
+        assert not lane._pending and not lane._inject_mailbox
+        assert not stopping.done() and not queued._fut.done()
+        assert injected._fut.done()
+        with pytest.raises(SchedulerDrainingError):
+            sched.submit(_req("must not run"))
+    finally:
+        release.set()
+        await stopping
+        await sched.shutdown(grace=0)
+    assert stopping.result() == 3
+    assert await running.result() is None
+    assert await queued.result() is None
+    assert await injected.result() is None
+    assert len([e for e in events if isinstance(e, TurnFailed)]) == 2
+
+
 async def test_a_runners_long_account_rides_the_failure():
     """The kernel cannot build the long form -- it imports no other raven
     package, so it has nothing to scrub with -- so it copies what the runner

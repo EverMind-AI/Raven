@@ -18,6 +18,82 @@ from raven.config.loader import set_config_path
 runner = CliRunner()
 
 
+def _binding_namespace(tmp_path):
+    import ast
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+
+    from raven.cli import gateway_commands
+
+    tree = ast.parse(Path(gateway_commands.__file__).read_text(encoding="utf-8"))
+    bind = next(n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef) and n.name == "_bind_generation")
+    start = next(
+        i for i, n in enumerate(bind.body) if isinstance(n, ast.ImportFrom) and n.module == "raven.gateway.linked_chat"
+    )
+    end = next(i for i in range(start, len(bind.body)) if isinstance(bind.body[i], ast.If))
+    dispatch = next(n for n in bind.body if isinstance(n, ast.AsyncFunctionDef) and n.name == "_inbound_dispatch")
+    namespace = {
+        "config": SimpleNamespace(workspace_path=tmp_path),
+        "agent": SimpleNamespace(subagents=SimpleNamespace(cancel_by_session=AsyncMock(return_value=0))),
+        "gw_hub": SimpleNamespace(dispatch=AsyncMock()),
+        "gw_sources": {},
+        "gw_scheduler": SimpleNamespace(submit=Mock(), has_inflight=Mock(return_value=False)),
+        "question_broker": SimpleNamespace(pending_req=Mock(return_value=None)),
+        "page_mount": None,
+        "logger": Mock(),
+    }
+    exec(
+        compile(ast.Module(body=bind.body[start:end] + [dispatch], type_ignores=[]), gateway_commands.__file__, "exec"),
+        namespace,
+    )
+    return namespace
+
+
+@pytest.mark.parametrize("present", [False, True])
+@pytest.mark.parametrize("native", [False, True], ids=["without-posix", "native-os"])
+async def test_binding_platform_failure_keeps_gateway_but_refuses_telegram(tmp_path, monkeypatch, present, native):
+    import json
+    import os
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from raven.gateway import linked_chat
+    from tests.test_gateway_linked_chat import KEY, OWNER, dm
+
+    if present:
+        path = tmp_path / "telegram-project-link.json"
+        path.write_text(json.dumps({"chat_id": OWNER, "sender_id": OWNER, "session_key": KEY}), encoding="utf-8")
+        path.chmod(0o600)
+    unsupported = not native or not (hasattr(os, "O_NOFOLLOW") and hasattr(os, "getuid"))
+    if not native:
+        monkeypatch.setattr(linked_chat, "os", SimpleNamespace())
+    namespace = _binding_namespace(tmp_path)
+    await namespace["_inbound_dispatch"](dm())
+    submit = namespace["gw_scheduler"].submit
+    assert submit.call_count == (0 if present else 1)
+    assert namespace["gw_hub"].dispatch.await_count == (1 if present and not unsupported else 0)
+    assert namespace["logger"].warning.call_count == (1 if present and unsupported else 0)
+    other = replace(dm(), source=replace(dm().source, channel="slack"))
+    await namespace["_inbound_dispatch"](other)
+    assert submit.call_args.args == (other,)
+    if present and unsupported:
+        await namespace["_inbound_dispatch"](dm("/stop"))
+        namespace["agent"].subagents.cancel_by_session.assert_not_awaited()
+        namespace["gw_hub"].dispatch.assert_not_awaited()
+
+
+def test_binding_platform_handler_does_not_hide_invalid_supported_configuration(tmp_path):
+    import os
+
+    if not (hasattr(os, "O_NOFOLLOW") and hasattr(os, "getuid")):
+        pytest.skip("POSIX file ownership required")
+    path = tmp_path / "telegram-project-link.json"
+    path.write_text("{}", encoding="utf-8")
+    path.chmod(0o600)
+    with pytest.raises(ValueError, match="Invalid Telegram project binding fields"):
+        _binding_namespace(tmp_path)
+
+
 @pytest.fixture
 def tmp_config(tmp_path: Path) -> Path:
     cfg = tmp_path / "config.json"

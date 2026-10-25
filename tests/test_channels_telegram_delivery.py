@@ -9,7 +9,17 @@ from loguru import logger
 
 pytest.importorskip("telegram")
 
-from telegram.error import BadRequest, Forbidden, NetworkError, RetryAfter, TimedOut
+from telegram.error import (
+    BadRequest,
+    Conflict,
+    Forbidden,
+    InvalidToken,
+    NetworkError,
+    RetryAfter,
+    TelegramError,
+    TimedOut,
+)
+from telegram.ext import Application
 from telegram.request import HTTPXRequest
 
 from raven.channels.adapters.telegram.channel import MAX_MESSAGE_LEN, _markdown_to_html
@@ -17,7 +27,7 @@ from raven.gateway.outlet import ChannelOutletAdapter
 from raven.spine import ChatType, MediaOut, Source, Text
 from raven.spine.delivery import DeliveryHub
 from raven.spine.message import Media
-from tests.test_channels_telegram import _running_channel
+from tests.test_channels_telegram import _channel, _running_channel
 
 
 @pytest.fixture
@@ -35,6 +45,24 @@ async def delivery(monkeypatch, request):
 
 def source(chat="123456789"):
     return Source("telegram", chat, chat, ChatType.DM)
+
+
+async def _production_request(monkeypatch, transport):
+    class InitializationReached(Exception):
+        pass
+
+    original = HTTPXRequest.__init__
+
+    def initialize_request(self, *args, **kwargs):
+        kwargs["httpx_kwargs"] = {"transport": transport}
+        original(self, *args, **kwargs)
+
+    monkeypatch.setattr(HTTPXRequest, "__init__", initialize_request)
+    monkeypatch.setattr(Application, "initialize", AsyncMock(side_effect=InitializationReached))
+    channel = _channel()
+    with pytest.raises(InitializationReached):
+        await channel.start()
+    return channel._app.bot.request
 
 
 @pytest.mark.parametrize("failure", ["missing", "forbidden", "bad-request"])
@@ -103,15 +131,20 @@ async def test_forbidden_text_is_not_retried_or_reformatted(delivery):
         pytest.param(413, {"description": "Request Entity Too Large"}, id="413-description"),
         pytest.param(413, {"description": "Payload Too Large"}, id="413-payload-description"),
         pytest.param(422, {}, id="422-status"),
+        pytest.param(422, {"description": "Unsupported upload"}, id="422-description"),
+        pytest.param(413, {"description": "Upload exceeds proxy limit"}, id="413-arbitrary-description"),
+        pytest.param(418, {"description": "Retry upstream (503)"}, id="418-misleading-description"),
     ],
 )
-async def test_permanent_sdk_http_failure_keeps_notice_later_attachment_and_text(tmp_path, delivery, status, payload):
+async def test_permanent_sdk_http_failure_keeps_notice_later_attachment_and_text(
+    tmp_path, delivery, monkeypatch, status, payload
+):
     channel, hub = delivery
     photo, document, later = (tmp_path / name for name in ("first.png", "oversized.zip", "later.png"))
     for path in (photo, document, later):
         path.write_bytes(b"synthetic attachment")
     transport = httpx.MockTransport(lambda request: httpx.Response(status, json=payload))
-    async with HTTPXRequest(httpx_kwargs={"transport": transport}) as request:
+    async with await _production_request(monkeypatch, transport) as request:
 
         async def upload(**kwargs):
             return await request.post("https://example.invalid/upload", request_data=None)
@@ -140,6 +173,55 @@ async def test_permanent_sdk_http_failure_keeps_notice_later_attachment_and_text
             assert hub.dropped == 0
         finally:
             await hub.aclose()
+
+
+@pytest.mark.parametrize(
+    "status,payload,error,retryable",
+    [
+        (400, {"description": "Message is too long"}, BadRequest, False),
+        (401, {"description": "Unauthorized"}, InvalidToken, False),
+        (403, {"description": "Forbidden"}, Forbidden, False),
+        (404, {"description": "Not found"}, InvalidToken, False),
+        (409, {"description": "Conflict"}, Conflict, False),
+        (429, {"parameters": {"retry_after": 1}}, RetryAfter, True),
+        (429, {"description": "Request Entity Too Large"}, NetworkError, True),
+        (503, {"description": "Request Entity Too Large"}, NetworkError, True),
+        (502, {"description": "Rejected (422)"}, NetworkError, True),
+    ],
+)
+async def test_production_request_preserves_sdk_errors_and_retryable_status(
+    monkeypatch, status, payload, error, retryable
+):
+    from raven.channels.adapters.telegram.channel import _retryable_send_error
+
+    transport = httpx.MockTransport(lambda request: httpx.Response(status, json=payload))
+    async with await _production_request(monkeypatch, transport) as request:
+        with pytest.raises(error) as caught:
+            await request.post("https://example.invalid/message", request_data=None)
+        assert _retryable_send_error(caught.value) is retryable
+
+
+async def test_production_request_rejects_non_json_permanent_response_without_its_body(monkeypatch):
+    from raven.channels.adapters.telegram.channel import _retryable_send_error
+
+    transport = httpx.MockTransport(lambda request: httpx.Response(413, content=b"<h1>SECRET-TOKEN</h1>"))
+    async with await _production_request(monkeypatch, transport) as request:
+        with pytest.raises(TelegramError) as caught:
+            await request.post("https://example.invalid/upload", request_data=None)
+        assert not _retryable_send_error(caught.value)
+        assert "SECRET-TOKEN" not in str(caught.value)
+
+
+async def test_production_request_transport_timeout_remains_retryable(monkeypatch):
+    from raven.channels.adapters.telegram.channel import _retryable_send_error
+
+    def transport(request):
+        raise httpx.ReadTimeout("synthetic timeout", request=request)
+
+    async with await _production_request(monkeypatch, httpx.MockTransport(transport)) as request:
+        with pytest.raises(TimedOut) as caught:
+            await request.post("https://example.invalid/message", request_data=None)
+        assert _retryable_send_error(caught.value)
 
 
 @pytest.mark.parametrize("message", ["Can't parse entities", "Message is too long", "Unsupported formatting"])
