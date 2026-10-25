@@ -351,10 +351,18 @@ stdio transport passes to the SDK; the loop merges the package layer into
 every MCP apply; the data directory is
 `<RAVEN_HOME>/plugin-data/<package>/`, created before a server starts;
 `raven agent-plugins list` and `inspect` report the servers and the
-problems without starting anything. A package's stdio server whose `cwd`
-is set cannot run under a sandboxed executor (the interface has no `cwd`),
-so that combination is refused with a clear reason rather than silently
-launched in the wrong directory.
+problems without starting anything. `SandboxExecutor.start_process` gained
+an optional `cwd`, and the boxlite executor translates it to its guest
+mount before passing it to `Box.exec`; a directory outside every mounted
+volume raises rather than falling back to `/workspace`, because a server
+answering from the wrong directory is worse than one that does not start.
+
+A package's server never replaces the operator's own: the host's
+`tools.mcpServers` names are unrestricted, so a package entry that composes
+to one of them is skipped and reported. And a live read of
+`tools.mcpServers` that has no answer (`None`, meaning absent or torn) stays
+`None`: turning it into a package-only answer would make the next reconcile
+detach every host server.
 
 The rows above are kept as the record of what the phase had to add; the
 table describes the state before Phase 2 landed.

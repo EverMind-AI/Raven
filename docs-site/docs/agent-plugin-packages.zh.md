@@ -1,6 +1,6 @@
 # Agent 插件包
 
-Raven 支持读取 [Agent Plugins 1.0](https://agent-plugins.org/specification)
+Raven 支持读取 Agent Plugins 1.0
 的可移植包格式：一个目录，根目录下有 `plugin.json`，可选带 `skills/` 与
 `mcp.json`。多个生态用这个格式发布包——例如 `agentic-awesome-skills`
 仓库就发布了三十个。
@@ -9,7 +9,7 @@ Raven 支持读取 [Agent Plugins 1.0](https://agent-plugins.org/specification)
 进程内运行的 Python 工厂；Agent 插件包是纯数据：技能，以及后续阶段才会用到的
 MCP server。包里的任何东西都不会被当作代码 import。
 
-## 一个包长什么样
+## 一个包长什么样 { #what-a-package-looks-like }
 
 ```text
 my-package/
@@ -25,7 +25,7 @@ my-package/
 实现的 Agent Plugins 版本的包会被拒绝，破坏 schema 的 manifest 也会被拒绝；
 未知字段只会被报告并忽略。
 
-## 让 Raven 找到包
+## 让 Raven 找到包 { #pointing-raven-at-a-package }
 
 ```json
 {
@@ -39,7 +39,7 @@ my-package/
 目录的目录。相对路径以工作目录为基准解析。`agentPlugins.disabled` 列出要跳过
 的包。
 
-## 命令
+## 命令 { #the-commands }
 
 ```bash
 raven agent-plugins list                 # Raven 能看到的包
@@ -51,7 +51,7 @@ raven agent-plugins remove my-package     # 删除导入的技能
 
 每条命令都支持 `--json` 以便脚本调用。
 
-## 导入做了什么
+## 导入做了什么 { #what-an-import-does }
 
 包的技能会被复制到工作区技能树下的 `<workspace>/skills/<包名>/`。一个包一个
 目录，意味着技能池按包生成一个来源标签，而不是按技能生成——这样两个包各自
@@ -64,7 +64,7 @@ raven agent-plugins remove my-package     # 删除导入的技能
 导入之后这些技能就是普通的工作区技能：文件监视器会看到它们，路由可以检索
 它们，技能里的脚本仍然通过普通的 `exec` 工具、在普通的工作区围栏内运行。
 
-## 包做不到什么
+## 包做不到什么 { #what-a-package-cannot-do }
 
 - **不能把自己注入每一轮对话。** 导入的副本会被去掉 `always` 标记。包的技能
   仍然可被检索，也就是在相关时由路由取用。
@@ -75,7 +75,7 @@ raven agent-plugins remove my-package     # 删除导入的技能
 - **不能覆盖你自己的技能。** 存在且不属于账本的目标目录会被原样保留，导入会
   如实报告。
 
-## 包里带的 MCP server
+## 包里带的 MCP server { #mcp-servers-a-package-ships }
 
 包可以在 `mcp.json` 里声明 MCP server。Raven 会读取它、逐条校验并报告结果；
 在你点名某个包之前，它不会启动任何东西：
@@ -103,9 +103,10 @@ server 以 `<包名>__<server 名>` 命名，因此不会和你自己的 `tools.
 `mcp.json` 声明的 Agent Plugins 版本和它的 `plugin.json` 不一致，或文件本身
 不是合法的 MCP 配置，则只关闭该包的 MCP，技能仍然可用。
 
-## 当前限制
+## 当前限制 { #current-limits }
 
 - Raven 不下载包。包是你已经拥有的目录；没有目录客户端，也没有更新通道。
 - 其他工具的宿主原生格式（`.claude-plugin/`、`.codex-plugin/`）暂时还不读取。
-- 指定了工作目录的 stdio server 无法在沙箱执行器下运行：沙箱接口没有设置
-  工作目录的能力，因此该 server 会被拒绝，而不是在错误的位置启动。
+- 包的 stdio server 以包根目录为工作目录，该目录必须位于挂载进沙箱的卷内。
+  若其目录不在任何已挂载的卷里，该 server 会被拒绝，而不是在错误的位置启动；
+  请挂载该目录，或不使用沙箱运行。

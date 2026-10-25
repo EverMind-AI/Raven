@@ -1,7 +1,7 @@
 # Agent Plugin Packages
 
 Raven reads the portable package format of
-[Agent Plugins 1.0](https://agent-plugins.org/specification): a directory
+Agent Plugins 1.0: a directory
 whose root holds a `plugin.json`, with optional `skills/` and `mcp.json`
 components. Several ecosystems publish packages in this format -- for
 example the `agentic-awesome-skills` repository ships thirty of them.
@@ -128,6 +128,7 @@ working.
   have; there is no registry client and no update channel.
 - The host-native formats of other tools (`.claude-plugin/`, `.codex-plugin/`)
   are not read yet.
-- A package's stdio server that names a working directory cannot run under
-  a sandboxed executor: the sandbox interface cannot set one, so the server
-  is refused rather than launched in the wrong place.
+- A package's stdio server runs in its package root, which has to be
+  inside a volume mounted into the sandbox. A server whose directory is
+  outside every mounted volume is refused rather than launched in the
+  wrong place; mount that directory or run without the sandbox.
