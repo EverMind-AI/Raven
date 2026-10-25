@@ -1088,11 +1088,16 @@ def _ended(pid: int) -> bool:
 
 
 @pytest.mark.skipif(os.name == "nt", reason="a POSIX process group; Windows ends the tree with taskkill")
+@pytest.mark.production_timing
 def test_an_npm_past_its_deadline_is_ended_with_what_it_started(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     """npm runs install scripts of its own; one that hangs must not outlive the
     install it belongs to, still writing into the directory the next launch
     installs into."""
-    monkeypatch.setattr(mirrors, "_NPX_INSTALL_TIMEOUT", 0.5)
+    # Long enough for the stub to be exec'd and to have started its own child:
+    # a first exec of a freshly written script can take a second on a loaded
+    # machine (measured on macOS), and a deadline that ends npm before its
+    # first line leaves nothing to check.
+    monkeypatch.setattr(mirrors, "_NPX_INSTALL_TIMEOUT", 5)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     started = tmp_path / "started.pid"
@@ -1101,7 +1106,11 @@ def test_an_npm_past_its_deadline_is_ended_with_what_it_started(tmp_path, monkey
 
     began = time.monotonic()
     assert not mirrors._npm_install(tmp_path, "install", {"PATH": f"{bin_dir}:/usr/bin:/bin"}, None)
-    assert time.monotonic() - began < 10, "the deadline waited for what npm started, which holds its output open"
+    assert time.monotonic() - began < 20, "the deadline waited for what npm started, which holds its output open"
+    deadline = time.monotonic() + 5
+    while not started.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert started.exists(), "the stub npm never started, so there is nothing to have ended"
     child = int(started.read_text(encoding="utf-8"))
     deadline = time.monotonic() + 5
     while not _ended(child) and time.monotonic() < deadline:
