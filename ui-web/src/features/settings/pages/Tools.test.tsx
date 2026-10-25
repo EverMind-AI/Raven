@@ -145,6 +145,17 @@ describe('tools page', () => {
     expect(calls).toEqual([['set', { key: 'tools.web.search.apiKey', value: '' }]])
   })
 
+  it('a vendor that needs no key blocks neither web tool, and its panel still takes an optional key', async () => {
+    const data = snap()
+    ;(data.raw.tools as Record<string, unknown>).web = { search: { provider: 'keenable' }, fetch: { provider: 'keenable' } }
+    install(data)
+    await mount('tools')
+    expect(blocker('web_search', data.raw)).toBe('')
+    expect(blocker('web_fetch', data.raw)).toBe('')
+    await act(async () => { fireEvent.click(screen.getByText('web_search')) })
+    expect(screen.getByText('gui.settings.tools.vendor_key {"name":"Keenable"}')).toBeTruthy()
+  })
+
   it('a media tool row carries the same role pill as the model page', async () => {
     const { calls } = install()
     await mount('tools')

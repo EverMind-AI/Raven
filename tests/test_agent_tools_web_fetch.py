@@ -84,7 +84,14 @@ async def test_vendor_http_errors_use_direct_html(transport, vendor, status):
         text="<html><body><h1>Title</h1><script>secret()</script><style>.x{}</style><p>Body</p></body></html>",
         headers={"Content-Type": "text/html"},
     )
-    for host in ["r.jina.ai", "api.tavily.com", "api.exa.ai", "api.firecrawl.dev", "api.anysearch.com"]:
+    for host in [
+        "r.jina.ai",
+        "api.tavily.com",
+        "api.exa.ai",
+        "api.firecrawl.dev",
+        "api.anysearch.com",
+        "api.keenable.ai",
+    ]:
         responses[host] = httpx.Response(status)
     tool = web.WebFetchTool(api_key="secret", provider=vendor)
 

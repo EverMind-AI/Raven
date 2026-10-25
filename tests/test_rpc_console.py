@@ -54,7 +54,18 @@ def test_the_settings_whitelist_is_exactly_this_set() -> None:
         "tools.web.fetch.provider",
         *(
             f"tools.web.providers.{vendor}.apiKey"
-            for vendor in ("serper", "anysearch", "serpapi", "jina", "tavily", "exa", "brave", "firecrawl", "serply")
+            for vendor in (
+                "serper",
+                "anysearch",
+                "serpapi",
+                "jina",
+                "tavily",
+                "exa",
+                "brave",
+                "firecrawl",
+                "serply",
+                "keenable",
+            )
         ),
         "tools.media.image.apiKey",
         "tools.media.image.model",

@@ -153,6 +153,17 @@ All notable changes to Raven are documented here.
   sub-agent's search tool routes through it too and pages with a result
   offset like SerpApi.
 
+- Keenable joins the `web_search` and `web_fetch` vendors:
+  `tools.web.search.provider: keenable` and `tools.web.fetch.provider:
+  keenable`, with an optional key under `tools.web.providers.keenable.apiKey`
+  (or `KEENABLE_API_KEY`). It is the one search vendor that answers without a
+  key, at a lower rate limit, so `web_search` on it is offered keyless the way
+  `web_fetch` on Jina is; a key moves both requests to the keyed endpoints and
+  lifts the limit. Its snippets are page text, collapsed and cut to 300
+  characters. The research sub-agent's two tools route through it too, and its
+  launcher starts with Keenable selected and no key. The defaults are
+  unchanged.
+
 - Two dark templates join the bundled catalogue, cut from user uploads: a
   near-black circuit-board deck for product launches and a green aurora deck
   for trend reports. Hidden vendor pages are gone, vendor marks are stripped,

@@ -9,7 +9,7 @@ the same question six ways and each looked reasonable alone.
 Tools never got the equivalent. Three rules decide whether a tool is offered to
 the model, one per family, each a different shape:
 
-    web_search   a resolved key, asked of the built tool
+    web_search   a resolved key or a vendor needing none, asked of the built tool
     web_fetch    nothing -- always registered, a key only improves extraction
     media x3     an api_key *or* a model, either one counting as configured
 
@@ -292,9 +292,12 @@ def has_credential(cap: Capability, config: "Config") -> bool:
     every call then fails on a missing key. A report that collapses the two
     ticks a capability that cannot run, which is the one thing it must not do.
 
-    The same answer twice for the other families -- web_search is configured by
-    a resolved key and nothing else, and web_fetch needs none -- so this only
-    ever diverges where the rule itself does.
+    They come apart for web_search too, with the opposite outcome: a vendor
+    that needs no key (Keenable) is configured without one and every call runs.
+    :func:`runs_keyless` names that state, so a report neither claims a key
+    nor warns about a missing one. web_fetch needs none, and image_search is
+    configured by a resolved key and nothing else, so for those this is the
+    same answer twice.
     """
     if cap.need is Need.NOTHING:
         return True
@@ -302,7 +305,29 @@ def has_credential(cap: Capability, config: "Config") -> bool:
         from raven.agent.tools.media_gen import _OpenRouterMediaTool
 
         return _OpenRouterMediaTool.has_key(_resolved_media(cap, config))
+    from raven.agent.tools.web import WebSearchTool
+
+    if cap.tool == WebSearchTool.name:
+        provider = config.tools.web.search.provider
+        return WebSearchTool.has_key(config.tools.web.vendor_key(provider), provider)
     return is_configured(cap, config)
+
+
+def runs_keyless(cap: Capability, config: "Config") -> bool:
+    """Whether this capability is configured with no key because its vendor needs none.
+
+    The state :func:`has_credential` cannot tell apart from the media family's
+    on its own: configured, no key resolves, and yet every call runs, because
+    the selected web_search vendor answers unauthenticated at a lower rate
+    limit. A report that warned "calls will fail" here would send the deployer
+    to fix what works.
+
+    False wherever a key resolves, and for web_fetch, which needs nothing and
+    is never asked for a credential.
+    """
+    if cap.need is Need.NOTHING or cap.media_attr:
+        return False
+    return is_configured(cap, config) and not has_credential(cap, config)
 
 
 def configured_from(cap: Capability, config: "Config") -> str:
@@ -314,10 +339,11 @@ def configured_from(cap: Capability, config: "Config") -> str:
     have" and "needs a key" are different instructions, and a row that cannot
     tell them apart sends someone to create an account they already have.
 
-    Empty when the capability is unconfigured, when it needs nothing, and --
-    for the media family only -- when it is registered with no credential at
-    all: a section naming just a model is offered to the model and fails on
-    every call, so there is no source to name.
+    Empty when the capability is unconfigured, when it needs nothing, and when
+    it is registered with no credential at all: a media section naming just a
+    model is offered to the model and fails on every call, and web_search on a
+    vendor that needs no key runs without one (:func:`runs_keyless`), so in
+    neither case is there a source to name.
 
     Names a source; it does not rule on whether one exists. Callers wanting that
     answer ask :func:`has_credential`, which asks the tools -- inferring it from
@@ -399,4 +425,5 @@ __all__ = [
     "configured_from",
     "has_credential",
     "is_configured",
+    "runs_keyless",
 ]

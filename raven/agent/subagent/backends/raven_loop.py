@@ -454,13 +454,15 @@ class RavenLoopBackend:
         # Withheld without a key, same as the main loop: a sub-agent that reaches
         # for a search it cannot run reports the failure to its caller, and that
         # text ends up in the parent turn. The whitelist stacks on top: a
-        # whitelisted web_search without a key is still withheld.
+        # whitelisted web_search without a key is still withheld. A vendor that
+        # needs no key is registered whether or not a key resolves, the way the
+        # main loop offers it.
         if allowed("web_search"):
             search_provider = self.web_search_provider
             web_search = WebSearchTool(
                 api_key=live_key(search_provider), proxy=self.web_proxy, provider=search_provider
             )
-            if web_search.api_key:
+            if web_search.ready:
                 tools.register(web_search)
         if self.image_search and allowed("image_search"):
             picture_vendor = image_search_vendor(self.web_search_provider, self._web_key)

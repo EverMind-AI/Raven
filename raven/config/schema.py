@@ -1007,8 +1007,10 @@ class GatewayConfig(Base):
     page: GatewayPageConfig = Field(default_factory=GatewayPageConfig)
 
 
-WebSearchProvider = Literal["serper", "anysearch", "serpapi", "tavily", "exa", "brave", "firecrawl", "serply"]
-WebFetchProvider = Literal["jina", "anysearch", "tavily", "exa", "firecrawl"]
+WebSearchProvider = Literal[
+    "serper", "anysearch", "serpapi", "tavily", "exa", "brave", "firecrawl", "serply", "keenable"
+]
+WebFetchProvider = Literal["jina", "anysearch", "tavily", "exa", "firecrawl", "keenable"]
 
 #: The bare environment variable each web vendor's tool falls back to when the
 #: config slot is empty, and the name ``~/.raven/env`` mirrors the slot out as.
@@ -1022,6 +1024,7 @@ WEB_VENDOR_ENV_VARS: dict[str, str] = {
     "brave": "BRAVE_API_KEY",
     "firecrawl": "FIRECRAWL_API_KEY",
     "serply": "SERPLY_API_KEY",
+    "keenable": "KEENABLE_API_KEY",
 }
 
 
@@ -1034,7 +1037,7 @@ class WebProviderKey(Base):
 class WebProvidersConfig(Base):
     """Credentials keyed by vendor, not by the tool that happens to use them.
 
-    AnySearch, Tavily, Exa and Firecrawl each serve both ``web_search`` and
+    AnySearch, Tavily, Exa, Firecrawl and Keenable each serve both ``web_search`` and
     ``web_fetch`` off one account, so a key held per tool would have to be
     pasted twice and could drift into two values for the same credential. Named
     fields rather than a free dict so a misspelled vendor fails validation
@@ -1054,6 +1057,7 @@ class WebProvidersConfig(Base):
     brave: WebProviderKey = Field(default_factory=WebProviderKey)
     firecrawl: WebProviderKey = Field(default_factory=WebProviderKey)
     serply: WebProviderKey = Field(default_factory=WebProviderKey)
+    keenable: WebProviderKey = Field(default_factory=WebProviderKey)
 
     def key_for(self, vendor: str) -> str:
         """One vendor's configured key, or an empty string for an unknown vendor."""
