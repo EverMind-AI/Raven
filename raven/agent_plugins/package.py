@@ -78,6 +78,10 @@ def load_package(root: Path) -> AgentPluginPackage:
     manifest_path = root / MANIFEST_FILENAME
     if not manifest_path.is_file():
         raise AgentPluginManifestError(f"the directory holds no {MANIFEST_FILENAME}")
+    # The manifest is a package path like any other: a link at the root may
+    # point at a file the package does not own (spec §4.1).
+    if not is_contained(root, manifest_path):
+        raise AgentPluginManifestError(f"{manifest_path} resolves outside the package root")
     manifest, notes = read_manifest(manifest_path)
     return AgentPluginPackage(
         name=manifest.name,

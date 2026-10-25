@@ -314,6 +314,7 @@ def import_package(
                 "version": report.version,
                 "target": report.target,
                 "installed": list(report.installed),
+                "removed": list(report.removed),
                 "skipped": [{"skill": name, "reason": reason} for name, reason in report.skipped],
                 "failed": [{"skill": name, "reason": reason} for name, reason in report.failed],
                 "problems": [{"name": item.name, "reason": item.reason} for item in report.problems],
@@ -340,6 +341,8 @@ def import_package(
             f"[green]{len(report['installed'])}[/green] installed"
         )
         console.print(f"  [dim]target:[/dim] {escape(report['target'])}")
+        for name in report["removed"]:
+            console.print(f"  [yellow]removed[/yellow] {escape(name)}: no longer in the package")
         for name, reason in [(item["skill"], item["reason"]) for item in report["skipped"]]:
             console.print(f"  [yellow]skipped[/yellow] {escape(name)}: {escape(reason)}", highlight=False)
         for item in report["failed"]:

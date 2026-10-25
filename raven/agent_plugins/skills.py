@@ -13,13 +13,14 @@ ledger claims.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from raven.agent_plugins.ledger import PackageLedger
+from raven.agent_plugins.ledger import LedgerEntry, PackageLedger
 from raven.agent_plugins.package import AgentPluginPackage, is_contained
 from raven.skill_hub.policy import is_blocked, lint_external_paths, normalize_blocklist
 from raven.utils.text import parse_frontmatter
@@ -56,6 +57,8 @@ class ImportReport:
     version: str = ""
     target: str = ""
     installed: tuple[str, ...] = ()
+    removed: tuple[str, ...] = ()
+    """Skills an earlier import installed that this package no longer ships."""
     skipped: tuple[tuple[str, str], ...] = ()
     failed: tuple[tuple[str, str], ...] = ()
     problems: tuple[SkillProblem, ...] = ()
@@ -129,6 +132,11 @@ def discover_skills(
         if not is_contained(package.root, child):
             problems.append(SkillProblem(child.name, "the skill directory resolves outside the package root"))
             continue
+        # The SKILL.md itself is a path too: a package may keep the skill
+        # directory inside its root and point the file at one outside it.
+        if not is_contained(package.root, child / SKILL_FILENAME):
+            problems.append(SkillProblem(child.name, "the SKILL.md resolves outside the package root"))
+            continue
         skill, reason = validate_skill(child)
         if skill is None:
             problems.append(SkillProblem(child.name, reason or "the skill is not usable"))
@@ -193,6 +201,11 @@ def import_package(
             skipped.append((skill.name, "the body references another product's home directory: " + ", ".join(flagged)))
             continue
 
+        escaped = _escaped_entry(package.root, skill.directory)
+        if escaped is not None:
+            skipped.append((skill.name, f"{escaped} resolves outside the package root"))
+            continue
+
         target = target_root / skill.name
         if target.exists():
             if not ledger.owns_directory(target, workspace=workspace):
@@ -211,15 +224,68 @@ def import_package(
         drop_always_flag(target / SKILL_FILENAME)
         installed.append(skill.name)
 
+    removed = _remove_stale_skills(
+        target_root,
+        previous=ledger.entry(package.name),
+        installed=installed,
+        workspace=workspace,
+        ledger=ledger,
+    )
+
     return ImportReport(
         package=package.name,
         version=package.version,
         target=str(target_root),
         installed=tuple(installed),
+        removed=tuple(removed),
         skipped=tuple(skipped),
         failed=tuple(failed),
         problems=tuple(problems),
     )
+
+
+def _remove_stale_skills(
+    target_root: Path,
+    *,
+    previous: LedgerEntry | None,
+    installed: list[str],
+    workspace: Path,
+    ledger: PackageLedger,
+) -> list[str]:
+    """Delete what an earlier import installed and this one no longer ships.
+
+    The ledger is the record of what this package put in the workspace. A
+    refresh that only visits the skills still present in the source leaves a
+    removed skill behind, and the ledger entry rewritten to the new set then
+    forgets it was ever ours -- so the copy becomes unowned and no later
+    ``remove`` can clear it. Converging to the installed set here is what
+    makes a re-import mean "the workspace matches the package".
+    """
+    if previous is None:
+        return []
+    removed: list[str] = []
+    for name in sorted(set(previous.skills) - set(installed)):
+        stale = target_root / name
+        if stale.is_dir() and ledger.owns_directory(stale, workspace=workspace):
+            shutil.rmtree(stale, ignore_errors=True)
+            removed.append(name)
+    return removed
+
+
+def _escaped_entry(root: Path, directory: Path) -> str | None:
+    """The first path under *directory* that resolves outside *root*.
+
+    ``copytree`` follows a symlink or junction it is given, so checking the
+    skill directory alone is not enough: a link one level down walks out of
+    the package and its contents land in the workspace as if they were the
+    package's own. Every entry is checked before anything is copied.
+    """
+    for parent, directories, files in os.walk(directory, followlinks=True):
+        for name in [*directories, *files]:
+            candidate = Path(parent) / name
+            if not is_contained(root, candidate):
+                return str(candidate)
+    return None
 
 
 def split_frontmatter(text: str) -> tuple[str, str, str] | None:

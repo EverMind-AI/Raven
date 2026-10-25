@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -574,3 +575,59 @@ def test_drop_always_flag_removes_the_flag_from_a_file_with_frontmatter(tmp_path
     assert "name: alpha" in text
     assert "description: A demo skill." in text
     assert "Do the thing." in text
+
+
+def test_import_package_refuses_a_skill_whose_file_links_outside_the_package(
+    tmp_path: Path,
+) -> None:
+    """Checking the skill directory is not enough: a file one level down is a path too."""
+    root = _package_root(tmp_path)
+    _write_skill(root / "skills" / "alpha", _frontmatter("alpha"))
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("SECRET-FROM-OUTSIDE\n", encoding="utf-8")
+    _link_directory(outside, root / "skills" / "alpha" / "assets")
+    workspace, ledger = _workspace(tmp_path)
+
+    report = import_package(load_package(root), workspace=workspace, ledger=ledger)
+
+    assert report.installed == ()
+    skipped = dict(report.skipped)
+    assert "alpha" in skipped
+    assert "outside the package root" in skipped["alpha"]
+    assert not (workspace / "skills" / PACKAGE_NAME / "alpha" / "assets" / "secret.txt").exists()
+
+
+def test_import_package_removes_a_skill_the_package_no_longer_ships(tmp_path: Path) -> None:
+    """A refresh converges on the package: what it dropped is dropped here too."""
+    root = _package_root(tmp_path)
+    _write_skill(root / "skills" / "alpha", _frontmatter("alpha"))
+    _write_skill(root / "skills" / "beta", _frontmatter("beta"))
+    workspace, ledger = _workspace(tmp_path)
+
+    first = import_package(load_package(root), workspace=workspace, ledger=ledger)
+    assert first.installed == ("alpha", "beta")
+    ledger.record(LedgerEntry(name=PACKAGE_NAME, version="1.0.0", skills=first.installed))
+
+    shutil.rmtree(root / "skills" / "beta")
+    second = import_package(load_package(root), workspace=workspace, ledger=ledger)
+
+    assert second.installed == ("alpha",)
+    assert second.removed == ("beta",)
+    assert not (workspace / "skills" / PACKAGE_NAME / "beta").exists()
+
+
+def test_import_package_keeps_a_directory_the_ledger_never_claimed(tmp_path: Path) -> None:
+    """The stale sweep is scoped to the ledger, not to the package directory."""
+    root = _package_root(tmp_path)
+    _write_skill(root / "skills" / "alpha", _frontmatter("alpha"))
+    workspace, ledger = _workspace(tmp_path)
+    ledger.record(LedgerEntry(name=PACKAGE_NAME, version="1.0.0", skills=("alpha",)))
+    foreign = workspace / "skills" / PACKAGE_NAME / "notes"
+    foreign.mkdir(parents=True)
+    (foreign / "KEEP.txt").write_text("not ours\n", encoding="utf-8")
+
+    report = import_package(load_package(root), workspace=workspace, ledger=ledger)
+
+    assert report.removed == ()
+    assert (foreign / "KEEP.txt").is_file()
