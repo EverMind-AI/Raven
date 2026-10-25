@@ -232,9 +232,24 @@ All notable changes to Raven are documented here.
   into every turn: the `always` flag is dropped from the imported copy. A
   skill on `skillForge.blocklist`, or one whose body points at another
   product's home directory, is refused, and a target directory the ledger
-  does not claim is never written into. The MCP configuration of a package is
-  not started yet. See
+  does not claim is never written into. See
   `docs/specs/2026-10-25-agent-plugins-loader-design.md`.
+
+- A portable Agent Plugin package can now ship **MCP servers** in its
+  `mcp.json`, and Raven reads and runs them. Every entry is validated
+  against the format's closed variants (stdio, Streamable HTTP, legacy
+  HTTP+SSE) and one bad entry never takes the others down: it is skipped
+  and reported. The servers are named `<package>__<server>` so they cannot
+  collide with the host's own `tools.mcpServers`, they run with the
+  package root as their working directory, and they get `PLUGIN_ROOT` and
+  `PLUGIN_DATA` in their environment, with the format's two placeholders
+  expanded in their arguments, environment and working directory. A
+  package's server is a process on the operator's machine, so it starts
+  only when the package is named in `agentPlugins.mcpPackages`; by default
+  the configuration is parsed, validated and reported only.
+  `MCPServerConfig` gained `cwd`, which the stdio transport passes to the
+  MCP SDK. `raven agent-plugins list` and `inspect` show a package's
+  servers and their problems without starting anything.
 
 ### Changed
 

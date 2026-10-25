@@ -206,9 +206,21 @@ async def open_mcp_transport(
                 [cfg.command, *cfg.args], {**os.environ, **(cfg.env or {})}, local=not sandboxed
             )
             if executor is not None and executor.supports_process_spawning:
+            cwd = getattr(cfg, "cwd", "") or None
+            if executor is not None and executor.supports_process_spawning:
+                if cwd:
+                    raise ValueError(
+                        "this MCP server needs a working directory, which the sandboxed "
+                        "executor cannot set for a spawned process"
+                    )
                 read, write = await executor.start_process(command, args, env=cfg.env or None)
             else:
-                params = StdioServerParameters(command=command, args=args, env=cfg.env or None)
+                params = StdioServerParameters(
+                    command=command,
+                    args=args,
+                    env=cfg.env or None,
+                    cwd=cwd,
+                )
                 read, write = await stack.enter_async_context(stdio_client(params))
         elif transport_type == "sse":
 

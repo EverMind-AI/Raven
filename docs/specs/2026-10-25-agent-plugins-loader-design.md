@@ -331,14 +331,33 @@ validated and reported, and no server is started. The opt-in is per
 package, not global.
 
 **Namespacing.** A package's server names are qualified with the package
-name (`<package>:<server>`) so they cannot collide with the host's own
+name (`<package>__<server>`) so they cannot collide with the host's own
 `tools.mcpServers` entries, and so a sub-agent row's `mcps` list
-(`raven/agent/subagent/mcp_grant.py:364-448`) can name them precisely.
+(`raven/agent/subagent/mcp_grant.py:364-448`) can name them precisely. The
+separator is `__` because the manifest's name rules forbid an underscore in
+a package name, so the first occurrence is unambiguous.
 
 **Where they live.** The package's servers are composed at boot next to the
 host's `tools.mcpServers` (`raven/config/live.py:465-483`), not written into
 `~/.raven/config.json`: the config file stays the operator's own, and the
-package's servers come and go with the package.
+package's servers come and go with the package. They are also kept apart
+inside the loop (`_package_mcp_servers`): a live answer about the host's own
+servers must not drop them, so every path to the manager merges the host's
+set with the package layer.
+
+**What Phase 2 shipped.** `raven/agent_plugins/mcp.py` reads the file and
+composes the surviving entries; `MCPServerConfig` gained `cwd`, which the
+stdio transport passes to the SDK; the loop merges the package layer into
+every MCP apply; the data directory is
+`<RAVEN_HOME>/plugin-data/<package>/`, created before a server starts;
+`raven agent-plugins list` and `inspect` report the servers and the
+problems without starting anything. A package's stdio server whose `cwd`
+is set cannot run under a sandboxed executor (the interface has no `cwd`),
+so that combination is refused with a clear reason rather than silently
+launched in the wrong directory.
+
+The rows above are kept as the record of what the phase had to add; the
+table describes the state before Phase 2 landed.
 
 ### 7. The package ledger
 

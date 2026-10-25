@@ -1777,7 +1777,11 @@ a package's skills into the workspace skill tree under `<workspace>/skills/<pack
 one directory per package, so the pool mints one source label per package rather than one
 per skill; the copy is recorded in the package ledger (`<home>/agent-plugins.json`), which is
 what makes removal safe. An imported skill carries no unconditional-injection flag: `always`
-is dropped from the copy, so a third-party package cannot put text into every turn.
+is dropped from the copy, so a third-party package cannot put text into every turn. A package
+may also carry `mcp.json`, and those servers are composed under the package's own names
+(`<package>__<server>`) with the package root as their working directory and `PLUGIN_ROOT` /
+`PLUGIN_DATA` in their environment; they start only for a package named in
+`agentPlugins.mcpPackages`, because a server entry is a process on the operator's machine.
 _Avoid_: "portable plugin", "third-party plugin", "plugin package" unqualified, "Agent
 Plugin" unqualified.
 

@@ -171,6 +171,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         sandbox_config: SandboxConfig | None = None,
         executor: "SandboxExecutor | None" = None,
         mcp_servers: dict | None = None,
+        package_mcp_servers: dict | None = None,
         tools: "ToolWiring | None" = None,
         subagents: "SubagentWiring | None" = None,
         engine: "EngineWiring | None" = None,
@@ -599,6 +600,11 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         self.enable_personalization = False  # Set via configure_personalization()
         self._running = False
         self._mcp_servers = mcp_servers or {}
+        # The MCP servers the portable Agent Plugin packages contribute. Kept
+        # apart from the host's own so that a live answer about the host's
+        # servers cannot drop them, and so that every path to the manager
+        # carries them.
+        self._package_mcp_servers = package_mcp_servers or {}
         self._mcp_manager: MCPConnectionManager | None = None
         self._mcp_event_sink = None
         self._mcp_event_tasks: set = set()

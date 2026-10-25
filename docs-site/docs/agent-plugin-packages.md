@@ -88,13 +88,46 @@ through the ordinary `exec` tool under the ordinary workspace fence.
 - **It cannot overwrite your own skills.** A target directory that exists
   and is not owned by the ledger is left alone, and the import says so.
 
+## MCP servers a package ships
+
+A package may carry an `mcp.json` naming MCP servers. Raven reads it,
+validates every entry and reports what it found; it starts nothing until
+you name the package:
+
+```json
+{
+  "agentPlugins": {
+    "packages": ["/opt/agent-plugins"],
+    "mcpPackages": ["my-package"]
+  }
+}
+```
+
+That opt-in is per package because a server entry is a process on your
+machine. The servers a package contributes are named
+`<package>__<server>`, so they never collide with your own
+`tools.mcpServers` entries.
+
+A package's servers run with the package root as the working directory
+(unless the entry names another one), and with `PLUGIN_ROOT` and
+`PLUGIN_DATA` in their environment: the first is the package directory,
+the second is a directory Raven keeps for that package across updates
+(`<home>/plugin-data/<package>/`). The format's two placeholders,
+`${PLUGIN_ROOT}` and `${PLUGIN_DATA}`, are expanded in a server's
+arguments, environment and working directory.
+
+One bad server entry does not disable the package: the entry is skipped
+and reported, and the rest still run. A package whose `mcp.json` declares
+a different Agent Plugins version than its `plugin.json`, or whose file is
+not a valid MCP configuration, has MCP disabled while its skills keep
+working.
+
 ## Current limits
 
-- Phase 1 reads the skills only. A package's `mcp.json` is not started
-  yet, and starting one needs an explicit per-package opt-in
-  (`agentPlugins.mcpPackages`), because it is a process the operator
-  agreed to run.
 - Raven does not download packages. A package is a directory you already
   have; there is no registry client and no update channel.
 - The host-native formats of other tools (`.claude-plugin/`, `.codex-plugin/`)
   are not read yet.
+- A package's stdio server that names a working directory cannot run under
+  a sandboxed executor: the sandbox interface cannot set one, so the server
+  is refused rather than launched in the wrong place.

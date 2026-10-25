@@ -198,6 +198,15 @@ def test_inspect_touches_nothing(env: _Env) -> None:
     assert not env.ledger.exists()
 
 
+def test_inspect_creates_no_package_data_directory(env: _Env) -> None:
+    """Reading a package must not leave a directory for a server it will not run."""
+    _write_mcp_config(env.package, {"demo": {"type": "stdio", "command": "npx"}})
+
+    assert _run(env, "inspect", str(env.package)).exit_code == 0
+
+    assert not (env.home / "plugin-data").exists()
+
+
 def test_inspect_json_reports_a_broken_package_as_a_failure(env: _Env) -> None:
     """A package whose manifest does not validate is a failure in JSON too.
 
@@ -361,3 +370,74 @@ def test_check_reports_a_changed_package_as_stale(env: _Env) -> None:
     assert result.exit_code == 0, result.stdout
     assert "stale" in result.stdout
     assert _json_payload(_run(env, "check", "--json"))["packages"][0]["status"] == "stale"
+
+
+# ---------------------------------------------------------------------------
+# mcp.json
+# ---------------------------------------------------------------------------
+
+
+def _write_mcp_config(package: Path, servers: dict) -> None:
+    (package / "mcp.json").write_text(
+        json.dumps(
+            {
+                "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+                "mcpServers": servers,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_list_marks_a_packages_mcp_servers_as_not_enabled(env: _Env) -> None:
+    _write_mcp_config(env.package, {"demo": {"type": "stdio", "command": "npx"}})
+
+    result = _run(env, "list")
+
+    assert result.exit_code == 0, result.stdout
+    assert "1 not enabled" in result.stdout
+
+
+def test_list_marks_an_opted_in_packages_mcp_servers_as_running(env: _Env) -> None:
+    _write_mcp_config(env.package, {"demo": {"type": "stdio", "command": "npx"}})
+    env.config.write_text(
+        json.dumps(
+            {
+                "agents": {"defaults": {"workspace": str(env.workspace)}},
+                "agentPlugins": {"packages": [str(env.package)], "mcpPackages": [PACKAGE_NAME]},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run(env, "list")
+
+    assert result.exit_code == 0, result.stdout
+    assert "1 running" in result.stdout
+
+
+def test_inspect_reports_the_packages_mcp_servers(env: _Env) -> None:
+    _write_mcp_config(
+        env.package,
+        {
+            "demo": {"type": "stdio", "command": "npx"},
+            "broken": {"type": "stdio", "command": "npx -y server"},
+        },
+    )
+
+    result = _run(env, "inspect", str(env.package))
+
+    assert result.exit_code == 0, result.stdout
+    assert f"{PACKAGE_NAME}__demo" in result.stdout
+    assert "single executable token" in result.stdout
+
+
+def test_inspect_json_carries_the_mcp_section(env: _Env) -> None:
+    _write_mcp_config(env.package, {"demo": {"type": "stdio", "command": "npx"}})
+
+    result = _run(env, "inspect", str(env.package), "--json")
+
+    assert result.exit_code == 0, result.stdout
+    mcp = _json_payload(result)["packages"][0]["mcp"]
+    assert mcp["servers"] == [f"{PACKAGE_NAME}__demo"]
+    assert mcp["disabled"] == ""

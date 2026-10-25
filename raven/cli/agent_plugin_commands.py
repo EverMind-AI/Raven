@@ -62,6 +62,24 @@ def _load_ledger():
     return PackageLedger.load(_ledger_path())
 
 
+def _mcp_report(package):
+    """What the package's ``mcp.json`` yields, read without starting anything."""
+    from raven.agent_plugins.mcp import package_mcp_report
+
+    return package_mcp_report(package, plugin_data=_package_data_dir(package.name))
+
+
+def _package_data_dir(name: str) -> Path:
+    """Where a package's server would keep its data.
+
+    Named without creating: the read-only commands must not leave a
+    directory behind for a package nothing will start.
+    """
+    from raven.config.paths import package_data_root_path
+
+    return package_data_root_path() / name
+
+
 @agent_plugin_app.command("list")
 def list_packages(
     config_path: Optional[str] = typer.Option(None, "--config", "-c", help="Path to config file"),
@@ -77,6 +95,7 @@ def list_packages(
     )
     ledger = _load_ledger()
     entries = ledger.entries
+    running = set(config.agent_plugins.mcp_packages)
 
     if as_json:
         console.print_json(
@@ -89,6 +108,10 @@ def list_packages(
                             "source": str(package.root),
                             "notes": list(package.notes),
                             "imported": package.name in entries,
+                            "mcp": {
+                                "servers": list(_mcp_report(package).servers),
+                                "running": package.name in running,
+                            },
                         }
                         for package in packages
                     ],
@@ -111,9 +134,17 @@ def list_packages(
     table.add_column("Version")
     table.add_column("Source")
     table.add_column("Status")
+    table.add_column("MCP")
     for package in packages:
         status = "[green]imported[/green]" if package.name in entries else "[yellow]available[/yellow]"
-        table.add_row(package.name, package.version or "(none)", str(package.root), status)
+        mcp_servers = len(_mcp_report(package).servers)
+        if not mcp_servers:
+            mcp = "[dim]none[/dim]"
+        elif package.name in running:
+            mcp = f"[green]{mcp_servers} running[/green]"
+        else:
+            mcp = f"[yellow]{mcp_servers} not enabled[/yellow]"
+        table.add_row(package.name, package.version or "(none)", str(package.root), status, mcp)
     console.print(table)
 
     for problem in problems:
@@ -153,6 +184,7 @@ def inspect_package(
             console.print(f"[red]{escape(str(root))}[/red]: {escape(str(exc))}", highlight=False)
             continue
         skills, skill_problems = discover_skills(package)
+        mcp_report = _mcp_report(package)
         reports.append(
             {
                 "name": package.name,
@@ -162,6 +194,11 @@ def inspect_package(
                 "notes": list(package.notes),
                 "skills": [skill.name for skill in skills],
                 "problems": [{"name": item.name, "reason": item.reason} for item in skill_problems],
+                "mcp": {
+                    "servers": list(mcp_report.servers),
+                    "problems": [{"server": item.server, "reason": item.reason} for item in mcp_report.problems],
+                    "disabled": mcp_report.disabled,
+                },
             }
         )
 
@@ -184,6 +221,17 @@ def inspect_package(
         for problem in report["problems"]:
             console.print(
                 f"    [red]{escape(problem['name'])}[/red]: {escape(problem['reason'])}",
+                highlight=False,
+            )
+        mcp = report["mcp"]
+        console.print(f"  [dim]mcp servers:[/dim] {len(mcp['servers'])}")
+        for server in mcp["servers"]:
+            console.print(f"    - {escape(server)}")
+        if mcp["disabled"]:
+            console.print(f"  [yellow]mcp disabled:[/yellow] {escape(mcp['disabled'])}", highlight=False)
+        for problem in mcp["problems"]:
+            console.print(
+                f"    [red]{escape(problem['server'])}[/red]: {escape(problem['reason'])}",
                 highlight=False,
             )
     if failed:

@@ -54,6 +54,31 @@ def get_agent_plugins_ledger_path() -> Path:
     return get_data_dir() / "agent-plugins.json"
 
 
+def package_data_root_path() -> Path:
+    """The per-package data root, named without creating anything.
+
+    A read-only surface -- ``raven agent-plugins inspect`` -- has to be able
+    to say where a package's data would live without leaving a directory
+    behind for a package nothing will run.
+    """
+    return get_data_dir() / "plugin-data"
+
+
+def get_package_data_root() -> Path:
+    """Return the root of the per-package persistent data directories.
+
+    Each portable Agent Plugin package gets one directory under it, kept
+    across package updates: it is where a package's server keeps whatever
+    it generates.
+    """
+    return ensure_dir(package_data_root_path())
+
+
+def get_package_data_dir(package: str) -> Path:
+    """Return the persistent data directory of one package, created."""
+    return get_package_data_root() / package
+
+
 def get_sandbox_dir(backend: str) -> Path:
     """Return the sandbox runtime home directory for the given backend.
 

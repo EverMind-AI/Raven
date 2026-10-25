@@ -75,9 +75,37 @@ raven agent-plugins remove my-package     # 删除导入的技能
 - **不能覆盖你自己的技能。** 存在且不属于账本的目标目录会被原样保留，导入会
   如实报告。
 
+## 包里带的 MCP server
+
+包可以在 `mcp.json` 里声明 MCP server。Raven 会读取它、逐条校验并报告结果；
+在你点名某个包之前，它不会启动任何东西：
+
+```json
+{
+  "agentPlugins": {
+    "packages": ["/opt/agent-plugins"],
+    "mcpPackages": ["my-package"]
+  }
+}
+```
+
+按包授权，是因为一条 server 配置就是要在你机器上启动一个进程。包贡献的
+server 以 `<包名>__<server 名>` 命名，因此不会和你自己的 `tools.mcpServers`
+条目冲突。
+
+包的 server 以包根目录为工作目录（除非条目另指一个），环境里带
+`PLUGIN_ROOT` 与 `PLUGIN_DATA`：前者是包目录，后者是 Raven 为该包保留、
+跨更新不丢的目录（`<home>/plugin-data/<包名>/`）。格式定义的两个占位符
+`${PLUGIN_ROOT}` 与 `${PLUGIN_DATA}` 会在 server 的参数、环境变量和工作目录
+中展开。
+
+一条坏配置不会让整个包失效：该条目被跳过并报告，其余照常运行。若包的
+`mcp.json` 声明的 Agent Plugins 版本和它的 `plugin.json` 不一致，或文件本身
+不是合法的 MCP 配置，则只关闭该包的 MCP，技能仍然可用。
+
 ## 当前限制
 
-- 第一阶段只读技能。包里的 `mcp.json` 还不会启动；启动它需要按包显式授权
-  （`agentPlugins.mcpPackages`），因为那是一个需要你同意运行进程。
 - Raven 不下载包。包是你已经拥有的目录；没有目录客户端，也没有更新通道。
 - 其他工具的宿主原生格式（`.claude-plugin/`、`.codex-plugin/`）暂时还不读取。
+- 指定了工作目录的 stdio server 无法在沙箱执行器下运行：沙箱接口没有设置
+  工作目录的能力，因此该 server 会被拒绝，而不是在错误的位置启动。
