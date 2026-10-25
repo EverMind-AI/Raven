@@ -379,6 +379,7 @@ class BoxliteExecutor(SandboxExecutor):
         command: str,
         args: list[str],
         env: dict[str, str] | None = None,
+        cwd: str | None = None,
     ) -> tuple[Any, Any]:
         """Start a long-running process inside the VM and return MCP-compatible streams.
 
@@ -388,18 +389,24 @@ class BoxliteExecutor(SandboxExecutor):
 
         Both streams are compatible with the MCP SDK's ClientSession constructor.
         The caller owns write_send.aclose() — typically handled by MCP ClientSession.__aexit__.
+
+        ``cwd`` is a host path, translated to its guest mount before it
+        reaches the VM. A directory outside every mounted volume is refused
+        rather than silently replaced by the default: a server told to run in
+        its package root must not end up in /workspace.
         """
         import anyio
         from mcp.shared.message import SessionMessage
         from mcp.types import JSONRPCMessage
 
         box = await self._ensure_box()
+        vm_cwd = self._translate_process_cwd(cwd)
 
         env_tuples = list(env.items()) if env else None
         if env_tuples:
-            execution = await box.exec(command, list(args), env_tuples)
+            execution = await box.exec(command, list(args), env_tuples, cwd=vm_cwd)
         else:
-            execution = await box.exec(command, list(args))
+            execution = await box.exec(command, list(args), cwd=vm_cwd)
         self._process_executions.append(execution)
 
         read_send, read_recv = anyio.create_memory_object_stream(max_buffer_size=16)
@@ -483,6 +490,30 @@ class BoxliteExecutor(SandboxExecutor):
         self._process_tasks.extend([task1, task2, task3])
 
         return read_recv, write_send
+
+    def _translate_process_cwd(self, cwd: str | None) -> str:
+        """``_translate_cwd`` for a long-running server, which must be exact.
+
+        ``exec`` may fall back to the workspace mount because a one-shot
+        command still runs; a server launched in the wrong directory answers
+        with the wrong files for as long as it lives, so this refuses.
+        """
+        if cwd is None:
+            return self.WORKSPACE_MOUNT
+        host_path = Path(cwd).resolve()
+        roots = [(self._workspace, self.WORKSPACE_MOUNT)]
+        roots.extend((Path(host), guest) for host, guest, _mode in self._extra_volumes)
+        for host_root, guest_root in roots:
+            try:
+                rel = host_path.relative_to(host_root.resolve())
+            except ValueError:
+                continue
+            rel_str = str(rel)
+            return guest_root if rel_str == "." else f"{guest_root}/{rel_str}"
+        raise ValueError(
+            f"the working directory {cwd!r} is not inside any volume mounted into the "
+            "sandbox; mount its parent directory or run this server without the sandbox"
+        )
 
     def _translate_cwd(self, cwd: str | None) -> str:
         """Map a host path to its VM mount path.

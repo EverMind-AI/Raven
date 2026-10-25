@@ -175,6 +175,17 @@ async def _report_redirect(response: httpx.Response) -> None:
         )
 
 
+def _configured_cwd(cfg) -> str | None:
+    """The stdio server's working directory, or ``None`` for the default.
+
+    ``isinstance`` rather than truthiness: a stub configuration whose
+    ``cwd`` was never set answers with a mock, and handing that to the SDK
+    turns a test into a validation error about a field nobody configured.
+    """
+    value = getattr(cfg, "cwd", "")
+    return value if isinstance(value, str) and value else None
+
+
 @asynccontextmanager
 async def open_mcp_transport(
     cfg,
@@ -205,15 +216,9 @@ async def open_mcp_transport(
             command, *args = await mirrors.package_launch_async(
                 [cfg.command, *cfg.args], {**os.environ, **(cfg.env or {})}, local=not sandboxed
             )
+            cwd = _configured_cwd(cfg)
             if executor is not None and executor.supports_process_spawning:
-            cwd = getattr(cfg, "cwd", "") or None
-            if executor is not None and executor.supports_process_spawning:
-                if cwd:
-                    raise ValueError(
-                        "this MCP server needs a working directory, which the sandboxed "
-                        "executor cannot set for a spawned process"
-                    )
-                read, write = await executor.start_process(command, args, env=cfg.env or None)
+                read, write = await executor.start_process(command, args, env=cfg.env or None, cwd=cwd)
             else:
                 params = StdioServerParameters(
                     command=command,

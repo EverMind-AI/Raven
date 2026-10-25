@@ -1060,6 +1060,35 @@ class TestBoxliteTranslateCwd:
         assert e._translate_cwd("/completely/outside") == "/workspace"
 
 
+class TestBoxliteTranslateProcessCwd:
+    """The strict twin used to launch a long-running server."""
+
+    def _make_executor(self, workspace: Path) -> BoxliteExecutor:
+        return BoxliteExecutor(
+            image="ubuntu:22.04",
+            workspace=workspace,
+            sandbox_home=_TEST_SANDBOX_HOME,
+        )
+
+    def test_none_returns_workspace_mount(self, tmp_path):
+        assert self._make_executor(tmp_path)._translate_process_cwd(None) == "/workspace"
+
+    def test_a_subdirectory_translates(self, tmp_path):
+        e = self._make_executor(tmp_path)
+        assert e._translate_process_cwd(str(tmp_path / "sub")) == "/workspace/sub"
+
+    def test_a_path_outside_every_volume_is_refused(self, tmp_path):
+        """A server must not be launched in the wrong directory.
+
+        ``_translate_cwd`` falls back to the workspace mount because a
+        one-shot command still has work to do; a server would answer with
+        the wrong files for as long as it lives, so this raises instead.
+        """
+        e = self._make_executor(tmp_path)
+        with pytest.raises(ValueError, match="not inside any volume mounted into the sandbox"):
+            e._translate_process_cwd("/completely/outside")
+
+
 # ---------------------------------------------------------------------------
 # BoxliteExecutor._collect
 # ---------------------------------------------------------------------------
@@ -2012,7 +2041,7 @@ class TestConnectOneMcpServer:
             def supports_process_spawning(self) -> bool:
                 return True
 
-            async def start_process(self, command, args, env=None):
+            async def start_process(self, command, args, env=None, cwd=None):
                 raise RuntimeError("start_process called -- expected in test")
 
         cfg = MagicMock()
@@ -2025,6 +2054,38 @@ class TestConnectOneMcpServer:
         # before any transport is opened, so its message would surface instead.
         with pytest.raises(RuntimeError, match="start_process called"):
             await connect_mcp_server("svc", cfg, ToolRegistry(), AsyncExitStack(), executor=SpawningExecutor())
+
+    async def test_stdio_sandboxed_process_gets_the_servers_working_directory(self):
+        """A server that names a cwd gets it; an unset one stays unset."""
+        from contextlib import AsyncExitStack
+
+        from raven.agent.tools.registry import ToolRegistry
+        from raven.mcp.client import connect_mcp_server
+
+        seen: list = []
+
+        class SpawningExecutor(MockExecutor):
+            @property
+            def supports_process_spawning(self) -> bool:
+                return True
+
+            async def start_process(self, command, args, env=None, cwd=None):
+                seen.append(cwd)
+                raise RuntimeError("start_process called -- expected in test")
+
+        for configured, expected in (("/opt/pkg", "/opt/pkg"), ("", None)):
+            cfg = MagicMock()
+            cfg.type = "stdio"
+            cfg.command = "mcp-server"
+            cfg.args = []
+            cfg.env = None
+            cfg.cwd = configured
+            cfg.tool_timeout = 30
+
+            with pytest.raises(RuntimeError, match="start_process called"):
+                await connect_mcp_server("svc", cfg, ToolRegistry(), AsyncExitStack(), executor=SpawningExecutor())
+
+        assert seen == ["/opt/pkg", None]
 
 
 # ---------------------------------------------------------------------------
