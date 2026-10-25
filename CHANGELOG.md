@@ -217,6 +217,25 @@ All notable changes to Raven are documented here.
   `PPT_IMAGE_PROVIDER` puts a deck's pictures on a provider of its own. See
   `docs/minimax-media.md`.
 
+- Raven reads the **portable Agent Plugins 1.0** package format: a directory
+  whose root holds a `plugin.json` that validates against the official
+  manifest schema, with optional `skills/` and `mcp.json`. It is not the
+  Raven plugin (`raven-plugin.toml`, Python factories running inside the
+  host) -- a package is data only. `raven agent-plugins list | inspect |
+  import | remove | check` reads them; an import copies the package's skills
+  into the workspace skill tree under `<workspace>/skills/<package name>/`,
+  one directory per package, so the pool mints one source label per package
+  and two packages may ship the same skill name without either shadowing
+  the other. The copy is recorded in a ledger (`<home>/agent-plugins.json`),
+  so `remove` only ever deletes directories the ledger claims and `check`
+  reports a package that changed since the import. A package cannot put text
+  into every turn: the `always` flag is dropped from the imported copy. A
+  skill on `skillForge.blocklist`, or one whose body points at another
+  product's home directory, is refused, and a target directory the ledger
+  does not claim is never written into. The MCP configuration of a package is
+  not started yet. See
+  `docs/specs/2026-10-25-agent-plugins-loader-design.md`.
+
 ### Changed
 
 - A complete install now carries the `everos-cloud-memory` plugin, so the

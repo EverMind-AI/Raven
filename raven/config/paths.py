@@ -45,6 +45,15 @@ def get_cache_dir() -> Path:
     return get_runtime_subdir("cache")
 
 
+def get_agent_plugins_ledger_path() -> Path:
+    """Return the Agent Plugin package ledger path.
+
+    The ledger records which portable Agent Plugins packages were imported
+    into the workspace, so that only those directories are ever removed.
+    """
+    return get_data_dir() / "agent-plugins.json"
+
+
 def get_sandbox_dir(backend: str) -> Path:
     """Return the sandbox runtime home directory for the given backend.
 
