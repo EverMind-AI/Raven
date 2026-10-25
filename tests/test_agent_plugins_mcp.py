@@ -485,3 +485,19 @@ def test_layer_reports_a_broken_configuration_without_running_it(tmp_path: Path)
 
     assert servers == {}
     assert notes
+
+
+def test_a_host_server_name_is_never_replaced_by_a_package(tmp_path: Path) -> None:
+    """Host names are unrestricted, so a composed name may already be taken."""
+    root = _package(tmp_path, mcp=_mcp({"search": _http(url="https://pkg.invalid/mcp")}), name="acme")
+    taken = f"acme{PACKAGE_SERVER_SEPARATOR}search"
+
+    servers, notes = package_mcp_layer(
+        [root],
+        allowed=["acme"],
+        plugin_data_root=tmp_path / "data",
+        reserved_names=[taken],
+    )
+
+    assert servers == {}
+    assert any("already configured" in note for note in notes)

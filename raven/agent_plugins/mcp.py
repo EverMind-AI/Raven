@@ -334,6 +334,7 @@ def package_mcp_report(
     package: AgentPluginPackage,
     *,
     plugin_data: Path,
+    reserved_names: Iterable[str] = (),
 ) -> PackageMcpReport:
     """What the package's MCP configuration yields.
 
@@ -343,6 +344,11 @@ def package_mcp_report(
     config_path = package.root / MCP_CONFIG_FILENAME
     if not config_path.is_file():
         return PackageMcpReport(package=package.name)
+    if not is_contained(package.root, config_path):
+        return PackageMcpReport(
+            package=package.name,
+            disabled=f"{config_path} resolves outside the package root",
+        )
 
     try:
         config = read_mcp_config(config_path)
@@ -369,6 +375,7 @@ def package_mcp_report(
         )
 
     plugin_data = Path(plugin_data)
+    taken = {str(name) for name in reserved_names}
     servers: dict[str, MCPServerConfig] = {}
     problems: list[McpServerProblem] = []
 
@@ -386,7 +393,20 @@ def package_mcp_report(
         except ValueError as exc:
             problems.append(McpServerProblem(package.name, str(name), str(exc)))
             continue
-        servers[f"{package.name}{PACKAGE_SERVER_SEPARATOR}{name}"] = composed
+        composed_name = f"{package.name}{PACKAGE_SERVER_SEPARATOR}{name}"
+        if composed_name in taken:
+            # The host's own names are unrestricted, so one of them may already
+            # spell what this package's server would be called. The operator's
+            # configured server wins: a package may not replace it.
+            problems.append(
+                McpServerProblem(
+                    package.name,
+                    str(name),
+                    f"the composed server name {composed_name!r} is already configured on this host",
+                )
+            )
+            continue
+        servers[composed_name] = composed
 
     return PackageMcpReport(package=package.name, servers=servers, problems=tuple(problems))
 
@@ -396,14 +416,18 @@ def package_mcp_servers(
     *,
     allowed: Iterable[str],
     plugin_data_root: Path,
+    reserved_names: Iterable[str] = (),
 ) -> tuple[dict[str, MCPServerConfig], list[PackageProblem], list[McpServerProblem]]:
     """The MCP servers of the packages the operator allowed to run.
 
     A package outside *allowed* is parsed and reported, not run: starting a
     package's server is a process on the operator's machine, and that is
-    their call to make.
+    their call to make. *reserved_names* are the server names this host
+    already runs; a package entry that would compose to one of them is
+    skipped and reported rather than replacing the operator's server.
     """
     permitted = {str(name) for name in allowed}
+    taken = {str(name) for name in reserved_names}
     servers: dict[str, MCPServerConfig] = {}
     problems: list[PackageProblem] = []
     entries: list[McpServerProblem] = []
@@ -414,7 +438,7 @@ def package_mcp_servers(
             # The client's persistent directory for this package, created
             # before any process of it starts (spec §9.1).
             data_dir.mkdir(parents=True, exist_ok=True)
-        report = package_mcp_report(package, plugin_data=data_dir)
+        report = package_mcp_report(package, plugin_data=data_dir, reserved_names=taken)
         if report.disabled:
             problems.append(PackageProblem(str(package.root), report.disabled))
             continue
@@ -432,6 +456,7 @@ def package_mcp_layer(
     allowed: Iterable[str],
     disabled: Iterable[str] = (),
     plugin_data_root: Path,
+    reserved_names: Iterable[str] = (),
 ) -> tuple[dict[str, MCPServerConfig], list[str]]:
     """The MCP server layer the portable packages contribute.
 
@@ -445,6 +470,7 @@ def package_mcp_layer(
         packages,
         allowed=allowed,
         plugin_data_root=plugin_data_root,
+        reserved_names=reserved_names,
     )
     notes = [f"{problem.path}: {problem.reason}" for problem in problems]
     notes += [f"{problem.path}: {problem.reason}" for problem in mcp_problems]
@@ -464,6 +490,7 @@ __all__ = [
     "StdioServer",
     "expand_placeholders",
     "package_mcp_report",
+    "schema_version",
     "package_mcp_servers",
     "read_mcp_config",
 ]

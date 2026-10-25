@@ -133,13 +133,14 @@ class RavenRuntime:
         return None
 
 
-def _package_mcp_servers(ec_config: Any) -> tuple[dict, list[str]]:
+def _package_mcp_servers(ec_config: Any, *, reserved_names: Any = ()) -> tuple[dict, list[str]]:
     """The MCP servers the portable Agent Plugin packages contribute.
 
     A package's server is a process on this machine, so only the packages
     the operator opted into (``agentPlugins.mcpPackages``) contribute one.
     The rest are parsed and reported, so a broken configuration is visible
-    without being run.
+    without being run. *reserved_names* are the host's own server names,
+    which a package may not replace.
     """
     from raven.agent_plugins.mcp import package_mcp_layer
     from raven.config.paths import get_package_data_root
@@ -152,6 +153,7 @@ def _package_mcp_servers(ec_config: Any) -> tuple[dict, list[str]]:
         allowed=agent_plugins.mcp_packages,
         disabled=agent_plugins.disabled,
         plugin_data_root=get_package_data_root(),
+        reserved_names=reserved_names,
     )
     return servers, notes
 
@@ -204,9 +206,16 @@ def build_runtime(
         provider_pool = ProviderPool(lambda: load_runtime_config(None, None))
     notify = host.notify if host is not None else None
     plugin_registry = plugin_stack.build_plugin_registry(ec_config, notify=notify)
-    package_mcp_servers, package_mcp_notes = _package_mcp_servers(ec_config)
+    # ``dict(... or {})`` rather than ``**``: a stub config in a test may carry
+    # a list where the typed field is a mapping, and the merge must not turn
+    # that into a startup failure.
+    initial_mcp_servers = dict(config.tools.mcp_servers or {})
+    package_mcp_servers, package_mcp_notes = _package_mcp_servers(ec_config, reserved_names=initial_mcp_servers.keys())
     for note in package_mcp_notes:
         logger.warning("Agent Plugin package MCP: {}", note)
+    # The host's own servers were composed first and keep their names: a
+    # package entry that would collide was already dropped and reported.
+    initial_mcp_servers.update(package_mcp_servers)
     backend = plugin_stack.maybe_build_memory_backend(
         config.workspace_path, ec_config, registry=plugin_registry, notify=notify
     )
@@ -264,7 +273,7 @@ def build_runtime(
         router=router,
         sandbox_config=config.tools.sandbox,
         executor=executor,
-        mcp_servers={**config.tools.mcp_servers, **package_mcp_servers},
+        mcp_servers=initial_mcp_servers,
         package_mcp_servers=package_mcp_servers,
         tools=ToolWiring(
             search_api_key=config.tools.web.vendor_key("serper") or None,

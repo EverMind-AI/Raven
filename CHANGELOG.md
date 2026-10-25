@@ -248,8 +248,13 @@ All notable changes to Raven are documented here.
   only when the package is named in `agentPlugins.mcpPackages`; by default
   the configuration is parsed, validated and reported only.
   `MCPServerConfig` gained `cwd`, which the stdio transport passes to the
-  MCP SDK. `raven agent-plugins list` and `inspect` show a package's
-  servers and their problems without starting anything.
+  MCP SDK, and `SandboxExecutor.start_process` gained an optional `cwd` so
+  a sandboxed server runs in the directory it names instead of being
+  refused. A package server never replaces an operator-configured one: a
+  name collision is reported and the host's entry wins. Re-importing a
+  package also removes the skills it no longer ships, so the workspace
+  converges on the package. `raven agent-plugins list` and `inspect` show
+  a package's servers and their problems without starting anything.
 
 ### Changed
 
