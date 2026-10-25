@@ -905,3 +905,55 @@ describe('the bar in a Scope Tab', () => {
     expect(document.activeElement).toBe(q('.trajectory-bar'))
   })
 })
+
+describe('a bar target the feed files under another tab in the meantime', () => {
+  const A = 't:runA'
+  const moved = (e: TrajectoryEntry): TrajectoryEntry => ({ ...e, subagent_scope: A })
+  const upsert = (entries: TrajectoryEntry[]): void => {
+    act(() => {
+      store.applyChanges({
+        epoch: 'e1', from_revision: 100, to_revision: 101, upserts: entries, removed: [], has_more: false, reset_required: false, index_state: READY,
+      })
+    })
+  }
+
+  it('is not selected when the wait runs out, so the click never moves the reader to the other tab', async () => {
+    await ready()
+    render(<DurationBar />)
+    await flush()
+    await click(WIDTH - 10)
+    upsert([moved(THREE[2]!)])
+    expect(store.get().index.out).toBeDefined()
+    await later(DBL_MS * 2)
+    expect([store.get().scope, store.get().selectedId, details.get().open]).toEqual([null, null, false])
+  })
+
+  it('is left out of a dense block\'s pick list, and picked from an open list it does nothing', async () => {
+    const many = Array.from({ length: capacity(WIDTH) + 50 }, (_, k) => entry(`d${k}`, k, { charged_ms: 500 }))
+    rows = many
+    await ready()
+    render(<DurationBar />)
+    await flush()
+    await click(1)
+    upsert([moved(many[0]!)])
+    await later(DBL_MS)
+    const bucket = store.get().timeline.bucket
+    expect(bucket).not.toBeNull()
+    expect(bucket!.ids).not.toContain('d0')
+    expect(bucket!.ids[0]).toBe('d1')
+    upsert([moved(many[1]!)])
+    const option = [...document.querySelectorAll<HTMLElement>('.trajectory-bucket [role="option"]')][0]!
+    act(() => { fireEvent.click(option) })
+    expect([store.get().scope, store.get().selectedId, store.get().timeline.bucket]).toEqual([null, null, null])
+  })
+
+  it('loses its hover', async () => {
+    await ready()
+    render(<DurationBar />)
+    await flush()
+    pointer('pointermove', WIDTH - 10)
+    expect(q('.trajectory-hover:not(.trajectory-hover-brief)')).not.toBeNull()
+    upsert([moved(THREE[2]!)])
+    expect(q('.trajectory-hover')).toBeNull()
+  })
+})

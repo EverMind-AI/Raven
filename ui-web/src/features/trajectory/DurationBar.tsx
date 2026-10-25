@@ -414,12 +414,13 @@ export function DurationBar(): JSX.Element {
     }
   }, [clearPending, endDrag])
 
-  /* The hover follows the rows: a block whose entry left is no longer anything to describe. */
+  /* The hover follows the rows: a block whose entry left the bar -- gone, or
+     filed under another tab by the feed -- is no longer anything to describe. */
   useEffect(() => {
     if (!hover) return
-    const alive = hover.block.ids ? hover.block.ids.some((id) => id in s.index) : hover.block.id in s.index
+    const alive = hover.block.ids ? hover.block.ids.some((id) => id in s.visibleIndex) : hover.block.id in s.visibleIndex
     if (!alive) setHover(null)
-  }, [hover, s.index])
+  }, [hover, s.visibleIndex])
 
   const contentX = (clientX: number): number => {
     const rect = canvas.current?.getBoundingClientRect()
@@ -442,17 +443,20 @@ export function DurationBar(): JSX.Element {
     if (first) store.select(first.entry_id, { source: 'bar' })
   }
 
-  /* The delayed click, fired with the world it was made in. */
+  /* The delayed click, fired with the world it was made in. Its target must
+     still be a row of this tab's bar: an entry the feed has since filed under
+     another tab is still in the index, and selecting it would move the reader
+     to that tab from a click on a block that is no longer here. */
   const fire = (p: Pending): void => {
     pending.current = null
     if (!stillValid(p.world)) return
-    const index = store.get().index
+    const onBar = store.get().visibleIndex
     if (p.block.ids) {
-      const alive = p.block.ids.filter((id) => id in index)
+      const alive = p.block.ids.filter((id) => id in onBar)
       if (alive.length) store.openBucket(alive, p.x)
       return
     }
-    if (!(p.block.id in index)) return
+    if (!(p.block.id in onBar)) return
     store.select(p.block.id, { source: 'bar' })
     details.openDetails()
   }
@@ -537,7 +541,7 @@ export function DurationBar(): JSX.Element {
 
   const onPick = (id: string): void => {
     store.closeBucket()
-    if (!(id in store.get().index)) return
+    if (!(id in store.get().visibleIndex)) return
     store.select(id, { source: 'bar' })
     details.openDetails()
     root.current?.focus()
