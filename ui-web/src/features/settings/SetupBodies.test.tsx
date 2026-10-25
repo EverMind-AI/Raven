@@ -1,8 +1,9 @@
 // @vitest-environment happy-dom
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { createElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import catalogue from '../../../../i18n/messages.json'
 import { setGateway } from '../../rpc/gateway'
 import { resetSources, setSources } from '../../state/sources'
 import { install, modelSource, mount, snap, source as settingsSource } from '../../test/settingsHarness'
@@ -436,7 +437,8 @@ describe('WebStepBody', () => {
     install()
     await openBody(WebStepBody)
     expect(screen.getByLabelText('gui.settings.tools.vendor_key {"name":"Jina Reader"} · gui.settings.roles.optional')).toBeTruthy()
-    expect(screen.getByText('gui.settings.setup.keyless_hint')).toBeTruthy()
+    expect(screen.getByText('gui.settings.setup.fetch_keyless_hint')).toBeTruthy()
+    expect(screen.queryByText('gui.settings.setup.search_keyless_hint')).toBeNull()
   })
 
   it('the keyless search vendor (keenable) carries an optional tag and the keyless hint', async () => {
@@ -447,9 +449,30 @@ describe('WebStepBody', () => {
     install(data)
     await openBody(WebStepBody)
     expect(screen.getByLabelText('gui.settings.tools.vendor_key {"name":"Keenable"} · gui.settings.roles.optional')).toBeTruthy()
-    expect(screen.getAllByText('gui.settings.setup.keyless_hint')).toHaveLength(1)
+    expect(screen.getByText('gui.settings.setup.search_keyless_hint')).toBeTruthy()
+    expect(screen.queryByText('gui.settings.setup.fetch_keyless_hint')).toBeNull()
     // The keyed fetch vendor keeps the plain field, with no tag of its own.
     expect(screen.getByLabelText('gui.settings.tools.vendor_key {"name":"Tavily"}')).toBeTruthy()
+  })
+
+  it.each([
+    ['keenable', 'jina'],
+    ['keenable', 'keenable'],
+  ])('keyless %s search and %s fetch: each card names its own role, not one sentence twice', async (search, fetch) => {
+    const data = snap()
+    ;(data.raw.tools as Record<string, unknown>).web = { search: { provider: search }, fetch: { provider: fetch } }
+    install(data)
+    await openBody(WebStepBody)
+    const [searchCard, fetchCard] = Array.from(document.querySelectorAll<HTMLElement>('.settings-card'))
+    expect(within(searchCard!).getByText('gui.settings.setup.search_keyless_hint')).toBeTruthy()
+    expect(within(searchCard!).queryByText('gui.settings.setup.fetch_keyless_hint')).toBeNull()
+    expect(within(fetchCard!).getByText('gui.settings.setup.fetch_keyless_hint')).toBeTruthy()
+    expect(within(fetchCard!).queryByText('gui.settings.setup.search_keyless_hint')).toBeNull()
+    // The harness answers keys, so hold the sentences themselves apart too.
+    const words = catalogue.ui as Record<string, { en?: string; zh?: string }>
+    for (const lang of ['en', 'zh'] as const) {
+      expect(words['gui.settings.setup.search_keyless_hint']?.[lang]).not.toBe(words['gui.settings.setup.fetch_keyless_hint']?.[lang])
+    }
   })
 
   it('a keyed fetch vendor carries no optional tag and no hint', async () => {
@@ -458,7 +481,8 @@ describe('WebStepBody', () => {
     install(data)
     await openBody(WebStepBody)
     expect(screen.getByLabelText('gui.settings.tools.vendor_key {"name":"Tavily"}')).toBeTruthy()
-    expect(screen.queryByText('gui.settings.setup.keyless_hint')).toBeNull()
+    expect(screen.queryByText('gui.settings.setup.search_keyless_hint')).toBeNull()
+    expect(screen.queryByText('gui.settings.setup.fetch_keyless_hint')).toBeNull()
     // Neither vendor has a key, so neither card reads ready.
     expect(screen.getAllByText('gui.settings.setup.unset')).toHaveLength(2)
     expect(screen.queryByText('gui.settings.setup.ready')).toBeNull()

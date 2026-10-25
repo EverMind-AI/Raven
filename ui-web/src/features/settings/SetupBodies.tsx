@@ -86,7 +86,7 @@ export function WebStepBody(): JSX.Element {
               label={searchLabel}
               keyName={vendorKey(searchVendor)} legacy={legacyKey('web_search', searchVendor)} url={WEB_VENDOR_URL[searchVendor]} raw={raw}
             />
-            {searchOptional && <Row><Rov>{t('gui.settings.setup.keyless_hint')}</Rov></Row>}
+            {searchOptional && <Row><Rov>{t('gui.settings.setup.search_keyless_hint')}</Rov></Row>}
           </Card>
           <Card title={t('gui.settings.setup.web_fetch')}>
             <Row label={<>
@@ -97,7 +97,7 @@ export function WebStepBody(): JSX.Element {
               <VendorSelect keyName={fetchPick.path} value={fetchVendor} opts={fetchPick.vendors.map((v) => [v, WEB_VENDOR_LABEL[v] || v])} />
             </Row>
             <KeyRow label={fetchLabel} keyName={vendorKey(fetchVendor)} legacy={legacyKey('web_fetch', fetchVendor)} url={WEB_VENDOR_URL[fetchVendor]} raw={raw} />
-            {fetchOptional && <Row><Rov>{t('gui.settings.setup.keyless_hint')}</Rov></Row>}
+            {fetchOptional && <Row><Rov>{t('gui.settings.setup.fetch_keyless_hint')}</Rov></Row>}
           </Card>
         </>
       ) : (
