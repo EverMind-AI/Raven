@@ -62,11 +62,15 @@ class OpenAIResponsesProvider(LLMProvider):
         extra_headers: dict[str, str] | None = None,
         provider_name: str | None = None,
         model_overrides: dict[str, dict[str, Any]] | None = None,
+        tls_verify: bool = True,
     ) -> None:
         super().__init__(api_key, api_base)
         self.default_model = default_model
         self.extra_headers = extra_headers or {}
         self.model_overrides = model_overrides or {}
+        # Same knob as the litellm client's: False streams through an httpx
+        # client built with verification off.
+        self.tls_verify = tls_verify
         self._provider_name = provider_name or "openai"
 
     @property
@@ -125,7 +129,9 @@ class OpenAIResponsesProvider(LLMProvider):
         raw_usage: dict[str, Any] = {}
         relaxed = False
         try:
-            async with httpx.AsyncClient(timeout=httpx_timeout(self.generation) or self.generation.timeout) as client:
+            async with httpx.AsyncClient(
+                timeout=httpx_timeout(self.generation) or self.generation.timeout, verify=self.tls_verify
+            ) as client:
                 while True:
                     async with client.stream(
                         "POST",

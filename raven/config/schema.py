@@ -386,6 +386,13 @@ class ProviderConfig(Base):
     # Custom headers (e.g. APP-Code for AiHubMix) -- can carry a secret, so
     # display faces redact the values (keys stay visible).
     extra_headers: dict[str, str] | None = Field(default=None, json_schema_extra={"secret": True})
+    # Keep verifying the server's certificate? Off for a gateway whose certificate
+    # no client machine trusts -- a self-signed one (a mkcert dev server, a
+    # throwaway VM) or an internal root nobody has imported. The call clients
+    # and the `/models` probe both read it; the preferred path is still
+    # importing the real root (see docs: "Behind a corporate proxy"), since a
+    # section that skips verification here accepts whatever answers that host.
+    tls_verify: bool = True
     models: list[str] = Field(default_factory=list)  # User-curated model names for the picker
     # Several full url/key/header groups under one provider section, for a
     # vendor reachable by more than one account or region. Meaningful only for

@@ -11,6 +11,7 @@ import warnings
 from collections.abc import AsyncIterator
 from typing import Any
 
+import httpx
 import json_repair
 from loguru import logger
 
@@ -200,6 +201,7 @@ class LiteLLMProvider(LLMProvider):
         disable_auto_cache_control: bool = False,
         extra_body: dict[str, Any] | None = None,
         model_overrides: dict[str, dict[str, Any]] | None = None,
+        tls_verify: bool = True,
         *,
         unparsed_reasoning: bool | None = None,
     ):
@@ -226,6 +228,13 @@ class LiteLLMProvider(LLMProvider):
         self.extra_body = extra_body or {}
         # User-configured per-model parameter overrides; win over the registry's.
         self.model_overrides = model_overrides or {}
+        # A section that opted out of certificate verification sends its calls
+        # through a client built here with verification off; True (the default)
+        # lets LiteLLM build its own verifying client exactly as before.
+        self.tls_verify = tls_verify
+        # Built lazily on the event loop the first call runs on, and shared by
+        # every call this provider makes afterwards.
+        self._verify_off_client: Any | None = None
 
         # Detect gateway / local deployment.
         # provider_name (from config key) is the primary signal;
@@ -561,6 +570,32 @@ class LiteLLMProvider(LLMProvider):
         body.setdefault("reasoning", {"effort": reasoning_effort})
         kwargs["extra_body"] = body
 
+    def _prebuilt_openai_client(self) -> Any:
+        """The `AsyncOpenAI` a `tls_verify=False` section sends its calls through.
+
+        LiteLLM builds each provider's client itself and verifies with it, and
+        carries no per-call hook to verify less, so the only hook is the
+        pre-construction one: a `client=` kwarg it takes verbatim (both the
+        streaming and the non-streaming handler). The one client serves every
+        call this provider makes, on the loop the first call ran on; per-call
+        timeouts still apply, because LiteLLM forwards them to the SDK call
+        rather than baking them into the client.
+        """
+        if self._verify_off_client is None:
+            from openai import AsyncOpenAI
+
+            self._verify_off_client = AsyncOpenAI(
+                # A literal, not None: None sends the process's OPENAI_API_KEY
+                # (some other section's) as this one's key. A keyless local
+                # gateway ignores the header; a keyed one 401s the key either
+                # way, so nothing here can misread as success.
+                api_key=self.api_key or "no-key",
+                base_url=self.api_base,
+                http_client=httpx.AsyncClient(verify=False),
+                timeout=self.generation.timeout,
+            )
+        return self._verify_off_client
+
     async def chat(
         self,
         messages: list[dict[str, Any]],
@@ -640,6 +675,15 @@ class LiteLLMProvider(LLMProvider):
         # Pass api_base for custom endpoints
         if self.api_base:
             kwargs["api_base"] = self.api_base
+
+        # A section that opted out of certificate verification sends this call
+        # through its own client: LiteLLM builds a verifying one of its own,
+        # and only a pre-construction hook turns that off. Only an OpenAI-shape
+        # endpoint lands here with a client LiteLLM adopts (its other handlers
+        # ignore the kwarg and build as before); the `responses`/`anthropic`
+        # protocols live in their own providers with the same knob read there.
+        if not self.tls_verify:
+            kwargs["client"] = self._prebuilt_openai_client()
 
         # Pass extra headers (e.g. APP-Code for AiHubMix)
         if self.extra_headers:
@@ -752,6 +796,10 @@ class LiteLLMProvider(LLMProvider):
             kwargs["api_key"] = self.api_key
         if self.api_base:
             kwargs["api_base"] = self.api_base
+        # Same override as chat(): the streaming handler adopts a prebuilt
+        # client too, so a `tls_verify=False` section streams through it.
+        if not self.tls_verify:
+            kwargs["client"] = self._prebuilt_openai_client()
         if self.extra_headers:
             kwargs["extra_headers"] = self.extra_headers
         if self.extra_body:

@@ -880,7 +880,7 @@ def _no_provider_probe(monkeypatch):
 
     real = update_providers._probe_models_endpoint
 
-    def unreachable(url, headers, *, timeout_s, transport=None, extras=()):
+    def unreachable(url, headers, *, timeout_s, transport=None, extras=(), verify=True):
         if transport is not None:
             return real(url, headers, timeout_s=timeout_s, transport=transport, extras=extras)
         return {

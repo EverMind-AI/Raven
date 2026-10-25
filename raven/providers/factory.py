@@ -150,6 +150,7 @@ def make_provider(config: Config, model: str | None = None):
                 extra_headers=ep.extra_headers if ep else (p.extra_headers if p else None),
                 provider_name=provider_name,
                 model_overrides=config.agents.defaults.model_overrides,
+                tls_verify=getattr(p, "tls_verify", True),
             )
 
         if len(eps) > 1:
@@ -195,6 +196,7 @@ def make_provider(config: Config, model: str | None = None):
                     provider_name=provider_name,
                     extra_body=wire_overrides(provider_name, model) or None,
                     model_overrides=config.agents.defaults.model_overrides,
+                    tls_verify=getattr(p, "tls_verify", True),
                 )
 
             provider = EndpointRotorProvider(
@@ -216,6 +218,7 @@ def make_provider(config: Config, model: str | None = None):
                 provider_name=provider_name,
                 extra_body=extra_body,
                 model_overrides=config.agents.defaults.model_overrides,
+                tls_verify=getattr(p, "tls_verify", True),
             )
         else:
             extra_body = wire_overrides(provider_name, model) or None
@@ -227,6 +230,7 @@ def make_provider(config: Config, model: str | None = None):
                 provider_name=provider_name,
                 extra_body=extra_body,
                 model_overrides=config.agents.defaults.model_overrides,
+                tls_verify=getattr(p, "tls_verify", True),
             )
 
     defaults = config.agents.defaults

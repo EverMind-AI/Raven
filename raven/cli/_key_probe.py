@@ -13,12 +13,13 @@ from __future__ import annotations
 from typing import Any
 
 
-def probe_models(api_key: str, api_base: str, *, transport: Any = None) -> dict[str, Any]:
+def probe_models(api_key: str, api_base: str, *, transport: Any = None, verify: bool = True) -> dict[str, Any]:
     """Return ``{ok, status, model_ids, error}`` for one key against one base.
 
     The ``/v1`` de-dup matters: some bases already end in ``/v1``, so appending
     ``/v1/models`` blindly would 404 and read as a bad key. ``transport`` is
-    injectable for tests.
+    injectable for tests. ``verify=False`` accepts an untrusted certificate,
+    matching what the section being probed has asked for.
     """
     import httpx
 
@@ -27,7 +28,7 @@ def probe_models(api_key: str, api_base: str, *, transport: Any = None) -> dict[
     base = api_base.rstrip("/")
     url = base + "/models" if "/v1" in base else base + "/v1/models"
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-    kwargs: dict[str, Any] = {"timeout": 10}
+    kwargs: dict[str, Any] = {"timeout": 10, "verify": verify}
     if transport is not None:
         kwargs["transport"] = transport
     try:

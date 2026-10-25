@@ -876,10 +876,15 @@ class AnthropicMessagesProvider(LLMProvider):
         extra_headers: dict[str, str] | None = None,
         provider_name: str | None = None,
         model_overrides: dict[str, dict[str, Any]] | None = None,
+        tls_verify: bool = True,
     ) -> None:
         super().__init__(api_key, api_base)
         self.default_model = default_model
         self.extra_headers = extra_headers or {}
+        # Same knob as the litellm client's: False posts through an httpx
+        # client built with verification off, for a gateway whose certificate
+        # the machine holds no root for.
+        self.tls_verify = tls_verify
         self.model_overrides = model_overrides or {}
         self._provider_name = provider_name or "anthropic"
         # Output ceilings learned from a model's own 400, so the next request
@@ -1011,7 +1016,9 @@ class AnthropicMessagesProvider(LLMProvider):
             # ``httpx_timeout`` puts connect/write/pool on the first-byte bound
             # while leaving the read wide. A plain float reached httpx as the
             # same number on all four phases, so a dead route cost 1800s.
-            async with httpx.AsyncClient(timeout=httpx_timeout(self.generation) or self.generation.timeout) as client:
+            async with httpx.AsyncClient(
+                timeout=httpx_timeout(self.generation) or self.generation.timeout, verify=self.tls_verify
+            ) as client:
                 for _attempt in range(3):
                     response = await asyncio.wait_for(
                         client.post(url, headers=build_headers(self.api_key or "", url, self.extra_headers), json=body),
@@ -1063,7 +1070,9 @@ class AnthropicMessagesProvider(LLMProvider):
         # response headers is a read, and httpx leaves read on the call budget.
         first_byte = stream_first_byte_budget(self.generation)
         try:
-            async with httpx.AsyncClient(timeout=httpx_timeout(self.generation) or self.generation.timeout) as client:
+            async with httpx.AsyncClient(
+                timeout=httpx_timeout(self.generation) or self.generation.timeout, verify=self.tls_verify
+            ) as client:
                 for _attempt in range(3):
                     async with contextlib.AsyncExitStack() as opened:
                         response = await self._open_stream(opened, client, url, body, first_byte)

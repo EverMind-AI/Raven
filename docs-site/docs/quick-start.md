@@ -123,6 +123,14 @@ store, so a root certificate your IT department installed there is trusted
 without extra settings. If a provider check reports `certificate_untrusted`,
 add the root certificate that signs your gateway or proxy to that store.
 
+For a gateway whose root you cannot import -- your own self-signed one, a
+throwaway cert on a dev VM -- a provider section can skip the check instead:
+set `tls_verify: false` on the section in `~/.raven/config.json`. The section's
+model calls and its `/v1/models` check in **Settings > Model providers** then
+accept the gateway's certificate without it sitting in any store. Leave it for
+one section only, on a network you trust: a skipped check accepts whatever
+answers that host.
+
 On WSL2 the Linux distribution keeps its own store and does not see the
 certificates installed in Windows. Import the root once inside WSL:
 

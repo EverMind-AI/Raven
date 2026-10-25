@@ -1410,6 +1410,13 @@ def test_provider(
     # endpoint's headers to its provider). A probe that dropped them reported a
     # working section as `invalid_key`.
     extra_headers = dict(endpoint.extra_headers or {}) if endpoint else {}
+    # Read from the same instance the request path reads (`tls_verify` on the
+    # section): a section that accepts its gateway's self-signed certificate
+    # must not have its settings dialog report a working one as untrusted. The
+    # flag rides only when it turns the knob -- the existing calls keep the
+    # exact shape the probe's fakes were written against.
+    tls_verify = getattr(instance, "tls_verify", True)
+    probe_tls = {} if tls_verify else {"verify": False}
     derived_api_base = False
 
     # Before the token fetch below, which asks a question this backend does not
@@ -1514,7 +1521,12 @@ def test_provider(
         # reason `Authorization` does below: this probe reports on the credential
         # it resolved, not on one the section names beside it.
         return _probe_models_endpoint(
-            url, _with_authoritative(extra_headers, shaped), timeout_s=timeout_s, transport=transport, extras=extras
+            url,
+            _with_authoritative(extra_headers, shaped),
+            timeout_s=timeout_s,
+            transport=transport,
+            **probe_tls,
+            extras=extras,
         )
 
     if not api_base:
@@ -1559,9 +1571,15 @@ def test_provider(
     if spec and spec.name in {"minimax_global", "minimax_cn"} and api_key:
         headers = _with_authoritative(headers, {"x-api-key": api_key})
 
-    result = _probe_models_endpoint(url, headers, timeout_s=timeout_s, transport=transport, extras=extras)
+    result = _probe_models_endpoint(url, headers, timeout_s=timeout_s, transport=transport, **probe_tls, extras=extras)
     if check_credential and api_key and result.get("status") == "valid":
-        result = _confirm_credential(spec, api_base, url, headers, result, timeout_s=timeout_s, transport=transport)
+        if tls_verify:
+            _extra: dict[str, Any] = {}
+        else:
+            _extra = {"verify": False}
+        result = _confirm_credential(
+            spec, api_base, url, headers, result, timeout_s=timeout_s, transport=transport, **_extra
+        )
     if derived_api_base and result.get("status") == "http_404":
         # The address LiteLLM sends completions to is not always where the
         # catalogue lives -- DeepSeek's `/beta` lists no models, which is why
@@ -1682,6 +1700,7 @@ def _confirm_credential(
     *,
     timeout_s: float,
     transport: httpx.BaseTransport | None,
+    verify: bool = True,
 ) -> dict[str, Any]:
     """Whether a 200 from a models endpoint says anything about the key.
 
@@ -1693,13 +1712,14 @@ def _confirm_credential(
     rather than as verified.
     """
     decoy = {name: (f"Bearer {_DECOY_KEY}" if name.lower() == "authorization" else _DECOY_KEY) for name in headers}
-    control = _probe_models_endpoint(url, decoy, timeout_s=timeout_s, transport=transport)
+    probe_kwargs = {} if verify else {"verify": False}
+    control = _probe_models_endpoint(url, decoy, timeout_s=timeout_s, transport=transport, **probe_kwargs)
     if control.get("status") != "valid":
         return result
     check = _CREDENTIAL_CHECKS.get(spec.name) if spec else None
     if check:
         verdict = _probe_models_endpoint(
-            api_base.rstrip("/") + check, headers, timeout_s=timeout_s, transport=transport
+            api_base.rstrip("/") + check, headers, timeout_s=timeout_s, transport=transport, **probe_kwargs
         )
         if verdict.get("status") == "valid":
             return result
@@ -1803,13 +1823,16 @@ def _probe_models_endpoint(
     *,
     timeout_s: float,
     transport: httpx.BaseTransport | None,
+    verify: bool = True,
     extras: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """GET a models endpoint and report the result in the probe's vocabulary.
 
     What to ask and what to send is the caller's answer. A vendor that refuses the
     request every other one accepts is the reason there is more than one caller;
-    how the answer is reported is the same for all of them.
+    how the answer is reported is the same for all of them. ``verify=False``
+    accepts a certificate whose chain the machine holds no root for -- a
+    self-signed gateway, an internal CA -- reading the section's ``tls_verify``.
 
     ``extras`` are sibling catalogues to fold into the same answer -- see
     ``_CATALOGUE_EXTRAS``. They are additions only: one of them refusing, or
@@ -1822,6 +1845,8 @@ def _probe_models_endpoint(
     client_kwargs: dict[str, Any] = {"timeout": timeout_s}
     if transport is not None:
         client_kwargs["transport"] = transport
+    else:
+        client_kwargs["verify"] = verify
 
     try:
         with httpx.Client(**client_kwargs) as client:
