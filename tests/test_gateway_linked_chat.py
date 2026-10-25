@@ -343,6 +343,7 @@ class NativeTests(unittest.IsolatedAsyncioTestCase):
             n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef) and n.name == "_inbound_dispatch"
         )
         namespace = {
+            "link_unavailable": False,
             "linked_chat": self.link,
             "page_mount": SimpleNamespace(scheduler=self.scheduler),
             "question_broker": self.broker,

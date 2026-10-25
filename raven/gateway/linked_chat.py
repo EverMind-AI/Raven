@@ -20,6 +20,10 @@ class Binding:
     session_key: str
 
 
+class UnsupportedBindingPlatformError(ValueError):
+    """A binding exists but its ownership cannot be checked on this platform."""
+
+
 def load_binding(path: Path) -> Binding | None:
     """An absent file disables linking; an unsafe or malformed file refuses startup."""
     if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "getuid"):
@@ -27,7 +31,7 @@ def load_binding(path: Path) -> Binding | None:
             path.lstat()
         except FileNotFoundError:
             return None
-        raise ValueError("Telegram project linking requires POSIX file ownership checks")
+        raise UnsupportedBindingPlatformError("Telegram project linking requires POSIX file ownership checks")
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError:

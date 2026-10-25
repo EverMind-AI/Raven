@@ -2,11 +2,15 @@
 
 The gateway can bind one Telegram private chat to an existing page conversation. The page keeps its session key, history and working directory. Telegram turns use the same serial lane as page turns, so they cannot run concurrently against that conversation.
 
-This is an opt-in, single-owner setup. Without the binding file, inbound Telegram conversations remain separate from page conversations. With it, other Telegram senders, groups and topics are refused. This initial implementation requires POSIX file ownership checks; configuring a binding on an unsupported platform fails closed.
+This is an opt-in, single-owner setup. Without the binding file, inbound Telegram conversations remain separate from page conversations. With it, other Telegram senders, groups and topics are refused.
+
+Linking requires POSIX file ownership checks and is not supported on Windows. If a binding file exists on an unsupported platform, the gateway logs a warning and refuses Telegram input to the agent without reading the binding or starting a separate conversation. The page and other channels remain available. Remove the file and restart at a safe checkpoint to restore standalone Telegram conversations; explicit outbound sends are unaffected.
 
 Explicit cross-target `message` sends are a gateway-wide change, available with or without a link. They still require both destination fields and an explicitly allowlisted destination.
 
 ## Configure the link
+
+These steps apply only to platforms with POSIX ownership checks. On Windows, leave the binding file absent and use standalone Telegram conversations.
 
 1. Configure and enable Telegram normally. Put the owner's numeric Telegram user ID explicitly in the channel's `allow_from` list. A wildcard alone does not authorize explicit outbound sends.
 2. Identify the exact existing page session key. Do not use its title or guess a key. The gateway must host the page that owns the conversation.
@@ -48,6 +52,8 @@ Changing only one destination field is rejected rather than completed from the c
 `Message queued ... (transport delivery pending)` means that the native delivery hub accepted the message, not that Telegram delivered it. Successful Telegram text and media sends log the returned message ID. Receipt logs contain chat/message identifiers, so treat them as private operational data.
 
 Permanent Telegram failures, including oversized uploads (HTTP 413), are logged without hub retries. A failed attachment gets a basename-only notice when the destination remains usable, and the remaining reply can continue. An HTML message rejected with `BadRequest` is attempted once as the original plain text, including when table padding makes the rendered message too long. Transient failures reach the delivery hub as sanitized errors and resume at the unacknowledged part under the same bounded retry budget. Previously acknowledged attachments and text chunks are not sent again. A lost acknowledgement remains ambiguous; this is not an exactly-once delivery guarantee.
+
+The delivery hub's `dropped` counter does not include permanent failures handled by the Telegram adapter, including an invalid chat ID or a stopped bot. Use adapter logs to diagnose these failures; a zero counter is not a delivery receipt.
 
 ## Disable the link
 

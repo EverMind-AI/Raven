@@ -13,7 +13,7 @@ from typing import Any
 
 from loguru import logger
 from telegram import BotCommand, Update
-from telegram.error import BadRequest, Forbidden, InvalidToken, NetworkError, RetryAfter
+from telegram.error import BadRequest, Forbidden, InvalidToken, NetworkError, RetryAfter, TelegramError
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -34,17 +34,19 @@ MAX_MESSAGE_LEN = 4000
 _ALBUM_WINDOW_S = 0.6
 
 
+class _TelegramRequest(HTTPXRequest):
+    async def do_request(self, *args, **kwargs) -> tuple[int, bytes]:
+        code, payload = await super().do_request(*args, **kwargs)
+        # PTB otherwise discards the status in favor of an arbitrary JSON description.
+        if 400 <= code < 500 and code not in {400, 401, 403, 404, 409, 429}:
+            raise TelegramError(f"Permanent Telegram HTTP failure ({code})")
+        return code, payload
+
+
 def _retryable_send_error(exc: Exception) -> bool:
     if isinstance(exc, BadRequest):
         return False
-    if isinstance(exc, NetworkError):
-        # PTB folds HTTP failures into NetworkError and keeps only their message.
-        message = str(exc)
-        if status := re.search(r"\(([45]\d{2})\)", message):
-            code = int(status[1])
-            return code == 429 or code >= 500
-        return message.lower() not in {"request entity too large", "payload too large"}
-    return isinstance(exc, RetryAfter) or transient_network(exc) or retryable_http(exc)
+    return isinstance(exc, (NetworkError, RetryAfter)) or transient_network(exc) or retryable_http(exc)
 
 
 # Telegram media APIs keyed by the kind we resolve from a file extension.
@@ -239,7 +241,7 @@ class TelegramChannel(ChannelBase):
         self._running = True
         self._stop_event = asyncio.Event()  # fresh per start (restart-safe)
 
-        request = HTTPXRequest(
+        request = _TelegramRequest(
             connection_pool_size=16,
             pool_timeout=5.0,
             connect_timeout=30.0,

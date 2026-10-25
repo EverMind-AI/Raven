@@ -51,6 +51,7 @@ async def linked_page(tmp_path, monkeypatch):
     tree = ast.parse((Path(__file__).resolve().parents[1] / "raven/cli/gateway_commands.py").read_text())
     dispatch = next(n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef) and n.name == "_inbound_dispatch")
     namespace = {
+        "link_unavailable": False,
         "linked_chat": link,
         "page_mount": SimpleNamespace(scheduler=scheduler),
         "question_broker": broker,

@@ -334,24 +334,24 @@ class Lane:
         """
         return self.running_turn() is not None or bool(self._pending) or bool(self._inject_mailbox)
 
-    def drain_pending(self) -> int:
+    def drain_pending(self, *, reports: list[Awaitable[None]] | None = None) -> int:
         """Resolve every not-yet-running turn (queued + mailboxed injects) as
         cancelled and return the count, leaving the running turn untouched.
 
         Already-drained injects are chained to the running turn and follow its
         fate inside _run_turn — not here, so each future resolves exactly once.
 
-        Silent by design, unlike cancel_turn's queued branch above: its only two
-        callers are Scheduler.shutdown's phase 2, where the process is already
-        going down and every slot dies with it, and Lane.cancel via the gateway's
-        /stop path (the gateway's cancel_conversation), whose
-        scheduler's lanes turn.send never binds -- so there is no client-facing
-        slot here for the silence to strand.
+        With reports, detach queued turns now and defer their resolution until
+        the caller awaits the reports, releasing their page slots. Without it,
+        drain silently for shutdown and gateway lanes that bind no page slots.
         """
         stopped = 0
         while self._pending:
-            _req, fut = self._pending.popleft()
-            fut.set_result(None)  # a queued turn never ran: resolve as cancelled
+            req, fut = self._pending.popleft()
+            if reports is None:
+                fut.set_result(None)
+            else:
+                reports.append(self._report_queued_cancel(req, fut))
             stopped += 1
         while self._inject_mailbox:
             _req, fut = self._inject_mailbox.popleft()
@@ -359,11 +359,11 @@ class Lane:
             stopped += 1
         return stopped
 
-    def cancel(self) -> int:
+    def cancel(self, *, reports: list[Awaitable[None]] | None = None) -> int:
         """/stop: cancel the running turn and drain the queue, resolving every
         waiting future as cancelled; return how many turns were stopped.
         """
-        return self.cancel_running() + self.drain_pending()
+        return self.cancel_running() + self.drain_pending(reports=reports)
 
     def _idle_for(self, now: float) -> float | None:
         """Seconds since the worker drained and the lane went idle, or None while
@@ -685,16 +685,9 @@ class Scheduler:
             stopped = 0
             if lane is not None:
                 # Cancellation cannot wait behind a blocked UI render barrier.
-                stopped += lane.cancel_running()
-                pending = list(lane._pending)
-                lane._pending.clear()
-                stopped += len(pending) + len(lane._inject_mailbox)
-                for _req, fut in lane._inject_mailbox:
-                    fut.set_result(None)
-                lane._inject_mailbox.clear()
-                reports.extend(lane._report_queued_cancel(req, fut) for req, fut in pending)
-                if lane._running_fut is not None:
-                    reports.append(asyncio.shield(lane._running_fut))
+                stopped += lane.cancel(reports=reports)
+                if (running := lane.running_future()) is not None:
+                    reports.append(asyncio.shield(running))
             if cancel_children is not None:
                 reports.append(cancel_children())
             results = await asyncio.gather(*reports, return_exceptions=True)
