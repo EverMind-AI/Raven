@@ -1856,6 +1856,44 @@ async def test_fetching_a_catalogue_dresses_what_the_vendor_answered(
     assert rows["anthropic/claude-sonnet-5"]["added"] is False
 
 
+@pytest.mark.parametrize("slug", ["openai", "custom", "openrouter"])
+async def test_fetched_gpt_image_models_keep_their_kind_when_added(
+    fake_home: Path, monkeypatch: pytest.MonkeyPatch, slug: str
+) -> None:
+    images = ["gpt-image-1.5", "GPT-Image-2", "gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"]
+    texts = [
+        "codex-auto-review",
+        "gpt-5.6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-6-astra",
+        "gpt-6-luna",
+        "gpt-6-sol",
+        "gpt-6.1-sol",
+    ]
+    _write_config(fake_home, {"providers": {slug: {"apiKey": "test-key", "apiBase": "https://example.com/v1"}}})
+    monkeypatch.setattr(
+        "raven.config.update_providers.test_provider",
+        lambda *args, **kwargs: {"ok": True, "status": "valid", "model_ids": [*texts, *images]},
+    )
+
+    out = await model_fetch_models({"slug": slug})
+    live = [row for row in out["models"] if row["source"] == "live"]
+
+    assert len(live) == 13
+    image_rows = [row for row in live if row["kind"] == "image"]
+    assert len(image_rows) == 5
+    assert sum(row["kind"] == "text" for row in live) == 8
+    assert all("image-generation" in row["capabilities"] for row in image_rows)
+
+    selected = [row["id"] for row in image_rows]
+    await model_module.model_add_models({"slug": slug, "models": selected})
+    after = _entry(await model_options({}), slug)
+
+    assert set(after["configured_models"]) == set(selected)
+    assert all(after["model_labels"][mid]["kind"] == "image" for mid in selected)
+
+
 async def test_a_refused_key_is_said_out_loud_beside_the_list_it_did_not_fill(
     fake_home: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -334,7 +334,7 @@ def test_no_chat_model_in_the_bundled_catalogue_is_mistaken_for_an_embedder() ->
     """
     from raven.providers.registry_data import _models, inferred_tags
 
-    marked = {mid: inferred_tags(mid) for mid in _models() if inferred_tags(mid)}
+    marked = {mid: tags for mid in _models() if (tags := inferred_tags(mid)) in (("embedding",), ("rerank",))}
     assert marked, "the corpus has embedding models; the rule matching none of them is the other failure"
     for mid in marked:
         bare = mid.rsplit("/", 1)[-1].lower()
@@ -462,8 +462,8 @@ def test_a_model_tagged_from_its_endpoint_reaches_the_same_bucket_as_a_catalogue
     assert kind_of(["image-recognition"], ["text"]) == "text"
 
 
-# The same nine rows, with the same kinds, sit in ui-web/src/features/model/types.test.ts:
-# the page copies inferred_tags' two patterns for a typed id's chip, and this
+# The same rows, with the same kinds, sit in ui-web/src/features/model/types.test.ts:
+# the page copies inferred_tags' patterns for a typed id's chip, and this
 # table is what keeps the copy honest.
 NAME_GUESSES = [
     ("openai/text-embedding-3-small", "embedding"),
@@ -475,9 +475,67 @@ NAME_GUESSES = [
     ("rerank-co/gpt-4", "text"),
     ("google/gemini-2.5-flash-image", "text"),
     ("deepseek-v4-pro", "text"),
+    ("gpt-image-1.5", "image"),
+    ("GPT-Image-2", "image"),
+    ("gpt-image-2.5", "image"),
+    ("gpt-image-2.5-flare", "image"),
+    ("gpt-image-2.5-sunburst", "image"),
+    ("openai/GPT-Image-2.5", "image"),
+    ("openrouter/openai/gpt-image-2.5-sunburst", "image"),
+    ("gpt-image-3-preview", "image"),
+    ("gpt-image-team/gpt-4o", "text"),
+    ("gpt-images-2.5", "text"),
+    ("my-gpt-image-2.5", "text"),
+    ("gpt-4o", "text"),
 ]
 
 
 @pytest.mark.parametrize(("model_id", "kind"), NAME_GUESSES)
 def test_kind_of_a_name_alone(model_id: str, kind: str) -> None:
     assert kind_of(inferred_tags(model_id), ()) == kind
+
+
+@pytest.mark.parametrize("model_id", [mid for mid, kind in NAME_GUESSES if kind == "image"])
+def test_gpt_image_models_are_tagged_without_a_catalogue_row(monkeypatch, model_id: str) -> None:
+    from raven.providers.catalog import describe
+
+    monkeypatch.setattr(registry_data, "row_for", lambda *args: None)
+    monkeypatch.setattr(registry_data, "row_by_name", lambda *args: None)
+
+    row = describe("custom", model_id)
+
+    assert row.capabilities == ("image-generation",)
+    assert kind_of(row.capabilities, row.output_modalities) == "image"
+    assert row.ref.endswith(model_id)
+
+
+def test_image_name_inference_respects_catalogued_outputs(monkeypatch) -> None:
+    from raven.providers.catalog import describe
+
+    entry = registry_data.RegistryRow(
+        provider="custom",
+        api_model_id="gpt-image-2.5",
+        model_id="gpt-image-2.5",
+        name="Our text deployment",
+        output_modalities=("text",),
+    )
+    monkeypatch.setattr(registry_data, "row_for", lambda *args: entry)
+
+    row = describe("custom", "gpt-image-2.5")
+
+    assert row.capabilities == ()
+    assert kind_of(row.capabilities, row.output_modalities) == "text"
+
+
+def test_image_name_inference_respects_user_tags() -> None:
+    from raven.config.schema import ModelOverlay
+    from raven.providers.catalog import describe
+
+    row = describe(
+        "custom",
+        "gpt-image-2.5",
+        overlay=ModelOverlay(capabilities=["function-call"], output_modalities=["text"]),
+    )
+
+    assert row.capabilities == ("function-call",)
+    assert kind_of(row.capabilities, row.output_modalities) == "text"

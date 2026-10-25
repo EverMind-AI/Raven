@@ -121,7 +121,7 @@ def describe(provider: str, model: str, *, overlay: "ModelOverlay | None" = None
             label=entry.name or split_model_id(ref)[1] or ref,
             source=SOURCE_SNAPSHOT if entry.name else SOURCE_ID_ONLY,
             description=entry.description,
-            capabilities=_with_inferred(ref, entry.capabilities),
+            capabilities=_with_inferred(ref, entry.capabilities, entry.output_modalities),
             input_modalities=entry.input_modalities,
             output_modalities=entry.output_modalities,
         )
@@ -140,13 +140,14 @@ def describe(provider: str, model: str, *, overlay: "ModelOverlay | None" = None
     return _with_overlay(row, overlay)
 
 
-def _with_inferred(ref: str, capabilities: tuple[str, ...]) -> tuple[str, ...]:
+def _with_inferred(ref: str, capabilities: tuple[str, ...], outputs: tuple[str, ...]) -> tuple[str, ...]:
     """The catalogue's tags, plus what its silence leaves the name to answer.
 
     Added rather than substituted, and only where the catalogue has claimed
     neither: a multimodal embedder really does read images, so
     ``cohere-embed-v4`` keeps ``image-recognition`` and gains ``embedding``. A
     model the catalogue already calls an embedder is left exactly as it is.
+    Image-family guesses also yield to stated outputs or generation tags.
     """
     from raven.providers.registry_data import CAPABILITIES, inferred_tags
 
@@ -154,6 +155,8 @@ def _with_inferred(ref: str, capabilities: tuple[str, ...]) -> tuple[str, ...]:
         return capabilities
     extra = inferred_tags(ref)
     if not extra:
+        return capabilities
+    if "image-generation" in extra and (outputs or any(tag.endswith("-generation") for tag in capabilities)):
         return capabilities
     merged = set(capabilities) | set(extra)
     return tuple(name for name in CAPABILITIES if name in merged)
