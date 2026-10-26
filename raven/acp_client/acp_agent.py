@@ -1162,7 +1162,8 @@ class AcpAgentBackend:
         # own to report. For this process's life, as the backend is.
         self._resume_lost: dict[tuple[str, str], str] = {}
         # Each session's cumulative cost as last reported, for the cost of its
-        # next turn (`_turn_cost`). Only for sessions this process has seen.
+        # next turn (`_turn_cost`). Only for sessions this process has seen, and
+        # only on an agent that resumes them: no other session has a next turn.
         self._session_spend: dict[str, float] = {}
         self._registry = registry or get_registry()
         # Which pool this backend's turns are served from. Almost always the
@@ -2216,7 +2217,7 @@ class AcpAgentBackend:
             return
         before = self._session_spend.get(session_id, None if resumed else 0.0)
         cost, spent = _turn_cost(collector.usage, before)
-        if spent is not None:
+        if spent is not None and self.is_stateful:
             self._session_spend[session_id] = spent
         if (usage := _ledger_counts(collector.turn_counts(answered))) is None:
             return

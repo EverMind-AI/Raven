@@ -2669,6 +2669,20 @@ async def test_a_resumed_session_whose_earlier_spend_is_unknown_books_no_cost(tm
     assert got.cost_usd is None and got.cost_missing_calls == 1
 
 
+async def test_a_session_nobody_can_resume_leaves_no_spend_behind(tmp_path: Path) -> None:
+    """The cumulative cost is kept to measure a resumed session's next turn by.
+    A stateless agent's sessions are never resumed, and keeping one entry per
+    dispatch would grow for as long as the process lives."""
+    cfg = stub_config("a")
+    cfg.env.update({**_CLAUDE_TURN, "ACP_STUB_COST_PER_PROMPT": "0.01"})
+    backend = build_third_party_backend(cfg)
+
+    await backend.run("ping", task_id="t1", workspace=tmp_path, session_key="cli:root", executor=None)
+
+    assert backend.is_stateful is False
+    assert backend._session_spend == {}
+
+
 async def test_a_raven_agent_is_not_booked_twice(tmp_path: Path) -> None:
     """A raven agent books its own calls under the delegating conversation (the
     prompt's ``raven.usage``); booking its turn here as well counts it twice."""
