@@ -903,8 +903,8 @@ class RavenLoopBackend:
         # What the instance's own history keeps as its reply.
         kept = final_result
         if ran_out:
-            # The ACP lane's partial-turn notice for the same case, so a caller
-            # reads a capped run the same way whichever lane ran it. Not kept:
+            # The ACP backend's partial-turn notice for the same case, so a caller
+            # reads a capped run the same way whichever backend ran it. Not kept:
             # it is raven telling the caller about this run, and a resumed
             # instance that read it as its own words could repeat it in a reply
             # that was not cut.

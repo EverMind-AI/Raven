@@ -228,7 +228,7 @@ async def test_an_ordinary_reply_is_still_a_success(monkeypatch: pytest.MonkeyPa
     assert result.remedy is None
 
 
-# ---- the dispatch lane ------------------------------------------------------
+# ---- the dispatch path ------------------------------------------------------
 
 
 _STUB = Path(__file__).with_name("acp_stub_server.py")
@@ -264,7 +264,7 @@ async def test_a_dispatch_whose_reply_is_the_refusal_fails(tmp_path: Path, _clos
     """The run a spawn or a DAG node makes, not only the Connect ping.
 
     Copilot ends the turn normally with the refusal as its message, so the
-    lane's own checks -- an empty turn, a failed call with nothing after it --
+    backend's own checks -- an empty turn, a failed call with nothing after it --
     pass it, and the sentence went back as the work: a node recorded completed
     whose output was "Your credit balance is too low", merged downstream.
     """

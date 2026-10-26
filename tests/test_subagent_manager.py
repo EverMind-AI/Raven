@@ -3314,7 +3314,7 @@ async def test_a_run_out_of_rounds_answers_from_what_it_gathered(tmp_path) -> No
 async def test_a_run_out_of_rounds_says_its_answer_is_partial(tmp_path) -> None:
     """The wrap-up is worth having and it is still not the work: the tool budget
     ended the run, not the task. Handed back bare, a spawn records it completed
-    and a DAG node's judge reads it as the result. The ACP lane marks the same
+    and a DAG node's judge reads it as the result. The ACP backend marks the same
     case with a ``[raven]`` line (``AcpAgentBackend._finished``); so does this one,
     in the reply and on the stream, which is the only place a watcher reads it.
     """
@@ -3340,7 +3340,7 @@ async def test_the_partial_notice_stays_out_of_the_instances_own_history(tmp_pat
     """The notice is raven telling the caller about this run, not something the
     sub-agent said. Kept in the history a resumed instance continues from, the
     model reads it as its own earlier words and can repeat it in a reply that was
-    not cut -- which the caller would then read as cut. The ACP lane never puts
+    not cut -- which the caller would then read as cut. The ACP backend never puts
     its notices into the agent's session, for the same reason."""
     from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
 
