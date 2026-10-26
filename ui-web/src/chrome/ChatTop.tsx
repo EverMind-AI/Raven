@@ -8,8 +8,8 @@
  * is a transcription -- tag, id, class, data-*, role, aria, the svg path data and
  * the text exactly as page.html spelled them, attributes in the same order --
  * and src/test/__golden__/region-app.txt is what says so. The containers are
- * here too now: src/App.tsx renders div.chat and this is the first six of its
- * seven children, with the composer dock (src/chrome/Dock.tsx) seventh.
+ * here too now: src/App.tsx renders div.chat and this is the first seven of its
+ * eight children, with the composer dock (src/chrome/Dock.tsx) eighth.
  *
  * What this does NOT own, though it renders the elements:
  *   - h1#title's text. Seven modules write it -- features/rail/source.ts and
@@ -33,6 +33,8 @@
  *     turn's, each keeping its position by identity, so React owning that child
  *     list would tear both out.
  *   - #wsGrip, which has no interior at all, so nothing portals into it.
+ *   - #turnNav's interior: the transcript island's turn nav roots itself
+ *     there (features/transcript/TurnNav.tsx).
  */
 
 import { MoreVerticalIcon } from '@hugeicons/core-free-icons'
@@ -210,6 +212,9 @@ export function ChatTop(): JSX.Element {
       <button className="backpill" id="backpill" hidden>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5.5v13M6.5 12.5l5.5 5.5 5.5-5.5" /></svg>
       </button>
+      {/* The turn nav's box, handed over empty (features/transcript/manifest.ts).
+          After the scroller, so the stylesheet parks it with the scroller. */}
+      <div id="turnNav" />
       {/* The workspace seam, hung off the chat rather than the panel: the panel
           clips its own overflow, so a grip inside it could only be grabbed from
           one side. No interior at all, and dragged by id from chrome/behaviour/panes.ts. */}

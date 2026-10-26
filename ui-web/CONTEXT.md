@@ -142,6 +142,22 @@ is why the transcript's store keeps a listener set per lane -- a token appended
 to the open step re-renders that leaf and nothing else -- and why a resident
 conversation keeps the detached host its lane is mounted in.
 
+**Turn Nav**:
+The strip of marks at the chat column's right edge, one per turn of the
+conversation on the stage, drawn by `features/transcript/TurnNav.tsx` into
+`#turnNav` -- the box `src/chrome/ChatTop.tsx` renders after `#scroll` and
+hands over empty, and which the stylesheet parks with the scroller. A mark is a
+question that opened a turn (an `ask` segment without `midTurn`), counted from
+the first one the lane holds; the mark being read is the last question
+scrolled past the reading line. Pointing at or focusing a mark shows the
+turn's number, how long ago it was asked and what was asked; a click scrolls
+the question into view. It draws nothing below two turns; a strip longer than
+its band scrolls with no thumb (`data-thumb="none"`), centred on the mark
+being read, and fades at either end instead. One root per page,
+not per lane: it reads the lane whose host is on `#stage` (`mount.tsx`'s
+`shownLane`), never one held off it.
+_Avoid_: "minimap" -- it marks turns, not a scaled copy of the transcript.
+
 **Trajectory View**:
 The chat column's second view: the conversation's trace entries as a list, in
 place of the transcript, drawn by `features/trajectory/` into `#trajHost` -- the
