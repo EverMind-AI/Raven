@@ -113,12 +113,11 @@ async def test_a_sandboxed_stdio_server_starts_the_same_way(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_a_stdio_server_resolves_its_registry_from_its_own_directory(monkeypatch):
-    """The mirror decision reads the registry the server's own cwd names.
+async def test_a_packages_working_directory_does_not_choose_the_registry(monkeypatch):
+    """The server starts in its cwd, but the mirror decision runs without it.
 
-    ``package_launch`` decides whether a launch reaches its registry by asking
-    npm from ``cwd``; a package server runs in its package root, so the
-    decision has to be evaluated there, not in the agent's process directory.
+    A package root is third-party content: a ``.npmrc`` there would otherwise
+    pick the registry and the payload the launch fetches.
     """
     from raven.utils import mirrors
 
@@ -139,7 +138,7 @@ async def test_a_stdio_server_resolves_its_registry_from_its_own_directory(monke
     ):
         pass
 
-    assert asked == [package_root]
+    assert asked == [None]
     assert executor.started == [("uvx", ["mcp-server-fetch"], None, package_root)]
 
 

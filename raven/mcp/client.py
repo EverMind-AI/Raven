@@ -212,12 +212,14 @@ async def open_mcp_transport(
             # would be the choice of registry PlugHub's vetting refuses a
             # catalogue entry (see market/vetting.py). A server the sandbox
             # starts is fetched in there, so only its command line can carry one.
-            # The registry probe reads the directory the server will run in.
-            cwd = _configured_cwd(cfg)
+            # The registry probe runs without the server's cwd on purpose: a
+            # package root is third-party content, and a .npmrc there must not
+            # choose the registry or the payload.
             sandboxed = executor is not None and executor.supports_process_spawning
             command, *args = await mirrors.package_launch_async(
-                [cfg.command, *cfg.args], {**os.environ, **(cfg.env or {})}, cwd, local=not sandboxed
+                [cfg.command, *cfg.args], {**os.environ, **(cfg.env or {})}, local=not sandboxed
             )
+            cwd = _configured_cwd(cfg)
             if executor is not None and executor.supports_process_spawning:
                 read, write = await executor.start_process(command, args, env=cfg.env or None, cwd=cwd)
             else:
